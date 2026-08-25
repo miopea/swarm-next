@@ -2049,6 +2049,42 @@ impl TaskService {
             }))
     }
 
+    /// The task this worker owns, INCLUDING one it has just finished.
+    ///
+    /// `list_visible_tasks` hides completed work from a worker on purpose: its
+    /// assignment is what it may act on, and finished work is not that. But
+    /// `swarm_draft_email_reply` requires the task to be completed with its
+    /// deployment recorded — and recording a deployment completes the task. So
+    /// the precondition the tool demands was the exact condition that removed
+    /// the task from the caller's reach, and no ordering existed that worked:
+    /// draft first and it is not yet completed, complete first and it is gone.
+    /// A worker following its own dispatch instruction got "not authorized",
+    /// which reads as a deliberate permission rather than a trap.
+    ///
+    /// Deliberately narrow. Same ownership rule as visibility — this worker,
+    /// this session — with only the completed clause lifted, so it reaches the
+    /// task the caller just finished and nothing else. Widening visibility
+    /// generally would have been the wrong fix: workers seeing only their
+    /// current assignment is load-bearing, and this is one tool needing one
+    /// exception.
+    ///
+    /// # Errors
+    /// Returns `NotAuthorized` when the task is not this worker's own.
+    pub fn task_this_worker_finished(
+        &self,
+        principal: AgentPrincipal,
+        task_id: TaskId,
+    ) -> Result<Task, ApplicationError> {
+        let task = self.store.get_task(task_id)?;
+        if principal.role == WorkerRole::Queen {
+            return Ok(task);
+        }
+        let owned = task.assigned_worker_id == Some(principal.worker_id)
+            && task.assigned_session_id == principal.active_session_id
+            && principal.active_session_id.is_some();
+        owned.then_some(task).ok_or(ApplicationError::NotAuthorized)
+    }
+
     /// Reads one task's history, including the notes workers wrote on it.
     ///
     /// Queen's job is to accept or reject finished work, and the outcome

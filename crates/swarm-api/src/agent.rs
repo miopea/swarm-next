@@ -963,7 +963,15 @@ impl AgentMcp {
     /// to writing the reply, not to approving it.
     fn draft_email_reply(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
         let input = parse::<DraftEmailReplyInput>(arguments)?;
-        let task_id = self.visible_task_id(&input.task_id)?;
+        // Not visible_task_id: this tool requires the task to be COMPLETED, and
+        // a completed task is deliberately outside a worker's visible set. The
+        // two rules together made the tool unreachable by the only agent the
+        // dispatch tells to use it. See task_this_worker_finished.
+        let task_id = TaskId::from_str(&input.task_id).map_err(|_| ApplicationError::NotAuthorized)?;
+        let task_id = self
+            .tasks
+            .task_this_worker_finished(self.principal, task_id)?
+            .id;
         let reply = self
             .tasks
             .store()
@@ -1771,7 +1779,7 @@ fn record_no_deployment_tool() -> Tool {
 fn draft_email_reply_tool() -> Tool {
     tool(
         "swarm_draft_email_reply",
-        "Write the reply for a task that came in by email, as part of finishing it. A person is waiting on that thread and finishing the work tells them nothing. Write for them: what changed, what they can do now, and no internal implementation detail. This drafts only — the operator reviews and sends. Requires the task to be completed and its deployment recorded.",
+        "Write the reply for a task that came in by email, as part of finishing it. A person is waiting on that thread and finishing the work tells them nothing. Write for them: what changed, what they can do now, and no internal implementation detail. This drafts only — the operator reviews and sends. Needs the task reported to review or completed, with its deployment recorded.",
         &json!({
             "type": "object",
             "properties": {
@@ -2432,6 +2440,157 @@ mod tests {
         let active = response_json(start(bridge).await).await;
         assert_eq!(active["result"]["isError"], false);
         assert_eq!(active["result"]["structuredContent"]["state"], "active");
+    }
+
+    /// The dispatch tells the worker: record the deployment, then write the
+    /// reply. That was a race the worker could lose and could not see.
+    ///
+    /// Drafting accepts a task in review OR completed, so a worker had a window
+    /// between recording its deployment and Queen closing the task. When Queen
+    /// got there first the window shut, because a completed task leaves the
+    /// worker's visible set — and the refusal said "not authorized", which
+    /// reads as a deliberate permission rather than a lost race. Hit live on
+    /// 2026-08-25 with somebody waiting on the thread since 22 August.
+    #[tokio::test]
+    async fn the_worker_that_finished_email_work_can_write_the_reply() {
+        let (bridge, store, _, worker_id, _) = setup();
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(worker_id, session).unwrap();
+        let imported = store
+            .import_email_message(
+                &swarm_persistence::EmailMessageSnapshot {
+                    integration_id: "operator-outlook",
+                    message_id: "AAMk-reply-1",
+                    conversation_id: "AAQk-reply-1",
+                    internet_message_id: Some("<reply-1@example.test>"),
+                    subject: "The terminal keeps dying",
+                    sender_name: "A Developer",
+                    sender_address: "dev@example.test",
+                    received_at: 1_786_730_000,
+                    web_url: "https://outlook.office.com/mail/inbox/id/AAMk-reply-1",
+                    body_text: "This randomly happens and the only fix is to reload.",
+                    attachments: &[],
+                },
+                TaskPriority::Normal,
+            )
+            .unwrap();
+        let task_id = imported.task.id;
+        store.transition_task(task_id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(task_id, worker_id).unwrap();
+        store.transition_task(task_id, TaskState::Active).unwrap();
+        store.transition_task(task_id, TaskState::Review).unwrap();
+
+        let call = |name: &'static str, arguments: Value| {
+            handle(
+                bridge.clone(),
+                plain_state(),
+                mcp_request(
+                    Some(&worker_token),
+                    "tools/call",
+                    &json!({ "name": name, "arguments": arguments }),
+                ),
+            )
+        };
+
+        // Step one, exactly as the dispatch instructs. This auto-completes the
+        // task, which is what used to make step two impossible.
+        let deployed = response_json(
+            call(
+                "swarm_record_deployment",
+                json!({
+                    "task_id": task_id.to_string(),
+                    "environment": "operator's Hive",
+                    "reference": "a43c248, running",
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(deployed["result"]["isError"], false);
+
+        // Queen closes it, on her own cycle, before the worker gets to step
+        // two. This is the race, and it is the whole defect: nothing about the
+        // worker's own conduct decides whether it wins.
+        store.transition_task(task_id, TaskState::Completed).unwrap();
+        assert_eq!(store.get_task(task_id).unwrap().state, TaskState::Completed);
+
+        // Step two, after losing the race. This returned "not authorized".
+        let drafted = response_json(
+            call(
+                "swarm_draft_email_reply",
+                json!({
+                    "task_id": task_id.to_string(),
+                    "body": "This is fixed, and it is already running on your Hive.",
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(
+            drafted["result"]["isError"], false,
+            "the worker that did the work can write to the person waiting on it"
+        );
+        assert_eq!(drafted["result"]["structuredContent"]["awaiting"], "operator review and send");
+    }
+
+    /// The exception is for the caller's OWN finished work and nothing else.
+    /// Widening worker visibility generally would have been the wrong fix.
+    #[tokio::test]
+    async fn a_worker_cannot_write_a_reply_for_another_workers_finished_task() {
+        let (bridge, store, _, worker_id, _) = setup();
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let other = store
+            .create_worker("Clover", ProviderKind::ClaudeCode, "/workspace/clover", false, 2)
+            .unwrap();
+        let other_session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(other.id, other_session).unwrap();
+        let imported = store
+            .import_email_message(
+                &swarm_persistence::EmailMessageSnapshot {
+                    integration_id: "operator-outlook",
+                    message_id: "AAMk-reply-2",
+                    conversation_id: "AAQk-reply-2",
+                    internet_message_id: Some("<reply-2@example.test>"),
+                    subject: "Somebody else's thread",
+                    sender_name: "A Member",
+                    sender_address: "member@example.test",
+                    received_at: 1_786_730_000,
+                    web_url: "https://outlook.office.com/mail/inbox/id/AAMk-reply-2",
+                    body_text: "Not this worker's work.",
+                    attachments: &[],
+                },
+                TaskPriority::Normal,
+            )
+            .unwrap();
+        store.transition_task(imported.task.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(imported.task.id, other.id).unwrap();
+        store.transition_task(imported.task.id, TaskState::Active).unwrap();
+        store.transition_task(imported.task.id, TaskState::Review).unwrap();
+        store
+            .record_task_deployment(imported.task.id, "somewhere", "abc123", crate::unix_timestamp())
+            .unwrap();
+
+        let refused = response_json(
+            handle(
+                bridge,
+                plain_state(),
+                mcp_request(
+                    Some(&worker_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_draft_email_reply",
+                        "arguments": { "task_id": imported.task.id.to_string(), "body": "Not mine to send." }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(refused["result"]["isError"], true);
     }
 
     /// Three tasks stranded in Review in one day because their workers said
