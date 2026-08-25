@@ -473,13 +473,39 @@ impl TaskStore {
             "SELECT t.id, t.title, link.sender_name, link.sender_address,
                     MIN(link.received_at),
                     EXISTS(SELECT 1 FROM email_reply_deliveries r
-                           WHERE r.task_id = t.id AND r.state = 'draft'),
+                           WHERE r.task_id = t.id
+                             AND r.state IN ('draft', 'cancelled')
+                             AND trim(r.body) <> ''),
                     (SELECT r.id FROM email_reply_deliveries r
                      WHERE r.task_id = t.id AND r.state = 'draft'
                      ORDER BY r.created_at DESC, r.id DESC LIMIT 1),
-                    (SELECT r.body FROM email_reply_deliveries r
-                     WHERE r.task_id = t.id AND r.state = 'draft'
-                     ORDER BY r.created_at DESC, r.id DESC LIMIT 1),
+                    -- THE BODY OF A CANCELLED REPLY IS STILL THE REPLY.
+                    --
+                    -- This read only 'draft', so a send that failed left a
+                    -- fully written reply in the row and the queue announced
+                    -- that no reply had been written. Four of them, 1.0 to 1.6
+                    -- KB each, sat unreadable on 2026-08-25 while the operator
+                    -- was told the work was gone -- they reported generating
+                    -- all the emails, watching them fail, and the drafts
+                    -- appearing to be lost. They were never lost.
+                    --
+                    -- Note what the old query did: it read last_error from the
+                    -- cancelled row two lines below and the body from nowhere.
+                    -- It looked straight at the draft and took only the bad
+                    -- news off it.
+                    --
+                    -- A draft still wins when one exists, because that is the
+                    -- newer text; the cancelled body is the fallback, not the
+                    -- preference.
+                    COALESCE(
+                        (SELECT r.body FROM email_reply_deliveries r
+                         WHERE r.task_id = t.id AND r.state = 'draft'
+                         ORDER BY r.created_at DESC, r.id DESC LIMIT 1),
+                        (SELECT r.body FROM email_reply_deliveries r
+                         WHERE r.task_id = t.id AND r.state = 'cancelled'
+                           AND trim(r.body) <> ''
+                         ORDER BY r.updated_at DESC, r.id DESC LIMIT 1)
+                    ),
                     (SELECT w.name FROM worker_profiles w WHERE w.id = t.assigned_worker_id),
                     COUNT(link.id),
                     (SELECT r.last_error FROM email_reply_deliveries r
@@ -2587,6 +2613,22 @@ mod tests {
             waiting[0].delivery_failure.as_deref(),
             Some("The email message was not found"),
             "and it carries the cause, rather than looking like nobody has written one"
+        );
+        // AND IT CARRIES THE REPLY ITSELF. The body is still on the cancelled
+        // row, and this query used to read last_error off that row and the body
+        // from nowhere — it looked straight at the draft and took only the bad
+        // news. So the queue announced that no reply had been written while
+        // four of them, 1.0 to 1.6 KB each, sat unreadable in the database on
+        // 2026-08-25. The operator was told the work was gone; pressing Write
+        // the reply opened an empty box over the top of it.
+        assert_eq!(
+            waiting[0].draft_body.as_deref(),
+            Some("Thank you — this is fixed."),
+            "a failed send must not read as an unwritten reply"
+        );
+        assert!(
+            waiting[0].drafted,
+            "and the card must not offer to write one that already exists"
         );
 
         // And the dead end is no longer permanent: a new reply can be written.
