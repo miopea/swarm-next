@@ -2144,6 +2144,35 @@ impl TaskService {
     ///
     /// # Errors
     /// Returns `NotAuthorized` when the task is not this worker's own.
+    /// Work this worker finished, newest first.
+    ///
+    /// Exists so an empty task list can explain itself. A worker whose only
+    /// assignment closes sees the same empty list as one that never had work,
+    /// and the difference between "you are done" and "you were cut off" is not
+    /// visible from the list alone.
+    ///
+    /// Keyed on the WORKER rather than the session, for the same reason
+    /// `task_this_worker_finished` is: the question is "did I do this", and
+    /// that answer survives a restart.
+    ///
+    /// # Errors
+    /// Returns a persistence error when the tasks cannot be read.
+    pub fn tasks_this_worker_finished(
+        &self,
+        principal: AgentPrincipal,
+    ) -> Result<Vec<Task>, ApplicationError> {
+        let mut finished = self
+            .list_tasks()?
+            .into_iter()
+            .filter(|task| {
+                task.assigned_worker_id == Some(principal.worker_id)
+                    && task.state == TaskState::Completed
+            })
+            .collect::<Vec<_>>();
+        finished.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        Ok(finished)
+    }
+
     pub fn task_this_worker_finished(
         &self,
         principal: AgentPrincipal,

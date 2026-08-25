@@ -375,7 +375,7 @@ impl ServerHandler for AgentMcp {
             "swarm_list_tasks" => self
                 .tasks
                 .list_visible_tasks(self.principal)
-                .and_then(|tasks| structured(json!({ "tasks": tasks }))),
+                .and_then(|tasks| self.task_list_result(tasks)),
             "swarm_read_task_history" => self.read_task_history(arguments),
             "swarm_reload_app" => self.reload_app(arguments).await,
             "swarm_approve_no_deployment" => self.approve_no_deployment(arguments),
@@ -1117,7 +1117,7 @@ impl AgentMcp {
     /// showing a completion nobody has shown to be live.
     fn record_deployment(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
         let input = parse::<RecordDeploymentInput>(arguments)?;
-        let task_id = self.visible_task_id(&input.task_id)?;
+        let task_id = self.task_evidence_may_reach(&input.task_id)?;
         let record = self.tasks.store().record_task_deployment(
             task_id,
             &input.environment,
@@ -1138,7 +1138,7 @@ impl AgentMcp {
     /// who accepts that decision.
     fn record_no_deployment(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
         let input = parse::<RecordNoDeploymentInput>(arguments)?;
-        let task_id = self.visible_task_id(&input.task_id)?;
+        let task_id = self.task_evidence_may_reach(&input.task_id)?;
         let evidence = self.tasks.store().claim_completion_exemption(
             task_id,
             &input.reason,
@@ -1179,6 +1179,73 @@ impl AgentMcp {
             "awaiting": "operator review and send",
             "recipients": reply.targets.len(),
         }))
+    }
+
+    /// The visible tasks, and — when there are none — why.
+    ///
+    /// AN EMPTY LIST IS CORRECT AND READS AS CATASTROPHIC. A worker whose only
+    /// assignment closes sees exactly what a worker with no assignment sees,
+    /// and cannot tell "you have finished" from "the board is gone". That
+    /// happened on 2026-08-25 seconds after the same worker's evidence was
+    /// refused, and the two together read as being cut off mid-task.
+    ///
+    /// So an empty list for a worker that recently finished something says so.
+    /// It costs one query on the rarest path — nobody calls this expecting
+    /// nothing — and it turns a frightening blank into a sentence.
+    fn task_list_result(
+        &self,
+        tasks: Vec<swarm_domain::Task>,
+    ) -> Result<CallToolResult, ApplicationError> {
+        if !tasks.is_empty() || self.principal.role == WorkerRole::Queen {
+            return structured(json!({ "tasks": tasks }));
+        }
+        let finished = self.tasks.tasks_this_worker_finished(self.principal)?;
+        let Some(latest) = finished.first() else {
+            return structured(json!({
+                "tasks": tasks,
+                "note": "You hold no assignment. This is the ordinary resting state, not an error — Queen assigns work, and nothing here has been taken away from you.",
+            }));
+        };
+        structured(json!({
+            "tasks": tasks,
+            "note": format!(
+                "You hold no assignment because \"{}\" closed. That is completion, not removal: work you finished leaves your list by design. You can still record evidence against it with its id, {}.",
+                latest.title, latest.id
+            ),
+        }))
+    }
+
+    /// A task this agent may record evidence against, INCLUDING one that has
+    /// just closed underneath it.
+    ///
+    /// A task in Review closes the moment evidence lands, and closing removes
+    /// it from the recorder's assignment. So whichever of the two parties wrote
+    /// second found the task no longer theirs and lost what it was carrying.
+    /// That happened three times on 2026-08-25; in the sharpest case the gap
+    /// was 23 seconds, and what vanished was a rollback file path and two spec
+    /// references — the half nobody can reconstruct afterwards.
+    ///
+    /// The two parties hold DIFFERENT information. The worker knows what it
+    /// did, what it verified, and where the rollback lives. Queen knows what
+    /// was independently checked and which caveat should outlive the task. They
+    /// are complementary rather than duplicate, and the old behaviour kept
+    /// exactly one of them, chosen by milliseconds.
+    ///
+    /// THIS DOES NOT WEAKEN THE ASSIGNMENT CHECK, which is doing real work. It
+    /// widens the question from "may I act on this now" — session-scoped, and
+    /// correctly false once the task closes — to "did I do this work", which
+    /// `task_this_worker_finished` already answers for exactly this shape of
+    /// problem. A worker still cannot record against a task that was never
+    /// its own.
+    fn task_evidence_may_reach(&self, value: &str) -> Result<TaskId, ApplicationError> {
+        if let Ok(task_id) = self.visible_task_id(value) {
+            return Ok(task_id);
+        }
+        let task_id = TaskId::from_str(value).map_err(|_| ApplicationError::NotAuthorized)?;
+        Ok(self
+            .tasks
+            .task_this_worker_finished(self.principal, task_id)?
+            .id)
     }
 
     fn visible_task_id(&self, value: &str) -> Result<TaskId, ApplicationError> {
@@ -2757,6 +2824,138 @@ mod tests {
         let active = response_json(start(bridge).await).await;
         assert_eq!(active["result"]["isError"], false);
         assert_eq!(active["result"]["structuredContent"]["state"], "active");
+    }
+
+    /// BOTH PARTIES' EVIDENCE SURVIVES, when they write seconds apart.
+    ///
+    /// A task in Review closes the moment evidence lands, and closing removes
+    /// it from the recorder's assignment — so whoever wrote second found the
+    /// task no longer theirs and lost what it was carrying. Three times on
+    /// 2026-08-25. The sharpest gap was 23 seconds, and what vanished was a
+    /// rollback file path and two spec references: the half nobody can
+    /// reconstruct from the code afterwards.
+    ///
+    /// The two records are complementary rather than duplicate. The worker
+    /// knows what it did and where the rollback lives; Queen knows what was
+    /// independently checked. Keeping exactly one of them, chosen by
+    /// milliseconds, is the defect.
+    #[tokio::test]
+    async fn evidence_from_both_parties_survives_a_close_between_them() {
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let task = store
+            .create_task("Restore the public schema", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(task.id, worker_id).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+
+        let record = |token: String, reference: &'static str| {
+            handle(
+                bridge.clone(),
+                plain_state(),
+                mcp_request(
+                    Some(&token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_record_deployment",
+                        "arguments": {
+                            "task_id": task.id.to_string(),
+                            "environment": "production",
+                            "reference": reference,
+                        }
+                    }),
+                ),
+            )
+        };
+
+        // Queen gets there first and the task closes on her evidence.
+        let queens = response_json(record(queen_token, "verified against /health").await).await;
+        assert_eq!(queens["result"]["isError"], false);
+        store
+            .transition_task(task.id, TaskState::Completed)
+            .unwrap();
+
+        // The worker writes 23 seconds later, carrying what only it knows.
+        let workers =
+            response_json(record(worker_token, "ROLLBACK-1315-restore-44-public.sql").await).await;
+
+        assert_eq!(
+            workers["result"]["isError"], false,
+            "the second party must not lose its evidence: {workers}"
+        );
+        let recorded = store.task_deployments(task.id).unwrap();
+        let references = recorded
+            .iter()
+            .map(|entry| entry.reference.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            references.contains(&"verified against /health"),
+            "{references:?}"
+        );
+        assert!(
+            references.contains(&"ROLLBACK-1315-restore-44-public.sql"),
+            "{references:?}"
+        );
+    }
+
+    /// A worker still cannot record against work that was never its own.
+    ///
+    /// The widening answers "did I do this work", not "may I write anywhere".
+    /// Losing that distinction would trade a lost-evidence bug for a much worse
+    /// one.
+    #[tokio::test]
+    async fn a_worker_cannot_record_evidence_on_someone_elses_task() {
+        let (bridge, store, _, worker_id, _) = setup();
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let stranger = store
+            .create_worker(
+                "Thistle",
+                ProviderKind::ClaudeCode,
+                "/workspace/thistle",
+                false,
+                2,
+            )
+            .unwrap();
+        let other = store
+            .create_task("Work belonging to another worker", "/workspace/thistle")
+            .unwrap();
+        store.transition_task(other.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(other.id, stranger.id).unwrap();
+        store.transition_task(other.id, TaskState::Active).unwrap();
+        store.transition_task(other.id, TaskState::Review).unwrap();
+
+        let refused = response_json(
+            handle(
+                bridge,
+                plain_state(),
+                mcp_request(
+                    Some(&worker_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_record_deployment",
+                        "arguments": {
+                            "task_id": other.id.to_string(),
+                            "environment": "production",
+                            "reference": "not mine to record",
+                        }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+
+        assert_eq!(refused["result"]["isError"], true);
+        assert!(store.task_deployments(other.id).unwrap().is_empty());
     }
 
     /// The dispatch tells the worker: record the deployment, then write the
