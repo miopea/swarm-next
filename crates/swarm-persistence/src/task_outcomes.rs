@@ -705,6 +705,110 @@ mod completion_evidence_tests {
         );
     }
 
+    /// A reviewer's dissent survives the close it could not prevent.
+    ///
+    /// Observed 2026-08-25, and nobody did anything wrong. Queen held 01a03944
+    /// in Review for a stated reason — its own author had written that an
+    /// acceptance criterion was NOT MET. Fifty-eight seconds later this sweep
+    /// closed it on a deployment the worker had recorded because the task's own
+    /// `next_step` prompt told it to. Three correct actions, one wrong outcome.
+    ///
+    /// The operator ruled the sweep keeps winning: closing shipped work with no
+    /// human round trip is what makes unattended running possible, and a hold
+    /// the sweep obeys can strand work whenever a reviewer forgets it. What was
+    /// wrong was not the override but the ERASURE — the board showed Completed
+    /// with evidence and no trace that anyone had disagreed.
+    #[test]
+    fn a_reviewers_hold_survives_the_sweep_that_closes_over_it() {
+        let store = TaskStore::in_memory().unwrap();
+        let held = task(&store);
+        store
+            .record_task_deployment(held, "production", "release 42", 1_000)
+            .unwrap();
+        store
+            .hold_reviewed_work(
+                held,
+                &TaskActivityActor::system(),
+                "the real-Hive criterion is unmet and its author said so",
+                1_000,
+            )
+            .unwrap();
+
+        let closed = store.complete_reviewed_work_with_deployment().unwrap();
+
+        // The sweep still wins. That is the ruling, not a compromise.
+        assert_eq!(closed.len(), 1);
+        assert_eq!(store.get_task(held).unwrap().state, TaskState::Completed);
+
+        // And the reason is on the task, in the same write that closed it —
+        // not in a note somebody has to win a race to add afterwards.
+        let activity = store.list_task_activity(held, 10).unwrap();
+        let note = &activity.events.last().unwrap().note;
+        assert!(note.contains("release 42"), "{note}");
+        assert!(note.contains("over a reviewer's hold"), "{note}");
+        assert!(note.contains("its author said so"), "{note}");
+    }
+
+    /// And with no hold, nothing is invented — the ordinary case is untouched.
+    #[test]
+    fn shipped_work_nobody_held_closes_with_nothing_to_explain() {
+        let store = TaskStore::in_memory().unwrap();
+        let shipped = task(&store);
+        store
+            .record_task_deployment(shipped, "production", "release 42", 1_000)
+            .unwrap();
+
+        store.complete_reviewed_work_with_deployment().unwrap();
+
+        let activity = store.list_task_activity(shipped, 10).unwrap();
+        assert_eq!(
+            activity.events.last().unwrap().note,
+            "Running in production as release 42."
+        );
+    }
+
+    /// A withdrawn hold is a withdrawn opinion, and must leave no residue.
+    #[test]
+    fn a_released_hold_stops_being_reported() {
+        let store = TaskStore::in_memory().unwrap();
+        let shipped = task(&store);
+        store
+            .record_task_deployment(shipped, "production", "release 42", 1_000)
+            .unwrap();
+        store
+            .hold_reviewed_work(
+                shipped,
+                &TaskActivityActor::system(),
+                "checking one thing",
+                1_000,
+            )
+            .unwrap();
+        assert!(store.release_reviewed_work_hold(shipped).unwrap());
+
+        store.complete_reviewed_work_with_deployment().unwrap();
+
+        let activity = store.list_task_activity(shipped, 10).unwrap();
+        assert_eq!(
+            activity.events.last().unwrap().note,
+            "Running in production as release 42."
+        );
+    }
+
+    /// A hold that does not say why is indistinguishable from silence, and
+    /// would close work with "a reviewer disagreed" and no reason — worse than
+    /// no hold, because it looks like information.
+    #[test]
+    fn a_hold_must_say_why() {
+        let store = TaskStore::in_memory().unwrap();
+        let shipped = task(&store);
+
+        assert!(
+            store
+                .hold_reviewed_work(shipped, &TaskActivityActor::system(), "   ", 1_000)
+                .is_err()
+        );
+    }
+
     /// The operator's ruling: the coordinator approves when the evidence is
     /// well-formed, and Queen sees only what needs judgment. Deployed work is
     /// the well-formed case and the common one.
@@ -805,6 +909,72 @@ pub struct DeterministicCompletion {
 }
 
 impl TaskStore {
+    /// Records why a reviewer does not consider this work finished.
+    ///
+    /// Replaces any existing hold: "is this finished" has one current answer.
+    ///
+    /// # Errors
+    /// Returns an error when the reason is blank or the hold cannot be stored.
+    pub fn hold_reviewed_work(
+        &self,
+        task_id: TaskId,
+        actor: &TaskActivityActor,
+        reason: &str,
+        now: i64,
+    ) -> Result<(), TaskStoreError> {
+        let reason = reason.trim();
+        if reason.is_empty() {
+            return Err(TaskStoreError::IntegrityFailure(
+                "a hold must say why, or it is indistinguishable from silence".into(),
+            ));
+        }
+        let connection = self.connection()?;
+        connection.execute(
+            "INSERT INTO task_review_holds (task_id, actor_kind, actor_id, reason, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(task_id) DO UPDATE SET
+                 actor_kind = excluded.actor_kind,
+                 actor_id = excluded.actor_id,
+                 reason = excluded.reason,
+                 created_at = excluded.created_at",
+            params![
+                task_id.to_string(),
+                actor.kind.to_string(),
+                actor.id.as_deref(),
+                reason,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Withdraws a hold, so ordinary shipped work closes with nothing to say.
+    ///
+    /// # Errors
+    /// Returns an error when the hold cannot be removed.
+    pub fn release_reviewed_work_hold(&self, task_id: TaskId) -> Result<bool, TaskStoreError> {
+        let connection = self.connection()?;
+        Ok(connection.execute(
+            "DELETE FROM task_review_holds WHERE task_id = ?1",
+            [task_id.to_string()],
+        )? > 0)
+    }
+
+    /// The standing hold on a task, if a reviewer set one.
+    ///
+    /// # Errors
+    /// Returns an error when the hold cannot be read.
+    pub fn reviewed_work_hold(&self, task_id: TaskId) -> Result<Option<String>, TaskStoreError> {
+        let connection = self.connection()?;
+        Ok(connection
+            .query_row(
+                "SELECT reason FROM task_review_holds WHERE task_id = ?1",
+                [task_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?)
+    }
+
     /// Closes reviewed work that can show where it is running.
     ///
     /// The operator's ruling on who approves a completion: the coordinator
@@ -822,6 +992,12 @@ impl TaskStore {
     /// Returns a persistence error. A task that cannot be closed is skipped
     /// rather than aborting the pass, because one stuck row should not stop
     /// every other completion.
+    /// Records why a reviewer does not consider this work finished.
+    ///
+    /// Replaces any existing hold: "is this finished" has one current answer.
+    ///
+    /// # Errors
+    /// Returns an error when the task is unknown or the hold cannot be stored.
     pub fn complete_reviewed_work_with_deployment(
         &self,
     ) -> Result<Vec<DeterministicCompletion>, TaskStoreError> {
@@ -860,7 +1036,30 @@ impl TaskStore {
             // The note is derived from the evidence rather than written about
             // it. "Verified" would be a claim this pass is not entitled to
             // make; where it is running is what was actually established.
-            let note = format!("Running in {environment} as {reference}.");
+            // THE SWEEP CARRIES THE DISSENT, IT DOES NOT RACE IT.
+            //
+            // The operator ruled that the sweep keeps winning — closing shipped
+            // work without a human round trip is what makes unattended running
+            // possible, and a hold the sweep obeys can strand work whenever a
+            // reviewer forgets it. But a reviewer's reason must survive the
+            // close, and writing it separately is what failed: on 2026-08-25 a
+            // reviewer recorded evidence whose text pointed at a completion note
+            // she then could not write, because this sweep had already closed
+            // the task in the intervening second. The board was left with a
+            // reference to information that did not exist, which reads as a
+            // pointer rather than as a gap. So the note is assembled here, in
+            // the same pass that closes the task, and nothing has to win a race.
+            let held = self.reviewed_work_hold(task_id).unwrap_or_default();
+            let note = match held
+                .as_deref()
+                .map(str::trim)
+                .filter(|held| !held.is_empty())
+            {
+                Some(held) => format!(
+                    "Running in {environment} as {reference}. Closed over a reviewer's hold, which said: {held}"
+                ),
+                None => format!("Running in {environment} as {reference}."),
+            };
             match self.transition_task_with_note_as(
                 task_id,
                 TaskState::Completed,
@@ -907,4 +1106,31 @@ impl TaskStore {
             .filter_map(|id| TaskId::from_str(&id).ok())
             .collect())
     }
+}
+
+/// A reviewer's stated reason for not considering shipped work finished.
+///
+/// There was no way to say it. A reviewer holding work in Review cannot
+/// transition it — it is already in Review — and nothing else annotates a task,
+/// so a hold existed only in prose between sessions. On 2026-08-25 Queen held
+/// 01a03944 for a stated reason, the shipped-work sweep closed it fifty-eight
+/// seconds later on evidence the worker had been instructed to record, and the
+/// board kept no trace that a reviewer had disagreed. Reading it afterwards, the
+/// disagreement was not overruled; it was absent.
+///
+/// One hold per task, replaced rather than accumulated: this answers "is this
+/// finished", which has one current answer.
+pub(super) fn migrate_review_holds(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS task_review_holds (
+             task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+             actor_kind TEXT NOT NULL,
+             actor_id TEXT,
+             reason TEXT NOT NULL,
+             created_at INTEGER NOT NULL DEFAULT (unixepoch())
+         );
+         PRAGMA user_version = 91;",
+    )
 }

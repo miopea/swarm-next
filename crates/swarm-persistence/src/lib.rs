@@ -142,7 +142,8 @@ const OPERATOR_PASSKEY_SCHEMA_VERSION: i64 = 87;
 const TERMINAL_GEOMETRY_LEDGER_SCHEMA_VERSION: i64 = 88;
 const UNDELIVERED_BRIEF_ATTENTION_SCHEMA_VERSION: i64 = 89;
 const REVIEWED_WORK_EVIDENCE_ATTENTION_SCHEMA_VERSION: i64 = 90;
-const CURRENT_SCHEMA_VERSION: i64 = REVIEWED_WORK_EVIDENCE_ATTENTION_SCHEMA_VERSION;
+const REVIEW_HOLD_SCHEMA_VERSION: i64 = 91;
+const CURRENT_SCHEMA_VERSION: i64 = REVIEW_HOLD_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -2365,6 +2366,9 @@ fn migrate_named_schema_steps(
     }
     if schema_version < REVIEWED_WORK_EVIDENCE_ATTENTION_SCHEMA_VERSION {
         coordinator::migrate_reviewed_work_evidence_attention(transaction)?;
+    }
+    if schema_version < REVIEW_HOLD_SCHEMA_VERSION {
+        task_outcomes::migrate_review_holds(transaction)?;
     }
     Ok(())
 }
@@ -5489,6 +5493,12 @@ mod tests {
             probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
                  WHERE type = 'table' AND name = 'coordinator_actions'
                    AND sql LIKE '%reviewed_work_without_evidence_attention%')",
+        },
+        SchemaStep {
+            table: "task_review_holds",
+            artifact: "",
+            undo_sql: "",
+            probe_sql: "",
         },
     ];
 

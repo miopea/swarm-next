@@ -325,6 +325,7 @@ impl ServerHandler for AgentMcp {
                 assign_task_tool(),
                 approve_no_deployment_tool(),
                 retire_task_tool(),
+                hold_reviewed_work_tool(),
                 list_apiary_hives_tool(),
                 list_apiary_tasks_tool(),
                 create_apiary_task_tool(),
@@ -377,6 +378,7 @@ impl ServerHandler for AgentMcp {
             "swarm_reload_app" => self.reload_app(arguments).await,
             "swarm_approve_no_deployment" => self.approve_no_deployment(arguments),
             "swarm_retire_task" => self.retire_task(arguments),
+            "swarm_hold_reviewed_work" => self.hold_reviewed_work(arguments),
             "swarm_transition_task" => self.transition_task(arguments).await,
             "swarm_list_jira_comments" => self.list_jira_comments(arguments).await,
             "swarm_comment_jira_task" => self.comment_jira_task(arguments),
@@ -815,6 +817,30 @@ impl AgentMcp {
         self.tasks
             .retire_task(self.principal, task_id, &input.reason)?;
         structured(json!({ "task_id": input.task_id, "retired": true }))
+    }
+
+    fn hold_reviewed_work(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<HoldReviewedWorkInput>(arguments)?;
+        let task_id =
+            TaskId::from_str(&input.task_id).map_err(|_| ApplicationError::NotAuthorized)?;
+        if input.release {
+            let released = self
+                .tasks
+                .release_reviewed_work_hold(self.principal, task_id)?;
+            return structured(
+                json!({ "task_id": input.task_id, "held": false, "released": released }),
+            );
+        }
+        let reason = input.reason.unwrap_or_default();
+        self.tasks
+            .hold_reviewed_work(self.principal, task_id, &reason, crate::unix_timestamp())?;
+        structured(json!({
+            "task_id": input.task_id,
+            "held": true,
+            // Said plainly at the call site, because the tool's whole risk is a
+            // reviewer believing the work has stopped.
+            "note": "Recorded. This does not stop the coordinator closing this work on its evidence; your reason will be carried into the completion.",
+        }))
     }
 
     fn approve_no_deployment(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
@@ -1357,6 +1383,17 @@ struct RetireTaskInput {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct HoldReviewedWorkInput {
+    task_id: String,
+    /// Absent when releasing; the store refuses an empty one when setting.
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    release: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ApproveNoDeploymentInput {
     task_id: String,
 }
@@ -1511,6 +1548,32 @@ fn reload_app_tool() -> Tool {
                 }
             },
             "required": ["action"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
+fn hold_reviewed_work_tool() -> Tool {
+    tool(
+        "swarm_hold_reviewed_work",
+        "Queen only: record why shipped work is not finished, on a task in Review. This does NOT stop the work being closed — the coordinator still completes reviewed work that has deployment evidence, because closing without a human round trip is what lets the Hive run unattended. What it does is make your reason survive that close, on the task, where a later reader sees it. Use it the moment you decide something is not done, not when you are ready to explain: a reason written afterwards has nowhere to go, since a completed task cannot be transitioned again. Pass release=true to withdraw a hold you no longer stand behind.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string", "format": "uuid" },
+                "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1000,
+                    "description": "What is not finished, specifically. Recorded verbatim on the task when it closes."
+                },
+                "release": {
+                    "type": "boolean",
+                    "description": "Withdraw an existing hold instead of setting one. The reason is then ignored."
+                }
+            },
+            "required": ["task_id"],
             "additionalProperties": false
         }),
         false,
@@ -2020,6 +2083,10 @@ mod tests {
         "swarm_finish_automation_run",
         "swarm_assign_task",
         "swarm_list_jira_projects",
+        // A reviewer's dissent is a reviewer's to record. A worker holding its
+        // own work is just a worker declining to finish it, which the lifecycle
+        // already expresses.
+        "swarm_hold_reviewed_work",
     ];
 
     fn setup() -> (

@@ -1930,6 +1930,52 @@ impl TaskService {
             .map_err(Into::into)
     }
 
+    /// Records why a reviewer does not consider shipped work finished.
+    ///
+    /// Queen's only lever for "shipped but not done". Before this there was
+    /// none: a task already in Review cannot be transitioned to Review, and
+    /// nothing else annotates a task, so a hold lived only in prose between
+    /// sessions and vanished when the shipped-work sweep closed the task.
+    ///
+    /// The hold does not stop the sweep, on the operator's ruling — closing
+    /// shipped work without a human round trip is what makes unattended running
+    /// possible. It makes the reason survive the close.
+    ///
+    /// # Errors
+    /// Denies a non-Queen caller and propagates persistence failures.
+    pub fn hold_reviewed_work(
+        &self,
+        principal: AgentPrincipal,
+        task_id: TaskId,
+        reason: &str,
+        now: i64,
+    ) -> Result<(), ApplicationError> {
+        require_queen(principal)?;
+        self.store
+            .hold_reviewed_work(
+                task_id,
+                &TaskActivityActor::worker(principal.worker_id),
+                reason,
+                now,
+            )
+            .map_err(Into::into)
+    }
+
+    /// Withdraws a hold, so the work closes with nothing to explain.
+    ///
+    /// # Errors
+    /// Denies a non-Queen caller and propagates persistence failures.
+    pub fn release_reviewed_work_hold(
+        &self,
+        principal: AgentPrincipal,
+        task_id: TaskId,
+    ) -> Result<bool, ApplicationError> {
+        require_queen(principal)?;
+        self.store
+            .release_reviewed_work_hold(task_id)
+            .map_err(Into::into)
+    }
+
     /// Retires a task Queen has been told should not exist any more.
     ///
     /// Soft-delete, per the operator's ruling: the row keeps its history and
@@ -1948,6 +1994,19 @@ impl TaskService {
     /// Denies a worker caller, and propagates lifecycle and persistence
     /// failures — including the refusal to retire Active or Review work, which
     /// must be moved out of flight first.
+    /// Records why a reviewer does not consider shipped work finished.
+    ///
+    /// Queen's only lever for "shipped but not done". Before this there was
+    /// none: a task already in Review cannot be transitioned to Review, and
+    /// nothing else annotates a task, so a hold lived only in prose between
+    /// sessions and vanished when the shipped-work sweep closed the task.
+    ///
+    /// The hold does not stop the sweep, on the operator's ruling — closing
+    /// shipped work without a human round trip is what makes unattended running
+    /// possible. It makes the reason survive the close.
+    ///
+    /// # Errors
+    /// Denies a non-Queen caller and propagates persistence failures.
     pub fn retire_task(
         &self,
         principal: AgentPrincipal,
