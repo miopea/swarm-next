@@ -375,7 +375,7 @@ impl ServerHandler for AgentMcp {
             "swarm_list_tasks" => self
                 .tasks
                 .list_visible_tasks(self.principal)
-                .and_then(|tasks| self.task_list_result(tasks)),
+                .and_then(|tasks| self.task_list_result(&tasks)),
             "swarm_read_task_history" => self.read_task_history(arguments),
             "swarm_reload_app" => self.reload_app(arguments).await,
             "swarm_approve_no_deployment" => self.approve_no_deployment(arguments),
@@ -1194,7 +1194,7 @@ impl AgentMcp {
     /// nothing — and it turns a frightening blank into a sentence.
     fn task_list_result(
         &self,
-        tasks: Vec<swarm_domain::Task>,
+        tasks: &[swarm_domain::Task],
     ) -> Result<CallToolResult, ApplicationError> {
         if !tasks.is_empty() || self.principal.role == WorkerRole::Queen {
             return structured(json!({ "tasks": tasks }));

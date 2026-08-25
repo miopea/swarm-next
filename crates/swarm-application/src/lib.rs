@@ -2169,10 +2169,13 @@ impl TaskService {
                     && task.state == TaskState::Completed
             })
             .collect::<Vec<_>>();
-        finished.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        finished.sort_by_key(|task| std::cmp::Reverse(task.updated_at));
         Ok(finished)
     }
 
+    /// # Errors
+    /// Returns `NotAuthorized` when this worker did not do the work, or a
+    /// persistence error when the task cannot be read.
     pub fn task_this_worker_finished(
         &self,
         principal: AgentPrincipal,

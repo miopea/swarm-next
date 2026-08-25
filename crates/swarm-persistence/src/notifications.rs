@@ -419,6 +419,9 @@ impl TaskStore {
         Ok(())
     }
 
+    /// # Errors
+    /// Returns a persistence error when the abandoned deliveries cannot be
+    /// cleared.
     pub fn recover_notification_deliveries(&self, now: i64) -> Result<usize, TaskStoreError> {
         let connection = self.connection()?;
         let removed = connection.execute(
@@ -830,6 +833,104 @@ fn retry_delay(attempts: i64) -> i64 {
     }
 }
 
+/// Widens notification deliveries past decisions, and remembers when the
+/// operator last looked at the queue.
+///
+/// THE OLD SHAPE COULD ONLY EVER CARRY DECISIONS, by construction:
+///
+///   `kind TEXT NOT NULL CHECK (kind IN ('decision','test'))`
+///   `CHECK ((kind = 'decision' AND decision_id IS NOT NULL)`
+///   `       OR (kind = 'test' AND decision_id IS NULL))`
+///   `UNIQUE(decision_id, subscription_id)`
+///
+/// Every non-test row had to name a decision, and the deduplication key was a
+/// decision id, so there was nowhere to hang the other four sources of Needs
+/// you and no way to tell two of them apart if there had been. The operator's
+/// ruling is parity — "If it makes it to Needs You then I should see it" — so
+/// `subject_key` replaces `decision_id` as the identity of a delivery, and
+/// `decision_id` stays only for its cascade.
+///
+/// `SQLite` cannot alter a CHECK, so this is a rebuild. Existing rows keep their
+/// meaning: a queued decision delivery is still a queued decision delivery,
+/// addressed by the key it would be given today.
+///
+/// Guarded on the table existing and on the column being absent, because the
+/// migration tests rewind `user_version` WITHOUT rewinding the tables — they
+/// model a database restored from a backup or half-upgraded, and a migration
+/// that assumes the old shape is still there fails on exactly that.
+pub(super) fn migrate_attention_notifications(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let widened: bool = transaction.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM pragma_table_info('notification_deliveries')
+             WHERE name = 'subject_key'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM sqlite_master
+             WHERE type = 'table' AND name = 'notification_deliveries'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    if present && !widened {
+        transaction.execute_batch(
+            "CREATE TABLE notification_deliveries_widened (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 operator_id TEXT NOT NULL REFERENCES operators(id) ON DELETE CASCADE,
+                 subscription_id TEXT NOT NULL
+                     REFERENCES notification_subscriptions(device_id) ON DELETE CASCADE,
+                 decision_id TEXT REFERENCES decision_requests(id) ON DELETE CASCADE,
+                 subject_key TEXT NOT NULL,
+                 urgency TEXT NOT NULL CHECK (urgency IN ('normal','time_sensitive')),
+                 kind TEXT NOT NULL CHECK (kind IN (
+                     'decision','assist','queen_automation','held_delivery',
+                     'email_reply','test'
+                 )),
+                 state TEXT NOT NULL CHECK (state IN ('queued','dispatching')),
+                 attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 5),
+                 available_at INTEGER NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 CHECK ((kind = 'decision' AND decision_id IS NOT NULL)
+                        OR (kind <> 'decision' AND decision_id IS NULL)),
+                 UNIQUE(subject_key, subscription_id)
+             );
+             INSERT INTO notification_deliveries_widened (
+                 id, operator_id, subscription_id, decision_id, subject_key,
+                 urgency, kind, state, attempts, available_at, created_at
+             )
+             SELECT id, operator_id, subscription_id, decision_id,
+                    CASE WHEN kind = 'decision' THEN 'decision:' || decision_id
+                         ELSE 'test:' || id END,
+                    urgency, kind, state, attempts, available_at, created_at
+             FROM notification_deliveries;
+             DROP TABLE notification_deliveries;
+             ALTER TABLE notification_deliveries_widened
+                 RENAME TO notification_deliveries;",
+        )?;
+    }
+    // WHEN THE OPERATOR LAST LOOKED, per operator rather than per device.
+    //
+    // It cannot be per-tab or per-browser state: they use more than one window,
+    // and a watermark that resets per tab would re-notify for work they read an
+    // hour ago on the other screen.
+    //
+    // This is the whole defence against shouting. Under parity every source is
+    // eligible, so what keeps the phone quiet is no longer "which sources" but
+    // "newer than the last time they looked at the queue".
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS operator_attention_watermarks (
+             operator_id TEXT PRIMARY KEY REFERENCES operators(id) ON DELETE CASCADE,
+             seen_at INTEGER NOT NULL
+         );
+         PRAGMA user_version = 94;",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1228,102 +1329,4 @@ mod tests {
         assert!(store.claim_notification_deliveries(131).unwrap().is_empty());
         assert_eq!(store.claim_notification_deliveries(132).unwrap().len(), 1);
     }
-}
-
-/// Widens notification deliveries past decisions, and remembers when the
-/// operator last looked at the queue.
-///
-/// THE OLD SHAPE COULD ONLY EVER CARRY DECISIONS, by construction:
-///
-///   kind TEXT NOT NULL CHECK (kind IN ('decision','test'))
-///   CHECK ((kind = 'decision' AND decision_id IS NOT NULL)
-///          OR (kind = 'test' AND decision_id IS NULL))
-///   UNIQUE(decision_id, subscription_id)
-///
-/// Every non-test row had to name a decision, and the deduplication key was a
-/// decision id, so there was nowhere to hang the other four sources of Needs
-/// you and no way to tell two of them apart if there had been. The operator's
-/// ruling is parity — "If it makes it to Needs You then I should see it" — so
-/// `subject_key` replaces `decision_id` as the identity of a delivery, and
-/// `decision_id` stays only for its cascade.
-///
-/// SQLite cannot alter a CHECK, so this is a rebuild. Existing rows keep their
-/// meaning: a queued decision delivery is still a queued decision delivery,
-/// addressed by the key it would be given today.
-///
-/// Guarded on the table existing and on the column being absent, because the
-/// migration tests rewind `user_version` WITHOUT rewinding the tables — they
-/// model a database restored from a backup or half-upgraded, and a migration
-/// that assumes the old shape is still there fails on exactly that.
-pub(super) fn migrate_attention_notifications(
-    transaction: &rusqlite::Transaction<'_>,
-) -> rusqlite::Result<()> {
-    let widened: bool = transaction.query_row(
-        "SELECT EXISTS(
-             SELECT 1 FROM pragma_table_info('notification_deliveries')
-             WHERE name = 'subject_key'
-         )",
-        [],
-        |row| row.get(0),
-    )?;
-    let present: bool = transaction.query_row(
-        "SELECT EXISTS(
-             SELECT 1 FROM sqlite_master
-             WHERE type = 'table' AND name = 'notification_deliveries'
-         )",
-        [],
-        |row| row.get(0),
-    )?;
-    if present && !widened {
-        transaction.execute_batch(
-            "CREATE TABLE notification_deliveries_widened (
-                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                 operator_id TEXT NOT NULL REFERENCES operators(id) ON DELETE CASCADE,
-                 subscription_id TEXT NOT NULL
-                     REFERENCES notification_subscriptions(device_id) ON DELETE CASCADE,
-                 decision_id TEXT REFERENCES decision_requests(id) ON DELETE CASCADE,
-                 subject_key TEXT NOT NULL,
-                 urgency TEXT NOT NULL CHECK (urgency IN ('normal','time_sensitive')),
-                 kind TEXT NOT NULL CHECK (kind IN (
-                     'decision','assist','queen_automation','held_delivery',
-                     'email_reply','test'
-                 )),
-                 state TEXT NOT NULL CHECK (state IN ('queued','dispatching')),
-                 attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 5),
-                 available_at INTEGER NOT NULL,
-                 created_at INTEGER NOT NULL,
-                 CHECK ((kind = 'decision' AND decision_id IS NOT NULL)
-                        OR (kind <> 'decision' AND decision_id IS NULL)),
-                 UNIQUE(subject_key, subscription_id)
-             );
-             INSERT INTO notification_deliveries_widened (
-                 id, operator_id, subscription_id, decision_id, subject_key,
-                 urgency, kind, state, attempts, available_at, created_at
-             )
-             SELECT id, operator_id, subscription_id, decision_id,
-                    CASE WHEN kind = 'decision' THEN 'decision:' || decision_id
-                         ELSE 'test:' || id END,
-                    urgency, kind, state, attempts, available_at, created_at
-             FROM notification_deliveries;
-             DROP TABLE notification_deliveries;
-             ALTER TABLE notification_deliveries_widened
-                 RENAME TO notification_deliveries;",
-        )?;
-    }
-    // WHEN THE OPERATOR LAST LOOKED, per operator rather than per device.
-    //
-    // It cannot be per-tab or per-browser state: they use more than one window,
-    // and a watermark that resets per tab would re-notify for work they read an
-    // hour ago on the other screen.
-    //
-    // This is the whole defence against shouting. Under parity every source is
-    // eligible, so what keeps the phone quiet is no longer "which sources" but
-    // "newer than the last time they looked at the queue".
-    transaction.execute_batch(
-        "CREATE TABLE IF NOT EXISTS operator_attention_watermarks (
-             operator_id TEXT PRIMARY KEY REFERENCES operators(id) ON DELETE CASCADE,
-             seen_at INTEGER NOT NULL
-         );
-         PRAGMA user_version = 94;",
-    )
 }
