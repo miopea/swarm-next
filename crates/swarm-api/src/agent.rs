@@ -691,33 +691,37 @@ impl AgentMcp {
                     .is_some_and(|status| status.reload_available),
             }));
         }
-        // Ruling, 2026-08-23: refuse while the operator is at the Hive rather
-        // than queue until they leave. A reload the operator did not ask for,
-        // arriving whenever they happen to step away, is worse than being told
-        // to try again — and a queued one would fire into a control room that
-        // has since been reopened.
-        let now = crate::unix_timestamp();
-        let presence = self
+        // Ruling, 2026-08-25, superseding ADR-0051 and recorded as ADR-0055.
+        // The operator's own words: a safe reload is one that does not break
+        // existing workers, "which should be fine on basically any app reload",
+        // and "you're not going to mess up my usage if we start a reload and I
+        // get a quick refresh, that's just development". Their presence is no
+        // longer a refusal — workers survive a reload because the terminal host
+        // is a separate service, which was always true and was what the old
+        // rule was protecting against anyway.
+        //
+        // What replaced it is the other half of what they said: "you should be
+        // clean to do your own reload WHEN YOU FINISH YOUR WORK". A worker
+        // holding an Active task is mid-sentence, and restarting the API under
+        // its own unfinished work is the case nobody wants.
+        //
+        // This is a state query, not a judgement of the moment: the worker does
+        // not decide whether now is a good time, the board does.
+        let holding_active_work = self
             .tasks
-            .store()
-            .operator_presence(now)
-            .map_err(ApplicationError::Store)?;
-        // Two questions, because presence answers only the first. Somebody can
-        // be holding a terminal on a device that has stopped reporting as
-        // present, and restarting under them is the thing this guard exists to
-        // prevent.
-        let holding_a_terminal = self
-            .tasks
-            .store()
-            .operator_holds_any_terminal(now)
-            .map_err(ApplicationError::Store)?;
-        if presence.mode == swarm_domain::PresenceMode::AtHive || holding_a_terminal {
+            .list_visible_tasks(self.principal)?
+            .iter()
+            .any(|task| task.state == TaskState::Active);
+        if holding_active_work {
             return Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(
-                "The operator is at the Hive or holding a terminal. Reloading restarts the control room and API they are using, so it is refused while they are here — commit the fix and ask again once they are away, or ask them to press Build and release."
+                "This worker still has active work. A reload restarts the API under whatever is in flight, so finish or report the task first and ask again."
                     .into(),
             )));
         }
-        let started = crate::maintenance::start_development_reload(&self.state)
+        let started = crate::maintenance::start_development_reload(
+            &self.state,
+            Some(&self.principal.worker_id.to_string()),
+        )
             .await
             .map_err(|error| {
                 ApplicationError::Store(TaskStoreError::IntegrityFailure(error.message.clone()))
@@ -2293,61 +2297,59 @@ mod tests {
     /// pressing a button, then ruled that it must refuse while they are at the
     /// Hive rather than queue until they leave.
     #[tokio::test]
-    async fn a_reload_is_refused_while_the_operator_is_here_and_never_queued() {
+    async fn a_reload_waits_for_the_worker_to_finish_rather_than_for_the_operator_to_leave() {
         let (bridge, store, state, developer_token, _outsider_token, _keep) = reloadable_hive();
+        let developer = store
+            .list_worker_profiles()
+            .unwrap()
+            .into_iter()
+            .find(|profile| profile.name == "Swarm Next")
+            .expect("the reloadable Hive has a worker whose workspace is the checkout");
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(developer.id, session).unwrap();
 
-        // Away: allowed to reach the mechanism. There is no build to make in a
-        // bare checkout, so it may be refused on that ground — which is still
-        // proof it got past the presence guard.
-        store
-            .set_manual_presence(Some(swarm_domain::PresenceMode::Away), 1_000)
-            .unwrap();
-        let away = reload_call(&bridge, &state, &developer_token, "request")
-            .await
-            .to_string();
-        assert!(
-            !away.contains("refused while they are here"),
-            "a reload must not be refused on presence while the operator is away: {away}"
-        );
-
+        // ADR-0055, superseding ADR-0051 on the operator's ruling: their being
+        // at the Hive is no longer a refusal. Workers survive a reload, and
+        // they called a quick refresh "just development".
         store
             .set_manual_presence(Some(swarm_domain::PresenceMode::AtHive), 1_000)
             .unwrap();
-        let refused = reload_call(&bridge, &state, &developer_token, "request").await;
+        let present = reload_call(&bridge, &state, &developer_token, "request")
+            .await
+            .to_string();
         assert!(
-            refused.to_string().contains("refused while they are here"),
-            "a reload must be refused while the operator is using the control room: {refused}"
+            !present.contains("refused while they are here"),
+            "the operator being present is no longer a refusal: {present}"
         );
 
-        // Away again, but somebody is holding a terminal: still refused. A
-        // device can stop reporting as present while a person is still typing.
-        store
-            .set_manual_presence(Some(swarm_domain::PresenceMode::Away), 1_000)
-            .unwrap();
-        let worker = store.list_worker_profiles().unwrap();
-        let holder = worker
-            .iter()
-            .find(|profile| profile.name == "Platform")
-            .unwrap();
-        let session = swarm_domain::WorkerSessionId::new();
-        store.bind_worker_session(holder.id, session).unwrap();
-        store
-            .renew_worker_engagement(
-                session,
-                Some(swarm_domain::PresenceDeviceId::new()),
-                crate::unix_timestamp(),
-                300,
-            )
-            .unwrap();
-        let held = reload_call(&bridge, &state, &developer_token, "request").await;
-        assert!(
-            held.to_string().contains("holding a terminal"),
-            "a reload must be refused while a terminal is held, whatever presence says: {held}"
-        );
-        store.release_worker_session(session).unwrap();
+        // What refuses instead is the worker's own unfinished work — "you
+        // should be clean to do your own reload when you finish your work".
+        let task = store.create_task("Mid-sentence", &developer.workspace).unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(task.id, developer.id).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
 
-        // Status stays readable throughout: it changes nothing, and it is how
-        // the worker closes the loop after a reload.
+        let refused = reload_call(&bridge, &state, &developer_token, "request")
+            .await
+            .to_string();
+        assert!(
+            refused.contains("still has active work"),
+            "a worker holding active work must not restart the API under it: {refused}"
+        );
+
+        // Reported, and it may ask again. The rule is a state query rather than
+        // a judgement of the moment.
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        let finished = reload_call(&bridge, &state, &developer_token, "request")
+            .await
+            .to_string();
+        assert!(
+            !finished.contains("still has active work"),
+            "finished work must not keep refusing: {finished}"
+        );
+
+        // Status changes nothing and stays readable throughout: it is how a
+        // worker closes the loop after a reload.
         let status = reload_call(&bridge, &state, &developer_token, "status").await;
         assert_eq!(
             status["result"]["structuredContent"]["running_version"],

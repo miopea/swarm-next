@@ -145,7 +145,8 @@ pub(super) async fn request_development_reload(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    start_development_reload(&state).await?;
+    // The control room's own button: the operator pressed it themselves.
+    start_development_reload(&state, None).await?;
     Ok(StatusCode::ACCEPTED.into_response())
 }
 
@@ -162,6 +163,7 @@ pub(crate) struct StartedDevelopmentReload {
 /// one cannot go missing from the other.
 pub(crate) async fn start_development_reload(
     state: &Arc<AppState>,
+    requested_by: Option<&str>,
 ) -> Result<StartedDevelopmentReload, ApiError> {
     let _guard = state.development_reload.lock().await;
     let source = runtime::development_source_status(state);
@@ -209,7 +211,14 @@ pub(crate) async fn start_development_reload(
         .expect("development reload paths are configured together");
     std::fs::write(
         status_path.as_ref(),
-        format!("state=requested\nrevision={source_revision}\n"),
+        // Who asked is written down. A reload the operator did not press must
+        // be visible to them afterwards rather than discovered by the surface
+        // changing under them — that is the condition on which the guard below
+        // it was relaxed.
+        format!(
+            "state=requested\nrevision={source_revision}\nrequested_by={}\n",
+            requested_by.unwrap_or("operator")
+        ),
     )
     .map_err(|error| {
         ApiError::new(

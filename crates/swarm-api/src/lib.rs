@@ -8042,7 +8042,7 @@ mod tests {
         assert!(!request.contains("secret"));
         assert_eq!(
             std::fs::read_to_string(status_path).unwrap(),
-            "state=requested\nrevision=unknown\n"
+            "state=requested\nrevision=unknown\nrequested_by=operator\n"
         );
 
         let duplicate = app
