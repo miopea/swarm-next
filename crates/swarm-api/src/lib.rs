@@ -2356,6 +2356,49 @@ impl Default for WorkerViewFacts {
     }
 }
 
+/// Why this worker cannot work in its own directory, if it cannot.
+///
+/// EXISTENCE WAS NEVER THE ONLY WAY A WORKSPACE FAILS. This checked only that
+/// the directory was there, and a read-only one is there — `is_dir` says yes,
+/// the worker reads as healthy, takes an assignment, and fails on its first
+/// write. On 2026-08-25 a developer's repositories went read-only underneath a
+/// running fleet while the Swarm workspace beside them stayed writable, so the
+/// board kept working perfectly and kept handing out work nobody could do. The
+/// operator learned about it from a person in a chat window.
+///
+/// `access(W_OK)` rather than a stat of the permission bits, because the two
+/// disagree in exactly the case that prompted this: a read-only MOUNT leaves
+/// the bits untouched and the kernel refuses the write anyway. It is also one
+/// syscall, the same cost class as the `is_dir` it joins, which is what keeps
+/// this honest per read instead of a stored flag going stale the moment the
+/// filesystem changes underneath it.
+///
+/// WHAT IT DOES NOT PROVE. A successful check is not a guarantee a write will
+/// land — a full disk, an immutable attribute, or a policy layer can still
+/// refuse one, and the filesystem can turn read-only a second later. It answers
+/// "can this worker write here right now", which is the question that was not
+/// being asked at all.
+fn workspace_fault(workspace: &str) -> Option<String> {
+    let path = std::path::Path::new(workspace);
+    if !path.is_dir() {
+        return Some(format!(
+            "Workspace {workspace} does not exist, so this worker cannot start. Fix the path in its settings, or create the directory."
+        ));
+    }
+    // Named separately from "does not exist" on purpose. The two look identical
+    // on the board otherwise, and they need opposite remedies: one is a wrong
+    // path to correct in settings, the other is a filesystem to repair, and
+    // telling someone to create a directory that is already there sends them
+    // looking in the wrong place.
+    nix::unistd::access(path, nix::unistd::AccessFlags::W_OK)
+        .err()
+        .map(|error| {
+            format!(
+                "Workspace {workspace} cannot be written ({error}), so this worker would fail on its first change. The directory is there; the filesystem or its permissions are refusing writes."
+            )
+        })
+}
+
 fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
     let WorkerViewFacts {
         running,
@@ -2389,14 +2432,7 @@ fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
     //
     // One stat per worker per read. The alternative is a stored flag that goes
     // stale the moment somebody clones the directory.
-    let runtime_error = runtime_error.or_else(|| {
-        (!std::path::Path::new(&profile.workspace).is_dir()).then(|| {
-            format!(
-                "Workspace {} does not exist, so this worker cannot start. Fix the path in its settings, or create the directory.",
-                profile.workspace
-            )
-        })
-    });
+    let runtime_error = runtime_error.or_else(|| workspace_fault(&profile.workspace));
     let attention_state = if runtime_error.is_some() {
         WorkerAttentionState::Blocked
     } else if !running {
@@ -15167,6 +15203,53 @@ mod tests {
             store.attention_watermark_for_test().unwrap() > before,
             "the look must be recorded, not merely accepted"
         );
+    }
+
+    /// A workspace that exists but refuses writes is reported as such.
+    ///
+    /// This is the case that used to pass silently. `is_dir` says yes for a
+    /// read-only directory, so the worker read as healthy, took an assignment,
+    /// and failed on its first write — looking like a worker that broke rather
+    /// than a filesystem that did. A developer's repositories went read-only
+    /// under a running fleet on 2026-08-25 and the board reported nothing at
+    /// all; it was a person in a chat window who noticed.
+    ///
+    /// Asserts the two faults stay DISTINCT. They need opposite remedies: a
+    /// missing workspace is a wrong path to fix in settings, an unwritable one
+    /// is a filesystem to repair. Telling someone to create a directory that is
+    /// already sitting there sends them looking in the wrong place.
+    #[test]
+    fn a_workspace_that_exists_but_refuses_writes_is_not_reported_as_missing() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let scratch = tempfile::tempdir().unwrap();
+        let unwritable = scratch.path().join("frozen-repo");
+        std::fs::create_dir(&unwritable).unwrap();
+        std::fs::set_permissions(&unwritable, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+        let fault = workspace_fault(&unwritable.to_string_lossy())
+            .expect("a workspace that cannot be written must be reported");
+
+        assert!(fault.contains("cannot be written"), "{fault}");
+        // The remedy has to be the right one.
+        assert!(fault.contains("directory is there"), "{fault}");
+        assert!(!fault.contains("does not exist"), "{fault}");
+
+        // Restored so the temp directory can be cleaned up.
+        std::fs::set_permissions(&unwritable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[test]
+    fn a_writable_workspace_reports_no_fault_and_a_missing_one_still_does() {
+        let scratch = tempfile::tempdir().unwrap();
+
+        assert_eq!(workspace_fault(&scratch.path().to_string_lossy()), None);
+
+        let missing = scratch.path().join("never-created");
+        let fault =
+            workspace_fault(&missing.to_string_lossy()).expect("a missing workspace stands");
+        assert!(fault.contains("does not exist"), "{fault}");
+        assert!(!fault.contains("cannot be written"), "{fault}");
     }
 
     async fn authorized_get(app: Router, uri: &str) -> Response {
