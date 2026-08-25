@@ -88,6 +88,11 @@ test("promises workers stay online, and defers the engine rather than stopping t
   vi.mocked(api.fetchReleaseStatus).mockResolvedValue(
     status({ carries_new_worker_engine: true, downloaded_version: "0.2.0" }),
   );
+  // Without this the bare vi.fn() returns undefined, the component calls
+  // .then on it, and the TypeError escapes as an unhandled rejection — which
+  // vitest reports as an error and exits non-zero while every test passes.
+  // That is what has been failing `pnpm test` in CI.
+  vi.mocked(api.applyRelease).mockResolvedValue(undefined);
   render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
 
   expect(await screen.findByText("Workers stay online")).toBeInTheDocument();
