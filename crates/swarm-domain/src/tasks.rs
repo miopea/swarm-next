@@ -244,6 +244,14 @@ pub enum TaskActivityKind {
     Unassigned,
     Removed,
     Restored,
+    /// A correction appended to a task's record without moving it.
+    ///
+    /// A handoff true when written stops being true, and saying so used to mean
+    /// leaving the state and coming back — which takes finished work out of
+    /// Queen's review queue and reads as though it restarted. This kind marks
+    /// an amendment in place: the note it corrects stays beside it, because
+    /// what was believed and when is part of the record.
+    Corrected,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -348,6 +356,7 @@ impl fmt::Display for TaskActivityKind {
             Self::Unassigned => "unassigned",
             Self::Removed => "removed",
             Self::Restored => "restored",
+            Self::Corrected => "corrected",
         })
     }
 }
@@ -364,6 +373,7 @@ impl FromStr for TaskActivityKind {
             "unassigned" => Ok(Self::Unassigned),
             "removed" => Ok(Self::Removed),
             "restored" => Ok(Self::Restored),
+            "corrected" => Ok(Self::Corrected),
             _ => Err(ParseTaskActivityKindError),
         }
     }

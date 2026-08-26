@@ -1028,6 +1028,69 @@ impl TaskStore {
         self.get_task(id)
     }
 
+    /// Appends a correction to a task's record WITHOUT changing its state.
+    ///
+    /// A handoff that was true when written stops being true, and until now the
+    /// only way to say so was to leave the state and come back — Review to
+    /// Active to Review. That works, and a worker did exactly that on
+    /// 2026-08-26, but it takes finished work out of Queen's review queue and
+    /// makes it read as restarted. The cost of correcting yourself should not
+    /// be losing your place.
+    ///
+    /// APPENDS, NEVER REPLACES. The original note was not wrong, it was
+    /// outdated, and those are different things worth keeping apart. Anyone
+    /// reading later needs to see what was believed and when, not a tidied
+    /// version where the belief was always current. That is the same reason a
+    /// superseded exemption keeps its reason with a prefix rather than losing
+    /// it.
+    ///
+    /// Deliberately not a state transition. Same-state moves are refused across
+    /// the whole machine, and that refusal does real work — it is what makes
+    /// "the state changed" mean something. Widening it so a note could be
+    /// corrected would trade a narrow gap for a weaker rule.
+    ///
+    /// # Errors
+    /// Returns an error when the note is empty or over the limit, or when the
+    /// task cannot be read.
+    pub fn append_task_correction(
+        &self,
+        id: TaskId,
+        note: &str,
+        actor: &TaskActivityActor,
+    ) -> Result<Task, TaskStoreError> {
+        let note = note.trim();
+        if note.is_empty() || note.len() > MAX_TASK_ACTIVITY_NOTE_BYTES {
+            return Err(TaskStoreError::InvalidTaskActivityNote);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let state: String = transaction
+            .query_row(
+                "SELECT state FROM tasks WHERE id = ?1 AND removed_at IS NULL",
+                [id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::NotFound)?;
+        // The state is recorded on the correction so a reader can see the
+        // record was amended in place rather than moved.
+        transaction.execute(
+            "INSERT INTO task_activity (task_id, kind, to_state, note, actor_kind, actor_id)
+             VALUES (?1, 'corrected', ?2, ?3, ?4, ?5)",
+            params![
+                id.to_string(),
+                state,
+                note,
+                actor.kind.to_string(),
+                actor.id.as_deref()
+            ],
+        )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        transaction.commit()?;
+        drop(connection);
+        self.get_task(id)
+    }
+
     /// Returns an open task to the Hive queue without stopping its former worker.
     ///
     /// # Errors

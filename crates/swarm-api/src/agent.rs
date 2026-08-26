@@ -309,6 +309,7 @@ impl ServerHandler for AgentMcp {
             list_jira_comments_tool(),
             comment_jira_task_tool(),
             record_deployment_tool(),
+            correct_task_record_tool(),
             record_no_deployment_tool(),
             draft_email_reply_tool(),
             create_task_tool(),
@@ -384,6 +385,7 @@ impl ServerHandler for AgentMcp {
             "swarm_promote_task" => self.promote_task(arguments),
             "swarm_sleep_worker" => self.sleep_worker(arguments).await,
             "swarm_transition_task" => self.transition_task(arguments).await,
+            "swarm_correct_task_record" => self.correct_task_record(arguments),
             "swarm_list_jira_comments" => self.list_jira_comments(arguments).await,
             "swarm_comment_jira_task" => self.comment_jira_task(arguments),
             "swarm_record_deployment" => self.record_deployment(arguments),
@@ -1240,6 +1242,32 @@ impl AgentMcp {
         }))
     }
 
+    /// Appends a correction to a task's record without moving it.
+    ///
+    /// A handoff true when written stops being true, and the only way to say so
+    /// was to leave the state and come back — Review to Active to Review. That
+    /// works, and a worker did it on 2026-08-26, but it takes finished work out
+    /// of Queen's review queue and makes it read as restarted. Correcting
+    /// yourself should not cost you your place.
+    ///
+    /// Scoped to a task this worker HOLDS OR FINISHED. It cannot reach another
+    /// worker's record, and it appends rather than replaces, so nobody can
+    /// rewrite what somebody else said — only add to it.
+    fn correct_task_record(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<CorrectTaskRecordInput>(arguments)?;
+        let task_id = self.task_evidence_may_reach(&input.task_id)?;
+        let task = self.tasks.store().append_task_correction(
+            task_id,
+            &input.note,
+            &swarm_domain::TaskActivityActor::worker(self.principal.worker_id),
+        )?;
+        structured(json!({
+            "task_id": task_id,
+            "state": task.state,
+            "recorded": "The correction is appended to this task's history. The note it corrects is still there, because what was believed and when is part of the record.",
+        }))
+    }
+
     /// A task this agent may record evidence against, INCLUDING one that has
     /// just closed underneath it.
     ///
@@ -1633,6 +1661,12 @@ struct TransitionTaskInput {
     task_id: String,
     state: TaskState,
     #[serde(default)]
+    note: String,
+}
+
+#[derive(Deserialize)]
+struct CorrectTaskRecordInput {
+    task_id: String,
     note: String,
 }
 
@@ -2169,6 +2203,26 @@ fn list_jira_comments_tool() -> Tool {
     )
 }
 
+fn correct_task_record_tool() -> Tool {
+    tool(
+        "swarm_correct_task_record",
+        "Append a correction to a task you hold or finished, without moving it out of its state. For a handoff that was TRUE WHEN WRITTEN and has since stopped being true — a PR that has merged, work that has now deployed, a blocker that cleared. The correction is added; the original note stays, because what was believed and when is part of the record and a tidied history that never mentions the belief is worse than an outdated one. Use this instead of cycling back through Active to re-write a handoff: that works, but it takes finished work out of Queen's review queue and reads as though the work restarted. It does not change state, does not complete anything, and cannot touch another worker's task.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string" },
+                "note": {
+                    "type": "string",
+                    "description": "What has changed since the note you are correcting, and what is true now. Say which claim is now stale rather than only stating the new fact — a reader needs to know which sentence above to stop believing."
+                }
+            },
+            "required": ["task_id", "note"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
 fn record_deployment_tool() -> Tool {
     tool(
         "swarm_record_deployment",
@@ -2564,6 +2618,10 @@ mod tests {
                 // running, the reply to whoever asked, and the follow-up it
                 // found. Sending and routing stay above it.
                 "swarm_record_deployment",
+                // Correcting your own handoff is worker work: the worker is the
+                // one whose note went stale, and it must not cost a trip out of
+                // Review to say so.
+                "swarm_correct_task_record",
                 "swarm_record_no_deployment",
                 "swarm_draft_email_reply",
                 "swarm_create_task",
@@ -3466,6 +3524,134 @@ mod tests {
         // Still enough to recognise one and go and read it.
         assert!(rendered.contains("Decision 7"), "{rendered}");
         assert!(content["next"].as_str().unwrap().contains("decision_id"));
+    }
+
+    /// A worker corrects its own handoff WITHOUT leaving Review.
+    ///
+    /// A note true when written stops being true. Until now the only route was
+    /// Review to Active to Review, which a worker did on 2026-08-26 — it works,
+    /// and it takes finished work out of Queen's review queue and reads as
+    /// though the work restarted. Correcting yourself should not cost your
+    /// place in the queue.
+    ///
+    /// The original note SURVIVES. It was not wrong, it was outdated, and a
+    /// history where the belief was always current is worse than one showing
+    /// what was believed and when.
+    #[tokio::test]
+    async fn a_worker_corrects_its_handoff_without_leaving_review() {
+        let (bridge, store, _, worker_id, _) = setup();
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let task = store
+            .create_task("Close the write hole", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(task.id, worker_id).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store
+            .transition_task_with_note(
+                task.id,
+                TaskState::Review,
+                "PR #426 is open, nothing deployed.",
+            )
+            .unwrap();
+
+        let corrected = response_json(
+            handle(
+                bridge,
+                plain_state(),
+                mcp_request(
+                    Some(&worker_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_correct_task_record",
+                        "arguments": {
+                            "task_id": task.id.to_string(),
+                            "note": "CORRECTION: #426 has merged and f2059bdb is in production. The line above saying nothing deployed is stale."
+                        }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+
+        assert_eq!(corrected["result"]["isError"], false, "{corrected}");
+        // It did NOT move. That is the whole point — the task keeps its place.
+        assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Review);
+
+        let history = store.list_task_activity(task.id, 50).unwrap();
+        let notes = history
+            .events
+            .iter()
+            .map(|entry| entry.note.as_str())
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(notes.contains("#426 has merged"), "{notes}");
+        // And the outdated note is still readable beside it.
+        assert!(notes.contains("PR #426 is open"), "{notes}");
+    }
+
+    /// It cannot reach another worker's record.
+    ///
+    /// Appending is not rewriting, but a correction on somebody else's task
+    /// would still be putting words in their record. The scope is the same one
+    /// evidence uses: a task this worker holds or finished.
+    #[tokio::test]
+    async fn a_worker_cannot_correct_another_workers_task() {
+        let (bridge, store, _, worker_id, _) = setup();
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let stranger = store
+            .create_worker(
+                "Thistle",
+                ProviderKind::ClaudeCode,
+                "/workspace/thistle",
+                false,
+                4,
+            )
+            .unwrap();
+        let other = store
+            .create_task("Not this worker's work", "/workspace/thistle")
+            .unwrap();
+        store.transition_task(other.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(other.id, stranger.id).unwrap();
+        store.transition_task(other.id, TaskState::Active).unwrap();
+        store
+            .transition_task_with_note(other.id, TaskState::Review, "Thistle's own handoff.")
+            .unwrap();
+
+        let refused = response_json(
+            handle(
+                bridge,
+                plain_state(),
+                mcp_request(
+                    Some(&worker_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_correct_task_record",
+                        "arguments": { "task_id": other.id.to_string(), "note": "Not mine to amend." }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+
+        assert_eq!(refused["result"]["isError"], true);
+        let notes = store
+            .list_task_activity(other.id, 50)
+            .unwrap()
+            .events
+            .iter()
+            .map(|entry| entry.note.clone())
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(!notes.contains("Not mine to amend"), "{notes}");
     }
 
     /// A worker can FIND the ruling that governs its own task.
