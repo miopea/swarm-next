@@ -102,19 +102,19 @@ test("retains the draft and blocks controls while disconnected", () => {
   expect(onInput).not.toHaveBeenCalled();
   expect(screen.getByLabelText(/Message worker/)).toHaveValue("keep me");
   expect(screen.getByRole("button", { name: "Cycle mode" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "Add image" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Add file" })).toBeDisabled();
 });
 
 test("offers a first-class mobile image picker without submitting the draft", async () => {
-  const onImage = vi.fn().mockResolvedValue(undefined);
-  const { container } = render(<MobileTerminalComposer connectionState="connected" onInput={vi.fn()} onImage={onImage} />);
+  const onAttachment = vi.fn().mockResolvedValue(undefined);
+  const { container } = render(<MobileTerminalComposer connectionState="connected" onInput={vi.fn()} onAttachment={onAttachment} />);
   const image = new File([new Uint8Array([1, 2, 3])], "screen.png", { type: "image/png" });
   const input = container.querySelector<HTMLInputElement>('input[type="file"]');
 
   fireEvent.change(input!, { target: { files: [image] } });
 
-  await vi.waitFor(() => expect(onImage).toHaveBeenCalledWith(image));
-  expect(screen.getByRole("button", { name: "Add image" })).toBeEnabled();
+  await vi.waitFor(() => expect(onAttachment).toHaveBeenCalledWith(image));
+  expect(screen.getByRole("button", { name: "Add file" })).toBeEnabled();
 });
 
 test("offers a way to rebuild a terminal that has gone wrong", () => {

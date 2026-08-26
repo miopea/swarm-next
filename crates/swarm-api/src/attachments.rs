@@ -42,11 +42,11 @@ pub struct AttachmentStore {
 
 #[derive(Clone, Copy, Debug, thiserror::Error)]
 pub enum AttachmentError {
-    #[error("unsupported image type")]
+    #[error("unsupported attachment type")]
     UnsupportedType,
-    #[error("image content did not match its declared type")]
+    #[error("file content did not match its declared type")]
     InvalidSignature,
-    #[error("image must contain 1 to {MAX_ATTACHMENT_BYTES} bytes")]
+    #[error("file must contain 1 to {MAX_ATTACHMENT_BYTES} bytes")]
     InvalidSize,
     #[error("private attachment storage is full")]
     Capacity,
@@ -134,11 +134,41 @@ fn media_type_for_name(name: &str) -> Option<&'static str> {
         "jpg" => Some("image/jpeg"),
         "webp" => Some("image/webp"),
         "gif" => Some("image/gif"),
+        "csv" => Some("text/csv"),
+        "xlsx" => Some(XLSX),
+        "xls" => Some(XLS),
         _ => None,
     }
 }
 
+/// The Open XML media type for a modern Excel workbook.
+pub const XLSX: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+/// The media type for a legacy Excel workbook.
+pub const XLS: &str = "application/vnd.ms-excel";
+
+/// Whether bytes are plausibly the text file they claim to be.
+///
+/// CSV is the one accepted format with NO signature to check — it is by
+/// definition arbitrary text, so the sniff that guards every other type has
+/// nothing to read. Refusing to store CSV for that reason would be the wrong
+/// trade, and pretending to validate it would be worse, so this checks the two
+/// things that are actually true of text and says nothing about structure: it
+/// decodes as UTF-8, and it carries no NUL. That is enough to reject a binary
+/// mislabelled as text/csv, which is the case the guard exists for. It is not a
+/// claim that the file parses as CSV, and no caller should read it as one.
+///
+/// Empty is refused because an empty upload is a mistake every time.
+fn is_text(bytes: &[u8]) -> bool {
+    !bytes.is_empty() && !bytes.contains(&0) && std::str::from_utf8(bytes).is_ok()
+}
+
+/// The extension to store a media type under, once its bytes agree with it.
+///
+/// XLSX is a ZIP container, so its signature proves the file is a zip and not
+/// that it is a workbook. That is the strongest check the format allows and it
+/// is deliberately not described as more.
 fn validated_extension(media_type: &str, bytes: &[u8]) -> Result<&'static str, AttachmentError> {
+    const OLE2: [u8; 8] = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
     match media_type.split(';').next().unwrap_or_default().trim() {
         "image/png" if bytes.starts_with(b"\x89PNG\r\n\x1a\n") => Ok("png"),
         "image/jpeg" if bytes.starts_with(&[0xff, 0xd8, 0xff]) => Ok("jpg"),
@@ -146,7 +176,10 @@ fn validated_extension(media_type: &str, bytes: &[u8]) -> Result<&'static str, A
             Ok("webp")
         }
         "image/gif" if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") => Ok("gif"),
-        "image/png" | "image/jpeg" | "image/webp" | "image/gif" => {
+        "text/csv" if is_text(bytes) => Ok("csv"),
+        XLSX if bytes.starts_with(b"PK\x03\x04") => Ok("xlsx"),
+        XLS if bytes.starts_with(&OLE2) => Ok("xls"),
+        "image/png" | "image/jpeg" | "image/webp" | "image/gif" | "text/csv" | XLSX | XLS => {
             Err(AttachmentError::InvalidSignature)
         }
         _ => Err(AttachmentError::UnsupportedType),
@@ -255,6 +288,68 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    /// A spreadsheet round-trips, and a CSV is judged on what CSV can be judged on.
+    ///
+    /// The three cases that matter are not the happy ones. A CSV has no
+    /// signature, so the only honest guard is that it decodes as text — this
+    /// asserts that guard actually refuses a binary wearing a .csv media type,
+    /// because a check that accepts everything is the same as no check. Empty is
+    /// refused too: it is always a mistake, and it is the one thing a drag that
+    /// went wrong reliably produces.
+    #[tokio::test]
+    async fn stores_spreadsheets_and_refuses_binary_wearing_a_csv_type() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(directory.path().join("attachments"));
+
+        let csv = store
+            .save("text/csv", b"name,amount\nvicky,3\n")
+            .await
+            .unwrap();
+        assert_eq!(
+            csv.extension().and_then(|value| value.to_str()),
+            Some("csv")
+        );
+
+        let xlsx = store.save(XLSX, b"PK\x03\x04workbook-bytes").await.unwrap();
+        assert_eq!(
+            xlsx.extension().and_then(|value| value.to_str()),
+            Some("xlsx")
+        );
+
+        let xls = store
+            .save(XLS, b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1legacy")
+            .await
+            .unwrap();
+        assert_eq!(
+            xls.extension().and_then(|value| value.to_str()),
+            Some("xls")
+        );
+
+        // The ablation: without is_text these three would all be stored.
+        assert!(matches!(
+            store.save("text/csv", b"\x00\x01binary").await,
+            Err(AttachmentError::InvalidSignature)
+        ));
+        // Empty is refused one layer earlier, by the size guard in save, so it
+        // never reaches the text check. Asserted here as InvalidSize rather than
+        // moved, because this is the error an empty drag actually produces.
+        assert!(matches!(
+            store.save("text/csv", b"").await,
+            Err(AttachmentError::InvalidSize)
+        ));
+        assert!(matches!(
+            store.save(XLSX, b"not a zip").await,
+            Err(AttachmentError::InvalidSignature)
+        ));
+
+        // A stored spreadsheet must still be readable back through the same
+        // validation, or it would save and then 404 on retrieval.
+        let name = csv.file_name().unwrap().to_string_lossy().to_string();
+        let (bytes, media_type) = store.read(&name).await.unwrap();
+        assert_eq!(media_type, "text/csv");
+        assert_eq!(bytes, b"name,amount\nvicky,3\n");
     }
 
     #[tokio::test]

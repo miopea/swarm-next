@@ -5,7 +5,7 @@ import { TerminalConnection, type TerminalConnectionState } from "./TerminalConn
 import type { TerminalController } from "./TerminalController";
 import { terminalWorkspace } from "./TerminalWorkspace";
 import { XtermSurface } from "./XtermSurface";
-import { dragCarriesFiles, supportedImageSummary, terminalAttachmentPaste, terminalTextPaste, transferredImage, uploadTerminalImage } from "./TerminalAttachments";
+import { dragCarriesFiles, supportedAttachmentSummary, terminalAttachmentPaste, terminalTextPaste, transferredAttachment, uploadTerminalAttachment } from "./TerminalAttachments";
 import type { QueenAutonomyLevel, QueenAutomationStatus } from "../api";
 import { queenAutonomyDetail, queenAutonomyLabel } from "../orchestration/queenAutonomyPresentation";
 import { queenAutomationCompactLabel, queenAutomationStateDetail, queenAutomationStateTone } from "../orchestration/queenAutomationPresentation";
@@ -94,13 +94,13 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   }
 
   async function handlePaste(event: ClipboardEvent<HTMLDivElement>) {
-    const transferred = transferredImage(event.clipboardData);
+    const transferred = transferredAttachment(event.clipboardData);
     event.preventDefault();
     event.stopPropagation();
-    if (transferred.kind === "image") return addImage(transferred.file);
+    if (transferred.kind === "file") return addAttachment(transferred.file);
     if (transferred.kind === "too-large") return refuseSize(transferred.description);
     if (transferred.kind === "unsupported") {
-      return refuseImage(transferred.description);
+      return refuseAttachment(transferred.description);
     }
     const text = event.clipboardData.getData("text/plain");
     if (text) controller.sendInput(terminalTextPaste(text));
@@ -118,17 +118,17 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
     event.preventDefault();
     event.stopPropagation();
     setDropActive(false);
-    const transferred = transferredImage(event.dataTransfer);
-    if (transferred.kind === "image") return addImage(transferred.file);
+    const transferred = transferredAttachment(event.dataTransfer);
+    if (transferred.kind === "file") return addAttachment(transferred.file);
     if (transferred.kind === "too-large") return refuseSize(transferred.description);
-    if (transferred.kind === "unsupported") refuseImage(transferred.description);
+    if (transferred.kind === "unsupported") refuseAttachment(transferred.description);
   }
 
   /**
    * Says what was too big and what the limit is.
    *
    * The server enforces this with a transport body limit, which rejects the
-   * upload before any code that could explain it — so an oversized image
+   * upload before any code that could explain it — so an oversized attachment
    * produced a bare transport failure, or nothing legible at all.
    */
   function refuseSize(description: string) {
@@ -137,16 +137,16 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   }
 
   /** Says why, rather than doing nothing and looking broken. */
-  function refuseImage(description: string) {
-    setAttachmentError(`${description} is not an image this terminal can add. Supported: ${supportedImageSummary()}.`);
+  function refuseAttachment(description: string) {
+    setAttachmentError(`${description} is not a file this terminal can add. Supported: ${supportedAttachmentSummary()}.`);
     setAttachmentState("error");
   }
 
-  async function addImage(image: File) {
+  async function addAttachment(file: File) {
     setAttachmentState("uploading");
     setAttachmentError(undefined);
     try {
-      const path = await uploadTerminalImage(operatorToken, session.session_id, image);
+      const path = await uploadTerminalAttachment(operatorToken, session.session_id, file);
       controller.sendInput(terminalAttachmentPaste(path));
       setAttachmentState("ready");
     } catch (error) {
@@ -214,7 +214,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
           {detail && <small>{detail}</small>}
           {attachmentState !== "idle" && (
             <small className={`attachment-state attachment-${attachmentState}`} role="status">
-              {attachmentState === "uploading" ? "Adding image…" : attachmentState === "ready" ? "Image added · press Enter when ready" : attachmentError ? `Image could not be added — ${attachmentError}. Try again.` : "Image could not be added. Try again."}
+              {attachmentState === "uploading" ? "Adding file…" : attachmentState === "ready" ? "File added · press Enter when ready" : attachmentError ? `File could not be added — ${attachmentError}. Try again.` : "File could not be added. Try again."}
             </small>
           )}
         </div>
@@ -265,7 +265,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
         <div className="terminal-mount" ref={mount} />
         {!atBottom ? <button type="button" className="terminal-jump-latest" onClick={() => controller.scrollToBottom()}>Jump to latest ↓</button> : null}
       </div>
-      <MobileTerminalComposer connectionState={connectionState} onInput={(text) => { controller.sendInput(text); if (text.includes("\r")) dismissAttachmentNotice(); }} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onImage={addImage} attachmentState={attachmentState} onRedraw={onRedraw} />
+      <MobileTerminalComposer connectionState={connectionState} onInput={(text) => { controller.sendInput(text); if (text.includes("\r")) dismissAttachmentNotice(); }} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onAttachment={addAttachment} attachmentState={attachmentState} onRedraw={onRedraw} />
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 
-import { clipboardImage, configureTerminalImageLimit, dragCarriesFiles, maxTerminalImageBytes, supportedImageSummary, terminalAttachmentPaste, terminalTextPaste, transferredImage, uploadTerminalImage } from "./TerminalAttachments";
+import { clipboardAttachment, configureTerminalImageLimit, dragCarriesFiles, maxTerminalAttachmentBytes, supportedAttachmentSummary, terminalAttachmentPaste, terminalTextPaste, transferredAttachment, uploadTerminalAttachment } from "./TerminalAttachments";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -13,8 +13,8 @@ test("selects a supported clipboard image without consuming ordinary text", () =
     items: [{ kind: "string", type: "text/plain", getAsFile: () => null }],
   } as unknown as DataTransfer;
 
-  expect(clipboardImage(imageTransfer)).toBe(image);
-  expect(clipboardImage(textTransfer)).toBeUndefined();
+  expect(clipboardAttachment(imageTransfer)).toBe(image);
+  expect(clipboardAttachment(textTransfer)).toBeUndefined();
 });
 
 test("inserts a private image path without submitting the terminal prompt", () => {
@@ -41,7 +41,7 @@ test("carries an image through the API restarting underneath it", () => {
   vi.stubGlobal("fetch", fetch);
   const image = new File([new Uint8Array([1, 2, 3])], "capture.png", { type: "image/png" });
 
-  return expect(uploadTerminalImage("token", "session-1", image))
+  return expect(uploadTerminalAttachment("token", "session-1", image))
     .resolves.toBe("/state/attachments/capture.png")
     .then(() => expect(fetch).toHaveBeenCalledTimes(2));
 });
@@ -77,13 +77,13 @@ function transfer(
 }
 
 test("a GIF is an image this terminal accepts", () => {
-  const result = transferredImage(transfer([{ kind: "file", type: "image/gif" }]));
+  const result = transferredAttachment(transfer([{ kind: "file", type: "image/gif" }]));
 
-  expect(result.kind).toBe("image");
+  expect(result.kind).toBe("file");
 });
 
 test("a file that is not a supported image is refused by name, not ignored", () => {
-  const result = transferredImage(transfer([{ kind: "file", type: "video/mp4" }]));
+  const result = transferredAttachment(transfer([{ kind: "file", type: "video/mp4" }]));
 
   expect(result).toEqual({ kind: "unsupported", description: "video/mp4" });
 });
@@ -94,14 +94,14 @@ test("a file that is not a supported image is refused by name, not ignored", () 
  * because the remedy is different and this path still has to paste text.
  */
 test("a clipboard carrying no file at all is not an unsupported file", () => {
-  const result = transferredImage(transfer([{ kind: "string", type: "text/html" }]));
+  const result = transferredAttachment(transfer([{ kind: "string", type: "text/html" }]));
 
   expect(result).toEqual({ kind: "none" });
 });
 
 test("names the formats it does accept, so the message can say", () => {
-  expect(supportedImageSummary()).toContain("GIF");
-  expect(supportedImageSummary()).toContain("PNG");
+  expect(supportedAttachmentSummary()).toContain("GIF");
+  expect(supportedAttachmentSummary()).toContain("PNG");
 });
 
 /**
@@ -109,7 +109,7 @@ test("names the formats it does accept, so the message can say", () => {
  * it shows like I can now but it never comes in."
  *
  * The drop target appeared, the file was accepted, and nothing happened.
- * `transferredImage` read only `items`, which a drop is not obliged to fill.
+ * `transferredAttachment` read only `items`, which a drop is not obliged to fill.
  */
 test("a dropped GIF is found through files, not only items", () => {
   const dropped = {
@@ -117,7 +117,7 @@ test("a dropped GIF is found through files, not only items", () => {
     items: [],
   } as unknown as DataTransfer;
 
-  expect(transferredImage(dropped).kind).toBe("image");
+  expect(transferredAttachment(dropped).kind).toBe("file");
 });
 
 /**
@@ -131,10 +131,10 @@ test("a dropped file with no media type is typed from its name", () => {
     items: [],
   } as unknown as DataTransfer;
 
-  const result = transferredImage(dropped);
+  const result = transferredAttachment(dropped);
 
-  expect(result.kind).toBe("image");
-  expect(result.kind === "image" && result.file.type).toBe("image/gif");
+  expect(result.kind).toBe("file");
+  expect(result.kind === "file" && result.file.type).toBe("image/gif");
 });
 
 test("a dropped file that is not an image is still refused by name", () => {
@@ -143,7 +143,7 @@ test("a dropped file that is not an image is still refused by name", () => {
     items: [],
   } as unknown as DataTransfer;
 
-  expect(transferredImage(dropped)).toEqual({ kind: "unsupported", description: "video/mp4" });
+  expect(transferredAttachment(dropped)).toEqual({ kind: "unsupported", description: "video/mp4" });
 });
 
 /**
@@ -188,7 +188,7 @@ test("an image over the limit is refused with its size and the limit", () => {
   Object.defineProperty(big, "size", { value: 16 * 1024 * 1024 });
   const dropped = { types: ["Files"], files: [big], items: [] } as unknown as DataTransfer;
 
-  const result = transferredImage(dropped);
+  const result = transferredAttachment(dropped);
 
   expect(result.kind).toBe("too-large");
   expect(result.kind === "too-large" && result.description).toContain("16.0 MB");
@@ -201,7 +201,7 @@ test("an image inside the limit is still accepted", () => {
   Object.defineProperty(fine, "size", { value: 4 * 1024 * 1024 });
   const dropped = { types: ["Files"], files: [fine], items: [] } as unknown as DataTransfer;
 
-  expect(transferredImage(dropped).kind).toBe("image");
+  expect(transferredAttachment(dropped).kind).toBe("file");
 });
 
 /**
@@ -216,8 +216,8 @@ test("the limit comes from the Hive, not from a copy of it", () => {
   Object.defineProperty(recording, "size", { value: 16 * 1024 * 1024 });
   const dropped = { types: ["Files"], files: [recording], items: [] } as unknown as DataTransfer;
 
-  expect(maxTerminalImageBytes()).toBe(32 * 1024 * 1024);
-  expect(transferredImage(dropped).kind).toBe("image");
+  expect(maxTerminalAttachmentBytes()).toBe(32 * 1024 * 1024);
+  expect(transferredAttachment(dropped).kind).toBe("file");
 });
 
 test("an unusable limit is ignored rather than believed", () => {
@@ -225,5 +225,67 @@ test("an unusable limit is ignored rather than believed", () => {
   configureTerminalImageLimit(0);
   configureTerminalImageLimit(Number.NaN);
 
-  expect(maxTerminalImageBytes()).toBe(32 * 1024 * 1024);
+  expect(maxTerminalAttachmentBytes()).toBe(32 * 1024 * 1024);
+});
+
+/**
+ * The operator, 2026-08-26: "I am not able to drag/drop an csv or excel
+ * document into the chat."
+ *
+ * The drop path was built for images and the allow-list said so, so a
+ * spreadsheet was refused by the same code that refuses a random binary. These
+ * assert the two shapes a spreadsheet actually arrives in — one that declares
+ * its media type, and one that does not.
+ */
+test("a CSV is a file this terminal accepts", () => {
+  const result = transferredAttachment(transfer([{ kind: "file", type: "text/csv", name: "budget.csv" }]));
+
+  expect(result.kind).toBe("file");
+});
+
+/**
+ * The case that matters most in practice. A CSV dragged out of a file manager
+ * frequently arrives with an empty `type`, so without the extension fallback the
+ * file the operator can plainly see is named .csv gets refused as unsupported.
+ */
+test("a CSV whose media type the browser did not fill in is still accepted", () => {
+  const result = transferredAttachment(transfer([{ kind: "file", type: "", name: "export.csv" }]));
+
+  expect(result.kind).toBe("file");
+  if (result.kind === "file") expect(result.file.type).toBe("text/csv");
+});
+
+test("an Excel workbook is accepted by extension and by media type", () => {
+  const byName = transferredAttachment(transfer([{ kind: "file", type: "", name: "q3.xlsx" }]));
+  const byType = transferredAttachment(
+    transfer([
+      {
+        kind: "file",
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        name: "q3.xlsx",
+      },
+    ]),
+  );
+
+  expect(byName.kind).toBe("file");
+  expect(byType.kind).toBe("file");
+});
+
+/**
+ * The ablation. Widening the allow-list must not widen it to everything — if
+ * this passes as "file", the type gate has stopped gating.
+ */
+test("an unsupported document is still refused, and says what it was", () => {
+  const result = transferredAttachment(transfer([{ kind: "file", type: "application/zip", name: "archive.zip" }]));
+
+  expect(result.kind).toBe("unsupported");
+  if (result.kind === "unsupported") expect(result.description).toContain("application/zip");
+});
+
+test("the supported-format summary names the spreadsheet formats", () => {
+  const summary = supportedAttachmentSummary();
+
+  expect(summary).toContain("CSV");
+  expect(summary).toContain("XLSX");
+  expect(summary).toContain("PNG");
 });
