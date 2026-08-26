@@ -6,26 +6,12 @@ export const XLSX_TYPE =
 /** The media type for a legacy Excel workbook. */
 export const XLS_TYPE = "application/vnd.ms-excel";
 
-/**
- * Everything a terminal will take, and it is no longer only images.
- *
- * Kept in step with validated_extension in crates/swarm-api/src/attachments.rs,
- * which re-checks every one of these against the file's own bytes. Adding a type
- * here alone gets it rejected by the server, which is the safe direction.
- */
-export const SUPPORTED_TERMINAL_ATTACHMENT_TYPES = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/webp",
-  "image/gif",
-  "text/csv",
-  XLSX_TYPE,
-  XLS_TYPE,
-]);
 
 export function clipboardAttachment(clipboard: DataTransfer): File | undefined {
   for (const item of clipboard.items) {
-    if (item.kind !== "file" || !SUPPORTED_TERMINAL_ATTACHMENT_TYPES.has(item.type)) continue;
+    // Any file, not only an allow-listed one — but still only a FILE, so a text
+    // paste stays a text paste.
+    if (item.kind !== "file") continue;
     const file = item.getAsFile();
     if (file) return file;
   }
@@ -77,7 +63,6 @@ export function describeBytes(bytes: number): string {
 
 export type TransferredAttachment =
   | { kind: "file"; file: File }
-  | { kind: "unsupported"; description: string }
   | { kind: "too-large"; description: string }
   | { kind: "none" };
 
@@ -116,11 +101,19 @@ const ATTACHMENT_EXTENSIONS = new Map([
   ["xls", XLS_TYPE],
 ]);
 
-/** The media type of a dropped file, from its own type or from its name. */
-function attachmentTypeOf(file: File): string | undefined {
-  if (SUPPORTED_TERMINAL_ATTACHMENT_TYPES.has(file.type)) return file.type;
+/**
+ * The media type of a dropped file, from its own type or from its name.
+ *
+ * Never undefined any more. The operator asked to be able to drop most file
+ * types, so an unrecognised file is given application/octet-stream and stored
+ * opaquely by the server rather than refused here. The extension map survives
+ * only to give a BETTER answer than octet-stream when the browser left `type`
+ * empty, which it routinely does for CSV dragged out of a file manager.
+ */
+function attachmentTypeOf(file: File): string {
+  if (file.type) return file.type;
   const extension = file.name.split(".").pop()?.toLowerCase();
-  return extension ? ATTACHMENT_EXTENSIONS.get(extension) : undefined;
+  return (extension && ATTACHMENT_EXTENSIONS.get(extension)) || "application/octet-stream";
 }
 
 export function transferredAttachment(transfer: DataTransfer): TransferredAttachment {
@@ -131,50 +124,29 @@ export function transferredAttachment(transfer: DataTransfer): TransferredAttach
   // Defensive: a text paste carries no files, and not every source populates
   // the field at all. Throwing here would take the text paste down with it.
   for (const file of Array.from(transfer.files ?? [])) {
-    const type = attachmentTypeOf(file);
-    // A file whose type the browser did not fill in still has a name. Re-typing
-    // it here is safe: the server checks the magic bytes and rejects a mislabel.
-    if (!type) continue;
     if (file.size > maxTerminalAttachmentBytes()) {
       return {
         kind: "too-large",
         description: `${file.name} is ${describeBytes(file.size)}; the limit is ${describeBytes(maxTerminalAttachmentBytes())}`,
       };
     }
+    // Re-typing is safe: the server re-checks any format that HAS a signature
+    // and refuses a mislabel, and stores the rest opaquely.
+    const type = attachmentTypeOf(file);
     return { kind: "file", file: type === file.type ? file : new File([file], file.name, { type }) };
   }
-  const image = clipboardAttachment(transfer);
-  if (image) {
-    return image.size > maxTerminalAttachmentBytes()
+  const pasted = clipboardAttachment(transfer);
+  if (pasted) {
+    return pasted.size > maxTerminalAttachmentBytes()
       ? {
           kind: "too-large",
-          description: `that image is ${describeBytes(image.size)}; the limit is ${describeBytes(maxTerminalAttachmentBytes())}`,
+          description: `that file is ${describeBytes(pasted.size)}; the limit is ${describeBytes(maxTerminalAttachmentBytes())}`,
         }
-      : { kind: "file", file: image };
+      : { kind: "file", file: pasted };
   }
-
-  const described = Array.from(transfer.files ?? []).map((file) => file.type || file.name);
-  if (described.length > 0) {
-    return { kind: "unsupported", description: [...new Set(described)].join(", ") };
-  }
-  const items = Array.from(transfer.items ?? []).filter((item) => item.kind === "file");
-  if (items.length === 0) return { kind: "none" };
-  const types = [...new Set(items.map((item) => item.type || "an unknown type"))];
-  return { kind: "unsupported", description: types.join(", ") };
+  return { kind: "none" };
 }
 
-/**
- * The formats a terminal accepts, for saying so.
- *
- * Built from the extension map rather than the media types, because the media
- * type of an xlsx is 66 characters of Open XML boilerplate and nobody being told
- * why their drop failed wants to read it.
- */
-export function supportedAttachmentSummary(): string {
-  return [...new Set(ATTACHMENT_EXTENSIONS.keys())]
-    .map((extension) => extension.toUpperCase())
-    .join(", ");
-}
 
 /**
  * Uploads one attachment and returns the path to paste.

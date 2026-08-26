@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 
-import { clipboardAttachment, configureTerminalImageLimit, dragCarriesFiles, maxTerminalAttachmentBytes, supportedAttachmentSummary, terminalAttachmentPaste, terminalTextPaste, transferredAttachment, uploadTerminalAttachment } from "./TerminalAttachments";
+import { clipboardAttachment, configureTerminalImageLimit, dragCarriesFiles, maxTerminalAttachmentBytes, terminalAttachmentPaste, terminalTextPaste, transferredAttachment, uploadTerminalAttachment } from "./TerminalAttachments";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -82,10 +82,19 @@ test("a GIF is an image this terminal accepts", () => {
   expect(result.kind).toBe("file");
 });
 
-test("a file that is not a supported image is refused by name, not ignored", () => {
+/**
+ * This test used to assert the opposite, and the change is deliberate.
+ *
+ * It was written when the terminal took images only, where refusing an mp4 BY
+ * NAME was the fix — the bug it guarded was refusing silently. The operator has
+ * since asked for most file types, so an mp4 is now simply taken, and its media
+ * type is preserved rather than flattened to octet-stream.
+ */
+test("a video is taken now, with its own media type", () => {
   const result = transferredAttachment(transfer([{ kind: "file", type: "video/mp4" }]));
 
-  expect(result).toEqual({ kind: "unsupported", description: "video/mp4" });
+  expect(result.kind).toBe("file");
+  if (result.kind === "file") expect(result.file.type).toBe("video/mp4");
 });
 
 /**
@@ -99,9 +108,18 @@ test("a clipboard carrying no file at all is not an unsupported file", () => {
   expect(result).toEqual({ kind: "none" });
 });
 
-test("names the formats it does accept, so the message can say", () => {
-  expect(supportedAttachmentSummary()).toContain("GIF");
-  expect(supportedAttachmentSummary()).toContain("PNG");
+/**
+ * What the extension map is FOR, now that it no longer gates anything.
+ *
+ * A browser that leaves `type` empty would otherwise get octet-stream, and the
+ * server would store a PNG as .bin. The map exists to give a better answer than
+ * the fallback, not to decide what is allowed.
+ */
+test("a known extension beats the octet-stream fallback when the browser says nothing", () => {
+  const png = transferredAttachment(transfer([{ kind: "file", type: "", name: "shot.png" }]));
+
+  expect(png.kind).toBe("file");
+  if (png.kind === "file") expect(png.file.type).toBe("image/png");
 });
 
 /**
@@ -137,13 +155,16 @@ test("a dropped file with no media type is typed from its name", () => {
   expect(result.kind === "file" && result.file.type).toBe("image/gif");
 });
 
-test("a dropped file that is not an image is still refused by name", () => {
+test("a dropped non-image is taken through the files path too", () => {
   const dropped = {
     files: [new File([""], "clip.mp4", { type: "video/mp4" })],
     items: [],
   } as unknown as DataTransfer;
 
-  expect(transferredAttachment(dropped)).toEqual({ kind: "unsupported", description: "video/mp4" });
+  const result = transferredAttachment(dropped);
+
+  expect(result.kind).toBe("file");
+  if (result.kind === "file") expect(result.file.name).toBe("clip.mp4");
 });
 
 /**
@@ -275,17 +296,29 @@ test("an Excel workbook is accepted by extension and by media type", () => {
  * The ablation. Widening the allow-list must not widen it to everything — if
  * this passes as "file", the type gate has stopped gating.
  */
-test("an unsupported document is still refused, and says what it was", () => {
-  const result = transferredAttachment(transfer([{ kind: "file", type: "application/zip", name: "archive.zip" }]));
+/**
+ * The operator, after the CSV fix: "we should definitely be able to drag and
+ * drop most file types."
+ *
+ * So the allow-list is gone. A type nobody enumerated is accepted and handed to
+ * the server, which stores it opaquely. If this ever returns anything but
+ * "file", the client has started refusing things again.
+ */
+test("a file type nobody enumerated is still accepted", () => {
+  const zip = transferredAttachment(transfer([{ kind: "file", type: "application/zip", name: "a.zip" }]));
+  const odd = transferredAttachment(transfer([{ kind: "file", type: "application/x-sqlite3", name: "hive.db" }]));
 
-  expect(result.kind).toBe("unsupported");
-  if (result.kind === "unsupported") expect(result.description).toContain("application/zip");
+  expect(zip.kind).toBe("file");
+  expect(odd.kind).toBe("file");
 });
 
-test("the supported-format summary names the spreadsheet formats", () => {
-  const summary = supportedAttachmentSummary();
+/**
+ * A file with no media type and no recognised extension still uploads, typed as
+ * octet-stream. Before this, it was dropped on the floor by `continue`.
+ */
+test("a file the browser could not type at all is sent as octet-stream", () => {
+  const result = transferredAttachment(transfer([{ kind: "file", type: "", name: "LICENSE" }]));
 
-  expect(summary).toContain("CSV");
-  expect(summary).toContain("XLSX");
-  expect(summary).toContain("PNG");
+  expect(result.kind).toBe("file");
+  if (result.kind === "file") expect(result.file.type).toBe("application/octet-stream");
 });

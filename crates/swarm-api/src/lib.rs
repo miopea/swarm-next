@@ -6388,7 +6388,7 @@ fn jira_issue_snapshot(issue: &jira::JiraIssue) -> JiraIssueSnapshot<'_> {
 
 fn attachment_error(error: AttachmentError) -> ApiError {
     match error {
-        AttachmentError::UnsupportedType | AttachmentError::InvalidSignature => ApiError::new(
+        AttachmentError::InvalidSignature => ApiError::new(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "invalid_attachment_type",
             error.to_string(),

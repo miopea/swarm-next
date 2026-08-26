@@ -107,7 +107,7 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
       <div className="mobile-terminal-key-heading">
         <span>Terminal tools</span>
         <div>
-          <input ref={attachmentInput} hidden type="file" accept="image/png,image/jpeg,image/webp,image/gif,text/csv,.csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" onChange={(event) => void chooseAttachment(event)} />
+          <input ref={attachmentInput} hidden type="file" onChange={(event) => void chooseAttachment(event)} />
           <button type="button" className="terminal-image-button" disabled={!connected || !onAttachment || attachmentState === "uploading"} onClick={() => attachmentInput.current?.click()}>{attachmentState === "uploading" ? "Adding…" : "Add file"}</button>
           <button type="button" className="terminal-keys-toggle" aria-expanded={keysExpanded} onClick={toggleKeys}>{keysExpanded ? "Hide keys" : "Show keys"}</button>
         </div>

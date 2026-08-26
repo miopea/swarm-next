@@ -42,8 +42,6 @@ pub struct AttachmentStore {
 
 #[derive(Clone, Copy, Debug, thiserror::Error)]
 pub enum AttachmentError {
-    #[error("unsupported attachment type")]
-    UnsupportedType,
     #[error("file content did not match its declared type")]
     InvalidSignature,
     #[error("file must contain 1 to {MAX_ATTACHMENT_BYTES} bytes")]
@@ -135,55 +133,78 @@ fn media_type_for_name(name: &str) -> Option<&'static str> {
         "webp" => Some("image/webp"),
         "gif" => Some("image/gif"),
         "csv" => Some("text/csv"),
+        "md" => Some("text/markdown"),
+        "txt" => Some("text/plain"),
+        "json" => Some("application/json"),
+        "pdf" => Some("application/pdf"),
+        "zip" => Some("application/zip"),
         "xlsx" => Some(XLSX),
         "xls" => Some(XLS),
+        "bin" => Some("application/octet-stream"),
         _ => None,
     }
 }
 
 /// The Open XML media type for a modern Excel workbook.
 pub const XLSX: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+/// The Open XML media type for a Word document.
+pub const DOCX: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+/// The Open XML media type for a `PowerPoint` deck.
+pub const PPTX: &str = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
 /// The media type for a legacy Excel workbook.
 pub const XLS: &str = "application/vnd.ms-excel";
 
-/// Whether bytes are plausibly the text file they claim to be.
-///
-/// CSV is the one accepted format with NO signature to check — it is by
-/// definition arbitrary text, so the sniff that guards every other type has
-/// nothing to read. Refusing to store CSV for that reason would be the wrong
-/// trade, and pretending to validate it would be worse, so this checks the two
-/// things that are actually true of text and says nothing about structure: it
-/// decodes as UTF-8, and it carries no NUL. That is enough to reject a binary
-/// mislabelled as text/csv, which is the case the guard exists for. It is not a
-/// claim that the file parses as CSV, and no caller should read it as one.
-///
-/// Empty is refused because an empty upload is a mistake every time.
-fn is_text(bytes: &[u8]) -> bool {
-    !bytes.is_empty() && !bytes.contains(&0) && std::str::from_utf8(bytes).is_ok()
-}
-
 /// The extension to store a media type under, once its bytes agree with it.
 ///
-/// XLSX is a ZIP container, so its signature proves the file is a zip and not
-/// that it is a workbook. That is the strongest check the format allows and it
-/// is deliberately not described as more.
+/// Mirrors `attachment_kind` in `email_attachments.rs` deliberately: this Hive
+/// already decided how to store an arbitrary file safely and there is no reason
+/// for a terminal drop to decide differently.
+///
+/// The rule is that a file which DECLARES a format with a signature must match
+/// it — claiming image/png and not being a PNG is a mislabel worth refusing.
+/// Everything else is stored opaquely as .bin.
+///
+/// Text is deliberately NOT validated. An earlier version required UTF-8 and no
+/// NUL for text/csv, which was wrong twice over. It rejected real spreadsheets:
+/// Excel exports CSV as Windows-1252 often enough, and its "Unicode text" export
+/// is UTF-16, which is full of NULs. And it bought nothing, because once unknown
+/// types fall through to .bin the same rejected bytes are accepted by calling
+/// them application/octet-stream. A guard that can be sidestepped by renaming
+/// the type is not a guard.
+///
+/// XLSX, DOCX and PPTX are ZIP containers, so the PK check proves the file is a
+/// zip and not that it is a workbook. That is the strongest check the format
+/// allows and it is not described as more.
 fn validated_extension(media_type: &str, bytes: &[u8]) -> Result<&'static str, AttachmentError> {
     const OLE2: [u8; 8] = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
-    match media_type.split(';').next().unwrap_or_default().trim() {
-        "image/png" if bytes.starts_with(b"\x89PNG\r\n\x1a\n") => Ok("png"),
-        "image/jpeg" if bytes.starts_with(&[0xff, 0xd8, 0xff]) => Ok("jpg"),
+    const OPEN_XML: [&str; 3] = [XLSX, DOCX, PPTX];
+    let normalized = media_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let signed_but_wrong = || Err(AttachmentError::InvalidSignature);
+    Ok(match normalized.as_str() {
+        "image/png" if bytes.starts_with(b"\x89PNG\r\n\x1a\n") => "png",
+        "image/jpeg" if bytes.starts_with(&[0xff, 0xd8, 0xff]) => "jpg",
+        "image/gif" if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") => "gif",
         "image/webp" if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" => {
-            Ok("webp")
+            "webp"
         }
-        "image/gif" if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") => Ok("gif"),
-        "text/csv" if is_text(bytes) => Ok("csv"),
-        XLSX if bytes.starts_with(b"PK\x03\x04") => Ok("xlsx"),
-        XLS if bytes.starts_with(&OLE2) => Ok("xls"),
-        "image/png" | "image/jpeg" | "image/webp" | "image/gif" | "text/csv" | XLSX | XLS => {
-            Err(AttachmentError::InvalidSignature)
-        }
-        _ => Err(AttachmentError::UnsupportedType),
-    }
+        "application/pdf" if bytes.starts_with(b"%PDF-") => "pdf",
+        "application/zip" if bytes.starts_with(b"PK") => "zip",
+        value if OPEN_XML.contains(&value) && bytes.starts_with(b"PK") => "xlsx",
+        XLS if bytes.starts_with(&OLE2) => "xls",
+        "text/csv" => "csv",
+        "text/markdown" => "md",
+        "text/plain" => "txt",
+        "application/json" => "json",
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "application/pdf"
+        | "application/zip" | XLS => return signed_but_wrong(),
+        value if OPEN_XML.contains(&value) => return signed_but_wrong(),
+        _ => "bin",
+    })
 }
 
 fn hex_prefix(bytes: &[u8], length: usize) -> String {
@@ -290,62 +311,118 @@ mod tests {
         }
     }
 
-    /// A spreadsheet round-trips, and a CSV is judged on what CSV can be judged on.
+    /// Most file types are storable, and a declared format still has to match.
     ///
-    /// The three cases that matter are not the happy ones. A CSV has no
-    /// signature, so the only honest guard is that it decodes as text — this
-    /// asserts that guard actually refuses a binary wearing a .csv media type,
-    /// because a check that accepts everything is the same as no check. Empty is
-    /// refused too: it is always a mistake, and it is the one thing a drag that
-    /// went wrong reliably produces.
+    /// The contract has two halves and the second is the one worth guarding. A
+    /// file that declares a format WITH a signature must match it. A file that
+    /// declares anything else is stored opaquely as .bin rather than refused,
+    /// because the operator asked to be able to drop most file types and an
+    /// allow-list cannot anticipate them.
+    ///
+    /// Text is not validated, and the assertion that a binary wearing text/csv
+    /// is ACCEPTED is deliberate rather than an oversight. Refusing it bought
+    /// nothing once .bin exists — the identical bytes are storable by calling
+    /// them octet-stream — and the check it replaced rejected real Excel CSV
+    /// exports, which are frequently Windows-1252 and sometimes UTF-16.
     #[tokio::test]
-    async fn stores_spreadsheets_and_refuses_binary_wearing_a_csv_type() {
+    async fn stores_most_types_and_still_refuses_a_mislabelled_format() {
         let directory = tempfile::tempdir().unwrap();
         let store = AttachmentStore::new(directory.path().join("attachments"));
+        let extension_of = |path: std::path::PathBuf| {
+            path.extension()
+                .and_then(|value| value.to_str())
+                .unwrap()
+                .to_string()
+        };
 
         let csv = store
             .save("text/csv", b"name,amount\nvicky,3\n")
             .await
             .unwrap();
+        assert_eq!(extension_of(csv.clone()), "csv");
         assert_eq!(
-            csv.extension().and_then(|value| value.to_str()),
-            Some("csv")
+            extension_of(store.save(XLSX, b"PK\x03\x04workbook").await.unwrap()),
+            "xlsx"
+        );
+        assert_eq!(
+            extension_of(store.save(DOCX, b"PK\x03\x04document").await.unwrap()),
+            "xlsx"
+        );
+        assert_eq!(
+            extension_of(
+                store
+                    .save(XLS, b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1legacy")
+                    .await
+                    .unwrap()
+            ),
+            "xls"
+        );
+        assert_eq!(
+            extension_of(
+                store
+                    .save("application/pdf", b"%PDF-1.7 body")
+                    .await
+                    .unwrap()
+            ),
+            "pdf"
         );
 
-        let xlsx = store.save(XLSX, b"PK\x03\x04workbook-bytes").await.unwrap();
+        // Anything unrecognised is stored rather than refused. This is the half
+        // the operator asked for: "we should definitely be able to drag and drop
+        // most file types."
         assert_eq!(
-            xlsx.extension().and_then(|value| value.to_str()),
-            Some("xlsx")
+            extension_of(
+                store
+                    .save("application/octet-stream", b"\x00\x01opaque")
+                    .await
+                    .unwrap()
+            ),
+            "bin"
+        );
+        assert_eq!(
+            extension_of(
+                store
+                    .save("application/x-sqlite3", b"SQLite format 3\x00")
+                    .await
+                    .unwrap()
+            ),
+            "bin"
+        );
+        assert_eq!(
+            extension_of(
+                store
+                    .save("text/csv", b"\x00\x01not really text")
+                    .await
+                    .unwrap()
+            ),
+            "csv"
         );
 
-        let xls = store
-            .save(XLS, b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1legacy")
-            .await
-            .unwrap();
-        assert_eq!(
-            xls.extension().and_then(|value| value.to_str()),
-            Some("xls")
-        );
+        // The half that still bites: claiming a signed format you are not.
+        // Without these arms every one of these would be stored as .bin.
+        for (media_type, bytes) in [
+            ("image/png", b"not a png".as_slice()),
+            ("application/pdf", b"not a pdf".as_slice()),
+            (XLSX, b"not a zip".as_slice()),
+            (XLS, b"not an ole2 file".as_slice()),
+        ] {
+            assert!(
+                matches!(
+                    store.save(media_type, bytes).await,
+                    Err(AttachmentError::InvalidSignature)
+                ),
+                "{media_type} should refuse content that is not that format"
+            );
+        }
 
-        // The ablation: without is_text these three would all be stored.
-        assert!(matches!(
-            store.save("text/csv", b"\x00\x01binary").await,
-            Err(AttachmentError::InvalidSignature)
-        ));
-        // Empty is refused one layer earlier, by the size guard in save, so it
-        // never reaches the text check. Asserted here as InvalidSize rather than
-        // moved, because this is the error an empty drag actually produces.
+        // Empty is refused one layer earlier, by the size guard in save.
         assert!(matches!(
             store.save("text/csv", b"").await,
             Err(AttachmentError::InvalidSize)
         ));
-        assert!(matches!(
-            store.save(XLSX, b"not a zip").await,
-            Err(AttachmentError::InvalidSignature)
-        ));
 
-        // A stored spreadsheet must still be readable back through the same
-        // validation, or it would save and then 404 on retrieval.
+        // A stored file must read back through the same validation, or it would
+        // save and then 404 on retrieval.
         let name = csv.file_name().unwrap().to_string_lossy().to_string();
         let (bytes, media_type) = store.read(&name).await.unwrap();
         assert_eq!(media_type, "text/csv");

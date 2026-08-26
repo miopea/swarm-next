@@ -5,7 +5,7 @@ import { TerminalConnection, type TerminalConnectionState } from "./TerminalConn
 import type { TerminalController } from "./TerminalController";
 import { terminalWorkspace } from "./TerminalWorkspace";
 import { XtermSurface } from "./XtermSurface";
-import { dragCarriesFiles, supportedAttachmentSummary, terminalAttachmentPaste, terminalTextPaste, transferredAttachment, uploadTerminalAttachment } from "./TerminalAttachments";
+import { dragCarriesFiles, terminalAttachmentPaste, terminalTextPaste, transferredAttachment, uploadTerminalAttachment } from "./TerminalAttachments";
 import type { QueenAutonomyLevel, QueenAutomationStatus } from "../api";
 import { queenAutonomyDetail, queenAutonomyLabel } from "../orchestration/queenAutonomyPresentation";
 import { queenAutomationCompactLabel, queenAutomationStateDetail, queenAutomationStateTone } from "../orchestration/queenAutomationPresentation";
@@ -99,9 +99,6 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
     event.stopPropagation();
     if (transferred.kind === "file") return addAttachment(transferred.file);
     if (transferred.kind === "too-large") return refuseSize(transferred.description);
-    if (transferred.kind === "unsupported") {
-      return refuseAttachment(transferred.description);
-    }
     const text = event.clipboardData.getData("text/plain");
     if (text) controller.sendInput(terminalTextPaste(text));
   }
@@ -120,8 +117,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
     setDropActive(false);
     const transferred = transferredAttachment(event.dataTransfer);
     if (transferred.kind === "file") return addAttachment(transferred.file);
-    if (transferred.kind === "too-large") return refuseSize(transferred.description);
-    if (transferred.kind === "unsupported") refuseAttachment(transferred.description);
+    if (transferred.kind === "too-large") refuseSize(transferred.description);
   }
 
   /**
@@ -137,10 +133,6 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   }
 
   /** Says why, rather than doing nothing and looking broken. */
-  function refuseAttachment(description: string) {
-    setAttachmentError(`${description} is not a file this terminal can add. Supported: ${supportedAttachmentSummary()}.`);
-    setAttachmentState("error");
-  }
 
   async function addAttachment(file: File) {
     setAttachmentState("uploading");
