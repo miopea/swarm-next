@@ -103,6 +103,9 @@ pub(super) async fn restart_superseded_workers(
             let release = match session.provider {
                 swarm_domain::ProviderKind::ClaudeCode => claude_release.as_ref(),
                 swarm_domain::ProviderKind::Codex => codex_release.as_ref(),
+                // No installed release to compare a session against, so it can
+                // never be superseded by one. It cannot be running either.
+                swarm_domain::ProviderKind::Unsupported => None,
             };
             swarm_terminal::provider_release_superseded(release, session.started_at)
         })

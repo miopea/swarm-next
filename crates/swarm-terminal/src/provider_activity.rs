@@ -27,6 +27,12 @@ pub fn classify_provider_activity(
 }
 
 fn classify_visible_text(provider: ProviderKind, visible: &str) -> ProviderActivity {
+    // A provider this build cannot launch has no screen worth reading, and
+    // guessing from another provider's glyphs would be worse than admitting it.
+    // Unknown is the honest answer and it already exists for exactly this.
+    if provider == ProviderKind::Unsupported {
+        return ProviderActivity::Unknown;
+    }
     let normalized = visible.to_lowercase();
     if active_signal(&normalized) {
         return ProviderActivity::Active;
@@ -122,7 +128,11 @@ fn background_work_signal(provider: ProviderKind, normalized: &str) -> bool {
                 || normalized.contains(" background dynamic workflow")
                 || normalized.contains(" remote dynamic workflow")
         }
-        ProviderKind::Codex => false,
+        // Codex prints no background-work banner, and an unrecognised provider
+        // emits nothing this build knows how to read. Unsupported is also
+        // unreachable here via the early return in classify_visible_text, but
+        // the arm is required for exhaustiveness.
+        ProviderKind::Codex | ProviderKind::Unsupported => false,
     }
 }
 
@@ -130,6 +140,7 @@ fn idle_prompt(provider: ProviderKind, line: &str) -> bool {
     match provider {
         ProviderKind::ClaudeCode => line == "❯" || line.starts_with("❯ "),
         ProviderKind::Codex => line == "›" || line.starts_with("› "),
+        ProviderKind::Unsupported => false,
     }
 }
 
@@ -143,6 +154,7 @@ fn idle_footer(provider: ProviderKind, line: &str) -> bool {
                 || line.contains("manual mode on")
         }
         ProviderKind::Codex => line.contains("? for shortcuts"),
+        ProviderKind::Unsupported => false,
     }
 }
 

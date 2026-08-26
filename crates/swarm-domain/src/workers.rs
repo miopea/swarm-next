@@ -109,6 +109,33 @@ impl std::error::Error for ParseWorkerRoleError {}
 pub enum ProviderKind {
     ClaudeCode,
     Codex,
+    /// A provider this build does not recognise, read back from storage.
+    ///
+    /// A provider is stored as a plain string with no CHECK constraint, so a
+    /// Hive that rolls back to a release predating a provider will read a value
+    /// it has never heard of. Without this the row fails to parse and, because
+    /// the roster maps every profile through one query, ONE unreadable worker
+    /// takes down the whole listing.
+    ///
+    /// Deliberately carries no payload. A `Box<str>` would preserve the unknown
+    /// name for display, and would also cost `Copy` across every consumer and
+    /// change the serialised shape. Losing the name is the cheaper loss.
+    ///
+    /// Only [`ProviderKind::from_stored`] produces this. `FromStr` stays strict
+    /// so the API still refuses an unknown provider at worker creation, which is
+    /// input validation and a different question from reading old data.
+    Unsupported,
+}
+
+impl ProviderKind {
+    /// Reads a stored provider, tolerating a value this build does not know.
+    ///
+    /// Use for anything coming OUT of the database. Use `from_str` for anything
+    /// coming in from an operator or an API caller.
+    #[must_use]
+    pub fn from_stored(value: &str) -> Self {
+        Self::from_str(value).unwrap_or(Self::Unsupported)
+    }
 }
 
 impl fmt::Display for ProviderKind {
@@ -116,6 +143,7 @@ impl fmt::Display for ProviderKind {
         formatter.write_str(match self {
             Self::ClaudeCode => "claude_code",
             Self::Codex => "codex",
+            Self::Unsupported => "unsupported",
         })
     }
 }

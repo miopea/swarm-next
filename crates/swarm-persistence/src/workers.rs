@@ -302,6 +302,15 @@ impl TaskStore {
                 params![worker_id.to_string(), description],
             )?;
         }
+        if provider == Some(ProviderKind::Unsupported) {
+            // Belt and braces. from_str is strict so no API caller can produce
+            // this, but writing it would overwrite a real stored provider with
+            // "unsupported" and destroy the only record of what the worker was.
+            // Losing a row is recoverable; silently rewriting it is not.
+            return Err(TaskStoreError::IntegrityFailure(
+                "refusing to store an unsupported provider".into(),
+            ));
+        }
         if let Some(provider) = provider
             && provider.to_string() != current_provider
         {
@@ -550,9 +559,10 @@ impl TaskStore {
             )
             .optional()?
             .ok_or(TaskStoreError::WorkerSessionNotActive)?;
-        ProviderKind::from_str(&provider).map_err(|_| {
-            TaskStoreError::IntegrityFailure("active worker session has an invalid provider".into())
-        })
+        // from_stored, not from_str: a provider this build does not know is a
+        // rollback, not corruption, and refusing to read it takes down callers
+        // that only wanted to know which session was active.
+        Ok(ProviderKind::from_stored(&provider))
     }
 
     /// Maps each engaged worker to the device currently holding input and
@@ -1229,8 +1239,7 @@ impl TaskStore {
                 Ok(ActiveWorkerSession {
                     worker_id: WorkerId::from_str(&id)
                         .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?,
-                    provider: ProviderKind::from_str(&provider)
-                        .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?,
+                    provider: ProviderKind::from_stored(&provider),
                     started_at,
                 })
             })
@@ -1574,8 +1583,9 @@ fn profile_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerProfile> 
         HiveId::from_str(&row.get::<_, String>(1)?).map_err(|_| rusqlite::Error::InvalidQuery)?;
     let role = WorkerRole::from_str(&row.get::<_, String>(3)?)
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
-    let provider = ProviderKind::from_str(&row.get::<_, String>(4)?)
-        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    // The row mapper every roster query runs through. Parsing strictly here is
+    // what let ONE worker on an unrecognised provider fail the entire listing.
+    let provider = ProviderKind::from_stored(&row.get::<_, String>(4)?);
     let session = row
         .get::<_, Option<String>>(8)?
         .map(|value| WorkerSessionId::from_str(&value).map_err(|_| rusqlite::Error::InvalidQuery))
@@ -2770,6 +2780,117 @@ mod tests {
         assert!(
             moved.provider_conversation_id.is_none(),
             "a conversation belongs to the repository it happened in"
+        );
+    }
+
+    /// A provider this build has never heard of is READ, not fatal.
+    ///
+    /// This is the rollback case. A provider is stored as a plain string with no
+    /// CHECK constraint, so a Hive that rolls back to a release predating a
+    /// provider reads a value it cannot parse. Rollback is routine here — the
+    /// packaging lifecycle test exercises it and the release tooling restores
+    /// the previous API automatically on a failed health check.
+    ///
+    /// The harm is not the one row. `list_worker_profiles` maps every row through
+    /// one mapper, so a strict parse meant ONE worker adopted onto a newer
+    /// provider took down the entire roster for every worker beside it.
+    ///
+    /// The ablation is the second half: swap `from_stored` back to `from_str` in
+    /// `profile_from_row` and the listing assertion fails outright rather than
+    /// returning a degraded row, which is the behaviour this exists to prevent.
+    #[test]
+    fn a_provider_from_a_newer_release_degrades_instead_of_failing_the_roster() {
+        let store = TaskStore::in_memory().unwrap();
+        let readable = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let rolled_back = store
+            .create_worker(
+                "Vicky",
+                ProviderKind::ClaudeCode,
+                "/workspace/vicky",
+                false,
+                1,
+            )
+            .unwrap();
+        // Written the way a NEWER build would write it. The column carries a
+        // CHECK constraint listing the providers this build knows, so the only
+        // faithful way to stage a rollback is to bypass the check exactly as a
+        // future release with a widened constraint would have done.
+        let connection = store.connection().unwrap();
+        connection
+            .execute_batch("PRAGMA ignore_check_constraints = ON")
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE worker_profiles SET provider = ?2 WHERE id = ?1",
+                rusqlite::params![rolled_back.id.to_string(), "gemini"],
+            )
+            .unwrap();
+        connection
+            .execute_batch("PRAGMA ignore_check_constraints = OFF")
+            .unwrap();
+        drop(connection);
+
+        // The whole roster still lists, which is the point.
+        let roster = store.list_worker_profiles().unwrap();
+        assert_eq!(
+            roster.len(),
+            2,
+            "one unreadable row must not fail the listing"
+        );
+        let degraded = roster
+            .iter()
+            .find(|profile| profile.id == rolled_back.id)
+            .expect("the worker on an unknown provider is still listed");
+        assert_eq!(degraded.provider, ProviderKind::Unsupported);
+        assert_eq!(
+            roster
+                .iter()
+                .find(|profile| profile.id == readable.id)
+                .expect("its neighbour is unaffected")
+                .provider,
+            ProviderKind::ClaudeCode
+        );
+
+        // Reading one directly degrades the same way rather than erroring.
+        assert_eq!(
+            store.get_worker_profile(rolled_back.id).unwrap().provider,
+            ProviderKind::Unsupported
+        );
+
+        // And the stored value is NOT overwritten by the placeholder. Losing the
+        // row is recoverable; rewriting "gemini" as "unsupported" would destroy
+        // the only record of what the worker actually was.
+        assert!(matches!(
+            store.update_worker_profile(
+                rolled_back.id,
+                None,
+                None,
+                Some(ProviderKind::Unsupported),
+                None,
+                None
+            ),
+            Err(TaskStoreError::IntegrityFailure(_))
+        ));
+        let stored: String = store
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT provider FROM worker_profiles WHERE id = ?1",
+                [rolled_back.id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            stored, "gemini",
+            "the real provider survives being unreadable"
         );
     }
 

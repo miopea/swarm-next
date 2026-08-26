@@ -227,6 +227,11 @@ fn prompt_marker(provider: ProviderKind) -> char {
     match provider {
         ProviderKind::ClaudeCode => '\u{276f}',
         ProviderKind::Codex => '\u{203a}',
+        // NUL, because this build knows no marker for an unrecognised provider
+        // and a terminal never emits one — so nothing matches, which is the
+        // honest result. Borrowing another provider's glyph would invent a
+        // reading of a screen we cannot interpret.
+        ProviderKind::Unsupported => '\0',
     }
 }
 
@@ -267,6 +272,7 @@ fn input_palette_is_resting(provider: ProviderKind, visible: &str) -> bool {
     let Some(prompt_index) = lines.iter().rposition(|line| match provider {
         ProviderKind::ClaudeCode => line == &"❯ /" || line.starts_with("❯ /"),
         ProviderKind::Codex => line == &"› /" || line.starts_with("› /"),
+        ProviderKind::Unsupported => false,
     }) else {
         return false;
     };

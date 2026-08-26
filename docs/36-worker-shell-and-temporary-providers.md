@@ -139,15 +139,27 @@ Adding a `ProviderKind` variant is mechanically large but **compiler-enforced**:
 `provider_activity.rs` carries no wildcard arm. Treat the compiler as the
 checklist.
 
-**No schema migration is required.** A provider is stored as a plain string and
-parsed back with `ProviderKind::from_str` (`crates/swarm-persistence/src/workers.rs:553`);
-there is no CHECK constraint enumerating the valid values. One hardcoded string map
-at `crates/swarm-persistence/src/migration.rs:1227` also needs the new arm.
+**A schema migration IS required, and an earlier draft of this document said the
+opposite.** The column is declared
+`provider TEXT NOT NULL CHECK (provider IN ('claude_code','codex'))` at
+`crates/swarm-persistence/src/lib.rs:3279`. Adding a provider means a forward-only
+migration widening that constraint, declared in `RECENT_SCHEMA_STEPS` with
+`undo_sql`/`probe_sql` like every other step, and idempotent — the migration tests
+rewind `user_version` without rewinding tables.
+
+The claim was wrong because the check was run against `workers.rs` and
+`migration.rs` and generalised to the schema without reading `lib.rs`, where the
+table is actually defined. It was found by a test that tried to stage a rollback
+and was refused by the constraint that supposedly did not exist.
+
+One hardcoded string map at `crates/swarm-persistence/src/migration.rs:1227` also
+needs the new arm.
 
 ### The rollback hazard this creates
 
-Because the value is parsed rather than constrained, an older build cannot read a
-newer provider. `from_str` fails, and the row fails to load — so a worker adopted
+The CHECK constrains WRITES only; SQLite does not re-validate it on read, and a
+rollback of the code does not rewind the schema. So the widened constraint stays
+in the database and the older build reads a value it cannot parse. `from_str` fails, and the row fails to load — so a worker adopted
 on Gemini becomes an unreadable worker row the moment the API rolls back to a
 release that predates Gemini.
 
