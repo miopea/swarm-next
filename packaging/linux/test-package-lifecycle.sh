@@ -87,24 +87,41 @@ for unit in swarm-api swarm-terminal-host; do
   }
 done
 
-# AND A PATH A FRESH MACHINE DOES NOT HAVE YET MUST BE TOLERATED, NOT REQUIRED.
+# THE TERMINAL HOST MUST NOT HAVE A READ-ONLY HOME.
 #
-# Claude Code creates ~/.claude and ~/.claude.json on its first run. Without a
-# leading '-' systemd treats them as required to build the namespace, so on a
-# brand-new install the first login has nowhere to persist: it succeeds, and
-# every later session asks again. Same family as the block above — configuration
-# that is correct on a machine which has already been used, and wrong on a new
-# one, which is why neither showed up on any developer machine here.
-for unit in swarm-api swarm-terminal-host; do
-  for optional in '%h/.claude' '%h/.claude.json'; do
-    grep -q "ReadWritePaths=-$optional\$" \
-      "$repo_root/packaging/systemd-user/$unit.service.in" || {
-      printf 'unit %s.service must tolerate %s being absent on a fresh install\n' \
-        "$unit" "$optional" >&2
-      exit 1
-    }
-  done
-done
+# It runs the operator's coding agents, and they write across $HOME as a matter
+# of course. ProtectHome=read-only there fails in the worst available way:
+# ReadWritePaths on a single FILE is a bind mount of one inode, and a writer
+# that saves by atomic replace — temp file, rename over the target, which is
+# what Claude Code does for ~/.claude.json — detaches from that inode. The write
+# reports success and the file never changes.
+#
+# On 2026-08-26 that produced a fresh install asking for login and full
+# onboarding on every wake, with ~/.claude.json byte-identical throughout: 517
+# bytes, same inode, same mtime. Credentials inside the ~/.claude DIRECTORY
+# persisted fine, which is the tell — a bind-mounted directory works, a
+# bind-mounted file does not.
+#
+# ProtectSystem=strict still guards the system tree. Home is what this service
+# exists to work in.
+grep -q '^ProtectHome=' "$repo_root/packaging/systemd-user/swarm-terminal-host.service.in" && {
+  printf 'swarm-terminal-host.service must not restrict $HOME: it runs agents that write there\n' >&2
+  exit 1
+}
+
+# And the API, which does NOT run agents, keeps its read-only home plus the one
+# directory it genuinely writes into.
+grep -q '^ProtectHome=read-only$' \
+  "$repo_root/packaging/systemd-user/swarm-api.service.in" || {
+  printf 'swarm-api.service should keep ProtectHome=read-only; it runs no agent code\n' >&2
+  exit 1
+}
+grep -q 'ReadWritePaths=-%h/.claude$' \
+  "$repo_root/packaging/systemd-user/swarm-api.service.in" || {
+  printf 'swarm-api.service needs ~/.claude for resume history, tolerated when absent\n' >&2
+  exit 1
+}
+
 # And every placeholder any template uses must be one the renderer substitutes.
 for placeholder in $(grep -ho '@[A-Z_]*@' "$repo_root"/packaging/systemd-user/*.in | sort -u); do
   grep -q "s|$placeholder|" "$repo_root/packaging/linux/swarm-package" || {

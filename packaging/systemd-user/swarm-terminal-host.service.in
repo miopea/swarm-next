@@ -18,22 +18,29 @@ TimeoutStopSec=30s
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ProtectHome=read-only
+# NOT ProtectHome=read-only, and this is deliberate rather than an omission.
+#
+# This unit runs the operator's coding agents. They write across $HOME as a
+# matter of course — Claude Code's own ~/.claude.json, git config, language
+# toolchain caches, whatever a task needs — so a read-only home is at odds with
+# what the service is for, and every tool that writes somewhere unlisted becomes
+# a bug nobody can see.
+#
+# It failed in the worst available way. ReadWritePaths on a single FILE is a
+# bind mount of one inode, and Claude Code writes its config by atomic replace:
+# temp file, then rename over the target. The rename detaches from the mounted
+# inode, so the write reports success and the file never changes. Files inside a
+# bind-mounted DIRECTORY are unaffected, which is why credentials in ~/.claude
+# persisted while ~/.claude.json stayed byte-identical through repeated
+# onboarding — 517 bytes, same inode, same mtime, on 2026-08-26.
+#
+# The result was a fresh install that asked for login and full onboarding on
+# every wake, with nothing anywhere reporting a failed write.
+#
+# ProtectSystem=strict still protects the system tree. Home is the thing this
+# service exists to work in.
 ReadWritePaths=@STATE_ROOT@
 ReadWritePaths=@WORKSPACE_ROOT@
-# TOLERANT, because a fresh machine does not have these yet.
-#
-# Claude Code creates ~/.claude and ~/.claude.json on its first run, so on a
-# brand-new install they do not exist when these units first start. Without the
-# leading '-' systemd treats a missing path as a failure to build the namespace,
-# and the first login has nowhere to persist — the operator logs in, it works,
-# and every later session asks again.
-#
-# The dev-reload unit two files over already does this for ~/.cargo and the pnpm
-# store, for exactly the same reason. This is that lesson, applied where it was
-# missed.
-ReadWritePaths=-%h/.claude
-ReadWritePaths=-%h/.claude.json
 UMask=0077
 
 [Install]
