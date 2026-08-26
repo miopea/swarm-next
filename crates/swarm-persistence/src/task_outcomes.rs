@@ -616,7 +616,8 @@ impl TaskStore {
                 task_id.to_string(),
                 reason,
                 worker_id.map(|id| id.to_string()),
-                now
+                now,
+                superseded_at
             ],
         )?;
         drop(connection);
