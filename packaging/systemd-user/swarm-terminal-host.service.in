@@ -21,8 +21,19 @@ ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=@STATE_ROOT@
 ReadWritePaths=@WORKSPACE_ROOT@
-ReadWritePaths=%h/.claude
-ReadWritePaths=%h/.claude.json
+# TOLERANT, because a fresh machine does not have these yet.
+#
+# Claude Code creates ~/.claude and ~/.claude.json on its first run, so on a
+# brand-new install they do not exist when these units first start. Without the
+# leading '-' systemd treats a missing path as a failure to build the namespace,
+# and the first login has nowhere to persist — the operator logs in, it works,
+# and every later session asks again.
+#
+# The dev-reload unit two files over already does this for ~/.cargo and the pnpm
+# store, for exactly the same reason. This is that lesson, applied where it was
+# missed.
+ReadWritePaths=-%h/.claude
+ReadWritePaths=-%h/.claude.json
 UMask=0077
 
 [Install]

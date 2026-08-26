@@ -59,6 +59,52 @@ for unit in "$repo_root"/packaging/systemd-user/*.service.in; do
   done
 done
 
+
+# THE TWO SERVICES THAT DEAL IN WORKSPACES MUST AGREE ABOUT THE BOUNDARY.
+#
+# ProtectHome=read-only makes the whole home read-only inside each namespace,
+# so a workspace is only writable where ReadWritePaths says so. The terminal
+# host ENFORCES that boundary and the API REPORTS on it, and a report made from
+# a namespace where nothing under home is writable says EROFS for every
+# workspace — marking every worker Blocked while the workers themselves run
+# perfectly well.
+#
+# It shipped that way, and it hid on the machine it was written on because
+# ~/projects there is a separate filesystem that ProtectHome does not cover. On
+# the ordinary layout, where the workspace is a directory inside the same
+# filesystem as home, every install was affected. Found on a fresh WSL install
+# on 2026-08-26 after the EROFS was read as a failing disk and chased through
+# dumpe2fs, dmesg and Windows free space. The disk was healthy throughout.
+#
+# Checked rather than remembered, for the same reason as the block above: a
+# missing ReadWritePaths entry does not fail a unit, it produces one that starts
+# and then cannot write, which reads as anything except a permission problem.
+for unit in swarm-api swarm-terminal-host; do
+  grep -q 'ReadWritePaths=@WORKSPACE_ROOT@' \
+    "$repo_root/packaging/systemd-user/$unit.service.in" || {
+    printf 'unit %s.service must be able to write @WORKSPACE_ROOT@\n' "$unit" >&2
+    exit 1
+  }
+done
+
+# AND A PATH A FRESH MACHINE DOES NOT HAVE YET MUST BE TOLERATED, NOT REQUIRED.
+#
+# Claude Code creates ~/.claude and ~/.claude.json on its first run. Without a
+# leading '-' systemd treats them as required to build the namespace, so on a
+# brand-new install the first login has nowhere to persist: it succeeds, and
+# every later session asks again. Same family as the block above — configuration
+# that is correct on a machine which has already been used, and wrong on a new
+# one, which is why neither showed up on any developer machine here.
+for unit in swarm-api swarm-terminal-host; do
+  for optional in '%h/.claude' '%h/.claude.json'; do
+    grep -q "ReadWritePaths=-$optional\$" \
+      "$repo_root/packaging/systemd-user/$unit.service.in" || {
+      printf 'unit %s.service must tolerate %s being absent on a fresh install\n' \
+        "$unit" "$optional" >&2
+      exit 1
+    }
+  done
+done
 # And every placeholder any template uses must be one the renderer substitutes.
 for placeholder in $(grep -ho '@[A-Z_]*@' "$repo_root"/packaging/systemd-user/*.in | sort -u); do
   grep -q "s|$placeholder|" "$repo_root/packaging/linux/swarm-package" || {
@@ -134,8 +180,8 @@ if grep -q 'CLAUDE_CONFIG_DIR' "$SWARM_SYSTEMD_USER_ROOT/swarm-api.service"; the
   echo "Workers must use the default Claude configuration directory" >&2
   exit 1
 fi
-grep -q 'ReadWritePaths=%h/.claude$' "$SWARM_SYSTEMD_USER_ROOT/swarm-api.service"
-grep -q 'ReadWritePaths=%h/.claude.json$' "$SWARM_SYSTEMD_USER_ROOT/swarm-api.service"
+grep -q 'ReadWritePaths=-%h/.claude$' "$SWARM_SYSTEMD_USER_ROOT/swarm-api.service"
+grep -q 'ReadWritePaths=-%h/.claude.json$' "$SWARM_SYSTEMD_USER_ROOT/swarm-api.service"
 grep -q 'PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin' "$SWARM_SYSTEMD_USER_ROOT/swarm-api.service"
 grep -q '^Wants=swarm-terminal-host.service$' "$SWARM_SYSTEMD_USER_ROOT/swarm-api.service"
 if grep -q '^Requires=swarm-terminal-host.service$' "$SWARM_SYSTEMD_USER_ROOT/swarm-api.service"; then
@@ -152,8 +198,8 @@ if grep -q 'CLAUDE_CONFIG_DIR' "$SWARM_SYSTEMD_USER_ROOT/swarm-terminal-host.ser
   echo "Workers must use the default Claude configuration directory" >&2
   exit 1
 fi
-grep -q 'ReadWritePaths=%h/.claude$' "$SWARM_SYSTEMD_USER_ROOT/swarm-terminal-host.service"
-grep -q 'ReadWritePaths=%h/.claude.json$' "$SWARM_SYSTEMD_USER_ROOT/swarm-terminal-host.service"
+grep -q 'ReadWritePaths=-%h/.claude$' "$SWARM_SYSTEMD_USER_ROOT/swarm-terminal-host.service"
+grep -q 'ReadWritePaths=-%h/.claude.json$' "$SWARM_SYSTEMD_USER_ROOT/swarm-terminal-host.service"
 grep -q 'SWARM_CLAUDE_SETTINGS_PATH=%h/.claude/settings.json' "$SWARM_SYSTEMD_USER_ROOT/swarm-terminal-host.service"
 grep -q 'PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin' "$SWARM_SYSTEMD_USER_ROOT/swarm-terminal-host.service"
 grep -q '^RuntimeDirectory=swarm$' "$SWARM_SYSTEMD_USER_ROOT/swarm-terminal-host.service"

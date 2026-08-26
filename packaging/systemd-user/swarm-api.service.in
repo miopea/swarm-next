@@ -23,11 +23,42 @@ PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=@STATE_ROOT@
+# THE WORKSPACE, EVEN THOUGH THIS SERVICE DOES NOT WRITE THERE.
+#
+# ProtectHome=read-only makes the whole home read-only inside this namespace,
+# and the API probes each worker's workspace for writability to report whether
+# that worker can actually work. Without this the probe answers from a namespace
+# where nothing under home is writable, returns EROFS for every workspace, and
+# marks every worker Blocked while the workers themselves run perfectly — the
+# terminal host has always had this line and does the actual writing.
+#
+# It hid on the developer machine it was written on, because there ~/projects is
+# a separate filesystem that ProtectHome does not cover. On the ordinary layout,
+# where the workspace is a directory inside the same filesystem as home, every
+# install was affected. Found on a fresh WSL install on 2026-08-26, after the
+# EROFS was read as a failing disk and chased through dumpe2fs, dmesg and
+# Windows free space. The disk was healthy the whole time.
+#
+# The two services must agree about this boundary. The terminal host ENFORCES it
+# and this service REPORTS on it, and a report from a different namespace than
+# the one being enforced is a report about the wrong thing.
+ReadWritePaths=@WORKSPACE_ROOT@
 # The operator rotates their token in Settings, which rewrites this file so the
 # new value is also what systemd loads on the next start.
 ReadWritePaths=@CONFIG_ROOT@
-ReadWritePaths=%h/.claude
-ReadWritePaths=%h/.claude.json
+# TOLERANT, because a fresh machine does not have these yet.
+#
+# Claude Code creates ~/.claude and ~/.claude.json on its first run, so on a
+# brand-new install they do not exist when these units first start. Without the
+# leading '-' systemd treats a missing path as a failure to build the namespace,
+# and the first login has nowhere to persist — the operator logs in, it works,
+# and every later session asks again.
+#
+# The dev-reload unit two files over already does this for ~/.cargo and the pnpm
+# store, for exactly the same reason. This is that lesson, applied where it was
+# missed.
+ReadWritePaths=-%h/.claude
+ReadWritePaths=-%h/.claude.json
 UMask=0077
 
 [Install]

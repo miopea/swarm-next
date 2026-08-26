@@ -582,14 +582,36 @@ impl TaskStore {
         if approved {
             return Err(TaskStoreError::CompletionEvidenceRequired);
         }
+        // A CLAIM MADE ON A TASK THAT ALREADY DEPLOYED IS BORN SUPERSEDED, and
+        // it has to carry the same mark as one superseded from the other
+        // direction.
+        //
+        // The deployment side of this was fixed first and only covered
+        // claim-then-deploy. Three claims corrected by hand on 2026-08-26 took
+        // the other route — deploy-then-claim — and left superseded_at NULL, so
+        // the contradiction query still returned them. A human reading the
+        // reason could see the correction; the query could not, which is the
+        // entire thing a structured field exists to avoid.
+        //
+        // Decided from the deployment record rather than from the reason text.
+        // All three corrections happen to begin "SUPERSEDES", and matching on
+        // that would be reading prose to determine a fact the store already
+        // holds — and would break the moment somebody phrased it differently.
+        let deployed: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM task_deployments WHERE task_id = ?1)",
+            [task_id.to_string()],
+            |row| row.get(0),
+        )?;
+        let superseded_at = deployed.then_some(now);
         connection.execute(
             "INSERT INTO task_completion_exemptions
-                 (task_id, reason, claimed_by_worker_id, claimed_at)
-             VALUES (?1, ?2, ?3, ?4)
+                 (task_id, reason, claimed_by_worker_id, claimed_at, superseded_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(task_id) DO UPDATE
                  SET reason = excluded.reason,
                      claimed_by_worker_id = excluded.claimed_by_worker_id,
-                     claimed_at = excluded.claimed_at",
+                     claimed_at = excluded.claimed_at,
+                     superseded_at = excluded.superseded_at",
             params![
                 task_id.to_string(),
                 reason,
