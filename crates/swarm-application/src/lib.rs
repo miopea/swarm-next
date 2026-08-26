@@ -2424,10 +2424,43 @@ impl TaskService {
                 role: WorkerRole::Queen,
                 ..
             }) => decisions,
-            Some(principal) => decisions
-                .into_iter()
-                .filter(|decision| decision.requesting_worker_id == principal.worker_id)
-                .collect(),
+            // A WORKER ALSO SEES RULINGS ON ITS OWN WORK, not only the ones it
+            // raised itself.
+            //
+            // Verifying a decision by id has always been open to anyone — the
+            // tool says so. What was closed was DISCOVERY: a worker assigned to
+            // a task could not find the id of the operator ruling attached to
+            // that task, and the only remaining route was to be told it by
+            // Queen. For a task whose gate says "do not touch this on a Queen
+            // note or a peer relay", being told the id IS the relay. So a
+            // worker that took its own gate seriously had to block, and one
+            // that satisfied the gate had necessarily broken it. The safer the
+            // worker, the more reliably it stalled.
+            //
+            // That happened on 2026-08-26 to a syslog forwarder cutover
+            // carrying 919k requests a day. The ruling existed, was correctly
+            // linked to the task, and was invisible to the one worker that
+            // needed it.
+            //
+            // Scoped to tasks this worker is ASSIGNED. It does not open the
+            // decision log; it hands a worker the authority that governs the
+            // work it was given, which is the thing it was already being asked
+            // to act on.
+            Some(principal) => {
+                let mine = self
+                    .list_tasks()?
+                    .into_iter()
+                    .filter(|task| task.assigned_worker_id == Some(principal.worker_id))
+                    .map(|task| task.id)
+                    .collect::<std::collections::HashSet<_>>();
+                decisions
+                    .into_iter()
+                    .filter(|decision| {
+                        decision.requesting_worker_id == principal.worker_id
+                            || decision.task_id.is_some_and(|task| mine.contains(&task))
+                    })
+                    .collect()
+            }
         })
     }
 

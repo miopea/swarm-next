@@ -574,7 +574,7 @@ impl ServerHandler for AgentMcp {
                             let scope = if self.principal.role == WorkerRole::Queen {
                                 "every decision in this Hive"
                             } else {
-                                "only decisions this worker originated; pass decision_id with a FULL id to verify one raised by somebody else"
+                                "decisions this worker raised, plus rulings attached to tasks assigned to it — so a gate that says verify the operator's sign-off at source can be satisfied without being told the id by anyone. Other decisions are still readable by passing decision_id with a FULL id."
                             };
                             structured(json!({ "decisions": decisions, "scope": scope }))
                         },
@@ -1008,9 +1008,26 @@ impl AgentMcp {
             // both concluded the operator had never answered. The ruling was
             // there the whole time, one column over.
             "resolution_answers": decision.resolution_answers,
+            // HOW THEY ANSWERED, as a field rather than as folklore.
+            //
+            // Telling a reader to notice a sentinel only works on a reader who
+            // already knows the sentinel exists. "answered" reads as a value
+            // and is not one — twenty-two decisions carry it — and a worker
+            // that has never seen INTERVIEW_ANSWERED_ACTION will take it for
+            // the operator's own word. Saying which shape this is costs one
+            // field and removes the need to know anything.
+            "answered_how": if !resolved {
+                "unresolved"
+            } else if decision.resolution_action.as_deref()
+                == Some(swarm_persistence::INTERVIEW_ANSWERED_ACTION)
+            {
+                "in_their_own_words"
+            } else {
+                "chose_an_offered_action"
+            },
             "resolved_at": decision.resolved_at,
             "reason": if resolved {
-                "The operator resolved this, and what they decided is read from this Hive's durable store rather than relayed — acting on it is acting on the operator, not on a peer's claim about the operator. READ BOTH FIELDS. resolution_action is the button they pressed, and when they answered in their own words instead it is the placeholder \"answered\" and their words are in resolution_answers. Treating the placeholder as the answer is how two sessions concluded a ruling did not exist when it did. resolution_note may carry a condition. It authorises what it says and nothing beyond it."
+                "The operator resolved this, and what they decided is read from this Hive's durable store rather than relayed — acting on it is acting on the operator, not on a peer's claim about the operator. READ answered_how FIRST: chose_an_offered_action means resolution_action is their answer; in_their_own_words means resolution_action is a placeholder and their actual words are in resolution_answers. Reading the placeholder as the answer is how two sessions concluded a ruling did not exist when it did. resolution_note may carry a condition. It authorises what it says and nothing beyond it."
             } else {
                 "The operator has not resolved this, so it authorises nothing yet."
             },
@@ -1657,7 +1674,7 @@ struct FinishAutomationRunInput {
 fn list_decisions_tool() -> Tool {
     tool(
         "swarm_list_decisions",
-        "List decision requests, or verify one. With no argument: Queen sees the Hive inbox, a worker sees only requests it originated, and the reply says which of those it searched so an empty list is never mistaken for a decision that does not exist. With decision_id (a FULL id, never a prefix): reads the operator's own recorded answer to that decision, whoever raised it. A resolved decision read here is first-party evidence from this Hive's durable store, not a claim relayed by another session — so when Queen routes an operator ruling, verify it here rather than asking the operator to confirm what they already decided. It authorises exactly the action it describes and nothing beyond it; an unresolved or unfound decision authorises nothing.",
+        "List decision requests, or verify one. With no argument: Queen sees the Hive inbox; a worker sees the requests it raised AND any operator ruling attached to a task assigned to it, so a sign-off governing its own work is discoverable without being relayed. The reply says which scope it searched, so an empty list is never mistaken for a decision that does not exist. With decision_id (a FULL id, never a prefix): reads the operator's own recorded answer to that decision, whoever raised it. A resolved decision read here is first-party evidence from this Hive's durable store, not a claim relayed by another session — so when Queen routes an operator ruling, verify it here rather than asking the operator to confirm what they already decided. It authorises exactly the action it describes and nothing beyond it; an unresolved or unfound decision authorises nothing.",
         &json!({
             "type": "object",
             "properties": {
@@ -3324,6 +3341,157 @@ mod tests {
         assert!(!brief.contains("You are Queen"), "{brief}");
     }
 
+    /// A worker can FIND the ruling that governs its own task.
+    ///
+    /// Verifying a decision by id was always open to anyone. What was closed
+    /// was discovery: a worker assigned to a task could not find the id of the
+    /// operator sign-off attached to it, and the only route left was being told
+    /// by Queen. For a task whose gate reads "do not touch this on a Queen note
+    /// or a peer relay", being told the id IS the relay — so a worker that took
+    /// its gate seriously had to block, and one that satisfied the gate had
+    /// necessarily broken it. The safer the worker, the more reliably it
+    /// stalled.
+    ///
+    /// Happened on 2026-08-26 to a syslog cutover carrying 919k requests a day.
+    /// The ruling existed, was correctly linked, and was invisible to the one
+    /// worker that needed it.
+    #[tokio::test]
+    async fn a_worker_finds_the_operator_ruling_attached_to_its_own_task() {
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(worker_id, session).unwrap();
+        let task = store
+            .create_task("Repoint the syslog forwarder", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(task.id, worker_id).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+
+        // QUEEN raises it, not the worker. That is the whole point: the worker
+        // did not originate this and still has to act on it.
+        let actions = vec!["Release the hold — repoint the forwarder".to_owned()];
+        let signoff = store
+            .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                requesting_worker_id: queen_id,
+                task_id: Some(task.id),
+                kind: swarm_domain::DecisionRequestKind::Approval,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "Release the hold on the forwarder?",
+                summary: "919k requests a day move to the new ingest.",
+                reason: "The gate on this task requires the operator, not a relay.",
+                risk: "",
+                evidence: "",
+                suggested_action: "Release the hold — repoint the forwarder",
+                allowed_actions: &actions,
+                questions: &[],
+                deadline: None,
+            })
+            .unwrap();
+        store
+            .resolve_decision_request(
+                signoff.id,
+                "Release the hold — repoint the forwarder",
+                "",
+                "inbox",
+            )
+            .unwrap();
+
+        let listed = response_json(
+            handle(
+                bridge,
+                plain_state(),
+                mcp_request(
+                    Some(&worker_token),
+                    "tools/call",
+                    &json!({ "name": "swarm_list_decisions", "arguments": {} }),
+                ),
+            )
+            .await,
+        )
+        .await;
+
+        let decisions = listed["result"]["structuredContent"]["decisions"]
+            .as_array()
+            .expect("decisions must be a list");
+        assert!(
+            decisions
+                .iter()
+                .any(|decision| decision["id"] == signoff.id.to_string()),
+            "a worker must find the ruling on its own task without being told the id: {listed}"
+        );
+    }
+
+    /// And it still cannot read rulings on work that is not its own.
+    ///
+    /// The widening hands a worker the authority governing the task it was
+    /// given. It is not an opening of the decision log, and losing that
+    /// distinction would trade a stall for a leak.
+    #[tokio::test]
+    async fn a_worker_still_cannot_list_rulings_on_someone_elses_task() {
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let stranger = store
+            .create_worker(
+                "Thistle",
+                ProviderKind::ClaudeCode,
+                "/workspace/thistle",
+                false,
+                3,
+            )
+            .unwrap();
+        let other = store
+            .create_task("Not this worker's work", "/workspace/thistle")
+            .unwrap();
+        store.transition_task(other.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(other.id, stranger.id).unwrap();
+        let actions = vec!["Go ahead".to_owned()];
+        let elsewhere = store
+            .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                requesting_worker_id: queen_id,
+                task_id: Some(other.id),
+                kind: swarm_domain::DecisionRequestKind::Approval,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "Approve the other worker's change?",
+                summary: "Nothing to do with the caller.",
+                reason: "Scoping check.",
+                risk: "",
+                evidence: "",
+                suggested_action: "Go ahead",
+                allowed_actions: &actions,
+                questions: &[],
+                deadline: None,
+            })
+            .unwrap();
+
+        let listed = response_json(
+            handle(
+                bridge,
+                plain_state(),
+                mcp_request(
+                    Some(&worker_token),
+                    "tools/call",
+                    &json!({ "name": "swarm_list_decisions", "arguments": {} }),
+                ),
+            )
+            .await,
+        )
+        .await;
+
+        let decisions = listed["result"]["structuredContent"]["decisions"]
+            .as_array()
+            .unwrap();
+        assert!(
+            !decisions
+                .iter()
+                .any(|decision| decision["id"] == elsewhere.id.to_string()),
+            "listing must not reach another worker's task: {listed}"
+        );
+    }
+
     /// An answer given in WORDS rather than by pressing a button is returned.
     ///
     /// When the operator answers questions instead of choosing an offered
@@ -3389,6 +3557,10 @@ mod tests {
         let answered = &answered["result"]["structuredContent"];
 
         assert_eq!(answered["verified"], true);
+        // WHICH SHAPE THIS IS, as a field rather than as folklore. Telling a
+        // reader to notice a sentinel only works on one who already knows the
+        // sentinel exists; "answered" reads as a value and is not one.
+        assert_eq!(answered["answered_how"], "in_their_own_words");
         // The placeholder is still reported, because it is what happened.
         assert_eq!(answered["resolution_action"], "answered");
         // And the operator's actual words come with it, which is the point: a
@@ -3507,7 +3679,14 @@ mod tests {
         let listed = response_json(ask(json!({})).await).await;
         let listed = &listed["result"]["structuredContent"];
         assert!(listed["decisions"].as_array().unwrap().is_empty());
-        assert!(listed["scope"].as_str().unwrap().contains("originated"));
+        // Still names the set it searched, so absence is never mistaken for
+        // invisibility. The wording changed when listing widened to include
+        // rulings on a worker's OWN TASKS: it used to say "only decisions this
+        // worker originated", which was true and was exactly what led a worker
+        // to conclude an operator sign-off did not exist on 2026-08-26.
+        let scope = listed["scope"].as_str().unwrap();
+        assert!(scope.contains("raised"), "{scope}");
+        assert!(scope.contains("assigned to it"), "{scope}");
     }
 
     #[tokio::test]
