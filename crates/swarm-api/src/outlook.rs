@@ -383,6 +383,46 @@ impl OutlookProbe {
             .ok_or(OutlookError::NotFound)
     }
 
+    /// The reply body as the markup Graph actually renders.
+    ///
+    /// `comment` IS HTML, not text. Passing plain prose sent every reply as one
+    /// unbroken blob in a serif face — paragraph breaks are newlines, and HTML
+    /// collapses newlines to spaces. The operator saw it in their own Sent Items
+    /// on 2026-08-26, after the replies had gone to real people.
+    ///
+    /// Three things this does, in order of how badly each was needed:
+    ///
+    /// ESCAPES FIRST. A reply is written by a worker and edited by the operator,
+    /// and either may contain `<`, `>` or `&` — a bare ampersand in a URL is
+    /// enough. Interpolating that into a message body is how a stray character
+    /// silently eats the rest of a sentence, and how anything worse would get in.
+    ///
+    /// PARAGRAPHS FROM BLANK LINES, line breaks from single ones, which is the
+    /// convention every one of these drafts is written in.
+    ///
+    /// A FONT, because inheriting nothing is what produced the serif. Aptos is the
+    /// current Outlook default with the older ones behind it, so a reply looks like
+    /// the rest of the thread rather than like something pasted in.
+    fn reply_html(body: &str) -> String {
+        let escaped = body
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        let mut paragraphs = String::new();
+        for block in escaped
+            .split("\n\n")
+            .map(str::trim)
+            .filter(|block| !block.is_empty())
+        {
+            paragraphs.push_str("<p>");
+            paragraphs.push_str(&block.replace('\n', "<br>"));
+            paragraphs.push_str("</p>");
+        }
+        format!(
+            "<div style=\"font-family:Aptos,Calibri,'Segoe UI',sans-serif;font-size:11pt\">{paragraphs}</div>"
+        )
+    }
+
     pub(crate) async fn reply(&self, message_id: &str, body: &str) -> Result<String, OutlookError> {
         validate_identifier(message_id)?;
         let body = body.trim();
@@ -397,7 +437,7 @@ impl OutlookProbe {
             .post(url)
             .bearer_auth(&access.access_token)
             .header(reqwest::header::ACCEPT, "application/json")
-            .json(&serde_json::json!({ "comment": body }))
+            .json(&serde_json::json!({ "comment": Self::reply_html(body) }))
             .send()
             .await
             .map_err(|_| OutlookError::AmbiguousDelivery)?;
@@ -657,6 +697,42 @@ mod tests {
             Url::parse(&format!("http://{address}/")).unwrap(),
             directory,
         )
+    }
+
+    /// The reply the recipient actually reads.
+    ///
+    /// `comment` is HTML. Sending plain prose through it produced one unbroken
+    /// blob in a serif face, which the operator found in their own Sent Items
+    /// on 2026-08-26 — after those replies had gone to real people.
+    #[test]
+    fn a_reply_keeps_its_paragraphs_and_cannot_carry_markup() {
+        let rendered = OutlookProbe::reply_html(
+            "Hello Mrs. E,\n\nYou were right.\nI have added a view.\n\nRegards,\nBrad",
+        );
+
+        // Blank lines are paragraphs; single newlines are breaks. Without this
+        // the whole reply arrives as one run-on line.
+        assert_eq!(rendered.matches("<p>").count(), 3, "{rendered}");
+        assert!(
+            rendered.contains("You were right.<br>I have added a view."),
+            "{rendered}"
+        );
+        assert!(rendered.contains("Regards,<br>Brad"), "{rendered}");
+        // And it looks like the thread rather than something pasted into it.
+        assert!(rendered.contains("font-family:Aptos"), "{rendered}");
+    }
+
+    /// A draft is written by a worker and edited by the operator, and either may
+    /// type a character that means something to HTML. An ampersand in a URL is
+    /// enough to eat the rest of a sentence.
+    #[test]
+    fn a_reply_containing_markup_is_escaped_rather_than_interpreted() {
+        let rendered = OutlookProbe::reply_html("Use <b>this</b> link: ?a=1&b=2");
+
+        assert!(rendered.contains("&lt;b&gt;this&lt;/b&gt;"), "{rendered}");
+        assert!(rendered.contains("?a=1&amp;b=2"), "{rendered}");
+        // The only tags in the output are the ones this function put there.
+        assert!(!rendered.contains("<b>"), "{rendered}");
     }
 
     #[tokio::test]
