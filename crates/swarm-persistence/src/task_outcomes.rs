@@ -256,6 +256,87 @@ mod tests {
         }
     }
 
+    /// A recorded deployment supersedes an unapproved claim that nothing
+    /// shipped, because the two cannot both be true.
+    ///
+    /// Five tasks on this board carry both right now and none was ever looked
+    /// at. The sharpest still reads "PR #418 is open" for work that merged and
+    /// deployed — and that task was later cited as the gate for the step after
+    /// it. The record says nothing shipped.
+    ///
+    /// The reason is PREFIXED rather than replaced: it was true when written,
+    /// and what it said is how anyone later understands why the task looked
+    /// finished without shipping anything.
+    #[test]
+    fn a_deployment_supersedes_an_unapproved_claim_that_nothing_shipped() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store
+            .create_task("Close the write hole", "/workspace")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        store
+            .claim_completion_exemption(task.id, "Nothing shipped: PR #418 is open.", None, 1_000)
+            .unwrap();
+
+        store
+            .record_task_deployment(task.id, "production", "f2059bdb", 2_000)
+            .unwrap();
+
+        let connection = store.connection().unwrap();
+        let (reason, superseded): (String, Option<i64>) = connection
+            .query_row(
+                "SELECT reason, superseded_at FROM task_completion_exemptions WHERE task_id = ?1",
+                [task.id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert_eq!(superseded, Some(2_000));
+        assert!(reason.starts_with("SUPERSEDED"), "{reason}");
+        // The original argument survives, because it explains the history.
+        assert!(reason.contains("PR #418 is open"), "{reason}");
+    }
+
+    /// An APPROVED exemption is left alone.
+    ///
+    /// Queen accepted that argument. Quietly rewriting an accepted decision is
+    /// a different and worse act than leaving a stale claim standing, and the
+    /// deployment gate already prefers the deployment either way.
+    #[test]
+    fn an_approved_exemption_is_not_rewritten_by_a_later_deployment() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store
+            .create_task("A documented spike", "/workspace")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        store
+            .claim_completion_exemption(task.id, "An investigation with no code.", None, 1_000)
+            .unwrap();
+        store
+            .approve_completion_exemption(task.id, "queen", 1_500)
+            .unwrap();
+
+        store
+            .record_task_deployment(task.id, "production", "abc123", 2_000)
+            .unwrap();
+
+        let connection = store.connection().unwrap();
+        let (reason, superseded): (String, Option<i64>) = connection
+            .query_row(
+                "SELECT reason, superseded_at FROM task_completion_exemptions WHERE task_id = ?1",
+                [task.id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert_eq!(superseded, None, "an accepted decision is not rewritten");
+        assert_eq!(reason, "An investigation with no code.");
+    }
+
     #[test]
     fn worker_handoff_waits_for_quiet_queen_and_preserves_its_note() {
         let fixture = active_assignment();

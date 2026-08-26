@@ -639,6 +639,32 @@ impl TaskStore {
             params![task_id.to_string(), environment, reference],
             deployment_from_row,
         )?;
+        // A DEPLOYMENT CONTRADICTS AN UNAPPROVED CLAIM THAT NOTHING SHIPPED,
+        // and the contradiction is knowable here rather than by someone
+        // stumbling on it later.
+        //
+        // Five tasks on this board carry both right now, none ever looked at.
+        // The sharpest still says "PR #418 is open" for work that merged and
+        // deployed — and that task was later cited as the gate for the step
+        // after it. The record says nothing shipped.
+        //
+        // Superseding is a statement of fact, not a judgement: the claim was
+        // that nothing shipped, and something did. It is deliberately narrow —
+        // an APPROVED exemption is untouched, because Queen accepted that
+        // argument and quietly rewriting an accepted decision is a different
+        // and worse act than leaving a stale claim standing.
+        //
+        // The reason is preserved and prefixed rather than replaced. It was
+        // true when written, and what it said is how anyone later understands
+        // why the task looked finished without shipping anything.
+        transaction.execute(
+            "UPDATE task_completion_exemptions
+                SET reason = 'SUPERSEDED by a recorded deployment. The claim below was true when it was made:'
+                             || char(10) || reason,
+                    superseded_at = ?2
+              WHERE task_id = ?1 AND approved_at IS NULL AND superseded_at IS NULL",
+            params![task_id.to_string(), deployed_at],
+        )?;
         transaction.commit()?;
         Ok(record)
     }

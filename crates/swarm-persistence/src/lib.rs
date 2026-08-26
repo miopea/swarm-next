@@ -147,7 +147,8 @@ const REVIEW_HOLD_SCHEMA_VERSION: i64 = 91;
 const SESSION_END_REASON_SCHEMA_VERSION: i64 = 92;
 const REPLY_ALLOWS_APPROVED_EXEMPTION_SCHEMA_VERSION: i64 = 93;
 const ATTENTION_NOTIFICATION_SCHEMA_VERSION: i64 = 94;
-const CURRENT_SCHEMA_VERSION: i64 = ATTENTION_NOTIFICATION_SCHEMA_VERSION;
+const SUPERSEDED_EXEMPTION_SCHEMA_VERSION: i64 = 95;
+const CURRENT_SCHEMA_VERSION: i64 = SUPERSEDED_EXEMPTION_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -2285,6 +2286,39 @@ fn migrate_completion_exemption(transaction: &rusqlite::Transaction<'_>) -> rusq
     transaction.pragma_update(None, "user_version", COMPLETION_EXEMPTION_SCHEMA_VERSION)
 }
 
+/// Records when a no-deployment claim was overtaken by a recorded deployment.
+///
+/// A claim that nothing shipped and a deployment record on the same task are a
+/// contradiction, and it was invisible: five tasks on this board carry both,
+/// none ever examined. The sharpest still reads "PR #418 is open" for work that
+/// merged and deployed, and that task was later cited as the gate for the step
+/// after it.
+///
+/// Guarded on the column being absent AND the table existing, because the
+/// migration tests rewind `user_version` without rewinding tables — they model
+/// a database restored from a backup or half-upgraded, and a migration that
+/// assumes the old shape fails on exactly that.
+fn migrate_superseded_exemptions(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                        WHERE type = 'table' AND name = 'task_completion_exemptions')",
+        [],
+        |row| row.get(0),
+    )?;
+    let has_column: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('task_completion_exemptions')
+                        WHERE name = 'superseded_at')",
+        [],
+        |row| row.get(0),
+    )?;
+    if present && !has_column {
+        transaction.execute_batch(
+            "ALTER TABLE task_completion_exemptions ADD COLUMN superseded_at INTEGER;",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", SUPERSEDED_EXEMPTION_SCHEMA_VERSION)
+}
+
 fn migrate_schema(
     transaction: &rusqlite::Transaction<'_>,
     schema_version: i64,
@@ -2562,6 +2596,9 @@ fn migrate_named_schema_steps(
     }
     if schema_version < ATTENTION_NOTIFICATION_SCHEMA_VERSION {
         notifications::migrate_attention_notifications(transaction)?;
+    }
+    if schema_version < SUPERSEDED_EXEMPTION_SCHEMA_VERSION {
+        migrate_superseded_exemptions(transaction)?;
     }
     Ok(())
 }
@@ -5903,6 +5940,12 @@ mod tests {
         SchemaStep {
             table: "operator_attention_watermarks",
             artifact: "",
+            undo_sql: "",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "task_completion_exemptions",
+            artifact: "superseded_at",
             undo_sql: "",
             probe_sql: "",
         },

@@ -576,7 +576,15 @@ impl ServerHandler for AgentMcp {
                             } else {
                                 "decisions this worker raised, plus rulings attached to tasks assigned to it — so a gate that says verify the operator's sign-off at source can be satisfied without being told the id by anyone. Other decisions are still readable by passing decision_id with a FULL id."
                             };
-                            structured(json!({ "decisions": decisions, "scope": scope }))
+                            structured(json!({
+                                "decisions": decisions
+                                    .iter()
+                                    .map(decision_index_entry)
+                                    .collect::<Vec<_>>(),
+                                "count": decisions.len(),
+                                "scope": scope,
+                                "next": "This is an index. reason, risk, evidence, questions and the operator's answers are omitted here — pass decision_id with a FULL id to read one in full."
+                            }))
                         },
                     ),
                 }
@@ -1443,8 +1451,24 @@ fn review_evidence_next_step(
         CompletionEvidence::None => Some(
             "This task is in Review with no completion evidence recorded. If something shipped, record it with swarm_record_deployment. If nothing shipped — a spike, an investigation, a documentation change, a defensible no-change-needed — record that with swarm_record_no_deployment. Both are complete answers, and neither is a lesser one; this cannot be closed until one of them exists, and a handoff that says so in prose is not the record.",
         ),
+        // A CLAIM ON FILE IS NOT NECESSARILY A CLAIM ABOUT NOW.
+        //
+        // This said "nothing further is needed from you", which was true about
+        // the store and false about the world. On 2026-08-26 a worker moved a
+        // task to Review at 16:37:44 carrying its own earlier no-deployment
+        // claim — accurate when written — and recorded the deployment 28
+        // seconds later. In that window it was told it was finished, while the
+        // correct action was to record work that had already shipped.
+        //
+        // The branch cannot tell "you just claimed this" from "a claim you made
+        // earlier is still on file and you may have shipped since", because a
+        // claim of any age looks identical here. Rather than widen
+        // CompletionEvidence with a timestamp for the sake of one sentence, the
+        // sentence stops asserting completeness and names the one action that
+        // supersedes a claim. Harmless when the claim is fresh; the difference
+        // between evidence and no evidence when it is stale.
         CompletionEvidence::ExemptionClaimed => Some(
-            "Your claim that this task had nothing to deploy is recorded. Queen approves it before the task can complete; nothing further is needed from you.",
+            "A claim that this task had nothing to deploy is on file, and Queen approves that before the task can complete. If anything has shipped since that claim was written, record it with swarm_record_deployment — a deployment supersedes the claim. A claim that was true when it was made can be stale by the time a task comes back to Review.",
         ),
         CompletionEvidence::Deployed | CompletionEvidence::ExemptionApproved => None,
     }
@@ -1671,10 +1695,45 @@ struct FinishAutomationRunInput {
     run_id: String,
     outcome: QueenAutomationOutcome,
 }
+/// One decision as an INDEX ENTRY: enough to recognise, not enough to read.
+///
+/// Widening a worker's listing to include rulings on its own tasks made this
+/// necessary an hour after it shipped. The full record carries reason, risk and
+/// evidence bounded at ten thousand characters EACH, plus questions and the
+/// operator's answers; twenty-five of them came to 154KB and blew past a
+/// worker's tool-output limit. The capability worked and the call shape broke.
+///
+/// That failure mode is the one worth avoiding rather than the size. An output
+/// limit reports itself as "exceeds maximum allowed tokens", which a reader
+/// mid-incident will take for "there are no decisions" — the same false
+/// negative, in a new costume, that this whole line of work exists to end.
+///
+/// So the index carries what identifies a decision and what says whether it is
+/// settled. Everything a reader must actually weigh lives on the verify path,
+/// which was always the tool's shape: list to find, `decision_id` to read.
+fn decision_index_entry(decision: &swarm_domain::DecisionRequest) -> Value {
+    json!({
+        "id": decision.id,
+        "task_id": decision.task_id,
+        "requesting_worker_id": decision.requesting_worker_id,
+        "kind": decision.kind,
+        "urgency": decision.urgency,
+        "title": decision.title,
+        // Bounded to a sentence or two by construction, which is what makes an
+        // index readable rather than a wall of ids.
+        "summary": decision.summary,
+        "state": decision.state,
+        "resolution_action": decision.resolution_action,
+        "deadline": decision.deadline,
+        "created_at": decision.created_at,
+        "resolved_at": decision.resolved_at,
+    })
+}
+
 fn list_decisions_tool() -> Tool {
     tool(
         "swarm_list_decisions",
-        "List decision requests, or verify one. With no argument: Queen sees the Hive inbox; a worker sees the requests it raised AND any operator ruling attached to a task assigned to it, so a sign-off governing its own work is discoverable without being relayed. The reply says which scope it searched, so an empty list is never mistaken for a decision that does not exist. With decision_id (a FULL id, never a prefix): reads the operator's own recorded answer to that decision, whoever raised it. A resolved decision read here is first-party evidence from this Hive's durable store, not a claim relayed by another session — so when Queen routes an operator ruling, verify it here rather than asking the operator to confirm what they already decided. It authorises exactly the action it describes and nothing beyond it; an unresolved or unfound decision authorises nothing.",
+        "List decision requests, or verify one. With no argument: Queen sees the Hive inbox; a worker sees the requests it raised AND any operator ruling attached to a task assigned to it, so a sign-off governing its own work is discoverable without being relayed. The reply says which scope it searched, so an empty list is never mistaken for a decision that does not exist. The listing is an INDEX — reason, risk, evidence, questions and the operator's answers are omitted, because the full records run to tens of thousands of characters and a reply that overflows your output limit reads exactly like no decisions at all. Pass decision_id to read one in full. With decision_id (a FULL id, never a prefix): reads the operator's own recorded answer to that decision, whoever raised it. A resolved decision read here is first-party evidence from this Hive's durable store, not a claim relayed by another session — so when Queen routes an operator ruling, verify it here rather than asking the operator to confirm what they already decided. It authorises exactly the action it describes and nothing beyond it; an unresolved or unfound decision authorises nothing.",
         &json!({
             "type": "object",
             "properties": {
@@ -3341,6 +3400,74 @@ mod tests {
         assert!(!brief.contains("You are Queen"), "{brief}");
     }
 
+    /// The listing stays an index, so a full inbox cannot overflow the caller.
+    ///
+    /// Widening a worker's listing made this necessary an hour after it
+    /// shipped: twenty-five full records came to 154KB and exceeded a worker's
+    /// tool-output limit. The capability worked and the call shape broke.
+    ///
+    /// The size is not the point — the failure mode is. An output limit
+    /// announces itself as "exceeds maximum allowed tokens", which a reader
+    /// mid-incident takes for "there are no decisions". That is the same false
+    /// negative this whole line of work exists to end, wearing a new costume.
+    #[tokio::test]
+    async fn a_full_decision_inbox_lists_without_overflowing_the_caller() {
+        let (bridge, store, queen_id, _, _) = setup();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let actions = vec!["Proceed".to_owned()];
+        // Each record carries reason, risk and evidence bounded at 10k EACH.
+        // Twenty of them is what broke the real call.
+        for index in 0..20 {
+            store
+                .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                    requesting_worker_id: queen_id,
+                    task_id: None,
+                    kind: swarm_domain::DecisionRequestKind::Approval,
+                    urgency: swarm_domain::DecisionUrgency::Normal,
+                    title: &format!("Decision {index}"),
+                    summary: "Short by construction.",
+                    reason: &"r".repeat(4_000),
+                    risk: &"k".repeat(4_000),
+                    evidence: &"e".repeat(4_000),
+                    suggested_action: "Proceed",
+                    allowed_actions: &actions,
+                    questions: &[],
+                    deadline: None,
+                })
+                .unwrap();
+        }
+
+        let listed = response_json(
+            handle(
+                bridge,
+                plain_state(),
+                mcp_request(
+                    Some(&queen_token),
+                    "tools/call",
+                    &json!({ "name": "swarm_list_decisions", "arguments": {} }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        let content = &listed["result"]["structuredContent"];
+
+        assert_eq!(content["count"], 20);
+        let rendered = content.to_string();
+        // 20 records carrying 12k of prose each would be ~240KB unindexed.
+        assert!(
+            rendered.len() < 20_000,
+            "the index must not carry the long fields: {} bytes",
+            rendered.len()
+        );
+        assert!(!rendered.contains("rrrr"), "reason must not be listed");
+        assert!(!rendered.contains("kkkk"), "risk must not be listed");
+        assert!(!rendered.contains("eeee"), "evidence must not be listed");
+        // Still enough to recognise one and go and read it.
+        assert!(rendered.contains("Decision 7"), "{rendered}");
+        assert!(content["next"].as_str().unwrap().contains("decision_id"));
+    }
+
     /// A worker can FIND the ruling that governs its own task.
     ///
     /// Verifying a decision by id was always open to anyone. What was closed
@@ -3770,6 +3897,18 @@ mod tests {
             .expect("a claimed exemption still has a step, and it is Queen's");
         assert!(settled.contains("Queen approves"));
         assert!(!settled.contains("swarm_record_no_deployment"));
+        // AND IT DOES NOT DECLARE THE WORKER FINISHED. This used to end
+        // "nothing further is needed from you" — true about the store, false
+        // about the world the moment a claim outlives the state it described.
+        // A worker hit exactly that on 2026-08-26: told it was done at
+        // 16:37:44, recorded a deployment 28 seconds later. The message must
+        // leave that door open, because a claim on file says nothing about
+        // whether something has shipped since it was written.
+        assert!(
+            settled.contains("swarm_record_deployment"),
+            "a claimed exemption must still name the action that supersedes it: {settled}"
+        );
+        assert!(!settled.contains("nothing further is needed"), "{settled}");
     }
 
     #[tokio::test]
