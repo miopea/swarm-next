@@ -8111,6 +8111,115 @@ mod tests {
         assert!(!message[..message.len() - 1].contains(&b'\n'));
         assert!(!message.contains(&0x1b));
     }
+    /// The operator's ruling arrives WITH the work.
+    ///
+    /// A task whose gate says "the operator must sign off, not a Queen note or
+    /// a peer relay" has to read that sign-off somewhere. Being told the id by
+    /// a peer IS that relay, so on 2026-08-26 a worker held a cutover carrying
+    /// 919k requests a day while the authority for it sat in a record it had no
+    /// reason to know existed. Every route open to it violated its own gate.
+    #[test]
+    fn a_brief_carries_the_operator_ruling_on_that_task() {
+        let dispatch = TaskDispatch {
+            assignment_id: "assignment-2".into(),
+            task_id: TaskId::new(),
+            worker_id: WorkerId::new(),
+            session_id: WorkerSessionId::new(),
+            title: "#1714 step 3: repoint the syslog forwarder".into(),
+            description: String::new(),
+            priority: swarm_domain::TaskPriority::High,
+            workspace: "/workspace".into(),
+            operator_instruction: String::new(),
+            operator_ruling: Some(swarm_persistence::TaskRuling {
+                decision_id: "01a03ebd-495c-7b20-a098-6dceb16a16ff".into(),
+                resolution: "Release the hold — repoint the forwarder".into(),
+                answered_in_words: false,
+            }),
+            email_requester: None,
+        };
+
+        let rendered = String::from_utf8_lossy(&task_dispatch_message(&dispatch)).into_owned();
+
+        assert!(
+            rendered.contains("Release the hold — repoint the forwarder"),
+            "{rendered}"
+        );
+        // The id, so the worker verifies at source rather than trusting this
+        // sentence. The brief is a pointer; the record is the authority.
+        assert!(
+            rendered.contains("01a03ebd-495c-7b20-a098-6dceb16a16ff"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("swarm_list_decisions"), "{rendered}");
+        // And it does not carry reason, risk or evidence — each bounded at ten
+        // thousand characters, into a terminal.
+        assert!(
+            rendered.len() < 600,
+            "a brief must stay a line: {}",
+            rendered.len()
+        );
+    }
+
+    /// A ruling answered in WORDS says so instead of quoting the placeholder.
+    ///
+    /// `resolution_action` is the sentinel "answered" by design when the operator
+    /// types rather than presses, and reading it as their answer is how two
+    /// sessions concluded a ruling did not exist.
+    #[test]
+    fn a_brief_never_quotes_the_placeholder_as_the_operators_words() {
+        let dispatch = TaskDispatch {
+            assignment_id: "assignment-3".into(),
+            task_id: TaskId::new(),
+            worker_id: WorkerId::new(),
+            session_id: WorkerSessionId::new(),
+            title: "May this worker reload on its own judgment?".into(),
+            description: String::new(),
+            priority: swarm_domain::TaskPriority::Normal,
+            workspace: "/workspace".into(),
+            operator_instruction: String::new(),
+            operator_ruling: Some(swarm_persistence::TaskRuling {
+                decision_id: "01a0396a-9e92-7d50-9701-e14836fe623c".into(),
+                resolution: "answered".into(),
+                answered_in_words: true,
+            }),
+            email_requester: None,
+        };
+
+        let rendered = String::from_utf8_lossy(&task_dispatch_message(&dispatch)).into_owned();
+
+        assert!(rendered.contains("in their own words"), "{rendered}");
+        assert!(
+            rendered.contains("01a0396a-9e92-7d50-9701-e14836fe623c"),
+            "{rendered}"
+        );
+        // The sentinel must never appear as though it were the ruling.
+        assert!(!rendered.contains("\"answered\""), "{rendered}");
+    }
+
+    /// A task with no ruling reads exactly as it did before.
+    #[test]
+    fn a_brief_without_a_ruling_is_unchanged() {
+        let dispatch = TaskDispatch {
+            assignment_id: "assignment-4".into(),
+            task_id: TaskId::new(),
+            worker_id: WorkerId::new(),
+            session_id: WorkerSessionId::new(),
+            title: "Ordinary work".into(),
+            description: String::new(),
+            priority: swarm_domain::TaskPriority::Normal,
+            workspace: "/workspace".into(),
+            operator_instruction: String::new(),
+            operator_ruling: None,
+            email_requester: None,
+        };
+
+        let rendered = String::from_utf8_lossy(&task_dispatch_message(&dispatch)).into_owned();
+
+        assert!(!rendered.contains("RULED"), "{rendered}");
+        assert!(!rendered.contains("swarm_list_decisions"), "{rendered}");
+        assert!(rendered.contains("Call swarm_list_tasks now"), "{rendered}");
+    }
+
     #[test]
     fn an_email_task_brief_names_who_is_waiting_and_what_finishing_includes() {
         // Operator ruling 2026-08-20: answering the person who wrote in is part
@@ -8127,6 +8236,7 @@ mod tests {
             priority: swarm_domain::TaskPriority::Normal,
             workspace: "email://inbox".into(),
             operator_instruction: String::new(),
+            operator_ruling: None,
             email_requester: Some("Lynn\u{1b}[31m Kuczyra".into()),
         };
 
@@ -8155,6 +8265,7 @@ mod tests {
             priority: swarm_domain::TaskPriority::Normal,
             workspace: "/workspace".into(),
             operator_instruction: String::new(),
+            operator_ruling: None,
             email_requester: None,
         };
 
@@ -8178,6 +8289,7 @@ mod tests {
             // Carries the same hostile characters as the rest: an instruction
             // reaches the terminal by the same path and gets the same sanitising.
             operator_instruction: "interview\u{1b}[31m me\rfirst".into(),
+            operator_ruling: None,
             email_requester: None,
         };
         let message = task_dispatch_message(&dispatch);

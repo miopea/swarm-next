@@ -19,6 +19,17 @@ const MAX_PENDING_DISPATCHES: i64 = 256;
 const ABANDONED_BRIEF_SECONDS: i64 = 30 * 60;
 const MAX_DISPATCH_ATTEMPTS: i64 = 3;
 
+/// One operator ruling, sized for a terminal line.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskRuling {
+    pub decision_id: String,
+    /// What they chose, or the placeholder when they answered in words.
+    pub resolution: String,
+    /// True when `resolution` is the sentinel and the substance is in the
+    /// decision's answers — the reader must go and look rather than quote it.
+    pub answered_in_words: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TaskDispatch {
     pub assignment_id: String,
@@ -32,6 +43,18 @@ pub struct TaskDispatch {
     /// The operator's line about how this work should be approached. It governs
     /// the brief, so it travels with it.
     pub operator_instruction: String,
+    /// The operator's ruling on THIS task, when one is recorded.
+    ///
+    /// Carried with the brief rather than left to be discovered. A worker whose
+    /// task says "the operator must sign off" has to read that sign-off
+    /// somewhere, and being told the id by a peer is exactly the relay such a
+    /// gate forbids — so the board hands it over directly.
+    ///
+    /// Three parts: the id to verify against, the resolution, and whether that
+    /// resolution is a pressed button or a placeholder standing in for typed
+    /// words. Deliberately not the reason, risk or evidence, which are bounded
+    /// at ten thousand characters EACH and would turn a brief into a wall.
+    pub operator_ruling: Option<TaskRuling>,
     /// Who wrote in, when this work came from an email.
     ///
     /// A person waiting on a thread is part of the work, not metadata about it.
@@ -449,7 +472,16 @@ fn deliverable_briefings(
                     (SELECT COALESCE(NULLIF(link.sender_name, ''), link.sender_address)
                      FROM email_message_links link
                      WHERE link.task_id = t.id
-                     ORDER BY link.received_at LIMIT 1)
+                     ORDER BY link.received_at LIMIT 1),
+                    -- RESOLVED ONLY. A pending decision authorises nothing, and
+                    -- naming one in a brief invites a worker to act on an
+                    -- expectation. The newest wins where a task has several.
+                    (SELECT d.id FROM decision_requests d
+                     WHERE d.task_id = t.id AND d.state = 'resolved'
+                     ORDER BY d.resolved_at DESC, d.id DESC LIMIT 1),
+                    (SELECT d.resolution_action FROM decision_requests d
+                     WHERE d.task_id = t.id AND d.state = 'resolved'
+                     ORDER BY d.resolved_at DESC, d.id DESC LIMIT 1)
              FROM task_dispatches td
              JOIN task_assignments a ON a.id = td.assignment_id AND a.released_at IS NULL
              JOIN tasks t ON t.id = td.task_id
@@ -503,34 +535,53 @@ fn deliverable_briefings(
     statement
         .query_map(
             params![now, MAX_DISPATCH_CLAIMS, ABANDONED_BRIEF_SECONDS],
-            |row| {
-                let priority = TaskPriority::from_str(&row.get::<_, String>(6)?)
-                    .map_err(|_| rusqlite::Error::InvalidQuery)?;
-                Ok(TaskDispatch {
-                    assignment_id: row.get(0)?,
-                    task_id: row
-                        .get::<_, String>(1)?
-                        .parse()
-                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
-                    worker_id: row
-                        .get::<_, String>(2)?
-                        .parse()
-                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
-                    session_id: row
-                        .get::<_, String>(3)?
-                        .parse()
-                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
-                    title: row.get(4)?,
-                    description: row.get(5)?,
-                    priority,
-                    workspace: row.get(7)?,
-                    operator_instruction: row.get(8)?,
-                    email_requester: row.get(9)?,
-                })
-            },
+            task_dispatch_from_row,
         )?
         .collect::<Result<Vec<_>, _>>()
         .map_err(TaskStoreError::from)
+}
+
+/// One claimed briefing, built from the row the dispatch query returned.
+///
+/// Extracted so that query stays under the line limit. The destructure and the
+/// struct literal are most of a function on their own, and none of it is what
+/// the query is about.
+fn task_dispatch_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskDispatch> {
+    let priority = TaskPriority::from_str(&row.get::<_, String>(6)?)
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    Ok(TaskDispatch {
+        assignment_id: row.get(0)?,
+        task_id: row
+            .get::<_, String>(1)?
+            .parse()
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        worker_id: row
+            .get::<_, String>(2)?
+            .parse()
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        session_id: row
+            .get::<_, String>(3)?
+            .parse()
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        title: row.get(4)?,
+        description: row.get(5)?,
+        priority,
+        workspace: row.get(7)?,
+        operator_instruction: row.get(8)?,
+        operator_ruling: row.get::<_, Option<String>>(10)?.map(|decision_id| {
+            let resolution = row
+                .get::<_, Option<String>>(11)
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            TaskRuling {
+                decision_id,
+                answered_in_words: resolution == crate::INTERVIEW_ANSWERED_ACTION,
+                resolution,
+            }
+        }),
+        email_requester: row.get(9)?,
+    })
 }
 
 #[cfg(test)]

@@ -766,9 +766,44 @@ pub(super) fn task_dispatch_message(delivery: &TaskDispatch) -> Vec<u8> {
             )
         },
     );
+    // THE OPERATOR'S RULING TRAVELS WITH THE WORK.
+    //
+    // A task whose gate reads "the operator must sign off, not a Queen note or
+    // a peer relay" has to be able to read that sign-off somewhere. Being told
+    // the decision id by a peer IS the relay such a gate forbids, so on
+    // 2026-08-26 a worker held a cutover carrying 919k requests a day while the
+    // authority for it sat in a record it had no reason to know existed. Every
+    // route available to it violated its own gate.
+    //
+    // The id is here so the worker can verify at source rather than take this
+    // sentence as the authority — this line is a pointer, and the durable
+    // record is what authorises.
+    //
+    // Deliberately not the reason, risk or evidence. Those are bounded at ten
+    // thousand characters EACH, and a brief is delivered into a terminal where
+    // a wall of text costs more than it does in a tool result.
+    let ruling = delivery.operator_ruling.as_ref().map_or_else(
+        String::new,
+        |ruling| {
+            if ruling.answered_in_words {
+                // The placeholder is not the answer, and quoting it as one is
+                // how two sessions concluded a ruling did not exist.
+                format!(
+                    " The operator has RULED on this task, answering in their own words: read decision {} with swarm_list_decisions before acting.",
+                    ruling.decision_id
+                )
+            } else {
+                format!(
+                    " The operator has RULED on this task: \"{}\". Verify it at source with swarm_list_decisions decision_id={} — that record authorises exactly what it says and nothing beyond it.",
+                    terminal_safe_text(&ruling.resolution),
+                    ruling.decision_id
+                )
+            }
+        },
+    );
     format!(
-        "[Swarm task {} assigned] {}.{}{} Call swarm_list_tasks now and work from its authoritative task details and linked evidence. If this task is not visible, stop; its assignment changed.\r",
-        delivery.task_id, title, instruction, requester,
+        "[Swarm task {} assigned] {}.{}{}{} Call swarm_list_tasks now and work from its authoritative task details and linked evidence. If this task is not visible, stop; its assignment changed.\r",
+        delivery.task_id, title, instruction, ruling, requester,
     )
     .into_bytes()
 }

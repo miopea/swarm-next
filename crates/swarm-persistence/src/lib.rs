@@ -101,7 +101,7 @@ pub use queen_conductor::{QueenAutomationDelivery, QueenAutomationFailure, Queen
 mod presentation;
 pub use presentation::{PresentationColorTheme, PresentationDeviceClass, PresentationPreferences};
 mod task_dispatches;
-pub use task_dispatches::{TaskDispatch, TaskDispatchFailure};
+pub use task_dispatches::{TaskDispatch, TaskDispatchFailure, TaskRuling};
 mod task_outcomes;
 pub use task_outcomes::{TaskOutcomeDispatch, TaskOutcomeFailure};
 mod workers;
