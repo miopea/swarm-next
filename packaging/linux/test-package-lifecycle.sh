@@ -215,8 +215,20 @@ if grep -q 'CLAUDE_CONFIG_DIR' "$SWARM_SYSTEMD_USER_ROOT/swarm-terminal-host.ser
   echo "Workers must use the default Claude configuration directory" >&2
   exit 1
 fi
-grep -q 'ReadWritePaths=-%h/.claude$' "$SWARM_SYSTEMD_USER_ROOT/swarm-terminal-host.service"
-grep -q 'ReadWritePaths=-%h/.claude.json$' "$SWARM_SYSTEMD_USER_ROOT/swarm-terminal-host.service"
+# The INVERSE of the swarm-api assertion above, and deliberately so. The API
+# keeps ProtectHome=read-only, so it needs those two single-file binds to reach
+# Claude's credentials at all. The terminal host dropped ProtectHome entirely,
+# which makes the binds not merely unnecessary but harmful: a bind mount of one
+# inode cannot survive a writer that renames a fresh file over the old one, so
+# every credential refresh landed on a detached inode and every wake asked the
+# worker to onboard again. Absence here is the fix, not an omission.
+if grep -qE '^ReadWritePaths=-?%h/\.claude(\.json)?$' \
+     "$SWARM_SYSTEMD_USER_ROOT/swarm-terminal-host.service"; then
+  echo "swarm-terminal-host must NOT bind ~/.claude as single files -- a bind of" >&2
+  echo "one inode breaks Claude's atomic credential writes; it has no ProtectHome" >&2
+  echo "and reaches its home directly." >&2
+  exit 1
+fi
 grep -q 'SWARM_CLAUDE_SETTINGS_PATH=%h/.claude/settings.json' "$SWARM_SYSTEMD_USER_ROOT/swarm-terminal-host.service"
 grep -q 'PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin' "$SWARM_SYSTEMD_USER_ROOT/swarm-terminal-host.service"
 grep -q '^RuntimeDirectory=swarm$' "$SWARM_SYSTEMD_USER_ROOT/swarm-terminal-host.service"
