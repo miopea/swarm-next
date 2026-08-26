@@ -141,6 +141,17 @@ pub enum HostRequest {
         #[serde(default)]
         allow_outside_roots: bool,
     },
+    /// A scratch shell in a workspace, deliberately NOT a worker session.
+    ///
+    /// It carries no conversation and no MCP configuration because there is no
+    /// agent to configure. Nothing binds the returned session to a worker, so
+    /// the roster never shows it and provider activity never classifies it.
+    StartShell {
+        workspace: PathBuf,
+        size: TerminalSize,
+        #[serde(default)]
+        allow_outside_roots: bool,
+    },
     ListSessions,
     HistoryDiagnostics,
     ListHistorySessions,

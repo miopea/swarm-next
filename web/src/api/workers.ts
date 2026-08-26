@@ -159,6 +159,22 @@ export async function startWorker(operatorToken: string, workerId: string): Prom
   return response.json() as Promise<Worker>;
 }
 
+/**
+ * Opens a scratch shell in a worker's workspace.
+ *
+ * Returns a session id that is NOT a worker session: nothing binds it, so the
+ * roster never shows it and sleeping the worker does not touch it. It borrows
+ * the worker's workspace path and nothing else.
+ */
+export async function openWorkerShell(operatorToken: string, workerId: string): Promise<string> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/workers/${encodeURIComponent(workerId)}/shell`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rows: 24, columns: 80 }),
+  });
+  return ((await response.json()) as { session_id: string }).session_id;
+}
+
 export async function stopWorker(operatorToken: string, workerId: string): Promise<Worker> {
   const response = await authenticatedFetch(operatorToken, `/api/v1/workers/${encodeURIComponent(workerId)}/session`, {
     method: "DELETE",

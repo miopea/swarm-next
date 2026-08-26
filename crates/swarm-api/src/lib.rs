@@ -3225,6 +3225,10 @@ fn api_router(state: AppState) -> Router {
             post(workers::start_worker),
         )
         .route(
+            "/api/v1/workers/{worker_id}/shell",
+            post(workers::open_shell),
+        )
+        .route(
             "/api/v1/workers/{worker_id}/session",
             delete(workers::stop_worker),
         )

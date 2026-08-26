@@ -33,6 +33,7 @@ export {
   fetchWorkers,
   fetchWorkspaces,
   improveWorkerDescription,
+  openWorkerShell,
   removeWorker,
   reorderWorkers,
   startWorker,

@@ -52,6 +52,7 @@ import {
   setManualPresence,
   setPresentationPreferences,
   setQueenAutonomyPolicy,
+  openWorkerShell,
   startWorker,
   stopClaudeSession,
   stopWorker,
@@ -170,6 +171,18 @@ export function App() {
   const keeper = hiveIdentity?.apiary_context?.mode === "federated" && hiveIdentity.apiary_context.local_role === "keeper";
   const federated = hiveIdentity?.apiary_context?.mode === "federated";
   const [activeSessionId, setActiveSessionId] = useState<string>();
+  /**
+   * Scratch shells, held here rather than read from the control room.
+   *
+   * A shell is deliberately not a worker session: nothing binds it server-side,
+   * so it never appears in controlRoom.sessions and the roster never shows it as
+   * a worker. That is the feature, not an omission — a bash prompt cannot answer
+   * "is this worker working", and a bound shell would make a SLEEPING worker
+   * read as awake. The cost is that the browser is the only thing that knows a
+   * shell is open, so a refresh loses the reference while the shell keeps
+   * running on the host.
+   */
+  const [shellSessions, setShellSessions] = useState<{ session_id: string; running: boolean; worker_name: string }[]>([]);
   const [terminalRevision, setTerminalRevision] = useState(0);
   const [showFeedback, setShowFeedback] = useState(false);
   const [feedbackRevision, setFeedbackRevision] = useState(0);
@@ -1170,7 +1183,23 @@ export function App() {
     setOperationError(undefined);
   }
 
-  const activeSession = sessions.find((session) => session.session_id === activeSessionId);
+  async function openShellForWorker(worker: Worker) {
+    if (!operatorToken) return;
+    setOperationError(undefined);
+    try {
+      const sessionId = await openWorkerShell(operatorToken, worker.id);
+      setShellSessions((current) => [
+        ...current.filter((shell) => shell.session_id !== sessionId),
+        { session_id: sessionId, running: true, worker_name: worker.name },
+      ]);
+      setActiveSessionId(sessionId);
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : "the shell could not be opened");
+    }
+  }
+
+  const activeShell = shellSessions.find((shell) => shell.session_id === activeSessionId);
+  const activeSession = sessions.find((session) => session.session_id === activeSessionId) ?? activeShell;
   const activeWorker = workers.find((worker) => worker.active_session_id === activeSessionId);
   const openTaskCount = tasks.filter((task) => task.state !== "completed").length;
   const pendingDecisionCount = decisions.filter((decision) => decision.state === "pending").length;
@@ -1555,9 +1584,26 @@ export function App() {
                         onOpen={() => sessionId && openWorker(sessionId)}
                         onStart={() => void startExistingWorker(worker)}
                         onStop={() => sessionId && void stopSession(sessionId)}
+                        onOpenShell={() => void openShellForWorker(worker)}
                       />
                     );
                   })}
+                  {shellSessions.map((shell) => (
+                    /*
+                     * A shell needs a way back. Without a rail entry, switching
+                     * to any worker strands it: it keeps running on the host
+                     * with nothing in the product able to reach it again.
+                     * Listed separately from workers because it IS separate —
+                     * no presence, no attention state, nothing to report.
+                     */
+                    <button className="worker-button" aria-current={shell.session_id === activeSessionId ? "page" : undefined} key={shell.session_id} onClick={() => setActiveSessionId(shell.session_id)}>
+                      <span className="worker-avatar" aria-hidden="true">$_</span>
+                      <span className="worker-copy">
+                        <strong>Shell</strong>
+                        <small>{shell.worker_name}&apos;s workspace</small>
+                      </span>
+                    </button>
+                  ))}
                   {railVisibleOrphanSessions.map((session) => {
                     const task = tasksBySession.get(session.session_id);
                     return (

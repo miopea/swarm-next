@@ -63,6 +63,34 @@ pub trait ProviderTerminalAdapter {
     ) -> Result<ProviderCommand, ProviderCommandError>;
 }
 
+/// Builds the command for a scratch shell in `workspace`.
+///
+/// Not a `ProviderTerminalAdapter`, and deliberately so — that trait exists to
+/// start an AGENT with a conversation and an MCP configuration, and a shell has
+/// neither. Implementing it here would put a shell into every provider match in
+/// the codebase, which is precisely the coupling this feature must not create.
+///
+/// `-l` because the host runs as a systemd user service, which does not source
+/// the operator's profile: without it the shell starts with a PATH that has none
+/// of their tooling on it, which reads as a broken shell rather than a bare one.
+///
+/// `SHELL` is usually absent under systemd for the same reason, so the fallback
+/// is the ordinary path rather than the exceptional one.
+///
+/// # Errors
+/// Returns an error when the workspace is not absolute.
+pub fn shell_command(workspace: &Path) -> Result<ProviderCommand, ProviderCommandError> {
+    if !workspace.is_absolute() {
+        return Err(ProviderCommandError::WorkspaceNotAbsolute);
+    }
+    Ok(ProviderCommand {
+        executable: std::env::var_os("SHELL")
+            .map_or_else(|| PathBuf::from("/bin/bash"), PathBuf::from),
+        arguments: vec!["-l".into()],
+        working_directory: workspace.to_path_buf(),
+    })
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ClaudeCodeAdapter;
 

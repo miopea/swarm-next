@@ -85,6 +85,49 @@ pub(super) async fn start_worker_process(
     ))
 }
 
+/// The path a session starts in, and whether the host must be told to allow a
+/// workspace outside the configured roots.
+///
+/// Shared by the agent start path and the scratch shell so the two cannot drift
+/// on the question of what counts as contained.
+///
+/// BOTH SIDES MUST JUDGE THE SAME PATH.
+///
+/// This decides whether to send the override; the terminal host then decides
+/// whether to honour the roots, and it CANONICALIZES first. Comparing the
+/// stored string here while the host compares the resolved target means the
+/// two agree on every ordinary path and disagree on exactly one shape: a
+/// symlink sitting inside a root that points outside it. There the stored
+/// path looks contained, so no override is sent, and the host resolves the
+/// target, finds it outside, and refuses.
+///
+/// That is not hypothetical. The RCG Development Installer's workspace is
+/// /home/bschleifer/projects/rcg/rcg-dev-install, a symlink to
+/// /home/bschleifer/rcg-dev-install, with the roots set to
+/// /home/bschleifer/projects. It had never started a session in its entire
+/// existence, and every existence check anyone ran passed, because `is_dir()`
+/// follows symlinks.
+///
+/// Canonicalizing is not a relaxation. The host still applies the same roots
+/// rule to the same resolved path it always did; this only stops the caller
+/// deciding the question from different evidence. Containment is established
+/// at worker creation by `resolve_workspace_path`, which refuses a symlink
+/// outright and stores the canonical target — so a worker created through
+/// that path can never reach here in this shape, and one that does got its
+/// row written some other way.
+///
+/// A path that cannot be resolved falls back to the stored form rather than
+/// failing: the host will refuse it and now says why.
+fn workspace_and_root_override(state: &AppState, workspace: &str) -> (PathBuf, bool) {
+    let resolved = PathBuf::from(expand_home(workspace));
+    let judged = std::fs::canonicalize(&resolved).unwrap_or_else(|_| resolved.clone());
+    let allow_outside_roots = !state
+        .workspace_roots
+        .iter()
+        .any(|root| judged.starts_with(root));
+    (resolved, allow_outside_roots)
+}
+
 fn provider_start_request(
     state: &AppState,
     worker_id: WorkerId,
@@ -92,41 +135,22 @@ fn provider_start_request(
     size: TerminalSize,
     mcp_config: Option<PathBuf>,
 ) -> Result<HostRequest, ApiError> {
-    let worker_workspace = PathBuf::from(expand_home(&profile.workspace));
-    // BOTH SIDES MUST JUDGE THE SAME PATH.
-    //
-    // This decides whether to send the override; the terminal host then decides
-    // whether to honour the roots, and it CANONICALIZES first. Comparing the
-    // stored string here while the host compares the resolved target means the
-    // two agree on every ordinary path and disagree on exactly one shape: a
-    // symlink sitting inside a root that points outside it. There the stored
-    // path looks contained, so no override is sent, and the host resolves the
-    // target, finds it outside, and refuses.
-    //
-    // That is not hypothetical. The RCG Development Installer's workspace is
-    // /home/bschleifer/projects/rcg/rcg-dev-install, a symlink to
-    // /home/bschleifer/rcg-dev-install, with the roots set to
-    // /home/bschleifer/projects. It had never started a session in its entire
-    // existence, and every existence check anyone ran passed, because is_dir()
-    // follows symlinks.
-    //
-    // Canonicalizing is not a relaxation. The host still applies the same roots
-    // rule to the same resolved path it always did; this only stops the caller
-    // deciding the question from different evidence. Containment is established
-    // at worker creation by resolve_workspace_path, which refuses a symlink
-    // outright and stores the canonical target — so a worker created through
-    // that path can never reach here in this shape, and one that does got its
-    // row written some other way.
-    //
-    // A path that cannot be resolved falls back to the stored form rather than
-    // failing: the host will refuse it and now says why.
-    let judged_workspace =
-        std::fs::canonicalize(&worker_workspace).unwrap_or_else(|_| worker_workspace.clone());
-    let allow_outside_roots = !state
-        .workspace_roots
-        .iter()
-        .any(|root| judged_workspace.starts_with(root));
+    let (worker_workspace, allow_outside_roots) =
+        workspace_and_root_override(state, &profile.workspace);
     let request = match profile.provider {
+        // This build read a provider it does not recognise, which happens after
+        // a rollback to a release predating that provider. The worker stays
+        // VISIBLE so one row cannot take down the roster, but it must not start:
+        // there is no adapter for it, and falling back to another provider would
+        // run the wrong agent against the operator's repository.
+        ProviderKind::Unsupported => {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "provider_unsupported",
+                "this worker uses a provider this version of Swarm does not support; \
+                 update Swarm, or change the worker's provider while it is asleep",
+            ));
+        }
         ProviderKind::ClaudeCode => {
             // A conversation Claude no longer holds is a lost thread, not a
             // reason the worker cannot run. Refusing to start left seventeen
@@ -273,6 +297,69 @@ fn worker_is_scout(state: &AppState, worker_id: WorkerId) -> Result<bool, ApiErr
 /// Live worker sessions and, where the terminal host reports it, the wall-clock
 /// second each one last produced output.
 pub(super) type LiveSessions = HashMap<WorkerSessionId, Option<i64>>;
+
+/// Opens a scratch shell in a worker's workspace WITHOUT binding it to that
+/// worker.
+///
+/// The absence of a binding is the whole feature. Swarm decides whether a worker
+/// is working, resting or blocked by reading its terminal, and a shell prompt
+/// answers none of those questions — bound as a worker session it would classify
+/// as permanently Unknown and, worse, make a SLEEPING worker read as awake.
+///
+/// Nothing sweeps the session away for being unbound: `reconcile_worker_bindings`
+/// runs the other direction, releasing DB bindings whose host sessions have
+/// vanished. It never terminates a host session that has no binding.
+///
+/// The worker is only consulted for its workspace. It is not started, not woken,
+/// and its state is not touched.
+///
+/// # Errors
+/// Returns an error when the worker is unknown or the host refuses to spawn.
+pub(super) async fn open_worker_shell(
+    state: &AppState,
+    worker_id: WorkerId,
+    size: TerminalSize,
+) -> Result<WorkerSessionId, ApiError> {
+    let profile = task_store(state)?
+        .get_worker_profile(worker_id)
+        .map_err(|error| task_store_error(&error))?;
+    let (workspace, allow_outside_roots) = workspace_and_root_override(state, &profile.workspace);
+    // A protocol addition reaches an OLDER host as an unreadable serde error.
+    // The terminal host is a separate service that deliberately survives an API
+    // reload so worker terminals are not killed, so "the API is new and the host
+    // is not" is the ORDINARY state after adding a request, not an edge case.
+    // The operator saw: unknown variant `start_shell`, expected one of `ping`,
+    // `host_status`, ... which says nothing about what to do.
+    let response = request_host(
+        state,
+        HostRequest::StartShell {
+            workspace,
+            size,
+            allow_outside_roots,
+        },
+    )
+    .await
+    .map_err(|error| {
+        if error.message.contains("unknown variant") && error.message.contains("start_shell") {
+            ApiError::new(
+                StatusCode::CONFLICT,
+                "terminal_host_too_old",
+                "the terminal host is older than this build and does not know how to open a \
+                 shell; run the worker engine update to replace it",
+            )
+        } else {
+            error
+        }
+    })?;
+    match response {
+        HostResponse::SessionStarted { session_id } => Ok(session_id),
+        _ => Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "unexpected_host_response",
+            "terminal host returned an unexpected response",
+        )),
+    }
+}
 
 pub(super) async fn reconcile_worker_bindings(state: &AppState) -> Result<LiveSessions, ApiError> {
     let _guard = state.worker_lifecycle.lock().await;

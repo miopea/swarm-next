@@ -26,7 +26,7 @@ pub use process::{
 pub use provider::{
     ClaudeCodeAdapter, ClaudeConversationStart, CodexAdapter, CodexConversationStart,
     ProviderCommand, ProviderCommandError, ProviderRelease, ProviderTerminalAdapter,
-    provider_release, provider_release_superseded,
+    provider_release, provider_release_superseded, shell_command,
 };
 pub use provider_activity::{
     ProviderActivity, background_work_running, classify_provider_activity,

@@ -22,13 +22,21 @@ type Props = {
   onOpen: () => void;
   onStart: () => void;
   onStop: () => void;
+  /**
+   * Opens a scratch shell in this worker's workspace.
+   *
+   * Optional because a shell is not part of a worker's lifecycle: a caller that
+   * has nowhere to put a terminal simply does not offer it, rather than being
+   * handed one it cannot show.
+   */
+  onOpenShell?: () => void;
 };
 
-export default function WorkerRosterItem({ worker, selected, detail, workSummary, busy, busyReason, onOpen, onStart, onStop }: Props) {
+export default function WorkerRosterItem({ worker, selected, detail, workSummary, busy, busyReason, onOpen, onStart, onStop, onOpenShell }: Props) {
   const [menuPoint, setMenuPoint] = useState<MenuPoint>();
   const [, refreshAttention] = useState(0);
   const primaryAction = worker.running ? onOpen : onStart;
-  const primaryActionLabel = worker.running ? "Open terminal" : worker.runtime_error ? "Retry worker" : "Wake worker";
+  const primaryActionLabel = worker.running ? "Open worker" : worker.runtime_error ? "Retry worker" : "Wake worker";
   const attention = workerAttention(worker);
   // A worker holding for an answer reports how long the answer has been owed,
   // not how long its terminal has been quiet. Silence age looks right for a
@@ -105,6 +113,9 @@ export default function WorkerRosterItem({ worker, selected, detail, workSummary
           <button role="menuitem" onClick={() => run(primaryAction)}>
             {primaryActionLabel}
           </button>
+          {onOpenShell && (
+            <button role="menuitem" onClick={() => run(onOpenShell)}>Open a shell here</button>
+          )}
           {worker.running && worker.role !== "queen" && (
             <button className="danger-text" role="menuitem" onClick={() => run(onStop)}>Put worker to sleep</button>
           )}

@@ -374,6 +374,20 @@ fn dispatch_blocking(
             .map(|session| HostResponse::SessionStarted {
                 session_id: session.id(),
             }),
+        HostRequest::StartShell {
+            workspace,
+            size,
+            allow_outside_roots,
+        } => swarm_terminal::shell_command(&workspace)
+            .map_err(|error| error.to_string())
+            .and_then(|command| {
+                registry
+                    .spawn_with_root_override(&command, size, allow_outside_roots)
+                    .map_err(|error| error.to_string())
+            })
+            .map(|session| HostResponse::SessionStarted {
+                session_id: session.id(),
+            }),
         HostRequest::ListSessions => registry
             .session_resource_states()
             .map(|sessions| HostResponse::Sessions {
@@ -547,6 +561,79 @@ mod tests {
                 .unwrap()
                 .contains("restart-proof")
         );
+    }
+
+    /// A `StartShell` request produces a REAL, usable shell, and nothing about it
+    /// is a worker session.
+    ///
+    /// Spawned through the host's own request path rather than by calling
+    /// `shell_command` directly, because the thing worth proving is that the
+    /// protocol arm works end to end: a request arrives, a pty starts in the
+    /// right directory, and the operator can type into it.
+    ///
+    /// The session is returned by `ListSessions` like any other, which is correct
+    /// and is exactly why the API must not bind it to a worker. The host has no
+    /// concept of a worker; detachment is the API's job, not the host's.
+    #[tokio::test]
+    async fn a_shell_request_starts_a_usable_shell_in_the_workspace() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
+        );
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind(&socket, Arc::clone(&registry)).unwrap();
+        let server_task = tokio::spawn(server.run());
+        let client = HostClient::new(&socket);
+
+        let started = client
+            .request(&HostRequest::StartShell {
+                workspace: workspace.clone(),
+                size: TerminalSize::default(),
+                allow_outside_roots: false,
+            })
+            .await
+            .unwrap();
+        let HostResponse::SessionStarted { session_id } = started else {
+            panic!("a shell request must start a session, got {started:?}");
+        };
+
+        // It is a live pty, not merely a registry entry: ask the shell to print
+        // its working directory and read it back off the screen.
+        let typed = b"printf 'cwd:%s\\n' \"$PWD\"\n".to_vec();
+        client
+            .request(&HostRequest::Write {
+                session_id,
+                provenance: swarm_terminal::TerminalWriteProvenance::operator(None, &typed),
+                bytes: typed,
+            })
+            .await
+            .unwrap();
+
+        let mut seen = String::new();
+        for _ in 0..60 {
+            if let HostResponse::Output { resume, .. } = client
+                .request(&HostRequest::Read {
+                    session_id,
+                    after_sequence: None,
+                })
+                .await
+                .unwrap()
+                && let swarm_terminal::Resume::Snapshot { snapshot } = resume
+            {
+                seen = String::from_utf8_lossy(&snapshot.bytes).into_owned();
+                if seen.contains("cwd:") {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(
+            seen.contains("cwd:"),
+            "the shell should answer as a live terminal; saw {seen:?}"
+        );
+
+        server_task.abort();
     }
 
     #[tokio::test]

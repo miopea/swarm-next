@@ -20,7 +20,7 @@ test("right click opens the same accessible action menu and protects Queen", () 
   expect(screen.getByRole("menu", { name: "Queen actions" })).toBeInTheDocument();
   expect(screen.getByText("Queen is always active")).toBeInTheDocument();
   expect(screen.queryByRole("menuitem", { name: "Put worker to sleep" })).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("menuitem", { name: "Open terminal" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Open worker" }));
   expect(onOpen).toHaveBeenCalledOnce();
 });
 
@@ -135,4 +135,46 @@ test("stays quiet when the briefing was confirmed", () => {
   );
 
   expect(screen.queryByRole("img", { name: /could not confirm/ })).not.toBeInTheDocument();
+});
+
+/**
+ * The shell is offered on the worker, but it is not a worker ACTION.
+ *
+ * Opening one must not wake, stop, or otherwise touch the worker — it borrows
+ * the workspace path and nothing else. Asserting the other handlers stay
+ * untouched is the real content here; that a click calls its own callback is
+ * the trivial half.
+ */
+test("a shell can be opened from a worker without touching that worker", () => {
+  const onOpenShell = vi.fn();
+  const onStart = vi.fn();
+  const onStop = vi.fn();
+  render(
+    <WorkerRosterItem
+      worker={{ ...queen, id: "worker", name: "Daisy", role: "worker" }}
+      selected={false}
+      detail="Running"
+      busy={false}
+      onOpen={vi.fn()}
+      onStart={onStart}
+      onStop={onStop}
+      onOpenShell={onOpenShell}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Actions for Daisy" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Open a shell here" }));
+
+  expect(onOpenShell).toHaveBeenCalledTimes(1);
+  expect(onStart).not.toHaveBeenCalled();
+  expect(onStop).not.toHaveBeenCalled();
+});
+
+/** A caller with nowhere to put a terminal is not offered one. */
+test("no shell entry appears when the caller cannot show one", () => {
+  render(<WorkerRosterItem worker={{ ...queen, id: "worker", name: "Daisy", role: "worker" }} selected={false} detail="Running" busy={false} onOpen={vi.fn()} onStart={vi.fn()} onStop={vi.fn()} />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Actions for Daisy" }));
+
+  expect(screen.queryByRole("menuitem", { name: "Open a shell here" })).toBeNull();
 });

@@ -22,7 +22,7 @@ use super::{
     terminal_host::request_host,
     terminal_socket::VIEWING_ENGAGEMENT_LEASE_SECONDS,
     unix_timestamp,
-    worker_runtime::{reconcile_worker_bindings, start_worker_process},
+    worker_runtime::{open_worker_shell, reconcile_worker_bindings, start_worker_process},
     worker_view,
 };
 
@@ -728,6 +728,38 @@ pub(super) async fn start_worker(
     )
     .await?;
     Ok(Json(worker).into_response())
+}
+
+/// Opens a scratch shell in a worker's workspace.
+///
+/// Deliberately NOT a worker lifecycle operation. It does not wake the worker,
+/// does not touch its state, and does not clear its errors the way `start_worker`
+/// does — it borrows the workspace path and nothing else. The session it returns
+/// is unbound, so the roster never shows it.
+///
+/// Ungated on purpose: anyone holding the operator token can already create a
+/// worker that runs arbitrary code, so a shell exposes no capability the token
+/// did not already carry. It makes it direct rather than new.
+///
+/// # Errors
+/// Returns an error when unauthorized, the size is invalid, the worker is
+/// unknown, or the terminal host refuses.
+pub(super) async fn open_shell(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(worker_id): AxumPath<String>,
+    Json(request): Json<StartWorkerRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    require_valid_size(request.rows, request.columns)?;
+    let worker_id = parse_worker_id(&worker_id)?;
+    let session_id = open_worker_shell(
+        &state,
+        worker_id,
+        TerminalSize::new(request.rows, request.columns),
+    )
+    .await?;
+    Ok(Json(serde_json::json!({ "session_id": session_id.to_string() })).into_response())
 }
 
 pub(super) async fn stop_worker(
