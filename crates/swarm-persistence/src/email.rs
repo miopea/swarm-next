@@ -465,6 +465,27 @@ impl TaskStore {
     ///
     /// # Errors
     /// Returns an error when persistence is unavailable or holds an invalid ID.
+    /// Finished work whose requester was never answered, with whatever reply
+    /// has been written for them.
+    ///
+    /// THE BODY OF A CANCELLED REPLY IS STILL THE REPLY. This once read the
+    /// body only from a row in state 'draft', and a send that fails leaves the
+    /// row in 'cancelled' — body and all. So the queue announced that no reply
+    /// had been written while four of them, 1.0 to 1.6 KB each, sat unreadable
+    /// in the database on 2026-08-25, and pressing Write the reply opened an
+    /// empty box over the top of them. The operator reported generating all the
+    /// emails, watching them fail, and the drafts appearing to be lost. They
+    /// were never lost.
+    ///
+    /// Worth noticing what the old query did: it read `last_error` off the
+    /// cancelled row and the body from nowhere. It looked straight at the draft
+    /// and took only the bad news.
+    ///
+    /// A draft still wins where one exists, because that is the newer text; the
+    /// cancelled body is the fallback rather than the preference.
+    ///
+    /// # Errors
+    /// Returns a persistence error when the queue cannot be read.
     pub fn completed_email_tasks_awaiting_a_reply(
         &self,
     ) -> Result<Vec<UnansweredEmailTask>, TaskStoreError> {
@@ -479,24 +500,8 @@ impl TaskStore {
                     (SELECT r.id FROM email_reply_deliveries r
                      WHERE r.task_id = t.id AND r.state = 'draft'
                      ORDER BY r.created_at DESC, r.id DESC LIMIT 1),
-                    -- THE BODY OF A CANCELLED REPLY IS STILL THE REPLY.
-                    --
-                    -- This read only 'draft', so a send that failed left a
-                    -- fully written reply in the row and the queue announced
-                    -- that no reply had been written. Four of them, 1.0 to 1.6
-                    -- KB each, sat unreadable on 2026-08-25 while the operator
-                    -- was told the work was gone -- they reported generating
-                    -- all the emails, watching them fail, and the drafts
-                    -- appearing to be lost. They were never lost.
-                    --
-                    -- Note what the old query did: it read last_error from the
-                    -- cancelled row two lines below and the body from nowhere.
-                    -- It looked straight at the draft and took only the bad
-                    -- news off it.
-                    --
-                    -- A draft still wins when one exists, because that is the
-                    -- newer text; the cancelled body is the fallback, not the
-                    -- preference.
+                    -- A cancelled reply still holds its body; see the doc
+                    -- comment. A draft wins when one exists.
                     COALESCE(
                         (SELECT r.body FROM email_reply_deliveries r
                          WHERE r.task_id = t.id AND r.state = 'draft'
@@ -555,38 +560,7 @@ impl TaskStore {
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
-        rows.into_iter()
-            .map(
-                |(
-                    id,
-                    title,
-                    sender_name,
-                    sender_address,
-                    received_at,
-                    drafted,
-                    draft_id,
-                    draft_body,
-                    worker_name,
-                    thread_count,
-                    delivery_failure,
-                )| {
-                    Ok(UnansweredEmailTask {
-                        task_id: TaskId::from_str(&id)
-                            .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?,
-                        title,
-                        sender_name,
-                        sender_address,
-                        received_at,
-                        drafted,
-                        draft_id,
-                        draft_body,
-                        worker_name,
-                        thread_count: usize::try_from(thread_count).unwrap_or(1).max(1),
-                        delivery_failure,
-                    })
-                },
-            )
-            .collect()
+        rows.into_iter().map(unanswered_email_task).collect()
     }
 
     /// Records operator-approved deployment evidence for a completed task.
@@ -1806,6 +1780,55 @@ pub(super) fn migrate_reply_allows_approved_exemption(
              BEGIN SELECT RAISE(ABORT, 'Email replies require deployed work, or an approved no-deployment exemption, in review or completed'); END;
          PRAGMA user_version = 93;",
     )
+}
+
+/// One waiting requester, built from the row the queue query returned.
+///
+/// Extracted so that query stays under the line limit. An eleven-column
+/// destructure and a struct literal is most of a function on its own, and none
+/// of it is what the query is about.
+type UnansweredEmailRow = (
+    String,
+    String,
+    String,
+    String,
+    i64,
+    bool,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    i64,
+    Option<String>,
+);
+
+fn unanswered_email_task(row: UnansweredEmailRow) -> Result<UnansweredEmailTask, TaskStoreError> {
+    let (
+        id,
+        title,
+        sender_name,
+        sender_address,
+        received_at,
+        drafted,
+        draft_id,
+        draft_body,
+        worker_name,
+        thread_count,
+        delivery_failure,
+    ) = row;
+    Ok(UnansweredEmailTask {
+        task_id: TaskId::from_str(&id)
+            .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?,
+        title,
+        sender_name,
+        sender_address,
+        received_at,
+        drafted,
+        draft_id,
+        draft_body,
+        worker_name,
+        thread_count: usize::try_from(thread_count).unwrap_or(1).max(1),
+        delivery_failure,
+    })
 }
 
 #[cfg(test)]
