@@ -155,6 +155,14 @@ pub struct UnansweredEmailTask {
     pub sender_address: String,
     /// When the earliest message in the thread arrived.
     pub received_at: i64,
+    /// This reply is ON ITS WAY — queued or dispatching, not waiting on anyone.
+    ///
+    /// Without it a reply mid-flight reads exactly like one nobody wrote: the
+    /// body lives on a row in state 'queued', and a query looking only for
+    /// 'draft' finds nothing. The operator sent seven threads at once on
+    /// 2026-08-26, watched Sent Items fill up, and the queue told them no reply
+    /// had been written for the ones still going out.
+    pub sending: bool,
     /// A reply exists but was never sent. Writing one is not sending it.
     pub drafted: bool,
     /// The drafted reply itself, so the operator can read and send it without
@@ -495,8 +503,11 @@ impl TaskStore {
                     MIN(link.received_at),
                     EXISTS(SELECT 1 FROM email_reply_deliveries r
                            WHERE r.task_id = t.id
-                             AND r.state IN ('draft', 'cancelled')
+                             AND r.state IN ('draft', 'cancelled', 'queued', 'dispatching')
                              AND trim(r.body) <> ''),
+                    EXISTS(SELECT 1 FROM email_reply_deliveries r
+                           WHERE r.task_id = t.id
+                             AND r.state IN ('queued', 'dispatching')),
                     (SELECT r.id FROM email_reply_deliveries r
                      WHERE r.task_id = t.id AND r.state = 'draft'
                      ORDER BY r.created_at DESC, r.id DESC LIMIT 1),
@@ -507,7 +518,8 @@ impl TaskStore {
                          WHERE r.task_id = t.id AND r.state = 'draft'
                          ORDER BY r.created_at DESC, r.id DESC LIMIT 1),
                         (SELECT r.body FROM email_reply_deliveries r
-                         WHERE r.task_id = t.id AND r.state = 'cancelled'
+                         WHERE r.task_id = t.id
+                           AND r.state IN ('cancelled', 'queued', 'dispatching')
                            AND trim(r.body) <> ''
                          ORDER BY r.updated_at DESC, r.id DESC LIMIT 1)
                     ),
@@ -552,11 +564,12 @@ impl TaskStore {
                     row.get::<_, String>(3)?,
                     row.get::<_, i64>(4)?,
                     row.get::<_, bool>(5)?,
-                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, bool>(6)?,
                     row.get::<_, Option<String>>(7)?,
                     row.get::<_, Option<String>>(8)?,
-                    row.get::<_, i64>(9)?,
-                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, Option<String>>(11)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -1794,6 +1807,7 @@ type UnansweredEmailRow = (
     String,
     i64,
     bool,
+    bool,
     Option<String>,
     Option<String>,
     Option<String>,
@@ -1809,6 +1823,7 @@ fn unanswered_email_task(row: UnansweredEmailRow) -> Result<UnansweredEmailTask,
         sender_address,
         received_at,
         drafted,
+        sending,
         draft_id,
         draft_body,
         worker_name,
@@ -1823,6 +1838,7 @@ fn unanswered_email_task(row: UnansweredEmailRow) -> Result<UnansweredEmailTask,
         sender_address,
         received_at,
         drafted,
+        sending,
         draft_id,
         draft_body,
         worker_name,

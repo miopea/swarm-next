@@ -121,7 +121,13 @@ function UnansweredEmailCard({ item, busy, onOpenTask, onSendReply, onSaveReply,
               sender made a seven-thread send look identical to a one-thread
               send, and this Hive has sent to seven. */}
           {item.thread_count > 1 ? ` Sending answers all ${item.thread_count} original threads at once.` : ""}
-          {item.draft_body ? " A reply is written and waiting for you to read it." : item.drafted ? " A reply is written but was never sent." : " No reply has been written."}
+          {/* SENDING IS NOT WAITING, and it is not nothing either. A reply
+              mid-flight lives on a row in state 'queued', so a card looking
+              only for a draft called it "No reply has been written" while
+              Sent Items was filling up in front of the operator. */}
+          {item.sending
+            ? " This reply is being sent now."
+            : item.draft_body ? " A reply is written and waiting for you to read it." : item.drafted ? " A reply is written but was never sent." : " No reply has been written."}
         </p>
         {editing ? (
           <div className="unanswered-email-editor">
@@ -182,7 +188,10 @@ function UnansweredEmailCard({ item, busy, onOpenTask, onSendReply, onSaveReply,
                 Send this reply
               </button>
             ) : null}
-            {canEditHere ? (
+            {/* Nothing to press while it is going out. Offering Edit or Write
+                here invites the operator to change or replace text that has
+                already left, or is leaving. */}
+            {canEditHere && !item.sending ? (
               <button className="secondary-button" type="button" disabled={busy} onClick={() => { setBody(item.draft_body ?? ""); setEditing(true); }}>
                 {item.draft_body ? "Edit here" : "Write the reply"}
               </button>

@@ -11,7 +11,7 @@ const waiting = {
   sender_name: "Lynn Kuczyra",
   sender_address: "l.kuczyra@rcg.org",
   received_at: 1_786_730_000,
-  drafted: false,
+  drafted: false, sending: false,
   draft_id: null,
   draft_body: null,
   worker_name: "Public Website",
@@ -48,9 +48,9 @@ test("gives every waiting person their own item, approvable on its own", () => {
   const onSendReply = vi.fn();
   render(<UnansweredEmailAttentionCard
     awaiting={[
-      { ...waiting, drafted: true, draft_id: "reply-1", draft_body: "First reply." },
-      { ...waiting, task_id: "task-2", sender_name: "Sharon Echelbarger", drafted: true, draft_id: "reply-2", draft_body: "Second reply." },
-      { ...waiting, task_id: "task-3", sender_name: "Larissa Oxley", drafted: true, draft_id: "reply-3", draft_body: "Third reply." },
+      { ...waiting, drafted: true, sending: false, draft_id: "reply-1", draft_body: "First reply." },
+      { ...waiting, task_id: "task-2", sender_name: "Sharon Echelbarger", drafted: true, sending: false, draft_id: "reply-2", draft_body: "Second reply." },
+      { ...waiting, task_id: "task-3", sender_name: "Larissa Oxley", drafted: true, sending: false, draft_id: "reply-3", draft_body: "Third reply." },
     ]}
     onOpenTask={vi.fn()}
     onSendReply={onSendReply}
@@ -75,7 +75,7 @@ test("the draft is shown whole, however long, with its length stated", () => {
   // gets cut off with an ellipse and doesn't make sense."
   const body = Array.from({ length: 200 }, (_, index) => `word${index}`).join(" ");
   render(<UnansweredEmailAttentionCard
-    awaiting={[{ ...waiting, drafted: true, draft_id: "reply-1", draft_body: body }]}
+    awaiting={[{ ...waiting, drafted: true, sending: false, draft_id: "reply-1", draft_body: body }]}
     onOpenTask={vi.fn()}
   />);
 
@@ -92,7 +92,7 @@ test("the reply is edited and saved without leaving this screen", () => {
   const onSaveReply = vi.fn();
   const onOpenTask = vi.fn();
   render(<UnansweredEmailAttentionCard
-    awaiting={[{ ...waiting, drafted: true, draft_id: "reply-1", draft_body: "Original wording." }]}
+    awaiting={[{ ...waiting, drafted: true, sending: false, draft_id: "reply-1", draft_body: "Original wording." }]}
     onOpenTask={onOpenTask}
     onSendReply={vi.fn()}
     onSaveReply={onSaveReply}
@@ -117,7 +117,7 @@ test("a prompted revision replaces the draft and stays undoable", async () => {
   const onReviseReply = vi.fn().mockResolvedValue("Short version.");
   const onSaveReply = vi.fn();
   render(<UnansweredEmailAttentionCard
-    awaiting={[{ ...waiting, drafted: true, draft_id: "reply-1", draft_body: "A long original draft." }]}
+    awaiting={[{ ...waiting, drafted: true, sending: false, draft_id: "reply-1", draft_body: "A long original draft." }]}
     onOpenTask={vi.fn()}
     onSaveReply={onSaveReply}
     onReviseReply={onReviseReply}
@@ -141,7 +141,7 @@ test("a failed revision leaves the draft alone and offers no undo", async () => 
   // operator undoes something that never happened.
   const onReviseReply = vi.fn().mockResolvedValue(null);
   render(<UnansweredEmailAttentionCard
-    awaiting={[{ ...waiting, drafted: true, draft_id: "reply-1", draft_body: "Untouched draft." }]}
+    awaiting={[{ ...waiting, drafted: true, sending: false, draft_id: "reply-1", draft_body: "Untouched draft." }]}
     onOpenTask={vi.fn()}
     onSaveReply={vi.fn()}
     onReviseReply={onReviseReply}
@@ -159,7 +159,7 @@ test("a failed revision leaves the draft alone and offers no undo", async () => 
 test("cancelling an edit restores the draft and sends nothing", () => {
   const onSaveReply = vi.fn();
   render(<UnansweredEmailAttentionCard
-    awaiting={[{ ...waiting, drafted: true, draft_id: "reply-1", draft_body: "Original wording." }]}
+    awaiting={[{ ...waiting, drafted: true, sending: false, draft_id: "reply-1", draft_body: "Original wording." }]}
     onOpenTask={vi.fn()}
     onSaveReply={onSaveReply}
   />);
@@ -178,7 +178,7 @@ test("says how many people one Send actually reaches", () => {
   // seven. Deciding whether to press Send without knowing who hears about it
   // is not a decision.
   render(<UnansweredEmailAttentionCard
-    awaiting={[{ ...waiting, thread_count: 7, drafted: true, draft_id: "reply-1", draft_body: "Fixed." }]}
+    awaiting={[{ ...waiting, thread_count: 7, drafted: true, sending: false, draft_id: "reply-1", draft_body: "Fixed." }]}
     onOpenTask={vi.fn()}
   />);
 
@@ -198,7 +198,7 @@ test("a reply that was never delivered says so, loudly, with the reason", () => 
   // the operator pressed Send, the item left the queue, and it looked handled.
   // They found out by opening Outlook and seeing nothing.
   render(<UnansweredEmailAttentionCard
-    awaiting={[{ ...waiting, drafted: true, draft_id: "reply-1", draft_body: "Fixed.", delivery_failure: "The email message was not found" }]}
+    awaiting={[{ ...waiting, drafted: true, sending: false, draft_id: "reply-1", draft_body: "Fixed.", delivery_failure: "The email message was not found" }]}
     onOpenTask={vi.fn()}
   />);
 
@@ -209,7 +209,7 @@ test("a reply that was never delivered says so, loudly, with the reason", () => 
 
 test("a reply that has not failed carries no alarm", () => {
   render(<UnansweredEmailAttentionCard
-    awaiting={[{ ...waiting, drafted: true, draft_id: "reply-1", draft_body: "Fixed." }]}
+    awaiting={[{ ...waiting, drafted: true, sending: false, draft_id: "reply-1", draft_body: "Fixed." }]}
     onOpenTask={vi.fn()}
   />);
 
@@ -228,7 +228,7 @@ test("the first reply is written here, not on the task page", () => {
   const onSaveReply = vi.fn();
   const onOpenTask = vi.fn();
   render(<UnansweredEmailAttentionCard
-    awaiting={[{ ...waiting, drafted: false, draft_id: null, draft_body: null }]}
+    awaiting={[{ ...waiting, drafted: false, sending: false, draft_id: null, draft_body: null }]}
     onOpenTask={onOpenTask}
     onSaveReply={onSaveReply}
   />);
@@ -259,7 +259,7 @@ test("puts the written reply where the operator already is, and sends it from th
   const onSendReply = vi.fn();
   const onOpenTask = vi.fn();
   render(<UnansweredEmailAttentionCard
-    awaiting={[{ ...waiting, drafted: true, draft_id: "reply-1", draft_body: "Thank you for reporting this. The adjustment saves correctly now." }]}
+    awaiting={[{ ...waiting, drafted: true, sending: false, draft_id: "reply-1", draft_body: "Thank you for reporting this. The adjustment saves correctly now." }]}
     onOpenTask={onOpenTask}
     onSendReply={onSendReply}
     onSaveReply={vi.fn()}
@@ -283,4 +283,31 @@ test("names the worker whose work this was", () => {
   render(<UnansweredEmailAttentionCard awaiting={[waiting]} onOpenTask={vi.fn()} />);
 
   expect(screen.getByText("Public Website · Email")).toBeInTheDocument();
+});
+
+/**
+ * A reply on its way is not a reply nobody wrote.
+ *
+ * The body of an in-flight reply lives on a row in state 'queued', and a card
+ * looking only for a draft called it "No reply has been written" while Sent
+ * Items filled up in front of the operator. They had just watched seven threads
+ * go out and were told none of them had been written.
+ *
+ * It also offers nothing to press: Edit or Write here invites changing text
+ * that has already left, or is leaving.
+ */
+test("a reply already going out says so, and offers nothing to press", () => {
+  const item = { ...waiting, sending: true, drafted: true, draft_id: null, draft_body: "On its way." };
+  render(
+    <UnansweredEmailAttentionCard
+      awaiting={[item]}
+      onOpenTask={vi.fn()}
+      onSendReply={vi.fn()}
+      onSaveReply={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByText(/being sent now/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Write the reply|Edit here/ })).toBeNull();
+  expect(screen.queryByText(/No reply has been written/)).toBeNull();
 });
