@@ -46,6 +46,21 @@ clean release; that put a `too_many_lines` error on main.
 `CARGO_INCREMENTAL=0` is required in this workspace — six rustc ICEs came from
 the incremental cache, each masking real errors.
 
+### And check CI on the current head
+
+Local green and CI red means the two are measuring different things, and that
+gap is exactly what shipped ten findings across three releases. It is one call:
+
+```bash
+gh api repos/miopea/swarm-next/commits/main/check-runs \
+  --jq '.check_runs[] | "\(.name) \(.status) \(.conclusion // "pending")"'
+```
+
+**Do not tag while `rust` is failing.** A pending run is not a failure — wait
+for it, or note plainly that you released without waiting and why. A red one
+means your local check missed something; find out what before adding a tag,
+because a tag is awkward to walk back.
+
 ## 2. Bump
 
 Edit `version` in the root `Cargo.toml` (eight crates share it), then let cargo
@@ -97,6 +112,19 @@ stale-page notice ships **inert** and looks fine.
 **Then check whatever this release exists to change.** 0.8.16 existed to ship two
 systemd template lines; verifying them in the working tree would have proved
 nothing. Extract the file from the tarball and look.
+
+### If the release exists to add a guard, run the guard
+
+0.8.16 shipped a packaging check and nothing confirmed the check itself ran. A
+guard that has never fired is a guard nobody has tested.
+
+```bash
+sh -n packaging/linux/test-package-lifecycle.sh   # it parses
+# and prove it BITES: break the thing it guards, confirm it fails, restore
+```
+
+An ablation is the only evidence a guard works. A guard that passes on correct
+input has told you nothing.
 
 ## 6. GitHub release
 
