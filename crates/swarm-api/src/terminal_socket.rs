@@ -6,7 +6,7 @@ use std::{
 use futures_util::{SinkExt, StreamExt, stream::SplitStream};
 use serde::{Deserialize, Serialize};
 use swarm_domain::{PresenceDeviceId, WorkerSessionId};
-use swarm_persistence::TaskStore;
+use swarm_persistence::{TaskStore, TaskStoreError};
 use swarm_terminal::{
     HostClient, HostRequest, HostResponse, MIN_TERMINAL_COLUMNS, MIN_TERMINAL_ROWS, Resume,
     TerminalSize, TerminalWriteProvenance,
@@ -729,16 +729,31 @@ async fn record_operator_engagement(
     outbound: &mpsc::Sender<Message>,
 ) -> bool {
     let now = unix_timestamp();
-    if let Ok(changed) = task_store.renew_worker_engagement(
+    match task_store.renew_worker_engagement(
         session_id,
         owner_device_id,
         now,
         OPERATOR_ENGAGEMENT_LEASE_SECONDS,
     ) {
-        if changed {
-            control_room_notify.notify_waiters();
+        Ok(changed) => {
+            if changed {
+                control_room_notify.notify_waiters();
+            }
+            return true;
         }
-        return true;
+        // A session bound to no worker is a scratch shell. Engagement exists to
+        // arbitrate which device is steering a WORKER -- who holds it, when the
+        // lease expires, who took it away. A shell has no worker for two devices
+        // to contend over, so there is nothing to record and refusing the write
+        // recorded nothing while making the terminal look alive and swallow
+        // every keystroke: "operator engagement could not be recorded; input was
+        // not sent", which is what the operator saw.
+        //
+        // Not a relaxation of the arbitration: a session that IS a worker's gets
+        // the same treatment it always did. This only stops a question about
+        // workers being asked of something that is not one.
+        Err(TaskStoreError::WorkerSessionNotActive) => return true,
+        Err(_) => {}
     }
     let _ = send_control(
         outbound,

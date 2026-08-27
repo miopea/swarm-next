@@ -178,11 +178,18 @@ export function App() {
    * so it never appears in controlRoom.sessions and the roster never shows it as
    * a worker. That is the feature, not an omission — a bash prompt cannot answer
    * "is this worker working", and a bound shell would make a SLEEPING worker
-   * read as awake. The cost is that the browser is the only thing that knows a
-   * shell is open, so a refresh loses the reference while the shell keeps
-   * running on the host.
+   * read as awake.
+   *
+   * Held as a MODAL over the worker it was opened from rather than as another
+   * entry in the rail. As a rail entry it appeared at the bottom of the roster,
+   * did not jump there when opened, and read as a peer of the workers it is not
+   * one of. Closing it now returns the operator to the worker they started on,
+   * because that is where they were going anyway.
+   *
+   * The browser is the only thing that knows a shell is open, so a refresh loses
+   * the reference while the shell keeps running on the host.
    */
-  const [shellSessions, setShellSessions] = useState<{ session_id: string; running: boolean; worker_name: string }[]>([]);
+  const [shell, setShell] = useState<{ session_id: string; worker_name: string }>();
   const [terminalRevision, setTerminalRevision] = useState(0);
   const [showFeedback, setShowFeedback] = useState(false);
   const [feedbackRevision, setFeedbackRevision] = useState(0);
@@ -1188,11 +1195,9 @@ export function App() {
     setOperationError(undefined);
     try {
       const sessionId = await openWorkerShell(operatorToken, worker.id);
-      setShellSessions((current) => [
-        ...current.filter((shell) => shell.session_id !== sessionId),
-        { session_id: sessionId, running: true, worker_name: worker.name },
-      ]);
-      openWorker(sessionId);
+      // Deliberately does NOT change the active session. The operator stays on
+      // the worker underneath; the shell is a modal over it.
+      setShell({ session_id: sessionId, worker_name: worker.name });
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : "the shell could not be opened");
     }
@@ -1207,19 +1212,16 @@ export function App() {
    * every worker down with it.
    */
   async function closeShell(sessionId: string) {
+    setShell(undefined);
     if (!operatorToken) return;
     try {
       await stopClaudeSession(operatorToken, sessionId);
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : "the shell could not be closed");
-    } finally {
-      setShellSessions((current) => current.filter((shell) => shell.session_id !== sessionId));
-      setActiveSessionId((current) => (current === sessionId ? undefined : current));
     }
   }
 
-  const activeShell = shellSessions.find((shell) => shell.session_id === activeSessionId);
-  const activeSession = sessions.find((session) => session.session_id === activeSessionId) ?? activeShell;
+  const activeSession = sessions.find((session) => session.session_id === activeSessionId);
   const activeWorker = workers.find((worker) => worker.active_session_id === activeSessionId);
   const openTaskCount = tasks.filter((task) => task.state !== "completed").length;
   const pendingDecisionCount = decisions.filter((decision) => decision.state === "pending").length;
@@ -1278,9 +1280,9 @@ export function App() {
     // "orphan" here — so without this filter every shell is listed twice, once
     // as itself and once as a pre-roster session with a generated worker name.
     () => orphanSessions.filter((session) =>
-      !shellSessions.some((shell) => shell.session_id === session.session_id)
+      session.session_id !== shell?.session_id
       && orphanSessionMatchesRosterQuery(workerName(session.session_id), normalizedWorkerQuery)),
-    [normalizedWorkerQuery, orphanSessions, shellSessions],
+    [normalizedWorkerQuery, orphanSessions, shell],
   );
   const sleepingWorkerMatchesRailQuery = useMemo(
     () => workerVisibility === "awake" && normalizedWorkerQuery
@@ -1613,25 +1615,6 @@ export function App() {
                       />
                     );
                   })}
-                  {shellSessions.map((shell) => (
-                    /*
-                     * A shell needs a way back. Without a rail entry, switching
-                     * to any worker strands it: it keeps running on the host
-                     * with nothing in the product able to reach it again.
-                     * Listed separately from workers because it IS separate —
-                     * no presence, no attention state, nothing to report.
-                     */
-                    <div className="worker-row" key={shell.session_id}>
-                      <button className="worker-button" aria-current={shell.session_id === activeSessionId ? "page" : undefined} onClick={() => openWorker(shell.session_id)}>
-                        <span className="worker-avatar" aria-hidden="true">$_</span>
-                        <span className="worker-copy">
-                          <strong>Shell</strong>
-                          <small>{shell.worker_name}&apos;s workspace</small>
-                        </span>
-                      </button>
-                      <button className="worker-shell-close" type="button" aria-label={`Close the shell in ${shell.worker_name}'s workspace`} onClick={() => void closeShell(shell.session_id)}>×</button>
-                    </div>
-                  ))}
                   {railVisibleOrphanSessions.map((session) => {
                     const task = tasksBySession.get(session.session_id);
                     return (
@@ -1833,6 +1816,34 @@ export function App() {
             onConfirm={() => void runRuntimeUpdate(runtimeConfirm)}
             onCancel={() => setRuntimeConfirm(undefined)}
           />
+        ) : null}
+        {operatorToken && shell ? (
+          /*
+           * No focus trap, deliberately. useModalFocus intercepts Escape and Tab
+           * to move between controls -- and both are load-bearing keystrokes in a
+           * shell: Escape cancels, Tab completes a path. A modal that swallowed
+           * them would be a worse terminal than no modal at all. Closing is the
+           * button or the backdrop.
+           */
+          <div className="shell-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) void closeShell(shell.session_id); }}>
+            <div className="shell-modal" role="dialog" aria-modal="true" aria-label={`Shell in ${shell.worker_name}'s workspace`}>
+              <div className="shell-modal-header">
+                <strong>Shell</strong>
+                <small>{shell.worker_name}&apos;s workspace</small>
+                <button type="button" className="shell-modal-close" onClick={() => void closeShell(shell.session_id)}>Close</button>
+              </div>
+              <TerminalLoadBoundary key={`${operatorToken}:${shell.session_id}`}>
+                <Suspense fallback={<div className="terminal-empty">Preparing shell…</div>}>
+                  <TerminalView
+                    operatorToken={operatorToken}
+                    session={{ session_id: shell.session_id, running: true }}
+                    busy={false}
+                    canStop={false}
+                  />
+                </Suspense>
+              </TerminalLoadBoundary>
+            </div>
+          </div>
         ) : null}
         {operatorToken && showCommands ? <CommandPalette choices={commandChoices} onClose={() => setShowCommands(false)} /> : null}
         {operatorToken && showFeedback ? (
