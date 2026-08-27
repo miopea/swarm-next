@@ -30,3 +30,30 @@ test("the queen is drawn with her diadem and the worker is not", () => {
   const { container: worker } = render(<BeeMascot role="worker" expression="available" />);
   expect(worker.querySelector(".bee-diadem")).toBeNull();
 });
+
+test("a mark draws without touching the eyes or the mouth", () => {
+  // The property the whole design rests on: identity and state have to coexist.
+  // A bee can be the one with the spectacles AND be blocked, and neither
+  // reading may interfere with the other.
+  const { container } = render(<BeeMascot expression="blocked" mark="spectacles" />);
+  expect(container.querySelector(".bee-kit")).not.toBeNull();
+  expect(container.querySelectorAll(".bee-eye")).toHaveLength(2);
+  expect(container.querySelector(".bee-mouth")).not.toBeNull();
+});
+
+test("hair is drawn before the head so the head overlaps it", () => {
+  // Order is what makes it read as hair rather than as a hat sitting on top.
+  const { container } = render(<BeeMascot mark="pigtails" />);
+  const svg = container.querySelector("svg")!;
+  const nodes = Array.from(svg.children);
+  const hair = nodes.findIndex((node) => node.classList.contains("bee-hair"));
+  const head = nodes.findIndex((node) => node.classList.contains("bee-head"));
+  expect(hair).toBeGreaterThanOrEqual(0);
+  expect(hair).toBeLessThan(head);
+});
+
+test("no mark leaves the bee plain", () => {
+  const { container } = render(<BeeMascot />);
+  expect(container.querySelector(".bee-kit")).toBeNull();
+  expect(container.querySelector(".bee-hair")).toBeNull();
+});

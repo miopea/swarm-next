@@ -66,6 +66,11 @@ export type Worker = {
   engaged_device_class?: "desktop" | "mobile";
   engagement_expires_at?: number;
   runtime_error?: string;
+  /**
+   * The bee this worker wears. Absent means it is derived from the worker's id,
+   * so a Hive that has never chosen one still shows everybody differently.
+   */
+  mark?: string | null;
 };
 
 export type WorkspaceChoice = {
@@ -81,6 +86,7 @@ export type CreateWorkerInput = {
   provider?: ProviderKind;
   autostart?: boolean;
   allow_outside_roots?: boolean;
+  mark?: string;
 };
 
 export type UpdateWorkerInput = {

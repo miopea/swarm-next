@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { TEMPORARY_PROVIDERS, type Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
+import { resolveMark } from "../brand/beeMarks";
 import CursorMenu, { pointFromElement, type MenuPoint } from "../shared/CursorMenu";
 import { heldForAnswer, workerAttention, workerSilence } from "./workerAttention";
 
@@ -86,7 +87,7 @@ export default function WorkerRosterItem({ worker, selected, detail, workSummary
         disabled={busy}
         title={pausedTitle}
       >
-        <span className="worker-avatar"><BeeMascot role={worker.role === "queen" ? "queen" : "worker"} expression={attention.expression} /></span>
+        <span className="worker-avatar"><BeeMascot role={worker.role === "queen" ? "queen" : "worker"} expression={attention.expression} mark={resolveMark(worker.id, worker.mark)} /></span>
         <span className="worker-copy">
           <span className="worker-copy-heading"><strong>{worker.name}</strong><span className="worker-attention-label">{attention.label}{silence ? <span className="worker-silence"> · {silence}</span> : null}{worker.answer_overdue ? <span className="worker-overdue" title="This request passed the deadline its asker set. The worker is still holding."> · overdue</span> : null}{worker.unconfirmed_delivery ? (
             <span

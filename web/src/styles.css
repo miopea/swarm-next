@@ -1725,6 +1725,33 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .bee-wings path { fill: none; stroke: #c6b992; stroke-width: 1.3; }
 .bee-antennae circle { fill: #302b1f; }
 .bee-eye { fill: #302b1f; }
+/* Marks. Colour lives HERE rather than on the bee: a red cap is natural, a red
+   bee is not, which is what the operator meant by coloured bees feeling wrong.
+   Hair is drawn behind the head so the head overlaps it, which is what makes it
+   read as hair rather than as a hat sitting on top. */
+/* Defaults live on the mascot itself so the tokens are DEFINED rather than only
+   ever appearing as var() fallbacks. A .bee-mark-* rule overrides them. */
+.bee-mascot { --bee-kit-fill: #b5442f; --bee-kit-heart: #f4e6bd; --bee-hair: #5a4632; }
+.bee-kit { fill: none; stroke: #302b1f; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.bee-kit-fill { fill: var(--bee-kit-fill); stroke: #302b1f; stroke-width: 2.6; stroke-linejoin: round; }
+.bee-kit-heart { fill: var(--bee-kit-heart); stroke: #302b1f; stroke-width: 2; }
+.bee-hair { fill: var(--bee-hair); stroke: #302b1f; stroke-width: 2.6; stroke-linejoin: round; }
+.bee-hair-line { fill: none; stroke: #302b1f; stroke-width: 2.2; stroke-linecap: round; opacity: .5; }
+.bee-mark-beanie { --bee-kit-fill: #3f6f72; }
+.bee-mark-hardhat { --bee-kit-fill: #e0a832; }
+.bee-mark-party { --bee-kit-fill: #8a4f86; }
+.bee-mark-headphones { --bee-kit-fill: #4a5f7a; }
+.bee-mark-flower { --bee-kit-fill: #d4759a; }
+.bee-mark-leaf { --bee-kit-fill: #5d7a52; }
+.bee-mark-goggles { --bee-kit-fill: #c9922f; }
+.bee-mark-bandana { --bee-kit-fill: #7a4f8a; }
+.bee-mark-wreath { --bee-kit-fill: #7f9a5c; }
+.bee-mark-hairband { --bee-kit-fill: #d4759a; }
+.bee-mark-buns { --bee-hair: #7a4a2c; }
+.bee-mark-pigtails { --bee-hair: #3e3226; }
+.bee-mark-ponytail { --bee-hair: #8a5a34; }
+.bee-mark-fringe { --bee-hair: #3e3226; }
+.bee-mark-curls { --bee-hair: #7a4a2c; }
 .bee-eye-glint { fill: #fffdf4; }
 .bee-lashes { stroke-width: 1.7; }
 .bee-leaf { fill: #8d9b7a; stroke: #536052; stroke-width: 2; }
