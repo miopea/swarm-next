@@ -1550,7 +1550,11 @@ export function App() {
           one worker it opened with. */}
       <aside className={`control-rail surface-${surface}${detached ? " detached-rail" : ""}`} aria-label={detached ? `${surfaceLabel(surface)} controls` : "Swarm navigation"}>
         {detached ? null : <div className="brand-lockup">
-          <div className="brand-mark"><BeeMascot expression="available" /></div>
+          {/* The Hive's own mark is the QUEEN. It defaulted to role="worker", so the
+              control room was headed by one of the workers rather than by the Hive
+              — and every worker avatar below it is the same drawing, which is what
+              made the header read as just another bee. */}
+          <div className="brand-mark"><BeeMascot role="queen" expression="available" /></div>
           <div className="brand-copy"><p className="eyebrow">Swarm</p><h1>Control room</h1><HiveContextIndicator identity={hiveIdentity} /></div>
           {operatorToken ? (
             <button
