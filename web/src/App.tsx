@@ -213,6 +213,7 @@ export function App() {
   const [terminalConnection, setTerminalConnection] = useState<string>();
   const { runtimeUpdates, developmentMode, refreshRuntimeUpdate } = useRuntimeUpdate(operatorToken || undefined);
   const [whatsNew, setWhatsNew] = useState<ReleaseVersionNotes[]>([]);
+  const [whatsNewTruncated, setWhatsNewTruncated] = useState(false);
   // Asked for ONCE per session rather than polled: the notes only change when
   // the build under the operator changes, and that already reloads the page.
   useEffect(() => {
@@ -222,9 +223,15 @@ export function App() {
       try {
         const notes = await fetchReleaseNotes(operatorToken);
         if (cancelled) return;
-        const { show, recordAs } = whatsNewFor(notes.releases, notes.running_version, readSeenVersion());
+        const { show, recordAs, truncated } = whatsNewFor(
+          notes.releases,
+          notes.running_version,
+          readSeenVersion(),
+          notes.previous_version,
+        );
         if (recordAs) storeSeenVersion(recordAs);
         setWhatsNew(show);
+        setWhatsNewTruncated(truncated);
       } catch {
         // A change list nobody can fetch is not worth telling the operator
         // about; the Hive works either way and a development build has none.
@@ -1891,7 +1898,11 @@ export function App() {
           </div>
         ) : null}
         {operatorToken && whatsNew.length > 0 ? (
-          <WhatsNewModal releases={whatsNew} onDismiss={() => setWhatsNew([])} />
+          <WhatsNewModal
+            releases={whatsNew}
+            truncated={whatsNewTruncated}
+            onDismiss={() => setWhatsNew([])}
+          />
         ) : null}
         {operatorToken && runtimeConfirm ? (
           <RuntimeUpdateConfirm

@@ -50,3 +50,47 @@ describe("what's new", () => {
     expect(anyAwaitingWorkerEngine([release("0.8.19", false)])).toBe(false);
   });
 });
+
+test("an operator whose browser has never seen the panel is still told what changed", () => {
+  // THE ABLATION. Drop the `previous` argument and this shows nothing, because
+  // an empty local storage is indistinguishable from a first install without
+  // it. That is the case a second machine, a private window, and cleared site
+  // data all land in.
+  const result = whatsNewFor(
+    [release("0.8.19"), release("0.8.18"), release("0.8.17"), release("0.8.16")],
+    "0.8.19",
+    null,
+    "0.8.16",
+  );
+  expect(result.show.map((entry) => entry.version)).toEqual(["0.8.19", "0.8.18", "0.8.17"]);
+  expect(result.recordAs).toBe("0.8.19");
+});
+
+test("a genuine first install is still shown nothing", () => {
+  const result = whatsNewFor([release("0.8.19"), release("0.8.18")], "0.8.19", null, null);
+  expect(result.show).toEqual([]);
+  expect(result.recordAs).toBe("0.8.19");
+});
+
+test("the anchor reaching further back wins, so a note is not skipped", () => {
+  // Dismissed on another device at 0.8.18 while this Hive came from 0.8.16:
+  // the three releases since 0.8.16 are what this operator has not seen here.
+  const result = whatsNewFor(
+    [release("0.8.19"), release("0.8.18"), release("0.8.17")],
+    "0.8.19",
+    "0.8.18",
+    "0.8.16",
+  );
+  expect(result.show.map((entry) => entry.version)).toEqual(["0.8.19", "0.8.18", "0.8.17"]);
+});
+
+test("a gap deeper than the notes carry is reported, not presented as complete", () => {
+  const result = whatsNewFor([release("0.8.19"), release("0.8.18")], "0.8.19", null, "0.8.10");
+  expect(result.show.map((entry) => entry.version)).toEqual(["0.8.19", "0.8.18"]);
+  expect(result.truncated).toBe(true);
+});
+
+test("a gap the notes cover completely is not reported as truncated", () => {
+  const result = whatsNewFor([release("0.8.19"), release("0.8.18")], "0.8.19", null, "0.8.18");
+  expect(result.truncated).toBe(false);
+});

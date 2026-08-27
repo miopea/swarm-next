@@ -10,9 +10,11 @@ import { anyAwaitingWorkerEngine } from "./whatsNew";
  * skipped several needs to see everything it missed, but they are a quiet label
  * rather than the structure.
  */
-export default function WhatsNewModal({ releases, onDismiss }: {
+export default function WhatsNewModal({ releases, onDismiss, truncated = false }: {
   releases: ReleaseVersionNotes[];
   onDismiss: () => void;
+  /** The gap reaches further back than the notes this artifact carries. */
+  truncated?: boolean;
 }) {
   if (releases.length === 0) return null;
   const awaitingEngine = anyAwaitingWorkerEngine(releases);
@@ -69,6 +71,14 @@ export default function WhatsNewModal({ releases, onDismiss }: {
             </section>
           );
         })}
+        {truncated && (
+          // SAID RATHER THAN IMPLIED. Without this the list looks like the whole
+          // story, and the operator has no way to tell a complete list from one
+          // that starts partway through what they missed.
+          <p className="whats-new-pending">
+            You were away longer than this list reaches — older releases are not shown.
+          </p>
+        )}
         {awaitingEngine && (
           <p className="whats-new-engine-note">
             Some of this is installed but not running yet. The terminal host keeps your workers alive across an

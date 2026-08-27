@@ -61,24 +61,73 @@ export function storeSeenVersion(version: string) {
 }
 
 /**
- * What to show, given what shipped and what this operator has already seen.
+ * What to show, given what shipped, what this operator has already seen, and
+ * what this Hive was running before.
  *
  * A FIRST RUN SHOWS NOTHING AND RECORDS THE VERSION. Someone installing Swarm
  * for the first time has not missed anything, and greeting them with five
  * releases of history reads as a changelog — which is the thing the operator
- * asked for an alternative to. `seen` being absent is that case, and it is
- * deliberately distinguished from `seen` being an older version.
+ * asked for an alternative to.
+ *
+ * BUT AN EMPTY BROWSER IS NOT A FIRST INSTALL. `seen` lives in local storage,
+ * so it is empty on a second machine, in a private window, and after cleared
+ * site data — none of which mean the operator has missed nothing. `previous`
+ * is the version the installer replaced, and it distinguishes the two: absent
+ * with no previous release is a genuine first install and shows nothing; absent
+ * on a Hive that HAS been updated falls back to the release it came from, so
+ * everything since then is shown.
+ *
+ * The floor is the OLDER of the two when both exist, because each can be stale
+ * in a way the other is not — `seen` lags when the panel was dismissed on
+ * another device, `previous` lags when several updates ran between two visits —
+ * and showing a note twice is a much smaller failure than never showing it.
  */
 export function whatsNewFor(
   releases: ReleaseVersionNotes[],
   runningVersion: string,
   seen: string | null,
-): { show: ReleaseVersionNotes[]; recordAs: string | null } {
-  if (seen === null || seen.trim() === "") {
-    return { show: [], recordAs: runningVersion };
+  previous?: string | null,
+): { show: ReleaseVersionNotes[]; recordAs: string | null; truncated: boolean } {
+  const floor = olderOf(seen, previous ?? null);
+  if (floor === null) {
+    return { show: [], recordAs: runningVersion, truncated: false };
   }
-  const show = releasesNewerThan(releases, seen);
-  return { show, recordAs: show.length > 0 ? runningVersion : null };
+  const show = releasesNewerThan(releases, floor);
+  return {
+    show,
+    recordAs: show.length > 0 ? runningVersion : null,
+    truncated: reachesPastTheNotes(releases, floor),
+  };
+}
+
+/**
+ * Whether the operator's gap is deeper than the artifact carries.
+ *
+ * The notes bundle holds a bounded number of releases, so an operator who was
+ * away long enough is shown a list that starts partway through what they
+ * missed. Presenting that as "what's new since you were last here" is a quiet
+ * false claim about completeness, and the panel would look identical either
+ * way — so it is measured here and said out loud rather than left to look
+ * complete.
+ */
+function reachesPastTheNotes(releases: ReleaseVersionNotes[], floor: string): boolean {
+  const floorParsed = parseVersion(floor);
+  if (floorParsed === null) return false;
+  const parsed = releases
+    .map((entry) => parseVersion(entry.version))
+    .filter((version): version is number[] => version !== null);
+  if (parsed.length === 0) return false;
+  const oldest = parsed.reduce((left, right) => (compareVersions(left, right) <= 0 ? left : right));
+  return compareVersions(floorParsed, oldest) < 0;
+}
+
+/** Whichever of the two anchors reaches further back; null when neither parses. */
+function olderOf(left: string | null, right: string | null): string | null {
+  const leftParsed = parseVersion(left === null || left.trim() === "" ? null : left);
+  const rightParsed = parseVersion(right === null || right.trim() === "" ? null : right);
+  if (leftParsed === null) return rightParsed === null ? null : right;
+  if (rightParsed === null) return left;
+  return compareVersions(leftParsed, rightParsed) <= 0 ? left : right;
 }
 
 /** Whether anything shown is installed but not yet in effect. */

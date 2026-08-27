@@ -13,6 +13,8 @@ export type ReleaseVersionNotes = {
 
 export type ReleaseNotesResponse = {
   running_version: string;
+  /** The release this Hive was updated FROM; null on a first install or a checkout reload. */
+  previous_version: string | null;
   releases: ReleaseVersionNotes[];
 };
 

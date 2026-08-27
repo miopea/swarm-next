@@ -734,6 +734,34 @@ pub(crate) fn installed_release_notes() -> ReleaseNotes {
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
+/// The version this Hive was running before the release it is running now.
+///
+/// THE ANCHOR HAS TO SURVIVE A BROWSER, which is why it is not read from one.
+/// The panel's own record of what an operator has seen lives in that browser's
+/// local storage, so an operator who updates three releases and then opens the
+/// control room somewhere else -- a second machine, a private window, cleared
+/// site data -- looks to it exactly like a first-ever install, and a first-ever
+/// install is deliberately shown nothing. They would be told about none of the
+/// three.
+///
+/// Taken from the `previous` symlink the installer maintains rather than from
+/// anything this process records: it IS the release that was replaced, it costs
+/// no state and no migration, and it is already correct on every Hive that has
+/// ever been updated. A checkout reload has no such link and answers `None`,
+/// which correctly falls back to the browser's own record.
+#[must_use]
+pub(crate) fn previous_installed_version() -> Option<String> {
+    let executable = std::env::current_exe().ok()?;
+    // <install_root>/releases/<version>/bin/<binary>
+    let install_root = executable.parent()?.parent()?.parent()?.parent()?;
+    let raw = std::fs::read_to_string(install_root.join("previous").join("VERSION")).ok()?;
+    let version = raw.trim();
+    if version.is_empty() {
+        return None;
+    }
+    Some(version.to_owned())
+}
+
 /// What is new for an operator who last saw `since`.
 ///
 /// # Errors
@@ -748,6 +776,7 @@ pub(super) async fn notes(
         [(header::CACHE_CONTROL, "no-store")],
         Json(serde_json::json!({
             "running_version": crate::build_version(),
+            "previous_version": previous_installed_version(),
             "releases": notes.releases,
         })),
     )

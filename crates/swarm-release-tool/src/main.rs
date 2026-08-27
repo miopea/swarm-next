@@ -28,9 +28,16 @@ const USAGE: &str = "usage: swarm-release <keygen PRIVATE_KEY_PATH | sign PRIVAT
 ///
 /// A Hive that skipped versions has to find what it missed inside the ONE
 /// artifact it downloads, so this is the depth of "away for a while" the modal
-/// can still account for. Bounded because the file ships in every release and
-/// nobody reads back further than this.
-const NOTES_DEPTH: usize = 5;
+/// can still account for. Raised from 5 once the panel started anchoring on the
+/// release an operator actually came from rather than on what their browser
+/// remembered: the anchor can now reach back further than five, and notes that
+/// stop short of it are a silent gap in the one thing the panel promises.
+///
+/// Still bounded -- the file ships inside every artifact, and a panel listing
+/// forty releases is a changelog, which is what this exists instead of. When
+/// the gap is genuinely deeper than this the panel SAYS so rather than
+/// presenting a partial list as the whole story.
+const NOTES_DEPTH: usize = 12;
 
 fn main() -> ExitCode {
     let mut arguments = env::args().skip(1);
