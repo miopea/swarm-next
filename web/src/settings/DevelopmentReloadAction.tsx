@@ -51,6 +51,18 @@ export default function DevelopmentReloadAction({ busy, runtime, reachable = tru
   // Rendered on BOTH branches of this card: a Hive whose app matches its
   // checkout can still be running a stale engine, and that is exactly the case
   // where nothing else would mention it.
+  // LOUDER THAN THE ENGINE NOTICE, because it is a harder stop. An engine that
+  // is behind still lets a reload land; a protocol change means the reload
+  // cannot install at all, and the operator would otherwise discover that by
+  // pressing the button and being refused.
+  const protocolPending = runtime.protocol_migration_required === true ? (
+    <p className="runtime-protocol-pending">
+      <strong>This checkout changes the terminal-host protocol.</strong> A reload cannot install
+      it — a reload leaves the terminal host running, which is what keeps worker terminals alive.
+      Installing it swaps the API and the host together and <strong>stops every worker</strong>,
+      so run the protocol migration when your workers are idle.
+    </p>
+  ) : null;
   const engineBehind = runtime.worker_engine_update_required === true ? (
     <p className="runtime-engine-behind">
       The worker engine is behind this build. A reload does not restart it — that is what keeps
@@ -117,12 +129,12 @@ export default function DevelopmentReloadAction({ busy, runtime, reachable = tru
     </article>
   );
   if (!runtime.reload_available) {
-    return <article className="runtime-subsystem-card runtime-subsystem-current development-reload-action" aria-label="App and API status"><header><div><span className="runtime-component-name">App and API</span><strong>Running build matches the working copy</strong></div><span className="runtime-status-badge current">Current</span></header><p className="runtime-version"><strong>Installed</strong> {runtimeVersionIdentity(healthVersion ?? runtime.version)}</p><p>Active revision {runningRevision} matches the product code in this checkout. No App/API build is waiting.</p>{unpublished}{engineBehind}<small>Swarm checks the working copy every 15 seconds. When product code changes, you can build and activate it without restarting Claude, Codex, or the worker engine.</small></article>;
+    return <article className="runtime-subsystem-card runtime-subsystem-current development-reload-action" aria-label="App and API status"><header><div><span className="runtime-component-name">App and API</span><strong>Running build matches the working copy</strong></div><span className="runtime-status-badge current">Current</span></header><p className="runtime-version"><strong>Installed</strong> {runtimeVersionIdentity(healthVersion ?? runtime.version)}</p><p>Active revision {runningRevision} matches the product code in this checkout. No App/API build is waiting.</p>{unpublished}{protocolPending}{engineBehind}<small>Swarm checks the working copy every 15 seconds. When product code changes, you can build and activate it without restarting Claude, Codex, or the worker engine.</small></article>;
   }
   return (
     <article className="runtime-subsystem-card runtime-subsystem-safe development-reload-action" aria-label="App and API status">
       <header><div><span className="runtime-component-name">App and API</span><strong>Development reload available</strong></div><span className="runtime-status-badge safe">Workers stay online</span></header>
-      {lastBuildLanded}{unpublished}{engineBehind}
+      {lastBuildLanded}{unpublished}{protocolPending}{engineBehind}
       <p>{uncommittedOnly
         ? <>Revision {runningRevision} is active, and the working copy has uncommitted changes on top of it. Building picks those up.</>
         : <>Revision {runningRevision} is active. Build and switch the browser and API to working-copy revision {workingRevision}.</>}</p>

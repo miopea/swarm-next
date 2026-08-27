@@ -316,3 +316,64 @@ test("says nothing about the engine when the host could not be asked", () => {
 
   expect(screen.queryByText(/The worker engine is behind/)).not.toBeInTheDocument();
 });
+
+/**
+ * The operator: "if you have an update that needs the engine to restart, I
+ * should see that notification."
+ *
+ * They were right and there was a hole. worker_engine_update_required compares
+ * the RUNNING host against the RUNNING API — both are the build in service, so
+ * a checkout that bumps PROTOCOL_VERSION leaves them agreeing and reports
+ * nothing. The only way to find out was to press reload and be refused.
+ */
+test("a checkout that changes the protocol says so before the button is pressed", () => {
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-123456789abc-20260815040000-10",
+    state: "idle",
+    reload_available: true,
+    deployed_source_revision: "76543210fedc",
+    source_revision: "abcdef012345",
+    source_dirty: false,
+    deployed_source_published: true,
+    worker_engine_update_required: false,
+    protocol_migration_required: true,
+  }} />);
+
+  expect(screen.getByText(/This checkout changes the terminal-host protocol/)).toBeInTheDocument();
+  expect(screen.getByText(/stops every worker/)).toBeInTheDocument();
+});
+
+test("it says so even when the app itself matches the checkout", () => {
+  // The case nothing else would mention: the card otherwise reads Current and
+  // there is no reload in flight to hang the warning on.
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-123456789abc-20260815040000-10",
+    state: "idle",
+    reload_available: false,
+    deployed_source_revision: "76543210fedc",
+    source_revision: "76543210fedc",
+    source_dirty: false,
+    deployed_source_published: true,
+    protocol_migration_required: true,
+  }} />);
+
+  expect(screen.getByText(/This checkout changes the terminal-host protocol/)).toBeInTheDocument();
+});
+
+test("a checkout on the same protocol says nothing about migrating", () => {
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-123456789abc-20260815040000-10",
+    state: "idle",
+    reload_available: true,
+    deployed_source_revision: "76543210fedc",
+    source_revision: "abcdef012345",
+    source_dirty: false,
+    deployed_source_published: true,
+    protocol_migration_required: false,
+  }} />);
+
+  expect(screen.queryByText(/changes the terminal-host protocol/)).not.toBeInTheDocument();
+});

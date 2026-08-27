@@ -2455,3 +2455,16 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   font-size: .78rem;
   line-height: 1.45;
 }
+
+/* A protocol change pending in the checkout.
+   Stronger than the engine notice beside it: an engine that is behind still
+   lets a reload land, while this means the reload cannot install at all. */
+.runtime-protocol-pending {
+  margin: 6px 0 0;
+  padding: 9px 11px;
+  border: 1px solid var(--danger, var(--accent-strong));
+  border-radius: var(--radius);
+  background: var(--panel-soft);
+  font-size: .78rem;
+  line-height: 1.45;
+}

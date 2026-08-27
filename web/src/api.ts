@@ -364,6 +364,16 @@ export type DevelopmentRuntime = {
    * different claim from being up to date.
    */
   worker_engine_update_required?: boolean | null;
+  /**
+   * Whether the checkout changes the terminal-host protocol.
+   *
+   * A reload CANNOT install this. It leaves the terminal host running on
+   * purpose — that is what keeps worker terminals alive across a reload — so a
+   * new protocol needs both processes swapped together, which stops every
+   * worker. That makes it a decision about timing, and the operator cannot make
+   * it if nothing says it is pending.
+   */
+  protocol_migration_required?: boolean | null;
 };
 /** One release the origin currently offers. Absent from the manifest means withdrawn. */
 export type ReleaseOffer = {

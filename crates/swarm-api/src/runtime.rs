@@ -59,6 +59,37 @@ async fn engine_update_required(state: &Arc<AppState>) -> Option<bool> {
         .map(|status| crate::maintenance::worker_engine_update_required(&status))
 }
 
+/// Whether the CHECKOUT changes the terminal-host protocol.
+///
+/// SEPARATE FROM `engine_update_required`, AND THIS IS THE CASE THAT WAS
+/// INVISIBLE. That one compares the RUNNING host against the RUNNING API, and
+/// both are the build in service — so a checkout that bumps `PROTOCOL_VERSION`
+/// leaves them agreeing with each other and reports nothing. The operator only
+/// found out by pressing reload and being refused.
+///
+/// A protocol change is the one thing a reload cannot install. The reload
+/// deliberately leaves the terminal host running, which is what keeps worker
+/// terminals alive across it, so installing a new protocol means swapping both
+/// processes together and stopping every worker to do it. That is a decision
+/// about timing, and an operator cannot make it if nothing tells them it is
+/// pending.
+///
+/// Read from the checkout with the same expression `build-development-release.sh`
+/// uses, so the number reported here is the number the build would stamp.
+async fn protocol_migration_required(state: &Arc<AppState>) -> Option<bool> {
+    let checkout = state.development_checkout_path.as_ref()?;
+    let source = std::fs::read_to_string(checkout.join("crates/swarm-terminal/src/ipc.rs")).ok()?;
+    let declared: u16 = source.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("pub const PROTOCOL_VERSION: u16 = ")?
+            .strip_suffix(';')?
+            .parse()
+            .ok()
+    })?;
+    let running = crate::maintenance::host_status_snapshot(state).await.ok()?;
+    Some(declared != running.protocol_version)
+}
+
 #[derive(Debug, Serialize)]
 #[allow(
     clippy::struct_excessive_bools,
@@ -93,6 +124,10 @@ struct DevelopmentRuntimeResponse {
     /// up to date, and saying "current" because nothing answered is the failure
     /// this Hive keeps removing.
     worker_engine_update_required: Option<bool>,
+    /// Whether the checkout changes the terminal-host protocol, which a reload
+    /// cannot install. None means the host could not be asked, or there is no
+    /// development checkout to compare against.
+    protocol_migration_required: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -248,6 +283,7 @@ pub(super) async fn development(
             source_dirty: source.as_ref().is_some_and(|status| status.dirty),
             deployed_source_published: source.is_some_and(|status| status.published),
             worker_engine_update_required: engine_update_required(&state).await,
+            protocol_migration_required: protocol_migration_required(&state).await,
         }),
     )
         .into_response())
