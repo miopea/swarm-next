@@ -1640,10 +1640,16 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .whats-new-pending { color: var(--muted); font-size: .74rem; }
 .whats-new-engine-note { margin-top: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-soft); }
 /* Blocks the operator asked to hear about directly. Sits with the other
-   attention cards rather than shouting: it is a stall, not an incident. */
-.blocked-escalation-list { display: grid; gap: 5px; margin: 6px 0 8px; padding: 0; list-style: none; }
-.blocked-escalation-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: .8rem; }
-.blocked-escalation-meta { color: var(--muted); font-size: .72rem; }
+   attention cards rather than shouting: it is a stall, not an incident, so it
+   takes the calm honey base rather than the red one. */
+.blocked-escalation-card { align-items: start; }
+.blocked-escalation-list { display: grid; gap: 4px; margin: 7px 0 9px; padding: 0; list-style: none; }
+/* Title and meta on one line, meta pushed to the end and allowed to drop below
+   on a narrow board rather than squeezing the title to one word per line. */
+.blocked-escalation-list li { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 14px; }
+.blocked-escalation-title { flex: 1 1 260px; min-width: 0; padding: 0; border: 0; background: none; color: var(--ink); font-size: .82rem; line-height: 1.4; text-align: left; }
+.blocked-escalation-title:hover { color: var(--link); text-decoration: underline; }
+.blocked-escalation-meta { flex: 0 0 auto; color: var(--muted); font-size: .72rem; font-variant-numeric: tabular-nums; }
 .dialog { display: grid; width: min(440px, 100%); gap: 9px; padding: 18px; border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--panel-raised); box-shadow: var(--shadow); }
 .dialog h3 { margin: 0; font-size: 1.05rem; }
 .dialog p { margin: 0; color: var(--muted); font-size: .78rem; line-height: 1.45; }

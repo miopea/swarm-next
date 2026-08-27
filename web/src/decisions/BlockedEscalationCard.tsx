@@ -18,30 +18,36 @@ export default function BlockedEscalationCard({ escalations, onOpenTask }: {
 }) {
   if (escalations.length === 0) return null;
   return (
-    <section className="queen-attention-card blocked-escalation-card">
-      <p className="eyebrow">Waiting on someone</p>
-      <h3>
-        {escalations.length === 1
-          ? "A task has been blocked more than 12 hours"
-          : `${escalations.length} tasks have been blocked more than 12 hours`}
-      </h3>
-      <ul className="blocked-escalation-list">
-        {escalations.map((escalation) => (
-          <li key={escalation.task_id}>
-            <button
-              type="button"
-              className="text-button"
-              onClick={() => onOpenTask?.(escalation.task_id)}
-            >
-              {escalation.title}
-            </button>
-            <span className="blocked-escalation-meta">
-              {escalation.worker_name} · {formatWaited(escalation.blocked_for_seconds)}
-            </span>
-          </li>
-        ))}
-      </ul>
-      <p>Queen moves work out of Blocked. This is here so a stall is not silent.</p>
+    <section className="apiary-attention-card blocked-escalation-card" aria-labelledby="blocked-escalation-heading">
+      {/* ONE child of the card grid, not four. The card lays its children out in
+          columns, so flat children land in an icon slot and an action slot and
+          wrap to nothing — which is exactly how this first shipped: the eyebrow
+          set one letter per line in a 44px column. */}
+      <div>
+        <p className="eyebrow">Waiting on someone</p>
+        <h3 id="blocked-escalation-heading">
+          {escalations.length === 1
+            ? "A task has been blocked more than 12 hours"
+            : `${escalations.length} tasks have been blocked more than 12 hours`}
+        </h3>
+        <ul className="blocked-escalation-list">
+          {escalations.map((escalation) => (
+            <li key={escalation.task_id}>
+              <button
+                type="button"
+                className="blocked-escalation-title"
+                onClick={() => onOpenTask?.(escalation.task_id)}
+              >
+                {escalation.title}
+              </button>
+              <span className="blocked-escalation-meta">
+                {escalation.worker_name} · {formatWaited(escalation.blocked_for_seconds)}
+              </span>
+            </li>
+          ))}
+        </ul>
+        <p>Queen moves work out of Blocked. This is here so a stall is not silent.</p>
+      </div>
     </section>
   );
 }
