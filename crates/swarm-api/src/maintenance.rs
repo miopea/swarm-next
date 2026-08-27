@@ -105,7 +105,16 @@ pub(super) async fn restart_superseded_workers(
                 swarm_domain::ProviderKind::Codex => codex_release.as_ref(),
                 // No installed release to compare a session against, so it can
                 // never be superseded by one. It cannot be running either.
-                swarm_domain::ProviderKind::Unsupported => None,
+                //
+                // The alpha three are here for a different reason: nothing
+                // probes their releases, so there is no version to compare and
+                // an alpha worker is never reported as running a superseded
+                // build. That is a missing feature stated honestly rather than
+                // a comparison against a value invented here.
+                swarm_domain::ProviderKind::Gemini
+                | swarm_domain::ProviderKind::Grok
+                | swarm_domain::ProviderKind::OpenCode
+                | swarm_domain::ProviderKind::Unsupported => None,
             };
             swarm_terminal::provider_release_superseded(release, session.started_at)
         })

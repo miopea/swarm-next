@@ -19,7 +19,7 @@ export type ReleaseNotesResponse = {
 };
 
 export type WorkerRole = "queen" | "worker";
-export type ProviderKind = "claude_code" | "codex";
+export type ProviderKind = "claude_code" | "codex" | "gemini" | "grok" | "opencode";
 export type WorkerAttentionState =
   | "sleeping"
   | "resting"
@@ -210,6 +210,18 @@ export async function openWorkerShell(operatorToken: string, workerId: string): 
 export const TEMPORARY_PROVIDERS = [
   { provider: "claude_code", label: "Claude", alpha: false },
   { provider: "codex", label: "Codex", alpha: false },
+  // ALPHA, and the label is load-bearing rather than decorative. For these
+  // three, provider_activity cannot read the terminal: their prompt glyphs are
+  // unknown and none of their CLIs is installed to learn them from, so a worker
+  // on one of them reads Unknown rather than resting or buzzing. It still gets
+  // work delivered and still raises attention -- Unknown is handled end to end
+  // -- but the roster cannot tell you it has finished a turn.
+  //
+  // They also start bare: no conversation resume, and like Codex no MCP
+  // configuration, so they do not reach the swarm tools.
+  { provider: "gemini", label: "Gemini", alpha: true },
+  { provider: "grok", label: "Grok", alpha: true },
+  { provider: "opencode", label: "OpenCode", alpha: true },
 ] as const;
 
 /**

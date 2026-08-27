@@ -9,8 +9,9 @@ use std::{
 use nix::unistd::Uid;
 use swarm_domain::WorkerSessionId;
 use swarm_terminal::{
-    ClaudeCodeAdapter, CodexAdapter, HostRequest, HostResponse, HostSessionSummary,
-    MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, PROTOCOL_VERSION, SessionRegistry, TerminalHostStatus,
+    AlphaProviderAdapter, ClaudeCodeAdapter, CodexAdapter, HostRequest, HostResponse,
+    HostSessionSummary, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, PROTOCOL_VERSION, SessionRegistry,
+    TerminalHostStatus,
 };
 use thiserror::Error;
 use tokio::{
@@ -376,6 +377,22 @@ fn dispatch_blocking(
             size,
             allow_outside_roots,
         } => swarm_terminal::shell_command(&workspace)
+            .map_err(|error| error.to_string())
+            .and_then(|command| {
+                registry
+                    .spawn_with_root_override(&command, size, allow_outside_roots)
+                    .map_err(|error| error.to_string())
+            })
+            .map(|session| HostResponse::SessionStarted {
+                session_id: session.id(),
+            }),
+        HostRequest::StartAlphaProvider {
+            provider,
+            workspace,
+            size,
+            allow_outside_roots,
+        } => AlphaProviderAdapter
+            .command_for(provider, &workspace)
             .map_err(|error| error.to_string())
             .and_then(|command| {
                 registry

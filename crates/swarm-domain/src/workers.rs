@@ -109,6 +109,19 @@ impl std::error::Error for ParseWorkerRoleError {}
 pub enum ProviderKind {
     ClaudeCode,
     Codex,
+    /// ALPHA. Its activity classifier is a literal glyph match against a TUI
+    /// nobody here has watched redraw under load.
+    ///
+    /// The three below are grouped deliberately: what makes them alpha is not
+    /// that the adapter is unfinished but that `provider_activity` cannot be
+    /// trusted for them yet, and a wrong arm fails QUIETLY in both directions
+    /// -- a worker busy forever, or resting mid-turn while delivery is deferred
+    /// indefinitely. Neither is visible from the board.
+    Gemini,
+    /// ALPHA. See [`ProviderKind::Gemini`].
+    Grok,
+    /// ALPHA. See [`ProviderKind::Gemini`].
+    OpenCode,
     /// A provider this build does not recognise, read back from storage.
     ///
     /// A provider is stored as a plain string with no CHECK constraint, so a
@@ -143,6 +156,9 @@ impl fmt::Display for ProviderKind {
         formatter.write_str(match self {
             Self::ClaudeCode => "claude_code",
             Self::Codex => "codex",
+            Self::Gemini => "gemini",
+            Self::Grok => "grok",
+            Self::OpenCode => "opencode",
             Self::Unsupported => "unsupported",
         })
     }
@@ -155,6 +171,9 @@ impl FromStr for ProviderKind {
         match value {
             "claude_code" => Ok(Self::ClaudeCode),
             "codex" => Ok(Self::Codex),
+            "gemini" => Ok(Self::Gemini),
+            "grok" => Ok(Self::Grok),
+            "opencode" => Ok(Self::OpenCode),
             _ => Err(ParseProviderKindError),
         }
     }

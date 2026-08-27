@@ -14,6 +14,33 @@ use crate::{
     worker_view,
 };
 
+/// Turns the terminal host's serde error into the sentence that names the fix.
+///
+/// THE HOST BEING OLDER THAN THE API IS THE ORDINARY STATE, not an edge case.
+/// swarm-terminal-host is a separate service that deliberately survives an API
+/// reload so worker terminals are not killed mid-turn, so every build that adds
+/// a `HostRequest` speaks a protocol the running host does not — until the worker
+/// engine update runs.
+///
+/// Matched on "unknown variant" alone rather than on a named request. The first
+/// version of this checked for `start_shell` specifically, which meant the next
+/// host request added would reproduce the same unreadable failure and need the
+/// same fix again. What the operator saw was serde's variant list: "unknown
+/// variant `start_shell`, expected one of `ping`, `host_status`, ..." — accurate
+/// and useless, because it says nothing about what to do.
+fn host_too_old_for(error: &ApiError, attempted: &str) -> Option<ApiError> {
+    error.message.contains("unknown variant").then(|| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            "terminal_host_too_old",
+            format!(
+                "the terminal host is older than this build and does not know how to \
+                 {attempted}; run the worker engine update to replace it"
+            ),
+        )
+    })
+}
+
 pub(super) async fn start_worker_process(
     state: &AppState,
     worker_id: WorkerId,
@@ -70,7 +97,9 @@ pub(super) async fn start_worker_process(
     }
 
     let request = provider_start_request(state, worker_id, &profile, size, mcp_config)?;
-    let response = request_host(state, request).await?;
+    let response = request_host(state, request).await.map_err(|error| {
+        host_too_old_for(&error, "start this worker's provider").unwrap_or(error)
+    })?;
     let HostResponse::SessionStarted { session_id } = response else {
         return Err(ApiError::new(
             StatusCode::BAD_GATEWAY,
@@ -189,6 +218,16 @@ fn provider_start_request(
                     }
                 },
                 mcp_config,
+                allow_outside_roots,
+            }
+        }
+        // One arm for the three alpha providers, matching the single host
+        // request. They start bare: no conversation resume, no MCP config.
+        ProviderKind::Gemini | ProviderKind::Grok | ProviderKind::OpenCode => {
+            HostRequest::StartAlphaProvider {
+                provider: profile.provider,
+                workspace: worker_workspace,
+                size,
                 allow_outside_roots,
             }
         }
@@ -352,18 +391,7 @@ pub(super) async fn open_worker_shell(
         },
     )
     .await
-    .map_err(|error| {
-        if error.message.contains("unknown variant") && error.message.contains("start_shell") {
-            ApiError::new(
-                StatusCode::CONFLICT,
-                "terminal_host_too_old",
-                "the terminal host is older than this build and does not know how to open a \
-                 shell; run the worker engine update to replace it",
-            )
-        } else {
-            error
-        }
-    })?;
+    .map_err(|error| host_too_old_for(&error, "open a shell").unwrap_or(error))?;
     match response {
         HostResponse::SessionStarted { session_id } => Ok(session_id),
         _ => Err(ApiError::new(
