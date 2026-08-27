@@ -81,7 +81,45 @@ for it, as the loop above does, or note plainly that you released without
 waiting and why. A red one means your local check missed something; find out
 what before adding a tag, because a tag is awkward to walk back.
 
-## 2. Bump — then READ IT BACK
+## 2. Write the notes — this is the step that gets skipped
+
+Add a section to `RELEASE_NOTES.md` for the version being cut:
+
+```markdown
+## X.Y.Z
+
+### New features
+- What a person can now do, in their words
+
+### Fixes
+- What stopped being broken, and what they will notice
+```
+
+`swarm-release notes` prefers this over the commit subjects, per release, and
+falls back to generation for any version with no section. **Absent keeps
+working** — a release that ships rough notes beats one that ships none.
+
+**Write for the person running Swarm, not the person who wrote the code.** The
+generated list is conventional-commit subjects, which is why 0.8.18 gave
+operators 32 bullets, six of them schema migrations, and the operator asked for
+"more human readable in future releases". Bullets may wrap; they are joined.
+
+End a bullet with `(after the worker engine update)` when the change is
+installed but not in effect until the engine swaps. The phrase is stripped and
+becomes the flag, so it is not printed twice.
+
+**The build prints which source each release used.** Read those lines:
+
+```
+swarm-release: 0.8.20 notes come from RELEASE_NOTES.md (4 entries)
+swarm-release: 0.8.19 notes generated from commit subjects (32 entries); no RELEASE_NOTES.md section
+```
+
+Seeing "generated from commit subjects" for the version you are cutting means
+your section heading does not match the version — notes written for 0.8.20 while
+cutting 0.9.0 are silently ignored, and the output looks fine either way.
+
+## 3. Bump — then READ IT BACK
 
 Edit `version` in the root `Cargo.toml` (eight crates share it), then let cargo
 refresh the lock:
@@ -130,7 +168,7 @@ If that command prints anything, tell the operator the range and the version
 you intend, and get an explicit answer before tagging. This is not a versioning
 policy — it is refusing to make the choice silently.
 
-## 3. Commit, tag, push
+## 4. Commit, tag, push
 
 ```bash
 git add Cargo.toml Cargo.lock
@@ -144,14 +182,14 @@ guard covers a reload from a checkout and **not** a tarball install — an
 upgrading Hive migrates unprotected. Tell the operator to copy their
 `swarm.sqlite3` first when it does.
 
-## 4. Build
+## 5. Build
 
 ```bash
 eval "$(op-login)"
 sh packaging/linux/build-release.sh      # prints the tarball path — read it, never guess
 ```
 
-## 5. Verify the ARTIFACT, not your working tree
+## 6. Verify the ARTIFACT, not your working tree
 
 The tarball is what a Hive installs. A fix present in your checkout and absent
 from the artifact ships nothing.
@@ -182,7 +220,7 @@ sh -n packaging/linux/test-package-lifecycle.sh   # it parses
 An ablation is the only evidence a guard works. A guard that passes on correct
 input has told you nothing.
 
-## 6. GitHub release
+## 7. GitHub release
 
 ```bash
 gh release create vX.Y.Z $T --title "Swarm X.Y.Z" --notes "..."
@@ -190,7 +228,7 @@ gh release create vX.Y.Z $T --title "Swarm X.Y.Z" --notes "..."
 
 Notes say what a Hive taking it gets, and name the migration if there is one.
 
-## 7. Sign the manifest
+## 8. Sign the manifest
 
 The key lives in 1Password and exists on disk only for this command.
 `/run/user/$UID` is tmpfs, so it never reaches a disk.
@@ -213,7 +251,7 @@ error.
 The manifest states what is offered **now** — it rewrites the whole document from
 the tarballs named, so a release is withdrawn by ceasing to list it.
 
-## 8. Fetch the artifact through the manifest's own URL
+## 9. Fetch the artifact through the manifest's own URL
 
 ```bash
 URL=$(python3 -c "import json;print(json.load(open('releases.json'))['payload']['releases'][0]['artifact_url'])")
@@ -225,7 +263,7 @@ python3 -c "import json;print(json.load(open('releases.json'))['payload']['relea
 Expect 200 and identical hashes. This is the step that catches a manifest
 pointing somewhere wrong, and it is the reason 0.8.7 cannot happen again.
 
-## 9. Publish
+## 10. Publish
 
 ```bash
 git add releases.json && git commit -m "release: offer X.Y.Z to Hives" && git push origin main
@@ -235,7 +273,7 @@ gh api repos/miopea/swarm-next/contents/releases.json --jq '.content' | base64 -
 Publishing the manifest is what makes a release real. A tarball on GitHub and
 absent from the manifest is offered to nobody.
 
-## 10. Propagation — published is not live
+## 11. Propagation — published is not live
 
 ```bash
 curl -sS -H 'Cache-Control: no-cache' \

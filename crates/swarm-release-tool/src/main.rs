@@ -8,6 +8,7 @@
 //! swarm-release notes REPO_ROOT VERSION   release notes JSON on stdout, for the bundle
 //! ```
 
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
@@ -160,8 +161,44 @@ fn notes(root: &Path, version: &str) -> Result<(), String> {
         ));
     }
 
+    // WHAT THE RELEASER WROTE BEATS WHAT THE COMMITS SAY, per release.
+    //
+    // Applied to every release in the bundle rather than only the one being
+    // cut: the artifact carries a dozen, so a Hive updating across several
+    // gets the written notes for each release that has them and generated ones
+    // for the rest.
+    let written = written_notes(root);
+    // ONE ENTRY PER VERSION, and this became load-bearing the moment written
+    // notes existed. The first range ends at HEAD because the tag for the
+    // release being cut may not exist yet -- but when it DOES exist, the
+    // windows(2) pass below produces that same version a second time. That was
+    // invisible while notes came only from commits: the HEAD range was empty
+    // and the `is_empty` guard dropped it. A written section is never empty, so
+    // both survived and the panel listed the release twice.
+    let mut seen: Vec<String> = Vec::new();
     for (release_version, from, to) in ranges {
-        let notes = notes_between(root, &from, &to)?;
+        if seen.contains(&release_version) {
+            continue;
+        }
+        seen.push(release_version.clone());
+        let notes = if let Some(written) = written.get(&release_version) {
+            // SAID OUT LOUD, because the alternative failure is silent. A
+            // releaser who writes a section for 0.8.20 and then cuts 0.9.0
+            // gets generation, ships the rough notes, and nothing tells them
+            // their prose was ignored -- the output looks the same either way.
+            eprintln!(
+                "swarm-release: {release_version} notes come from {WRITTEN_NOTES_FILE} ({} entries)",
+                written.len()
+            );
+            written.clone()
+        } else {
+            let generated = notes_between(root, &from, &to)?;
+            eprintln!(
+                "swarm-release: {release_version} notes generated from commit subjects ({} entries); no {WRITTEN_NOTES_FILE} section",
+                generated.len()
+            );
+            generated
+        };
         if !notes.is_empty() {
             releases.push(ReleaseVersionNotes {
                 version: release_version,
@@ -179,6 +216,124 @@ fn notes(root: &Path, version: &str) -> Result<(), String> {
     io::stdout()
         .write_all(&encoded)
         .map_err(|error| format!("could not write notes: {error}"))
+}
+
+/// The file a releaser writes to say what a release means, in their words.
+const WRITTEN_NOTES_FILE: &str = "RELEASE_NOTES.md";
+
+/// The phrase that marks an entry as installed but not yet in effect.
+///
+/// It is the sentence the panel already renders, so what the releaser types is
+/// what the operator reads and there is no second vocabulary to learn. Parsed
+/// off the end and replaced by the flag, so it is not printed twice.
+const ENGINE_MARKER: &str = "(after the worker engine update)";
+
+/// Notes the releaser wrote, keyed by the version they describe.
+///
+/// REPLACES the generated list for a release rather than annotating it. A
+/// releaser who writes notes has decided what the release says; interleaving
+/// their lines with generated ones produces a list where nobody can tell which
+/// is which, and the generated half is exactly what they were overriding.
+///
+/// A MISSING FILE IS NOT AN ERROR, and that is the load-bearing part. A
+/// release that silently ships NO notes because someone forgot the file is
+/// worse than one that ships rough ones, so every failure here has to fall
+/// toward saying something. Unreadable and unparseable are the same as absent.
+///
+/// THE RETURN TYPE IS NOT A `Result`, deliberately. There is no failure this
+/// function is allowed to have: every way of not getting notes -- no file, no
+/// permission, malformed content -- has to end as "generate them instead",
+/// because the one outcome worse than rough notes is a release that stops.
+///
+/// The format is the one the panel renders, so it reads as what it produces:
+///
+/// ```text
+/// ## 0.8.20
+///
+/// ### New features
+/// - A shell can be opened in a worker's workspace (after the worker engine update)
+///
+/// ### Fixes
+/// - The blocked-escalation card lays out as one card
+/// ```
+fn written_notes(root: &Path) -> HashMap<String, Vec<ReleaseNote>> {
+    let path = root.join(WRITTEN_NOTES_FILE);
+    let Ok(raw) = fs::read_to_string(&path) else {
+        return HashMap::new();
+    };
+    let mut sections: HashMap<String, Vec<ReleaseNote>> = HashMap::new();
+    let mut version: Option<String> = None;
+    // `feat` until a Fixes heading says otherwise, matching the generator's
+    // vocabulary so both halves produce the same shape of entry.
+    let mut kind = "feat";
+    // A BULLET IS NOT A LINE. Markdown wraps, this repository wraps at 80, and
+    // the first version of this read only the `- ` line -- so a releaser who
+    // wrapped a sentence shipped its first fragment and lost the rest, with
+    // nothing to show anything had gone missing. Continuations are gathered
+    // until the next bullet, heading, or blank line closes the entry.
+    let mut pending: Option<String> = None;
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        let is_heading = trimmed.starts_with('#');
+        let is_bullet = trimmed.starts_with("- ");
+        if (is_heading || is_bullet || trimmed.is_empty())
+            && let Some(entry) = pending.take()
+        {
+            push_written_note(&mut sections, version.as_ref(), kind, &entry);
+        }
+        if let Some(heading) = trimmed.strip_prefix("## ") {
+            version = Some(heading.trim().trim_start_matches('v').to_owned());
+            kind = "feat";
+        } else if let Some(heading) = trimmed.strip_prefix("### ") {
+            kind = if heading.trim().eq_ignore_ascii_case("fixes") {
+                "fix"
+            } else {
+                "feat"
+            };
+        } else if let Some(entry) = trimmed.strip_prefix("- ") {
+            pending = Some(entry.trim().to_owned());
+        } else if !trimmed.is_empty()
+            && !is_heading
+            && let Some(entry) = pending.as_mut()
+        {
+            entry.push(' ');
+            entry.push_str(trimmed);
+        }
+    }
+    if let Some(entry) = pending.take() {
+        push_written_note(&mut sections, version.as_ref(), kind, &entry);
+    }
+    sections
+}
+
+/// Files one finished bullet under the release it belongs to.
+///
+/// A bullet before any version heading belongs to no release, and is dropped
+/// rather than guessed at: attaching it to whichever release comes next would
+/// put a line in front of operators that nobody meant for them.
+fn push_written_note(
+    sections: &mut HashMap<String, Vec<ReleaseNote>>,
+    version: Option<&String>,
+    kind: &str,
+    entry: &str,
+) {
+    let Some(version) = version else { return };
+    let entry = entry.trim();
+    let (summary, needs_worker_engine_update) = entry
+        .strip_suffix(ENGINE_MARKER)
+        .map_or((entry, false), |trimmed| (trimmed.trim_end(), true));
+    if summary.is_empty() {
+        return;
+    }
+    sections
+        .entry(version.clone())
+        .or_default()
+        .push(ReleaseNote {
+            summary: summary.to_owned(),
+            kind: kind.to_owned(),
+            needs_worker_engine_update,
+        });
 }
 
 /// Release tags newest first. Development and non-release tags are ignored.
@@ -299,7 +454,90 @@ fn git(root: &Path, arguments: &[&str]) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::conventional_note;
+    use super::{conventional_note, written_notes};
+
+    /// Writes a `RELEASE_NOTES.md` into a throwaway directory and parses it.
+    fn parse(body: &str) -> std::collections::HashMap<String, Vec<swarm_domain::ReleaseNote>> {
+        let root = std::env::temp_dir().join(format!("swarm-release-notes-{}", body.len()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("RELEASE_NOTES.md"), body).unwrap();
+        let parsed = written_notes(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        parsed
+    }
+
+    /// A releaser's sentence survives being wrapped.
+    ///
+    /// THE ABLATION IS THE POINT. Reading only the `- ` line parses without
+    /// error and produces a note -- just a truncated one -- so nothing looks
+    /// wrong anywhere. This repository wraps prose at 80 columns, so the first
+    /// person to use the feature as intended would have shipped a fragment.
+    #[test]
+    fn a_wrapped_bullet_keeps_the_whole_sentence() {
+        let parsed = parse(
+            "## 0.9.0\n\n### Fixes\n- A Hive with Outlook registered and no public address\n  starts again, instead of exiting on boot and being\n  restart-looped\n",
+        );
+        let notes = &parsed["0.9.0"];
+        assert_eq!(notes.len(), 1, "one bullet, however many lines it took");
+        assert_eq!(
+            notes[0].summary,
+            "A Hive with Outlook registered and no public address starts again, instead of exiting on boot and being restart-looped"
+        );
+    }
+
+    /// The marker the panel already renders is the one the releaser types.
+    #[test]
+    fn the_engine_marker_sets_the_flag_and_is_not_printed_twice() {
+        let parsed = parse(
+            "## 0.9.0\n\n### New features\n- A shell opens in a worker's workspace (after the worker engine update)\n- An ordinary change\n",
+        );
+        let notes = &parsed["0.9.0"];
+        assert!(notes[0].needs_worker_engine_update);
+        assert_eq!(notes[0].summary, "A shell opens in a worker's workspace");
+        assert!(!notes[1].needs_worker_engine_update);
+    }
+
+    /// Headings decide the section a bullet lands in.
+    #[test]
+    fn new_features_and_fixes_are_separated_by_their_headings() {
+        let parsed = parse(
+            "## 0.9.0\n\n### New features\n- Something new\n\n### Fixes\n- Something repaired\n",
+        );
+        let notes = &parsed["0.9.0"];
+        assert_eq!(notes[0].kind, "feat");
+        assert_eq!(notes[1].kind, "fix");
+    }
+
+    /// Several releases can be described in one file.
+    #[test]
+    fn each_version_gets_only_the_bullets_under_its_own_heading() {
+        let parsed = parse("## 0.9.0\n\n- Newer\n\n## 0.8.19\n\n- Older\n");
+        assert_eq!(parsed["0.9.0"].len(), 1);
+        assert_eq!(parsed["0.9.0"][0].summary, "Newer");
+        assert_eq!(parsed["0.8.19"].len(), 1);
+        assert_eq!(parsed["0.8.19"][0].summary, "Older");
+    }
+
+    /// Prose above the first version heading is not somebody's release note.
+    #[test]
+    fn a_bullet_before_any_version_heading_reaches_no_operator() {
+        let parsed = parse("# Release notes\n\n- How to use this file\n\n## 0.9.0\n\n- Real\n");
+        assert_eq!(parsed["0.9.0"].len(), 1);
+        assert_eq!(parsed["0.9.0"][0].summary, "Real");
+    }
+
+    /// Absent has to keep working, because the failure must fall toward
+    /// saying something. A release that ships NO notes because someone forgot
+    /// the file is worse than one that ships rough ones.
+    #[test]
+    fn a_missing_file_is_not_an_error_and_falls_back_to_generation() {
+        let root = std::env::temp_dir().join("swarm-release-notes-absent");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(written_notes(&root).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// A commit undone inside the same release is not news.
     ///
