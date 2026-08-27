@@ -38,10 +38,18 @@ export default function HeldBriefingList({ briefings, onOpenTask }: Props) {
         Nothing is wrong with these — Swarm is holding them until the worker is free. Worth a look
         only if one has been waiting far longer than the task ahead of it should take.
       </p>
-      <ul>
+      <ul className="held-briefing-rows">
         {briefings.map((briefing) => (
           <li key={briefing.task_id}>
-            <button type="button" className="link-button" onClick={() => onOpenTask?.(briefing.task_id)}>
+            {/* Reset explicitly. A bare <button> in this app is the big filled
+                control, so a title left unstyled renders as a full-width gold
+                call to action — louder than the attention card above it, on a
+                panel whose whole point is that nothing is wrong. */}
+            <button
+              type="button"
+              className="held-briefing-title"
+              onClick={() => onOpenTask?.(briefing.task_id)}
+            >
               {briefing.title}
             </button>
             <span className="held-briefing-detail">

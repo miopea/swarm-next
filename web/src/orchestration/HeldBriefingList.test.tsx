@@ -73,3 +73,35 @@ test("renders nothing when none are held", () => {
   const { container } = render(<HeldBriefingList briefings={[]} />);
   expect(container).toBeEmptyDOMElement();
 });
+
+/**
+ * The defect this exists for, reported by the operator against a screenshot:
+ * "This functionality is nice, but the UI needs work."
+ *
+ * The title button carried a class that DID NOT EXIST IN styles.css, so it fell
+ * back to this app's default button — the big filled gold control — and
+ * rendered as a full-width call to action on a panel whose entire message is
+ * that nothing is wrong. It was louder than the real attention card above it.
+ *
+ * Text assertions could not catch that: the words were all correct. This reads
+ * the stylesheet, because "the class is applied" and "the class is defined" are
+ * different claims and only the second one styles anything.
+ */
+test("the title is visually reset, not left as the default filled button", async () => {
+  const [fs, path] = await Promise.all([import("node:fs/promises"), import("node:path")]);
+  // Resolved from the vitest root rather than import.meta.url: the transformed
+  // module URL is not a file: URL, so new URL(...) throws there.
+  const styles = await fs.readFile(path.resolve(process.cwd(), "src/styles.css"), "utf8");
+  render(<HeldBriefingList briefings={[briefing()]} />);
+  const title = screen.getByRole("button", { name: "Reconcile the household roster" });
+  const applied = title.className.split(" ").filter(Boolean);
+
+  expect(applied).toContain("held-briefing-title");
+  for (const cls of applied) {
+    expect(styles, `.${cls} is applied but never defined, so the button keeps its default styling`)
+      .toContain(`.${cls}`);
+  }
+  // And the definition actually removes the default control's chrome.
+  const rule = styles.slice(styles.indexOf(".held-briefing-title"));
+  expect(rule.slice(0, rule.indexOf("}"))).toMatch(/background:\s*none/);
+});

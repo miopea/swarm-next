@@ -2406,9 +2406,15 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 }
 .held-briefing-list h4 { margin: 0; font-size: .86rem; }
 .held-briefing-note { margin: 0; color: var(--muted); font-size: .74rem; line-height: 1.45; }
-.held-briefing-list ul { display: grid; gap: 8px; margin: 4px 0 0; padding: 0; list-style: none; }
-.held-briefing-list li { display: grid; gap: 2px; }
-.held-briefing-detail { color: var(--muted); font-size: .72rem; }
+.held-briefing-rows { display: grid; gap: 4px; margin: 4px 0 0; padding: 0; list-style: none; }
+/* Title and detail share a baseline row, matching the blocked-escalation list
+   directly above it. Two adjacent lists of waiting work that read differently
+   are two things to learn instead of one. */
+.held-briefing-rows li { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 14px; }
+/* The reset is the point: an unstyled button here is the big filled control. */
+.held-briefing-title { flex: 1 1 260px; min-width: 0; padding: 0; border: 0; background: none; color: var(--ink); font-size: .82rem; line-height: 1.4; text-align: left; }
+.held-briefing-title:hover { color: var(--link); text-decoration: underline; }
+.held-briefing-detail { flex: 0 0 auto; color: var(--muted); font-size: .72rem; font-variant-numeric: tabular-nums; }
 
 /* The worker engine trailing the app after a reload.
    Inside the reload card rather than a banner: it is a fact about the reload
