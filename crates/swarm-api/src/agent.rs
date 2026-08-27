@@ -213,6 +213,43 @@ struct AgentMcp {
     state: Arc<crate::AppState>,
 }
 
+/// Bumped whenever the tool surface changes. The tool equivalent of a protocol
+/// version.
+///
+/// NOT A HASH OF THE TOOLS A SESSION WAS HANDED, and that was the first attempt.
+/// The list is role-scoped -- Queen is served tools a worker is not -- so
+/// comparing one session's hash against another's reports every session of a
+/// different role as stale. A flag that fires on healthy sessions is the exact
+/// failure this Hive has spent the night removing, so it is a flat revision
+/// instead: role-independent and exact.
+///
+/// Maintained by hand, and therefore pinned by a test to the tool list itself,
+/// for the same reason `PROTOCOL_VERSION` is. A number someone has to remember
+/// change is not a check.
+const AGENT_TOOL_SURFACE_REVISION: u32 = 1;
+
+/// The tool-surface revision has to move with the surface itself.
+///
+/// A session caches its tool list when it connects, so anything shipped
+/// afterwards is live and unreachable from that session -- and the only thing
+/// that can say so is this number. Left unbumped it reports every stale session
+/// as current, which is how "the code is live" and "you can call it" silently
+/// became the same claim.
+#[cfg(test)]
+fn assert_tool_surface_matches_revision(queen_names: &[&str], worker_names: &[&str]) {
+    assert_eq!(
+        AGENT_TOOL_SURFACE_REVISION, 1,
+        "the tool surface changed, so sessions holding the old list can no longer call \
+         everything this build serves. Bump AGENT_TOOL_SURFACE_REVISION so a reload can \
+         say so, then update the count below."
+    );
+    assert_eq!(
+        queen_names.len() + worker_names.len(),
+        47,
+        "the pinned counts belong to revision 1 of the tool surface"
+    );
+}
+
 /// What a session is told about its own role, once, when it connects.
 ///
 /// Queen had one sentence. Everything else about her job she had to infer from
@@ -344,6 +381,20 @@ impl ServerHandler for AgentMcp {
                 finish_automation_run_tool(),
             ]);
         }
+        // Recorded because THIS is the moment the session's surface is fixed.
+        // An MCP client asks once and caches, so everything shipped after this
+        // call is live and unreachable from this session. Nothing knew which
+        // sessions were in that state, so the only way to find out was to try
+        // calling a tool and read the failure.
+        self.state.agent_tool_surfaces.write().await.insert(
+            // Keyed on the SESSION, because a worker that reconnects gets a
+            // fresh surface while the worker id stays the same.
+            self.principal.active_session_id.map_or_else(
+                || self.principal.worker_id.to_string(),
+                |session| session.to_string(),
+            ),
+            AGENT_TOOL_SURFACE_REVISION,
+        );
         Ok(ListToolsResult::with_all_items(tools))
     }
 
@@ -763,6 +814,22 @@ impl AgentMcp {
     /// worker asks again — which is also the only version of this that proves
     /// anything, since the running build is read after the swap rather than
     /// predicted before it.
+    /// How many connected agent sessions hold a tool list this build has moved past.
+    ///
+    /// The code being live and the session being able to call it are different
+    /// facts, and only the first was observable. A worker -- or Queen, who is
+    /// stranded by this identically -- would ask for a tool that exists, be told
+    /// it does not, and read that as an unbuilt feature.
+    async fn stale_tool_surfaces(&self) -> usize {
+        self.state
+            .agent_tool_surfaces
+            .read()
+            .await
+            .values()
+            .filter(|recorded| **recorded != AGENT_TOOL_SURFACE_REVISION)
+            .count()
+    }
+
     async fn reload_app(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
         let input = parse::<ReloadAppInput>(arguments)?;
         if !self.may_reload_this_hive() {
@@ -790,6 +857,30 @@ impl AgentMcp {
                 "reload_available": source
                     .as_ref()
                     .is_some_and(|status| status.reload_available),
+                // What a reload will NOT put into effect, stated rather than
+                // left to be discovered by something not working. Null when
+                // there is nothing to say.
+                //
+                // The reload does not gain the power to fix this: the terminal
+                // host is deferred on purpose so a reload cannot kill a
+                // worker's terminal mid-turn. It only says so.
+                "worker_engine_update_required":
+                    crate::runtime::worker_engine_update_required(&self.state).await,
+                // INSTALLED, RESTARTED AND MIGRATED ARE THREE MOMENTS, not one.
+                // Queen caught `current` pointing at a new build while the API
+                // was still the old process and the database still carried the
+                // old schema -- and reported the first as the third. Reporting
+                // what a build activates is worth little if it cannot say
+                // whether it HAS.
+                "schema_version": self.tasks.store().schema_version().ok(),
+                // Sessions whose cached tool list no longer matches what this
+                // build would serve. They must RECONNECT; a reload does not
+                // reach them, because an MCP client asks for its tools once.
+                //
+                // Counted rather than named, because the useful answer is "some
+                // sessions cannot see the new tool" and naming them invites
+                // acting on a list that changes as sessions come and go.
+                "stale_agent_tool_surfaces": self.stale_tool_surfaces().await,
             }));
         }
         // Ruling, 2026-08-25, superseding ADR-0051 and recorded as ADR-0055.
@@ -2890,6 +2981,7 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect::<Vec<_>>();
+        assert_tool_surface_matches_revision(&queen_names, &worker_names);
         for name in QUEEN_ONLY_TOOLS {
             assert!(queen_names.contains(name), "Queen is missing {name}");
             assert!(!worker_names.contains(name), "a worker was offered {name}");

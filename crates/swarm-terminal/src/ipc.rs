@@ -390,6 +390,77 @@ impl HostClient {
 mod tests {
     use super::*;
 
+    /// Adding a host request without bumping `PROTOCOL_VERSION` fails here.
+    ///
+    /// THE CHECK ALREADY EXISTED AND ITS INPUT WAS MAINTAINED BY HAND, which is
+    /// the whole defect. The version is scraped into a PROTOCOL file by
+    /// build-release.sh and compared by `reconcile_host`, which refuses to swap a
+    /// host across a change. All of that machinery worked perfectly and reported
+    /// nothing, because `StartShell` was added while the number stayed at 9 --
+    /// so it compared 9 to 9. The operator met "unknown variant `start_shell`".
+    ///
+    /// A check whose input a human has to remember to update is a document
+    /// wearing a check's clothes. This is what makes the number trustworthy.
+    ///
+    /// Read through serde rather than from a hand-written list, because serde's
+    /// view IS the wire surface -- the thing an older host actually fails to
+    /// parse. A list maintained beside the enum could drift from it in exactly
+    /// the way the version drifted.
+    #[test]
+    fn a_new_host_request_requires_a_protocol_bump() {
+        // Pinned deliberately. Changing this list without changing the version
+        // below is the mistake being prevented, so both must move together.
+        const PINNED: &[&str] = &[
+            "ping",
+            "host_status",
+            "provider_capabilities",
+            "begin_drain",
+            "cancel_drain",
+            "start_claude",
+            "start_codex",
+            "start_shell",
+            "start_alpha_provider",
+            "list_sessions",
+            "history_diagnostics",
+            "list_history_sessions",
+            "read_history",
+            "read",
+            "wait",
+            "write",
+            "write_audit",
+            "install_takeover",
+            "takeover_write",
+            "reclaim_takeover_and_write",
+            "release_takeover",
+            "resize",
+            "stop",
+        ];
+        let error = serde_json::from_value::<HostRequest>(serde_json::json!({
+            "type": "a_request_that_does_not_exist"
+        }))
+        .expect_err("an unknown request must not parse")
+        .to_string();
+        let listed: Vec<String> = error
+            .split("expected one of ")
+            .nth(1)
+            .expect("serde names the variants it knows")
+            .split(", ")
+            .map(|name| name.trim().trim_matches('`').to_owned())
+            .collect();
+
+        assert_eq!(
+            listed, PINNED,
+            "the host request surface changed. An older terminal host cannot \
+             parse what this build now sends, and only PROTOCOL_VERSION tells \
+             anyone -- bump it, then update this list."
+        );
+        assert_eq!(
+            PROTOCOL_VERSION, 10,
+            "the pinned surface above belongs to protocol 10; if you changed \
+             the requests, this number moves with them"
+        );
+    }
+
     #[test]
     fn older_host_status_without_resources_remains_compatible() {
         let status: TerminalHostStatus = serde_json::from_str(

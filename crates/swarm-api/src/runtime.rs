@@ -654,6 +654,39 @@ pub(super) fn resource_response(
     }
 }
 
+/// What this build changes that a reload will NOT put into effect.
+///
+/// "It is live" means several different things here and which one applies
+/// depends on what changed. Every instance of that has been found the same way:
+/// after the code was written, by something not working, reading as a different
+/// bug each time. A 422 naming a serde variant reads as a protocol bug; a
+/// missing tool reads as an unbuilt feature.
+///
+/// So this states the fact rather than leaving it to be discovered. The API
+/// already asks the terminal host for its status, so the difference between
+/// what the host speaks and what this checkout speaks is computable now.
+///
+/// DOES NOT AND MUST NOT RESTART THE HOST. Deferring that update while sessions
+/// are live is deliberate: it is what stops a reload killing every worker's
+/// terminal mid-turn. This only reports.
+pub(super) async fn worker_engine_update_required(state: &AppState) -> Option<String> {
+    let client = state.terminal_host.as_ref()?;
+    let running = match client.request(&HostRequest::HostStatus).await {
+        Ok(HostResponse::HostStatus { status }) => status.protocol_version,
+        // A host that cannot be reached is not a host that is out of date, and
+        // guessing either way here would be worse than saying nothing.
+        Ok(_) | Err(_) => return None,
+    };
+    (running != swarm_terminal::PROTOCOL_VERSION).then(|| {
+        format!(
+            "the worker engine update is required: this build speaks terminal protocol {}, \
+             the running terminal host speaks {running}. A reload restarts the API and web \
+             only -- the terminal host is a separate service so worker terminals survive it.",
+            swarm_terminal::PROTOCOL_VERSION
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ResourcePressure, layer_pressure, machine_of as machine};

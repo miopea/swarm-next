@@ -196,6 +196,22 @@ pub struct AppState {
     jira_delivery: Arc<Mutex<()>>,
     email_delivery: Arc<Mutex<()>>,
     worker_errors: Arc<RwLock<HashMap<WorkerId, String>>>,
+    /// The tool surface each connected agent session was actually handed.
+    ///
+    /// AN MCP CLIENT ASKS FOR THE TOOL LIST ONCE, WHEN IT CONNECTS, and caches
+    /// it. So a session that started before a tool shipped cannot call that
+    /// tool, while the server happily reports it as available -- the code is
+    /// live and unreachable at the same time. Nothing recorded which sessions
+    /// were in that state, so the only way to find out was to try.
+    ///
+    /// Recorded per session rather than per worker because Queen is stranded by
+    /// this exactly as a worker is: she searched her own surface for a tool
+    /// shipped an hour earlier and it was not there either. Anything keyed to
+    /// "the worker's session" would miss half the population.
+    ///
+    /// Not persisted: a session that ends takes its staleness with it, and a
+    /// restart of the API ends every session anyway.
+    agent_tool_surfaces: Arc<RwLock<HashMap<String, u32>>>,
     worker_recovery_attempts: Arc<RwLock<HashMap<WorkerId, i64>>>,
     provider_activity: Arc<RwLock<HashMap<WorkerSessionId, provider_activity::ProviderSignals>>>,
     coordinator_start_admission: Arc<AtomicU8>,
@@ -270,6 +286,7 @@ impl AppState {
             jira_delivery: Arc::new(Mutex::new(())),
             email_delivery: Arc::new(Mutex::new(())),
             worker_errors: Arc::new(RwLock::new(HashMap::new())),
+            agent_tool_surfaces: Arc::new(RwLock::new(HashMap::new())),
             worker_recovery_attempts: Arc::new(RwLock::new(HashMap::new())),
             provider_activity: Arc::new(RwLock::new(HashMap::new())),
             coordinator_start_admission: Arc::new(AtomicU8::new(
