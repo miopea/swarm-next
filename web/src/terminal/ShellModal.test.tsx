@@ -96,3 +96,37 @@ test("pressing Close does not start a drag", () => {
 
   expect(screen.getByRole("dialog").style.left).toBe("");
 });
+
+/**
+ * The window must escape its parent, and this is the test that would have caught
+ * both defects the operator reported.
+ *
+ * Rendered in place it lands inside `.workspace`, which carries
+ * `contain: layout paint` and `isolation: isolate` — added deliberately to stop
+ * xterm's accelerated canvas painting over a newly mounted view. Both bite a
+ * floating window: `isolation` traps its z-index below the rail beside it, and
+ * `contain: layout` makes the workspace the containing block for fixed
+ * descendants, so `left` is measured from the workspace edge while the drag
+ * clamp measures from the viewport. They disagree by the rail's width, which is
+ * why the window threw itself sideways rather than drifting.
+ *
+ * jsdom does no layout, so neither symptom can be reproduced here. What CAN be
+ * asserted is the structural fact underneath both: the dialog is not a
+ * descendant of whatever rendered it. Raising the z-index would have satisfied
+ * neither.
+ */
+test("the window renders outside the container that mounted it", () => {
+  const host = document.createElement("div");
+  host.id = "a-container-with-containment";
+  document.body.append(host);
+
+  render(<ShellModal title="Shell" subtitle="Petal's workspace" onClose={vi.fn()}><div /></ShellModal>, {
+    container: host,
+  });
+
+  const dialog = screen.getByRole("dialog");
+  expect(host.contains(dialog)).toBe(false);
+  expect(document.body.contains(dialog)).toBe(true);
+
+  host.remove();
+});

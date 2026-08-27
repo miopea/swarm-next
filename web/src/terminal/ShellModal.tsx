@@ -1,4 +1,5 @@
 import { type PointerEvent as ReactPointerEvent, type ReactNode, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 interface ShellModalProps {
   title: string;
@@ -28,6 +29,23 @@ const KEEP_VISIBLE = 64;
  * Resizing is the browser's own `resize: both` rather than hand-written handles,
  * because the terminal inside already watches its container with a
  * ResizeObserver — so the pty follows the window with no wiring of ours.
+ *
+ * PORTALLED TO document.body, and it has to be. Rendered in place it lands
+ * inside `.workspace`, which carries `contain: layout paint` and
+ * `isolation: isolate` to keep xterm's accelerated canvas from painting over a
+ * newly mounted view. Both of those bite a floating window:
+ *
+ * - `isolation: isolate` opens a stacking context, so any z-index here is scoped
+ *   INSIDE the workspace and can never rise above the rail beside it. The window
+ *   slid under the left navigation.
+ * - `contain: layout` makes the workspace the containing block for FIXED
+ *   descendants, so `left` is measured from the workspace's edge while the clamp
+ *   below measures from the viewport. The two disagree by exactly the rail
+ *   width, which is why dragging threw the window sideways rather than off by
+ *   some varying amount.
+ *
+ * A portal escapes both, and escapes whatever the next such container turns out
+ * to be — raising the z-index would have fixed neither.
  */
 export default function ShellModal({ title, subtitle, onClose, children }: ShellModalProps) {
   const dialog = useRef<HTMLDivElement>(null);
@@ -65,7 +83,7 @@ export default function ShellModal({ title, subtitle, onClose, children }: Shell
     }
   }
 
-  return (
+  return createPortal(
     <div
       className="shell-modal-backdrop"
       role="presentation"
@@ -92,6 +110,7 @@ export default function ShellModal({ title, subtitle, onClose, children }: Shell
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
