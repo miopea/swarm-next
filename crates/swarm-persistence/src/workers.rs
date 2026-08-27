@@ -2118,7 +2118,9 @@ mod tests {
         );
         let second = WorkerSessionId::new();
         store.bind_worker_session(worker.id, second).unwrap();
-        let claimed = store.claim_task_dispatches(1_000).unwrap();
+        let claimed = store
+            .claim_task_dispatches(1_000, &std::collections::HashSet::new())
+            .unwrap();
         let delivered = claimed
             .iter()
             .find(|dispatch| dispatch.task_id == task.id)

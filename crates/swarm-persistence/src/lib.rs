@@ -4591,7 +4591,12 @@ mod tests {
         assert_eq!(unassigned.assigned_worker_id, None);
         assert_eq!(unassigned.assigned_session_id, None);
         assert_eq!(unassigned.dispatch_state, None);
-        assert!(store.claim_task_dispatches(i64::MAX).unwrap().is_empty());
+        assert!(
+            store
+                .claim_task_dispatches(i64::MAX, &std::collections::HashSet::new())
+                .unwrap()
+                .is_empty()
+        );
         let activity = store.list_task_activity(task.id, 100).unwrap();
         assert_eq!(
             activity.events.last().unwrap().kind,

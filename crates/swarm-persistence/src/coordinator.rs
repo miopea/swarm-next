@@ -2555,7 +2555,10 @@ mod tests {
         store
             .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::worker(queen.id))
             .unwrap();
-        let dispatch = store.claim_task_dispatches(100).unwrap().remove(0);
+        let dispatch = store
+            .claim_task_dispatches(100, &std::collections::HashSet::new())
+            .unwrap()
+            .remove(0);
         assert!(
             store
                 .complete_task_dispatch(&dispatch.assignment_id, 101)
@@ -2638,7 +2641,10 @@ mod tests {
         store
             .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::worker(queen.id))
             .unwrap();
-        let dispatch = store.claim_task_dispatches(100).unwrap().remove(0);
+        let dispatch = store
+            .claim_task_dispatches(100, &std::collections::HashSet::new())
+            .unwrap()
+            .remove(0);
         assert!(
             store
                 .complete_task_dispatch(&dispatch.assignment_id, 101)
@@ -2773,7 +2779,9 @@ mod tests {
         let (worker, _session, task) = active_owned_work(&store, "Clover", 100);
 
         // The API dies mid-delivery: claimed, attempted, never delivered.
-        let claimed = store.claim_task_dispatches(200).unwrap();
+        let claimed = store
+            .claim_task_dispatches(200, &std::collections::HashSet::new())
+            .unwrap();
         assert_eq!(claimed.len(), 1, "the brief is in flight");
         assert_eq!(store.recover_inflight_task_dispatches().unwrap(), 1);
 
@@ -2807,7 +2815,9 @@ mod tests {
         store
             .assign_task_to_worker_as(task, worker, &TaskActivityActor::operator())
             .unwrap();
-        let redelivered = store.claim_task_dispatches(2_000).unwrap();
+        let redelivered = store
+            .claim_task_dispatches(2_000, &std::collections::HashSet::new())
+            .unwrap();
         assert!(
             redelivered.iter().any(|dispatch| dispatch.task_id == task),
             "re-assigning Active work must send the brief again"

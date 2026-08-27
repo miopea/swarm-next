@@ -294,12 +294,33 @@ impl TaskStore {
     ///
     /// # Errors
     /// Returns a persistence or data-integrity error.
-    pub fn claim_task_dispatches(&self, now: i64) -> Result<Vec<TaskDispatch>, TaskStoreError> {
+    pub fn claim_task_dispatches(
+        &self,
+        now: i64,
+        mid_turn: &std::collections::HashSet<WorkerSessionId>,
+    ) -> Result<Vec<TaskDispatch>, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         repoint_assignments_left_on_a_dead_session(&transaction)?;
         Self::rebrief_ready_work_without_a_briefing(&transaction)?;
-        let candidates = deliverable_briefings(&transaction, now)?;
+        // A briefing is TYPED INTO A LIVE TERMINAL. Arriving mid-turn it does
+        // not queue, it interrupts -- and a worker that follows it abandons what
+        // it was doing. The operator watched exactly that: "the queen will insert
+        // comments into a working/active/buzzing worker instead of queueing
+        // them", and D365 Solutions left the Customer Insights job they were
+        // steering for a task that was sitting BLOCKED.
+        //
+        // Filtered here rather than in the SQL because provider activity is
+        // in-memory rather than a column: it is inferred from what the terminal
+        // is currently painting, and the process that knows is the API.
+        //
+        // Not claimed rather than claimed-and-skipped: an unclaimed briefing
+        // stays queued and is simply offered again on the next pass, which is
+        // the machinery that already exists for a held brief.
+        let candidates = deliverable_briefings(&transaction, now)?
+            .into_iter()
+            .filter(|delivery| !mid_turn.contains(&delivery.session_id))
+            .collect::<Vec<_>>();
         for delivery in &candidates {
             let updated = transaction.execute(
                 "UPDATE task_dispatches SET state = 'dispatching', attempts = attempts + 1,
@@ -630,7 +651,9 @@ mod tests {
     #[test]
     fn work_sent_back_from_review_is_briefed_again() {
         let (store, task_id, _session) = assigned_task();
-        let first = store.claim_task_dispatches(100).unwrap();
+        let first = store
+            .claim_task_dispatches(100, &std::collections::HashSet::new())
+            .unwrap();
         assert_eq!(first.len(), 1, "the original briefing");
         store
             .complete_task_dispatch(&first[0].assignment_id, 100)
@@ -642,7 +665,10 @@ mod tests {
             .transition_task(task_id, swarm_domain::TaskState::Review)
             .unwrap();
         assert!(
-            store.claim_task_dispatches(100).unwrap().is_empty(),
+            store
+                .claim_task_dispatches(100, &std::collections::HashSet::new())
+                .unwrap()
+                .is_empty(),
             "nothing is owed while the work sits in review"
         );
 
@@ -650,7 +676,9 @@ mod tests {
             .transition_task(task_id, swarm_domain::TaskState::Active)
             .unwrap();
 
-        let again = store.claim_task_dispatches(100).unwrap();
+        let again = store
+            .claim_task_dispatches(100, &std::collections::HashSet::new())
+            .unwrap();
         assert_eq!(
             again.len(),
             1,
@@ -664,7 +692,9 @@ mod tests {
     #[test]
     fn a_worker_starting_its_own_ready_work_is_not_briefed_twice() {
         let (store, task_id, _session) = assigned_task();
-        let first = store.claim_task_dispatches(100).unwrap();
+        let first = store
+            .claim_task_dispatches(100, &std::collections::HashSet::new())
+            .unwrap();
         assert_eq!(first.len(), 1);
         store
             .complete_task_dispatch(&first[0].assignment_id, 100)
@@ -675,7 +705,10 @@ mod tests {
             .unwrap();
 
         assert!(
-            store.claim_task_dispatches(100).unwrap().is_empty(),
+            store
+                .claim_task_dispatches(100, &std::collections::HashSet::new())
+                .unwrap()
+                .is_empty(),
             "starting the work is not a reason to repeat its briefing"
         );
     }
@@ -719,9 +752,16 @@ mod tests {
         store
             .renew_worker_engagement(session, Some(PresenceDeviceId::new()), 100, 300)
             .unwrap();
-        assert!(store.claim_task_dispatches(101).unwrap().is_empty());
+        assert!(
+            store
+                .claim_task_dispatches(101, &std::collections::HashSet::new())
+                .unwrap()
+                .is_empty()
+        );
 
-        let dispatches = store.claim_task_dispatches(401).unwrap();
+        let dispatches = store
+            .claim_task_dispatches(401, &std::collections::HashSet::new())
+            .unwrap();
         assert_eq!(dispatches.len(), 1);
         assert_eq!(dispatches[0].task_id, task_id);
         assert_eq!(dispatches[0].session_id, session);
@@ -766,13 +806,24 @@ mod tests {
         assert_eq!(assigned.state, swarm_domain::TaskState::Draft);
         assert_eq!(assigned.assigned_worker_id, Some(worker.id));
         assert_eq!(assigned.dispatch_state, None);
-        assert!(store.claim_task_dispatches(100).unwrap().is_empty());
+        assert!(
+            store
+                .claim_task_dispatches(100, &std::collections::HashSet::new())
+                .unwrap()
+                .is_empty()
+        );
 
         let ready = store
             .transition_task(task.id, swarm_domain::TaskState::Ready)
             .unwrap();
         assert_eq!(ready.dispatch_state, Some(TaskDispatchState::Queued));
-        assert_eq!(store.claim_task_dispatches(101).unwrap().len(), 1);
+        assert_eq!(
+            store
+                .claim_task_dispatches(101, &std::collections::HashSet::new())
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -786,19 +837,31 @@ mod tests {
             .unwrap();
         store.assign_task(second.id, session).unwrap();
 
-        let first_dispatch = store.claim_task_dispatches(100).unwrap();
+        let first_dispatch = store
+            .claim_task_dispatches(100, &std::collections::HashSet::new())
+            .unwrap();
         assert_eq!(first_dispatch.len(), 1);
         assert_eq!(first_dispatch[0].task_id, first_id);
         let worker_id = first_dispatch[0].worker_id;
         store
             .complete_task_dispatch(&first_dispatch[0].assignment_id, 101)
             .unwrap();
-        assert!(store.claim_task_dispatches(102).unwrap().is_empty());
+        assert!(
+            store
+                .claim_task_dispatches(102, &std::collections::HashSet::new())
+                .unwrap()
+                .is_empty()
+        );
 
         store
             .transition_task(first_id, swarm_domain::TaskState::Active)
             .unwrap();
-        assert!(store.claim_task_dispatches(103).unwrap().is_empty());
+        assert!(
+            store
+                .claim_task_dispatches(103, &std::collections::HashSet::new())
+                .unwrap()
+                .is_empty()
+        );
         store
             .transition_task(first_id, swarm_domain::TaskState::Review)
             .unwrap();
@@ -806,7 +869,9 @@ mod tests {
             .transition_task(first_id, swarm_domain::TaskState::Completed)
             .unwrap();
 
-        let next_dispatch = store.claim_task_dispatches(104).unwrap();
+        let next_dispatch = store
+            .claim_task_dispatches(104, &std::collections::HashSet::new())
+            .unwrap();
         assert_eq!(next_dispatch.len(), 1);
         assert_eq!(next_dispatch[0].task_id, second.id);
         assert_eq!(next_dispatch[0].worker_id, worker_id);
@@ -821,7 +886,9 @@ mod tests {
         // work still waiting to be done — once the task has moved on it is
         // answered or moot, and nothing was clearing it.
         let (store, task_id, _session) = assigned_task();
-        let claimed = store.claim_task_dispatches(100).unwrap();
+        let claimed = store
+            .claim_task_dispatches(100, &std::collections::HashSet::new())
+            .unwrap();
         store
             .fail_task_dispatch(
                 &claimed[0].assignment_id,
@@ -866,7 +933,9 @@ mod tests {
             .transition_task(task_id, swarm_domain::TaskState::Active)
             .unwrap();
 
-        let claimed = store.claim_task_dispatches(100).unwrap();
+        let claimed = store
+            .claim_task_dispatches(100, &std::collections::HashSet::new())
+            .unwrap();
 
         assert_eq!(
             claimed.len(),
@@ -889,7 +958,9 @@ mod tests {
             .transition_task(second.id, swarm_domain::TaskState::Ready)
             .unwrap();
         store.assign_task(second.id, session).unwrap();
-        let first = store.claim_task_dispatches(100).unwrap();
+        let first = store
+            .claim_task_dispatches(100, &std::collections::HashSet::new())
+            .unwrap();
         store
             .complete_task_dispatch(&first[0].assignment_id, 101)
             .unwrap();
@@ -899,7 +970,10 @@ mod tests {
             .unwrap();
 
         assert!(
-            store.claim_task_dispatches(102).unwrap().is_empty(),
+            store
+                .claim_task_dispatches(102, &std::collections::HashSet::new())
+                .unwrap()
+                .is_empty(),
             "the second task waits while the first is under way"
         );
     }
@@ -922,7 +996,9 @@ mod tests {
             .unwrap();
 
         store.assign_task(task_id, second_session).unwrap();
-        let dispatches = store.claim_task_dispatches(100).unwrap();
+        let dispatches = store
+            .claim_task_dispatches(100, &std::collections::HashSet::new())
+            .unwrap();
         assert_eq!(dispatches.len(), 1);
         assert_eq!(dispatches[0].session_id, second_session);
         assert_ne!(dispatches[0].session_id, first_session);
@@ -940,16 +1016,32 @@ mod tests {
             store.release_session_assignments(second_session).unwrap(),
             2
         );
-        assert!(store.claim_task_dispatches(101).unwrap().is_empty());
+        assert!(
+            store
+                .claim_task_dispatches(101, &std::collections::HashSet::new())
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(store.get_task(second_task.id).unwrap().dispatch_state, None);
     }
 
     #[test]
     fn crash_ambiguity_never_replays_a_task_briefing() {
         let (store, task_id, _) = assigned_task();
-        assert_eq!(store.claim_task_dispatches(100).unwrap().len(), 1);
+        assert_eq!(
+            store
+                .claim_task_dispatches(100, &std::collections::HashSet::new())
+                .unwrap()
+                .len(),
+            1
+        );
         assert_eq!(store.recover_inflight_task_dispatches().unwrap(), 1);
-        assert!(store.claim_task_dispatches(101).unwrap().is_empty());
+        assert!(
+            store
+                .claim_task_dispatches(101, &std::collections::HashSet::new())
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             store.get_task(task_id).unwrap().dispatch_state,
             Some(TaskDispatchState::Uncertain)
@@ -1067,6 +1159,60 @@ mod tests {
         (store, session)
     }
 
+    /// A briefing is not typed into a worker that is MID-TURN.
+    ///
+    /// The operator watched this happen: "the queen will insert comments into a
+    /// working/active/buzzing worker instead of queueing them which has caused a
+    /// worker to get off track." D365 Solutions left the Customer Insights job
+    /// they were steering, for a task that was sitting BLOCKED — so the
+    /// interruption traded live operator work for work going nowhere.
+    ///
+    /// A briefing is TYPED INTO A LIVE TERMINAL, so arriving mid-turn it does not
+    /// queue, it interrupts. The two guards that existed — an operator engagement
+    /// and other active work — are both about what the BOARD says, and neither
+    /// asks whether the agent is currently thinking.
+    ///
+    /// The unclaimed briefing stays queued and is offered again next pass. That
+    /// matters: skipping after claiming would burn an attempt on a delivery that
+    /// never happened.
+    #[test]
+    fn a_briefing_is_not_claimed_for_a_worker_that_is_mid_turn() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        ready_task_assigned_to(&store, session, "Carry something");
+
+        let mid_turn = std::collections::HashSet::from([session]);
+        assert!(
+            store
+                .claim_task_dispatches(1_000, &mid_turn)
+                .unwrap()
+                .is_empty(),
+            "nothing is typed into a worker that is thinking"
+        );
+
+        // And it was HELD, not spent: the same briefing is still claimable once
+        // the turn ends.
+        let claimed = store
+            .claim_task_dispatches(1_000, &std::collections::HashSet::new())
+            .unwrap();
+        assert_eq!(
+            claimed.len(),
+            1,
+            "the briefing waited rather than being lost"
+        );
+        assert_eq!(claimed[0].worker_id, worker.id);
+    }
+
     fn ready_task_assigned_to(store: &TaskStore, session: WorkerSessionId, title: &str) -> TaskId {
         let task = store
             .create_task_with_details(title, "", TaskPriority::Normal, "/workspace/petal")
@@ -1096,7 +1242,9 @@ mod tests {
             .execute("DELETE FROM task_dispatches", [])
             .unwrap();
 
-        let claimed = store.claim_task_dispatches(401).unwrap();
+        let claimed = store
+            .claim_task_dispatches(401, &std::collections::HashSet::new())
+            .unwrap();
         assert_eq!(
             claimed
                 .iter()
@@ -1119,7 +1267,9 @@ mod tests {
     fn work_already_briefed_does_not_hold_up_the_rest_of_the_queue() {
         let (store, session) = engaged_worker();
         let stalled = ready_task_assigned_to(&store, session, "Briefed, never started");
-        let delivered = store.claim_task_dispatches(401).unwrap();
+        let delivered = store
+            .claim_task_dispatches(401, &std::collections::HashSet::new())
+            .unwrap();
         assert_eq!(delivered.len(), 1);
         store
             .complete_task_dispatch(&delivered[0].assignment_id, 402)
@@ -1130,7 +1280,10 @@ mod tests {
         // Still being acted on: the queue holds, which is the rule that keeps a
         // worker from being handed two tasks at once.
         assert!(
-            store.claim_task_dispatches(403).unwrap().is_empty(),
+            store
+                .claim_task_dispatches(403, &std::collections::HashSet::new())
+                .unwrap()
+                .is_empty(),
             "a briefing delivered seconds ago must still hold the queue"
         );
 
@@ -1138,7 +1291,9 @@ mod tests {
         // than derived from the constant, so the contract is asserted and not
         // just restated.
         let an_hour_later = 402 + 60 * 60;
-        let claimed = store.claim_task_dispatches(an_hour_later).unwrap();
+        let claimed = store
+            .claim_task_dispatches(an_hour_later, &std::collections::HashSet::new())
+            .unwrap();
         assert!(
             claimed.iter().any(|dispatch| dispatch.task_id == behind),
             "an abandoned briefing must not block the queue forever"

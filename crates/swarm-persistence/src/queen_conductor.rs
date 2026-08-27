@@ -1589,7 +1589,10 @@ mod tests {
         store
             .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::operator())
             .unwrap();
-        let dispatch = store.claim_task_dispatches(100).unwrap().remove(0);
+        let dispatch = store
+            .claim_task_dispatches(100, &std::collections::HashSet::new())
+            .unwrap()
+            .remove(0);
         store
             .complete_task_dispatch(&dispatch.assignment_id, 101)
             .unwrap();

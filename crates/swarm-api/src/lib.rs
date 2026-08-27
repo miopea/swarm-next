@@ -1596,14 +1596,44 @@ impl AppState {
         }
     }
 
+    /// The sessions a briefing must not be typed into right now.
+    ///
+    /// ACTIVE is the obvious one: a briefing arriving mid-turn interrupts rather
+    /// than queues, and the worker follows it.
+    ///
+    /// `AwaitingOperator` is the worse one and is easy to miss. That state means
+    /// a choice cursor is on screen, so text typed into it does not interrupt a
+    /// turn -- IT SELECTS AN OPTION. Delivering there does not derail the worker,
+    /// it answers a question on the operator's behalf.
+    ///
+    /// Resting and Unknown are both delivered to, and Unknown deliberately. That
+    /// is what a provider whose prompt this build cannot classify reports, and
+    /// holding on it would mean an alpha provider never receives work at all --
+    /// trading a loud failure for a silent one.
+    async fn mid_turn_sessions(&self) -> std::collections::HashSet<swarm_domain::WorkerSessionId> {
+        self.provider_activity
+            .read()
+            .await
+            .iter()
+            .filter(|(_, signals)| {
+                matches!(
+                    signals.activity,
+                    ProviderActivity::Active | ProviderActivity::AwaitingOperator
+                )
+            })
+            .map(|(session_id, _)| *session_id)
+            .collect()
+    }
+
     async fn deliver_task_briefs(&self, store: &TaskStore, client: &HostClient) {
-        let deliveries = match store.claim_task_dispatches(unix_timestamp()) {
-            Ok(deliveries) => deliveries,
-            Err(error) => {
-                tracing::warn!(message = %error, "task dispatch queue could not be claimed");
-                return;
-            }
-        };
+        let deliveries =
+            match store.claim_task_dispatches(unix_timestamp(), &self.mid_turn_sessions().await) {
+                Ok(deliveries) => deliveries,
+                Err(error) => {
+                    tracing::warn!(message = %error, "task dispatch queue could not be claimed");
+                    return;
+                }
+            };
         let settled = coordination_delivery::submit_to_each_terminal_at_once(
             store,
             client,
@@ -11629,7 +11659,10 @@ mod tests {
                 &swarm_domain::TaskActivityActor::operator(),
             )
             .unwrap();
-        let dispatch = store.claim_task_dispatches(1).unwrap().remove(0);
+        let dispatch = store
+            .claim_task_dispatches(1, &std::collections::HashSet::new())
+            .unwrap()
+            .remove(0);
         assert!(
             store
                 .complete_task_dispatch(&dispatch.assignment_id, 2)
@@ -11699,7 +11732,10 @@ mod tests {
                 &swarm_domain::TaskActivityActor::operator(),
             )
             .unwrap();
-        let dispatch = store.claim_task_dispatches(1).unwrap().remove(0);
+        let dispatch = store
+            .claim_task_dispatches(1, &std::collections::HashSet::new())
+            .unwrap()
+            .remove(0);
         assert!(
             store
                 .complete_task_dispatch(&dispatch.assignment_id, 2)
@@ -11782,7 +11818,10 @@ mod tests {
                 &swarm_domain::TaskActivityActor::operator(),
             )
             .unwrap();
-        let dispatch = store.claim_task_dispatches(1).unwrap().remove(0);
+        let dispatch = store
+            .claim_task_dispatches(1, &std::collections::HashSet::new())
+            .unwrap()
+            .remove(0);
         assert!(
             store
                 .complete_task_dispatch(&dispatch.assignment_id, 2)
