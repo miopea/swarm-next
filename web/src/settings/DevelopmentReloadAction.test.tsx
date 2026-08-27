@@ -237,3 +237,82 @@ test("says uncommitted changes are the reason, not a revision that reads identic
   expect(status).toHaveTextContent("the working copy has uncommitted changes on top of it");
   expect(status).not.toHaveTextContent("switch the browser and API to working-copy revision");
 });
+
+/**
+ * The second meaning of "it is live", said at the moment it matters.
+ *
+ * A reload deliberately does not restart the terminal host — that is what keeps
+ * worker terminals alive mid-turn — so it can report success while leaving the
+ * engine behind. The operator met that as `Runtime request returned 422:
+ * unknown variant "start_shell"`, which reads as a protocol bug rather than as
+ * a service that never restarted.
+ */
+test("says the worker engine is behind even when the app matches the checkout", () => {
+  // The case nothing else would mention: app and checkout agree, so this card
+  // otherwise reads "Current" and there is no reload to hang the warning on.
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-123456789abc-20260815040000-10",
+    state: "idle",
+    reload_available: false,
+    deployed_source_revision: "76543210fedc",
+    source_revision: "76543210fedc",
+    source_dirty: false,
+    deployed_source_published: true,
+    worker_engine_update_required: true,
+  }} />);
+
+  expect(screen.getByText(/The worker engine is behind this build/)).toBeInTheDocument();
+  expect(screen.getByText(/A reload does not restart it/)).toBeInTheDocument();
+});
+
+test("says the worker engine is behind while a reload is also available", () => {
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-123456789abc-20260815040000-10",
+    state: "idle",
+    reload_available: true,
+    deployed_source_revision: "76543210fedc",
+    source_revision: "abcdef012345",
+    source_dirty: false,
+    deployed_source_published: true,
+    worker_engine_update_required: true,
+  }} />);
+
+  expect(screen.getByText(/The worker engine is behind this build/)).toBeInTheDocument();
+});
+
+test("says nothing about the engine when it is current", () => {
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-123456789abc-20260815040000-10",
+    state: "idle",
+    reload_available: false,
+    deployed_source_revision: "76543210fedc",
+    source_revision: "76543210fedc",
+    source_dirty: false,
+    deployed_source_published: true,
+    worker_engine_update_required: false,
+  }} />);
+
+  expect(screen.queryByText(/The worker engine is behind/)).not.toBeInTheDocument();
+});
+
+test("says nothing about the engine when the host could not be asked", () => {
+  // null is not false. A host that did not answer is not a host that is up to
+  // date, and claiming current because nothing replied is the check-that-
+  // cannot-fail shape this whole task exists to remove.
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-123456789abc-20260815040000-10",
+    state: "idle",
+    reload_available: false,
+    deployed_source_revision: "76543210fedc",
+    source_revision: "76543210fedc",
+    source_dirty: false,
+    deployed_source_published: true,
+    worker_engine_update_required: null,
+  }} />);
+
+  expect(screen.queryByText(/The worker engine is behind/)).not.toBeInTheDocument();
+});

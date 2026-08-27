@@ -41,6 +41,24 @@ struct TerminalRuntimeLimits {
     attachment_max_bytes: usize,
 }
 
+/// Whether the terminal host is behind the API that is answering.
+///
+/// ASKED OF THE RUNNING HOST, not of a symlink. A symlink comparison reported
+/// "already uses 0.8.17-dev-68f517e" on 2026-08-27 while the host process and
+/// all fourteen terminals were still executing a two-release-old image whose
+/// directory had been deleted. A check that cannot see the thing it checks
+/// reports agreement.
+///
+/// A host that cannot be reached answers None rather than false: not knowing
+/// and being up to date are different facts, and collapsing them is how a
+/// staleness check becomes a check that cannot fail.
+async fn engine_update_required(state: &Arc<AppState>) -> Option<bool> {
+    crate::maintenance::host_status_snapshot(state)
+        .await
+        .ok()
+        .map(|status| crate::maintenance::worker_engine_update_required(&status))
+}
+
 #[derive(Debug, Serialize)]
 #[allow(
     clippy::struct_excessive_bools,
@@ -57,6 +75,24 @@ struct DevelopmentRuntimeResponse {
     /// Whether the running revision exists on a remote, so the operator can see
     /// that their Hive is on code that lives only on this machine.
     deployed_source_published: bool,
+    /// Whether the worker engine is behind the running API.
+    ///
+    /// "IT IS LIVE" MEANS FOUR DIFFERENT THINGS HERE and this is the second of
+    /// them. The terminal host is a separate service that deliberately survives
+    /// a reload so worker terminals are not killed mid-turn, so a reload can
+    /// leave the engine behind — and that was discoverable only by something
+    /// not working. The operator met it as `Runtime request returned 422:
+    /// unknown variant "start_shell"`, which reads as a protocol bug rather
+    /// than as a service that had not restarted.
+    ///
+    /// Reported here because this is the status an operator is already watching
+    /// when they reload, rather than in a document they would have to know to
+    /// go and read.
+    ///
+    /// None means the host could not be asked. Absent is not the same claim as
+    /// up to date, and saying "current" because nothing answered is the failure
+    /// this Hive keeps removing.
+    worker_engine_update_required: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -211,6 +247,7 @@ pub(super) async fn development(
             source_revision: source.as_ref().map(|status| status.revision.clone()),
             source_dirty: source.as_ref().is_some_and(|status| status.dirty),
             deployed_source_published: source.is_some_and(|status| status.published),
+            worker_engine_update_required: engine_update_required(&state).await,
         }),
     )
         .into_response())

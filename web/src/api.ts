@@ -355,6 +355,15 @@ export type DevelopmentRuntime = {
   source_dirty: boolean;
   /** Whether the running revision exists on a remote, and so survives losing this machine. */
   deployed_source_published: boolean;
+  /**
+   * Whether the worker engine is behind the running API.
+   *
+   * A reload deliberately does NOT restart the terminal host — that is what
+   * stops it killing every worker's terminal mid-turn — so a reload can leave
+   * the engine behind. null means the host could not be asked, which is a
+   * different claim from being up to date.
+   */
+  worker_engine_update_required?: boolean | null;
 };
 /** One release the origin currently offers. Absent from the manifest means withdrawn. */
 export type ReleaseOffer = {
