@@ -148,7 +148,8 @@ const SESSION_END_REASON_SCHEMA_VERSION: i64 = 92;
 const REPLY_ALLOWS_APPROVED_EXEMPTION_SCHEMA_VERSION: i64 = 93;
 const ATTENTION_NOTIFICATION_SCHEMA_VERSION: i64 = 94;
 const SUPERSEDED_EXEMPTION_SCHEMA_VERSION: i64 = 95;
-const CURRENT_SCHEMA_VERSION: i64 = SUPERSEDED_EXEMPTION_SCHEMA_VERSION;
+const OPEN_PROVIDER_SET_SCHEMA_VERSION: i64 = 96;
+const CURRENT_SCHEMA_VERSION: i64 = OPEN_PROVIDER_SET_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -2382,6 +2383,90 @@ fn migrate_superseded_exemptions(transaction: &rusqlite::Transaction<'_>) -> rus
     transaction.pragma_update(None, "user_version", SUPERSEDED_EXEMPTION_SCHEMA_VERSION)
 }
 
+/// The columns of `worker_profiles` in creation order, for a rebuild.
+///
+/// `SQLite` cannot ALTER a CHECK constraint, so changing one means the whole
+/// twelve-step rebuild. Naming the columns explicitly rather than `SELECT *`
+/// keeps the copy honest if this is ever run against a database whose column
+/// order differs.
+const WORKER_PROFILE_COLUMNS: &str = "id, name, role, provider, workspace, autostart, position, \
+     created_at, updated_at, hive_id, provider_conversation_id, description, archived_at, \
+     system_role, provider_conversation_resume";
+
+/// Rebuilds `worker_profiles` without the closed provider list.
+///
+/// The column carried `CHECK (provider IN ('claude_code','codex'))`, which made
+/// adding a provider a SCHEMA change rather than a code change. The operator
+/// chose to drop it outright rather than widen it: the domain already refuses an
+/// unknown provider at every write boundary through `FromStr`, so the constraint
+/// was a second opinion about a question already answered, and it was the only
+/// reason each new provider needed a migration.
+///
+/// That is a real reduction in defence in depth and it was taken deliberately.
+/// The database will now accept any string in this column; `ProviderKind` is the
+/// only thing standing between an operator and a nonsense provider.
+///
+/// `legacy_alter_table` is the load-bearing part. SEVENTEEN tables carry foreign
+/// keys into `worker_profiles`. With the pragma OFF, renaming the table rewrites
+/// every one of those references to follow the new name, which would leave them
+/// all pointing at the temporary table this drops at the end. With it ON the
+/// references keep naming `worker_profiles`, so they resolve to the rebuilt table
+/// and nothing downstream notices.
+///
+/// Guarded on the constraint's presence rather than on a column, because the
+/// migration tests rewind `user_version` WITHOUT rewinding tables: this has to be
+/// safe to run against a database that already has the rebuilt shape.
+fn migrate_open_provider_set(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let constrained: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                        WHERE type = 'table' AND name = 'worker_profiles'
+                          AND sql LIKE '%provider IN (%')",
+        [],
+        |row| row.get(0),
+    )?;
+    if constrained {
+        transaction.pragma_update(None, "legacy_alter_table", true)?;
+        let columns = WORKER_PROFILE_COLUMNS;
+        let rebuild = format!(
+            "ALTER TABLE worker_profiles RENAME TO worker_profiles_pre_open_provider;
+             CREATE TABLE worker_profiles (
+                 id TEXT PRIMARY KEY,
+                 name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                 role TEXT NOT NULL CHECK (role IN ('queen','worker')),
+                 provider TEXT NOT NULL,
+                 workspace TEXT NOT NULL,
+                 autostart INTEGER NOT NULL CHECK (autostart IN (0,1)),
+                 position INTEGER NOT NULL,
+                 created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                 updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                 hive_id TEXT REFERENCES hives(id),
+                 provider_conversation_id TEXT,
+                 description TEXT NOT NULL DEFAULT '',
+                 archived_at INTEGER,
+                 system_role TEXT CHECK (system_role IS NULL OR system_role = 'scout'),
+                 provider_conversation_resume INTEGER NOT NULL DEFAULT 0
+                     CHECK (provider_conversation_resume IN (0, 1))
+             );
+             INSERT INTO worker_profiles ({columns})
+                 SELECT {columns} FROM worker_profiles_pre_open_provider;
+             DROP TABLE worker_profiles_pre_open_provider;
+             CREATE UNIQUE INDEX one_queen_profile
+                 ON worker_profiles(role) WHERE role = 'queen';
+             CREATE INDEX worker_profiles_by_hive ON worker_profiles(hive_id);
+             CREATE INDEX worker_profiles_active_roster
+                 ON worker_profiles(role, position, created_at, id)
+                 WHERE archived_at IS NULL;
+             CREATE UNIQUE INDEX one_scout_per_hive
+                 ON worker_profiles(hive_id)
+                 WHERE system_role = 'scout' AND archived_at IS NULL;"
+        );
+        let result = transaction.execute_batch(&rebuild);
+        transaction.pragma_update(None, "legacy_alter_table", false)?;
+        result?;
+    }
+    transaction.pragma_update(None, "user_version", OPEN_PROVIDER_SET_SCHEMA_VERSION)
+}
+
 fn migrate_schema(
     transaction: &rusqlite::Transaction<'_>,
     schema_version: i64,
@@ -2662,6 +2747,9 @@ fn migrate_named_schema_steps(
     }
     if schema_version < SUPERSEDED_EXEMPTION_SCHEMA_VERSION {
         migrate_superseded_exemptions(transaction)?;
+    }
+    if schema_version < OPEN_PROVIDER_SET_SCHEMA_VERSION {
+        migrate_open_provider_set(transaction)?;
     }
     Ok(())
 }
@@ -3276,7 +3364,10 @@ fn migrate_worker_roster(transaction: &rusqlite::Transaction<'_>) -> rusqlite::R
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL COLLATE NOCASE UNIQUE,
             role TEXT NOT NULL CHECK (role IN ('queen','worker')),
-            provider TEXT NOT NULL CHECK (provider IN ('claude_code','codex')),
+            -- No CHECK on provider, deliberately. See migrate_open_provider_set:
+            -- the closed list made adding a provider a schema change, and
+            -- ProviderKind already refuses an unknown one at every write.
+            provider TEXT NOT NULL,
             workspace TEXT NOT NULL,
             autostart INTEGER NOT NULL CHECK (autostart IN (0,1)),
             position INTEGER NOT NULL,
@@ -6011,6 +6102,52 @@ mod tests {
             artifact: "superseded_at",
             undo_sql: "",
             probe_sql: "",
+        },
+        SchemaStep {
+            table: "worker_profiles",
+            artifact: "",
+            // Puts the closed provider list back, by the same rebuild in
+            // reverse. A DROP-and-recreate would be shorter and wrong:
+            // seventeen tables carry foreign keys into this one and dropping it
+            // would cascade them away, so rewinding the schema would delete the
+            // operator's data rather than model an older database.
+            undo_sql: "PRAGMA legacy_alter_table = ON;
+                 ALTER TABLE worker_profiles RENAME TO worker_profiles_undo;
+                 CREATE TABLE worker_profiles (
+                     id TEXT PRIMARY KEY,
+                     name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                     role TEXT NOT NULL CHECK (role IN ('queen','worker')),
+                     provider TEXT NOT NULL CHECK (provider IN ('claude_code','codex')),
+                     workspace TEXT NOT NULL,
+                     autostart INTEGER NOT NULL CHECK (autostart IN (0,1)),
+                     position INTEGER NOT NULL,
+                     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                     updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                     hive_id TEXT REFERENCES hives(id),
+                     provider_conversation_id TEXT,
+                     description TEXT NOT NULL DEFAULT '',
+                     archived_at INTEGER,
+                     system_role TEXT CHECK (system_role IS NULL OR system_role = 'scout'),
+                     provider_conversation_resume INTEGER NOT NULL DEFAULT 0
+                         CHECK (provider_conversation_resume IN (0, 1))
+                 );
+                 INSERT INTO worker_profiles SELECT * FROM worker_profiles_undo;
+                 DROP TABLE worker_profiles_undo;
+                 CREATE UNIQUE INDEX one_queen_profile
+                     ON worker_profiles(role) WHERE role = 'queen';
+                 CREATE INDEX worker_profiles_by_hive ON worker_profiles(hive_id);
+                 CREATE INDEX worker_profiles_active_roster
+                     ON worker_profiles(role, position, created_at, id)
+                     WHERE archived_at IS NULL;
+                 CREATE UNIQUE INDEX one_scout_per_hive
+                     ON worker_profiles(hive_id)
+                     WHERE system_role = 'scout' AND archived_at IS NULL;
+                 PRAGMA legacy_alter_table = OFF;",
+            probe_sql: "SELECT EXISTS(
+                 SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'worker_profiles'
+                   AND sql NOT LIKE '%provider IN (%'
+             )",
         },
     ];
 

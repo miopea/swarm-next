@@ -2819,24 +2819,19 @@ mod tests {
                 1,
             )
             .unwrap();
-        // Written the way a NEWER build would write it. The column carries a
-        // CHECK constraint listing the providers this build knows, so the only
-        // faithful way to stage a rollback is to bypass the check exactly as a
-        // future release with a widened constraint would have done.
-        let connection = store.connection().unwrap();
-        connection
-            .execute_batch("PRAGMA ignore_check_constraints = ON")
-            .unwrap();
-        connection
+        // Written the way a NEWER build would write it. Schema 96 dropped the
+        // closed provider list, so this needs no constraint bypass -- and that
+        // it does not is itself the point: an earlier version of this test had
+        // to disable CHECK enforcement, which is how the constraint that
+        // supposedly did not exist was discovered.
+        store
+            .connection()
+            .unwrap()
             .execute(
                 "UPDATE worker_profiles SET provider = ?2 WHERE id = ?1",
                 rusqlite::params![rolled_back.id.to_string(), "gemini"],
             )
             .unwrap();
-        connection
-            .execute_batch("PRAGMA ignore_check_constraints = OFF")
-            .unwrap();
-        drop(connection);
 
         // The whole roster still lists, which is the point.
         let roster = store.list_worker_profiles().unwrap();
