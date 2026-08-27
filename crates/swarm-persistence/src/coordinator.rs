@@ -15,22 +15,47 @@ const MAX_STALE_CANDIDATES: i64 = 32;
 const MAX_EXITED_WORK_CANDIDATES: i64 = 32;
 const MAX_UNSTARTED_WORK_CANDIDATES: i64 = 32;
 
-/// The one definition of a coordination-attention record that is still true.
+/// The last moment a worker or the operator did something to a task itself.
 ///
-/// Three questions are asked of it: what Queen sees when she reviews, how much
-/// is actionable, and — crucially — the fingerprint that decides she should run
-/// at all. They were three copies of one predicate, and a fourth kind added to
-/// only the first was missed by the other two. The result was exactly what the
-/// operator saw: a worker filed several tasks, the record existed, Queen could
-/// have read it, and nothing ever woke her to look.
+/// One definition, because two flags need it and a second copy is how they
+/// drift. Joined as `acted`, exposing `task_id` and `acted_at`; LEFT JOIN it,
+/// because a task nobody has touched yields no row rather than a zero.
 ///
-/// Every branch re-verifies against live state, so a record whose reason has
-/// passed stops counting without anything having to delete it.
+/// BOTH SOURCES ARE REQUIRED and neither is sufficient. Amendments do not
+/// write a `task_activity` row and do not bump `tasks.updated_at` -- they land in
+/// `task_amendments` alone -- so the way a worker is meant to record progress
+/// was invisible to every clock the schema could offer. That is why a task
+/// being actively worked could look untouched.
+///
+/// Actor kind matters: 'system' rows are the machine talking to itself and
+/// jira/email rows are inbound sync, so neither is evidence a person or a
+/// worker picked the work up. Counting them would let the coordinator reset
+/// its own clock.
+///
+/// Kind matters too, and the excluded ones are the reason to be explicit
+/// rather than to take every row. 'created', 'assigned' and the
+/// `state_changed` that moves a task into the state a flag watches are the
+/// bookkeeping that makes it eligible in the first place. Counting them would
+/// reset the clock at the same moment it starts.
+macro_rules! last_task_action_source {
+    () => {
+        "(SELECT task_id, MAX(acted_at) AS acted_at
+                        FROM (SELECT task_id, occurred_at AS acted_at
+                              FROM task_activity
+                              WHERE actor_kind IN ('worker', 'operator')
+                                AND kind IN ('corrected', 'details_updated')
+                              UNION ALL
+                              SELECT task_id, created_at AS acted_at
+                              FROM task_amendments)
+                        GROUP BY task_id)"
+    };
+}
+
 /// Delivered Ready work that nobody has acted on since the briefing landed.
 ///
 /// Lifted out of the function body because the reasoning in it is longer
 /// than the query, and clippy caps a function at 100 lines.
-const UNSTARTED_WORK_CANDIDATES_SQL: &str =
+const UNSTARTED_WORK_CANDIDATES_SQL: &str = concat!(
     "SELECT task.assigned_worker_id, session.session_id, task.id,
                     task.updated_at,
                     MAX(0, ?1 - MAX(dispatch.delivered_at, COALESCE(acted.acted_at, 0)))
@@ -58,33 +83,10 @@ const UNSTARTED_WORK_CANDIDATES_SQL: &str =
              -- whole time. Eleven of the twelve instances Queen recorded were
              -- that exact shape, and reading each one cost a transcript.
              --
-             -- BOTH SOURCES ARE REQUIRED and neither is sufficient. Amendments
-             -- do not write a task_activity row and do not bump updated_at --
-             -- they land in task_amendments alone -- so a worker recording its
-             -- progress the way the operator asked it to was invisible to every
-             -- clock this flag could have read. That is why the trail looked
-             -- empty while the work was happening.
-             --
-             -- Actor kind matters: 'system' rows are the machine talking to
-             -- itself and jira/email rows are inbound sync, so neither is
-             -- evidence a person or a worker picked the work up. Counting them
-             -- would let the coordinator reset its own clock.
-             --
-             -- Kind matters too, and the excluded ones are the reason to be
-             -- explicit rather than to take every row. 'created', 'assigned'
-             -- and the 'state_changed' that moved the task INTO ready are the
-             -- bookkeeping that makes a task eligible for this flag in the
-             -- first place. Counting them would reset the clock at the same
-             -- moment it starts and the flag would never fire at all.
-             LEFT JOIN (SELECT task_id, MAX(acted_at) AS acted_at
-                        FROM (SELECT task_id, occurred_at AS acted_at
-                              FROM task_activity
-                              WHERE actor_kind IN ('worker', 'operator')
-                                AND kind IN ('corrected', 'details_updated')
-                              UNION ALL
-                              SELECT task_id, created_at AS acted_at
-                              FROM task_amendments)
-                        GROUP BY task_id) acted
+
+             LEFT JOIN ",
+    last_task_action_source!(),
+    " acted
                ON acted.task_id = task.id
              WHERE task.state = 'ready' AND dispatch.delivered_at IS NOT NULL
                AND MAX(dispatch.delivered_at, COALESCE(acted.acted_at, 0)) + ?2 <= ?1
@@ -121,8 +123,20 @@ const UNSTARTED_WORK_CANDIDATES_SQL: &str =
                      AND action.evidence_revision = task.updated_at
                )
              ORDER BY MAX(dispatch.delivered_at, COALESCE(acted.acted_at, 0)),
-                      task.id LIMIT ?3";
+                      task.id LIMIT ?3"
+);
 
+/// The one definition of a coordination-attention record that is still true.
+///
+/// Three questions are asked of it: what Queen sees when she reviews, how much
+/// is actionable, and — crucially — the fingerprint that decides she should run
+/// at all. They were three copies of one predicate, and a fourth kind added to
+/// only the first was missed by the other two. The result was exactly what the
+/// operator saw: a worker filed several tasks, the record existed, Queen could
+/// have read it, and nothing ever woke her to look.
+///
+/// Every branch re-verifies against live state, so a record whose reason has
+/// passed stops counting without anything having to delete it.
 pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
              JOIN tasks task ON task.id = action.task_id
              JOIN worker_profiles worker ON worker.id = action.worker_id
@@ -1005,15 +1019,26 @@ impl TaskStore {
         minimum_age_seconds: i64,
     ) -> Result<Vec<StaleOwnedWorkCandidate>, TaskStoreError> {
         let connection = self.connection()?;
-        let mut statement = connection.prepare(
+        let mut statement = connection.prepare(concat!(
             "SELECT task.assigned_worker_id, session.session_id, task.id,
-                    task.updated_at, MAX(0, ?1 - task.updated_at)
+                    task.updated_at,
+                    MAX(0, ?1 - MAX(task.updated_at, COALESCE(acted.acted_at, 0)))
              FROM tasks task
              JOIN worker_profiles worker
                ON worker.id = task.assigned_worker_id AND worker.archived_at IS NULL
              JOIN worker_sessions session
                ON session.worker_id = worker.id AND session.ended_at IS NULL
-             WHERE task.state = 'active' AND task.updated_at + ?2 <= ?1
+             -- updated_at ALONE MISSES THE ONE THING A WORKING WORKER DOES.
+             -- Transitions move it; amendments do not. So a worker steadily
+             -- recording progress on an Active task -- the behaviour the board
+             -- asks for -- read as untouched for as long as it kept doing it.
+             -- Same blind spot the unstarted-work flag had, same answer.
+             LEFT JOIN ",
+            last_task_action_source!(),
+            " acted
+               ON acted.task_id = task.id
+             WHERE task.state = 'active'
+               AND MAX(task.updated_at, COALESCE(acted.acted_at, 0)) + ?2 <= ?1
                AND NOT EXISTS (
                    SELECT 1 FROM worker_engagements engagement
                    WHERE engagement.worker_id = worker.id AND engagement.expires_at > ?1
@@ -1033,8 +1058,9 @@ impl TaskStore {
                    SELECT 1 FROM decision_requests decision
                    WHERE decision.task_id = task.id AND decision.state = 'pending'
                )
-             ORDER BY task.updated_at, task.id LIMIT ?3",
-        )?;
+             ORDER BY MAX(task.updated_at, COALESCE(acted.acted_at, 0)),
+                      task.id LIMIT ?3"
+        ))?;
         statement
             .query_map(
                 params![now, minimum_age_seconds, MAX_STALE_CANDIDATES],
@@ -3347,6 +3373,65 @@ mod tests {
                 .stale_owned_work_candidates(1_001, 600)
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    /// A worker amending its Active task is working it, not sitting on it.
+    ///
+    /// `updated_at` moves on a transition and not on an amendment, so a worker
+    /// recording progress the way the board asks -- without changing state,
+    /// because the state is already right -- looked untouched for as long as it
+    /// kept doing it. Same blind spot the unstarted-work flag had.
+    ///
+    /// The second half is why this is not just silencing: once the worker
+    /// STOPS, the flag fires on the time since it stopped, which is the number
+    /// worth acting on rather than the time since the last state change.
+    #[test]
+    fn active_work_being_amended_is_not_stale_until_the_amending_stops() {
+        let store = TaskStore::in_memory().unwrap();
+        let (worker, _session, task) = active_owned_work(&store, "Sorrel", 100);
+
+        // Untouched since 100, read at 1000 with a 600s grace: still correct.
+        assert_eq!(
+            store.stale_owned_work_candidates(1_000, 600).unwrap().len(),
+            1,
+            "work nobody has touched in 900 seconds is what this flag is for"
+        );
+
+        // The worker records progress without transitioning. created_at is
+        // pinned because the column defaults to the real clock while this
+        // fixture runs on a synthetic one.
+        let amendment = store
+            .amend_task_facts(task, worker, "Still on it; the migration is rebuilding.")
+            .unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE task_amendments SET created_at = 900 WHERE id = ?1",
+                [&amendment.id],
+            )
+            .unwrap();
+
+        assert!(
+            store
+                .stale_owned_work_candidates(1_000, 600)
+                .unwrap()
+                .is_empty(),
+            "a worker that acted on the task 100 seconds ago has not gone quiet"
+        );
+
+        // It stops. The age is measured from the amendment, not from the
+        // transition that last moved updated_at.
+        let candidate = store
+            .stale_owned_work_candidates(1_600, 600)
+            .unwrap()
+            .pop()
+            .expect("work that genuinely went quiet still has to surface");
+        assert_eq!(candidate.task_id, task);
+        assert_eq!(
+            candidate.age_seconds, 700,
+            "age runs from the last thing the worker did, not the last state change"
         );
     }
 

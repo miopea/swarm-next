@@ -1418,7 +1418,7 @@ impl AppState {
         }
         let activity = self.provider_activity.read().await;
         for candidate in candidates {
-            if !should_surface_stale_owned_work(
+            if worker_is_mid_turn(
                 activity
                     .get(&candidate.session_id)
                     .map(|signals| signals.activity)
@@ -1490,7 +1490,7 @@ impl AppState {
         }
         let activity = self.provider_activity.read().await;
         for candidate in candidates {
-            if !should_surface_stale_owned_work(
+            if worker_is_mid_turn(
                 activity
                     .get(&candidate.session_id)
                     .map(|signals| signals.activity)
@@ -2542,8 +2542,35 @@ fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
     }
 }
 
-fn should_surface_stale_owned_work(activity: Option<&ProviderActivity>) -> bool {
-    activity == Some(&ProviderActivity::Resting)
+/// Whether an attention flag may speak about a worker, given what its terminal
+/// looks like.
+///
+/// HOLD ONLY WHEN THE WORKER IS POSITIVELY KNOWN TO BE MID-TURN. Everything
+/// else -- Resting, Unknown, and no reading at all -- surfaces.
+///
+/// This used to demand a positive `Resting`, which reads as cautious and is the
+/// opposite. Because Unknown suppressed, a worker on a provider whose glyph
+/// classifier is alpha could never raise either flag: not late, never. Silence
+/// about such a worker was indistinguishable from nothing being wrong, and only
+/// the Claude and Codex classifiers made these flags work at all.
+///
+/// The polarity here matches the delivery side, which settled the same question
+/// first: `mid_turn_sessions` holds on Active and `AwaitingOperator`, and it
+/// on Resting and Unknown. An unclassifiable provider degrades to the old
+/// behaviour rather than to silence, which is the trade this system wants --
+/// glyph matching is alpha and a flag that trusts it absolutely inherits its
+/// fragility.
+///
+/// SAFE ONLY BECAUSE BOTH CALLERS NOW MEASURE WORK RATHER THAN TRANSITIONS.
+/// Inverting this alone would broaden both flags to a population they have
+/// never fired for, and before their clocks read task activity that population
+/// would have produced exactly the false positives this flag family has already
+/// cost Queen a night of hand-verification over.
+fn worker_is_mid_turn(activity: Option<&ProviderActivity>) -> bool {
+    matches!(
+        activity,
+        Some(&ProviderActivity::Active | &ProviderActivity::AwaitingOperator)
+    )
 }
 
 fn default_provider() -> ProviderKind {
@@ -11634,20 +11661,26 @@ mod tests {
     }
 
     #[test]
-    fn stale_owned_work_surfaces_only_for_a_loaded_resting_provider() {
-        assert!(should_surface_stale_owned_work(Some(
-            &ProviderActivity::Resting
-        )));
-        assert!(!should_surface_stale_owned_work(Some(
-            &ProviderActivity::Active
-        )));
-        assert!(!should_surface_stale_owned_work(Some(
+    fn attention_holds_only_for_a_worker_positively_known_to_be_mid_turn() {
+        // Held: the two readings that mean the worker is in the middle of
+        // something. Interrupting either is the cost this guard exists to avoid.
+        assert!(worker_is_mid_turn(Some(&ProviderActivity::Active)));
+        assert!(worker_is_mid_turn(Some(
             &ProviderActivity::AwaitingOperator
         )));
-        assert!(!should_surface_stale_owned_work(Some(
-            &ProviderActivity::Unknown
-        )));
-        assert!(!should_surface_stale_owned_work(None));
+
+        // Surfaced. Resting always did; the other two are the fix. An alpha
+        // provider reads Unknown and a worker with no signal at all reads None,
+        // and both used to mean permanent silence rather than caution.
+        assert!(!worker_is_mid_turn(Some(&ProviderActivity::Resting)));
+        assert!(
+            !worker_is_mid_turn(Some(&ProviderActivity::Unknown)),
+            "an unclassifiable provider must degrade to the old behaviour, not to silence"
+        );
+        assert!(
+            !worker_is_mid_turn(None),
+            "no reading at all is not evidence that a worker is busy"
+        );
     }
 
     #[tokio::test]
