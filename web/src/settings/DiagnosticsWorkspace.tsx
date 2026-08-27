@@ -170,6 +170,18 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
     { label: "Standing swap", value: swapLabel(machine?.swap_used_bytes, machine?.swap_total_bytes, machine?.swap_used_percent), healthy: true },
     { label: "Provider", value: providerStatus, healthy: launchFailures === 0 },
     { label: "Jira", value: jiraStatusLabel(jiraReadiness, jiraUnavailable), healthy: !jiraStatusLabel(jiraReadiness, jiraUnavailable).includes("attention") },
+    // A SUBSYSTEM THAT STEPPED ASIDE HAS TO SAY SO SOMEWHERE SOMEONE LOOKS.
+    // These used to abort startup, so their failure was impossible to miss and
+    // impossible to recover from. Now the Hive keeps serving — which means a
+    // misconfiguration can sit unnoticed for days unless it is reported, and
+    // "email quietly never sent" is its own kind of outage. Carried as rows
+    // rather than a banner so they land in needsAttention with everything
+    // else, and lead the page for the same reason every other fault does.
+    ...(health?.degraded ?? []).map((entry) => ({
+      label: `${entry.subsystem} configuration`,
+      value: `Disabled at startup · ${entry.reason}`,
+      healthy: false,
+    })),
   ];
   const needsAttention = rows.filter((row) => !row.healthy);
 

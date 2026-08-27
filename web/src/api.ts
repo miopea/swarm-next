@@ -181,12 +181,28 @@ export type {
   WorkspaceChoice,
 } from "./api/workers";
 
+/** A subsystem that did not start, and why. */
+export type DegradedSubsystem = {
+  subsystem: string;
+  reason: string;
+};
 export type Health = {
-  status: "ok";
+  /**
+   * "degraded" means serving with something switched off, NOT failing.
+   *
+   * The HTTP status is 200 either way, deliberately: the updater's health
+   * check reads only the status code, and a degraded Hive that answered an
+   * error would fail every update and roll back — leaving an operator unable
+   * to install their way out of a misconfiguration. That is the trap this
+   * exists to prevent, so the distinction lives here rather than in the code.
+   */
+  status: "ok" | "degraded";
   version: string;
   worker_engine_build_id?: string;
   /** Largest image this Hive accepts; absent on older builds. */
   attachment_max_bytes?: number;
+  /** What is switched off; absent on older builds, empty when nothing is. */
+  degraded?: DegradedSubsystem[];
 };
 export type ProcessResources = {
   resident_memory_bytes: number | null;

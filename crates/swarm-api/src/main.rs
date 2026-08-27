@@ -53,19 +53,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             release_apply_request_path(&database_path),
         )
         .with_workspace_roots(workspace_roots)
-        .with_task_store(store)
-        .with_notifications(vapid_subject_from_env())?;
-    if let Some((request, status)) = development_reload_paths_from_env()? {
-        state = state.with_development_reload_paths(request, status);
-        if let Some(checkout) = env::var_os("SWARM_DEV_CHECKOUT") {
-            state = state.with_development_checkout_path(PathBuf::from(checkout));
+        .with_task_store(store);
+    // WEB PUSH IS NOT LOAD-BEARING. A bad VAPID subject used to abort startup,
+    // which trades "the operator gets no push notifications" for "the operator
+    // has no Hive". See `degrade` for why every one of these is a clone.
+    state = degrade(
+        state,
+        "Web push notifications",
+        AppState::with_notifications,
+        vapid_subject_from_env(),
+    );
+    // Setting one of the two development reload paths and not the other used
+    // to be fatal. A developer who mistyped an env var got no Hive rather than
+    // no reload button, which is the same trade this whole change exists to
+    // stop making.
+    match development_reload_paths_from_env() {
+        Ok(Some((request, status))) => {
+            state = state.with_development_reload_paths(request, status);
+            if let Some(checkout) = env::var_os("SWARM_DEV_CHECKOUT") {
+                state = state.with_development_checkout_path(PathBuf::from(checkout));
+            }
         }
+        Ok(None) => {}
+        Err(error) => state = state.with_degraded_subsystem("Development reload", error),
     }
     if let Ok(manifest_url) = env::var("SWARM_RELEASE_MANIFEST_URL") {
         state = state.with_release_manifest_url(manifest_url);
     }
     if let Ok(public_base_url) = env::var("SWARM_PUBLIC_BASE_URL") {
-        state = state.with_public_base_url(&public_base_url)?;
+        // A TYPO IN ONE ENVIRONMENT VARIABLE USED TO BRICK THE HIVE. The value
+        // is only ever a place to send someone back to; nothing needs it to
+        // serve a request, take a backup, or install a different release.
+        state = match state.clone().with_public_base_url(&public_base_url) {
+            Ok(configured) => configured,
+            Err(error) => state.with_degraded_subsystem("Public base URL", error),
+        };
     }
     state = state.with_email_oauth_paths(
         email_configuration_path(&database_path),
@@ -86,10 +108,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // so a config fault from days earlier surfaced as a failed upgrade, on a
     // Hive that could then not start on either release.
     state = state.with_api_bind_address(address);
-    state = configure_jira(state, &database_path)?;
-    state = configure_email(state, &database_path)?;
+    state = configure_jira(state, &database_path);
+    state = configure_email(state, &database_path);
     state = state.with_agent_configuration(agent_config_root, mcp_url_from_env(address));
-    recover_interrupted_deliveries(&state)?;
+    // Recovering queued deliveries is repair, and repair that cannot run is a
+    // reason to say so rather than a reason to refuse to start -- a Hive that
+    // will not boot delivers nothing at all, which is strictly worse than one
+    // that boots with a backlog it could not requeue.
+    if let Err(error) = recover_interrupted_deliveries(&state) {
+        state = state.with_degraded_subsystem("Queued delivery recovery", error.to_string());
+    }
     state.supervise_workers().await;
     start_background_services(&state);
     let listener = tokio::net::TcpListener::bind(address).await?;
@@ -106,6 +134,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+/// Applies one fallible configuration step, keeping the Hive if it fails.
+///
+/// THE CLONE IS THE MECHANISM, NOT A COST. Every `with_*` builder takes `self`
+/// by value and drops it on the error path, so there is no state left to fall
+/// back to once one has failed -- which is precisely why a single bad setting
+/// could only ever be expressed as `?` and a dead process. Handing the builder
+/// a clone means the pristine state is still here afterwards.
+///
+/// It also gives the right semantics for free: a subsystem that failed
+/// half-way leaves NO partial configuration behind, because the half-built
+/// clone is discarded whole. A Hive with broken Jira settings is a Hive with
+/// Jira off, never a Hive with Jira on and one field missing.
+///
+/// `AppState` is `Arc`-backed throughout, so the clone is pointer copies.
+fn degrade<T>(
+    state: AppState,
+    subsystem: &str,
+    step: impl FnOnce(AppState, T) -> Result<AppState, String>,
+    argument: T,
+) -> AppState {
+    match step(state.clone(), argument) {
+        Ok(configured) => configured,
+        Err(error) => {
+            tracing::warn!(subsystem, %error, "subsystem disabled; the Hive is still serving");
+            state.with_degraded_subsystem(subsystem, error)
+        }
+    }
 }
 
 fn start_background_services(state: &AppState) {
@@ -350,10 +407,14 @@ fn email_attachment_root_from_database(database_path: &std::path::Path) -> PathB
         .join("email-attachments")
 }
 
-fn configure_jira(
-    mut state: AppState,
-    database_path: &std::path::Path,
-) -> Result<AppState, Box<dyn std::error::Error>> {
+/// Configures Jira, or leaves it off and says why.
+///
+/// The second subsystem taken out of the load-bearing set, chosen because it
+/// is the same shape as email and had FIVE distinct ways to refuse to start --
+/// more ways than email had, on settings an operator types by hand. An
+/// incomplete pair of environment variables here used to be indistinguishable,
+/// from the outside, from a corrupt database.
+fn configure_jira(state: AppState, database_path: &std::path::Path) -> AppState {
     let api_token = (
         env::var("SWARM_JIRA_BASE_URL").ok(),
         env::var("SWARM_JIRA_EMAIL").ok(),
@@ -369,31 +430,49 @@ fn configure_jira(
         // the operator types an Atlassian API token into Settings and this
         // host keeps it. Anything already stored is loaded here, so a restart
         // does not disconnect Jira.
-        ((None, None, None), (None, None)) => {
-            state = state.with_jira_credentials_path(jira_credentials_path(database_path))?;
-        }
+        ((None, None, None), (None, None)) => degrade(
+            state,
+            "Jira",
+            |state, ()| state.with_jira_credentials_path(jira_credentials_path(database_path)),
+            (),
+        ),
         ((None, None, None), (Some(client_id), Some(client_secret))) => {
-            let public_url = public_url.ok_or("Jira OAuth requires SWARM_PUBLIC_BASE_URL")?;
-            state = state.with_jira_oauth(
-                client_id,
-                client_secret,
-                &public_url,
-                jira_token_path(database_path),
-            )?;
+            let Some(public_url) = public_url else {
+                return state
+                    .with_degraded_subsystem("Jira", "Jira OAuth requires SWARM_PUBLIC_BASE_URL");
+            };
+            degrade(
+                state,
+                "Jira",
+                |state, ()| {
+                    state.with_jira_oauth(
+                        client_id,
+                        client_secret,
+                        &public_url,
+                        jira_token_path(database_path),
+                    )
+                },
+                (),
+            )
         }
-        ((Some(base_url), Some(email), Some(api_token)), (None, None)) => {
-            state = state.with_jira_configuration(&base_url, email, api_token)?;
+        ((Some(base_url), Some(email), Some(api_token)), (None, None)) => degrade(
+            state,
+            "Jira",
+            |state, ()| state.with_jira_configuration(&base_url, email, api_token),
+            (),
+        ),
+        ((Some(_), Some(_), Some(_)), (Some(_), Some(_))) => state.with_degraded_subsystem(
+            "Jira",
+            "configure either Jira OAuth or Jira API-token authentication, not both",
+        ),
+        ((None, None, None), _) => {
+            state.with_degraded_subsystem("Jira", "Jira OAuth settings are incomplete")
         }
-        ((Some(_), Some(_), Some(_)), (Some(_), Some(_))) => {
-            return Err(
-                "configure either Jira OAuth or Jira API-token authentication, not both".into(),
-            );
+        (_, (None, None)) => {
+            state.with_degraded_subsystem("Jira", "Jira API-token settings are incomplete")
         }
-        ((None, None, None), _) => return Err("Jira OAuth settings are incomplete".into()),
-        (_, (None, None)) => return Err("Jira API-token settings are incomplete".into()),
-        _ => return Err("Jira authentication settings are incomplete".into()),
+        _ => state.with_degraded_subsystem("Jira", "Jira authentication settings are incomplete"),
     }
-    Ok(state)
 }
 
 fn jira_credentials_path(database_path: &std::path::Path) -> PathBuf {
@@ -412,31 +491,54 @@ fn jira_token_path(database_path: &std::path::Path) -> PathBuf {
         .join("jira-oauth.json")
 }
 
-fn configure_email(
-    mut state: AppState,
-    database_path: &std::path::Path,
-) -> Result<AppState, Box<dyn std::error::Error>> {
+/// Configures Microsoft email, or leaves it off and says why.
+///
+/// THIS IS THE ONE THAT COST 45 MINUTES. A Hive with a Microsoft registration
+/// and no public base URL exited 1 and was restart-looped by systemd, so email
+/// being misconfigured meant the control room was gone, no backup could be
+/// taken, and no other release could be installed. Email is not needed to
+/// serve a request; it never belonged in the set of things that can refuse to
+/// start.
+fn configure_email(state: AppState, database_path: &std::path::Path) -> AppState {
     let settings = (
         env::var("SWARM_EMAIL_TENANT_ID").ok(),
         env::var("SWARM_EMAIL_OAUTH_CLIENT_ID").ok(),
         env::var("SWARM_EMAIL_OAUTH_CLIENT_SECRET").ok(),
     );
     match settings {
-        (None, None, None) => state = state.with_saved_outlook_oauth()?,
+        (None, None, None) => degrade(
+            state,
+            "Microsoft email",
+            |state, ()| state.with_saved_outlook_oauth(),
+            (),
+        ),
         (Some(tenant_id), Some(client_id), Some(client_secret)) => {
-            let public_url = env::var("SWARM_PUBLIC_BASE_URL")
-                .map_err(|_| "Microsoft email OAuth requires SWARM_PUBLIC_BASE_URL")?;
-            state = state.with_outlook_oauth(
-                &tenant_id,
-                client_id,
-                client_secret,
-                &public_url,
-                email_token_path(database_path),
-            )?;
+            let Ok(public_url) = env::var("SWARM_PUBLIC_BASE_URL") else {
+                return state.with_degraded_subsystem(
+                    "Microsoft email",
+                    "Microsoft email OAuth requires SWARM_PUBLIC_BASE_URL",
+                );
+            };
+            degrade(
+                state,
+                "Microsoft email",
+                |state, ()| {
+                    state.with_outlook_oauth(
+                        &tenant_id,
+                        client_id,
+                        client_secret,
+                        &public_url,
+                        email_token_path(database_path),
+                    )
+                },
+                (),
+            )
         }
-        _ => return Err("Microsoft email OAuth settings are incomplete".into()),
+        _ => state.with_degraded_subsystem(
+            "Microsoft email",
+            "Microsoft email OAuth settings are incomplete",
+        ),
     }
-    Ok(state)
 }
 
 fn email_token_path(database_path: &std::path::Path) -> PathBuf {

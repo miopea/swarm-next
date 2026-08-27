@@ -118,3 +118,51 @@ test("a large but proportionate worker footprint is not called critical", () => 
   // And a genuinely strained machine still reads through.
   expect(workerTreePressure({ ...roomy, pressure: "critical" as const })).toBe("critical");
 });
+
+const diagnosticsProps = {
+  feedbackRevision: 0,
+  operatorToken: "secret",
+  hiveIdentity: undefined,
+  liveFeedState: "retrying" as const,
+  recentEvents: [],
+  sessions: [],
+  workers: [],
+  jiraReadiness: undefined,
+  jiraUnavailable: true,
+};
+
+test("a subsystem disabled at startup leads the page instead of sitting unnoticed", () => {
+  // THE ABLATION. Drop the degraded rows and this Hive looks entirely healthy:
+  // every other check passes, because the process IS serving. That is the
+  // failure mode the reporting exists for — email silently never arriving is
+  // an outage nobody is told about.
+  render(
+    <DiagnosticsWorkspace
+      {...diagnosticsProps}
+      health={{
+        status: "degraded",
+        version: "0.8.19",
+        degraded: [
+          {
+            subsystem: "Microsoft email",
+            reason: "Microsoft email OAuth requires SWARM_PUBLIC_BASE_URL",
+          },
+        ],
+      }}
+    />,
+  );
+  expect(screen.getByText("Microsoft email configuration")).toBeInTheDocument();
+  expect(
+    screen.getByText(/Disabled at startup · Microsoft email OAuth requires SWARM_PUBLIC_BASE_URL/),
+  ).toBeInTheDocument();
+});
+
+test("a Hive with nothing switched off shows no disabled rows", () => {
+  render(
+    <DiagnosticsWorkspace
+      {...diagnosticsProps}
+      health={{ status: "ok", version: "0.8.19", degraded: [] }}
+    />,
+  );
+  expect(screen.queryByText(/Disabled at startup/)).not.toBeInTheDocument();
+});

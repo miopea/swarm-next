@@ -215,6 +215,12 @@ pub struct AppState {
     worker_recovery_attempts: Arc<RwLock<HashMap<WorkerId, i64>>>,
     provider_activity: Arc<RwLock<HashMap<WorkerSessionId, provider_activity::ProviderSignals>>>,
     coordinator_start_admission: Arc<AtomicU8>,
+    /// Subsystems that failed to configure at startup and were left off.
+    ///
+    /// Fixed at startup rather than mutable: these come from configuration
+    /// read once, so anything that would change the list needs a restart
+    /// anyway, and a lock here would suggest otherwise.
+    degraded: Vec<DegradedSubsystem>,
     control_room_notify: Arc<Notify>,
     notification_sender: Option<notifications::NotificationSender>,
     attachment_store: Option<AttachmentStore>,
@@ -292,6 +298,7 @@ impl AppState {
             coordinator_start_admission: Arc::new(AtomicU8::new(
                 runtime::CoordinatorStartAdmission::DeferredUnavailable.code(),
             )),
+            degraded: Vec::new(),
             control_room_notify: Arc::new(Notify::new()),
             notification_sender: None,
             attachment_store: None,
@@ -463,6 +470,30 @@ impl AppState {
                 source: EmailOAuthConfigurationSource::Operator,
             })));
         Ok(self)
+    }
+
+    /// Records that a subsystem is off, and why, without stopping the Hive.
+    ///
+    /// Deliberately infallible and deliberately not a `Result`: it is what the
+    /// startup path reaches for when something else has ALREADY failed, and a
+    /// reporting step that can itself fail would put us back where we started.
+    #[must_use]
+    pub fn with_degraded_subsystem(
+        mut self,
+        subsystem: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        self.degraded.push(DegradedSubsystem {
+            subsystem: subsystem.into(),
+            reason: reason.into(),
+        });
+        self
+    }
+
+    /// What is not running on this Hive, and why.
+    #[must_use]
+    pub fn degraded_subsystems(&self) -> &[DegradedSubsystem] {
+        &self.degraded
     }
 
     /// Configures the HTTPS endpoint placed in signed federation invitations.
@@ -2156,6 +2187,27 @@ impl Default for AppState {
     }
 }
 
+/// A subsystem that did not start, and why.
+///
+/// THE PROCESS SURVIVING A BAD SUBSYSTEM IS ONLY HALF THE FIX. Degrading
+/// silently trades a loud failure for a quiet one: the Hive answers, the
+/// operator sees nothing wrong, and email simply never arrives. So a
+/// subsystem that steps aside has to say it did, in a place someone will
+/// actually look -- which is /health, because that is the one endpoint every
+/// client already asks for and the only one reachable before sign-in.
+///
+/// The reason is the configuration error verbatim. It is written for the
+/// person who set the value, and paraphrasing it here would put a second,
+/// worse copy of the same sentence in the tree.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct DegradedSubsystem {
+    /// What is unavailable, in the operator's words -- "Microsoft email", not
+    /// `configure_email`.
+    pub subsystem: String,
+    /// Why it did not start.
+    pub reason: String,
+}
+
 #[derive(Debug, Serialize)]
 struct HealthResponse {
     status: &'static str,
@@ -2169,6 +2221,18 @@ struct HealthResponse {
     /// this Hive actually enforces — a copied constant is what made the
     /// original failure silent.
     attachment_max_bytes: usize,
+    /// What is not running, and why. Empty on a Hive with nothing wrong.
+    ///
+    /// THE HTTP STATUS STAYS 200 WHEN THIS IS NON-EMPTY, and that is the whole
+    /// point rather than an oversight. `swarm-package`'s `wait_for_health` uses
+    /// `curl --fail` and discards the body, so a degraded Hive answering 4xx
+    /// or 5xx would fail every update's health verification, roll back, and
+    /// reproduce exactly the trap this exists to prevent: a Hive that cannot
+    /// be updated out of a misconfiguration. "The API is answering" and
+    /// "everything works" are different claims, and they are reported in
+    /// different places -- the status line for the first, this list for the
+    /// second.
+    degraded: Vec<DegradedSubsystem>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3435,12 +3499,20 @@ async fn mcp(State(state): State<Arc<AppState>>, request: axum::extract::Request
     state.deliver_coordination().await;
     response
 }
-async fn health() -> Json<HealthResponse> {
+async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
+    let degraded = state.degraded_subsystems().to_vec();
     Json(HealthResponse {
-        status: "ok",
+        // Reported honestly, and it costs nothing: no client keys on this
+        // field, and the updater never reads the body at all.
+        status: if degraded.is_empty() {
+            "ok"
+        } else {
+            "degraded"
+        },
         version: build_version(),
         attachment_max_bytes: attachments::MAX_ATTACHMENT_BYTES,
         worker_engine_build_id: worker_engine_build_id(),
+        degraded,
     })
 }
 
@@ -8549,6 +8621,95 @@ mod tests {
         assert_eq!(json["status"], "ok");
         assert_eq!(json["version"], build_version());
         assert_eq!(json["worker_engine_build_id"], worker_engine_build_id());
+    }
+
+    #[tokio::test]
+    async fn a_hive_with_a_subsystem_off_still_answers_health_with_200() {
+        // THE STATUS CODE IS THE ACCEPTANCE CRITERION. `swarm-package`'s
+        // wait_for_health uses `curl --fail` and reads nothing else, so a
+        // degraded Hive answering anything but 2xx fails every update's health
+        // verification and rolls back -- which is the trap: a misconfigured
+        // Hive that cannot be updated out of its misconfiguration.
+        let state = AppState::default().with_degraded_subsystem(
+            "Microsoft email",
+            "Microsoft email OAuth requires SWARM_PUBLIC_BASE_URL",
+        );
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "a degraded Hive must still pass an updater's health check"
+        );
+        let json = response_json(response).await;
+        assert_eq!(json["status"], "degraded");
+        assert_eq!(json["degraded"][0]["subsystem"], "Microsoft email");
+        assert_eq!(
+            json["degraded"][0]["reason"],
+            "Microsoft email OAuth requires SWARM_PUBLIC_BASE_URL"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_degraded_subsystem_says_which_one_and_why() {
+        // Silent degradation is its own failure: the Hive answers, nothing
+        // looks wrong, and email simply never arrives. Both subsystems taken
+        // out of the load-bearing set are reported, each with the reason the
+        // person who set the value needs to read.
+        let state = AppState::default()
+            .with_degraded_subsystem("Microsoft email", "settings are incomplete")
+            .with_degraded_subsystem("Jira", "Jira OAuth requires SWARM_PUBLIC_BASE_URL");
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let json = response_json(response).await;
+        let reported: Vec<&str> = json["degraded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["subsystem"].as_str().unwrap())
+            .collect();
+        assert_eq!(reported, vec!["Microsoft email", "Jira"]);
+        assert!(
+            json["degraded"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|entry| !entry["reason"].as_str().unwrap().is_empty()),
+            "a subsystem that stepped aside must say why"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hive_with_nothing_wrong_reports_no_degradation() {
+        // The other half of the ablation: if this list were populated on a
+        // healthy Hive the reporting would be noise, and an operator would
+        // learn to ignore exactly the thing that matters.
+        let response = router(AppState::default())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let json = response_json(response).await;
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["degraded"].as_array().unwrap().len(), 0);
     }
 
     #[tokio::test]
