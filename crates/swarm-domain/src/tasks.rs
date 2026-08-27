@@ -418,6 +418,26 @@ pub struct TaskDetailsUpdate {
     pub operator_instruction: Option<String>,
 }
 
+/// A correction of FACT appended to a task's description.
+///
+/// Never replaces the description and never outranks its scope or acceptance —
+/// the operator's ruling was "facts govern, scope and acceptance never do". A
+/// reader takes an amendment as authoritative about what is TRUE and takes the
+/// original as authoritative about what the work is FOR.
+///
+/// Always attributed. An unattributed amendment to governing text would be worse
+/// than the stale text it corrects.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TaskAmendment {
+    pub id: String,
+    pub author_worker_id: WorkerId,
+    /// The author's name at the time it is read, so a reader sees who without a
+    /// second lookup. Denormalised deliberately: the id is the durable link.
+    pub author_name: String,
+    pub body: String,
+    pub created_at: i64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     pub id: TaskId,

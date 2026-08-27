@@ -310,6 +310,7 @@ impl ServerHandler for AgentMcp {
             comment_jira_task_tool(),
             record_deployment_tool(),
             correct_task_record_tool(),
+            amend_task_facts_tool(),
             record_no_deployment_tool(),
             draft_email_reply_tool(),
             create_task_tool(),
@@ -386,6 +387,7 @@ impl ServerHandler for AgentMcp {
             "swarm_sleep_worker" => self.sleep_worker(arguments).await,
             "swarm_transition_task" => self.transition_task(arguments).await,
             "swarm_correct_task_record" => self.correct_task_record(arguments),
+            "swarm_amend_task_facts" => self.amend_task_facts(arguments),
             "swarm_list_jira_comments" => self.list_jira_comments(arguments).await,
             "swarm_comment_jira_task" => self.comment_jira_task(arguments),
             "swarm_record_deployment" => self.record_deployment(arguments),
@@ -1208,6 +1210,47 @@ impl AgentMcp {
         }))
     }
 
+    /// Tasks with their corrections attached, so a reader of the description
+    /// sees what is wrong with it in the same place.
+    ///
+    /// This is the whole point of the mechanism. A correction that lives
+    /// somewhere the description is not read leaves the error in the
+    /// authoritative place and the fix three screens below it, which is the
+    /// asymmetry the operator asked to close.
+    ///
+    /// Amendments govern what is TRUE. The description still governs what the
+    /// work is FOR, and the sentence saying so travels with them rather than
+    /// living only in a tool description a reader may never have seen.
+    fn tasks_with_amendments(
+        &self,
+        tasks: &[swarm_domain::Task],
+    ) -> Result<Vec<Value>, ApplicationError> {
+        let ids = tasks.iter().map(|task| task.id).collect::<Vec<_>>();
+        let mut grouped = self.tasks.store().amendments_for_tasks(&ids)?;
+        Ok(tasks
+            .iter()
+            .map(|task| {
+                let mut value = json!(task);
+                let amendments = grouped.remove(&task.id).unwrap_or_default();
+                if !amendments.is_empty()
+                    && let Some(object) = value.as_object_mut()
+                {
+                    object.insert("amendments".into(), json!(amendments));
+                    object.insert(
+                        "amendments_note".into(),
+                        json!(
+                            "Corrections of FACT appended to the description, oldest first, each \
+                             attributed. Where one contradicts the description, believe the \
+                             amendment. The description still governs what this work is FOR: an \
+                             amendment cannot change scope or acceptance."
+                        ),
+                    );
+                }
+                value
+            })
+            .collect())
+    }
+
     /// The visible tasks, and — when there are none — why.
     ///
     /// AN EMPTY LIST IS CORRECT AND READS AS CATASTROPHIC. A worker whose only
@@ -1224,7 +1267,7 @@ impl AgentMcp {
         tasks: &[swarm_domain::Task],
     ) -> Result<CallToolResult, ApplicationError> {
         if !tasks.is_empty() || self.principal.role == WorkerRole::Queen {
-            return structured(json!({ "tasks": tasks }));
+            return structured(json!({ "tasks": self.tasks_with_amendments(tasks)? }));
         }
         let finished = self.tasks.tasks_this_worker_finished(self.principal)?;
         let Some(latest) = finished.first() else {
@@ -1265,6 +1308,26 @@ impl AgentMcp {
             "task_id": task_id,
             "state": task.state,
             "recorded": "The correction is appended to this task's history. The note it corrects is still there, because what was believed and when is part of the record.",
+        }))
+    }
+
+    /// Corrects a fact in a task's description, leaving the original in place.
+    ///
+    /// # Errors
+    /// Returns an error when the task is not this agent's, or the correction is
+    /// empty or over the note limit.
+    fn amend_task_facts(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<AmendTaskFactsInput>(arguments)?;
+        let task_id = self.task_evidence_may_reach(&input.task_id)?;
+        let amendment = self.tasks.store().amend_task_facts(
+            task_id,
+            self.principal.worker_id,
+            &input.correction,
+        )?;
+        structured(json!({
+            "task_id": task_id,
+            "amendment_id": amendment.id,
+            "recorded": "Appended to the description, attributed to you. The original text stays and still governs what this work is FOR; your correction governs what is TRUE.",
         }))
     }
 
@@ -1668,6 +1731,12 @@ struct TransitionTaskInput {
 struct CorrectTaskRecordInput {
     task_id: String,
     note: String,
+}
+
+#[derive(Deserialize)]
+struct AmendTaskFactsInput {
+    task_id: String,
+    correction: String,
 }
 
 #[derive(Deserialize)]
@@ -2223,6 +2292,26 @@ fn correct_task_record_tool() -> Tool {
     )
 }
 
+fn amend_task_facts_tool() -> Tool {
+    tool(
+        "swarm_amend_task_facts",
+        "Correct a FACT in a task's description, where the error is rather than three screens below it in a note. For a description that states something untrue about the world: a requirement that does not exist, a constraint that has since been removed, a claim you have disproved. The original is never erased and never stops governing WHAT THE WORK IS FOR — your amendment governs what is TRUE. It cannot move scope, cannot change acceptance, and cannot redefine the task; a worker that could do those could redirect itself and then be judged against a target it moved. Append only: there is no edit and no delete, including for you, so a second thought is another amendment. Every amendment carries your name. Use it when you have established something the description gets wrong, not to record progress — that is a Review note.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string" },
+                "correction": {
+                    "type": "string",
+                    "description": "Which claim in the description is wrong, and what is true instead. Name the sentence to stop believing rather than only stating the new fact — a reader who cannot find what you are correcting has to trust two contradictory statements at once. Say how you established it: a description is authoritative and an amendment to it should carry its evidence."
+                }
+            },
+            "required": ["task_id", "correction"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
 fn record_deployment_tool() -> Tool {
     tool(
         "swarm_record_deployment",
@@ -2554,6 +2643,78 @@ mod tests {
         );
     }
 
+    /// A correction reaches the worker WHERE THE DESCRIPTION IS READ.
+    ///
+    /// The mechanism is worthless if the correction lives somewhere else. That
+    /// was the defect: a task could already be corrected in a note, so the false
+    /// claim sat in the authoritative place and its correction three screens
+    /// below, and a correction carrying less standing than the thing it corrects
+    /// reliably loses.
+    ///
+    /// The real case is this Hive's own: 01a04008's description said "NO schema
+    /// migration is needed" while `worker_profiles` carried a CHECK constraint. A
+    /// test `SQLite` refused is what settled it.
+    #[tokio::test]
+    async fn a_correction_reaches_the_worker_where_the_description_is_read() {
+        let (bridge, store, _queen_id, worker_id, _) = setup();
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(worker_id, session).unwrap();
+        let task = store
+            .create_task_with_details(
+                "Add a provider",
+                "NO schema migration is needed.",
+                swarm_domain::TaskPriority::Normal,
+                "/workspace/swarm-next",
+            )
+            .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store
+            .assign_task_to_worker_as(
+                task.id,
+                worker_id,
+                &swarm_domain::TaskActivityActor::operator(),
+            )
+            .unwrap();
+        store
+            .amend_task_facts(
+                task.id,
+                worker_id,
+                "False: the column carries a CHECK constraint.",
+            )
+            .unwrap();
+
+        let listed = response_json(
+            handle(
+                bridge,
+                plain_state(),
+                mcp_request(
+                    Some(&worker_token),
+                    "tools/call",
+                    &json!({ "name": "swarm_list_tasks", "arguments": {} }),
+                ),
+            )
+            .await,
+        )
+        .await
+        .to_string();
+
+        assert!(
+            listed.contains("False: the column carries a CHECK constraint."),
+            "the correction travels with the description: {listed}"
+        );
+        assert!(
+            listed.contains("NO schema migration is needed."),
+            "and the original is still there to be corrected: {listed}"
+        );
+        assert!(
+            listed.contains("cannot change scope or acceptance"),
+            "and the precedence rule travels with it: {listed}"
+        );
+    }
+
     #[tokio::test]
     async fn discovery_is_role_scoped_and_credentials_survive_bridge_recreation() {
         let (bridge, store, queen_id, worker_id, directory) = setup();
@@ -2622,6 +2783,7 @@ mod tests {
                 // one whose note went stale, and it must not cost a trip out of
                 // Review to say so.
                 "swarm_correct_task_record",
+                "swarm_amend_task_facts",
                 "swarm_record_no_deployment",
                 "swarm_draft_email_reply",
                 "swarm_create_task",

@@ -10,7 +10,7 @@ use swarm_domain::{
     Apiary, ApiaryId, ApiaryMemberSummary, ControlRoomEventKind, Hive, HiveId, HiveIdentity,
     LocalApiaryContext, LocalApiaryRole, Operator, OperatorId, SharedWorkBackend,
     StewardCapability, Stewardship, StewardshipId, Task, TaskActivity, TaskActivityActor,
-    TaskActivityActorKind, TaskActivityKind, TaskActivityPage, TaskDetailsUpdate,
+    TaskActivityActorKind, TaskActivityKind, TaskActivityPage, TaskAmendment, TaskDetailsUpdate,
     TaskDispatchState, TaskId, TaskOutcomeDeliveryState, TaskPriority, TaskState, WorkerId,
     WorkerSessionId,
 };
@@ -150,7 +150,8 @@ const ATTENTION_NOTIFICATION_SCHEMA_VERSION: i64 = 94;
 const SUPERSEDED_EXEMPTION_SCHEMA_VERSION: i64 = 95;
 const OPEN_PROVIDER_SET_SCHEMA_VERSION: i64 = 96;
 const EPHEMERAL_WORKER_SCHEMA_VERSION: i64 = 97;
-const CURRENT_SCHEMA_VERSION: i64 = EPHEMERAL_WORKER_SCHEMA_VERSION;
+const TASK_AMENDMENT_SCHEMA_VERSION: i64 = 98;
+const CURRENT_SCHEMA_VERSION: i64 = TASK_AMENDMENT_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1128,6 +1129,158 @@ impl TaskStore {
         transaction.commit()?;
         drop(connection);
         self.get_task(id)
+    }
+
+    /// Appends a correction of FACT to a task's description.
+    ///
+    /// The operator's ruling on decision 01a04108: "Facts govern, scope and
+    /// acceptance never do", by "Worker and Queen, always attributed".
+    ///
+    /// APPEND ONLY. There is no update and no delete, deliberately and for the
+    /// author too: a second thought is another amendment. That is what keeps the
+    /// property immutability was protecting — what a worker was told when it
+    /// picked the task up can still be reconstructed exactly.
+    ///
+    /// WHAT THIS CANNOT DO, said here because the limit is easy to forget once
+    /// the tool exists: it cannot tell a correction of fact from an attempt to
+    /// change what the task is FOR. Both are free text from the same author.
+    /// Any classifier would be a heuristic over prose and would fail silently
+    /// toward accepting a scope change, which is the failure being removed. What
+    /// IS structural is that the original can never be erased and never stops
+    /// governing scope, and that every amendment carries its author.
+    ///
+    /// # Errors
+    /// Returns an error when the task or worker is unknown, or the body is empty
+    /// or over the note limit.
+    pub fn amend_task_facts(
+        &self,
+        id: TaskId,
+        author: WorkerId,
+        body: &str,
+    ) -> Result<TaskAmendment, TaskStoreError> {
+        let body = body.trim();
+        if body.is_empty() || body.len() > MAX_TASK_ACTIVITY_NOTE_BYTES {
+            return Err(TaskStoreError::InvalidTaskActivityNote);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let author_name: String = transaction
+            .query_row(
+                "SELECT name FROM worker_profiles WHERE id = ?1 AND archived_at IS NULL",
+                [author.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::WorkerNotFound)?;
+        let exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE id = ?1 AND removed_at IS NULL)",
+            [id.to_string()],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(TaskStoreError::NotFound);
+        }
+        let amendment_id = Uuid::now_v7().to_string();
+        transaction.execute(
+            "INSERT INTO task_amendments (id, task_id, author_worker_id, body)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![amendment_id, id.to_string(), author.to_string(), body],
+        )?;
+        let created_at: i64 = transaction.query_row(
+            "SELECT created_at FROM task_amendments WHERE id = ?1",
+            [&amendment_id],
+            |row| row.get(0),
+        )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        transaction.commit()?;
+        Ok(TaskAmendment {
+            id: amendment_id,
+            author_worker_id: author,
+            author_name,
+            body: body.to_owned(),
+            created_at,
+        })
+    }
+
+    /// Amendments for MANY tasks at once, keyed by task.
+    ///
+    /// One query rather than one per task: the listing that needs this is
+    /// Queen's whole queue, and an N+1 there would make reading the board more
+    /// expensive the more work it holds.
+    ///
+    /// # Errors
+    /// Returns an error when the query fails.
+    pub fn amendments_for_tasks(
+        &self,
+        ids: &[TaskId],
+    ) -> Result<std::collections::HashMap<TaskId, Vec<TaskAmendment>>, TaskStoreError> {
+        let mut grouped: std::collections::HashMap<TaskId, Vec<TaskAmendment>> =
+            std::collections::HashMap::new();
+        if ids.is_empty() {
+            return Ok(grouped);
+        }
+        let connection = self.connection()?;
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let mut statement = connection.prepare(&format!(
+            "SELECT a.task_id, a.id, a.author_worker_id, w.name, a.body, a.created_at
+             FROM task_amendments a
+             JOIN worker_profiles w ON w.id = a.author_worker_id
+             WHERE a.task_id IN ({placeholders})
+             ORDER BY a.created_at, a.id"
+        ))?;
+        let bound = ids.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let rows = statement.query_map(rusqlite::params_from_iter(bound.iter()), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                TaskAmendment {
+                    id: row.get(1)?,
+                    author_worker_id: WorkerId::from_str(&row.get::<_, String>(2)?)
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    author_name: row.get(3)?,
+                    body: row.get(4)?,
+                    created_at: row.get(5)?,
+                },
+            ))
+        })?;
+        for row in rows {
+            let (task_id, amendment) = row?;
+            let Ok(task_id) = TaskId::from_str(&task_id) else {
+                continue;
+            };
+            grouped.entry(task_id).or_default().push(amendment);
+        }
+        Ok(grouped)
+    }
+
+    /// Every amendment on a task, oldest first.
+    ///
+    /// Oldest first because they are read as a sequence: the original, then what
+    /// was learned, in the order it was learned.
+    ///
+    /// # Errors
+    /// Returns an error when the query fails.
+    pub fn task_amendments(&self, id: TaskId) -> Result<Vec<TaskAmendment>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT a.id, a.author_worker_id, w.name, a.body, a.created_at
+             FROM task_amendments a
+             JOIN worker_profiles w ON w.id = a.author_worker_id
+             WHERE a.task_id = ?1
+             ORDER BY a.created_at, a.id",
+        )?;
+        let amendments = statement
+            .query_map([id.to_string()], |row| {
+                Ok(TaskAmendment {
+                    id: row.get(0)?,
+                    author_worker_id: WorkerId::from_str(&row.get::<_, String>(1)?)
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    author_name: row.get(2)?,
+                    body: row.get(3)?,
+                    created_at: row.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(amendments)
     }
 
     /// Returns an open task to the Hive queue without stopping its former worker.
@@ -2542,6 +2695,47 @@ fn migrate_ephemeral_workers(transaction: &rusqlite::Transaction<'_>) -> rusqlit
     transaction.pragma_update(None, "user_version", EPHEMERAL_WORKER_SCHEMA_VERSION)
 }
 
+/// Corrections of FACT appended to a task's description, never replacing it.
+///
+/// The operator's ruling, decision 01a04108: "Facts govern, scope and acceptance
+/// never do", and "Worker and Queen, always attributed".
+///
+/// The defect this closes is an asymmetry rather than an absence. A task could
+/// already be corrected — in a NOTE, which is subordinate to the description it
+/// corrects. So the error sat in the authoritative place and its correction sat
+/// three screens below it, and a correction system whose corrections carry less
+/// standing than the thing they correct reliably loses.
+///
+/// APPEND ONLY, enforced by there being no update or delete path. Not even the
+/// author can revise an amendment; they append another. That is what preserves
+/// the property immutability was protecting — you can still reconstruct exactly
+/// what a worker was told when it picked the task up.
+///
+/// `author_worker_id` is NOT NULL on purpose. An unattributed amendment to the
+/// governing text would be strictly worse than the stale text it replaces.
+fn migrate_task_amendments(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                        WHERE type = 'table' AND name = 'tasks')",
+        [],
+        |row| row.get(0),
+    )?;
+    if present {
+        transaction.execute_batch(
+            "CREATE TABLE IF NOT EXISTS task_amendments (
+                 id TEXT PRIMARY KEY,
+                 task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                 author_worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+                 body TEXT NOT NULL,
+                 created_at INTEGER NOT NULL DEFAULT (unixepoch())
+             );
+             CREATE INDEX IF NOT EXISTS task_amendments_by_task
+                 ON task_amendments(task_id, created_at);",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", TASK_AMENDMENT_SCHEMA_VERSION)
+}
+
 fn migrate_schema(
     transaction: &rusqlite::Transaction<'_>,
     schema_version: i64,
@@ -2844,6 +3038,9 @@ fn migrate_newest_schema_steps(
     }
     if schema_version < EPHEMERAL_WORKER_SCHEMA_VERSION {
         migrate_ephemeral_workers(transaction)?;
+    }
+    if schema_version < TASK_AMENDMENT_SCHEMA_VERSION {
+        migrate_task_amendments(transaction)?;
     }
     Ok(())
 }
@@ -6256,6 +6453,12 @@ mod tests {
             undo_sql: "",
             probe_sql: "",
         },
+        SchemaStep {
+            table: "task_amendments",
+            artifact: "",
+            undo_sql: "",
+            probe_sql: "",
+        },
     ];
 
     fn newest_step() -> &'static SchemaStep {
@@ -6288,6 +6491,81 @@ mod tests {
     /// Seventeen tables carry foreign keys into `worker_profiles`, so a rebuild
     /// with no children present tests almost nothing about a rebuild. One bound
     /// session is enough to make the difference between the two outcomes.
+    /// An amendment corrects the record without erasing what it corrects.
+    ///
+    /// The defect this closes is an asymmetry, not an absence: a task could
+    /// already be corrected in a NOTE, which is subordinate to the description
+    /// it corrects. So the false claim sat in the authoritative place and its
+    /// correction sat three screens below. A correction system whose corrections
+    /// carry less standing than the thing they correct reliably loses.
+    ///
+    /// APPEND ONLY, and the assertion that matters is the second amendment: a
+    /// revision is another amendment, never an edit, so what a worker was told
+    /// when it picked the task up can still be reconstructed exactly. That is
+    /// the property immutability was protecting, kept without immutability.
+    #[test]
+    fn an_amendment_is_attributed_appended_and_never_replaces_the_original() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Swarm Next",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace/swarm-next",
+                false,
+                1,
+            )
+            .unwrap();
+        let task = store
+            .create_task_with_details(
+                "Add a provider",
+                "NO schema migration is needed.",
+                TaskPriority::Normal,
+                "/workspace/swarm-next",
+            )
+            .unwrap();
+
+        let first = store
+            .amend_task_facts(task.id, worker.id, "False: the column carries a CHECK.")
+            .unwrap();
+        assert_eq!(first.author_worker_id, worker.id);
+        assert_eq!(
+            first.author_name, "Swarm Next",
+            "an amendment names its author"
+        );
+
+        // The original is untouched. This is what stops an amendment being an
+        // edit: the description a worker was briefed with is still there.
+        assert_eq!(
+            store.get_task(task.id).unwrap().description,
+            "NO schema migration is needed.",
+            "the original text survives its own correction"
+        );
+
+        // A second thought is another amendment, not a revision of the first.
+        store
+            .amend_task_facts(task.id, worker.id, "Schema 96 has since removed it.")
+            .unwrap();
+        let amendments = store.task_amendments(task.id).unwrap();
+        assert_eq!(
+            amendments.len(),
+            2,
+            "corrections accumulate rather than replace"
+        );
+        assert_eq!(amendments[0].body, "False: the column carries a CHECK.");
+        assert_eq!(amendments[1].body, "Schema 96 has since removed it.");
+
+        // Unattributed amendment of governing text would be worse than the stale
+        // text it corrects, so an unknown author is refused outright.
+        assert!(matches!(
+            store.amend_task_facts(task.id, WorkerId::new(), "who wrote this"),
+            Err(TaskStoreError::WorkerNotFound)
+        ));
+        assert!(matches!(
+            store.amend_task_facts(task.id, worker.id, "   "),
+            Err(TaskStoreError::InvalidTaskActivityNote)
+        ));
+    }
+
     #[test]
     fn migrates_the_previous_schema_when_the_database_carries_related_rows() {
         let directory = tempfile::tempdir().unwrap();
