@@ -1088,3 +1088,48 @@ test("counts held work in the Needs you badge", async () => {
   expect(await screen.findByText(/has work waiting behind a prompt/)).toBeInTheDocument();
   await waitFor(() => expect(screen.getByRole("button", { name: /^Needs you/ })).toHaveTextContent("1"));
 });
+
+test("a blocked task old enough to escalate is counted, not just drawn", async () => {
+  // THE BADGE MUST NOT DISAGREE WITH THE PAGE. The escalation was computed,
+  // handed to the inbox as additionalPendingCount, and left out of the count —
+  // so its card rendered while "Needs you" read 0. A badge that disagrees with
+  // the page teaches the operator to stop believing the badge, which is the one
+  // thing it has to do. It also silenced the push for it, because the watermark
+  // only quiets sources the count knows about.
+  const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
+    if (url === "/api/v1/auth/session") return Promise.resolve(ok({}));
+    if (url.endsWith("/integrations/email/awaiting-reply")) return Promise.resolve(ok([]));
+    if (url === "/api/v1/hive") return Promise.resolve(ok({
+      operator: { id: "operator-1", display_name: "Bea" },
+      hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: null },
+    }));
+    if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: [] }));
+    if (["/api/v1/workers", "/api/v1/workspaces", "/api/v1/tasks", "/api/v1/decisions"].includes(url)) return Promise.resolve(ok([]));
+    if (url === "/api/v1/integrations/jira/bindings") return Promise.resolve(ok([]));
+    if (url === "/api/v1/apiary/join-links") return Promise.resolve(ok([]));
+    if (url.includes("/api/v1/control-room/events")) return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
+    if (url.includes("/api/v1/orchestration/queen-policy")) return Promise.resolve(ok({ at_hive: "coordinate", away: "coordinate", night_watch: "local_execution" }));
+    if (url.includes("/api/v1/orchestration/coordinator")) return Promise.resolve(ok({
+      completed_actions: 0, queen_calls_avoided: 0, uncertain_actions: 0, queued_actions: 0,
+      stale_attention_actions: 0, worker_exit_attention_actions: 0, unstarted_attention_actions: 0,
+      last_action_at: null, automatic_start_admission: "allowed", automatic_start_batch_limit: 1,
+      held: [],
+      blocked_escalations: [{ task_id: "019fedfc-1c30-70e1-a5e2-9a3c94268099", title: "A task nobody has come back to", worker_name: "Platform", workspace: "/workspace/platform", blocked_for_seconds: 50_400 }],
+    }));
+    if (url.includes("/api/v1/providers")) return Promise.resolve(ok({ claude_code: true, codex: false }));
+    if (url.includes("/api/v1/preferences/presentation/desktop")) return Promise.resolve(ok({ device_class: "desktop", color_theme: "light", terminal_keys_visible: true, configured: true }));
+    if (url.includes("/api/v1/integrations/jira/task-links")) return Promise.resolve(ok([]));
+    if (url.includes("/api/v1/preferences/start-surface")) return Promise.resolve(ok({ start_surface: "decisions" }));
+    return Promise.resolve(ok({ policy: "important_only", subscription_count: 0 }));
+  });
+  vi.stubGlobal("fetch", fetch);
+
+  render(<App />);
+
+  // The card is on the page...
+  expect(await screen.findByText(/A task nobody has come back to/)).toBeInTheDocument();
+  // ...and the badge agrees with it, which is the part that was missing.
+  await waitFor(() => expect(screen.getByRole("button", { name: /^Needs you/ })).toHaveTextContent("1"));
+});

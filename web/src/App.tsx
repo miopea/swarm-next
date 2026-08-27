@@ -1327,8 +1327,14 @@ export function App() {
   // operator to stop believing the badge, which is the one thing it has to do.
   const heldDeliveryAttentionCount = heldDeliveries.length > 0 ? 1 : 0;
   const blockedEscalationAttentionCount = blockedEscalations.length > 0 ? 1 : 0;
+  // blockedEscalationAttentionCount BELONGS HERE and was missing, which is the
+  // same defect the paragraph above describes and fixes for held deliveries.
+  // It was computed, passed to the inbox as additionalPendingCount, and left
+  // out of the badge — so a blocked task old enough to escalate rendered its
+  // card on the page while "Needs you" read 0. It also silenced the push for
+  // it, because the watermark below only quiets sources the count knows about.
   const attentionCount = pendingDecisionCount + pendingAssistCount + queenAutomationAttentionCount
-    + heldDeliveryAttentionCount + awaitingReply.length;
+    + heldDeliveryAttentionCount + blockedEscalationAttentionCount + awaitingReply.length;
   // WHEN THEY ACTUALLY LOOKED. The watermark this advances is the only thing
   // keeping push quiet now that every Needs-you source is eligible, so it is
   // recorded from the surface being open and visible — never from a poll.
