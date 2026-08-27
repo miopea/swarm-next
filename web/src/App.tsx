@@ -1192,9 +1192,29 @@ export function App() {
         ...current.filter((shell) => shell.session_id !== sessionId),
         { session_id: sessionId, running: true, worker_name: worker.name },
       ]);
-      setActiveSessionId(sessionId);
+      openWorker(sessionId);
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : "the shell could not be opened");
+    }
+  }
+
+  /**
+   * Closes a shell and forgets it.
+   *
+   * Nothing else can: a shell is bound to no worker, so the roster's sleep
+   * action does not reach it and reconcile never sweeps it. Without this the
+   * only way to stop one is to restart the terminal host, which would take
+   * every worker down with it.
+   */
+  async function closeShell(sessionId: string) {
+    if (!operatorToken) return;
+    try {
+      await stopClaudeSession(operatorToken, sessionId);
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : "the shell could not be closed");
+    } finally {
+      setShellSessions((current) => current.filter((shell) => shell.session_id !== sessionId));
+      setActiveSessionId((current) => (current === sessionId ? undefined : current));
     }
   }
 
@@ -1254,8 +1274,13 @@ export function App() {
     [normalizedWorkerQuery, visibleWorkers],
   );
   const railVisibleOrphanSessions = useMemo(
-    () => orphanSessions.filter((session) => orphanSessionMatchesRosterQuery(workerName(session.session_id), normalizedWorkerQuery)),
-    [normalizedWorkerQuery, orphanSessions],
+    // A shell is unbound by design, which is exactly what makes a session an
+    // "orphan" here — so without this filter every shell is listed twice, once
+    // as itself and once as a pre-roster session with a generated worker name.
+    () => orphanSessions.filter((session) =>
+      !shellSessions.some((shell) => shell.session_id === session.session_id)
+      && orphanSessionMatchesRosterQuery(workerName(session.session_id), normalizedWorkerQuery)),
+    [normalizedWorkerQuery, orphanSessions, shellSessions],
   );
   const sleepingWorkerMatchesRailQuery = useMemo(
     () => workerVisibility === "awake" && normalizedWorkerQuery
@@ -1596,13 +1621,16 @@ export function App() {
                      * Listed separately from workers because it IS separate —
                      * no presence, no attention state, nothing to report.
                      */
-                    <button className="worker-button" aria-current={shell.session_id === activeSessionId ? "page" : undefined} key={shell.session_id} onClick={() => setActiveSessionId(shell.session_id)}>
-                      <span className="worker-avatar" aria-hidden="true">$_</span>
-                      <span className="worker-copy">
-                        <strong>Shell</strong>
-                        <small>{shell.worker_name}&apos;s workspace</small>
-                      </span>
-                    </button>
+                    <div className="worker-row" key={shell.session_id}>
+                      <button className="worker-button" aria-current={shell.session_id === activeSessionId ? "page" : undefined} onClick={() => openWorker(shell.session_id)}>
+                        <span className="worker-avatar" aria-hidden="true">$_</span>
+                        <span className="worker-copy">
+                          <strong>Shell</strong>
+                          <small>{shell.worker_name}&apos;s workspace</small>
+                        </span>
+                      </button>
+                      <button className="worker-shell-close" type="button" aria-label={`Close the shell in ${shell.worker_name}'s workspace`} onClick={() => void closeShell(shell.session_id)}>×</button>
+                    </div>
                   ))}
                   {railVisibleOrphanSessions.map((session) => {
                     const task = tasksBySession.get(session.session_id);
