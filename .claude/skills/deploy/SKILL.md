@@ -46,33 +46,89 @@ clean release; that put a `too_many_lines` error on main.
 `CARGO_INCREMENTAL=0` is required in this workspace — six rustc ICEs came from
 the incremental cache, each masking real errors.
 
-### And check CI on the current head
+### And check CI — on the commit you are releasing, not on whatever main is
 
 Local green and CI red means the two are measuring different things, and that
-gap is exactly what shipped ten findings across three releases. It is one call:
+gap is exactly what shipped ten findings across three releases.
+
+**CI CANNOT HAVE RUN ON WORK YOU HAVE NOT PUSHED.** 0.8.18 was cut with 33
+commits unpushed: `origin/main` was 32 behind, its four checks were green, and
+every one of them described work from hours earlier. Reading that as "CI is
+green" is the same false green this file already warns about, arriving through
+a different door — the answer was real, it was just to a different question.
+
+So the order is **push, wait, check, THEN tag**. Push first (step 3 up to the
+push, without the tag), then:
 
 ```bash
+# The commit CI must have run on is the one you are about to tag.
+HEAD_SHA=$(git rev-parse HEAD)
+gh api repos/miopea/swarm-next/commits/main --jq '.sha'   # must equal HEAD_SHA
+until [ "$(gh api repos/miopea/swarm-next/commits/main/check-runs \
+           --jq '[.check_runs[] | select(.status != "completed")] | length')" = "0" ]; do
+  sleep 20
+done
 gh api repos/miopea/swarm-next/commits/main/check-runs \
-  --jq '.check_runs[] | "\(.name) \(.status) \(.conclusion // "pending")"'
+  --jq '.check_runs[] | "\(.name): \(.conclusion)"'
 ```
 
-**Do not tag while `rust` is failing.** A pending run is not a failure — wait
-for it, or note plainly that you released without waiting and why. A red one
-means your local check missed something; find out what before adding a tag,
-because a tag is awkward to walk back.
+**Compare the sha before you believe the conclusions.** A green result from an
+ancestor is not a green result for your release, and nothing in the output says
+which commit it belongs to.
 
-## 2. Bump
+**Do not tag while `rust` is failing.** A pending run is not a failure — wait
+for it, as the loop above does, or note plainly that you released without
+waiting and why. A red one means your local check missed something; find out
+what before adding a tag, because a tag is awkward to walk back.
+
+## 2. Bump — then READ IT BACK
 
 Edit `version` in the root `Cargo.toml` (eight crates share it), then let cargo
 refresh the lock:
 
 ```bash
-sed -i '15s/^version = "0.8.16"/version = "0.8.17"/' Cargo.toml
+NEW=0.8.19
+# Address the FIELD, not a line number. Anchored to the start of a line so it
+# cannot touch a version inside a dependency table.
+sed -i -E "0,/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"$/s//version = \"$NEW\"/" Cargo.toml
+
+# THE BUMP IS NOT DONE UNTIL IT IS READ BACK.
+GOT=$(sed -n -E 's/^version = "([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p' Cargo.toml | head -1)
+[ "$GOT" = "$NEW" ] || { echo "bump did not apply: Cargo.toml says $GOT" >&2; exit 1; }
+
 CARGO_INCREMENTAL=0 cargo check --workspace --quiet
 ```
 
+**A LINE-ADDRESSED `sed` MATCHES NOTHING AND SAYS NOTHING.** The previous
+version of this step was `sed -i '15s/...'`, and the version line has moved
+since it was written. During 0.8.18 it was run against line 14, changed
+nothing, and reported success — caught only because `git diff --stat` came back
+empty. A release then goes out carrying the PREVIOUS version number while every
+log line says the bump worked.
+
+That is the failure shape this repository keeps producing: a check that cannot
+fail. Same as the reconcile that compares a symlink against itself, and the
+schema tests that passed against empty databases. The guard is reading the
+value back, not writing it more carefully.
+
 Ask the operator for the version if it is anything other than a patch bump.
 Patch is right almost always, and wrong exactly when it matters.
+
+### If this release carries a schema migration, say the number out loud
+
+```bash
+git diff --unified=0 "v$(git tag --list 'v*' --sort=-v:refname | head -1 | tr -d v)"..HEAD \
+  -- crates/swarm-persistence/src/lib.rs | grep -E '^\+const .*_SCHEMA_VERSION' || echo "none"
+```
+
+0.8.18 went out as a PATCH carrying migrations 96 through 102, one of which
+rebuilds `worker_profiles` — the table seventeen others hold foreign keys into,
+and one that had already failed once on the operator's real database. Nothing
+in this procedure noticed, because a patch bump asks no questions.
+
+If that command prints anything, tell the operator the range and the version
+you intend, and get an explicit answer before tagging. This is not a versioning
+policy — it is refusing to make the choice silently.
 
 ## 3. Commit, tag, push
 
