@@ -422,6 +422,25 @@ fi
 [ "$(cat "$SWARM_STATE_ROOT/backups/pre-update-3.0.0.sqlite3")" = "database-v2" ]
 [ "$(tail -n 2 "$HOME/curl.log" | tr '\n' ' ')" = "3.0.0 2.0.0 " ]
 
+# THE REFUSAL NAMES THE COMMAND THAT WORKS. `update` correctly declines a
+# protocol change, and for three hours on 2026-08-27 that refusal was a dead
+# end: it said a compatibility migration was required and never said that
+# migrate-protocol is one. The release was reverted instead of migrated.
+migrate_refusal=$("$package" update "$test_root/bundle-4.0.0" 2>&1 || true)
+case "$migrate_refusal" in
+  *migrate-protocol*) :;;
+  *) echo "the protocol refusal does not name migrate-protocol: $migrate_refusal" >&2; exit 1;;
+esac
+# And it names both protocols, so the operator can see WHICH way they differ
+# rather than being told only that they do.
+case "$migrate_refusal" in
+  *"protocol 6"*|*"speaks 5"*) :;;
+  *) echo "the protocol refusal does not name the protocols: $migrate_refusal" >&2; exit 1;;
+esac
+# The refusal must still refuse: nothing moved.
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "2.0.0" ]
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "2.0.0" ]
+
 # Explicit protocol migration refuses active workers, then atomically switches
 # both processes while retaining the old API and host for rollback.
 printf '1\n' > "$HOME/running-sessions"

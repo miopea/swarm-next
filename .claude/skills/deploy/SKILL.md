@@ -119,7 +119,34 @@ Seeing "generated from commit subjects" for the version you are cutting means
 your section heading does not match the version — notes written for 0.8.20 while
 cutting 0.9.0 are silently ignored, and the output looks fine either way.
 
-## 3. Bump — then READ IT BACK
+## 3. Check whether the terminal-host protocol moved
+
+```bash
+git diff v<previous>..HEAD -- crates/swarm-terminal/src/ipc.rs | grep PROTOCOL_VERSION
+```
+
+If `PROTOCOL_VERSION` changed, **say so in the release notes and the GitHub
+release**, because a Hive installs it with a different command:
+
+```bash
+swarm-package migrate-protocol <bundle>     # NOT update
+```
+
+`update` refuses a protocol change on purpose — a host and an API speaking
+different protocols is the failure that guard exists to prevent. The migration
+drains the terminal host, defers if any worker session is live, and swaps the
+API and the host together.
+
+**Tell the operator their workers will be stopped.** A protocol migration is the
+one install that cannot preserve running terminals, because both processes have
+to move at once. Everything else in this file leaves workers alone.
+
+On 2026-08-27 a protocol bump reached main without this step, every operator
+reload died at the install guard for three hours, and the release was reverted
+rather than migrated — the command existed the whole time and the error did not
+name it.
+
+## 4. Bump — then READ IT BACK
 
 Edit `version` in the root `Cargo.toml` (eight crates share it), then let cargo
 refresh the lock:
@@ -168,7 +195,7 @@ If that command prints anything, tell the operator the range and the version
 you intend, and get an explicit answer before tagging. This is not a versioning
 policy — it is refusing to make the choice silently.
 
-## 4. Commit, tag, push
+## 5. Commit, tag, push
 
 ```bash
 git add Cargo.toml Cargo.lock
@@ -182,14 +209,14 @@ guard covers a reload from a checkout and **not** a tarball install — an
 upgrading Hive migrates unprotected. Tell the operator to copy their
 `swarm.sqlite3` first when it does.
 
-## 5. Build
+## 6. Build
 
 ```bash
 eval "$(op-login)"
 sh packaging/linux/build-release.sh      # prints the tarball path — read it, never guess
 ```
 
-## 6. Verify the ARTIFACT, not your working tree
+## 7. Verify the ARTIFACT, not your working tree
 
 The tarball is what a Hive installs. A fix present in your checkout and absent
 from the artifact ships nothing.
@@ -220,7 +247,7 @@ sh -n packaging/linux/test-package-lifecycle.sh   # it parses
 An ablation is the only evidence a guard works. A guard that passes on correct
 input has told you nothing.
 
-## 7. GitHub release
+## 8. GitHub release
 
 ```bash
 gh release create vX.Y.Z $T --title "Swarm X.Y.Z" --notes "..."
@@ -228,7 +255,7 @@ gh release create vX.Y.Z $T --title "Swarm X.Y.Z" --notes "..."
 
 Notes say what a Hive taking it gets, and name the migration if there is one.
 
-## 8. Sign the manifest
+## 9. Sign the manifest
 
 The key lives in 1Password and exists on disk only for this command.
 `/run/user/$UID` is tmpfs, so it never reaches a disk.
@@ -251,7 +278,7 @@ error.
 The manifest states what is offered **now** — it rewrites the whole document from
 the tarballs named, so a release is withdrawn by ceasing to list it.
 
-## 9. Fetch the artifact through the manifest's own URL
+## 10. Fetch the artifact through the manifest's own URL
 
 ```bash
 URL=$(python3 -c "import json;print(json.load(open('releases.json'))['payload']['releases'][0]['artifact_url'])")
@@ -263,7 +290,7 @@ python3 -c "import json;print(json.load(open('releases.json'))['payload']['relea
 Expect 200 and identical hashes. This is the step that catches a manifest
 pointing somewhere wrong, and it is the reason 0.8.7 cannot happen again.
 
-## 10. Publish
+## 11. Publish
 
 ```bash
 git add releases.json && git commit -m "release: offer X.Y.Z to Hives" && git push origin main
@@ -273,7 +300,7 @@ gh api repos/miopea/swarm-next/contents/releases.json --jq '.content' | base64 -
 Publishing the manifest is what makes a release real. A tarball on GitHub and
 absent from the manifest is offered to nobody.
 
-## 11. Propagation — published is not live
+## 12. Propagation — published is not live
 
 ```bash
 curl -sS -H 'Cache-Control: no-cache' \

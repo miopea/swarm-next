@@ -633,13 +633,37 @@ apply_release() {
     die "the requested directory is not a Swarm release"
   }
   printf 'state=installing\nversion=%s\n' "$requested_version" > "$status_path"
+  # A PROTOCOL CHANGE TAKES THE OTHER COMMAND, and hardcoding `update` here is
+  # why the control room could not install one at all. `update` refuses a
+  # protocol change by design, so an operator accepting such a release from the
+  # control room got the refusal and no route forward.
+  #
+  # Choosing migrate-protocol here is safe rather than bold: it drains the host
+  # and DEFERS when any session is live, so it cannot take a worker's terminal
+  # out from under them. The dangerous version would be widening the guard, and
+  # that is untouched.
+  apply_command=update
+  # Carried into the FINAL status too, not only the in-flight one. A status file
+  # outlives the attempt that wrote it, and "installed" alone cannot be told
+  # apart from an ordinary update -- so the one fact that distinguishes this
+  # install, that the terminal host was swapped with the API, would be gone by
+  # the time anybody read it.
+  migration_marker=
+  host_release=$(release_from_link "$install_root/host-current")
+  if [ -n "$host_release" ] && [ -f "$host_release/PROTOCOL" ] \
+    && [ "$(cat "$host_release/PROTOCOL")" != "$(cat "$requested/PROTOCOL")" ]; then
+    apply_command=migrate-protocol
+    migration_marker='protocol_migration=1
+'
+    printf 'state=installing\nversion=%s\n%s' "$requested_version" "$migration_marker" > "$status_path"
+  fi
   # The bundle verifies its own SHA256SUMS on update, so integrity does not
   # depend on whoever wrote the request having been honest.
-  if "$requested/swarm-package" update "$requested"; then
-    printf 'state=installed\nversion=%s\n' "$requested_version" > "$status_path"
+  if "$requested/swarm-package" "$apply_command" "$requested"; then
+    printf 'state=installed\nversion=%s\n%s' "$requested_version" "$migration_marker" > "$status_path"
     rm -rf "$requested"
   else
-    printf 'state=failed\nversion=%s\n' "$requested_version" > "$status_path"
+    printf 'state=failed\nversion=%s\n%s' "$requested_version" "$migration_marker" > "$status_path"
     die "the requested release did not install"
   fi
 }
@@ -684,7 +708,21 @@ install_or_update() {
   fi
   if [ -n "$host_release" ]; then
     host_protocol=$(cat "$host_release/PROTOCOL")
-    [ "$host_protocol" = "$protocol" ] || die "protocol change requires an explicit compatibility migration"
+    # NAMES THE COMMAND, NOT JUST THE CONCEPT. This refusal is correct and is
+    # doing its job -- a host and an API speaking different protocols is the
+    # failure it exists to prevent. But it used to say only that "an explicit
+    # compatibility migration" was required, and migrate-protocol IS that
+    # migration and has existed all along. On 2026-08-27 every operator reload
+    # died here for three hours and the release was reverted instead, because
+    # nothing in the message pointed at the command that would have worked.
+    #
+    # A procedure nobody can find from the error is barely better than one that
+    # does not exist.
+    if [ "$host_protocol" != "$protocol" ]; then
+      die "this release speaks terminal-host protocol $protocol and the installed host speaks $host_protocol, so 'update' cannot install it. Run the protocol migration instead, which swaps the API and the host together and defers if any worker session is live:
+
+    $bundle/swarm-package migrate-protocol $bundle"
+    fi
   fi
   # When the new release carries the same engine, move host-current onto it
   # rather than leaving it on the release it was installed from. Nothing

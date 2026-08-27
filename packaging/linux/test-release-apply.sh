@@ -162,3 +162,22 @@ host_changed=$(basename "$(readlink "$SWARM_INSTALL_ROOT/host-current")")
 [ "$host_changed" = "7.0.0" ] || fail "a changed engine must not be swapped under running workers ($host_changed)"
 
 printf 'release apply smoke passed\n'
+
+# LAST, because it moves the Hive to a new protocol: A PROTOCOL CHANGE INSTALLS FROM THE CONTROL ROOM, which it could not.
+#
+# apply-release hardcoded `update`, and `update` refuses a protocol change by
+# design. So an operator accepting such a release in the control room got the
+# refusal and no route forward — the in-app path could not reach the migration
+# that exists. Choosing it here is safe rather than bold: migrate-protocol
+# drains and DEFERS while any session is live, so it cannot take a worker's
+# terminal out from under them.
+make_bundle 9.0.0 6
+mkdir -p "$SWARM_STATE_ROOT/downloads"
+cp -r "$test_root/bundle-9.0.0" "$SWARM_STATE_ROOT/downloads/9.0.0"
+printf '%s\n' "$SWARM_STATE_ROOT/downloads/9.0.0" > "$SWARM_STATE_ROOT/release-apply.request"
+sh "$SWARM_INSTALL_ROOT/current/swarm-package" apply-release >/dev/null \
+  || fail "a protocol-bumping release did not install from the control room"
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "9.0.0" ] || fail "current is not 9.0.0"
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "9.0.0" ] || fail "the host was left on the old protocol"
+grep -q 'protocol_migration=1' "$SWARM_STATE_ROOT/release-apply.status" \
+  || fail "the status did not say a protocol migration was chosen"
