@@ -25,6 +25,7 @@ restore_rollback=
 restore_auth=
 restore_incoming=
 update_rollback=
+update_schema_before=
 update_auth=
 update_incoming=
 dev_config="$config_root/swarm-dev.env"
@@ -36,6 +37,72 @@ dev_reload_revision=
 die() { printf 'swarm-package: %s\n' "$*" >&2; exit 1; }
 run_systemctl() { "$systemctl_bin" --user "$@"; }
 terminal_socket() { printf '%s/swarm/terminal.sock\n' "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; }
+
+# The schema a database file is at, without opening it.
+#
+# user_version is a 4-byte big-endian integer at offset 60 of the SQLite
+# header — a documented, stable part of the file format. Read as raw bytes
+# rather than with od --endian so this does not depend on a coreutils version,
+# and without sqlite3 so it works on a box that has never had it installed.
+database_schema_version() {
+  [ -f "$1" ] || return 1
+  # THE MAGIC IS CHECKED FIRST BECAUSE OFFSET 60 EXISTS IN EVERY FILE. Without
+  # it this reads four arbitrary bytes out of whatever it was handed and
+  # returns them as a schema number, which is worse than failing: the caller
+  # compares that number and decides whether to warn the operator that their
+  # database is unreadable.
+  case $(od -An -c -N15 "$1" 2>/dev/null | tr -d ' \n') in
+    'SQLiteformat3') :;;
+    *) return 1;;
+  esac
+  schema_bytes=$(od -An -tx1 -j60 -N4 "$1" 2>/dev/null | tr -d ' \n')
+  [ ${#schema_bytes} -eq 8 ] || return 1
+  printf '%d\n' "0x$schema_bytes"
+}
+
+# The newest schema a release understands, asked of the release itself.
+#
+# Measured rather than assumed: the binary is handed a path that does not
+# exist, opens it, migrates the empty database to its own current schema, and
+# the answer is read back out of the file. No table is touched and no existing
+# database is opened, so this is safe to run against a live Hive.
+release_schema_version() {
+  [ -x "$1/bin/swarmctl" ] || return 1
+  schema_probe="$state_root/.schema-probe-$$.sqlite3"
+  rm -f "$schema_probe" "$schema_probe-wal" "$schema_probe-shm"
+  if ! "$1/bin/swarmctl" verify-database "$schema_probe" >/dev/null 2>&1; then
+    rm -f "$schema_probe" "$schema_probe-wal" "$schema_probe-shm"
+    return 1
+  fi
+  probed=$(database_schema_version "$schema_probe" || printf '')
+  rm -f "$schema_probe" "$schema_probe-wal" "$schema_probe-shm"
+  [ -n "$probed" ] || return 1
+  printf '%s\n' "$probed"
+}
+
+# A UNIT THAT HAS HIT ITS START LIMIT REFUSES TO START, AND SAYS SO IN WORDS
+# NOBODY CONNECTS TO AN UPDATE.
+#
+# systemd gives up after enough rapid failures and answers every later start
+# with "start request repeated too quickly". On 2026-08-27 a developer's API
+# crash-looped 459 times, and from then on EVERY install failed here — not
+# because the new release was bad, but because the unit was latched failed
+# from the old one. Nothing in the updater cleared it, so the one action that
+# would have let her install her way out was the one action she had no way to
+# discover.
+#
+# Announced rather than done quietly: an operator watching an update needs to
+# know the unit was in a failed state, because that is a fact about the run
+# before this one and it does not otherwise appear anywhere they will look.
+clear_start_limit() {
+  for limited_unit in "$@"; do
+    if run_systemctl is-failed --quiet "$limited_unit" 2>/dev/null; then
+      printf 'swarm-package: %s was latched in a failed state; clearing it before starting\n' \
+        "$limited_unit" >&2
+      run_systemctl reset-failed "$limited_unit" >/dev/null 2>&1 || true
+    fi
+  done
+}
 
 on_exit() {
   result=$?
@@ -55,12 +122,12 @@ on_exit() {
     activate_link "$rollback_release" >/dev/null 2>&1 || true
     activate_host_link "$rollback_host_release" >/dev/null 2>&1 || true
     install_units "$rollback_release" >/dev/null 2>&1 || true
-    restore_update_database >/dev/null 2>&1 || true
+    restore_update_database >/dev/null || true
     run_systemctl enable --now swarm.target >/dev/null 2>&1 || true
   elif [ -n "$rollback_release" ] && [ -d "$rollback_release" ]; then
     activate_link "$rollback_release" >/dev/null 2>&1 || true
     install_units "$rollback_release" >/dev/null 2>&1 || true
-    restore_update_database >/dev/null 2>&1 || true
+    restore_update_database >/dev/null || true
     run_systemctl restart swarm-api.service >/dev/null 2>&1 || true
   fi
   if [ -n "$drain_release" ]; then
@@ -91,9 +158,16 @@ prune_update_backups() {
 
 create_update_backup() {
   current_release=$1
-  verifier_release=${2:-$current_release}
+  # Used ONLY when the rollback target carries no swarmctl, and then only
+  # against a copy. See the verification block below for why it is never the
+  # first choice.
+  fallback_verifier=${2:-}
   database="$state_root/swarm.sqlite3"
   [ -f "$database" ] || return 0
+  # Captured BEFORE the new release can migrate it, so a rollback can tell the
+  # difference between "the database is untouched" and "the database moved on
+  # and the release we are rolling back to cannot read it".
+  update_schema_before=$(database_schema_version "$database" || printf '')
   mkdir -p "$state_root/backups"
   chmod 0700 "$state_root/backups"
   update_incoming="$state_root/.update-backup-$$.sqlite3"
@@ -101,10 +175,76 @@ create_update_backup() {
   token=$(sed -n 's/^SWARM_OPERATOR_TOKEN=//p' "$config_root/swarm.env")
   umask 077
   printf 'header = "Authorization: Bearer %s"\n' "$token" > "$update_auth"
-  "$curl_bin" --fail --silent --show-error --config "$update_auth" --output "$update_incoming" "${health_url%/health}/api/v1/backups/database" || die "could not create the pre-update database backup"
+  # THE ENDPOINT IS PREFERRED, NOT REQUIRED.
+  #
+  # Asking the API for the backup takes a consistent snapshot of a database
+  # that is being written, which a file copy cannot. But making it the ONLY
+  # path meant the repair depended on the thing that was broken: on
+  # 2026-08-27 a developer's API could not start, so `update` hung for 135
+  # seconds on a connect and then refused, and there was no supported route
+  # to install any release. She could run neither the old one nor the new.
+  #
+  # --connect-timeout so an unreachable API costs five seconds rather than
+  # the two minutes she waited before being told anything at all.
+  if "$curl_bin" --fail --silent --show-error --connect-timeout 5 --max-time 300 \
+    --config "$update_auth" --output "$update_incoming" \
+    "${health_url%/health}/api/v1/backups/database"; then
+    backup_source=api
+  else
+    # THE COPY IS SAFE EXACTLY WHEN IT IS NEEDED. It is reached only because
+    # the API did not answer, and an API that is not running is not writing
+    # the database — so there is no torn read to worry about. A live API
+    # never takes this path.
+    #
+    # The -wal and -shm files come too: in WAL mode the newest committed
+    # transactions live in the -wal, and copying the main file alone would
+    # produce a backup that silently lost them.
+    printf 'API unreachable; copying the database directly for the pre-update backup\n' >&2
+    cp -f "$database" "$update_incoming" || die "could not copy the database for the pre-update backup"
+    # Written as `if` rather than `[ ... ] && cp` only for legibility -- both
+    # are safe here, because `set -e` exempts a command that fails inside an
+    # AND-OR list. No -wal beside the database is the ordinary case.
+    if [ -f "$database-wal" ]; then cp -f "$database-wal" "$update_incoming-wal"; fi
+    if [ -f "$database-shm" ]; then cp -f "$database-shm" "$update_incoming-shm"; fi
+    backup_source=copy
+  fi
   rm -f "$update_auth"
   update_auth=
-  "$verifier_release/bin/swarmctl" verify-database "$update_incoming" >/dev/null || die "pre-update database backup failed verification"
+  # THE VERIFIER MUST BE THE RELEASE WE WOULD ROLL BACK TO, AND THAT IS NOT A
+  # PREFERENCE.
+  #
+  # verify-database opens the file through TaskStore::open, which MIGRATES
+  # anything older than the binary's own schema before checking it. So verify
+  # with the new release and the act of verifying rewrites the backup to the
+  # new schema -- measured 2026-08-27: a backup taken at 95 came back 102. The
+  # rollback then restores a database the old binary refuses to open, which is
+  # the unbootable pair of a restored release and a migrated database, and it
+  # is produced BY the step that exists to make rollback safe. Both call sites
+  # used to pass the new release explicitly, so this had never worked for any
+  # release carrying a migration.
+  #
+  # The old release's schema equals the backup's, so `found < CURRENT` is
+  # false, nothing migrates, and verify_integrity still runs in full. The check
+  # is not weakened; it is pointed at the binary whose opinion matters.
+  #
+  # It is also why the API-free copy above is acceptable: verify-database is a
+  # binary, not an endpoint, so the check is exactly as strong on a copied file
+  # as on a fetched one. Opening the database also folds in any -wal beside it.
+  if [ -x "$current_release/bin/swarmctl" ]; then
+    "$current_release/bin/swarmctl" verify-database "$update_incoming" >/dev/null \
+      || die "pre-update database backup failed verification (source: $backup_source)"
+  elif [ -n "$fallback_verifier" ] && [ -x "$fallback_verifier/bin/swarmctl" ]; then
+    # Verify a COPY, so integrity is still proven and the backup itself is
+    # never opened by a newer schema. The copy is byte-identical at the moment
+    # it is checked, so the verdict transfers to the file we keep.
+    cp -f "$update_incoming" "$update_incoming.check"
+    "$fallback_verifier/bin/swarmctl" verify-database "$update_incoming.check" >/dev/null \
+      || die "pre-update database backup failed verification (source: $backup_source)"
+    rm -f "$update_incoming.check" "$update_incoming.check-wal" "$update_incoming.check-shm"
+  else
+    die "no swarmctl is available to verify the pre-update database backup"
+  fi
+  rm -f "$update_incoming-wal" "$update_incoming-shm"
   update_rollback="$state_root/backups/pre-update-$version.sqlite3"
   chmod 0600 "$update_incoming"
   mv -f "$update_incoming" "$update_rollback"
@@ -112,14 +252,43 @@ create_update_backup() {
   prune_update_backups
 }
 
+# Put the database back where the release we are rolling back to can read it.
+#
+# THE OLD BINARY AND THE NEW SCHEMA IS AN UNBOOTABLE HIVE. A release refuses a
+# database newer than it understands -- correctly, because the alternative is
+# reading rows it has no model for. So a rollback that restores the binary and
+# leaves a migrated database has not rolled anything back: it has assembled a
+# combination that cannot start, and the operator is left with two releases
+# installed and neither of them able to run.
+#
+# Every exit from here SAYS which of those happened. The version that returned
+# 0 in silence is what can turn one failed update into a machine that needs
+# hand recovery, because nothing on the way past tells anyone the database has
+# been left ahead of the binary.
 restore_update_database() {
-  [ -n "$update_rollback" ] || return 0
-  [ -f "$update_rollback" ] || die "pre-update rollback backup is missing"
   database="$state_root/swarm.sqlite3"
+  if [ -z "$update_rollback" ]; then
+    schema_now=$(database_schema_version "$database" || printf '')
+    if [ -n "$schema_now" ] && [ -n "$update_schema_before" ] \
+      && [ "$schema_now" -gt "$update_schema_before" ]; then
+      # The one case that must never be quiet. There is no backup to restore
+      # and the database has moved past the release being restored, so the
+      # rollback is about to produce a Hive that will not start. Name the
+      # directory rather than pick a file: which backup is the right one is the
+      # operator's call, and guessing it for them is how data goes missing.
+      printf 'swarm-package: THE ROLLBACK IS INCOMPLETE. The database migrated from schema %s to %s during this update and no pre-update backup exists, so the restored release cannot read it. Restore a backup from %s before starting Swarm:\n\n    swarm-package restore <backup>\n\n' \
+        "$update_schema_before" "$schema_now" "$state_root/backups" >&2
+    else
+      printf 'swarm-package: no pre-update database backup was taken; the database is unchanged and was left as it is\n' >&2
+    fi
+    return 0
+  fi
+  [ -f "$update_rollback" ] || die "pre-update rollback backup is missing"
   run_systemctl stop swarm-api.service
   cp "$update_rollback" "$database"
   chmod 0600 "$database"
   rm -f "$database-wal" "$database-shm"
+  printf 'swarm-package: restored the pre-update database from %s\n' "$update_rollback" >&2
   update_rollback=
 }
 
@@ -532,6 +701,8 @@ install_or_update() {
     host_release=$new_release
     engine_carried_forward=1
   fi
+  # First argument verifies; the second is only a fallback for a copy. The
+  # rollback target is what must be able to read the backup afterwards.
   [ -z "$old_release" ] || create_update_backup "$old_release" "$new_release"
   previous_release=$(release_from_link "$install_root/previous")
   [ -z "$previous_release" ] || publish_assets "$previous_release"
@@ -542,6 +713,7 @@ install_or_update() {
     activate_link "$new_release"
     activate_host_link "$new_release"
     install_units "$new_release"
+    clear_start_limit swarm-api.service swarm.target
     if run_systemctl enable --now swarm.target \
       && run_systemctl enable --now swarm-host-reconcile.path swarm-host-reconcile.timer swarm-release-apply.path \
       && wait_for_health && wait_for_host "$new_release"; then
@@ -567,6 +739,7 @@ install_or_update() {
   activate_link "$new_release"
   install_units "$new_release"
   rollback_release=$old_release
+  clear_start_limit swarm-api.service swarm.target
   if run_systemctl enable --now swarm.target \
     && run_systemctl enable --now swarm-host-reconcile.path swarm-host-reconcile.timer swarm-release-apply.path \
     && run_systemctl restart swarm-api.service && wait_for_health; then
@@ -585,6 +758,7 @@ install_or_update() {
   activate_link "$old_release"
   install_units "$old_release"
   restore_update_database
+  clear_start_limit swarm-api.service swarm.target
   run_systemctl restart swarm-api.service
   if wait_for_health; then
     rollback_release=
@@ -602,10 +776,34 @@ rollback() {
   [ -n "$current" ] || die "no current release is installed"
   [ -n "$host_release" ] || die "no terminal host release is installed"
   [ "$(cat "$previous/PROTOCOL")" = "$(cat "$host_release/PROTOCOL")" ] || die "rollback API is incompatible with the active terminal host"
+  # ROLLBACK IS NOT ONLY A BINARY. An update migrates the database before it
+  # can fail, so moving the symlink back gives an older API a newer schema,
+  # which it refuses -- correctly -- and the unit crash-loops. The operation
+  # named "rollback" then leaves a Hive worse off than before it was run, which
+  # is exactly what happened on 2026-08-27.
+  #
+  # Checked BEFORE anything moves, and refused rather than half-done. A
+  # rollback that stops and names the missing step costs a command; one that
+  # proceeds costs a hand-recovered machine. Naming a backup to restore is as
+  # far as this goes -- choosing one is the operator's call, because the wrong
+  # choice silently discards work.
+  target_schema=$(release_schema_version "$previous" || printf '')
+  live_schema=$(database_schema_version "$state_root/swarm.sqlite3" || printf '')
+  if [ -n "$target_schema" ] && [ -n "$live_schema" ] && [ "$live_schema" -gt "$target_schema" ]; then
+    newest_backup=$(ls -1t "$state_root/backups"/pre-update-*.sqlite3 2>/dev/null | head -1)
+    if [ -n "$newest_backup" ]; then
+      die "the database is at schema $live_schema and $(basename "$previous") reads $target_schema, so rolling back now would leave a Hive that cannot start. Restore the database first, then roll back:
+
+    swarm-package restore $newest_backup
+    swarm-package rollback"
+    fi
+    die "the database is at schema $live_schema and $(basename "$previous") reads $target_schema, so rolling back now would leave a Hive that cannot start. No pre-update backup is retained in $state_root/backups; restore one with 'swarm-package restore <backup>' before rolling back."
+  fi
   rollback_release=$current
   activate_link "$previous"
   ln -sfn "$current" "$install_root/previous"
   install_units "$previous"
+  clear_start_limit swarm-api.service swarm.target
   run_systemctl restart swarm-api.service
   wait_for_health || die "rollback release failed health verification"
   rollback_release=

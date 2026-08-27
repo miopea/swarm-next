@@ -22,6 +22,17 @@ cat > "$SWARM_SYSTEMCTL_BIN" <<'EOF'
 #!/bin/sh
 set -eu
 printf '%s\n' "$*" >> "$HOME/systemctl.log"
+# is-failed ANSWERS HONESTLY, or the updater's start-limit check is untestable.
+# A stub that exits 0 for everything reports every unit as failed, so the check
+# fires on every start and the log looks identical whether it works or not.
+# systemd's convention is non-zero for "not failed", which is the state a
+# healthy box is in; the marker file is how a test asks for the other one.
+for stub_argument in "$@"; do
+  if [ "$stub_argument" = "is-failed" ]; then
+    [ -f "$HOME/unit-latched-failed" ] || exit 1
+    exit 0
+  fi
+done
 EOF
 cat > "$SWARM_CURL_BIN" <<'EOF'
 #!/bin/sh
@@ -333,12 +344,32 @@ fi
 [ -f "$SWARM_INSTALL_ROOT/assets/app-2.0.0.js" ]
 [ "$(find "$SWARM_INSTALL_ROOT/releases" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2 ]
 [ "$(cat "$SWARM_STATE_ROOT/backups/pre-update-2.0.0.sqlite3")" = "database-v1" ]
-[ "$(tail -n 1 "$HOME/verify-release.log")" = "2.0.0" ]
+# THE ROLLBACK TARGET VERIFIES, NOT THE INCOMING RELEASE. This asserted 2.0.0
+# until 2026-08-27, which pinned the defect rather than the requirement:
+# verify-database migrates what it opens, so verifying with the new release
+# rewrote the pre-update backup to the new schema and left the rollback holding
+# a database its own binary refuses. See create_update_backup.
+[ "$(tail -n 1 "$HOME/verify-release.log")" = "1.0.0" ]
 [ "$(find "$SWARM_STATE_ROOT/backups" -maxdepth 1 -type f -name 'pre-update-*.sqlite3' | wc -l)" -eq 10 ]
 [ ! -e "$SWARM_STATE_ROOT/backups/pre-update-old-1.sqlite3" ]
 
 # API rollback is also sidecar-safe while a worker is active.
+# A unit latched failed by an earlier crash loop is cleared before starting.
+# Without this an update cannot install its way out: systemd answers every
+# start with "start request repeated too quickly" and the updater reports a
+# failure that has nothing to do with the release being installed.
 : > "$HOME/systemctl.log"
+touch "$HOME/unit-latched-failed"
+"$package" rollback
+grep -q '^--user reset-failed swarm-api.service$' "$HOME/systemctl.log"
+rm -f "$HOME/unit-latched-failed"
+# And a healthy unit is left alone rather than reset on every start.
+: > "$HOME/systemctl.log"
+"$package" update "$test_root/bundle-2.0.0"
+if grep -q 'reset-failed' "$HOME/systemctl.log"; then
+  echo "a healthy unit was reset anyway" >&2
+  exit 1
+fi
 "$package" rollback
 [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "1.0.0" ]
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "1.0.0" ]
