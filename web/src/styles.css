@@ -331,8 +331,13 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 /* The shell opens over the worker it belongs to rather than beside it in the
    rail, where it read as a peer of the workers it is not one of. */
 .shell-modal-backdrop { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 24px; background: color-mix(in srgb, var(--ink, #000) 55%, transparent); }
-.shell-modal { display: grid; grid-template-rows: auto minmax(0, 1fr); width: min(1100px, 100%); height: min(720px, 100%); overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35); }
-.shell-modal-header { display: flex; align-items: baseline; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+/* resize: both is the browser's own handle rather than one of ours, because the
+   terminal inside already watches its container with a ResizeObserver -- so the
+   pty follows the window with no wiring. overflow must not be `visible` for a
+   resize handle to appear at all, which is why it is hidden rather than unset. */
+.shell-modal { display: grid; grid-template-rows: auto minmax(0, 1fr); width: min(1100px, 100%); height: min(720px, 100%); min-width: 420px; min-height: 240px; max-width: 100vw; max-height: 100vh; overflow: hidden; resize: both; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35); }
+/* The drag handle. touch-action none so a drag is not stolen by scrolling. */
+.shell-modal-header { display: flex; align-items: baseline; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); cursor: move; touch-action: none; user-select: none; }
 .shell-modal-header small { color: var(--quiet); }
 .shell-modal-close { margin-left: auto; }
 .shell-modal > :last-child { min-height: 0; overflow: hidden; }

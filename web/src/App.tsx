@@ -100,6 +100,7 @@ import { queenAutomationNeedsAttention } from "./orchestration/queenAutomationPr
 import { foreignEngagement, workerAttention, workerSwitcherDetail } from "./workers/workerAttention";
 import DecisionInbox from "./decisions/DecisionInbox";
 import DogfoodFeedbackDialog from "./feedback/DogfoodFeedbackDialog";
+import ShellModal from "./terminal/ShellModal";
 import CommandPalette, { type CommandChoice } from "./navigation/CommandPalette";
 import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
 import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
@@ -1213,6 +1214,16 @@ export function App() {
    */
   async function closeShell(sessionId: string) {
     setShell(undefined);
+    // The worker terminal underneath repaints from its own buffer the moment the
+    // modal unmounts, and it does so with the metrics it measured while it was
+    // covered — which renders as garbled glyphs for one frame before the next
+    // full redraw corrects it. The operator saw exactly that. Resetting the
+    // renderer makes the first paint after the modal a correct one; this is the
+    // same remedy a recovered terminal already uses.
+    if (activeSessionId) {
+      terminalWorkspace.resetSessionRenderer(activeSessionId);
+      setTerminalRevision((current) => current + 1);
+    }
     if (!operatorToken) return;
     try {
       await stopClaudeSession(operatorToken, sessionId);
@@ -1818,32 +1829,22 @@ export function App() {
           />
         ) : null}
         {operatorToken && shell ? (
-          /*
-           * No focus trap, deliberately. useModalFocus intercepts Escape and Tab
-           * to move between controls -- and both are load-bearing keystrokes in a
-           * shell: Escape cancels, Tab completes a path. A modal that swallowed
-           * them would be a worse terminal than no modal at all. Closing is the
-           * button or the backdrop.
-           */
-          <div className="shell-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) void closeShell(shell.session_id); }}>
-            <div className="shell-modal" role="dialog" aria-modal="true" aria-label={`Shell in ${shell.worker_name}'s workspace`}>
-              <div className="shell-modal-header">
-                <strong>Shell</strong>
-                <small>{shell.worker_name}&apos;s workspace</small>
-                <button type="button" className="shell-modal-close" onClick={() => void closeShell(shell.session_id)}>Close</button>
-              </div>
-              <TerminalLoadBoundary key={`${operatorToken}:${shell.session_id}`}>
-                <Suspense fallback={<div className="terminal-empty">Preparing shell…</div>}>
-                  <TerminalView
-                    operatorToken={operatorToken}
-                    session={{ session_id: shell.session_id, running: true }}
-                    busy={false}
-                    canStop={false}
-                  />
-                </Suspense>
-              </TerminalLoadBoundary>
-            </div>
-          </div>
+          <ShellModal
+            title="Shell"
+            subtitle={`${shell.worker_name}'s workspace`}
+            onClose={() => void closeShell(shell.session_id)}
+          >
+            <TerminalLoadBoundary key={`${operatorToken}:${shell.session_id}`}>
+              <Suspense fallback={<div className="terminal-empty">Preparing shell…</div>}>
+                <TerminalView
+                  operatorToken={operatorToken}
+                  session={{ session_id: shell.session_id, running: true }}
+                  busy={false}
+                  canStop={false}
+                />
+              </Suspense>
+            </TerminalLoadBoundary>
+          </ShellModal>
         ) : null}
         {operatorToken && showCommands ? <CommandPalette choices={commandChoices} onClose={() => setShowCommands(false)} /> : null}
         {operatorToken && showFeedback ? (
