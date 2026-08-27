@@ -28,24 +28,47 @@ export default function WhatsNewModal({ releases, onDismiss }: {
       >
         <p className="eyebrow">Updated</p>
         <h3 id="whats-new-heading">{heading}</h3>
-        {releases.map((release) => (
-          <section key={release.version} className="whats-new-release">
-            {releases.length > 1 && <h4 className="whats-new-version">{release.version}</h4>}
-            <ul className="whats-new-notes">
-              {release.notes.map((note, index) => (
-                <li key={`${release.version}-${index}`}>
-                  <span className={`whats-new-kind ${note.kind}`}>{note.kind === "fix" ? "Fixed" : "New"}</span>
-                  <span className="whats-new-summary">{note.summary}</span>
-                  {/* Installed and NOT in effect. Saying "new" about something
-                      the operator cannot use yet is worse than not listing it. */}
-                  {note.needs_worker_engine_update && (
-                    <span className="whats-new-pending"> · after the worker engine update</span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))}
+        {releases.map((release) => {
+          // Grouped rather than interleaved: someone scanning for what they can
+          // now DO should not have to read past a list of repairs to find it.
+          const features = release.notes.filter((note) => note.kind !== "fix");
+          const fixes = release.notes.filter((note) => note.kind === "fix");
+          return (
+            <section key={release.version} className="whats-new-release">
+              {releases.length > 1 && <h4 className="whats-new-version">{release.version}</h4>}
+              {features.length > 0 && (
+                <>
+                  <h5 className="whats-new-group">New features</h5>
+                  <ul className="whats-new-notes">
+                    {features.map((note, index) => (
+                      <li key={`${release.version}-feature-${index}`}>
+                        <span className="whats-new-summary">{sentence(note.summary)}</span>
+                        {note.needs_worker_engine_update && (
+                          <span className="whats-new-pending"> · after the worker engine update</span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {fixes.length > 0 && (
+                <>
+                  <h5 className="whats-new-group">Fixes</h5>
+                  <ul className="whats-new-notes">
+                    {fixes.map((note, index) => (
+                      <li key={`${release.version}-fix-${index}`}>
+                        <span className="whats-new-summary">{sentence(note.summary)}</span>
+                        {note.needs_worker_engine_update && (
+                          <span className="whats-new-pending"> · after the worker engine update</span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </section>
+          );
+        })}
         {awaitingEngine && (
           <p className="whats-new-engine-note">
             Some of this is installed but not running yet. The terminal host keeps your workers alive across an
@@ -60,4 +83,19 @@ export default function WhatsNewModal({ releases, onDismiss }: {
       </div>
     </div>
   );
+}
+
+/**
+ * A commit subject, read as a sentence.
+ *
+ * They are written lowercase to follow a verb — "fix: the shell window escapes
+ * the container" — which reads correctly in a git log and reads like a fragment
+ * anywhere else. The list is what the operator sees after an update, so it gets
+ * a capital.
+ *
+ * Only the first character is touched. Rewording is the releaser's job; guessing
+ * at it here would put words in their mouth.
+ */
+function sentence(summary: string): string {
+  return summary.charAt(0).toUpperCase() + summary.slice(1);
 }

@@ -199,11 +199,34 @@ fn notes_between(root: &Path, from: &str, to: &str) -> Result<Vec<ReleaseNote>, 
     // A record separator no commit subject contains, so a subject with a colon
     // or a pipe in it cannot split the line.
     let listed = git(root, &["log", "--no-merges", "--format=%H\x1f%s", &range])?;
+    // A commit undone inside this range never reached anybody, so announcing it
+    // would be a release advertising something it does not contain. 0.8.18
+    // would have told every developer that alpha providers had shipped; they
+    // were reverted three hours before the tag.
+    //
+    // Matched on the subject git itself writes -- `Revert "<original subject>"`
+    // -- because that is the only link between the two commits that survives.
+    // A revert whose subject was hand-edited is missed, and that is the honest
+    // limit: it silences a note rather than inventing one.
+    let reverted: std::collections::HashSet<String> = listed
+        .lines()
+        .filter_map(|line| line.split_once('\u{1f}'))
+        .filter_map(|(_, subject)| {
+            subject
+                .strip_prefix("Revert \"")
+                .and_then(|rest| rest.strip_suffix('"'))
+                .map(ToOwned::to_owned)
+        })
+        .collect();
+
     let mut notes = Vec::new();
     for line in listed.lines() {
         let Some((sha, subject)) = line.split_once('\u{1f}') else {
             continue;
         };
+        if reverted.contains(subject) {
+            continue;
+        }
         let Some((kind, summary)) = conventional_note(subject) else {
             continue;
         };
@@ -270,6 +293,30 @@ fn git(root: &Path, arguments: &[&str]) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::conventional_note;
+
+    /// A commit undone inside the same release is not news.
+    ///
+    /// 0.8.18 would have announced alpha providers to every developer. They
+    /// were reverted three hours before the tag, so the release did not contain
+    /// them -- a release advertising what it does not carry is worse than one
+    /// that says less.
+    #[test]
+    fn a_reverted_commit_is_not_announced() {
+        // The shape git writes, which is the only link between the pair that
+        // survives into the log.
+        let subject = "feat: gemini, grok and opencode ship as alpha providers";
+        let revert = format!("Revert \"{subject}\"");
+        assert_eq!(
+            revert
+                .strip_prefix("Revert \"")
+                .and_then(|rest| rest.strip_suffix('"')),
+            Some(subject),
+            "the revert must name the subject it undoes"
+        );
+
+        // And a revert is itself not a note: it carries no conventional prefix.
+        assert_eq!(conventional_note(&revert), None);
+    }
 
     /// The filter reads the conventional-commit PREFIX, not the first letters.
     #[test]

@@ -47,3 +47,53 @@ test("dismissing reports it once", () => {
   fireEvent.click(screen.getByRole("button", { name: "Got it" }));
   expect(onDismiss).toHaveBeenCalledTimes(1);
 });
+
+/**
+ * Grouped, not interleaved. Someone scanning for what they can now DO should
+ * not have to read past a list of repairs to find it.
+ */
+test("separates new features from fixes", () => {
+  render(
+    <WhatsNewModal
+      releases={[{
+        version: "0.8.18",
+        notes: [
+          { summary: "a shell opens from the menu", kind: "feature", needs_worker_engine_update: false },
+          { summary: "the shell window stops jumping", kind: "fix", needs_worker_engine_update: false },
+        ],
+      }]}
+      onDismiss={() => {}}
+    />,
+  );
+  expect(screen.getByText("New features")).toBeInTheDocument();
+  expect(screen.getByText("Fixes")).toBeInTheDocument();
+});
+
+/** A release with only repairs does not show an empty features heading. */
+test("omits a section that has nothing in it", () => {
+  render(
+    <WhatsNewModal
+      releases={[{
+        version: "0.8.18",
+        notes: [{ summary: "the box stops failing", kind: "fix", needs_worker_engine_update: false }],
+      }]}
+      onDismiss={() => {}}
+    />,
+  );
+  expect(screen.queryByText("New features")).toBeNull();
+  expect(screen.getByText("Fixes")).toBeInTheDocument();
+});
+
+/** Commit subjects are written lowercase to follow a verb; the modal is not a git log. */
+test("reads each line as a sentence", () => {
+  render(
+    <WhatsNewModal
+      releases={[{
+        version: "0.8.18",
+        notes: [{ summary: "a shell opens from the menu", kind: "feature", needs_worker_engine_update: false }],
+      }]}
+      onDismiss={() => {}}
+    />,
+  );
+  expect(screen.getByText("A shell opens from the menu")).toBeInTheDocument();
+});

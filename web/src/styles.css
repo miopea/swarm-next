@@ -1629,9 +1629,12 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
    scrolled rather than truncated so nothing is silently dropped. */
 .whats-new { width: min(560px, 100%); max-height: min(72vh, 640px); overflow-y: auto; }
 .whats-new-release { display: grid; gap: 5px; }
+.whats-new-group { margin: 9px 0 1px; color: var(--ink); font-size: .78rem; font-weight: 600; }
+.whats-new-release > .whats-new-group:first-child { margin-top: 0; }
 .whats-new-version { margin: 6px 0 0; color: var(--muted); font-size: .7rem; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; }
-.whats-new-notes { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.whats-new-notes li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 7px; font-size: .82rem; line-height: 1.45; }
+.whats-new-notes { display: grid; gap: 6px; margin: 0; padding: 0 0 0 18px; }
+.whats-new-notes li { font-size: .82rem; line-height: 1.45; color: var(--ink); }
+.whats-new-notes li::marker { color: var(--accent-strong); }
 .whats-new-kind { flex: none; padding: 1px 7px; border-radius: var(--radius); background: var(--accent-soft); color: var(--accent-strong); font-size: .66rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
 .whats-new-kind.fix { background: var(--good-soft); color: var(--good); }
 .whats-new-summary { flex: 1 1 240px; min-width: 0; color: var(--ink); }
