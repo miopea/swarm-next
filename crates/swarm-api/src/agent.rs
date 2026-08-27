@@ -698,6 +698,7 @@ impl ServerHandler for AgentMcp {
                                 suggested_action: input.suggested_action,
                                 allowed_actions: input.allowed_actions,
                                 questions: input.questions,
+                                requested_command: input.command,
                                 deadline: input.deadline,
                             },
                         )
@@ -1892,6 +1893,12 @@ struct DraftEmailReplyInput {
 #[derive(Deserialize)]
 struct RequestDecisionInput {
     task_id: Option<String>,
+    /// The one command being asked for, verbatim.
+    ///
+    /// Defaulted so a client holding the older schema, which cannot send it,
+    /// keeps filing ordinary decisions rather than failing to file at all.
+    #[serde(default)]
+    command: Option<String>,
     kind: DecisionRequestKind,
     #[serde(default)]
     urgency: DecisionUrgency,
@@ -2000,7 +2007,8 @@ fn request_decision_tool() -> Tool {
                 "suggested_action": { "type": "string", "maxLength": 80, "description": "The recommended button label. During Queen automation this must exactly match one allowed_actions value." },
                 "questions": { "type": "array", "maxItems": 4, "description": "Ask instead of guessing. Each question offers 2 to 4 options and a unique header; the operator may still answer with something none of them offered. A record carries questions or allowed_actions, never both.", "items": { "type": "object", "properties": { "header": { "type": "string", "maxLength": 40 }, "question": { "type": "string", "maxLength": 600 }, "options": { "type": "array", "minItems": 2, "maxItems": 4, "items": { "type": "string", "maxLength": 200 } }, "multi_select": { "type": "boolean", "default": false } }, "required": ["header", "question", "options"], "additionalProperties": false } },
                 "allowed_actions": { "type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "description": "Short, task-specific operator choices. Do not encode actions for other tasks.", "items": { "type": "string", "minLength": 1, "maxLength": 80 } },
-                "deadline": { "type": ["integer", "null"] }
+                "deadline": { "type": ["integer", "null"] },
+                "command": { "type": ["string", "null"], "maxLength": 4000, "description": "The ONE shell command you are asking to be allowed to run, verbatim and complete. Supplying it adds a separate grant button to the request; approving THAT button, and only that button, lets you run this command. The grant is scoped to you, dies when the task leaves the board, and is offered to one session. Send the command you will actually run, not a pattern and not a shortened version: the operator reads this exact text before allowing it, and a command that does not match what you run is a request for something nobody approved. Omit this for an ordinary approval that authorises no execution." }
             },
             "required": ["kind", "title", "summary", "reason", "suggested_action"],
             "additionalProperties": false
