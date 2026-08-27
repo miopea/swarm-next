@@ -52,7 +52,9 @@ import {
   setManualPresence,
   setPresentationPreferences,
   setQueenAutonomyPolicy,
+  adoptWorker,
   openWorkerShell,
+  spawnTemporaryWorker,
   startWorker,
   stopClaudeSession,
   stopWorker,
@@ -1191,6 +1193,41 @@ export function App() {
     setOperationError(undefined);
   }
 
+  /**
+   * Spawns a throwaway sibling on another provider, in the same workspace.
+   *
+   * Not a second session on the worker underneath: two providers under one
+   * worker would break the one-session-per-worker assumption that sleep/wake
+   * and briefing delivery rely on.
+   */
+  async function spawnTemporary(worker: Worker, provider: string) {
+    if (!operatorToken) return;
+    setOperationError(undefined);
+    try {
+      const created = await spawnTemporaryWorker(operatorToken, worker.id, provider);
+      const controlRoom = await loadControlRoom(operatorToken);
+      setWorkers(controlRoom.workers);
+      setOperationError(`${created.name} is temporary — adopt it to keep it, or release it when you are done.`);
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : "the temporary worker could not be started");
+    }
+  }
+
+  /** Keeps a temporary worker, under a permanent name. */
+  async function adoptTemporary(worker: Worker) {
+    if (!operatorToken) return;
+    const name = window.prompt("Name this worker", worker.name.replace(/ · .*$/, ""));
+    if (!name?.trim()) return;
+    setOperationError(undefined);
+    try {
+      await adoptWorker(operatorToken, worker.id, name.trim());
+      const controlRoom = await loadControlRoom(operatorToken);
+      setWorkers(controlRoom.workers);
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : "the worker could not be adopted");
+    }
+  }
+
   async function openShellForWorker(worker: Worker) {
     if (!operatorToken) return;
     setOperationError(undefined);
@@ -1623,6 +1660,9 @@ export function App() {
                         onStart={() => void startExistingWorker(worker)}
                         onStop={() => sessionId && void stopSession(sessionId)}
                         onOpenShell={() => void openShellForWorker(worker)}
+                        onSpawnTemporary={(provider) => void spawnTemporary(worker, provider)}
+                        onAdopt={() => void adoptTemporary(worker)}
+                        onRelease={() => void removeWorkerProfile(worker.id)}
                       />
                     );
                   })}

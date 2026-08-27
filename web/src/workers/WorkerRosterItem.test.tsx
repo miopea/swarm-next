@@ -178,3 +178,68 @@ test("no shell entry appears when the caller cannot show one", () => {
 
   expect(screen.queryByRole("menuitem", { name: "Open a shell here" })).toBeNull();
 });
+
+/**
+ * A temporary worker offers Adopt and Release; a permanent one offers neither.
+ *
+ * The operator chose "Adopt into the Hive" or "Release" as the only two ways a
+ * temporary worker ends — nothing auto-dismisses. Release rather than Kill
+ * because its board writes survive it either way, and a name that implies
+ * erasure would be wrong about what happens.
+ */
+test("a temporary worker can be adopted or released", () => {
+  const onAdopt = vi.fn();
+  const onRelease = vi.fn();
+  render(
+    <WorkerRosterItem
+      worker={{ ...queen, id: "temp", name: "Daisy · Codex", role: "worker", provider: "codex", ephemeral: true }}
+      selected={false}
+      detail="Temporary"
+      busy={false}
+      onOpen={vi.fn()}
+      onStart={vi.fn()}
+      onStop={vi.fn()}
+      onAdopt={onAdopt}
+      onRelease={onRelease}
+      onSpawnTemporary={vi.fn()}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Actions for Daisy · Codex" }));
+  expect(screen.getByRole("menuitem", { name: "Adopt into the Hive" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("menuitem", { name: "Release" }));
+
+  expect(onRelease).toHaveBeenCalledTimes(1);
+  expect(onAdopt).not.toHaveBeenCalled();
+});
+
+/** A permanent worker is offered the other providers, not its own. */
+test("a permanent worker is offered providers other than the one it runs", () => {
+  const onSpawnTemporary = vi.fn();
+  render(
+    <WorkerRosterItem
+      worker={{ ...queen, id: "worker", name: "Daisy", role: "worker", provider: "claude_code" }}
+      selected={false}
+      detail="Running"
+      busy={false}
+      onOpen={vi.fn()}
+      onStart={vi.fn()}
+      onStop={vi.fn()}
+      onSpawnTemporary={onSpawnTemporary}
+      onAdopt={vi.fn()}
+      onRelease={vi.fn()}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Actions for Daisy" }));
+
+  // Its own provider is not offered: spawning a Claude sibling beside a Claude
+  // worker is a second session, which is the thing this deliberately is not.
+  expect(screen.queryByRole("menuitem", { name: /Try this with Claude/ })).toBeNull();
+  fireEvent.click(screen.getByRole("menuitem", { name: /Try this with Codex/ }));
+  expect(onSpawnTemporary).toHaveBeenCalledWith("codex");
+
+  // And a permanent worker is never offered Adopt or Release.
+  expect(screen.queryByRole("menuitem", { name: "Adopt into the Hive" })).toBeNull();
+  expect(screen.queryByRole("menuitem", { name: "Release" })).toBeNull();
+});

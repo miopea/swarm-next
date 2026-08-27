@@ -3303,6 +3303,14 @@ fn api_router(state: AppState) -> Router {
             post(workers::start_worker),
         )
         .route(
+            "/api/v1/workers/{worker_id}/temporary",
+            post(workers::spawn_temporary_worker),
+        )
+        .route(
+            "/api/v1/workers/{worker_id}/adoption",
+            post(workers::adopt_worker),
+        )
+        .route(
             "/api/v1/workers/{worker_id}/shell",
             post(workers::open_shell),
         )

@@ -402,6 +402,101 @@ pub(super) async fn update_worker(
     .into_response())
 }
 
+#[derive(Deserialize)]
+pub(super) struct SpawnTemporaryRequest {
+    provider: ProviderKind,
+}
+
+#[derive(Deserialize)]
+pub(super) struct AdoptWorkerRequest {
+    name: String,
+}
+
+/// Spawns a TEMPORARY worker beside this one, on another provider.
+///
+/// A throwaway sibling in the same workspace rather than a second session on
+/// the parent: two providers under one worker would break the
+/// one-session-per-worker assumption that sleep/wake, briefing delivery and MCP
+/// credential scoping all rely on.
+///
+/// SHARING THE PARENT'S WORKSPACE IS THE POINT, so this deliberately does not
+/// apply `create_worker`'s one-worker-per-repository guard. That guard exists to
+/// stop two PERMANENT workers owning the same repository and disagreeing about
+/// it; a temporary sibling is the case it was never about.
+///
+/// # Errors
+/// Returns an error when unauthorized, the parent is unknown, or a name cannot
+/// be found.
+pub(super) async fn spawn_temporary_worker(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(worker_id): AxumPath<String>,
+    Json(request): Json<SpawnTemporaryRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let parent_id = parse_worker_id(&worker_id)?;
+    let store = task_store(&state)?;
+    let parent = store
+        .get_worker_profile(parent_id)
+        .map_err(|error| task_store_error(&error))?;
+    let position = parent.position;
+    // Names are UNIQUE, and a temporary worker is exactly the thing an operator
+    // spawns twice in a row while comparing two answers. Try the readable name
+    // first and fall back to a distinguishable one rather than refusing.
+    let readable = format!("{} · {}", parent.name, provider_label(request.provider));
+    let created = match store.create_temporary_worker(
+        &readable,
+        request.provider,
+        &parent.workspace,
+        position,
+    ) {
+        Ok(created) => created,
+        Err(swarm_persistence::TaskStoreError::DuplicateWorkerName) => store
+            .create_temporary_worker(
+                &format!("{readable} {}", &WorkerId::new().to_string()[..4]),
+                request.provider,
+                &parent.workspace,
+                position,
+            )
+            .map_err(|error| task_store_error(&error))?,
+        Err(error) => return Err(task_store_error(&error)),
+    };
+    state.control_room_notify.notify_waiters();
+    Ok(Json(created).into_response())
+}
+
+/// Adopts a temporary worker into the Hive under a permanent name.
+///
+/// A FLAG CHANGE, not a re-creation: it keeps its id, so its session history and
+/// every board write it already made continue to point at the same worker.
+///
+/// # Errors
+/// Returns an error when unauthorized, the worker is unknown or not temporary,
+/// or the name is taken.
+pub(super) async fn adopt_worker(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(worker_id): AxumPath<String>,
+    Json(request): Json<AdoptWorkerRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let worker_id = parse_worker_id(&worker_id)?;
+    let adopted = task_store(&state)?
+        .adopt_worker(worker_id, &request.name)
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    Ok(Json(adopted).into_response())
+}
+
+/// How a provider is named to an operator choosing one.
+fn provider_label(provider: ProviderKind) -> &'static str {
+    match provider {
+        ProviderKind::ClaudeCode => "Claude",
+        ProviderKind::Codex => "Codex",
+        ProviderKind::Unsupported => "unsupported",
+    }
+}
+
 pub(super) async fn remove_worker(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

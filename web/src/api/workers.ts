@@ -26,6 +26,13 @@ export type Worker = {
   updated_at: number;
   running: boolean;
   attention_state: WorkerAttentionState;
+  /**
+   * Spawned beside another worker to try a second provider, and not yet adopted.
+   *
+   * Optional so a response from a build that predates it reads as false rather
+   * than undefined-and-truthy in a menu condition.
+   */
+  ephemeral?: boolean;
   /** Something this worker started is still running after its turn ended. */
   background_work?: boolean;
   /** Wall-clock second this worker's terminal last produced output. */
@@ -173,6 +180,43 @@ export async function openWorkerShell(operatorToken: string, workerId: string): 
     body: JSON.stringify({ rows: 24, columns: 80 }),
   });
   return ((await response.json()) as { session_id: string }).session_id;
+}
+
+/** Providers an operator may spawn a temporary worker on. */
+export const TEMPORARY_PROVIDERS = [
+  { provider: "claude_code", label: "Claude", alpha: false },
+  { provider: "codex", label: "Codex", alpha: false },
+] as const;
+
+/**
+ * Spawns a temporary worker beside this one, on another provider.
+ *
+ * A throwaway sibling in the same workspace, not a second session on the parent
+ * — two providers under one worker would break the one-session-per-worker
+ * assumption that sleep/wake and briefing delivery rely on.
+ */
+export async function spawnTemporaryWorker(operatorToken: string, workerId: string, provider: string): Promise<Worker> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/workers/${encodeURIComponent(workerId)}/temporary`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider }),
+  });
+  return response.json() as Promise<Worker>;
+}
+
+/**
+ * Adopts a temporary worker into the Hive under a permanent name.
+ *
+ * A flag change rather than a re-creation, so it keeps its id and everything
+ * already written against it still points at the same worker.
+ */
+export async function adoptWorker(operatorToken: string, workerId: string, name: string): Promise<Worker> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/workers/${encodeURIComponent(workerId)}/adoption`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  return response.json() as Promise<Worker>;
 }
 
 export async function stopWorker(operatorToken: string, workerId: string): Promise<Worker> {

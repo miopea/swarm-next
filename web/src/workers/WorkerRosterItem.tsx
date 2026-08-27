@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import type { Worker } from "../api";
+import { TEMPORARY_PROVIDERS, type Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 import CursorMenu, { pointFromElement, type MenuPoint } from "../shared/CursorMenu";
 import { heldForAnswer, workerAttention, workerSilence } from "./workerAttention";
@@ -30,9 +30,16 @@ type Props = {
    * handed one it cannot show.
    */
   onOpenShell?: () => void;
+  /** Spawns a throwaway sibling on another provider, in the same workspace. */
+  onSpawnTemporary?: (provider: string) => void;
+  /** Keeps a temporary worker, under a permanent name. */
+  onAdopt?: () => void;
+  /** Dismisses a temporary worker. Named Release rather than Kill because its
+   *  board writes survive it either way. */
+  onRelease?: () => void;
 };
 
-export default function WorkerRosterItem({ worker, selected, detail, workSummary, busy, busyReason, onOpen, onStart, onStop, onOpenShell }: Props) {
+export default function WorkerRosterItem({ worker, selected, detail, workSummary, busy, busyReason, onOpen, onStart, onStop, onOpenShell, onSpawnTemporary, onAdopt, onRelease }: Props) {
   const [menuPoint, setMenuPoint] = useState<MenuPoint>();
   const [, refreshAttention] = useState(0);
   const primaryAction = worker.running ? onOpen : onStart;
@@ -116,6 +123,19 @@ export default function WorkerRosterItem({ worker, selected, detail, workSummary
           {onOpenShell && (
             <button role="menuitem" onClick={() => run(onOpenShell)}>Open a shell here</button>
           )}
+          {worker.ephemeral && onAdopt && (
+            <button role="menuitem" onClick={() => run(onAdopt)}>Adopt into the Hive</button>
+          )}
+          {worker.ephemeral && onRelease && (
+            <button role="menuitem" onClick={() => run(onRelease)}>Release</button>
+          )}
+          {!worker.ephemeral && onSpawnTemporary && TEMPORARY_PROVIDERS
+            .filter((choice) => choice.provider !== worker.provider)
+            .map((choice) => (
+              <button key={choice.provider} role="menuitem" onClick={() => run(() => onSpawnTemporary(choice.provider))}>
+                Try this with {choice.label}{choice.alpha ? " (alpha)" : ""}
+              </button>
+            ))}
           {worker.running && worker.role !== "queen" && (
             <button className="danger-text" role="menuitem" onClick={() => run(onStop)}>Put worker to sleep</button>
           )}
