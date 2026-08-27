@@ -91,6 +91,64 @@ impl AgentBridge {
         self
     }
 
+    /// The settings file carrying the commands this worker was granted.
+    ///
+    /// Written as a SIBLING of the per-worker MCP config, and that placement is
+    /// the mechanism rather than tidiness. The terminal host already receives
+    /// the MCP config path in `StartClaude`, so it can derive this one without a
+    /// new protocol field — and a new field would mean a protocol bump, which
+    /// `swarm-package` refuses to install outright.
+    ///
+    /// REMOVED WHEN THERE IS NOTHING TO GRANT. A stale file is a standing rule
+    /// nobody decided to keep, so the absence of grants has to erase it rather
+    /// than merely stop refreshing it.
+    ///
+    /// # Errors
+    /// Returns an error when the grants cannot be read or the file cannot be
+    /// written privately.
+    pub fn ensure_worker_settings(
+        &self,
+        worker_id: WorkerId,
+    ) -> Result<Option<PathBuf>, AgentBridgeError> {
+        let path = self.worker_settings_path(worker_id);
+        let granted = self.tasks.store().live_command_grants(worker_id)?;
+        // A command spanning lines is refused rather than flattened. The rule is
+        // an exact match on the text, so anything that changes the text changes
+        // what runs, and the operator approved the text they read.
+        let allow: Vec<String> = granted
+            .iter()
+            .filter(|command| !command.contains(['\n', '\r']))
+            .map(|command| format!("Bash({command})"))
+            .collect();
+        if allow.is_empty() {
+            // remove_file on a missing path is not a failure here: the state we
+            // want is "no file", and it is already true.
+            if let Err(error) = std::fs::remove_file(&path)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(AgentBridgeError::from(error));
+            }
+            return Ok(None);
+        }
+        std::fs::create_dir_all(self.config_root.as_ref())?;
+        set_private_directory(self.config_root.as_ref())?;
+        let payload = serde_json::to_vec_pretty(&serde_json::json!({
+            "permissions": { "allow": allow }
+        }))
+        .map_err(|error| AgentBridgeError::Io(std::io::Error::other(error)))?;
+        write_private_atomic(&path, &payload)?;
+        Ok(Some(path))
+    }
+
+    /// Where this worker's granted-command settings live.
+    ///
+    /// `<worker_id>.settings.json` beside `<worker_id>.json`, so the host can
+    /// derive one from the other.
+    #[must_use]
+    pub fn worker_settings_path(&self, worker_id: WorkerId) -> PathBuf {
+        self.config_root.join(format!("{worker_id}.settings.json"))
+    }
+
     /// Ensures one private provider config and durable digest exist for a worker.
     ///
     /// # Errors
