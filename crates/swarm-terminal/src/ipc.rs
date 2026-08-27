@@ -4,7 +4,9 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use swarm_domain::{FederationStewardTakeoverLeaseId, PresenceDeviceId, WorkerSessionId};
+use swarm_domain::{
+    FederationStewardTakeoverLeaseId, PresenceDeviceId, ProviderKind, WorkerSessionId,
+};
 use thiserror::Error;
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
@@ -16,7 +18,22 @@ use crate::{
     HistoryPage, HistorySessionSummary, ProcessResourceSample, Resume, TerminalSize,
 };
 
-pub const PROTOCOL_VERSION: u16 = 9;
+// 10, not 9. This is the number that tells an API whether the running terminal
+// host speaks its protocol, and the whole chain downstream of it already works:
+// build-release.sh scrapes it into a PROTOCOL file and reconcile_host refuses to
+// swap a host across a change.
+//
+// It was left at 9 when StartShell was added, so every one of those checks
+// dutifully compared 9 to 9 and reported no change -- which is how the operator
+// met "unknown variant `start_shell`" instead of being told the worker engine
+// update was required. Bumping it here covers StartShell as well as
+// StartAlphaProvider.
+//
+// Safe to bump mid-flight: reconcile_host drains with $host_release/bin/swarmctl,
+// the binary from the release the RUNNING host came from, so the drain stays
+// version-matched to itself and a newer checkout cannot break the update that
+// carries it.
+pub const PROTOCOL_VERSION: u16 = 10;
 pub const MAX_REQUEST_BYTES: u64 = 256 * 1024;
 pub const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 pub const MAX_WRITE_AUDIT_PAGE: u16 = 1_000;
@@ -147,6 +164,24 @@ pub enum HostRequest {
     /// agent to configure. Nothing binds the returned session to a worker, so
     /// the roster never shows it and provider activity never classifies it.
     StartShell {
+        workspace: PathBuf,
+        size: TerminalSize,
+        #[serde(default)]
+        allow_outside_roots: bool,
+    },
+    /// An ALPHA provider: gemini, grok or opencode.
+    ///
+    /// One variant for all three rather than one each, because they are started
+    /// identically -- bare CLI in the workspace, no conversation and no MCP
+    /// configuration. Their resume contracts and configuration flags are not
+    /// known here and would be guesses; when one is learned it earns its own
+    /// variant and a protocol bump, which is the same cost as adding it now and
+    /// carries evidence instead of assumption.
+    ///
+    /// Refuses `ClaudeCode`, Codex and Unsupported at the host, so this cannot
+    /// become a second way to start a first-class provider.
+    StartAlphaProvider {
+        provider: ProviderKind,
         workspace: PathBuf,
         size: TerminalSize,
         #[serde(default)]
@@ -361,7 +396,15 @@ mod tests {
             r#"{"protocol_version":8,"host_version":"0.1.0","draining":false,"running_sessions":1,"retained_sessions":1}"#,
         )
         .unwrap();
-        assert_eq!(status.protocol_version, PROTOCOL_VERSION - 1);
+        // Read as 8 because the payload says 8, and asserted OLDER rather than
+        // exactly-one-behind. This was `PROTOCOL_VERSION - 1`, which tied a
+        // fixed payload to a moving constant and so failed on the next bump
+        // without anything about compatibility having changed.
+        assert_eq!(status.protocol_version, 8);
+        assert!(
+            status.protocol_version < PROTOCOL_VERSION,
+            "this fixture exists to model a host older than the current build"
+        );
         assert_eq!(status.host_build_id, None);
         assert_eq!(status.resources, None);
         assert!(!status.takeover_relay);

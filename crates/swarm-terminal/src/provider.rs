@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use swarm_domain::ProviderConversationId;
+use swarm_domain::{ProviderConversationId, ProviderKind};
 use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -34,6 +34,8 @@ pub enum ProviderCommandError {
     McpConfigNotUtf8,
     #[error("Claude settings path must be valid UTF-8")]
     ClaudeSettingsNotUtf8,
+    #[error("provider has a first-class adapter and must not start as an alpha provider")]
+    ProviderNotAlpha,
 }
 
 pub trait ProviderTerminalAdapter {
@@ -185,6 +187,52 @@ impl CodexAdapter {
         Ok(ProviderCommand {
             executable: PathBuf::from("codex"),
             arguments,
+            working_directory: workspace.to_path_buf(),
+        })
+    }
+}
+
+/// The three ALPHA providers, started identically.
+///
+/// One adapter rather than three because everything that would distinguish them
+/// -- resume syntax, MCP configuration flags, settings paths -- is unknown here.
+/// None of the three CLIs is installed on this machine, so writing per-provider
+/// arguments would be transcribing documentation into code that nobody can run,
+/// which is the same failure the activity classifier refuses to commit.
+///
+/// So this starts the bare CLI in the workspace and nothing more. A worker on
+/// one of these can be typed into and watched; it has no conversation resume,
+/// and like Codex it carries no MCP configuration, so it does not reach the
+/// swarm tools. That gap is what the ALPHA label is for.
+pub struct AlphaProviderAdapter;
+
+impl AlphaProviderAdapter {
+    /// Builds the command for an alpha provider in an absolute workspace.
+    ///
+    /// # Errors
+    /// Returns [`ProviderCommandError::WorkspaceNotAbsolute`] for a workspace the
+    /// caller has not resolved, and [`ProviderCommandError::ProviderNotAlpha`]
+    /// for a provider that has a real adapter of its own -- so this can never
+    /// become a second, worse way to start Claude or Codex.
+    pub fn command_for(
+        &self,
+        provider: ProviderKind,
+        workspace: &Path,
+    ) -> Result<ProviderCommand, ProviderCommandError> {
+        if !workspace.is_absolute() {
+            return Err(ProviderCommandError::WorkspaceNotAbsolute);
+        }
+        let executable = match provider {
+            ProviderKind::Gemini => "gemini",
+            ProviderKind::Grok => "grok",
+            ProviderKind::OpenCode => "opencode",
+            ProviderKind::ClaudeCode | ProviderKind::Codex | ProviderKind::Unsupported => {
+                return Err(ProviderCommandError::ProviderNotAlpha);
+            }
+        };
+        Ok(ProviderCommand {
+            executable: PathBuf::from(executable),
+            arguments: Vec::new(),
             working_directory: workspace.to_path_buf(),
         })
     }

@@ -24,9 +24,9 @@ pub use process::{
     MIN_TERMINAL_ROWS, ProcessTerminalSession, SessionRegistry, SessionRegistryError, TerminalSize,
 };
 pub use provider::{
-    ClaudeCodeAdapter, ClaudeConversationStart, CodexAdapter, CodexConversationStart,
-    ProviderCommand, ProviderCommandError, ProviderRelease, ProviderTerminalAdapter,
-    provider_release, provider_release_superseded, shell_command,
+    AlphaProviderAdapter, ClaudeCodeAdapter, ClaudeConversationStart, CodexAdapter,
+    CodexConversationStart, ProviderCommand, ProviderCommandError, ProviderRelease,
+    ProviderTerminalAdapter, provider_release, provider_release_superseded, shell_command,
 };
 pub use provider_activity::{
     ProviderActivity, background_work_running, classify_provider_activity,

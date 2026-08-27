@@ -132,7 +132,34 @@ fn background_work_signal(provider: ProviderKind, normalized: &str) -> bool {
         // emits nothing this build knows how to read. Unsupported is also
         // unreachable here via the early return in classify_visible_text, but
         // the arm is required for exhaustiveness.
-        ProviderKind::Codex | ProviderKind::Unsupported => false,
+        //
+        // THE ALPHA THREE ARE UNCLASSIFIED ON PURPOSE, NOT UNFINISHED. None of
+        // gemini, grok or opencode is installed on this machine, so every glyph
+        // written here would be a guess at a TUI nobody has watched redraw. The
+        // file already argues the case in classify_visible_text: guessing from
+        // another provider's glyphs is worse than admitting ignorance.
+        //
+        // Falling through costs less than being wrong. With all three of these
+        // functions false, classify_visible_text returns Unknown -- and Unknown
+        // is handled correctly end to end: delivery treats it as deliverable and
+        // the attention flags surface it, both settled deliberately in c53b5ab.
+        // A WRONG arm has no such safety net: it pins a worker Active forever
+        // and defers every delivery to it, invisibly.
+        //
+        // The generic active_signal above is provider-independent and still
+        // catches the busy case for these three, because "esc to interrupt" and
+        // "esc to stop" are near-universal among agent TUIs. So what is lost is
+        // the resting/idle half, not the whole classification. That gap IS what
+        // the alpha label in the UI is pointing at.
+        //
+        // To finish one: install its CLI, capture a real snapshot at rest and
+        // mid-turn, and add the arms with a test built from that capture rather
+        // than from documentation.
+        ProviderKind::Codex
+        | ProviderKind::Gemini
+        | ProviderKind::Grok
+        | ProviderKind::OpenCode
+        | ProviderKind::Unsupported => false,
     }
 }
 
@@ -140,7 +167,11 @@ fn idle_prompt(provider: ProviderKind, line: &str) -> bool {
     match provider {
         ProviderKind::ClaudeCode => line == "❯" || line.starts_with("❯ "),
         ProviderKind::Codex => line == "›" || line.starts_with("› "),
-        ProviderKind::Unsupported => false,
+        // Unclassified rather than guessed -- see background_work_signal.
+        ProviderKind::Gemini
+        | ProviderKind::Grok
+        | ProviderKind::OpenCode
+        | ProviderKind::Unsupported => false,
     }
 }
 
@@ -154,7 +185,13 @@ fn idle_footer(provider: ProviderKind, line: &str) -> bool {
                 || line.contains("manual mode on")
         }
         ProviderKind::Codex => line.contains("? for shortcuts"),
-        ProviderKind::Unsupported => false,
+        // Unclassified rather than guessed -- see background_work_signal.
+        // "? for shortcuts" is tempting because two providers print it, and
+        // that is exactly the reasoning that would pin a third one wrong.
+        ProviderKind::Gemini
+        | ProviderKind::Grok
+        | ProviderKind::OpenCode
+        | ProviderKind::Unsupported => false,
     }
 }
 
@@ -171,6 +208,55 @@ fn is_numbered_choice(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An alpha provider reads Unknown, and Unknown is the safe answer.
+    ///
+    /// This is the assertion that keeps the "do not guess glyphs" decision
+    /// honest. The danger of leaving the arms unwritten would be a worker pinned
+    /// ACTIVE forever, because that defers every delivery to it invisibly. The
+    /// classifier falls through to Unknown instead, which delivery and the
+    /// attention flags both handle.
+    #[test]
+    fn an_alpha_provider_reads_unknown_rather_than_busy_forever() {
+        // Another provider's resting prompt on screen. If any alpha arm
+        // borrowed a glyph from Claude or Codex, this would read Resting.
+        for provider in [
+            ProviderKind::Gemini,
+            ProviderKind::Grok,
+            ProviderKind::OpenCode,
+        ] {
+            assert_eq!(
+                classify_visible_text(provider, "❯\n› \n? for shortcuts"),
+                ProviderActivity::Unknown,
+                "{provider} must not borrow another provider's glyphs"
+            );
+            assert_eq!(
+                classify_visible_text(provider, "some output nobody can classify"),
+                ProviderActivity::Unknown,
+                "{provider} is unclassified, which is Unknown rather than Active"
+            );
+        }
+    }
+
+    /// The generic busy signal still works for an alpha provider.
+    ///
+    /// So what the missing arms cost is the RESTING half, not the whole
+    /// classification — "esc to interrupt" is near-universal among agent TUIs
+    /// and is matched before any provider-specific branch.
+    #[test]
+    fn an_alpha_provider_is_still_seen_working_by_the_generic_signal() {
+        for provider in [
+            ProviderKind::Gemini,
+            ProviderKind::Grok,
+            ProviderKind::OpenCode,
+        ] {
+            assert_eq!(
+                classify_visible_text(provider, "thinking... esc to interrupt"),
+                ProviderActivity::Active,
+                "{provider} mid-turn must not read as idle"
+            );
+        }
+    }
 
     fn snapshot(text: &str) -> TerminalSnapshot {
         let mut state = crate::CanonicalTerminalState::new(
