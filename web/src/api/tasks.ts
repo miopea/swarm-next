@@ -32,7 +32,7 @@ export type Task = {
   updated_at: number;
 };
 
-export type TaskActivityKind = "created" | "details_updated" | "state_changed" | "assigned" | "unassigned" | "removed" | "restored";
+export type TaskActivityKind = "created" | "details_updated" | "state_changed" | "assigned" | "unassigned" | "removed" | "restored" | "corrected" | "amended";
 export type TaskActivityActorKind = "operator" | "worker" | "jira" | "email" | "system";
 
 export type TaskActivity = {

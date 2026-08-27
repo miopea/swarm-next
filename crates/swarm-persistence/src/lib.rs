@@ -153,7 +153,8 @@ const EPHEMERAL_WORKER_SCHEMA_VERSION: i64 = 97;
 const TASK_AMENDMENT_SCHEMA_VERSION: i64 = 98;
 const DECISION_COMMAND_GRANT_SCHEMA_VERSION: i64 = 99;
 const UNATTENDED_BLOCK_SCHEMA_VERSION: i64 = 100;
-const CURRENT_SCHEMA_VERSION: i64 = UNATTENDED_BLOCK_SCHEMA_VERSION;
+const AMENDMENT_ACTIVITY_SCHEMA_VERSION: i64 = 101;
+const CURRENT_SCHEMA_VERSION: i64 = AMENDMENT_ACTIVITY_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1192,6 +1193,16 @@ impl TaskStore {
             "SELECT created_at FROM task_amendments WHERE id = ?1",
             [&amendment_id],
             |row| row.get(0),
+        )?;
+        // The SAME transaction and the SAME timestamp, deliberately. Two writes
+        // that can disagree are how the trail and the table drift apart, and
+        // occurred_at is read as a clock by two attention flags -- stamping it
+        // with unixepoch() here instead of the amendment's own created_at would
+        // shift those clocks by however long the transaction took.
+        transaction.execute(
+            "INSERT INTO task_activity (task_id, kind, note, occurred_at, actor_kind, actor_id)
+             VALUES (?1, 'amended', ?2, ?3, 'worker', ?4)",
+            params![id.to_string(), body, created_at, author.to_string()],
         )?;
         insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
@@ -3109,7 +3120,53 @@ fn migrate_newest_schema_steps(
     if schema_version < UNATTENDED_BLOCK_SCHEMA_VERSION {
         coordinator::migrate_unattended_block_attention(transaction)?;
     }
+    if schema_version < AMENDMENT_ACTIVITY_SCHEMA_VERSION {
+        migrate_amendment_activity(transaction)?;
+    }
     Ok(())
+}
+
+/// Puts every amendment that already exists into the activity trail.
+///
+/// IDEMPOTENT BY NECESSITY, not by taste. The migration harness rewinds
+/// `user_version` WITHOUT rewinding tables, so this runs again over rows it has
+/// already written. A bare INSERT..SELECT would duplicate every amendment on
+/// each re-run, and that does not fail loudly -- it makes every task look
+/// freshly touched, which silently drags two attention clocks forward. The NOT
+/// EXISTS guard is the whole safety property.
+///
+/// `occurred_at` is the amendment's OWN `created_at`, never `unixepoch()`. Those
+/// clocks read this column, so stamping it with migration time would move every
+/// historical amendment to now and mute both flags across the whole board.
+///
+/// Guards table existence because a database old enough to predate
+/// `task_amendments` reaches this step too.
+fn migrate_amendment_activity(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+         WHERE type = 'table' AND name = 'task_amendments')",
+        [],
+        |row| row.get(0),
+    )?;
+    if present {
+        transaction.execute(
+            "INSERT INTO task_activity (task_id, kind, note, occurred_at, actor_kind, actor_id)
+             SELECT amendment.task_id, 'amended', amendment.body, amendment.created_at,
+                    'worker', amendment.author_worker_id
+             FROM task_amendments amendment
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM task_activity existing
+                 WHERE existing.task_id = amendment.task_id
+                   AND existing.kind = 'amended'
+                   AND existing.occurred_at = amendment.created_at
+                   AND existing.actor_id = amendment.author_worker_id
+             )",
+            [],
+        )?;
+    }
+    // Stamped even when the table was absent: the step is still satisfied, and
+    // returning without it leaves the database below the ceiling forever.
+    transaction.pragma_update(None, "user_version", AMENDMENT_ACTIVITY_SCHEMA_VERSION)
 }
 
 /// Every request to set a terminal's size, and what came of it.
@@ -6577,6 +6634,23 @@ mod tests {
                    AND sql LIKE '%blocked_work_unattended_attention%'
              )",
         },
+        // Adds no column and no table: it backfills rows. undo_sql therefore
+        // removes what the backfill wrote rather than reshaping anything, and
+        // the probe asks whether any amendment is still missing from the trail.
+        SchemaStep {
+            table: "task_activity",
+            artifact: "amended",
+            undo_sql: "DELETE FROM task_activity WHERE kind = 'amended';",
+            probe_sql: "SELECT NOT EXISTS(
+                 SELECT 1 FROM task_amendments amendment
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM task_activity existing
+                     WHERE existing.task_id = amendment.task_id
+                       AND existing.kind = 'amended'
+                       AND existing.occurred_at = amendment.created_at
+                 )
+             )",
+        },
     ];
 
     fn newest_step() -> &'static SchemaStep {
@@ -6744,6 +6818,126 @@ mod tests {
             .optional()
             .unwrap();
         assert_eq!(dangling, None, "no child is left pointing at nothing");
+    }
+
+    /// The backfill is exercised against a database that HAS amendments.
+    ///
+    /// This is the shape migration 96 got wrong: forty schema tests passed
+    /// against empty databases while it was broken on the operator's real data.
+    /// The generic step probe here is vacuously true when no amendment exists,
+    /// so it cannot be the thing that establishes the backfill works.
+    ///
+    /// Two properties, and the second is the one that fails silently. The rows
+    /// must arrive carrying the amendment's OWN `created_at`, because two
+    /// attention flags read that column as a clock and migration-time stamps
+    /// would drag every historical amendment to now. And the step must be safe
+    /// to run twice, because the harness rewinds `user_version` WITHOUT
+    /// rewinding tables -- a duplicate does not raise, it just makes every task
+    /// look freshly touched.
+    #[test]
+    fn the_amendment_backfill_carries_original_timestamps_and_survives_a_rerun() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm.sqlite3");
+        let (task_id, worker_id) = {
+            let store = TaskStore::open(&path).unwrap();
+            let worker = store
+                .create_worker(
+                    "Yarrow",
+                    swarm_domain::ProviderKind::ClaudeCode,
+                    "/workspace/yarrow",
+                    false,
+                    1,
+                )
+                .unwrap();
+            let task = store
+                .create_task("Carry the facts", "/workspace/yarrow")
+                .unwrap();
+            for body in ["First finding.", "Second finding."] {
+                store.amend_task_facts(task.id, worker.id, body).unwrap();
+            }
+            let connection = store.connection().unwrap();
+            connection
+                .execute_batch(
+                    "UPDATE task_amendments SET created_at = 4242
+                     WHERE body = 'First finding.';
+                     UPDATE task_amendments SET created_at = 5353
+                     WHERE body = 'Second finding.';",
+                )
+                .unwrap();
+            // Model the pre-101 database: the amendments exist and the trail
+            // does not know about them.
+            connection
+                .execute_batch(&format!(
+                    "{};
+                     PRAGMA user_version = {};",
+                    newest_step().undo(),
+                    CURRENT_SCHEMA_VERSION - 1
+                ))
+                .unwrap();
+            (task.id, worker.id)
+        };
+
+        let migrated = TaskStore::open(&path).expect("a database with amendments migrates");
+        let stamps: Vec<i64> = migrated
+            .connection()
+            .unwrap()
+            .prepare(
+                "SELECT occurred_at FROM task_activity
+                 WHERE task_id = ?1 AND kind = 'amended' ORDER BY occurred_at",
+            )
+            .unwrap()
+            .query_map([task_id.to_string()], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            stamps,
+            vec![4242, 5353],
+            "backfilled rows carry the amendment's own created_at, not migration time"
+        );
+
+        // The trail is what a reader reads, so assert through that rather than
+        // through the table the migration wrote.
+        let trail = migrated.list_task_activity(task_id, 100).unwrap();
+        let amended: Vec<_> = trail
+            .events
+            .iter()
+            .filter(|event| event.kind == TaskActivityKind::Amended)
+            .collect();
+        assert_eq!(
+            amended.len(),
+            2,
+            "both amendments reach the rendered history"
+        );
+        assert!(
+            amended
+                .iter()
+                .all(|event| event.actor_id.as_deref() == Some(worker_id.to_string().as_str())),
+            "an amendment stays attributable to the worker that wrote it"
+        );
+
+        // Rewind the version WITHOUT rewinding the rows, which is exactly what
+        // the harness does, and migrate again.
+        migrated
+            .connection()
+            .unwrap()
+            .execute_batch(&format!(
+                "PRAGMA user_version = {};",
+                CURRENT_SCHEMA_VERSION - 1
+            ))
+            .unwrap();
+        drop(migrated);
+        let rerun = TaskStore::open(&path).expect("the step is safe to run twice");
+        let after: i64 = rerun
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM task_activity WHERE task_id = ?1 AND kind = 'amended'",
+                [task_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(after, 2, "a re-run must not duplicate the backfilled rows");
     }
 
     #[test]

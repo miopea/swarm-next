@@ -252,6 +252,14 @@ pub enum TaskActivityKind {
     /// an amendment in place: the note it corrects stays beside it, because
     /// what was believed and when is part of the record.
     Corrected,
+    /// A fact appended to a task while the work on it continues.
+    ///
+    /// Amendments are how a worker records progress without moving the task,
+    /// and they used to write only to `task_amendments` -- so the trail a
+    /// reader actually reads did not contain them. Two readers saw two
+    /// histories of the same task and the authoritative-looking one was the
+    /// one missing the entries.
+    Amended,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -357,6 +365,7 @@ impl fmt::Display for TaskActivityKind {
             Self::Removed => "removed",
             Self::Restored => "restored",
             Self::Corrected => "corrected",
+            Self::Amended => "amended",
         })
     }
 }
@@ -374,6 +383,7 @@ impl FromStr for TaskActivityKind {
             "removed" => Ok(Self::Removed),
             "restored" => Ok(Self::Restored),
             "corrected" => Ok(Self::Corrected),
+            "amended" => Ok(Self::Amended),
             _ => Err(ParseTaskActivityKindError),
         }
     }

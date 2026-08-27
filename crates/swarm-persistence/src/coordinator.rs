@@ -21,11 +21,12 @@ const MAX_UNSTARTED_WORK_CANDIDATES: i64 = 32;
 /// drift. Joined as `acted`, exposing `task_id` and `acted_at`; LEFT JOIN it,
 /// because a task nobody has touched yields no row rather than a zero.
 ///
-/// BOTH SOURCES ARE REQUIRED and neither is sufficient. Amendments do not
-/// write a `task_activity` row and do not bump `tasks.updated_at` -- they land in
-/// `task_amendments` alone -- so the way a worker is meant to record progress
-/// was invisible to every clock the schema could offer. That is why a task
-/// being actively worked could look untouched.
+/// ONE SOURCE, and it took a migration to earn that. Amendments used to write
+/// only to `task_amendments` -- no activity row, no `updated_at` bump -- so this
+/// had to union the two tables to see the way a worker is meant to record
+/// progress. Schema 101 puts amendments in the trail and backfills the ones
+/// that predate it, so the union is gone and a future consumer of "has anyone
+/// touched this task" has one place to look instead of two to remember.
 ///
 /// Actor kind matters: 'system' rows are the machine talking to itself and
 /// jira/email rows are inbound sync, so neither is evidence a person or a
@@ -39,14 +40,10 @@ const MAX_UNSTARTED_WORK_CANDIDATES: i64 = 32;
 /// reset the clock at the same moment it starts.
 macro_rules! last_task_action_source {
     () => {
-        "(SELECT task_id, MAX(acted_at) AS acted_at
-                        FROM (SELECT task_id, occurred_at AS acted_at
-                              FROM task_activity
-                              WHERE actor_kind IN ('worker', 'operator')
-                                AND kind IN ('corrected', 'details_updated')
-                              UNION ALL
-                              SELECT task_id, created_at AS acted_at
-                              FROM task_amendments)
+        "(SELECT task_id, MAX(occurred_at) AS acted_at
+                        FROM task_activity
+                        WHERE actor_kind IN ('worker', 'operator')
+                          AND kind IN ('corrected', 'details_updated', 'amended')
                         GROUP BY task_id)"
     };
 }
@@ -3113,15 +3110,15 @@ mod tests {
         );
 
         // The worker starts, without ever transitioning the task.
-        let amendment = store
+        store
             .amend_task_facts(task.id, worker.id, "Picked this up; tracing the query.")
             .unwrap();
         store
             .connection()
             .unwrap()
-            .execute(
-                "UPDATE task_amendments SET created_at = 450 WHERE id = ?1",
-                [&amendment.id],
+            .execute_batch(
+                "UPDATE task_amendments SET created_at = 450;
+                 UPDATE task_activity SET occurred_at = 450 WHERE kind = 'amended';",
             )
             .unwrap();
 
@@ -3195,15 +3192,15 @@ mod tests {
         // The worker records progress the way the operator asked it to, and
         // never transitions the task. created_at is pinned because the column
         // defaults to the real clock while this fixture runs on a synthetic one.
-        let amendment = store
+        store
             .amend_task_facts(task.id, worker.id, "Reproduced it; the clock is wrong.")
             .unwrap();
         store
             .connection()
             .unwrap()
-            .execute(
-                "UPDATE task_amendments SET created_at = 350 WHERE id = ?1",
-                [&amendment.id],
+            .execute_batch(
+                "UPDATE task_amendments SET created_at = 350;
+                 UPDATE task_activity SET occurred_at = 350 WHERE kind = 'amended';",
             )
             .unwrap();
 
@@ -3401,15 +3398,15 @@ mod tests {
         // The worker records progress without transitioning. created_at is
         // pinned because the column defaults to the real clock while this
         // fixture runs on a synthetic one.
-        let amendment = store
+        store
             .amend_task_facts(task, worker, "Still on it; the migration is rebuilding.")
             .unwrap();
         store
             .connection()
             .unwrap()
-            .execute(
-                "UPDATE task_amendments SET created_at = 900 WHERE id = ?1",
-                [&amendment.id],
+            .execute_batch(
+                "UPDATE task_amendments SET created_at = 900;
+                 UPDATE task_activity SET occurred_at = 900 WHERE kind = 'amended';",
             )
             .unwrap();
 
