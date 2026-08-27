@@ -8134,11 +8134,11 @@ mod tests {
             priority: swarm_domain::TaskPriority::High,
             workspace: "/workspace".into(),
             operator_instruction: String::new(),
-            operator_ruling: Some(swarm_persistence::TaskRuling {
+            operator_rulings: vec![swarm_persistence::TaskRuling {
                 decision_id: "01a03ebd-495c-7b20-a098-6dceb16a16ff".into(),
                 resolution: "Release the hold — repoint the forwarder".into(),
                 answered_in_words: false,
-            }),
+            }],
             email_requester: None,
         };
 
@@ -8164,6 +8164,73 @@ mod tests {
         );
     }
 
+    /// A task carrying TWO UNRELATED rulings loses neither.
+    ///
+    /// This is the case that changed the design, and it was found in this Hive's
+    /// own data rather than imagined. Task 01a03952 carries an approval for a
+    /// contact formula-column test and, twenty-five hours later, a ruling that
+    /// historical rows should be left as history. They share no subject.
+    ///
+    /// The first version of this feature carried only the NEWEST resolved
+    /// decision, on the reasoning that a later ruling supersedes an earlier one.
+    /// That is true when an operator answers the same question twice — task
+    /// 01a0337e carries five decisions that are one negotiation, each summary
+    /// naming the ruling it replaces — and false here, where picking the newest
+    /// silently dropped an operator APPROVAL that the assigned worker was
+    /// blocked on.
+    ///
+    /// The failure modes are not symmetric, which is why all of them are
+    /// carried: a superfluous line costs a reader a second, and a missing
+    /// authority reads as no authority.
+    #[test]
+    fn a_brief_carries_every_ruling_when_a_task_has_more_than_one() {
+        let dispatch = swarm_persistence::TaskDispatch {
+            assignment_id: "assignment-3".into(),
+            task_id: TaskId::new(),
+            worker_id: WorkerId::new(),
+            session_id: WorkerSessionId::new(),
+            title: "D365 contact and household work".into(),
+            description: String::new(),
+            priority: swarm_domain::TaskPriority::Normal,
+            workspace: "/workspace/d365".into(),
+            operator_instruction: String::new(),
+            operator_rulings: vec![
+                swarm_persistence::TaskRuling {
+                    decision_id: "01a03efa-fd95-7a11-9a4d-2b6a5f0c9d31".into(),
+                    resolution: "Leave it — historical rows are correct as history".into(),
+                    answered_in_words: false,
+                },
+                swarm_persistence::TaskRuling {
+                    decision_id: "01a03997-f79b-7c22-8e0d-1f4b3a2c5e60".into(),
+                    resolution: "Approve the one contact formula-column test".into(),
+                    answered_in_words: false,
+                },
+            ],
+            email_requester: None,
+        };
+
+        let rendered = String::from_utf8_lossy(&task_dispatch_message(&dispatch)).into_owned();
+
+        // The OLDER one is the assertion that matters. Carrying the newest was
+        // never the bug; losing the other one was.
+        assert!(
+            rendered.contains("Approve the one contact formula-column test"),
+            "the older approval must survive: {rendered}"
+        );
+        assert!(
+            rendered.contains("01a03997-f79b-7c22-8e0d-1f4b3a2c5e60"),
+            "and be verifiable at source: {rendered}"
+        );
+        assert!(
+            rendered.contains("Leave it — historical rows are correct as history"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.find("Leave it") < rendered.find("Approve the one"),
+            "newest first: {rendered}"
+        );
+    }
+
     /// A ruling answered in WORDS says so instead of quoting the placeholder.
     ///
     /// `resolution_action` is the sentinel "answered" by design when the operator
@@ -8181,17 +8248,22 @@ mod tests {
             priority: swarm_domain::TaskPriority::Normal,
             workspace: "/workspace".into(),
             operator_instruction: String::new(),
-            operator_ruling: Some(swarm_persistence::TaskRuling {
+            operator_rulings: vec![swarm_persistence::TaskRuling {
                 decision_id: "01a0396a-9e92-7d50-9701-e14836fe623c".into(),
                 resolution: "answered".into(),
                 answered_in_words: true,
-            }),
+            }],
             email_requester: None,
         };
 
         let rendered = String::from_utf8_lossy(&task_dispatch_message(&dispatch)).into_owned();
 
-        assert!(rendered.contains("in their own words"), "{rendered}");
+        // "the operator's own words" rather than "their own words": a brief is
+        // read by a worker, and an unqualified pronoun there has no referent.
+        assert!(
+            rendered.contains("in the operator's own words"),
+            "{rendered}"
+        );
         assert!(
             rendered.contains("01a0396a-9e92-7d50-9701-e14836fe623c"),
             "{rendered}"
@@ -8213,7 +8285,7 @@ mod tests {
             priority: swarm_domain::TaskPriority::Normal,
             workspace: "/workspace".into(),
             operator_instruction: String::new(),
-            operator_ruling: None,
+            operator_rulings: Vec::new(),
             email_requester: None,
         };
 
@@ -8240,7 +8312,7 @@ mod tests {
             priority: swarm_domain::TaskPriority::Normal,
             workspace: "email://inbox".into(),
             operator_instruction: String::new(),
-            operator_ruling: None,
+            operator_rulings: Vec::new(),
             email_requester: Some("Lynn\u{1b}[31m Kuczyra".into()),
         };
 
@@ -8269,7 +8341,7 @@ mod tests {
             priority: swarm_domain::TaskPriority::Normal,
             workspace: "/workspace".into(),
             operator_instruction: String::new(),
-            operator_ruling: None,
+            operator_rulings: Vec::new(),
             email_requester: None,
         };
 
@@ -8293,7 +8365,7 @@ mod tests {
             // Carries the same hostile characters as the rest: an instruction
             // reaches the terminal by the same path and gets the same sanitising.
             operator_instruction: "interview\u{1b}[31m me\rfirst".into(),
-            operator_ruling: None,
+            operator_rulings: Vec::new(),
             email_requester: None,
         };
         let message = task_dispatch_message(&dispatch);
@@ -11583,6 +11655,93 @@ mod tests {
         assert_eq!(
             attention[0].kind,
             "assigned_ready_work_not_started_attention"
+        );
+    }
+
+    /// A worker BUSY WITH OTHER WORK has not ignored its queued briefing.
+    ///
+    /// The flag existed to catch a briefing that was delivered and then sat
+    /// there. It could not tell that case from a briefing correctly queued
+    /// behind the thing its worker is doing right now — so it fired on a task
+    /// whose worker was visibly working, three times in one night on the same
+    /// task, and each time someone had to read a transcript and /proc to
+    /// establish that nothing was wrong.
+    ///
+    /// Worse than noise: the delivery path already holds a briefing back for
+    /// exactly this reason and reports it as `worker_already_working`. The
+    /// attention list and the held-briefing list were describing the same
+    /// situation and disagreeing about whether it was a problem.
+    ///
+    /// A flag whose every instance must be checked by hand is not better than
+    /// no flag; it costs attention to reach the same conclusion.
+    #[tokio::test]
+    async fn a_worker_already_working_is_not_ignoring_its_queued_briefing() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Clover",
+                ProviderKind::ClaudeCode,
+                "/workspace/clover",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let queued = store
+            .create_task("Queued behind the active one", "/workspace/clover")
+            .unwrap();
+        store.transition_task(queued.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(
+                queued.id,
+                worker.id,
+                &swarm_domain::TaskActivityActor::operator(),
+            )
+            .unwrap();
+        let dispatch = store.claim_task_dispatches(1).unwrap().remove(0);
+        assert!(
+            store
+                .complete_task_dispatch(&dispatch.assignment_id, 2)
+                .unwrap()
+        );
+
+        // The same worker is ALREADY carrying something else, which is the
+        // entire difference between this and the test above.
+        let underway = store
+            .create_task("The thing it is actually doing", "/workspace/clover")
+            .unwrap();
+        store
+            .transition_task(underway.id, TaskState::Ready)
+            .unwrap();
+        store
+            .assign_task_to_worker_as(
+                underway.id,
+                worker.id,
+                &swarm_domain::TaskActivityActor::operator(),
+            )
+            .unwrap();
+        store
+            .transition_task(underway.id, TaskState::Active)
+            .unwrap();
+
+        let state = AppState::default().with_task_store(store.clone());
+        state.provider_activity.write().await.insert(
+            session,
+            provider_activity::ProviderSignals {
+                activity: ProviderActivity::Resting,
+                background_work: false,
+            },
+        );
+
+        state.observe_assigned_ready_work_not_started(&store).await;
+
+        assert!(
+            store
+                .current_coordinator_attention(unix_timestamp())
+                .unwrap()
+                .is_empty(),
+            "a worker carrying other active work is not ignoring this briefing"
         );
     }
 

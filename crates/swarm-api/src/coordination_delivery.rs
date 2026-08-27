@@ -782,25 +782,57 @@ pub(super) fn task_dispatch_message(delivery: &TaskDispatch) -> Vec<u8> {
     // Deliberately not the reason, risk or evidence. Those are bounded at ten
     // thousand characters EACH, and a brief is delivered into a terminal where
     // a wall of text costs more than it does in a tool result.
-    let ruling = delivery.operator_ruling.as_ref().map_or_else(
-        String::new,
-        |ruling| {
-            if ruling.answered_in_words {
-                // The placeholder is not the answer, and quoting it as one is
-                // how two sessions concluded a ruling did not exist.
-                format!(
-                    " The operator has RULED on this task, answering in their own words: read decision {} with swarm_list_decisions before acting.",
-                    ruling.decision_id
-                )
-            } else {
-                format!(
-                    " The operator has RULED on this task: \"{}\". Verify it at source with swarm_list_decisions decision_id={} — that record authorises exactly what it says and nothing beyond it.",
-                    terminal_safe_text(&ruling.resolution),
-                    ruling.decision_id
-                )
-            }
-        },
-    );
+    // EVERY resolved ruling, newest first, one line each -- not the newest one.
+    //
+    // Picking the newest is right when an operator answers the same question
+    // twice and wrong when a task accumulates rulings on different questions,
+    // and this Hive's data contains both. On 01a0337e five decisions form one
+    // negotiation, each naming the ruling it replaces. On 01a03952 two share no
+    // subject at all -- an approval for a schema test and a ruling on historical
+    // rows, twenty-five hours apart -- and picking the newest DROPPED THE
+    // APPROVAL the assigned worker was blocked on.
+    //
+    // The failure modes are not symmetric. A superfluous line costs a reader a
+    // second; a missing authority reads as no authority, and a worker acting on
+    // that reads a complete-looking brief and concludes it has no approval.
+    //
+    // Brevity is still kept, but by the FIELD SELECTION rather than by picking:
+    // id and resolution only, never reason, risk or evidence, which are bounded
+    // at ten thousand characters EACH.
+    let ruling = if delivery.operator_rulings.is_empty() {
+        String::new()
+    } else {
+        let each = delivery
+            .operator_rulings
+            .iter()
+            .map(|ruling| {
+                if ruling.answered_in_words {
+                    // The placeholder is not the answer, and quoting it as one
+                    // is how two sessions concluded a ruling did not exist.
+                    format!(
+                        "decision {} answered in the operator's own words (read it with swarm_list_decisions)",
+                        ruling.decision_id
+                    )
+                } else {
+                    format!(
+                        "\"{}\" (decision {})",
+                        terminal_safe_text(&ruling.resolution),
+                        ruling.decision_id
+                    )
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        // Wording kept tight on purpose: a brief is delivered into a terminal
+        // and the test holds it to a line. Every word here is carrying weight --
+        // "each stands" is what stops a reader treating the newest as the only
+        // one, and "verify at source" is what stops them treating this sentence
+        // as the authority.
+        format!(
+            " Operator rulings on this task, newest first: {each}. Each stands unless a later \
+             one answers the same question; verify at source with swarm_list_decisions."
+        )
+    };
     format!(
         "[Swarm task {} assigned] {}.{}{}{} Call swarm_list_tasks now and work from its authoritative task details and linked evidence. If this task is not visible, stop; its assignment changed.\r",
         delivery.task_id, title, instruction, ruling, requester,

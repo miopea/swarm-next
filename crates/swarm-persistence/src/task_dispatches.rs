@@ -54,7 +54,27 @@ pub struct TaskDispatch {
     /// resolution is a pressed button or a placeholder standing in for typed
     /// words. Deliberately not the reason, risk or evidence, which are bounded
     /// at ten thousand characters EACH and would turn a brief into a wall.
-    pub operator_ruling: Option<TaskRuling>,
+    /// Every resolved decision on this task, NEWEST FIRST.
+    ///
+    /// All of them, not the newest one. An earlier version of this carried only
+    /// the newest, on the reasoning that a later ruling supersedes an earlier
+    /// one — which is true when an operator answers the SAME question twice and
+    /// false when a task accumulates rulings on different questions.
+    ///
+    /// Both shapes exist in this Hive's own data. Task 01a0337e carries five
+    /// decisions that are one negotiation, each summary naming the ruling it
+    /// replaces, where the newest genuinely is the operative answer. Task
+    /// 01a03952 carries two that share no subject — one approving a schema test,
+    /// one ruling on historical rows, twenty-five hours apart — where picking the
+    /// newest DROPPED AN OPERATOR APPROVAL the assigned worker was blocked on.
+    ///
+    /// Carrying all of them is right because the failure modes are not
+    /// symmetric: a superfluous line costs a reader a second, and a missing
+    /// authority reads as no authority. Brevity was never bought by picking one
+    /// — it is bought by carrying only the id and the resolution and leaving out
+    /// reason, risk and evidence, which are bounded at ten thousand characters
+    /// EACH.
+    pub operator_rulings: Vec<TaskRuling>,
     /// Who wrote in, when this work came from an email.
     ///
     /// A person waiting on a thread is part of the work, not metadata about it.
@@ -457,6 +477,35 @@ fn repoint_assignments_left_on_a_dead_session(
     )?)
 }
 
+/// Every resolved decision on a task, newest first.
+///
+/// RESOLVED ONLY. A pending decision authorises nothing, and naming one in a
+/// brief invites a worker to act on an expectation.
+///
+/// # Errors
+/// Returns an error when the query fails.
+fn resolved_rulings(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: &str,
+) -> Result<Vec<TaskRuling>, TaskStoreError> {
+    let mut statement = transaction.prepare(
+        "SELECT d.id, d.resolution_action FROM decision_requests d
+         WHERE d.task_id = ?1 AND d.state = 'resolved'
+         ORDER BY d.resolved_at DESC, d.id DESC",
+    )?;
+    let rulings = statement
+        .query_map([task_id], |row| {
+            let resolution: String = row.get::<_, Option<String>>(1)?.unwrap_or_default();
+            Ok(TaskRuling {
+                decision_id: row.get(0)?,
+                answered_in_words: resolution == crate::INTERVIEW_ANSWERED_ACTION,
+                resolution,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rulings)
+}
+
 /// The briefings that may be delivered right now, in queue order.
 ///
 /// Split out of `claim_task_dispatches` only because the conditions and the
@@ -472,16 +521,7 @@ fn deliverable_briefings(
                     (SELECT COALESCE(NULLIF(link.sender_name, ''), link.sender_address)
                      FROM email_message_links link
                      WHERE link.task_id = t.id
-                     ORDER BY link.received_at LIMIT 1),
-                    -- RESOLVED ONLY. A pending decision authorises nothing, and
-                    -- naming one in a brief invites a worker to act on an
-                    -- expectation. The newest wins where a task has several.
-                    (SELECT d.id FROM decision_requests d
-                     WHERE d.task_id = t.id AND d.state = 'resolved'
-                     ORDER BY d.resolved_at DESC, d.id DESC LIMIT 1),
-                    (SELECT d.resolution_action FROM decision_requests d
-                     WHERE d.task_id = t.id AND d.state = 'resolved'
-                     ORDER BY d.resolved_at DESC, d.id DESC LIMIT 1)
+                     ORDER BY link.received_at LIMIT 1)
              FROM task_dispatches td
              JOIN task_assignments a ON a.id = td.assignment_id AND a.released_at IS NULL
              JOIN tasks t ON t.id = td.task_id
@@ -532,13 +572,17 @@ fn deliverable_briefings(
              ORDER BY t.position, td.updated_at, td.assignment_id
              LIMIT ?2",
     )?;
-    statement
+    let mut briefings = statement
         .query_map(
             params![now, MAX_DISPATCH_CLAIMS, ABANDONED_BRIEF_SECONDS],
             task_dispatch_from_row,
         )?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(TaskStoreError::from)
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+    for briefing in &mut briefings {
+        briefing.operator_rulings = resolved_rulings(transaction, &briefing.task_id.to_string())?;
+    }
+    Ok(briefings)
 }
 
 /// One claimed briefing, built from the row the dispatch query returned.
@@ -568,18 +612,9 @@ fn task_dispatch_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskDispa
         priority,
         workspace: row.get(7)?,
         operator_instruction: row.get(8)?,
-        operator_ruling: row.get::<_, Option<String>>(10)?.map(|decision_id| {
-            let resolution = row
-                .get::<_, Option<String>>(11)
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-            TaskRuling {
-                decision_id,
-                answered_in_words: resolution == crate::INTERVIEW_ANSWERED_ACTION,
-                resolution,
-            }
-        }),
+        // Loaded separately: a task can carry several and a scalar subquery can
+        // only return one. See resolved_rulings.
+        operator_rulings: Vec::new(),
         email_requester: row.get(9)?,
     })
 }
