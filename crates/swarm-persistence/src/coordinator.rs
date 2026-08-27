@@ -30,7 +30,7 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
              JOIN tasks task ON task.id = action.task_id
              JOIN worker_profiles worker ON worker.id = action.worker_id
              JOIN worker_sessions session ON session.session_id = action.session_id
-             WHERE action.kind IN ('stale_owned_work_attention','owned_work_never_briefed_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention','reviewed_work_without_evidence_attention')
+             WHERE action.kind IN ('stale_owned_work_attention','owned_work_never_briefed_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention','reviewed_work_without_evidence_attention','blocked_work_unattended_attention')
                AND action.state = 'completed'
                AND task.updated_at = action.evidence_revision
                AND session.worker_id = action.worker_id
@@ -95,6 +95,12 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
                            SELECT 1 FROM worker_sessions live
                            WHERE live.worker_id = action.worker_id AND live.ended_at IS NULL
                        ))
+                   -- Counts only while the task is STILL blocked. Queen moving
+                   -- it is what clears this, with nothing having to delete the
+                   -- row -- and Queen moving it is the entire point.
+                   OR (action.kind = 'blocked_work_unattended_attention'
+                       AND task.assigned_worker_id = action.worker_id
+                       AND task.state = 'blocked')
                    OR (action.kind = 'assigned_ready_work_not_started_attention'
                        AND task.assigned_worker_id = action.worker_id
                        AND task.state = 'ready' AND session.ended_at IS NULL
@@ -146,6 +152,20 @@ pub struct ExitedWorkerOwnedWorkCandidate {
     pub task_id: TaskId,
     pub task_revision: i64,
     pub age_seconds: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnattendedBlockCandidate {
+    pub worker_id: WorkerId,
+    pub task_id: TaskId,
+    pub task_revision: i64,
+    pub age_seconds: i64,
+    /// The worker's most recent session, whether or not it is still running.
+    ///
+    /// A blocked worker is frequently ASLEEP, so requiring a live session would
+    /// exclude exactly the tasks that have waited longest — the ones this exists
+    /// to surface.
+    pub session_id: WorkerSessionId,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -496,6 +516,133 @@ impl TaskStore {
             })
             .collect::<Result<Vec<_>, _>>()
             .map_err(TaskStoreError::from)
+    }
+
+    /// A blocked task nobody has come back to, and how long it has waited.
+    ///
+    /// AGE COMES FROM `task_activity`, NOT `updated_at`, and that is the whole
+    /// reason this reports anything. When this was measured against the live
+    /// database, `updated_at` said 0.6 hours for EVERY blocked task because a
+    /// sweep had touched them — while the oldest had been blocked 168.6 hours.
+    /// A query written the obvious way reports a healthy board.
+    ///
+    /// # Errors
+    /// Returns an error when the query fails.
+    pub fn unattended_block_candidates(
+        &self,
+        now: i64,
+        minimum_age_seconds: i64,
+    ) -> Result<Vec<UnattendedBlockCandidate>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT task.assigned_worker_id, task.id, task.updated_at,
+                    MAX(0, ?1 - blocked.blocked_at), session.session_id
+             FROM tasks task
+             JOIN worker_profiles worker
+               ON worker.id = task.assigned_worker_id AND worker.archived_at IS NULL
+             JOIN (SELECT task_id, MAX(occurred_at) AS blocked_at
+                   FROM task_activity WHERE to_state = 'blocked'
+                   GROUP BY task_id) blocked
+               ON blocked.task_id = task.id
+             JOIN (SELECT worker_id, session_id,
+                          ROW_NUMBER() OVER (PARTITION BY worker_id
+                                             ORDER BY started_at DESC) AS recency
+                   FROM worker_sessions) session
+               ON session.worker_id = worker.id AND session.recency = 1
+             WHERE task.state = 'blocked' AND task.removed_at IS NULL
+               AND blocked.blocked_at + ?2 <= ?1
+               AND NOT EXISTS (
+                   SELECT 1 FROM coordinator_actions action
+                   WHERE action.kind = 'blocked_work_unattended_attention'
+                     AND action.task_id = task.id AND action.worker_id = worker.id
+                     AND action.evidence_revision = task.updated_at
+               )
+             ORDER BY blocked.blocked_at, task.id LIMIT ?3",
+        )?;
+        let candidates = statement
+            .query_map(
+                params![now, minimum_age_seconds, MAX_UNSTARTED_WORK_CANDIDATES],
+                |row| {
+                    Ok(UnattendedBlockCandidate {
+                        worker_id: WorkerId::from_str(&row.get::<_, String>(0)?)
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                        task_id: TaskId::from_str(&row.get::<_, String>(1)?)
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                        task_revision: row.get(2)?,
+                        age_seconds: row.get(3)?,
+                        session_id: WorkerSessionId::from_str(&row.get::<_, String>(4)?)
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    })
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(candidates)
+    }
+
+    /// Records that a blocked task has waited without anyone acting on it.
+    ///
+    /// Records only. It moves nothing: Queen remains the only actor that takes a
+    /// task out of Blocked, which is the constraint the operator set.
+    ///
+    /// # Errors
+    /// Returns an error when the write fails.
+    pub fn record_unattended_block_attention(
+        &self,
+        candidate: &UnattendedBlockCandidate,
+        now: i64,
+        minimum_age_seconds: i64,
+    ) -> Result<bool, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let still_blocked: bool = transaction.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM tasks task
+                 JOIN (SELECT task_id, MAX(occurred_at) AS blocked_at
+                       FROM task_activity WHERE to_state = 'blocked'
+                       GROUP BY task_id) blocked ON blocked.task_id = task.id
+                 WHERE task.id = ?1 AND task.state = 'blocked'
+                   AND task.assigned_worker_id = ?2 AND task.updated_at = ?3
+                   AND task.removed_at IS NULL
+                   AND blocked.blocked_at + ?4 <= ?5
+             )",
+            params![
+                candidate.task_id.to_string(),
+                candidate.worker_id.to_string(),
+                candidate.task_revision,
+                minimum_age_seconds,
+                now,
+            ],
+            |row| row.get(0),
+        )?;
+        if !still_blocked {
+            transaction.commit()?;
+            return Ok(false);
+        }
+        let idempotency_key = format!(
+            "blocked-work-unattended:{}:{}:{}",
+            candidate.task_id, candidate.worker_id, candidate.task_revision
+        );
+        let changed = transaction.execute(
+            "INSERT OR IGNORE INTO coordinator_actions
+                 (id, idempotency_key, kind, worker_id, task_id, session_id,
+                  evidence_revision, observed_age_seconds, state, reason,
+                  finished_at, updated_at)
+             VALUES (?1, ?2, 'blocked_work_unattended_attention', ?3, ?4, ?5, ?6, ?7,
+                     'completed', 'Blocked work has waited without anyone acting on it',
+                     ?8, ?8)",
+            params![
+                Uuid::now_v7().to_string(),
+                idempotency_key,
+                candidate.worker_id.to_string(),
+                candidate.task_id.to_string(),
+                candidate.session_id.to_string(),
+                candidate.task_revision,
+                candidate.age_seconds,
+                now,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(changed == 1)
     }
 
     /// Records one exact unstarted-work observation after the delivered brief
@@ -1620,6 +1767,78 @@ pub(super) fn migrate_undelivered_brief_attention(
 /// and work that was abandoned looked identical on the board, and the only way
 /// to tell them apart was reading the handoff prose — which is how three tasks
 /// sat stranded in a day.
+/// Work that has sat BLOCKED long enough that nobody is coming.
+///
+/// The operator: "we have workers with blocked tasks and the queen never
+/// changes anything". Measured before building: one task blocked 168.6 hours —
+/// seven days — and two more past a day. Nothing on the board distinguished
+/// them from a block ten minutes old, because a blocked task is a legitimate
+/// resting state and the only signal was the state itself.
+///
+/// This is a CLOCK rather than a channel, and deliberately: coordinator
+/// attention already exists and already reaches Queen, so a block older than a
+/// threshold with no Queen action on it is a computable fact needing no new
+/// route between workers.
+///
+/// It does not let anyone unblock anything. Queen remains the only actor that
+/// moves a task out of Blocked, which is the line the operator drew: "we don't
+/// want to lose our design of the queen being an arbitrator."
+pub(super) fn migrate_unattended_block_attention(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+         WHERE type = 'table' AND name = 'coordinator_actions'
+           AND sql LIKE '%blocked_work_unattended_attention%')",
+        [],
+        |row| row.get(0),
+    )?;
+    let ready: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+         WHERE type = 'table' AND name = 'coordinator_actions'
+           AND sql LIKE '%reviewed_work_without_evidence_attention%')",
+        [],
+        |row| row.get(0),
+    )?;
+    if ready && !present {
+        transaction.execute_batch(
+            "DROP INDEX IF EXISTS coordinator_actions_queue;
+             PRAGMA legacy_alter_table = ON;
+             ALTER TABLE coordinator_actions RENAME TO coordinator_actions_v99;
+             CREATE TABLE coordinator_actions (
+                 id TEXT PRIMARY KEY,
+                 idempotency_key TEXT NOT NULL UNIQUE,
+                 kind TEXT NOT NULL CHECK (kind IN ('wake_assigned_worker','stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention','owned_work_never_briefed_attention','reviewed_work_without_evidence_attention','blocked_work_unattended_attention')),
+                 worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+                 task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                 session_id TEXT,
+                 evidence_revision INTEGER,
+                 observed_age_seconds INTEGER,
+                 state TEXT NOT NULL CHECK (state IN ('queued','running','completed','uncertain','cancelled')),
+                 reason TEXT NOT NULL,
+                 attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 1),
+                 attempted_at INTEGER,
+                 finished_at INTEGER,
+                 created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                 updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+             );
+             INSERT INTO coordinator_actions (
+                 id, idempotency_key, kind, worker_id, task_id, session_id,
+                 evidence_revision, observed_age_seconds, state, reason, attempts,
+                 attempted_at, finished_at, created_at, updated_at
+             ) SELECT id, idempotency_key, kind, worker_id, task_id, session_id,
+                      evidence_revision, observed_age_seconds, state, reason, attempts,
+                      attempted_at, finished_at, created_at, updated_at
+               FROM coordinator_actions_v99;
+             DROP TABLE coordinator_actions_v99;
+             CREATE INDEX coordinator_actions_queue
+                 ON coordinator_actions(state, created_at, id);
+             PRAGMA legacy_alter_table = OFF;",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", crate::UNATTENDED_BLOCK_SCHEMA_VERSION)
+}
+
 pub(super) fn migrate_reviewed_work_evidence_attention(
     transaction: &rusqlite::Transaction<'_>,
 ) -> rusqlite::Result<()> {
@@ -1680,6 +1899,132 @@ pub(super) fn migrate_reviewed_work_evidence_attention(
         "user_version",
         crate::REVIEWED_WORK_EVIDENCE_ATTENTION_SCHEMA_VERSION,
     )
+}
+
+#[cfg(test)]
+mod unattended_block_tests {
+    use crate::TaskStore;
+    use swarm_domain::{ProviderKind, TaskState, WorkerSessionId};
+
+    /// A block that has waited surfaces, and its age is measured from when it
+    /// was BLOCKED.
+    ///
+    /// The operator: "we have workers with blocked tasks and the queen never
+    /// changes anything." Measured against the live database first: one task
+    /// blocked 168.6 hours, two more past a day. Nothing distinguished them from
+    /// a ten-minute block, because a blocked task is a legitimate resting state.
+    ///
+    /// THE MEASUREMENT IS THE FRAGILE PART. `updated_at` reported 0.6 hours for
+    /// every one of those tasks — a sweep had touched them — so a query written
+    /// the obvious way reports a healthy board while a week-old block sits in it.
+    ///
+    /// Queen moving the task is what clears this, which is the design the
+    /// operator asked to keep: she remains the only actor that takes work out of
+    /// Blocked, and nothing here changes that.
+    #[test]
+    fn blocked_work_nobody_returned_to_is_surfaced_and_clears_when_queen_moves_it() {
+        let store = TaskStore::in_memory().unwrap();
+        store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker(
+                "Sculpt Studio",
+                ProviderKind::ClaudeCode,
+                "/workspace/sculpt",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store
+            .create_task(
+                "iOS: the bottom tab bar detaches mid-page",
+                "/workspace/sculpt",
+            )
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(
+                task.id,
+                worker.id,
+                &swarm_domain::TaskActivityActor::operator(),
+            )
+            .unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Blocked).unwrap();
+
+        // The task's own updated_at is the clock this test needs to be relative
+        // to, and reading it from the row avoids depending on wall time.
+        let now: i64 = store
+            .connection()
+            .unwrap()
+            .query_row("SELECT unixepoch()", [], |row| row.get(0))
+            .unwrap();
+        let a_week = 7 * 24 * 3_600;
+
+        // Fresh: nothing to say.
+        assert!(
+            store
+                .unattended_block_candidates(now, a_week)
+                .unwrap()
+                .is_empty(),
+            "a block that just happened is not a problem"
+        );
+
+        // THE SWEEP. This is what makes the difference between the two ways of
+        // measuring, and without it this test passes either way — it did, until
+        // an ablation showed the assertion below could not tell them apart.
+        //
+        // On the live database every blocked task reported 0.6 hours because
+        // something had touched updated_at, while the oldest had been blocked
+        // for a week. Reproducing that here is the only way this test covers the
+        // thing it claims to.
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET updated_at = ?2 WHERE id = ?1",
+                rusqlite::params![task.id.to_string(), now + a_week],
+            )
+            .unwrap();
+
+        // Aged past the threshold, timed from the transition.
+        let candidates = store
+            .unattended_block_candidates(now + a_week + 60, 60)
+            .unwrap();
+        assert_eq!(candidates.len(), 1, "a block nobody returned to surfaces");
+        assert_eq!(candidates[0].task_id, task.id);
+        assert!(
+            candidates[0].age_seconds >= a_week,
+            "age is measured from the transition and NOT from updated_at, which a \
+             sweep has just moved to a week later: {}",
+            candidates[0].age_seconds
+        );
+
+        assert!(
+            store
+                .record_unattended_block_attention(&candidates[0], now + a_week + 60, 60)
+                .unwrap()
+        );
+        assert_eq!(
+            store
+                .current_coordinator_attention(now + a_week + 60)
+                .unwrap()
+                .len(),
+            1,
+            "and it reaches the place Queen already looks"
+        );
+
+        // Queen moves it. Nothing deletes the row; its reason has passed.
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        assert!(
+            store
+                .current_coordinator_attention(now + a_week + 120)
+                .unwrap()
+                .is_empty(),
+            "acting on the block is what clears the flag"
+        );
+    }
 }
 
 #[cfg(test)]

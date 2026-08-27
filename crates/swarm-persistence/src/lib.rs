@@ -152,7 +152,8 @@ const OPEN_PROVIDER_SET_SCHEMA_VERSION: i64 = 96;
 const EPHEMERAL_WORKER_SCHEMA_VERSION: i64 = 97;
 const TASK_AMENDMENT_SCHEMA_VERSION: i64 = 98;
 const DECISION_COMMAND_GRANT_SCHEMA_VERSION: i64 = 99;
-const CURRENT_SCHEMA_VERSION: i64 = DECISION_COMMAND_GRANT_SCHEMA_VERSION;
+const UNATTENDED_BLOCK_SCHEMA_VERSION: i64 = 100;
+const CURRENT_SCHEMA_VERSION: i64 = UNATTENDED_BLOCK_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -3104,6 +3105,9 @@ fn migrate_newest_schema_steps(
     }
     if schema_version < DECISION_COMMAND_GRANT_SCHEMA_VERSION {
         migrate_decision_command_grants(transaction)?;
+    }
+    if schema_version < UNATTENDED_BLOCK_SCHEMA_VERSION {
+        coordinator::migrate_unattended_block_attention(transaction)?;
     }
     Ok(())
 }
@@ -6532,6 +6536,46 @@ mod tests {
             artifact: "",
             undo_sql: "",
             probe_sql: "",
+        },
+        SchemaStep {
+            table: "coordinator_actions",
+            artifact: "",
+            // Rewinds the CHECK to the set before this kind existed, by the same
+            // rebuild the migration runs forward. Not a DROP: coordinator_actions
+            // carries foreign keys and dropping it would cascade.
+            undo_sql: "DROP INDEX IF EXISTS coordinator_actions_queue;
+                 PRAGMA foreign_keys = OFF;
+                 PRAGMA legacy_alter_table = ON;
+                 ALTER TABLE coordinator_actions RENAME TO coordinator_actions_undo;
+                 CREATE TABLE coordinator_actions (
+                     id TEXT PRIMARY KEY,
+                     idempotency_key TEXT NOT NULL UNIQUE,
+                     kind TEXT NOT NULL CHECK (kind IN ('wake_assigned_worker','stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention','owned_work_never_briefed_attention','reviewed_work_without_evidence_attention')),
+                     worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+                     task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                     session_id TEXT,
+                     evidence_revision INTEGER,
+                     observed_age_seconds INTEGER,
+                     state TEXT NOT NULL CHECK (state IN ('queued','running','completed','uncertain','cancelled')),
+                     reason TEXT NOT NULL,
+                     attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 1),
+                     attempted_at INTEGER,
+                     finished_at INTEGER,
+                     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                     updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+                 );
+                 INSERT INTO coordinator_actions SELECT * FROM coordinator_actions_undo
+                     WHERE kind != 'blocked_work_unattended_attention';
+                 DROP TABLE coordinator_actions_undo;
+                 CREATE INDEX coordinator_actions_queue
+                     ON coordinator_actions(state, created_at, id);
+                 PRAGMA legacy_alter_table = OFF;
+                 PRAGMA foreign_keys = ON;",
+            probe_sql: "SELECT EXISTS(
+                 SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'coordinator_actions'
+                   AND sql LIKE '%blocked_work_unattended_attention%'
+             )",
         },
     ];
 

@@ -161,6 +161,19 @@ const ASSIGNED_READY_START_GRACE_SECONDS: i64 = 5 * 60;
 /// case where that did not happen.
 const REVIEWED_WORK_EVIDENCE_GRACE_SECONDS: i64 = 15 * 60;
 const STALE_OWNED_WORK_SECONDS: i64 = 30 * 60;
+/// How long a task may sit Blocked before nobody is coming for it.
+///
+/// FOUR HOURS IS MY NUMBER, NOT THE OPERATOR'S, and it should be treated as
+/// unset until they say otherwise. It is defensible rather than derived: long
+/// enough that an ordinary block resolved within a working session never fires,
+/// short enough that the seven-day case this was built for would have surfaced
+/// forty-two times before anyone noticed it by hand.
+///
+/// The number the operator actually needs to choose is a different one — at what
+/// age this should stop going to Queen and reach THEM instead, because
+/// escalating to Queen is useless when Queen is the bottleneck. That is not
+/// built, and picking it for them would be worse than leaving it visible.
+const UNATTENDED_BLOCK_SECONDS: i64 = 4 * 60 * 60;
 const MAX_WORKER_DESCRIPTION_IMPROVEMENTS: usize = 1;
 
 #[derive(Clone)]
@@ -1173,6 +1186,7 @@ impl AppState {
         self.observe_exited_worker_owned_work(store);
         self.observe_assigned_ready_work_not_started(store).await;
         self.observe_reviewed_work_without_evidence(store);
+        self.observe_unattended_blocks(store);
         self.observe_stale_owned_work(store).await;
         let admission = runtime::coordinator_start_admission(self).await;
         self.coordinator_start_admission
@@ -1422,6 +1436,40 @@ impl AppState {
                     message = %error,
                     "stale owned work attention could not be recorded"
                 ),
+            }
+        }
+    }
+
+    /// Surfaces blocked work nobody has come back to.
+    ///
+    /// Records only. Queen remains the only actor that moves a task out of
+    /// Blocked — the operator drew that line explicitly, and a worker able to
+    /// unblock itself is a worker able to decide its blocker no longer matters.
+    fn observe_unattended_blocks(&self, store: &TaskStore) {
+        let now = unix_timestamp();
+        let candidates = match store.unattended_block_candidates(now, UNATTENDED_BLOCK_SECONDS) {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                tracing::warn!(message = %error, "deterministic coordinator could not inspect blocked work");
+                return;
+            }
+        };
+        for candidate in candidates {
+            match store.record_unattended_block_attention(&candidate, now, UNATTENDED_BLOCK_SECONDS)
+            {
+                Ok(true) => {
+                    tracing::info!(
+                        task_id = %candidate.task_id,
+                        worker_id = %candidate.worker_id,
+                        blocked_for_seconds = candidate.age_seconds,
+                        "blocked work has waited without anyone acting on it"
+                    );
+                    self.control_room_notify.notify_waiters();
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(message = %error, "blocked-work attention could not be recorded");
+                }
             }
         }
     }
