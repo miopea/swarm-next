@@ -615,6 +615,17 @@ pub struct DecisionRequest {
     pub evidence: String,
     pub suggested_action: String,
     pub allowed_actions: Vec<String>,
+    /// The one command this request asks to be allowed to run.
+    ///
+    /// READ BACK SO THE OPERATOR CAN SEE IT. It was stored and never returned,
+    /// which left the grant button — "Allow the command shown in this request"
+    /// — with no command shown. Approving a grant you cannot read is worse than
+    /// having no grant mechanism at all, so this field is what makes the button
+    /// safe to press rather than a detail of it.
+    ///
+    /// Defaulted for records written before the column existed.
+    #[serde(default)]
+    pub requested_command: Option<String>,
     pub deadline: Option<i64>,
     pub state: DecisionRequestState,
     /// Present when this record is an interview rather than a ruling. Empty

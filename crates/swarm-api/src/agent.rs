@@ -284,7 +284,16 @@ struct AgentMcp {
 /// Maintained by hand, and therefore pinned by a test to the tool list itself,
 /// for the same reason `PROTOCOL_VERSION` is. A number someone has to remember
 /// change is not a check.
-const AGENT_TOOL_SURFACE_REVISION: u32 = 1;
+/// 2: `swarm_request_decision` gained `command`. A session holding the older
+/// schema cannot send it, so it can file an ordinary approval and never a
+/// grant — live and unreachable, which is precisely what this number reports.
+///
+/// AN ARGUMENT CHANGE SLIPS PAST THE PIN BELOW, which compares tool NAMES and
+/// their count. Both are unchanged here: no tool was added or removed, only
+/// what one of them accepts. So the pin would not have fired, and this bump is
+/// by judgement rather than by the test catching it. Worth knowing before
+/// trusting the pin as complete.
+const AGENT_TOOL_SURFACE_REVISION: u32 = 2;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -296,7 +305,7 @@ const AGENT_TOOL_SURFACE_REVISION: u32 = 1;
 #[cfg(test)]
 fn assert_tool_surface_matches_revision(queen_names: &[&str], worker_names: &[&str]) {
     assert_eq!(
-        AGENT_TOOL_SURFACE_REVISION, 1,
+        AGENT_TOOL_SURFACE_REVISION, 2,
         "the tool surface changed, so sessions holding the old list can no longer call \
          everything this build serves. Bump AGENT_TOOL_SURFACE_REVISION so a reload can \
          say so, then update the count below."

@@ -405,7 +405,8 @@ impl TaskStore {
                         state, resolution_action, resolution_note, resolved_by_operator_id,
                         resolution_surface, questions, resolution_answers, summary,
                         created_at, updated_at, resolved_at,
-                        (SELECT state FROM decision_deliveries WHERE decision_id = decision_requests.id)
+                        (SELECT state FROM decision_deliveries WHERE decision_id = decision_requests.id),
+                        requested_command
                  FROM decision_requests WHERE id = ?1",
                 [id.to_string()],
                 decision_from_row,
@@ -426,7 +427,8 @@ impl TaskStore {
                     state, resolution_action, resolution_note, resolved_by_operator_id,
                     resolution_surface, questions, resolution_answers, summary,
                     created_at, updated_at, resolved_at,
-                    (SELECT state FROM decision_deliveries WHERE decision_id = d.id)
+                    (SELECT state FROM decision_deliveries WHERE decision_id = d.id),
+                    d.requested_command
              FROM decision_requests d
              JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1
              ORDER BY state = 'pending' DESC, urgency = 'time_sensitive' DESC,
@@ -1012,6 +1014,11 @@ fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionReques
             .map(|value| DecisionDeliveryState::from_str(&value))
             .transpose()
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        // APPENDED AT THE END ON PURPOSE. Every field above is read by position,
+        // so inserting a column anywhere else would silently re-map all of them
+        // — the kind of change that compiles, passes, and returns the wrong
+        // field in production.
+        requested_command: row.get(25)?,
     })
 }
 
@@ -1071,6 +1078,34 @@ mod tests {
                 .any(|action| action == GRANT_COMMAND_ACTION),
             "swarm offers the grant button itself: {:?}",
             refused.allowed_actions
+        );
+        // THE BUTTON IS ONLY SAFE IF THE COMMAND COMES BACK WITH IT. It was
+        // stored and never read, so the operator would have seen "Allow the
+        // command shown in this request" with nothing shown. Asserted on the
+        // record as returned, and again after a re-read, because those are two
+        // different query paths and only one of them was ever exercised.
+        assert_eq!(
+            refused.requested_command.as_deref(),
+            Some(command),
+            "the operator must be able to read what the button would allow"
+        );
+        assert_eq!(
+            store
+                .get_decision_request(refused.id)
+                .unwrap()
+                .requested_command
+                .as_deref(),
+            Some(command),
+            "and on a re-read, which is the path the control room uses"
+        );
+        assert!(
+            store
+                .list_decision_requests()
+                .unwrap()
+                .iter()
+                .any(|entry| entry.id == refused.id
+                    && entry.requested_command.as_deref() == Some(command)),
+            "and in the inbox listing, which is where it is actually rendered"
         );
         store
             .resolve_decision_request(refused.id, "Do not run it", "", "inbox")
