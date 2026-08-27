@@ -38,6 +38,38 @@ const MAX_UNSTARTED_WORK_CANDIDATES: i64 = 32;
 /// `state_changed` that moves a task into the state a flag watches are the
 /// bookkeeping that makes it eligible in the first place. Counting them would
 /// reset the clock at the same moment it starts.
+/// When a task BECAME blocked. Transitions only.
+///
+/// A SECOND CLOCK BESIDE `last_task_action_source!`, ON PURPOSE, and the two
+/// answer different questions. That one asks "has anyone acted on this task",
+/// where a note IS evidence of engagement and correctly resets it. This one asks
+/// "when did this become blocked", where a note is precisely the thing that
+/// looks like movement without being it.
+///
+/// The shared macro exists so definitions cannot drift, so adding a second is a
+/// trade rather than a tidy-up. It is the right one here because collapsing the
+/// two is what produced the defect: `swarm_correct_task_record` writes
+/// `kind='corrected'` with `to_state` set to the task's CURRENT state, so on a
+/// blocked task a correction is indistinguishable from a re-block, and `MAX()`
+/// takes it.
+///
+/// MEASURED ON THE LIVE BOARD, not reasoned about. 01a040e4 was blocked for
+/// 10.8 hours and read 0.4 after one note; 01a04008 was blocked 4.0 and read
+/// 0.4. The operator's twelve-hour escalation exists to reach them when Queen is
+/// the bottleneck, and a Queen annotating blocked work -- which is what a
+/// conscientious Queen does -- was silencing the alarm built to catch her.
+///
+/// Filtering by kind rather than by actor, because the actor is not the problem:
+/// a worker's correction suppresses it identically.
+macro_rules! blocked_transition_source {
+    () => {
+        "(SELECT task_id, MAX(occurred_at) AS blocked_at
+          FROM task_activity
+          WHERE to_state = 'blocked' AND kind = 'state_changed'
+          GROUP BY task_id)"
+    };
+}
+
 macro_rules! last_task_action_source {
     () => {
         "(SELECT task_id, MAX(occurred_at) AS acted_at
@@ -633,15 +665,15 @@ impl TaskStore {
         minimum_age_seconds: i64,
     ) -> Result<Vec<UnattendedBlockCandidate>, TaskStoreError> {
         let connection = self.connection()?;
-        let mut statement = connection.prepare(
+        let mut statement = connection.prepare(concat!(
             "SELECT task.assigned_worker_id, task.id, task.updated_at,
                     MAX(0, ?1 - blocked.blocked_at), session.session_id
              FROM tasks task
              JOIN worker_profiles worker
                ON worker.id = task.assigned_worker_id AND worker.archived_at IS NULL
-             JOIN (SELECT task_id, MAX(occurred_at) AS blocked_at
-                   FROM task_activity WHERE to_state = 'blocked'
-                   GROUP BY task_id) blocked
+             JOIN ",
+            blocked_transition_source!(),
+            " blocked
                ON blocked.task_id = task.id
              JOIN (SELECT worker_id, session_id,
                           ROW_NUMBER() OVER (PARTITION BY worker_id
@@ -651,8 +683,8 @@ impl TaskStore {
              WHERE task.state = 'blocked' AND task.removed_at IS NULL
                AND blocked.blocked_at + ?2 <= ?1
                AND (task.blocked_until IS NULL OR task.blocked_until <= ?1)
-             ORDER BY blocked.blocked_at, task.id LIMIT ?3",
-        )?;
+             ORDER BY blocked.blocked_at, task.id LIMIT ?3"
+        ))?;
         let candidates = statement
             .query_map(
                 params![now, minimum_age_seconds, MAX_UNSTARTED_WORK_CANDIDATES],
@@ -689,15 +721,15 @@ impl TaskStore {
         minimum_age_seconds: i64,
     ) -> Result<Vec<UnattendedBlockCandidate>, TaskStoreError> {
         let connection = self.connection()?;
-        let mut statement = connection.prepare(
+        let mut statement = connection.prepare(concat!(
             "SELECT task.assigned_worker_id, task.id, task.updated_at,
                     MAX(0, ?1 - blocked.blocked_at), session.session_id
              FROM tasks task
              JOIN worker_profiles worker
                ON worker.id = task.assigned_worker_id AND worker.archived_at IS NULL
-             JOIN (SELECT task_id, MAX(occurred_at) AS blocked_at
-                   FROM task_activity WHERE to_state = 'blocked'
-                   GROUP BY task_id) blocked
+             JOIN ",
+            blocked_transition_source!(),
+            " blocked
                ON blocked.task_id = task.id
              JOIN (SELECT worker_id, session_id,
                           ROW_NUMBER() OVER (PARTITION BY worker_id
@@ -712,8 +744,8 @@ impl TaskStore {
                      AND action.task_id = task.id AND action.worker_id = worker.id
                      AND action.evidence_revision = task.updated_at
                )
-             ORDER BY blocked.blocked_at, task.id LIMIT ?3",
-        )?;
+             ORDER BY blocked.blocked_at, task.id LIMIT ?3"
+        ))?;
         let candidates = statement
             .query_map(
                 params![now, minimum_age_seconds, MAX_UNSTARTED_WORK_CANDIDATES],
@@ -750,16 +782,18 @@ impl TaskStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         let still_blocked: bool = transaction.query_row(
-            "SELECT EXISTS(
+            concat!(
+                "SELECT EXISTS(
                  SELECT 1 FROM tasks task
-                 JOIN (SELECT task_id, MAX(occurred_at) AS blocked_at
-                       FROM task_activity WHERE to_state = 'blocked'
-                       GROUP BY task_id) blocked ON blocked.task_id = task.id
+                 JOIN ",
+                blocked_transition_source!(),
+                " blocked ON blocked.task_id = task.id
                  WHERE task.id = ?1 AND task.state = 'blocked'
                    AND task.assigned_worker_id = ?2 AND task.updated_at = ?3
                    AND task.removed_at IS NULL
                    AND blocked.blocked_at + ?4 <= ?5
-             )",
+             )"
+            ),
             params![
                 candidate.task_id.to_string(),
                 candidate.worker_id.to_string(),
@@ -3532,6 +3566,86 @@ mod tests {
         assert!(
             reaching_later.contains(&waiting),
             "an elapsed deadline escalates -- the reason expired and nobody came back"
+        );
+    }
+
+    /// A NOTE IS NOT A MOVE. Annotating a blocked task must not reset its clock.
+    ///
+    /// The live case: 01a040e4 had been blocked for 10.8 hours and read 0.4
+    /// after one correction, an hour short of the operator's threshold. The
+    /// escalation exists to reach them when Queen is the bottleneck, and a Queen
+    /// who annotates blocked work -- which is what a conscientious Queen does --
+    /// was silencing the alarm built to catch exactly that.
+    ///
+    /// The cause is that `swarm_correct_task_record` writes `kind='corrected'`
+    /// with `to_state` set to the task's CURRENT state, so on a blocked task the
+    /// note is indistinguishable from a re-block and `MAX()` prefers it.
+    #[test]
+    fn annotating_a_blocked_task_does_not_restart_its_clock() {
+        let store = TaskStore::in_memory().unwrap();
+        let twelve_hours = 12 * 60 * 60;
+        let now = 1_000_000;
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store
+            .create_task("Waiting on a release", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::operator())
+            .unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store
+            .transition_task_with_note(task.id, TaskState::Blocked, "Blocked on the operator")
+            .unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE task_activity SET occurred_at = ?2
+                 WHERE task_id = ?1 AND to_state = 'blocked' AND kind = 'state_changed'",
+                params![task.id.to_string(), now - 13 * 60 * 60],
+            )
+            .unwrap();
+
+        assert_eq!(
+            store
+                .operator_block_escalation_candidates(now, twelve_hours)
+                .unwrap()
+                .len(),
+            1,
+            "thirteen hours blocked is past the threshold"
+        );
+
+        // Queen writes about it, conscientiously, and moves nothing. This is the
+        // exact call that suppressed it on the live board.
+        store
+            .append_task_correction(
+                task.id,
+                "Still waiting on the operator.",
+                &TaskActivityActor::operator(),
+            )
+            .unwrap();
+
+        let candidate = store
+            .operator_block_escalation_candidates(now, twelve_hours)
+            .unwrap()
+            .pop()
+            .expect("a note is attention, not action -- the block is still thirteen hours old");
+        assert_eq!(candidate.task_id, task.id);
+        assert_eq!(
+            candidate.age_seconds,
+            13 * 60 * 60,
+            "the age is measured from the block, not from the last thing written about it"
         );
     }
 
