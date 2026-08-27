@@ -281,6 +281,42 @@ if grep -q 'restart swarm-terminal-host.service' "$HOME/systemctl.log"; then
   echo "development enable touched the terminal host" >&2
   exit 1
 fi
+# A PROTOCOL CHANGE IS REFUSED BEFORE THE BUILD, NOT AFTER IT.
+#
+# A reload ends in `update`, which refuses a protocol change by design — and on
+# 2026-08-27 that refusal arrived at the end of a five-minute build, every time,
+# for three hours. The build script here exits 1, so if the refusal came late
+# this test could not tell the two failures apart: the marker file is what
+# proves the builder was never reached.
+mkdir -p "$dev_checkout/crates/swarm-terminal/src"
+printf 'pub const PROTOCOL_VERSION: u16 = 99;\n' > "$dev_checkout/crates/swarm-terminal/src/ipc.rs"
+cat > "$dev_checkout/packaging/linux/build-development-release.sh" <<'EOF'
+#!/bin/sh
+touch "$HOME/the-builder-ran"
+exit 1
+EOF
+chmod +x "$dev_checkout/packaging/linux/build-development-release.sh"
+rm -f "$HOME/the-builder-ran"
+protocol_refusal=$("$package" reload-development 2>&1 || true)
+case "$protocol_refusal" in
+  *migrate-protocol*) :;;
+  *) echo "the reload refusal does not name migrate-protocol: $protocol_refusal" >&2; exit 1;;
+esac
+case "$protocol_refusal" in
+  *"STOPS EVERY WORKER"*) :;;
+  *) echo "the reload refusal does not say the migration stops workers" >&2; exit 1;;
+esac
+[ ! -f "$HOME/the-builder-ran" ] || { echo "the reload built before refusing" >&2; exit 1; }
+grep -q '^reason=protocol-change$' "$SWARM_STATE_ROOT/development-reload.status" \
+  || { echo "the status did not record why the reload was refused" >&2; exit 1; }
+# Back to a checkout whose protocol agrees, so the rest of this file is unaffected.
+printf 'pub const PROTOCOL_VERSION: u16 = 5;\n' > "$dev_checkout/crates/swarm-terminal/src/ipc.rs"
+cat > "$dev_checkout/packaging/linux/build-development-release.sh" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$dev_checkout/packaging/linux/build-development-release.sh"
+
 printf 'state=requested\n' > "$SWARM_STATE_ROOT/development-reload.status"
 printf 'request\n' > "$SWARM_STATE_ROOT/development-reload.request"
 mkdir -p "$SWARM_STATE_ROOT/development-build/stale-one" "$SWARM_STATE_ROOT/development-build/stale-two"

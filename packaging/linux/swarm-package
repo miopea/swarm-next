@@ -589,6 +589,35 @@ reload_development() {
   dev_status_path=$(sed -n 's/^SWARM_DEV_RELOAD_STATUS_PATH=//p' "$dev_config")
   validate_dev_checkout "$dev_checkout"
   [ "$dev_status_path" = "$state_root/development-reload.status" ] || die "development status path is invalid"
+  # REFUSED BEFORE THE BUILD, NOT AFTER IT.
+  #
+  # A reload ends in `update`, and update refuses a protocol change by design.
+  # On 2026-08-27 that refusal arrived at the END of a five-minute build, every
+  # time, from 10:33 until the release was reverted three hours later — the
+  # operator paid for the whole build to be told no.
+  #
+  # AND THE RELOAD MUST NOT SIMPLY RUN THE MIGRATION INSTEAD. migrate-protocol
+  # drains the terminal host and stops every worker; the reload's entire promise
+  # is that workers stay online, and its card says so on its face. Quietly
+  # killing fourteen live terminals to save a refusal is a far worse trade than
+  # the refusal.
+  #
+  # So it stops here, in seconds, and names the command that does the job along
+  # with what that command costs.
+  dev_protocol=$(sed -n 's/^pub const PROTOCOL_VERSION: u16 = \([0-9][0-9]*\);/\1/p' \
+    "$dev_checkout/crates/swarm-terminal/src/ipc.rs" 2>/dev/null | tr -d '\r')
+  dev_host_release=$(release_from_link "$install_root/host-current")
+  if [ -n "$dev_protocol" ] && [ -n "$dev_host_release" ] && [ -f "$dev_host_release/PROTOCOL" ] \
+    && [ "$(cat "$dev_host_release/PROTOCOL")" != "$dev_protocol" ]; then
+    printf 'state=failed\nrevision=%s\nreason=protocol-change\n' \
+      "$(git -C "$dev_checkout" rev-parse --short=12 HEAD 2>/dev/null)" > "$dev_status_path" 2>/dev/null || true
+    die "this checkout speaks terminal-host protocol $dev_protocol and the installed host speaks $(cat "$dev_host_release/PROTOCOL"), so a reload cannot install it — a reload deliberately leaves the terminal host running, which is what keeps worker terminals alive.
+
+Build and migrate instead, which swaps the API and the host together. It STOPS EVERY WORKER, so do it when they are idle:
+
+    $dev_checkout/packaging/linux/build-development-release.sh $state_root/development-build
+    <the printed bundle>/swarm-package migrate-protocol <the printed bundle>"
+  fi
   dev_reload_started=1
   dev_reload_revision=$(git -C "$dev_checkout" rev-parse --short=12 HEAD)
   [ -n "$dev_reload_revision" ] || die "development source revision is unavailable"
