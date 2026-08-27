@@ -2391,3 +2391,21 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   font-size: .72rem;
   line-height: 1.45;
 }
+
+/* Briefings queued and waiting their turn.
+   Quiet on purpose: this is status, not a fault. It sits below the attention
+   cards and borrows none of their colour, because a panel that looks urgent
+   for a queue behaving correctly is how the urgent ones stop being read. */
+.held-briefing-list {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-soft);
+}
+.held-briefing-list h4 { margin: 0; font-size: .86rem; }
+.held-briefing-note { margin: 0; color: var(--muted); font-size: .74rem; line-height: 1.45; }
+.held-briefing-list ul { display: grid; gap: 8px; margin: 4px 0 0; padding: 0; list-style: none; }
+.held-briefing-list li { display: grid; gap: 2px; }
+.held-briefing-detail { color: var(--muted); font-size: .72rem; }

@@ -280,6 +280,38 @@ export type CoordinatorStatus = {
   held: HeldDelivery[];
   /** Blocks past the twelve hours the operator asked to hear about directly. */
   blocked_escalations?: BlockedEscalation[];
+  /**
+   * Briefings queued and not yet handed over, with what each waits on.
+   *
+   * NOT AN ATTENTION ITEM, and that is measured rather than assumed. Every hold
+   * reason is a queue behaving correctly — the worker is on something else, an
+   * earlier task is ahead of it, or a person is typing in that terminal — and
+   * they clear themselves: two on this Hive went to zero within minutes with
+   * nothing done about them. Counting self-resolving states in "Needs you"
+   * teaches the operator to distrust the badge, which is the one thing it
+   * cannot afford.
+   *
+   * Shown anyway, because the server computed them and nothing rendered them:
+   * a briefing held for hours means the task ahead of it never moved, and that
+   * is a stall wearing a healthy label.
+   */
+  held_briefings?: HeldBriefing[];
+};
+export type HeldBriefing = {
+  task_id: string;
+  title: string;
+  worker_id: string;
+  worker_name: string;
+  queued_at: number;
+  /** "operator_in_the_terminal", "worker_already_working" or "waiting_its_turn". */
+  reason: string;
+  /**
+   * The earlier task this one is behind, when that is the hold.
+   *
+   * Without it "waiting its turn" is unfalsifiable — sixteen briefings reported
+   * it at once on 2026-08-24 and named nothing to go and look at.
+   */
+  blocked_by?: string | null;
 };
 export type HeldDelivery = {
   /**

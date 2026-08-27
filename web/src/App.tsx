@@ -75,6 +75,7 @@ import {
   type ProviderCapabilities,
   type PresentationDeviceClass,
   type QueenAutonomyPolicy,
+  type HeldBriefing,
   type HeldDelivery,
   type QueenAutomationStatus,
   type SessionSummary,
@@ -110,6 +111,7 @@ import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/the
 import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
 import BlockedEscalationCard from "./decisions/BlockedEscalationCard";
 import RuntimeUpdateConfirm from "./runtime/RuntimeUpdateConfirm";
+import HeldBriefingList from "./orchestration/HeldBriefingList";
 import WhatsNewModal from "./runtime/WhatsNewModal";
 import { readSeenVersion, storeSeenVersion, whatsNewFor } from "./runtime/whatsNew";
 import type { RuntimeUpdateSummary } from "./runtime/runtimeUpdates";
@@ -347,6 +349,9 @@ export function App() {
   /** What the coordinator is holding behind an unanswered terminal prompt. */
   const [heldDeliveries, setHeldDeliveries] = useState<HeldDelivery[]>([]);
   const [blockedEscalations, setBlockedEscalations] = useState<BlockedEscalation[]>([]);
+  // NOT fed into attentionCount, on purpose. See HeldBriefingList for why a
+  // self-resolving state must not badge.
+  const [heldBriefings, setHeldBriefings] = useState<HeldBriefing[]>([]);
   /** Bumped to re-read held work immediately rather than waiting for the tick. */
   const [heldDeliveryRefresh, setHeldDeliveryRefresh] = useState(0);
   const [providers, setProviders] = useState<ProviderCapabilities>({ claude_code: true, codex: false });
@@ -448,6 +453,7 @@ export function App() {
     if (!operatorToken) {
       setHeldDeliveries([]);
       setBlockedEscalations([]);
+      setHeldBriefings([]);
       return undefined;
     }
     let cancelled = false;
@@ -456,8 +462,8 @@ export function App() {
         // Defaulted rather than assumed: during an update the page can briefly
         // be newer than the API answering it, and a missing field should not
         // take the control room down.
-        .then((status) => { if (!cancelled) { setHeldDeliveries(status.held ?? []); setBlockedEscalations(status.blocked_escalations ?? []); } })
-        .catch(() => { if (!cancelled) setHeldDeliveries([]); });
+        .then((status) => { if (!cancelled) { setHeldDeliveries(status.held ?? []); setBlockedEscalations(status.blocked_escalations ?? []); setHeldBriefings(status.held_briefings ?? []); } })
+        .catch(() => { if (!cancelled) { setHeldDeliveries([]); setHeldBriefings([]); } });
     };
     load();
     const interval = window.setInterval(load, HELD_DELIVERY_POLL_MS);
@@ -1994,6 +2000,7 @@ export function App() {
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
                 <BlockedEscalationCard escalations={blockedEscalations} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
+                <HeldBriefingList briefings={heldBriefings} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <HeldDeliveryAttentionCard held={heldDeliveries} onOpenWorker={(name) => { const worker = workers.find((candidate) => candidate.name === name); if (worker) openWorker(worker.id); }} />
               </>}
               onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }}
