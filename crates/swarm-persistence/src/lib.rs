@@ -532,6 +532,28 @@ impl TaskStore {
             connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match schema_version {
             found if found < CURRENT_SCHEMA_VERSION => {
+                // Foreign keys OFF for the duration of the migration, exactly as
+                // SQLite's own twelve-step ALTER procedure requires, and OFF
+                // BEFORE the transaction begins because `PRAGMA foreign_keys` is
+                // a no-op inside one.
+                //
+                // This is not a relaxation. A migration that REBUILDS a table --
+                // the only way to change a CHECK constraint -- has to drop the
+                // old copy, and with enforcement on, DROP TABLE runs an implicit
+                // DELETE FROM that trips every child row pointing at the parent.
+                // `defer_foreign_keys` was tried first and merely moves the same
+                // failure to COMMIT.
+                //
+                // Integrity is not taken on trust: foreign_key_check runs after
+                // the commit and refuses the open if the migration left a
+                // dangling reference, which is a stronger guarantee than
+                // per-statement enforcement gave, because it examines EVERY row
+                // rather than only the ones a migration happened to touch.
+                let foreign_keys_were_on: bool =
+                    connection.pragma_query_value(None, "foreign_keys", |row| row.get(0))?;
+                if foreign_keys_were_on {
+                    connection.pragma_update(None, "foreign_keys", "OFF")?;
+                }
                 let transaction = connection.transaction()?;
                 if schema_version == 0 {
                     transaction.execute_batch(
@@ -566,6 +588,21 @@ impl TaskStore {
                 }
                 migrate_schema(&transaction, schema_version)?;
                 transaction.commit()?;
+                if foreign_keys_were_on {
+                    connection.pragma_update(None, "foreign_keys", "ON")?;
+                    let dangling: Option<String> = connection
+                        .query_row(
+                            "SELECT \"table\" FROM pragma_foreign_key_check LIMIT 1",
+                            [],
+                            |row| row.get(0),
+                        )
+                        .optional()?;
+                    if let Some(table) = dangling {
+                        return Err(TaskStoreError::IntegrityFailure(format!(
+                            "migration left a dangling foreign key in {table}"
+                        )));
+                    }
+                }
             }
             CURRENT_SCHEMA_VERSION => {}
             found => {
@@ -5236,7 +5273,7 @@ mod tests {
             )
             .unwrap();
         store
-            .bind_worker_session(worker.id, WorkerSessionId::new())
+            .bind_worker_session(worker.id, swarm_domain::WorkerSessionId::new())
             .unwrap();
 
         let page = store.list_control_room_events(0).unwrap();
@@ -6111,7 +6148,13 @@ mod tests {
             // seventeen tables carry foreign keys into this one and dropping it
             // would cascade them away, so rewinding the schema would delete the
             // operator's data rather than model an older database.
-            undo_sql: "PRAGMA legacy_alter_table = ON;
+            // foreign_keys OFF for the same reason migrate_open_provider_set
+            // needs it: this rebuild drops a table that seventeen others point
+            // at, and DROP TABLE's implicit delete refuses while a
+            // non-cascading child row exists. This batch runs outside a
+            // transaction, so the pragma takes effect here.
+            undo_sql: "PRAGMA foreign_keys = OFF;
+                 PRAGMA legacy_alter_table = ON;
                  ALTER TABLE worker_profiles RENAME TO worker_profiles_undo;
                  CREATE TABLE worker_profiles (
                      id TEXT PRIMARY KEY,
@@ -6142,7 +6185,8 @@ mod tests {
                  CREATE UNIQUE INDEX one_scout_per_hive
                      ON worker_profiles(hive_id)
                      WHERE system_role = 'scout' AND archived_at IS NULL;
-                 PRAGMA legacy_alter_table = OFF;",
+                 PRAGMA legacy_alter_table = OFF;
+                 PRAGMA foreign_keys = ON;",
             probe_sql: "SELECT EXISTS(
                  SELECT 1 FROM sqlite_master
                  WHERE type = 'table' AND name = 'worker_profiles'
@@ -6167,6 +6211,80 @@ mod tests {
             .query_row(&newest_step().probe(), [], |row| row.get(0))
             .unwrap();
         assert!(present, "the newest step listed is not in the schema");
+    }
+
+    /// The ceiling migration survives a database that HAS DATA IN IT.
+    ///
+    /// This exists because the test below it passed while schema 96 was broken.
+    /// That one opens an empty store, so the table rebuild had no rows to copy
+    /// and, more importantly, no CHILD ROWS pointing at the table it drops. On
+    /// the operator's real database the same migration failed immediately:
+    /// with foreign keys enforced, DROP TABLE runs an implicit DELETE FROM, and
+    /// every child row referencing the parent trips it.
+    ///
+    /// Seventeen tables carry foreign keys into `worker_profiles`, so a rebuild
+    /// with no children present tests almost nothing about a rebuild. One bound
+    /// session is enough to make the difference between the two outcomes.
+    #[test]
+    fn migrates_the_previous_schema_when_the_database_carries_related_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm.sqlite3");
+        let worker_id;
+        {
+            let store = TaskStore::open(&path).unwrap();
+            let worker = store
+                .create_worker(
+                    "Petal",
+                    swarm_domain::ProviderKind::ClaudeCode,
+                    "/workspace/petal",
+                    false,
+                    1,
+                )
+                .unwrap();
+            worker_id = worker.id;
+            // Child rows in the tables that reference this one. A CASCADING
+            // child is not enough: DROP TABLE's implicit delete cascades it away
+            // harmlessly. tasks.assigned_worker_id has NO on-delete action, so
+            // it is the shape that actually refuses the drop -- and the shape
+            // the operator's database was full of.
+            let session = swarm_domain::WorkerSessionId::new();
+            store.bind_worker_session(worker.id, session).unwrap();
+            let task = store
+                .create_task("Carry something", "/workspace/petal")
+                .unwrap();
+            store.assign_task(task.id, session).unwrap();
+            store
+                .connection()
+                .unwrap()
+                .execute_batch(&format!(
+                    "{};
+                     PRAGMA user_version = {};",
+                    newest_step().undo(),
+                    CURRENT_SCHEMA_VERSION - 1
+                ))
+                .unwrap();
+        }
+
+        let migrated = TaskStore::open(&path).expect("a populated database migrates");
+        migrated
+            .verify_integrity()
+            .expect("the migration leaves the database verifiable");
+        assert_eq!(
+            migrated.get_worker_profile(worker_id).unwrap().name,
+            "Petal",
+            "the worker survives the rebuild"
+        );
+        let dangling: Option<String> = migrated
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT \"table\" FROM pragma_foreign_key_check LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap();
+        assert_eq!(dangling, None, "no child is left pointing at nothing");
     }
 
     #[test]
