@@ -311,6 +311,7 @@ impl ServerHandler for AgentMcp {
             record_deployment_tool(),
             correct_task_record_tool(),
             amend_task_facts_tool(),
+            retitle_task_tool(),
             record_no_deployment_tool(),
             draft_email_reply_tool(),
             create_task_tool(),
@@ -388,6 +389,7 @@ impl ServerHandler for AgentMcp {
             "swarm_transition_task" => self.transition_task(arguments).await,
             "swarm_correct_task_record" => self.correct_task_record(arguments),
             "swarm_amend_task_facts" => self.amend_task_facts(arguments),
+            "swarm_retitle_task" => self.retitle_task(arguments),
             "swarm_list_jira_comments" => self.list_jira_comments(arguments).await,
             "swarm_comment_jira_task" => self.comment_jira_task(arguments),
             "swarm_record_deployment" => self.record_deployment(arguments),
@@ -1311,6 +1313,38 @@ impl AgentMcp {
         }))
     }
 
+    /// Corrects a task's title.
+    ///
+    /// A title is how work is FOUND, not what it was authorised to be, so
+    /// replacing it loses nothing that governs anything — which is exactly why
+    /// the operator separated it from the description: "two questions — let
+    /// titles be edited freely, treat descriptions carefully" (decision
+    /// 01a04108). The old title stays readable in the task's history.
+    ///
+    /// # Errors
+    /// Returns an error when the task is not this agent's, or the title is
+    /// invalid.
+    fn retitle_task(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<RetitleTaskInput>(arguments)?;
+        let task_id = self.task_evidence_may_reach(&input.task_id)?;
+        let task = self.tasks.store().update_task_details_as(
+            task_id,
+            &swarm_domain::TaskDetailsUpdate {
+                title: Some(input.title),
+                description: None,
+                priority: None,
+                workspace: None,
+                operator_instruction: None,
+            },
+            &swarm_domain::TaskActivityActor::worker(self.principal.worker_id),
+        )?;
+        structured(json!({
+            "task_id": task_id,
+            "title": task.title,
+            "recorded": "The title is corrected and the old one stays in this task's history. Nothing else moved: the description, the acceptance and the state are untouched.",
+        }))
+    }
+
     /// Corrects a fact in a task's description, leaving the original in place.
     ///
     /// # Errors
@@ -1737,6 +1771,12 @@ struct CorrectTaskRecordInput {
 struct AmendTaskFactsInput {
     task_id: String,
     correction: String,
+}
+
+#[derive(Deserialize)]
+struct RetitleTaskInput {
+    task_id: String,
+    title: String,
 }
 
 #[derive(Deserialize)]
@@ -2292,6 +2332,26 @@ fn correct_task_record_tool() -> Tool {
     )
 }
 
+fn retitle_task_tool() -> Tool {
+    tool(
+        "swarm_retitle_task",
+        "Correct a task's title. A title is how work is FOUND in a list, not what it was authorised to be — so unlike the description, replacing it loses nothing that governs anything. Use it when the title says something untrue or now misleading: it names a mechanism the work disproved, or describes a plan that changed. It does not touch the description, the acceptance or the state, and it cannot make the work mean something else. The change is recorded in the task's history with your name, so what it used to say remains readable.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string" },
+                "title": {
+                    "type": "string",
+                    "description": "The corrected title. Say what the work IS, not what was wrong with the old one — the history already carries the old title, so a title that argues with itself costs every future reader and helps none of them."
+                }
+            },
+            "required": ["task_id", "title"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
 fn amend_task_facts_tool() -> Tool {
     tool(
         "swarm_amend_task_facts",
@@ -2643,6 +2703,83 @@ mod tests {
         );
     }
 
+    /// A title can be corrected; the description it sits above cannot be replaced.
+    ///
+    /// The operator separated these deliberately — "two questions — let titles
+    /// be edited freely, treat descriptions carefully" (decision 01a04108) —
+    /// and the separation is the assertion worth testing. A title is how work is
+    /// FOUND. A description is what the work was AUTHORISED to be. Replacing the
+    /// first loses nothing that governs anything; replacing the second would let
+    /// a worker redirect itself.
+    ///
+    /// This task existed because 01a03ef1's title permanently asserted a
+    /// mechanism that task's own work disproved.
+    #[tokio::test]
+    async fn a_worker_can_correct_a_title_without_touching_what_governs_the_work() {
+        let (bridge, store, _queen_id, worker_id, _) = setup();
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(worker_id, session).unwrap();
+        let task = store
+            .create_task_with_details(
+                "A stale exemption claim is restated as if freshly made",
+                "The description that governs.",
+                swarm_domain::TaskPriority::Normal,
+                "/workspace/swarm-next",
+            )
+            .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store
+            .assign_task_to_worker_as(
+                task.id,
+                worker_id,
+                &swarm_domain::TaskActivityActor::operator(),
+            )
+            .unwrap();
+
+        let response = response_json(
+            handle(
+                bridge,
+                plain_state(),
+                mcp_request(
+                    Some(&worker_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_retitle_task",
+                        "arguments": {
+                            "task_id": task.id.to_string(),
+                            "title": "Supersession works; the Review note is what cannot be corrected"
+                        }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await
+        .to_string();
+        assert!(
+            response.contains("Supersession works"),
+            "the title is corrected: {response}"
+        );
+
+        let corrected = store.get_task(task.id).unwrap();
+        assert_eq!(
+            corrected.title,
+            "Supersession works; the Review note is what cannot be corrected"
+        );
+        assert_eq!(
+            corrected.description, "The description that governs.",
+            "and the description is untouched — that is the whole distinction"
+        );
+        assert_eq!(
+            corrected.state,
+            swarm_domain::TaskState::Ready,
+            "and so is the state"
+        );
+    }
+
     /// A correction reaches the worker WHERE THE DESCRIPTION IS READ.
     ///
     /// The mechanism is worthless if the correction lives somewhere else. That
@@ -2784,6 +2921,7 @@ mod tests {
                 // Review to say so.
                 "swarm_correct_task_record",
                 "swarm_amend_task_facts",
+                "swarm_retitle_task",
                 "swarm_record_no_deployment",
                 "swarm_draft_email_reply",
                 "swarm_create_task",
