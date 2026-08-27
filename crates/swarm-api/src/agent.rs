@@ -3653,6 +3653,7 @@ mod tests {
                     allowed_actions: &actions,
                     questions: &[],
                     deadline: None,
+                    requested_command: None,
                 })
                 .unwrap();
         }
@@ -3861,6 +3862,7 @@ mod tests {
                 allowed_actions: &actions,
                 questions: &[],
                 deadline: None,
+                requested_command: None,
             })
             .unwrap();
         store
@@ -3939,6 +3941,7 @@ mod tests {
                 allowed_actions: &actions,
                 questions: &[],
                 deadline: None,
+                requested_command: None,
             })
             .unwrap();
 
@@ -3999,6 +4002,7 @@ mod tests {
                 allowed_actions: &["Yes".to_owned(), "No".to_owned()],
                 questions: &[],
                 deadline: None,
+                requested_command: None,
             })
             .unwrap();
         store
@@ -4077,6 +4081,7 @@ mod tests {
                 allowed_actions: &["Cut and release 0.8.10".to_owned()],
                 questions: &[],
                 deadline: None,
+                requested_command: None,
             })
             .unwrap();
 

@@ -151,7 +151,8 @@ const SUPERSEDED_EXEMPTION_SCHEMA_VERSION: i64 = 95;
 const OPEN_PROVIDER_SET_SCHEMA_VERSION: i64 = 96;
 const EPHEMERAL_WORKER_SCHEMA_VERSION: i64 = 97;
 const TASK_AMENDMENT_SCHEMA_VERSION: i64 = 98;
-const CURRENT_SCHEMA_VERSION: i64 = TASK_AMENDMENT_SCHEMA_VERSION;
+const DECISION_COMMAND_GRANT_SCHEMA_VERSION: i64 = 99;
+const CURRENT_SCHEMA_VERSION: i64 = DECISION_COMMAND_GRANT_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -2736,6 +2737,65 @@ fn migrate_task_amendments(transaction: &rusqlite::Transaction<'_>) -> rusqlite:
     transaction.pragma_update(None, "user_version", TASK_AMENDMENT_SCHEMA_VERSION)
 }
 
+/// One command an operator approved, and the grant that makes it runnable.
+///
+/// The operator ruled on this: build it, and "one decision, one use, dies with
+/// the task".
+///
+/// WHY THIS DOES NOT WIDEN WHO CAN AUTHORISE ANYTHING. Only the operator can
+/// resolve a decision, so only the operator can create a grant. The chain is the
+/// same act they already perform; what changes is that the classifier can see
+/// it. A worker cannot mint one, and neither can Queen.
+///
+/// `requested_command` lives on the DECISION rather than here so the operator
+/// reads the exact text before approving. Approving "the one contact
+/// formula-column test" is not approving a regex, and a decision that silently
+/// compiled to a permission pattern would trade a visible block for an invisible
+/// grant — worse than the gap being closed.
+///
+/// `consumed_at` is honest about what it can enforce. The classifier reads a
+/// settings file at process start and reports nothing back, so exactly-once
+/// cannot be enforced AT THE CLASSIFIER. What is enforced is that the grant
+/// appears in one session's settings, is marked consumed when that session ends,
+/// and dies with the task regardless.
+fn migrate_decision_command_grants(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                        WHERE type = 'table' AND name = 'decision_requests')",
+        [],
+        |row| row.get(0),
+    )?;
+    if present {
+        let has_column: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('decision_requests')
+                            WHERE name = 'requested_command')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_column {
+            transaction.execute_batch(
+                "ALTER TABLE decision_requests ADD COLUMN requested_command TEXT;",
+            )?;
+        }
+        transaction.execute_batch(
+            "CREATE TABLE IF NOT EXISTS decision_command_grants (
+                 decision_id TEXT PRIMARY KEY
+                     REFERENCES decision_requests(id) ON DELETE CASCADE,
+                 task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                 worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+                 command TEXT NOT NULL,
+                 created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                 consumed_at INTEGER
+             );
+             CREATE INDEX IF NOT EXISTS decision_command_grants_live
+                 ON decision_command_grants(worker_id) WHERE consumed_at IS NULL;",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", DECISION_COMMAND_GRANT_SCHEMA_VERSION)
+}
+
 fn migrate_schema(
     transaction: &rusqlite::Transaction<'_>,
     schema_version: i64,
@@ -3041,6 +3101,9 @@ fn migrate_newest_schema_steps(
     }
     if schema_version < TASK_AMENDMENT_SCHEMA_VERSION {
         migrate_task_amendments(transaction)?;
+    }
+    if schema_version < DECISION_COMMAND_GRANT_SCHEMA_VERSION {
+        migrate_decision_command_grants(transaction)?;
     }
     Ok(())
 }
@@ -6455,6 +6518,12 @@ mod tests {
         },
         SchemaStep {
             table: "task_amendments",
+            artifact: "",
+            undo_sql: "",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "decision_command_grants",
             artifact: "",
             undo_sql: "",
             probe_sql: "",

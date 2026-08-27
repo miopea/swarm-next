@@ -2501,6 +2501,7 @@ impl TaskService {
                 allowed_actions: &input.allowed_actions,
                 questions: &input.questions,
                 deadline: input.deadline,
+                requested_command: None,
             })
             .map_err(Into::into)
     }

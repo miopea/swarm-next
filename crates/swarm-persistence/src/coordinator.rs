@@ -1835,6 +1835,7 @@ mod tests {
                 // in the future and then aged below — which is also what
                 // actually happens to one.
                 deadline: Some(unix_now(store) + 3_600),
+                requested_command: None,
             })
             .unwrap();
         store
@@ -2721,6 +2722,7 @@ mod tests {
                 allowed_actions: &["Treat the wire as authoritative".to_owned()],
                 questions: &[],
                 deadline: None,
+                requested_command: None,
             })
             .unwrap();
 

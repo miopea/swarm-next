@@ -966,6 +966,7 @@ mod tests {
             allowed_actions: actions,
             questions: &[],
             deadline: None,
+            requested_command: None,
         }
     }
 

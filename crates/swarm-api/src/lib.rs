@@ -13509,6 +13509,7 @@ mod tests {
                 allowed_actions: &actions,
                 questions: &[],
                 deadline: None,
+                requested_command: None,
             })
             .unwrap();
         let stale_decision = store
@@ -13526,6 +13527,7 @@ mod tests {
                 allowed_actions: &actions,
                 questions: &[],
                 deadline: None,
+                requested_command: None,
             })
             .unwrap();
         let app = router(
@@ -13634,6 +13636,7 @@ mod tests {
                 allowed_actions: &actions,
                 questions: &[],
                 deadline: None,
+                requested_command: None,
             })
             .unwrap();
         let client = HostClient::new(&socket);
@@ -13772,6 +13775,7 @@ mod tests {
                 allowed_actions: &actions,
                 questions: &[],
                 deadline: None,
+                requested_command: None,
             })
             .unwrap();
         store

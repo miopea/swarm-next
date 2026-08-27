@@ -177,7 +177,30 @@ pub struct NewDecisionRequest<'a> {
     /// Present makes this an interview rather than a ruling. Empty is a ruling.
     pub questions: &'a [DecisionQuestion],
     pub deadline: Option<i64>,
+    /// The exact command this decision would authorise, if approving it should
+    /// make that command RUNNABLE.
+    ///
+    /// Shown to the operator verbatim, and it is the reason this is a field
+    /// rather than something inferred from the prose: approving "the one contact
+    /// formula-column test" is not approving a regex. A decision that silently
+    /// compiled to a permission pattern would trade a visible block for an
+    /// invisible grant.
+    pub requested_command: Option<&'a str>,
 }
+
+/// The one action that turns an approval into a runnable grant.
+///
+/// EXACT MATCH, never a classifier. Whether a resolution approves something is a
+/// judgement about prose; whether it equals this string is not.
+///
+/// SHORT AND CONSTANT rather than carrying the command, because an action label
+/// is capped at eighty bytes and a real command does not fit — the first version
+/// of this embedded the command and was refused at resolution. That cap turns
+/// out to be the better design: a truncated command in a button would be the
+/// worst possible place to read what you are authorising. The command lives in
+/// the decision's `requested_command`, where there is room for it whole, and the
+/// button binds to the record rather than to a copy of the text.
+pub const GRANT_COMMAND_ACTION: &str = "Allow the command shown in this request";
 
 impl TaskStore {
     /// Returns the workers with an unresolved explicit operator decision.
@@ -291,7 +314,17 @@ impl TaskStore {
         validate_new_request(request)?;
         let questions = serde_json::to_string(request.questions)
             .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
-        let actions = serde_json::to_string(request.allowed_actions)
+        // SWARM APPENDS THE GRANT BUTTON, never the caller. If a worker could
+        // supply the label that mints a grant, the exact-match check below would
+        // be checking a string the worker chose — which is not a check.
+        let mut offered = request.allowed_actions.to_vec();
+        if request.requested_command.is_some() {
+            let label = GRANT_COMMAND_ACTION.to_owned();
+            if !offered.contains(&label) {
+                offered.push(label);
+            }
+        }
+        let actions = serde_json::to_string(&offered)
             .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
         let id = DecisionRequestId::new();
         let mut connection = self.connection()?;
@@ -314,9 +347,9 @@ impl TaskStore {
             "INSERT INTO decision_requests (
                 id, hive_id, requesting_worker_id, task_id, kind, urgency, title, reason,
                 risk, evidence, suggested_action, allowed_actions, deadline, questions,
-                summary
+                summary, requested_command
              )
-             SELECT ?1, w.hive_id, w.id, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
+             SELECT ?1, w.hive_id, w.id, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
              FROM worker_profiles w
              JOIN local_hive_identity l ON l.hive_id = w.hive_id AND l.singleton = 1
              WHERE w.id = ?2
@@ -338,6 +371,7 @@ impl TaskStore {
                 request.deadline,
                 questions,
                 request.summary,
+                request.requested_command,
             ],
         )?;
         if inserted == 0 {
@@ -550,6 +584,38 @@ impl TaskStore {
         if updated != 1 {
             return Err(TaskStoreError::DecisionAlreadyResolved);
         }
+        // The grant, and the whole safety of it is that this is an EQUALITY
+        // check rather than a reading of the operator's prose. It fires only
+        // when they pressed the button naming the exact command, so what they
+        // authorised and what becomes runnable cannot drift apart.
+        //
+        // A decision with no task grants nothing: a grant dies with its task,
+        // and one with nothing to die with would be a standing rule.
+        let requested: Option<String> = transaction
+            .query_row(
+                "SELECT requested_command FROM decision_requests WHERE id = ?1",
+                [id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        if requested.is_some() && action == GRANT_COMMAND_ACTION {
+            // The label is rebuilt from the STORED command and compared to what
+            // the operator chose. An earlier version of this compared
+            // resolution_action to the action being written, which is the same
+            // string by construction and would therefore have granted on ANY
+            // resolution -- including a refusal.
+            //
+            // A decision with no task grants nothing: a grant dies with its
+            // task, and one with nothing to die with is a standing rule.
+            transaction.execute(
+                "INSERT INTO decision_command_grants (decision_id, task_id, worker_id, command)
+                 SELECT d.id, d.task_id, d.requesting_worker_id, d.requested_command
+                 FROM decision_requests d
+                 WHERE d.id = ?1 AND d.task_id IS NOT NULL",
+                [id.to_string()],
+            )?;
+        }
         transaction.execute(
             "INSERT INTO decision_deliveries (decision_id, worker_id, state)
              SELECT id, requesting_worker_id, 'queued' FROM decision_requests WHERE id = ?1",
@@ -559,6 +625,52 @@ impl TaskStore {
         transaction.commit()?;
         drop(connection);
         self.get_decision_request(id)
+    }
+
+    /// The commands this worker may run because the operator approved them.
+    ///
+    /// Unconsumed grants only, and only while the task they were created for is
+    /// still on the board — a grant that outlives its task is the standing rule
+    /// the operator explicitly refused, wearing a costume.
+    ///
+    /// # Errors
+    /// Returns an error when the query fails.
+    pub fn live_command_grants(&self, worker_id: WorkerId) -> Result<Vec<String>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT g.command
+             FROM decision_command_grants g
+             JOIN tasks t ON t.id = g.task_id
+             WHERE g.worker_id = ?1
+               AND g.consumed_at IS NULL
+               AND t.removed_at IS NULL
+               AND t.state != 'completed'
+             ORDER BY g.created_at",
+        )?;
+        let commands = statement
+            .query_map([worker_id.to_string()], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(commands)
+    }
+
+    /// Marks every live grant for a worker as spent.
+    ///
+    /// Called when the session those grants were written into ends. This is what
+    /// "one use" can honestly mean here: the classifier reads a settings file at
+    /// process start and reports nothing back, so exactly-once cannot be enforced
+    /// AT the classifier. What is enforced is that a grant is offered to one
+    /// session and never a second.
+    ///
+    /// # Errors
+    /// Returns an error when the update fails.
+    pub fn consume_command_grants(&self, worker_id: WorkerId) -> Result<usize, TaskStoreError> {
+        let connection = self.connection()?;
+        let spent = connection.execute(
+            "UPDATE decision_command_grants SET consumed_at = unixepoch()
+             WHERE worker_id = ?1 AND consumed_at IS NULL",
+            [worker_id.to_string()],
+        )?;
+        Ok(spent)
     }
 
     /// Atomically claims a bounded batch whose worker is running and not operator-engaged.
@@ -911,6 +1023,99 @@ mod tests {
     use super::*;
     use swarm_domain::{PresenceDeviceId, ProviderKind, TaskPriority};
 
+    /// A grant exists only when the operator pressed the button naming the command.
+    ///
+    /// The whole safety of this rests on an EQUALITY check rather than a reading
+    /// of the operator's prose. Approving "the one contact formula-column test"
+    /// is not approving a regex, and a decision that silently compiled to a
+    /// permission pattern would trade a visible block for an invisible grant.
+    ///
+    /// The refusal case is the one that matters. An earlier version of this
+    /// compared `resolution_action` against the action being written — the same
+    /// string by construction — so it would have granted on ANY resolution,
+    /// including a refusal. That is the shape of bug this test exists to catch.
+    #[test]
+    fn a_command_grant_needs_the_operator_to_press_the_button_that_names_it() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let task = store
+            .create_task("Create the formula column", "/workspace/d365")
+            .unwrap();
+        let command =
+            "curl -sS -X POST https://example.crm.dynamics.com/api/data/v9.2/AttributeMetadata";
+        let refusals = vec!["Do not run it".to_owned()];
+
+        // Refused: the operator picked something else.
+        let refused = store
+            .create_decision_request(&NewDecisionRequest {
+                requesting_worker_id: queen.id,
+                task_id: Some(task.id),
+                kind: DecisionRequestKind::Approval,
+                urgency: DecisionUrgency::Normal,
+                title: "Create one formula column?",
+                summary: "One metadata POST against contact.",
+                reason: "The classifier denied it and the operator approved the action.",
+                risk: "",
+                evidence: "",
+                suggested_action: "Do not run it",
+                allowed_actions: &refusals,
+                questions: &[],
+                deadline: None,
+                requested_command: Some(command),
+            })
+            .unwrap();
+        assert!(
+            refused
+                .allowed_actions
+                .iter()
+                .any(|action| action == GRANT_COMMAND_ACTION),
+            "swarm offers the grant button itself: {:?}",
+            refused.allowed_actions
+        );
+        store
+            .resolve_decision_request(refused.id, "Do not run it", "", "inbox")
+            .unwrap();
+        assert!(
+            store.live_command_grants(queen.id).unwrap().is_empty(),
+            "a refusal grants nothing"
+        );
+
+        // Approved by pressing the button that names the command.
+        let approved = store
+            .create_decision_request(&NewDecisionRequest {
+                requesting_worker_id: queen.id,
+                task_id: Some(task.id),
+                kind: DecisionRequestKind::Approval,
+                urgency: DecisionUrgency::Normal,
+                title: "Create one formula column?",
+                summary: "One metadata POST against contact.",
+                reason: "The classifier denied it and the operator approved the action.",
+                risk: "",
+                evidence: "",
+                suggested_action: "Do not run it",
+                allowed_actions: &refusals,
+                questions: &[],
+                deadline: None,
+                requested_command: Some(command),
+            })
+            .unwrap();
+        store
+            .resolve_decision_request(approved.id, GRANT_COMMAND_ACTION, "", "inbox")
+            .unwrap();
+        assert_eq!(
+            store.live_command_grants(queen.id).unwrap(),
+            vec![command.to_owned()],
+            "the approved command, and only that command"
+        );
+
+        // And it dies with the work rather than standing.
+        store.consume_command_grants(queen.id).unwrap();
+        assert!(
+            store.live_command_grants(queen.id).unwrap().is_empty(),
+            "a spent grant is not offered to a second session"
+        );
+    }
+
     fn request(worker_id: WorkerId, actions: &[String]) -> NewDecisionRequest<'_> {
         NewDecisionRequest {
             requesting_worker_id: worker_id,
@@ -926,6 +1131,7 @@ mod tests {
             allowed_actions: actions,
             questions: &[],
             deadline: None,
+            requested_command: None,
         }
     }
 
@@ -1584,6 +1790,7 @@ mod tests {
                 allowed_actions: &["Use the production listing".to_owned()],
                 questions: &[],
                 deadline: None,
+                requested_command: None,
             })
             .unwrap();
         // The delivery carries the answer, so it exists once the decision is

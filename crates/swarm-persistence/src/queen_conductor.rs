@@ -1743,6 +1743,7 @@ mod tests {
                 allowed_actions: &["Route to the platform repository".to_owned()],
                 questions: &[],
                 deadline: None,
+                requested_command: None,
             })
             .unwrap();
         store.request_queen_automation_run(10).unwrap();
