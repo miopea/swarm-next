@@ -424,6 +424,27 @@ impl TaskStore {
                    SELECT 1 FROM worker_engagements engagement
                    WHERE engagement.worker_id = worker.id AND engagement.expires_at > ?1
                )
+               -- A worker carrying OTHER active work has not ignored this
+               -- briefing; it is queued behind the thing that worker is doing.
+               -- Without this the attention list and the held-briefing list
+               -- describe the same situation and disagree about whether it is a
+               -- problem: delivery already holds a briefing back for exactly
+               -- this reason and reports it as worker_already_working, while
+               -- this flag called it delivered-but-never-started.
+               --
+               -- Queen hit it three times in one night on one task and had to
+               -- read a transcript and /proc each time to establish that nothing
+               -- was wrong. A flag that cannot tell queued-behind-higher-
+               -- priority-work from delivered-and-ignored trains its reader
+               -- to check every instance by hand, which is the same as not
+               -- having it, and worse, because reaching that conclusion costs
+               -- attention every time.
+               AND NOT EXISTS (
+                   SELECT 1 FROM tasks active
+                   WHERE active.assigned_worker_id = worker.id
+                     AND active.state = 'active' AND active.removed_at IS NULL
+                     AND active.id <> task.id
+               )
                AND NOT EXISTS (
                    SELECT 1 FROM coordinator_actions action
                    WHERE action.kind = 'assigned_ready_work_not_started_attention'
