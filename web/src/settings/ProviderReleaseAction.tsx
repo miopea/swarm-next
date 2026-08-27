@@ -2,16 +2,9 @@ import { useState } from "react";
 
 import type { SupersededProvider } from "../api";
 
-// The alpha three are listed for exhaustiveness, not because they can appear
-// here: nothing probes their releases, so the API never reports one superseded.
-// Naming them keeps this a total map, so adding a provider is a type error
-// rather than a blank label.
 const PROVIDER_NAME: Record<SupersededProvider["provider"], string> = {
   claude_code: "Claude",
   codex: "Codex",
-  gemini: "Gemini",
-  grok: "Grok",
-  opencode: "OpenCode",
 };
 
 /**

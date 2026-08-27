@@ -4,9 +4,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use swarm_domain::{
-    FederationStewardTakeoverLeaseId, PresenceDeviceId, ProviderKind, WorkerSessionId,
-};
+use swarm_domain::{FederationStewardTakeoverLeaseId, PresenceDeviceId, WorkerSessionId};
 use thiserror::Error;
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
@@ -18,22 +16,7 @@ use crate::{
     HistoryPage, HistorySessionSummary, ProcessResourceSample, Resume, TerminalSize,
 };
 
-// 10, not 9. This is the number that tells an API whether the running terminal
-// host speaks its protocol, and the whole chain downstream of it already works:
-// build-release.sh scrapes it into a PROTOCOL file and reconcile_host refuses to
-// swap a host across a change.
-//
-// It was left at 9 when StartShell was added, so every one of those checks
-// dutifully compared 9 to 9 and reported no change -- which is how the operator
-// met "unknown variant `start_shell`" instead of being told the worker engine
-// update was required. Bumping it here covers StartShell as well as
-// StartAlphaProvider.
-//
-// Safe to bump mid-flight: reconcile_host drains with $host_release/bin/swarmctl,
-// the binary from the release the RUNNING host came from, so the drain stays
-// version-matched to itself and a newer checkout cannot break the update that
-// carries it.
-pub const PROTOCOL_VERSION: u16 = 10;
+pub const PROTOCOL_VERSION: u16 = 9;
 pub const MAX_REQUEST_BYTES: u64 = 256 * 1024;
 pub const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 pub const MAX_WRITE_AUDIT_PAGE: u16 = 1_000;
@@ -164,24 +147,6 @@ pub enum HostRequest {
     /// agent to configure. Nothing binds the returned session to a worker, so
     /// the roster never shows it and provider activity never classifies it.
     StartShell {
-        workspace: PathBuf,
-        size: TerminalSize,
-        #[serde(default)]
-        allow_outside_roots: bool,
-    },
-    /// An ALPHA provider: gemini, grok or opencode.
-    ///
-    /// One variant for all three rather than one each, because they are started
-    /// identically -- bare CLI in the workspace, no conversation and no MCP
-    /// configuration. Their resume contracts and configuration flags are not
-    /// known here and would be guesses; when one is learned it earns its own
-    /// variant and a protocol bump, which is the same cost as adding it now and
-    /// carries evidence instead of assumption.
-    ///
-    /// Refuses `ClaudeCode`, Codex and Unsupported at the host, so this cannot
-    /// become a second way to start a first-class provider.
-    StartAlphaProvider {
-        provider: ProviderKind,
         workspace: PathBuf,
         size: TerminalSize,
         #[serde(default)]
@@ -419,7 +384,6 @@ mod tests {
             "start_claude",
             "start_codex",
             "start_shell",
-            "start_alpha_provider",
             "list_sessions",
             "history_diagnostics",
             "list_history_sessions",
@@ -454,10 +418,28 @@ mod tests {
              parse what this build now sends, and only PROTOCOL_VERSION tells \
              anyone -- bump it, then update this list."
         );
+        // THIS PAIRING IS KNOWN TO BE WRONG AND CANNOT BE FIXED BY BUMPING.
+        // `start_shell` was added at protocol 9 without a bump, so the surface
+        // above is NOT what a v0.8.17 host serves even though both say 9 --
+        // which is exactly the 422 the operator met.
+        //
+        // The bump that would correct it was made and then reverted, because
+        // swarm-package refuses to install across a protocol change:
+        // install_or_update dies with "protocol change requires an explicit
+        // compatibility migration", and reconcile_host refuses too. With the
+        // installed host at 9, a build at 10 cannot be installed by any path
+        // this packaging offers, so bumping silently broke every reload.
+        //
+        // So the number is pinned to the truth about THIS repository -- 9, with
+        // start_shell present -- and the disagreement with a shipped 0.8.17
+        // host is recorded rather than papered over. Fixing it needs a way to
+        // migrate the host across a protocol change, which does not exist yet.
         assert_eq!(
-            PROTOCOL_VERSION, 10,
-            "the pinned surface above belongs to protocol 10; if you changed \
-             the requests, this number moves with them"
+            PROTOCOL_VERSION, 9,
+            "the pinned surface above belongs to protocol 9; if you changed \
+             the requests, this number moves with them -- but read the note \
+             above first, because there is currently no way to INSTALL a \
+             protocol change"
         );
     }
 
@@ -467,15 +449,7 @@ mod tests {
             r#"{"protocol_version":8,"host_version":"0.1.0","draining":false,"running_sessions":1,"retained_sessions":1}"#,
         )
         .unwrap();
-        // Read as 8 because the payload says 8, and asserted OLDER rather than
-        // exactly-one-behind. This was `PROTOCOL_VERSION - 1`, which tied a
-        // fixed payload to a moving constant and so failed on the next bump
-        // without anything about compatibility having changed.
-        assert_eq!(status.protocol_version, 8);
-        assert!(
-            status.protocol_version < PROTOCOL_VERSION,
-            "this fixture exists to model a host older than the current build"
-        );
+        assert_eq!(status.protocol_version, PROTOCOL_VERSION - 1);
         assert_eq!(status.host_build_id, None);
         assert_eq!(status.resources, None);
         assert!(!status.takeover_relay);

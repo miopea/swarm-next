@@ -2945,19 +2945,12 @@ mod tests {
         // it does not is itself the point: an earlier version of this test had
         // to disable CHECK enforcement, which is how the constraint that
         // supposedly did not exist was discovered.
-        //
-        // THE NAME HAS TO BE ONE THIS BUILD GENUINELY DOES NOT KNOW. It was
-        // "gemini" until Gemini shipped as a real provider, at which point this
-        // test failed -- correctly, because its premise had quietly become
-        // false and it was asserting tolerance while exercising a known value.
-        // Any future provider added here must move this string again rather
-        // than adjust the assertion.
         store
             .connection()
             .unwrap()
             .execute(
                 "UPDATE worker_profiles SET provider = ?2 WHERE id = ?1",
-                rusqlite::params![rolled_back.id.to_string(), "a_provider_from_the_future"],
+                rusqlite::params![rolled_back.id.to_string(), "gemini"],
             )
             .unwrap();
 
@@ -3012,7 +3005,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            stored, "a_provider_from_the_future",
+            stored, "gemini",
             "the real provider survives being unreadable"
         );
     }

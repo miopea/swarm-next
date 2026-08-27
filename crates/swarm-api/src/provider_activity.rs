@@ -231,14 +231,7 @@ fn prompt_marker(provider: ProviderKind) -> char {
         // and a terminal never emits one — so nothing matches, which is the
         // honest result. Borrowing another provider's glyph would invent a
         // reading of a screen we cannot interpret.
-        //
-        // The alpha three take the same answer for the same reason: their
-        // prompt markers are unknown here, and none of their CLIs is installed
-        // to find out from.
-        ProviderKind::Gemini
-        | ProviderKind::Grok
-        | ProviderKind::OpenCode
-        | ProviderKind::Unsupported => '\0',
+        ProviderKind::Unsupported => '\0',
     }
 }
 
@@ -279,10 +272,7 @@ fn input_palette_is_resting(provider: ProviderKind, visible: &str) -> bool {
     let Some(prompt_index) = lines.iter().rposition(|line| match provider {
         ProviderKind::ClaudeCode => line == &"❯ /" || line.starts_with("❯ /"),
         ProviderKind::Codex => line == &"› /" || line.starts_with("› /"),
-        ProviderKind::Gemini
-        | ProviderKind::Grok
-        | ProviderKind::OpenCode
-        | ProviderKind::Unsupported => false,
+        ProviderKind::Unsupported => false,
     }) else {
         return false;
     };

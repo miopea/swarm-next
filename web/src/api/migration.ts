@@ -32,7 +32,7 @@ export type LegacyWorkerPreview = {
   source_id: string;
   name: string;
   workspace: string;
-  provider: "claude_code" | "codex" | "gemini" | "grok" | "opencode";
+  provider: "claude_code" | "codex";
   disposition: LegacyWorkerImportDisposition;
   selectable: boolean;
   conversation_available: boolean;

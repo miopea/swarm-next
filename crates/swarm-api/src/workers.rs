@@ -493,9 +493,6 @@ fn provider_label(provider: ProviderKind) -> &'static str {
     match provider {
         ProviderKind::ClaudeCode => "Claude",
         ProviderKind::Codex => "Codex",
-        ProviderKind::Gemini => "Gemini",
-        ProviderKind::Grok => "Grok",
-        ProviderKind::OpenCode => "OpenCode",
         ProviderKind::Unsupported => "unsupported",
     }
 }

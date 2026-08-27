@@ -198,7 +198,7 @@ export type SessionsResponse = { type: "sessions"; sessions: SessionSummary[] };
 export type SessionStartedResponse = { type: "session_started"; session_id: string };
 /** A provider release on disk that some running workers have not picked up. */
 export type SupersededProvider = {
-  provider: "claude_code" | "codex" | "gemini" | "grok" | "opencode";
+  provider: "claude_code" | "codex";
   version: string | null;
   installed_at: number | null;
   worker_ids: string[];
