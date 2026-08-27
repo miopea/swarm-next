@@ -902,6 +902,20 @@ pub(super) async fn stand_worker_down(
         task_store(state)?
             .release_session_assignments(session_id)
             .map_err(|error| task_store_error(&error))?;
+        // ONE SESSION, ONE OFFER. The classifier reads a settings file at
+        // process start and reports nothing back, so exactly-once cannot be
+        // enforced where the command actually runs. What IS enforceable is
+        // that a grant reaches one session and never a second, and this is
+        // where that session ends.
+        //
+        // Spending them is not conditional on the stop succeeding cleanly: a
+        // grant that survives a messy shutdown is the standing rule the
+        // operator refused, and erring toward spent errs toward asking again.
+        match task_store(state)?.consume_command_grants(worker_id) {
+            Ok(0) => {}
+            Ok(spent) => tracing::info!(spent, "approved-command grants spent with the session"),
+            Err(error) => tracing::warn!(%error, "could not spend approved-command grants"),
+        }
     }
     state.worker_errors.write().await.remove(&worker_id);
     state

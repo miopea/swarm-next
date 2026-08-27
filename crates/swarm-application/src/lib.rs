@@ -2501,7 +2501,7 @@ impl TaskService {
                 allowed_actions: &input.allowed_actions,
                 questions: &input.questions,
                 deadline: input.deadline,
-                requested_command: None,
+                requested_command: input.requested_command.as_deref(),
             })
             .map_err(Into::into)
     }
@@ -2555,6 +2555,14 @@ pub struct DecisionRequestInput {
     /// Present makes this an interview rather than a ruling.
     pub questions: Vec<DecisionQuestion>,
     pub deadline: Option<i64>,
+    /// The one command this request is asking to be allowed to run.
+    ///
+    /// Present makes the store append the grant button; absent leaves the
+    /// request an ordinary approval that authorises nothing runnable. The
+    /// caller supplies the COMMAND, never the button label — see
+    /// `GRANT_COMMAND_ACTION` for why a worker choosing that label would be
+    /// checking a string it chose.
+    pub requested_command: Option<String>,
 }
 
 fn require_queen(principal: AgentPrincipal) -> Result<(), ApplicationError> {
@@ -3096,6 +3104,7 @@ mod tests {
             allowed_actions: actions.iter().map(|action| (*action).to_string()).collect(),
             questions: Vec::new(),
             deadline: None,
+            requested_command: None,
         }
     }
 
@@ -3184,6 +3193,7 @@ mod tests {
                     allowed_actions: vec!["acknowledge".into()],
                     questions: Vec::new(),
                     deadline: None,
+                    requested_command: None,
                 },
             ),
             Err(ApplicationError::NotAuthorized)

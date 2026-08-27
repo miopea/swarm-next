@@ -481,3 +481,37 @@ test("reserves nothing when the queue is empty", () => {
   expect(container.querySelector(".decision-attention-cards")).not.toHaveClass("reserved");
   expect(screen.getByText("Nothing needs your attention")).toBeInTheDocument();
 });
+
+test("a decision that would grant a command shows the operator that command", () => {
+  // THE SAFETY PROPERTY OF THE WHOLE GRANT MECHANISM. One of these buttons
+  // turns the approval into a permission rule the classifier obeys. Approving
+  // "Allow the command shown in this request" with no command shown is
+  // approving something you cannot read, which is worse than the block it
+  // removes — so the command renders, in full, beside the button.
+  const command =
+    "curl -sS -X POST 'https://example.crm.dynamics.com/api/data/v9.2/EntityDefinitions(LogicalName='\"'\"'contact'\"'\"')/Attributes'";
+  const granting: DecisionRequest = {
+    ...pending,
+    id: "decision-grant",
+    kind: "approval",
+    questions: [],
+    requested_command: command,
+    allowed_actions: ["Do not run it", "Allow the command shown in this request"],
+  };
+  render(<DecisionInbox decisions={[granting]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} />);
+
+  expect(screen.getByText("Command this would allow")).toBeInTheDocument();
+  // The WHOLE command, not a truncation: an operator approving the first half
+  // of a command has not read what they are allowing.
+  expect(screen.getByText(command)).toBeInTheDocument();
+  expect(
+    screen.getByText(/Allowing runs exactly this, once, for this worker only/),
+  ).toBeInTheDocument();
+});
+
+test("an ordinary decision shows no command block", () => {
+  // A grant panel on a decision that grants nothing is noise, and noise is how
+  // an operator learns to skip past the one card where it mattered.
+  render(<DecisionInbox decisions={[pending]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} />);
+  expect(screen.queryByText("Command this would allow")).not.toBeInTheDocument();
+});

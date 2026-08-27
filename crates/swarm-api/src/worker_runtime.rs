@@ -55,6 +55,19 @@ pub(super) async fn start_worker_process(
     } else {
         None
     };
+    // Refreshed on every start, so a grant approved since the last one takes
+    // effect and one whose task has left the board stops existing. The host
+    // finds this by deriving it from the MCP config path above; nothing needs
+    // to be passed, which is what keeps this off the wire protocol.
+    if profile.provider == ProviderKind::ClaudeCode
+        && let Some(bridge) = state.agent_bridge.as_ref()
+        && let Err(error) = bridge.ensure_worker_settings(worker_id)
+    {
+        // A grant that cannot be written must not stop a worker starting. The
+        // worker then runs without it and is denied exactly as it is today,
+        // which is the safe direction and the state it was already in.
+        tracing::warn!(%error, "could not write the approved-command grants for this worker");
+    }
 
     let request = provider_start_request(state, worker_id, &profile, size, mcp_config)?;
     let response = request_host(state, request).await?;

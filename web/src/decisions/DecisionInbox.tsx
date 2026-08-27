@@ -219,6 +219,25 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                   </div>
                 ) : decision.state === "pending" ? (
                   <div className="decision-resolution">
+                    {decision.requested_command ? (
+                      // THE COMMAND IS SHOWN BECAUSE ONE BUTTON BELOW GRANTS IT.
+                      // Approving "the one contact formula-column test" is not
+                      // approving a command you never saw, and a grant that
+                      // compiled from prose the operator read loosely would be a
+                      // worse trade than the block it removes. What is rendered
+                      // here is the exact text that becomes the rule.
+                      //
+                      // Not truncated and not styled down: this is the part of
+                      // the card that carries the consequence.
+                      <div className="decision-command">
+                        <p className="eyebrow">Command this would allow</p>
+                        <pre><code>{decision.requested_command}</code></pre>
+                        <small>
+                          Allowing runs exactly this, once, for this worker only. It stops working
+                          when the task leaves the board. Any other command is still refused.
+                        </small>
+                      </div>
+                    ) : null}
                     <label><span>Optional note</span><textarea value={note} maxLength={4000} onChange={(event) => setNotes((current) => ({ ...current, [decision.id]: event.target.value }))} placeholder="Add context for the worker" /></label>
                     <div className="decision-actions">
                       {decision.allowed_actions.map((action, index) => (

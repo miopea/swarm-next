@@ -344,10 +344,7 @@ fn dispatch_blocking(
                 &workspace,
                 conversation,
                 mcp_config.as_deref(),
-                std::env::var_os("SWARM_CLAUDE_SETTINGS_PATH")
-                    .map(PathBuf::from)
-                    .filter(|path| path.is_file())
-                    .as_deref(),
+                claude_settings_for(mcp_config.as_deref()).as_deref(),
             )
             .map_err(|error| error.to_string())
             .and_then(|command| {
@@ -857,5 +854,160 @@ mod tests {
             fs::metadata(target).unwrap().permissions().mode() & 0o777,
             0o755
         );
+    }
+}
+
+/// The settings file a Claude worker starts with.
+///
+/// THE PER-WORKER FILE IS DERIVED, NOT SENT. Swarm writes the commands an
+/// operator approved to `<worker>.settings.json`, beside the `<worker>.json`
+/// MCP config this request already carries. Deriving it means no new field on
+/// `StartClaude`, and therefore no protocol bump -- which matters because
+/// `swarm-package` refuses to install a protocol change outright, so a new
+/// field would have made this unshippable rather than merely awkward.
+///
+/// MERGED, NOT SUBSTITUTED. The generated file holds only grants; the
+/// operator's own settings must still apply, or a worker with one approved
+/// command would lose every permission it normally has. Claude reads one
+/// `--settings` path, so the merge happens here.
+///
+/// Every failure falls back to the operator's global settings alone. A grant
+/// that cannot be applied leaves the worker denied exactly as it is today,
+/// which is the safe direction; refusing to start the worker would not be.
+fn claude_settings_for(mcp_config: Option<&Path>) -> Option<PathBuf> {
+    let global = std::env::var_os("SWARM_CLAUDE_SETTINGS_PATH")
+        .map(PathBuf::from)
+        .filter(|path| path.is_file());
+    let grants = mcp_config.and_then(worker_settings_beside)?;
+    match merged_settings(global.as_deref(), &grants) {
+        Ok(merged) => Some(merged),
+        Err(error) => {
+            eprintln!("swarm-terminal-host: could not apply approved-command grants: {error}");
+            global
+        }
+    }
+}
+
+/// `<worker>.json` -> `<worker>.settings.json`, when that file exists.
+fn worker_settings_beside(mcp_config: &Path) -> Option<PathBuf> {
+    let stem = mcp_config.file_stem()?.to_str()?;
+    let candidate = mcp_config.with_file_name(format!("{stem}.settings.json"));
+    candidate.is_file().then_some(candidate)
+}
+
+/// Writes one file holding the operator's settings with the grants folded in.
+fn merged_settings(global: Option<&Path>, grants: &Path) -> Result<PathBuf, String> {
+    let mut document = match global {
+        Some(path) => serde_json::from_str::<serde_json::Value>(
+            &fs::read_to_string(path).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?,
+        None => serde_json::json!({}),
+    };
+    let granted: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(grants).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+    let extra = granted
+        .get("permissions")
+        .and_then(|permissions| permissions.get("allow"))
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if extra.is_empty() {
+        return Err("the grant file lists no commands".into());
+    }
+    // APPENDED TO allow, and nothing else is touched. A deny rule the operator
+    // wrote still denies: this widens one list by the exact commands they
+    // approved and leaves every other decision they made alone.
+    let permissions = document
+        .as_object_mut()
+        .ok_or("settings are not an object")?
+        .entry("permissions")
+        .or_insert_with(|| serde_json::json!({}));
+    let allow = permissions
+        .as_object_mut()
+        .ok_or("permissions are not an object")?
+        .entry("allow")
+        .or_insert_with(|| serde_json::json!([]));
+    let allow = allow.as_array_mut().ok_or("allow is not an array")?;
+    for rule in extra {
+        if !allow.contains(&rule) {
+            allow.push(rule);
+        }
+    }
+    let target = grants.with_extension("merged.json");
+    let payload = serde_json::to_vec_pretty(&document).map_err(|error| error.to_string())?;
+    fs::write(&target, payload).map_err(|error| error.to_string())?;
+    fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600))
+        .map_err(|error| error.to_string())?;
+    Ok(target)
+}
+
+#[cfg(test)]
+mod grant_settings_tests {
+    use super::{merged_settings, worker_settings_beside};
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("swarm-grant-{name}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    /// The grant is found beside the MCP config, which is how it travels
+    /// without a protocol field.
+    #[test]
+    fn the_grant_file_is_derived_from_the_mcp_config_path() {
+        let root = scratch("derive");
+        let mcp = root.join("worker-7.json");
+        std::fs::write(&mcp, "{}").unwrap();
+        assert_eq!(worker_settings_beside(&mcp), None, "absent means no grants");
+        let grants = root.join("worker-7.settings.json");
+        std::fs::write(&grants, "{}").unwrap();
+        assert_eq!(worker_settings_beside(&mcp), Some(grants));
+    }
+
+    /// THE OPERATOR'S OWN SETTINGS SURVIVE. A worker with one approved command
+    /// must not lose every permission it normally has, and a deny rule they
+    /// wrote must still deny.
+    #[test]
+    fn merging_adds_the_grant_and_keeps_everything_else() {
+        let root = scratch("merge");
+        let global = root.join("global.json");
+        std::fs::write(
+            &global,
+            r#"{"permissions":{"allow":["Edit"],"deny":["Bash(rm:*)"]}}"#,
+        )
+        .unwrap();
+        let grants = root.join("w.settings.json");
+        std::fs::write(&grants, r#"{"permissions":{"allow":["Bash(echo one)"]}}"#).unwrap();
+
+        let merged = merged_settings(Some(&global), &grants).unwrap();
+        let document: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(merged).unwrap()).unwrap();
+        let allow = document["permissions"]["allow"].as_array().unwrap();
+        assert!(
+            allow.iter().any(|rule| rule == "Edit"),
+            "kept the operator's own rule"
+        );
+        assert!(
+            allow.iter().any(|rule| rule == "Bash(echo one)"),
+            "added the grant"
+        );
+        assert_eq!(
+            document["permissions"]["deny"].as_array().unwrap().len(),
+            1,
+            "a deny rule the operator wrote still denies"
+        );
+    }
+
+    /// An empty grant file is an error, not an empty allow list that silently
+    /// replaces the operator's settings with nothing.
+    #[test]
+    fn a_grant_file_listing_nothing_is_refused_rather_than_applied() {
+        let root = scratch("empty");
+        let grants = root.join("w.settings.json");
+        std::fs::write(&grants, r#"{"permissions":{"allow":[]}}"#).unwrap();
+        assert!(merged_settings(None, &grants).is_err());
     }
 }

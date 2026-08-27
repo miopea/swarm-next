@@ -2360,3 +2360,34 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .maintenance-spinner { width: .9rem; height: .9rem; flex: 0 0 auto; margin-top: .12rem; border: 2px solid color-mix(in srgb, var(--honey) 30%, transparent); border-top-color: var(--honey-deep); border-radius: 50%; animation: maintenance-spin .8s linear infinite; }
 @keyframes maintenance-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .maintenance-spinner { animation: none; border-top-color: var(--honey-deep); } .runtime-update-spinner { animation: none; border-top-color: var(--accent-strong); } .worker-row.worker-state-buzzing .presence { animation: none; } }
+
+/* The command a decision would allow.
+   Set apart and monospaced because it is the thing being authorised, not
+   context around it. Wrapped rather than scrolled: a command that runs off the
+   edge is one an operator approves without having read the end of it. */
+.decision-command {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--accent-strong);
+  border-radius: var(--radius);
+  background: var(--panel-soft);
+}
+.decision-command pre {
+  margin: 0;
+  overflow-x: auto;
+}
+.decision-command code {
+  font-family: "Atkinson Hyperlegible Mono", ui-monospace, monospace;
+  font-size: .78rem;
+  line-height: 1.5;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.decision-command small {
+  color: var(--muted);
+  font-size: .72rem;
+  line-height: 1.45;
+}

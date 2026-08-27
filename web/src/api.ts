@@ -872,6 +872,14 @@ export type DecisionRequest = {
   evidence: string;
   suggested_action: string;
   allowed_actions: string[];
+  /**
+   * The one command this request asks to be allowed to run.
+   *
+   * Present means one of the buttons grants permission to run it. The operator
+   * must be able to READ it before pressing that button — a grant you cannot
+   * read is worse than no grant mechanism at all.
+   */
+  requested_command?: string | null;
   /** Non-empty makes this an interview: answered by answering, not by a button. */
   questions?: DecisionQuestion[];
   deadline: number | null;
