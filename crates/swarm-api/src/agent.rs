@@ -303,17 +303,84 @@ const AGENT_TOOL_SURFACE_REVISION: u32 = 2;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-fn assert_tool_surface_matches_revision(queen_names: &[&str], worker_names: &[&str]) {
+/// The served surface as of revision 2. Update this and the revision together.
+const TOOL_SURFACE_FINGERPRINT: &str =
+    "d95fb2634567c7b6bbf6686c82423ebee3ffcf7729bec5726b0571abe172a0ea";
+
+/// A fingerprint of what the build actually SERVES, taken from the served list.
+///
+/// NAMES WERE NOT ENOUGH, and that is why this replaced a name-and-count pin.
+/// The old check saw a tool added, removed or renamed and nothing else — so an
+/// ARGUMENT added to an existing tool changed what the build accepts and
+/// reported as unchanged. That happened: `swarm_request_decision` gained
+/// `command`, the pin stayed silent, and the revision was bumped because a
+/// person noticed rather than because anything failed.
+///
+/// DERIVED FROM THE SERVED RESPONSE, never from a parallel list. A list someone
+/// maintains alongside the tools is one more thing that drifts, and drift is
+/// the defect being fixed.
+///
+/// DESCRIPTIONS ARE STRIPPED, RECURSIVELY, and that is a decision rather than an
+/// oversight. The failure this guards is structural — a session calling with
+/// arguments the build no longer accepts, or omitting one it now requires — and
+/// prose cannot cause it. Including descriptions would fire on every wording
+/// tweak, and a check that fires constantly is bumped reflexively, which is a
+/// check that cannot fail wearing a different coat.
+#[cfg(test)]
+fn tool_surface_fingerprint(queen: &serde_json::Value, worker: &serde_json::Value) -> String {
+    fn without_prose(value: &serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(fields) => serde_json::Value::Object(
+                fields
+                    .iter()
+                    .filter(|(key, _)| key.as_str() != "description")
+                    .map(|(key, nested)| (key.clone(), without_prose(nested)))
+                    .collect(),
+            ),
+            serde_json::Value::Array(items) => {
+                serde_json::Value::Array(items.iter().map(without_prose).collect())
+            }
+            other => other.clone(),
+        }
+    }
+    // serde_json::Map preserves insertion order, so the served order is the
+    // canonical order. That is stable because it comes from the same code path
+    // every time, and it means a REORDERED tool list also counts as a change --
+    // which is honest, because a session was handed one specific ordering.
+    let canonical = serde_json::json!({
+        "queen": without_prose(queen),
+        "worker": without_prose(worker),
+    });
+    let encoded = serde_json::to_vec(&canonical).expect("the served tool list re-encodes");
+    let digest: [u8; 32] = Sha256::digest(&encoded).into();
+    // Written the way generate_token writes its hex, rather than a third idiom
+    // for the same two lines.
+    let mut fingerprint = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut fingerprint, "{byte:02x}").expect("writing to an in-memory String cannot fail");
+    }
+    fingerprint
+}
+
+/// The tool-surface revision has to move with the surface itself.
+///
+/// A session caches its tool list when it connects, so anything shipped
+/// afterwards is live and unreachable from that session -- and the only thing
+/// that can say so is this number. Left unbumped it reports every stale session
+/// as current, which is how "the code is live" and "you can call it" silently
+/// became the same claim.
+#[cfg(test)]
+fn assert_tool_surface_matches_revision(queen: &serde_json::Value, worker: &serde_json::Value) {
+    let fingerprint = tool_surface_fingerprint(queen, worker);
     assert_eq!(
-        AGENT_TOOL_SURFACE_REVISION, 2,
-        "the tool surface changed, so sessions holding the old list can no longer call \
-         everything this build serves. Bump AGENT_TOOL_SURFACE_REVISION so a reload can \
-         say so, then update the count below."
-    );
-    assert_eq!(
-        queen_names.len() + worker_names.len(),
-        47,
-        "the pinned counts belong to revision 1 of the tool surface"
+        fingerprint, TOOL_SURFACE_FINGERPRINT,
+        "\n\nThe tool surface changed, so a session holding the old list can no longer call \
+         everything this build serves — and the only thing that can say so is the revision.\n\n\
+         Do BOTH, or the signal is wrong:\n\
+           1. bump AGENT_TOOL_SURFACE_REVISION (currently {AGENT_TOOL_SURFACE_REVISION})\n\
+           2. set TOOL_SURFACE_FINGERPRINT to the value above\n\n\
+         This covers names AND argument schemas. Descriptions are stripped, so a wording \
+         change will not bring you here.\n"
     );
 }
 
@@ -3056,7 +3123,7 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect::<Vec<_>>();
-        assert_tool_surface_matches_revision(&queen_names, &worker_names);
+        assert_tool_surface_matches_revision(&queen["result"]["tools"], &worker["result"]["tools"]);
         for name in QUEEN_ONLY_TOOLS {
             assert!(queen_names.contains(name), "Queen is missing {name}");
             assert!(!worker_names.contains(name), "a worker was offered {name}");
