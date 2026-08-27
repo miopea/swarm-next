@@ -1,18 +1,18 @@
 {
   "payload": {
     "schema_version": 1,
-    "issued_at": 1787841114,
+    "issued_at": 1787848625,
     "releases": [
       {
-        "version": "0.8.18",
+        "version": "0.8.19",
         "protocol": "9",
-        "artifact_url": "https://github.com/miopea/swarm-next/releases/download/v0.8.18/swarm-0.8.18-linux-x86_64.tar.gz",
-        "artifact_sha256": "96150fc84d5ab63dd00b0104510073b8d94796d24878d9d471126134fa1cf5d5",
-        "artifact_bytes": 17168391,
+        "artifact_url": "https://github.com/miopea/swarm-next/releases/download/v0.8.19/swarm-0.8.19-linux-x86_64.tar.gz",
+        "artifact_sha256": "de86a3b1fccd80f5875833fba3ed2015a753baf19a634ce8fd6f81dcd5761f81",
+        "artifact_bytes": 17168570,
         "worker_engine_build_id": "868b952592c2a99af9aa218982f3dd3a699c7a89c10725d0a6674caa4d6adbf7",
         "notes_url": null
       }
     ]
   },
-  "signature": "PgrjFpE7AGoAsiSX6-yaByVQbj2clbur-K509kRzOB-1yXiX3RBD-bnfFhRnB1GWL6Pkz4z8aztXTlH-jaHPAw"
+  "signature": "9VMS1F3RhwYdfrVSTEy_JGh663pUm1carzSxsc-lRQHSJPUZo1E4YpbiKe_x0OoQxG1s2j9FkCAdYQGY0vhtCQ"
 }
