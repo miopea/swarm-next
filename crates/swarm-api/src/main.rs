@@ -71,10 +71,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         email_configuration_path(&database_path),
         email_token_path(&database_path),
     );
+    // THE BIND ADDRESS IS SET BEFORE configure_email, AND THE ORDER IS THE FIX.
+    //
+    // consent_base_url falls back to http://localhost:<port> when no public
+    // base URL is configured, and it reads api_bind_address to do it. That
+    // fallback was two lines too late to ever fire: configure_email calls
+    // with_saved_outlook_oauth, which asks for the consent URL while
+    // api_bind_address is still None, and a Hive with a Microsoft registration
+    // and no tunnel refuses to start with "Microsoft email OAuth needs an
+    // address to come back to".
+    //
+    // It hid because it needs both conditions AND a restart. A developer
+    // registered Outlook, did not restart, and the next restart was an update —
+    // so a config fault from days earlier surfaced as a failed upgrade, on a
+    // Hive that could then not start on either release.
+    state = state.with_api_bind_address(address);
     state = configure_jira(state, &database_path)?;
     state = configure_email(state, &database_path)?;
     state = state.with_agent_configuration(agent_config_root, mcp_url_from_env(address));
-    state = state.with_api_bind_address(address);
     recover_interrupted_deliveries(&state)?;
     state.supervise_workers().await;
     start_background_services(&state);
