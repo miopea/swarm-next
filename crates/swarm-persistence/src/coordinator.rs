@@ -26,6 +26,103 @@ const MAX_UNSTARTED_WORK_CANDIDATES: i64 = 32;
 ///
 /// Every branch re-verifies against live state, so a record whose reason has
 /// passed stops counting without anything having to delete it.
+/// Delivered Ready work that nobody has acted on since the briefing landed.
+///
+/// Lifted out of the function body because the reasoning in it is longer
+/// than the query, and clippy caps a function at 100 lines.
+const UNSTARTED_WORK_CANDIDATES_SQL: &str =
+    "SELECT task.assigned_worker_id, session.session_id, task.id,
+                    task.updated_at,
+                    MAX(0, ?1 - MAX(dispatch.delivered_at, COALESCE(acted.acted_at, 0)))
+             FROM tasks task
+             JOIN worker_profiles worker
+               ON worker.id = task.assigned_worker_id AND worker.archived_at IS NULL
+             JOIN task_assignments assignment
+               ON assignment.task_id = task.id AND assignment.released_at IS NULL
+             JOIN worker_sessions session
+               ON session.session_id = assignment.worker_session_id
+                  AND session.worker_id = worker.id AND session.ended_at IS NULL
+             JOIN task_dispatches dispatch
+               ON dispatch.assignment_id = assignment.id AND dispatch.worker_id = worker.id
+                  AND dispatch.state = 'delivered'
+             -- THE CLOCK RUNS FROM THE LAST THING ANYONE DID TO THIS TASK, not
+             -- from when the briefing was handed over. Those are the same number
+             -- only for a task nobody has touched, which is the one case this
+             -- flag is actually about.
+             --
+             -- Delivered-at alone asks 'has this been transitioned to Active
+             -- yet', and treats that as a proxy for 'is anyone working it'. It
+             -- is not one. A worker can work a Ready task for an hour --
+             -- amending its facts, correcting the record, leaving notes -- and
+             -- never transition it, and the proxy reports it as ignored the
+             -- whole time. Eleven of the twelve instances Queen recorded were
+             -- that exact shape, and reading each one cost a transcript.
+             --
+             -- BOTH SOURCES ARE REQUIRED and neither is sufficient. Amendments
+             -- do not write a task_activity row and do not bump updated_at --
+             -- they land in task_amendments alone -- so a worker recording its
+             -- progress the way the operator asked it to was invisible to every
+             -- clock this flag could have read. That is why the trail looked
+             -- empty while the work was happening.
+             --
+             -- Actor kind matters: 'system' rows are the machine talking to
+             -- itself and jira/email rows are inbound sync, so neither is
+             -- evidence a person or a worker picked the work up. Counting them
+             -- would let the coordinator reset its own clock.
+             --
+             -- Kind matters too, and the excluded ones are the reason to be
+             -- explicit rather than to take every row. 'created', 'assigned'
+             -- and the 'state_changed' that moved the task INTO ready are the
+             -- bookkeeping that makes a task eligible for this flag in the
+             -- first place. Counting them would reset the clock at the same
+             -- moment it starts and the flag would never fire at all.
+             LEFT JOIN (SELECT task_id, MAX(acted_at) AS acted_at
+                        FROM (SELECT task_id, occurred_at AS acted_at
+                              FROM task_activity
+                              WHERE actor_kind IN ('worker', 'operator')
+                                AND kind IN ('corrected', 'details_updated')
+                              UNION ALL
+                              SELECT task_id, created_at AS acted_at
+                              FROM task_amendments)
+                        GROUP BY task_id) acted
+               ON acted.task_id = task.id
+             WHERE task.state = 'ready' AND dispatch.delivered_at IS NOT NULL
+               AND MAX(dispatch.delivered_at, COALESCE(acted.acted_at, 0)) + ?2 <= ?1
+               AND NOT EXISTS (
+                   SELECT 1 FROM worker_engagements engagement
+                   WHERE engagement.worker_id = worker.id AND engagement.expires_at > ?1
+               )
+               -- A worker carrying OTHER active work has not ignored this
+               -- briefing; it is queued behind the thing that worker is doing.
+               -- Without this the attention list and the held-briefing list
+               -- describe the same situation and disagree about whether it is a
+               -- problem: delivery already holds a briefing back for exactly
+               -- this reason and reports it as worker_already_working, while
+               -- this flag called it delivered-but-never-started.
+               --
+               -- Queen hit it three times in one night on one task and had to
+               -- read a transcript and /proc each time to establish that nothing
+               -- was wrong. A flag that cannot tell queued-behind-higher-
+               -- priority-work from delivered-and-ignored trains its reader
+               -- to check every instance by hand, which is the same as not
+               -- having it, and worse, because reaching that conclusion costs
+               -- attention every time.
+               AND NOT EXISTS (
+                   SELECT 1 FROM tasks active
+                   WHERE active.assigned_worker_id = worker.id
+                     AND active.state = 'active' AND active.removed_at IS NULL
+                     AND active.id <> task.id
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM coordinator_actions action
+                   WHERE action.kind = 'assigned_ready_work_not_started_attention'
+                     AND action.task_id = task.id AND action.worker_id = worker.id
+                     AND action.session_id = session.session_id
+                     AND action.evidence_revision = task.updated_at
+               )
+             ORDER BY MAX(dispatch.delivered_at, COALESCE(acted.acted_at, 0)),
+                      task.id LIMIT ?3";
+
 pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
              JOIN tasks task ON task.id = action.task_id
              JOIN worker_profiles worker ON worker.id = action.worker_id
@@ -104,6 +201,27 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
                    OR (action.kind = 'assigned_ready_work_not_started_attention'
                        AND task.assigned_worker_id = action.worker_id
                        AND task.state = 'ready' AND session.ended_at IS NULL
+                       -- AND the reason has passed once the worker does
+                       -- anything to the task itself. The revision check above
+                       -- cannot see this on its own: an amendment moves neither
+                       -- tasks.updated_at nor the activity trail, so a row
+                       -- raised a minute before the worker started work stayed
+                       -- on the board for as long as the work took. Guarding
+                       -- creation alone would have left exactly that behind,
+                       -- which is the mistake the note below records being made
+                       -- once already.
+                       AND NOT EXISTS (
+                           SELECT 1 FROM task_amendments amendment
+                           WHERE amendment.task_id = task.id
+                             AND amendment.created_at >= COALESCE(action.finished_at, action.created_at)
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1 FROM task_activity acted
+                           WHERE acted.task_id = task.id
+                             AND acted.actor_kind IN ('worker', 'operator')
+                             AND acted.kind IN ('corrected', 'details_updated')
+                             AND acted.occurred_at >= COALESCE(action.finished_at, action.created_at)
+                       )
                        -- The reason has passed once its worker picks up other
                        -- work: the briefing is queued behind that, not ignored.
                        -- Guarding only where the row is CREATED stops new false
@@ -437,56 +555,7 @@ impl TaskStore {
         minimum_age_seconds: i64,
     ) -> Result<Vec<AssignedReadyWorkNotStartedCandidate>, TaskStoreError> {
         let connection = self.connection()?;
-        let mut statement = connection.prepare(
-            "SELECT task.assigned_worker_id, session.session_id, task.id,
-                    task.updated_at, MAX(0, ?1 - dispatch.delivered_at)
-             FROM tasks task
-             JOIN worker_profiles worker
-               ON worker.id = task.assigned_worker_id AND worker.archived_at IS NULL
-             JOIN task_assignments assignment
-               ON assignment.task_id = task.id AND assignment.released_at IS NULL
-             JOIN worker_sessions session
-               ON session.session_id = assignment.worker_session_id
-                  AND session.worker_id = worker.id AND session.ended_at IS NULL
-             JOIN task_dispatches dispatch
-               ON dispatch.assignment_id = assignment.id AND dispatch.worker_id = worker.id
-                  AND dispatch.state = 'delivered'
-             WHERE task.state = 'ready' AND dispatch.delivered_at IS NOT NULL
-               AND dispatch.delivered_at + ?2 <= ?1
-               AND NOT EXISTS (
-                   SELECT 1 FROM worker_engagements engagement
-                   WHERE engagement.worker_id = worker.id AND engagement.expires_at > ?1
-               )
-               -- A worker carrying OTHER active work has not ignored this
-               -- briefing; it is queued behind the thing that worker is doing.
-               -- Without this the attention list and the held-briefing list
-               -- describe the same situation and disagree about whether it is a
-               -- problem: delivery already holds a briefing back for exactly
-               -- this reason and reports it as worker_already_working, while
-               -- this flag called it delivered-but-never-started.
-               --
-               -- Queen hit it three times in one night on one task and had to
-               -- read a transcript and /proc each time to establish that nothing
-               -- was wrong. A flag that cannot tell queued-behind-higher-
-               -- priority-work from delivered-and-ignored trains its reader
-               -- to check every instance by hand, which is the same as not
-               -- having it, and worse, because reaching that conclusion costs
-               -- attention every time.
-               AND NOT EXISTS (
-                   SELECT 1 FROM tasks active
-                   WHERE active.assigned_worker_id = worker.id
-                     AND active.state = 'active' AND active.removed_at IS NULL
-                     AND active.id <> task.id
-               )
-               AND NOT EXISTS (
-                   SELECT 1 FROM coordinator_actions action
-                   WHERE action.kind = 'assigned_ready_work_not_started_attention'
-                     AND action.task_id = task.id AND action.worker_id = worker.id
-                     AND action.session_id = session.session_id
-                     AND action.evidence_revision = task.updated_at
-               )
-             ORDER BY dispatch.delivered_at, task.id LIMIT ?3",
-        )?;
+        let mut statement = connection.prepare(UNSTARTED_WORK_CANDIDATES_SQL)?;
         statement
             .query_map(
                 params![now, minimum_age_seconds, MAX_UNSTARTED_WORK_CANDIDATES],
@@ -2962,6 +3031,177 @@ mod tests {
 
         store.transition_task(task.id, TaskState::Active).unwrap();
         assert!(store.current_coordinator_attention(0).unwrap().is_empty());
+    }
+
+    /// A row already on the board clears itself once the worker starts.
+    ///
+    /// The creation guard cannot do this: by the time the worker acts, the row
+    /// exists. Queen watched a live-computed age climb past an hour on exactly
+    /// this shape, and the note in `LIVE_ATTENTION_SOURCE` records the same
+    /// mistake being made once already for the busy-worker case.
+    #[test]
+    fn delivered_ready_work_attention_clears_when_the_worker_acts_on_the_task() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker(
+                "Bramble",
+                ProviderKind::ClaudeCode,
+                "/workspace/bramble",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store
+            .create_task("Raise it, then work it", "/workspace/bramble")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::worker(queen.id))
+            .unwrap();
+        let dispatch = store
+            .claim_task_dispatches(100, &std::collections::HashSet::new())
+            .unwrap()
+            .remove(0);
+        assert!(
+            store
+                .complete_task_dispatch(&dispatch.assignment_id, 101)
+                .unwrap()
+        );
+        let candidate = store
+            .assigned_ready_work_not_started_candidates(401, 300)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert!(
+            store
+                .record_assigned_ready_work_not_started_attention(&candidate, 401, 300)
+                .unwrap()
+        );
+        assert_eq!(
+            store.current_coordinator_attention(402).unwrap().len(),
+            1,
+            "the row is on the board and was right to be raised"
+        );
+
+        // The worker starts, without ever transitioning the task.
+        let amendment = store
+            .amend_task_facts(task.id, worker.id, "Picked this up; tracing the query.")
+            .unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE task_amendments SET created_at = 450 WHERE id = ?1",
+                [&amendment.id],
+            )
+            .unwrap();
+
+        assert!(
+            store.current_coordinator_attention(451).unwrap().is_empty(),
+            "the worker acting on the task is what clears this, with nothing \
+             having to be dismissed by hand"
+        );
+    }
+
+    /// A worker working a Ready task it never transitioned is not ignoring it.
+    ///
+    /// This is the shape behind eleven of the twelve instances Queen recorded.
+    /// The flag asked "has this been moved to Active yet" and read the answer as
+    /// "is anyone working it". They are the same question only for a task nobody
+    /// has touched.
+    ///
+    /// The amendment is the load-bearing part. It writes no `task_activity` row
+    /// and does not bump `tasks.updated_at`, so before this fix there was no clock
+    /// in the schema that could see it -- which is exactly why the work was
+    /// invisible while it was happening.
+    ///
+    /// Both halves matter and the second is why this is not just silencing:
+    /// while the worker is working, nothing is raised; once it STOPS, the flag
+    /// fires again on the time since it stopped. That is Queen's instance
+    /// twelve, which was right for the wrong reason and now has a clock that
+    /// means what it says.
+    #[test]
+    fn delivered_ready_work_is_quiet_while_worked_and_fires_once_it_stops() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker(
+                "Thistle",
+                ProviderKind::ClaudeCode,
+                "/workspace/thistle",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store
+            .create_task("Work it without moving it", "/workspace/thistle")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::worker(queen.id))
+            .unwrap();
+        let dispatch = store
+            .claim_task_dispatches(100, &std::collections::HashSet::new())
+            .unwrap()
+            .remove(0);
+        assert!(
+            store
+                .complete_task_dispatch(&dispatch.assignment_id, 101)
+                .unwrap()
+        );
+
+        // Delivered and untouched, the flag is still right to fire. Asserting
+        // this first is what stops the fix from being "never fire".
+        assert_eq!(
+            store
+                .assigned_ready_work_not_started_candidates(401, 300)
+                .unwrap()
+                .len(),
+            1,
+            "a briefing nobody has acted on is what this flag is for"
+        );
+
+        // The worker records progress the way the operator asked it to, and
+        // never transitions the task. created_at is pinned because the column
+        // defaults to the real clock while this fixture runs on a synthetic one.
+        let amendment = store
+            .amend_task_facts(task.id, worker.id, "Reproduced it; the clock is wrong.")
+            .unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE task_amendments SET created_at = 350 WHERE id = ?1",
+                [&amendment.id],
+            )
+            .unwrap();
+
+        assert!(
+            store
+                .assigned_ready_work_not_started_candidates(401, 300)
+                .unwrap()
+                .is_empty(),
+            "a worker that acted on the task 51 seconds ago has not ignored it"
+        );
+
+        // It stops. Now there IS something to say, and the number attached to
+        // it is the time since it stopped -- not the 599 seconds since delivery,
+        // which is the figure that had Queen reading transcripts.
+        let candidate = store
+            .assigned_ready_work_not_started_candidates(700, 300)
+            .unwrap()
+            .pop()
+            .expect("work abandoned mid-way still has to surface");
+        assert_eq!(candidate.task_id, task.id);
+        assert_eq!(
+            candidate.age_seconds, 350,
+            "age is measured from the last thing the worker did, not from delivery"
+        );
     }
 
     #[test]
