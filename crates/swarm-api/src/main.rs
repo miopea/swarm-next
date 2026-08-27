@@ -33,11 +33,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .to_string_lossy()
             .as_ref(),
     )?;
-    let mut state = env::var("SWARM_OPERATOR_TOKEN")
-        .map_or_else(
-            |_| AppState::default(),
-            |token| AppState::default().with_terminal_host(HostClient::new(terminal_socket), token),
-        )
+    // Read once and remembered, because a Hive without it needs to SAY so and
+    // the branch that builds the state has already thrown the answer away by
+    // the time anything can. Only whether it is present is kept here; the value
+    // goes straight into the state and is never logged or reported.
+    let operator_token = env::var("SWARM_OPERATOR_TOKEN").ok();
+    let mut state = operator_token
+        .clone()
+        .map_or_else(AppState::default, |token| {
+            AppState::default().with_terminal_host(HostClient::new(terminal_socket), token)
+        })
         .with_attachment_store(attachment_root_from_database(&database_path))
         .with_database_directory(
             database_path
@@ -54,6 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .with_workspace_roots(workspace_roots)
         .with_task_store(store);
+    state = note_missing_operator_token(state, operator_token.as_ref());
     // WEB PUSH IS NOT LOAD-BEARING. A bad VAPID subject used to abort startup,
     // which trades "the operator gets no push notifications" for "the operator
     // has no Hive". See `degrade` for why every one of these is a clone.
@@ -134,6 +140,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+/// Says so when there is no operator token, and does not stop the Hive.
+///
+/// THE LOUDEST SILENT FAILURE THERE IS. Without the token there is no terminal
+/// host, so every worker is dead -- and the Hive answered /health with "ok" and
+/// an empty degraded list, looking perfectly well. A control room with no
+/// running workers is indistinguishable from an idle one, which is worse than
+/// email quietly not arriving: nobody is waiting for an email that never comes,
+/// but somebody IS waiting for a worker that will never start.
+///
+/// IT STAYS NON-FATAL. The test is not whether a subsystem is important, it is
+/// whether its absence stops the API answering, stops a backup being taken, or
+/// stops a different release being installed. A missing token does none of
+/// those, and making it fatal would rebuild the trap that cost a developer
+/// forty-five minutes.
+///
+/// The consequence is named, not just the variable: naming
+/// `SWARM_OPERATOR_TOKEN` alone does not tell anyone their workers cannot run.
+/// Only the token's PRESENCE reaches here; the value never does.
+fn note_missing_operator_token(state: AppState, operator_token: Option<&String>) -> AppState {
+    if operator_token.is_some() {
+        return state;
+    }
+    state.with_degraded_subsystem(
+        "Operator token",
+        "SWARM_OPERATOR_TOKEN is not set, so no terminal host is connected and no worker can run. Set it in swarm.env and restart the API.",
+    )
 }
 
 /// Applies one fallible configuration step, keeping the Hive if it fails.
@@ -714,5 +748,35 @@ mod tests {
             ]),
             PathBuf::from("/home/operator/projects")
         );
+    }
+
+    /// A Hive nobody gave a token to says so, and keeps serving.
+    ///
+    /// THE ABLATION IS THE WHOLE TEST. Without the row this Hive answers
+    /// "ok" with an empty degraded list while no terminal host exists and every
+    /// worker is dead — measured, not supposed. A control room with no running
+    /// workers looks exactly like an idle one.
+    #[test]
+    fn a_hive_with_no_operator_token_says_its_workers_cannot_run() {
+        let state = super::note_missing_operator_token(AppState::default(), None);
+        let degraded = state.degraded_subsystems();
+        assert_eq!(degraded.len(), 1);
+        assert_eq!(degraded[0].subsystem, "Operator token");
+        assert!(
+            degraded[0].reason.contains("no worker can run"),
+            "the consequence has to be named, not just the variable: {}",
+            degraded[0].reason
+        );
+    }
+
+    /// And a Hive that HAS one is not nagged about it.
+    ///
+    /// The other half: a row that appears on a healthy Hive is noise, and an
+    /// operator learns to scroll past exactly the thing that matters.
+    #[test]
+    fn a_hive_with_a_token_reports_nothing_about_it() {
+        let token = String::from("present");
+        let state = super::note_missing_operator_token(AppState::default(), Some(&token));
+        assert!(state.degraded_subsystems().is_empty());
     }
 }
