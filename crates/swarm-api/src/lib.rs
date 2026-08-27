@@ -3082,6 +3082,7 @@ fn api_router(state: AppState) -> Router {
             get(release::status).put(release::set_mode),
         )
         .route("/api/v1/runtime/release/check", post(release::check_now))
+        .route("/api/v1/runtime/release/notes", get(release::notes))
         .route("/api/v1/runtime/tunnel", get(tunnel::status))
         .route("/api/v1/runtime/tunnel/start", post(tunnel::start))
         .route("/api/v1/runtime/tunnel/stop", post(tunnel::stop))

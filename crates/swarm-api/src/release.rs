@@ -31,8 +31,8 @@ use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use swarm_domain::{
-    ReleaseOffer, SignedReleaseManifest, SwarmVersion, compiled_release_verifying_key,
-    verify_release_manifest,
+    ReleaseNotes, ReleaseOffer, SignedReleaseManifest, SwarmVersion,
+    compiled_release_verifying_key, verify_release_manifest,
 };
 use tokio::io::AsyncWriteExt;
 
@@ -705,4 +705,51 @@ mod apply_status_tests {
             Some("installing")
         );
     }
+}
+
+/// The notes shipped inside the running release, if this build came from one.
+///
+/// Read from the bundle rather than fetched, because the artifact is already on
+/// disk and its hash is what the manifest signature covered. Located from the
+/// running binary rather than from configuration so it cannot point at a
+/// different release than the one executing.
+///
+/// A DEVELOPMENT BUILD HAS NO NOTES AND THAT IS CORRECT. A reload from the
+/// checkout is not a release, has no version to be new since, and nothing about
+/// it should greet the operator with a change list.
+#[must_use]
+pub(crate) fn installed_release_notes() -> ReleaseNotes {
+    let Ok(executable) = std::env::current_exe() else {
+        return ReleaseNotes::default();
+    };
+    // <bundle>/bin/<binary>, so the bundle is two levels up.
+    let Some(bundle) = executable.parent().and_then(std::path::Path::parent) else {
+        return ReleaseNotes::default();
+    };
+    let Ok(raw) = std::fs::read_to_string(bundle.join("NOTES")) else {
+        return ReleaseNotes::default();
+    };
+    // Malformed notes are dropped rather than surfaced. Nothing depends on
+    // them, and a half-parsed change list is worse than none.
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+/// What is new for an operator who last saw `since`.
+///
+/// # Errors
+/// Returns an error only when the caller is not authorized.
+pub(super) async fn notes(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let notes = installed_release_notes();
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({
+            "running_version": crate::build_version(),
+            "releases": notes.releases,
+        })),
+    )
+        .into_response())
 }

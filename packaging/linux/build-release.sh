@@ -89,6 +89,23 @@ printf '%s\n' "$protocol" > "$bundle/PROTOCOL"
 # Recorded so the release manifest can say whether installing this stops
 # workers, at the moment of consent rather than after a reconcile timer.
 printf '%s\n' "$worker_engine_build_id" > "$bundle/WORKER_ENGINE_BUILD_ID"
+# What changed, for the modal shown after an update.
+#
+# In the BUNDLE and not the manifest, and that is forced rather than chosen: the
+# manifest signature is computed over the re-serialized payload, so a field an
+# older Hive does not know is dropped before it recomputes the canonical form,
+# and the signature fails for the WHOLE document -- the one every Hive reads to
+# learn any release exists. Bumping schema_version is no better; the check is
+# exact equality. Either way the damage lands on already deployed Hives.
+#
+# The bundle is still covered: the manifest signs artifact_sha256, taken over
+# the artifact these notes live inside. Transitively signed, no second fetch,
+# and no change to the document older Hives must verify.
+#
+# Generated here rather than at publish time because this is where the git
+# history is, and read straight back out of the bundle by swarm-package.
+"$repo_root/target/release/swarm-release" notes "$repo_root" "$version" > "$bundle/NOTES" \
+  || { echo "could not gather release notes" >&2; exit 1; }
 (
   cd "$bundle"
   find bin web systemd-user -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS

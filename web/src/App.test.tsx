@@ -789,6 +789,13 @@ test("creates a persisted task draft from the task board", async () => {
     // Answered by name rather than from the queue below: that queue is consumed
     // in call order, so an unnamed endpoint silently takes another request's
     // response.
+    //
+    // The what's-new notes are exactly that hazard realised: adding the request
+    // to App shifted every queued response by one and this test failed on a
+    // heading four calls away from the cause.
+    if (String(url).includes("/api/v1/runtime/release/notes")) {
+      return Promise.resolve(ok({ running_version: "0.1.0", releases: [] }));
+    }
     if (String(url).includes("/api/v1/preferences/start-surface")) {
       return Promise.resolve(ok({ start_surface: "tasks" }));
     }

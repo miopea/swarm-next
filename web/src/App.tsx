@@ -7,6 +7,7 @@ import {
   BROWSER_SESSION_AUTH,
   createBrowserSession,
   createTask,
+  fetchReleaseNotes,
   fetchDevelopmentRuntime,
   answerDecision,
   resolveDecision,
@@ -90,6 +91,7 @@ import {
   type TunnelStatus,
   recordAttentionSeen,
 } from "./api";
+import type { ReleaseVersionNotes } from "./api";
 import { bundleIsStale } from "./staleBundle";
 import BeeMascot from "./brand/BeeMascot";
 import ApiaryAttentionCard from "./apiary/ApiaryAttentionCard";
@@ -107,6 +109,8 @@ import CommandPalette, { type CommandChoice } from "./navigation/CommandPalette"
 import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
 import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
 import RuntimeUpdateConfirm from "./runtime/RuntimeUpdateConfirm";
+import WhatsNewModal from "./runtime/WhatsNewModal";
+import { readSeenVersion, storeSeenVersion, whatsNewFor } from "./runtime/whatsNew";
 import type { RuntimeUpdateSummary } from "./runtime/runtimeUpdates";
 import HiveContextIndicator from "./controlRoom/HiveContextIndicator";
 import { useControlRoomModel } from "./controlRoom/useControlRoomModel";
@@ -207,6 +211,28 @@ export function App() {
   const [workerQuery, setWorkerQuery] = useState("");
   const [terminalConnection, setTerminalConnection] = useState<string>();
   const { runtimeUpdates, developmentMode, refreshRuntimeUpdate } = useRuntimeUpdate(operatorToken || undefined);
+  const [whatsNew, setWhatsNew] = useState<ReleaseVersionNotes[]>([]);
+  // Asked for ONCE per session rather than polled: the notes only change when
+  // the build under the operator changes, and that already reloads the page.
+  useEffect(() => {
+    if (!operatorToken) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const notes = await fetchReleaseNotes(operatorToken);
+        if (cancelled) return;
+        const { show, recordAs } = whatsNewFor(notes.releases, notes.running_version, readSeenVersion());
+        if (recordAs) storeSeenVersion(recordAs);
+        setWhatsNew(show);
+      } catch {
+        // A change list nobody can fetch is not worth telling the operator
+        // about; the Hive works either way and a development build has none.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [operatorToken]);
   const [runtimeConfirm, setRuntimeConfirm] = useState<RuntimeUpdateSummary>();
   const [startSurface, setStartSurface] = useState("tasks");
   /** Applied once, and only while nothing else has claimed the screen. */
@@ -1859,6 +1885,9 @@ export function App() {
               <button className="secondary-button mobile-manage-workers" type="button" onClick={() => { setShowMobileWorkers(false); openSettings("settings-workers"); }}>Manage workers</button>
             </section>
           </div>
+        ) : null}
+        {operatorToken && whatsNew.length > 0 ? (
+          <WhatsNewModal releases={whatsNew} onDismiss={() => setWhatsNew([])} />
         ) : null}
         {operatorToken && runtimeConfirm ? (
           <RuntimeUpdateConfirm

@@ -54,6 +54,83 @@ pub enum ReleaseManifestError {
     SignatureRejected,
 }
 
+/// What changed in a release, as the operator is told it.
+///
+/// CARRIED IN THE ARTIFACT BUNDLE, NOT THE MANIFEST, and that is forced rather
+/// than preferred. The manifest is signed over the RE-SERIALIZED payload, so a
+/// build that does not know a field drops it, recomputes a different canonical
+/// form and rejects the signature -- for the whole document, which is how every
+/// Hive learns any release exists. Bumping `schema_version` is no better: the
+/// check is exact equality, so an older Hive answers `UnsupportedSchema` and
+/// stops seeing releases entirely. Either way the damage lands on already
+/// deployed Hives and removes the channel that would have carried the fix.
+/// `an_unknown_field_in_the_signed_payload_breaks_verification_for_older_builds`
+/// holds that line.
+///
+/// The bundle is still covered by the signature, transitively: the manifest
+/// signs `artifact_sha256`, and these notes live inside the artifact that hash
+/// is taken over. So they are as trustworthy as the release itself, they cost
+/// no second fetch because the artifact is downloaded anyway, and adding to
+/// them never touches the document older Hives have to verify.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ReleaseNotes {
+    pub schema: u32,
+    /// Newest first, and CUMULATIVE rather than only this release.
+    ///
+    /// A Hive updating 0.8.14 to 0.8.19 fetches one artifact, so anything it
+    /// skipped has to be inside that one. Carrying only the current release
+    /// would show such an operator four releases' worth of changes as one line.
+    pub releases: Vec<ReleaseVersionNotes>,
+}
+
+/// One release's worth of notes.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ReleaseVersionNotes {
+    pub version: String,
+    pub notes: Vec<ReleaseNote>,
+}
+
+/// One thing that changed, in the operator's terms.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ReleaseNote {
+    pub summary: String,
+    /// `feature` or `fix`, from the conventional-commit prefix.
+    pub kind: String,
+    /// Installed but NOT ACTIVE until the worker engine update runs.
+    ///
+    /// The terminal host is a separate service that deliberately survives an
+    /// API restart so worker terminals are not killed mid-turn, so a release
+    /// whose change is host-side is on disk and not in effect. Announcing such
+    /// a change as available is a confident false claim about what the operator
+    /// can now do, which is worse than not mentioning it -- so the modal says
+    /// so instead of staying silent or lying.
+    pub needs_worker_engine_update: bool,
+}
+
+impl ReleaseNotes {
+    /// The notes for every release NEWER than `installed`, newest first.
+    ///
+    /// Filtered here rather than at render time so "what is new to me" has one
+    /// definition. An unparseable version on either side is omitted rather than
+    /// guessed at: showing the wrong release's notes is worse than showing none.
+    #[must_use]
+    pub fn newer_than(&self, installed: &str) -> Vec<&ReleaseVersionNotes> {
+        let Some(installed) = SwarmVersion::parse(installed) else {
+            return Vec::new();
+        };
+        let mut fresh: Vec<&ReleaseVersionNotes> = self
+            .releases
+            .iter()
+            .filter(|entry| {
+                SwarmVersion::parse(&entry.version)
+                    .is_some_and(|version| version.supersedes(&installed))
+            })
+            .collect();
+        fresh.sort_by(|left, right| right.version.cmp(&left.version));
+        fresh
+    }
+}
+
 /// A manifest as served, with the signature that covers it.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SignedReleaseManifest {
@@ -243,6 +320,123 @@ mod tests {
             issued_at: 1_000,
             releases,
         }
+    }
+
+    fn note(summary: &str, engine: bool) -> ReleaseNote {
+        ReleaseNote {
+            summary: summary.to_owned(),
+            kind: "feature".to_owned(),
+            needs_worker_engine_update: engine,
+        }
+    }
+
+    fn version_notes(version: &str, notes: Vec<ReleaseNote>) -> ReleaseVersionNotes {
+        ReleaseVersionNotes {
+            version: version.to_owned(),
+            notes,
+        }
+    }
+
+    /// A Hive that skipped versions sees everything it missed, not only the newest.
+    ///
+    /// This is the common case rather than the exotic one: anyone away for a day
+    /// updates across several releases at once. Showing them only the newest
+    /// would silently drop the rest, and they would have no way to know.
+    #[test]
+    fn release_notes_cover_every_version_the_operator_skipped() {
+        let notes = ReleaseNotes {
+            schema: 1,
+            releases: vec![
+                version_notes("0.8.19", vec![note("A shell opens from the menu", false)]),
+                version_notes("0.8.17", vec![note("Workers survive a reload", true)]),
+                version_notes(
+                    "0.8.16",
+                    vec![note("Attachments stop being rejected", false)],
+                ),
+                version_notes("0.8.14", vec![note("Older than the operator has", false)]),
+            ],
+        };
+
+        let fresh = notes.newer_than("0.8.15");
+        assert_eq!(
+            fresh
+                .iter()
+                .map(|entry| entry.version.as_str())
+                .collect::<Vec<_>>(),
+            vec!["0.8.19", "0.8.17", "0.8.16"],
+            "everything newer than the running version, newest first"
+        );
+        assert!(
+            fresh.iter().all(|entry| entry.version.as_str() != "0.8.14"),
+            "a release the operator already had is not new to them"
+        );
+
+        // The host-side marker survives selection, because the modal has to be
+        // able to say a change is installed but not yet in effect.
+        assert!(
+            fresh
+                .iter()
+                .flat_map(|entry| entry.notes.iter())
+                .any(|note| note.needs_worker_engine_update),
+            "a host-side change must stay distinguishable after filtering"
+        );
+
+        assert!(
+            notes.newer_than("0.8.19").is_empty(),
+            "nothing is new to a Hive already on the newest release"
+        );
+        assert!(
+            notes.newer_than("not-a-version").is_empty(),
+            "an unreadable running version shows nothing rather than guessing"
+        );
+    }
+
+    /// THE MANIFEST CANNOT GAIN A FIELD. This is why release notes travel in
+    /// the artifact bundle rather than here.
+    ///
+    /// `canonical_release_manifest` re-serializes the DESERIALIZED struct rather
+    /// than hashing the bytes as received. So a build that does not know a
+    /// field drops it on the way in, re-encodes without it, and computes a
+    /// different canonical form than the signer signed. The signature then
+    /// fails -- not for the release carrying the new field, but for the WHOLE
+    /// MANIFEST, which is the document every Hive reads to learn that any
+    /// release exists at all.
+    ///
+    /// Bumping `schema_version` instead is no better: the check above is exact
+    /// equality, so an older Hive answers `UnsupportedSchema` and stops seeing
+    /// releases entirely.
+    ///
+    /// Either way the failure lands on every ALREADY DEPLOYED Hive and takes
+    /// away the mechanism that would have delivered the fix. That asymmetry is
+    /// what makes this worth a test rather than a comment.
+    #[test]
+    fn an_unknown_field_in_the_signed_payload_breaks_verification_for_older_builds() {
+        let (signing_key, public) = keypair();
+        let document = sign(manifest(vec![offer("0.3.0", "engine-c")]), &signing_key);
+
+        // Exactly what a NEWER signer produces: the same payload plus a field
+        // this build has never heard of, signed over the fuller encoding.
+        let mut raw: serde_json::Value = serde_json::to_value(&document).unwrap();
+        let newer = raw["payload"]["releases"][0].as_object_mut().unwrap();
+        newer.insert("notes".to_owned(), serde_json::json!(["something new"]));
+        let canonical_for_newer = serde_json::to_vec(&raw["payload"]).unwrap();
+        raw["signature"] = serde_json::json!(Base64UrlUnpadded::encode_string(
+            &signing_key.sign(&canonical_for_newer).to_bytes()
+        ));
+
+        // This build reads it. serde drops the field it does not know, so the
+        // canonical form it recomputes is the OLD one and the signature over
+        // the new one cannot match.
+        let as_this_build_sees_it: SignedReleaseManifest =
+            serde_json::from_value(raw).expect("an unknown field still deserializes");
+        assert!(
+            matches!(
+                verify_release_manifest(&as_this_build_sees_it, Some(&public), 2_000),
+                Err(ReleaseManifestError::SignatureRejected)
+            ),
+            "adding a field to the signed payload must be understood as breaking \
+             every older Hive's ability to verify ANY release"
+        );
     }
 
     #[test]

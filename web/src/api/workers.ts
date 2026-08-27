@@ -1,5 +1,21 @@
 import { authenticatedFetch } from "./request";
 
+export type ReleaseNote = {
+  summary: string;
+  kind: string;
+  needs_worker_engine_update: boolean;
+};
+
+export type ReleaseVersionNotes = {
+  version: string;
+  notes: ReleaseNote[];
+};
+
+export type ReleaseNotesResponse = {
+  running_version: string;
+  releases: ReleaseVersionNotes[];
+};
+
 export type WorkerRole = "queen" | "worker";
 export type ProviderKind = "claude_code" | "codex" | "gemini" | "grok" | "opencode";
 export type WorkerAttentionState =
@@ -256,4 +272,16 @@ export async function claimWorker(
     `/api/v1/workers/${encodeURIComponent(workerId)}/engagement/${encodeURIComponent(deviceId)}`,
     { method: "POST" },
   );
+}
+
+/**
+ * What changed in the releases this Hive has installed.
+ *
+ * Read out of the running bundle rather than fetched from anywhere: the notes
+ * ship inside the artifact whose hash the manifest signature covered, so they
+ * are as trustworthy as the release and cost no second request.
+ */
+export async function fetchReleaseNotes(operatorToken: string): Promise<ReleaseNotesResponse> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/release/notes");
+  return response.json() as Promise<ReleaseNotesResponse>;
 }

@@ -37,6 +37,7 @@ export {
   openWorkerShell,
   spawnTemporaryWorker,
   TEMPORARY_PROVIDERS,
+  fetchReleaseNotes,
   removeWorker,
   reorderWorkers,
   startWorker,
@@ -169,6 +170,9 @@ export type {
 export type {
   CreateWorkerInput,
   ProviderKind,
+  ReleaseNote,
+  ReleaseNotesResponse,
+  ReleaseVersionNotes,
   UpdateWorkerInput,
   RepositoryState,
   Worker,
