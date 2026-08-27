@@ -98,6 +98,19 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
                    OR (action.kind = 'assigned_ready_work_not_started_attention'
                        AND task.assigned_worker_id = action.worker_id
                        AND task.state = 'ready' AND session.ended_at IS NULL
+                       -- The reason has passed once its worker picks up other
+                       -- work: the briefing is queued behind that, not ignored.
+                       -- Guarding only where the row is CREATED stops new false
+                       -- rows and leaves existing ones surfacing forever, which
+                       -- is what a Queen hit four automation runs in a row --
+                       -- watching a live-computed age climb past an hour on a
+                       -- situation that was never a problem.
+                       AND NOT EXISTS (
+                           SELECT 1 FROM tasks busy
+                           WHERE busy.assigned_worker_id = action.worker_id
+                             AND busy.state = 'active' AND busy.removed_at IS NULL
+                             AND busy.id <> task.id
+                       )
                        AND EXISTS (
                            SELECT 1 FROM task_assignments assignment
                            JOIN task_dispatches dispatch

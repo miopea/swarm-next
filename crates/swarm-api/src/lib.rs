@@ -11745,6 +11745,94 @@ mod tests {
         );
     }
 
+    /// An attention row ALREADY RECORDED stops counting once its worker is busy.
+    ///
+    /// Guarding only where the row is created fixes the future and leaves the
+    /// past surfacing forever. A Queen watched one such row return in four
+    /// consecutive automation runs with a live-computed age climbing past an
+    /// hour, on a situation that had never been a problem — and had to read the
+    /// database to establish that, twice, because the response looked like a
+    /// worsening situation rather than a settled one.
+    ///
+    /// This is how the design already says it should work: "a record whose
+    /// reason has passed stops counting without anything having to delete it."
+    /// The reason passes when the worker picks up other work.
+    #[tokio::test]
+    async fn a_recorded_attention_clears_when_its_worker_takes_other_work() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Clover",
+                ProviderKind::ClaudeCode,
+                "/workspace/clover",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let queued = store
+            .create_task("Delivered and not started", "/workspace/clover")
+            .unwrap();
+        store.transition_task(queued.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(
+                queued.id,
+                worker.id,
+                &swarm_domain::TaskActivityActor::operator(),
+            )
+            .unwrap();
+        let dispatch = store.claim_task_dispatches(1).unwrap().remove(0);
+        assert!(
+            store
+                .complete_task_dispatch(&dispatch.assignment_id, 2)
+                .unwrap()
+        );
+        let state = AppState::default().with_task_store(store.clone());
+        state.provider_activity.write().await.insert(
+            session,
+            provider_activity::ProviderSignals {
+                activity: ProviderActivity::Resting,
+                background_work: false,
+            },
+        );
+        state.observe_assigned_ready_work_not_started(&store).await;
+        assert_eq!(
+            store
+                .current_coordinator_attention(unix_timestamp())
+                .unwrap()
+                .len(),
+            1,
+            "the row is recorded while nothing else is under way"
+        );
+
+        // The worker picks up something else. Nothing deletes the row.
+        let underway = store
+            .create_task("The thing it is actually doing", "/workspace/clover")
+            .unwrap();
+        store
+            .transition_task(underway.id, TaskState::Ready)
+            .unwrap();
+        store
+            .assign_task_to_worker_as(
+                underway.id,
+                worker.id,
+                &swarm_domain::TaskActivityActor::operator(),
+            )
+            .unwrap();
+        store
+            .transition_task(underway.id, TaskState::Active)
+            .unwrap();
+
+        assert!(
+            store
+                .current_coordinator_attention(unix_timestamp())
+                .unwrap()
+                .is_empty(),
+            "the recorded row stops counting once its reason has passed"
+        );
+    }
+
     #[tokio::test]
     async fn jira_readiness_is_private_and_explicit_when_not_configured() {
         let app = router(
