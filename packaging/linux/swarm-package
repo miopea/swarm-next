@@ -619,7 +619,51 @@ reconcile_host() {
   host_release=$(release_from_link "$install_root/host-current")
   [ -n "$current" ] || die "no current release is installed"
   [ -n "$host_release" ] || die "no terminal host release is installed"
-  [ "$current" != "$host_release" ] || { printf 'Terminal host already uses %s\n' "$(basename "$current")"; return; }
+  # ASK THE RUNNING PROCESS, NOT THE SYMLINK IT WAS JUST HANDED.
+  #
+  # This compared $current against $host_release — two symlinks, one of which
+  # the installer had just moved. That is a check that cannot fail: whenever
+  # the install carried the engine forward, the comparison agreed with itself
+  # and reported success whether or not anything had restarted.
+  #
+  # It gave the right answer for the wrong reason and said a misleading thing
+  # while doing it. On 2026-08-27 it logged "Terminal host already uses
+  # 0.8.17-dev-68f517e..." while the host process was executing a binary from
+  # 0.8.17-dev-93b1d50..., whose release directory had been deleted. The engine
+  # was in fact identical — carried forward correctly — but nothing in the
+  # message let anyone tell that from a host that had failed to restart, and
+  # two readers spent an hour establishing which it was.
+  #
+  # The host reports host_build_id about ITSELF over its own socket. That is
+  # the fact worth comparing, and it is the one that still fails when a swap
+  # moved the symlink and the restart did not take.
+  desired_engine=$([ -f "$current/WORKER_ENGINE_BUILD_ID" ] && cat "$current/WORKER_ENGINE_BUILD_ID" || echo "")
+  running_engine=$(SWARM_TERMINAL_SOCKET=$(terminal_socket) \
+    "$host_release/bin/swarmctl" status 2>/dev/null \
+    | sed -n 's/.*"host_build_id":"\([0-9a-f]*\)".*/\1/p')
+  running_version=$(SWARM_TERMINAL_SOCKET=$(terminal_socket) \
+    "$host_release/bin/swarmctl" status 2>/dev/null \
+    | sed -n 's/.*"host_version":"\([^"]*\)".*/\1/p')
+
+  if [ -n "$desired_engine" ] && [ -n "$running_engine" ] \
+    && [ "$desired_engine" = "$running_engine" ]; then
+    # Named by what is RUNNING, not by the release the link points at, so a
+    # carried-forward engine and a stale one cannot read the same.
+    printf 'Terminal host is running the current engine %s (process started from %s)\n' \
+      "$(printf '%s' "$running_engine" | cut -c1-12)" "$running_version"
+    return
+  fi
+  if [ -n "$desired_engine" ] && [ -n "$running_engine" ]; then
+    printf 'Terminal host is running engine %s but %s wants %s; swapping\n' \
+      "$(printf '%s' "$running_engine" | cut -c1-12)" \
+      "$(basename "$current")" \
+      "$(printf '%s' "$desired_engine" | cut -c1-12)"
+  fi
+  # A host that cannot be reached says nothing either way, so fall through to
+  # the link comparison rather than claiming it is current.
+  if [ -z "$running_engine" ]; then
+    [ "$current" != "$host_release" ] || { printf 'Terminal host link already at %s; running engine unknown\n' "$(basename "$current")"; return; }
+  fi
   [ "$(cat "$current/PROTOCOL")" = "$(cat "$host_release/PROTOCOL")" ] || die "terminal host protocol migration is required"
 
   SWARM_TERMINAL_SOCKET=$(terminal_socket) "$host_release/bin/swarmctl" drain >/dev/null
