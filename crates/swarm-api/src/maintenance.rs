@@ -545,6 +545,7 @@ mod tests {
             engagement_expires_at: None,
             created_at: 0,
             updated_at: 0,
+            ephemeral: false,
         }
     }
 

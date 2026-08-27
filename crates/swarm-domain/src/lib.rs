@@ -742,6 +742,7 @@ mod tests {
             engagement_expires_at: None,
             created_at: 1,
             updated_at: 1,
+            ephemeral: false,
         };
         assert_eq!(profile.role, WorkerRole::Queen);
         assert!(profile.autostart);

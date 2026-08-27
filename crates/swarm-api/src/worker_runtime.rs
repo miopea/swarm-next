@@ -635,6 +635,7 @@ mod tests {
             engagement_expires_at: None,
             created_at: 1,
             updated_at: 1,
+            ephemeral: false,
         }
     }
 }

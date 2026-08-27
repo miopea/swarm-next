@@ -194,6 +194,13 @@ pub struct WorkerProfile {
     /// Expiry of the active operator engagement lease, when one exists.
     #[serde(skip)]
     pub engagement_expires_at: Option<i64>,
+    /// Whether this worker is TEMPORARY: spawned beside another to try a second
+    /// provider, and not yet adopted into the Hive.
+    ///
+    /// Serialized rather than skipped because the roster has to show it. A
+    /// temporary worker that looks permanent is one an operator will rely on and
+    /// then lose.
+    pub ephemeral: bool,
     pub created_at: i64,
     pub updated_at: i64,
 }

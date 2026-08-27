@@ -70,6 +70,31 @@ pub struct GeometryContention {
     pub distinct_sizes: usize,
 }
 
+/// How a profile starts life: awake or not, where in the roster, and whether it
+/// is temporary.
+///
+/// A struct rather than three more parameters because `insert_profile` already
+/// carried as many as it should. Grouping them also stops the two booleans
+/// being passed in the wrong order, which a pair of bare `bool`s invites.
+#[derive(Clone, Copy)]
+struct ProfileStartup {
+    autostart: bool,
+    position: i64,
+    /// Temporary workers are created only by `create_temporary_worker`.
+    ephemeral: bool,
+}
+
+impl ProfileStartup {
+    /// An ordinary worker, which is every caller but one.
+    const fn permanent(autostart: bool, position: i64) -> Self {
+        Self {
+            autostart,
+            position,
+            ephemeral: false,
+        }
+    }
+}
+
 impl TaskStore {
     /// Returns the singleton Queen profile, creating it on first start.
     ///
@@ -85,7 +110,7 @@ impl TaskStore {
             WorkerRole::Queen,
             ProviderKind::ClaudeCode,
             workspace,
-            (true, 0),
+            ProfileStartup::permanent(true, 0),
         )
     }
 
@@ -195,7 +220,7 @@ impl TaskStore {
             WorkerRole::Worker,
             provider,
             workspace,
-            (autostart, position),
+            ProfileStartup::permanent(autostart, position),
         )
     }
 
@@ -218,7 +243,7 @@ impl TaskStore {
             WorkerRole::Worker,
             provider,
             workspace,
-            (autostart, position),
+            ProfileStartup::permanent(autostart, position),
         )
     }
 
@@ -332,6 +357,94 @@ impl TaskStore {
         transaction.execute(
             "UPDATE worker_profiles SET updated_at = unixepoch() WHERE id = ?1",
             [worker_id.to_string()],
+        )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        transaction.commit()?;
+        drop(connection);
+        self.get_worker_profile(worker_id)
+    }
+
+    /// Creates a TEMPORARY worker beside another, on any provider.
+    ///
+    /// A real worker row rather than an anonymous session, because it holds the
+    /// full tool surface and anything that writes to the durable record must
+    /// stay attributable. The flag is the only difference: it is otherwise an
+    /// ordinary worker, which is what makes adoption a flag change rather than a
+    /// re-creation.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid name or workspace, or a duplicate name.
+    pub fn create_temporary_worker(
+        &self,
+        name: &str,
+        provider: ProviderKind,
+        workspace: &str,
+        position: i64,
+    ) -> Result<WorkerProfile, TaskStoreError> {
+        self.insert_profile(
+            name,
+            "",
+            WorkerRole::Worker,
+            provider,
+            workspace,
+            ProfileStartup {
+                autostart: false,
+                position,
+                ephemeral: true,
+            },
+        )
+    }
+
+    /// Adopts a temporary worker into the Hive under a permanent name.
+    ///
+    /// A FLAG CHANGE, deliberately, not a re-creation. The worker keeps its id,
+    /// so its session history, its conversation and every board write it already
+    /// made continue to point at the same worker. Re-creating it would leave the
+    /// record naming a worker that no longer exists.
+    ///
+    /// # Errors
+    /// Returns an error when the worker is unknown, is not temporary, or the
+    /// name is invalid or taken.
+    pub fn adopt_worker(
+        &self,
+        worker_id: WorkerId,
+        name: &str,
+    ) -> Result<WorkerProfile, TaskStoreError> {
+        let name = name.trim();
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let ephemeral: bool = transaction
+            .query_row(
+                "SELECT ephemeral FROM worker_profiles
+                 WHERE id = ?1 AND archived_at IS NULL",
+                [worker_id.to_string()],
+                |row| row.get::<_, i64>(0).map(|value| value != 0),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::WorkerNotFound)?;
+        if !ephemeral {
+            // Not an error worth inventing a variant for, but not a silent
+            // success either: adopting something already permanent means the
+            // caller believes something false about it.
+            return Err(TaskStoreError::WorkerNotFound);
+        }
+        let taken = transaction
+            .query_row(
+                "SELECT 1 FROM worker_profiles
+                 WHERE name = ?1 COLLATE NOCASE AND id != ?2 AND archived_at IS NULL",
+                params![name, worker_id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .is_some();
+        if taken {
+            return Err(TaskStoreError::DuplicateWorkerName);
+        }
+        transaction.execute(
+            "UPDATE worker_profiles
+             SET name = ?2, ephemeral = 0, updated_at = unixepoch()
+             WHERE id = ?1",
+            params![worker_id.to_string(), name],
         )?;
         insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
         transaction.commit()?;
@@ -459,7 +572,7 @@ impl TaskStore {
                    (EXISTS(SELECT 1 FROM worker_sessions history WHERE history.worker_id = p.id)
                     OR p.provider_conversation_resume = 1),
                    e.expires_at,
-                   p.created_at, p.updated_at, p.description
+                   p.created_at, p.updated_at, p.description, p.ephemeral
             FROM worker_profiles p
             LEFT JOIN worker_sessions s
               ON s.worker_id = p.id AND s.ended_at IS NULL
@@ -521,7 +634,7 @@ impl TaskStore {
                        (EXISTS(SELECT 1 FROM worker_sessions history WHERE history.worker_id = p.id)
                         OR p.provider_conversation_resume = 1),
                        e.expires_at,
-                       p.created_at, p.updated_at, p.description
+                       p.created_at, p.updated_at, p.description, p.ephemeral
                 FROM worker_profiles p
                 LEFT JOIN worker_sessions s
                   ON s.worker_id = p.id AND s.ended_at IS NULL
@@ -1430,7 +1543,7 @@ impl TaskStore {
                        (EXISTS(SELECT 1 FROM worker_sessions history WHERE history.worker_id = p.id)
                         OR p.provider_conversation_resume = 1),
                        e.expires_at,
-                       p.created_at, p.updated_at, p.description
+                       p.created_at, p.updated_at, p.description, p.ephemeral
                 FROM worker_profiles p
                 LEFT JOIN worker_sessions s
                   ON s.worker_id = p.id AND s.ended_at IS NULL
@@ -1453,9 +1566,13 @@ impl TaskStore {
         role: WorkerRole,
         provider: ProviderKind,
         workspace: &str,
-        startup: (bool, i64),
+        startup: ProfileStartup,
     ) -> Result<WorkerProfile, TaskStoreError> {
-        let (autostart, position) = startup;
+        let ProfileStartup {
+            autostart,
+            position,
+            ephemeral,
+        } = startup;
         let name = name.trim();
         let description = description.trim();
         let workspace = normalize_workspace(workspace)?;
@@ -1496,8 +1613,8 @@ impl TaskStore {
         transaction.execute(
             "INSERT INTO worker_profiles
              (id, hive_id, name, description, role, provider, workspace, autostart, position,
-              provider_conversation_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+              provider_conversation_id, ephemeral)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 id.to_string(),
                 hive_id.to_string(),
@@ -1508,7 +1625,8 @@ impl TaskStore {
                 workspace,
                 autostart,
                 position,
-                provider_conversation_id.map(|value| value.to_string())
+                provider_conversation_id.map(|value| value.to_string()),
+                ephemeral
             ],
         )?;
         insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
@@ -1612,6 +1730,7 @@ fn profile_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerProfile> 
         engagement_expires_at: row.get(11)?,
         created_at: row.get(12)?,
         updated_at: row.get(13)?,
+        ephemeral: row.get::<_, i64>(15)? != 0,
     })
 }
 
@@ -2886,6 +3005,82 @@ mod tests {
         assert_eq!(
             stored, "gemini",
             "the real provider survives being unreadable"
+        );
+    }
+
+    /// A temporary worker is adopted by CHANGING A FLAG, not by re-creating it.
+    ///
+    /// The identity is the whole point. A temporary worker holds the full tool
+    /// surface, so by the time anyone adopts it, it may already have transitioned
+    /// tasks and filed new ones. Re-creating it under a permanent name would
+    /// leave every one of those writes naming a worker that no longer exists —
+    /// the same defect as an unreadable provider taking down the roster, one
+    /// layer up.
+    ///
+    /// Releasing archives rather than deletes, for the same reason: the row has
+    /// to outlive the worker or its writes point at nothing. That is why the
+    /// action is called Release rather than Kill.
+    #[test]
+    fn a_temporary_worker_keeps_its_identity_through_adoption_and_release() {
+        let store = TaskStore::in_memory().unwrap();
+        let temporary = store
+            .create_temporary_worker("Codex scratch", ProviderKind::Codex, "/workspace/petal", 5)
+            .unwrap();
+        assert!(temporary.ephemeral, "it is created temporary");
+        assert_eq!(temporary.provider, ProviderKind::Codex);
+
+        // It runs like any worker, which is what gives it history to preserve.
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(temporary.id, session).unwrap();
+        store.release_worker_session(session).unwrap();
+
+        let adopted = store.adopt_worker(temporary.id, "Thistle").unwrap();
+        assert_eq!(adopted.id, temporary.id, "adoption preserves the identity");
+        assert_eq!(adopted.name, "Thistle");
+        assert!(!adopted.ephemeral, "it is no longer temporary");
+        assert!(
+            adopted.has_session_history,
+            "its history survives adoption; a re-creation would have lost it"
+        );
+
+        // Adopting twice is refused rather than silently accepted: the second
+        // caller believes something false about the worker.
+        assert!(matches!(
+            store.adopt_worker(temporary.id, "Bramble"),
+            Err(TaskStoreError::WorkerNotFound)
+        ));
+
+        // Release archives. The row must outlive the worker.
+        let released = store
+            .create_temporary_worker(
+                "Codex scratch two",
+                ProviderKind::Codex,
+                "/workspace/petal",
+                6,
+            )
+            .unwrap();
+        store.archive_worker_profile(released.id).unwrap();
+        let survives: bool = store
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM worker_profiles
+                                WHERE id = ?1 AND archived_at IS NOT NULL)",
+                [released.id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            survives,
+            "a released worker's row remains, so its writes still name it"
+        );
+        assert!(
+            !store
+                .list_worker_profiles()
+                .unwrap()
+                .iter()
+                .any(|profile| profile.id == released.id),
+            "but it is gone from the roster"
         );
     }
 

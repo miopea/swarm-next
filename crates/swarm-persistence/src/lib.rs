@@ -149,7 +149,8 @@ const REPLY_ALLOWS_APPROVED_EXEMPTION_SCHEMA_VERSION: i64 = 93;
 const ATTENTION_NOTIFICATION_SCHEMA_VERSION: i64 = 94;
 const SUPERSEDED_EXEMPTION_SCHEMA_VERSION: i64 = 95;
 const OPEN_PROVIDER_SET_SCHEMA_VERSION: i64 = 96;
-const CURRENT_SCHEMA_VERSION: i64 = OPEN_PROVIDER_SET_SCHEMA_VERSION;
+const EPHEMERAL_WORKER_SCHEMA_VERSION: i64 = 97;
+const CURRENT_SCHEMA_VERSION: i64 = EPHEMERAL_WORKER_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -2504,6 +2505,43 @@ fn migrate_open_provider_set(transaction: &rusqlite::Transaction<'_>) -> rusqlit
     transaction.pragma_update(None, "user_version", OPEN_PROVIDER_SET_SCHEMA_VERSION)
 }
 
+/// Marks a worker as temporary until it is adopted or released.
+///
+/// A temporary worker is a real row rather than an anonymous session because it
+/// holds the full tool surface: it can transition tasks, file new ones and
+/// record deployments. Anything that writes to the durable record has to stay
+/// attributable, or its writes outlive it pointing at an author that never
+/// existed.
+///
+/// A plain ADD COLUMN with a default, so no table rebuild and none of migration
+/// 96's difficulty. Guarded on the column's absence because the migration tests
+/// rewind `user_version` without rewinding tables.
+fn migrate_ephemeral_workers(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    // Table existence AND column absence. Older synthetic schemas in the
+    // migration tests have no worker_profiles at all, and pragma_table_info on a
+    // missing table returns no rows rather than failing -- so checking only the
+    // column reads "not present" and then ALTERs a table that is not there.
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                        WHERE type = 'table' AND name = 'worker_profiles')",
+        [],
+        |row| row.get(0),
+    )?;
+    let has_column: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('worker_profiles')
+                        WHERE name = 'ephemeral')",
+        [],
+        |row| row.get(0),
+    )?;
+    if present && !has_column {
+        transaction.execute_batch(
+            "ALTER TABLE worker_profiles ADD COLUMN ephemeral INTEGER NOT NULL DEFAULT 0
+                 CHECK (ephemeral IN (0, 1));",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", EPHEMERAL_WORKER_SCHEMA_VERSION)
+}
+
 fn migrate_schema(
     transaction: &rusqlite::Transaction<'_>,
     schema_version: i64,
@@ -2770,6 +2808,22 @@ fn migrate_named_schema_steps(
     if schema_version < REVIEWED_WORK_EVIDENCE_ATTENTION_SCHEMA_VERSION {
         coordinator::migrate_reviewed_work_evidence_attention(transaction)?;
     }
+    migrate_newest_schema_steps(transaction, schema_version)
+}
+
+/// The steps from the review hold onwards.
+///
+/// Split from `migrate_named_schema_steps` purely because that function reached
+/// the length limit, and split HERE rather than at an arbitrary line: 91 is
+/// where this Hive started recording why work was held rather than only that it
+/// was, so everything below is the run of steps about evidence and provenance.
+///
+/// The order is still the order. Adding a step means appending to the end of
+/// this list and to `RECENT_SCHEMA_STEPS`, whichever function it lands in.
+fn migrate_newest_schema_steps(
+    transaction: &rusqlite::Transaction<'_>,
+    schema_version: i64,
+) -> rusqlite::Result<()> {
     if schema_version < REVIEW_HOLD_SCHEMA_VERSION {
         task_outcomes::migrate_review_holds(transaction)?;
     }
@@ -2787,6 +2841,9 @@ fn migrate_named_schema_steps(
     }
     if schema_version < OPEN_PROVIDER_SET_SCHEMA_VERSION {
         migrate_open_provider_set(transaction)?;
+    }
+    if schema_version < EPHEMERAL_WORKER_SCHEMA_VERSION {
+        migrate_ephemeral_workers(transaction)?;
     }
     Ok(())
 }
@@ -6192,6 +6249,12 @@ mod tests {
                  WHERE type = 'table' AND name = 'worker_profiles'
                    AND sql NOT LIKE '%provider IN (%'
              )",
+        },
+        SchemaStep {
+            table: "worker_profiles",
+            artifact: "ephemeral",
+            undo_sql: "",
+            probe_sql: "",
         },
     ];
 
