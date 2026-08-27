@@ -154,7 +154,8 @@ const TASK_AMENDMENT_SCHEMA_VERSION: i64 = 98;
 const DECISION_COMMAND_GRANT_SCHEMA_VERSION: i64 = 99;
 const UNATTENDED_BLOCK_SCHEMA_VERSION: i64 = 100;
 const AMENDMENT_ACTIVITY_SCHEMA_VERSION: i64 = 101;
-const CURRENT_SCHEMA_VERSION: i64 = AMENDMENT_ACTIVITY_SCHEMA_VERSION;
+const BLOCK_DEADLINE_SCHEMA_VERSION: i64 = 102;
+const CURRENT_SCHEMA_VERSION: i64 = BLOCK_DEADLINE_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -504,6 +505,81 @@ fn rearm_briefing_for_returned_work(
         [id.to_string()],
     )?;
     Ok(())
+}
+
+/// The deadline a transition should store, which is None unless it is a block.
+///
+/// Separated so the write stays one statement and the reasoning has somewhere
+/// to live: `blocked_until` moves WITH the state and is cleared on the way out.
+/// A deadline left behind by an earlier block would silently suppress the next
+/// escalation, which is the worst direction for this to fail -- the task goes
+/// quiet and nothing says why.
+fn block_deadline_for(target: TaskState, note: &str) -> Option<i64> {
+    (target == TaskState::Blocked)
+        .then(|| parse_block_deadline(note))
+        .flatten()
+}
+
+/// The moment a block says it is waiting for, if it names one.
+///
+/// READ FROM THE NOTE RATHER THAN A TOOL PARAMETER, deliberately. The obvious
+/// design is a new argument on the transition tool, and it is wrong here: an
+/// MCP client asks for its tool schema once when it connects and caches it, so
+/// no session running today could send a new parameter. The field would sit
+/// empty for exactly the population that needs it now. A line in the note works
+/// from every session that already exists.
+///
+/// A MARKER, NOT PROSE. "Blocked until: <RFC3339>" on its own line. A note that
+/// merely mentions a date is not a note that names its own deadline, and the
+/// difference decides whether the operator hears about a stalled task -- so it
+/// is stated explicitly rather than inferred from whatever timestamps appear.
+///
+/// Anything unparseable yields None, which escalates. Failing toward speaking
+/// is the right direction: a missed escalation is silent, and a spurious one is
+/// visible and can be corrected.
+fn parse_block_deadline(note: &str) -> Option<i64> {
+    note.lines()
+        .filter_map(|line| line.trim().strip_prefix("Blocked until:"))
+        .find_map(|value| parse_rfc3339_seconds(value.trim()))
+}
+
+/// Seconds since the epoch for an RFC3339 instant, without pulling in a clock
+/// crate for one field.
+///
+/// Deliberately strict: it accepts what a worker is told to write and refuses
+/// the rest, because a half-understood timestamp is worse than none. Only the
+/// `Z` form, because an offset that is silently ignored would shift a deadline
+/// by hours in whichever direction nobody checked.
+fn parse_rfc3339_seconds(value: &str) -> Option<i64> {
+    let value = value.strip_suffix('Z')?;
+    let (date, time) = value.split_once('T')?;
+    let mut date = date.split('-');
+    let (year, month, day) = (
+        date.next()?.parse::<i64>().ok()?,
+        date.next()?.parse::<i64>().ok()?,
+        date.next()?.parse::<i64>().ok()?,
+    );
+    if date.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let mut time = time.split(':');
+    let (hour, minute, second) = (
+        time.next()?.parse::<i64>().ok()?,
+        time.next()?.parse::<i64>().ok()?,
+        time.next()?.split('.').next()?.parse::<i64>().ok()?,
+    );
+    if time.next().is_some() || hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
+    // Days from the civil calendar, Howard Hinnant's algorithm. Exact for every
+    // date this will ever see and it needs no dependency.
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
 }
 
 impl TaskStore {
@@ -2036,9 +2112,11 @@ impl TaskStore {
             "DELETE FROM task_outcome_deliveries WHERE task_id = ?1 AND state = 'queued'",
             [id.to_string()],
         )?;
+        let block_deadline = block_deadline_for(target, note);
         transaction.execute(
-            "UPDATE tasks SET state = ?2, updated_at = unixepoch() WHERE id = ?1",
-            params![id.to_string(), target.to_string()],
+            "UPDATE tasks SET state = ?2, blocked_until = ?3, updated_at = unixepoch()
+             WHERE id = ?1",
+            params![id.to_string(), target.to_string(), block_deadline],
         )?;
         // Work sent back to a worker owes it a briefing again. Queen's only
         // non-completing exit from Review used to be Active, and that
@@ -3123,7 +3201,37 @@ fn migrate_newest_schema_steps(
     if schema_version < AMENDMENT_ACTIVITY_SCHEMA_VERSION {
         migrate_amendment_activity(transaction)?;
     }
+    if schema_version < BLOCK_DEADLINE_SCHEMA_VERSION {
+        migrate_block_deadline(transaction)?;
+    }
     Ok(())
+}
+
+/// When a block's own stated condition arrives, if it named one.
+///
+/// A plain ADD COLUMN, so none of migration 96's difficulty: no table rebuild
+/// and nothing holding a foreign key into it. Guarded on the column's absence
+/// because the migration tests rewind `user_version` without rewinding tables.
+fn migrate_block_deadline(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    // BOTH GUARDS ARE REQUIRED. The column check alone is not enough: a
+    // database old enough to predate the tasks table reaches this step too, and
+    // pragma_table_info on a missing table returns no rows -- which reads as
+    // "the column is absent" and sends the ALTER at a table that is not there.
+    // The migration harness starts from exactly such a database.
+    let table: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks')",
+        [],
+        |row| row.get(0),
+    )?;
+    let column: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tasks') WHERE name = 'blocked_until')",
+        [],
+        |row| row.get(0),
+    )?;
+    if table && !column {
+        transaction.execute_batch("ALTER TABLE tasks ADD COLUMN blocked_until INTEGER;")?;
+    }
+    transaction.pragma_update(None, "user_version", BLOCK_DEADLINE_SCHEMA_VERSION)
 }
 
 /// Puts every amendment that already exists into the activity trail.
@@ -6638,6 +6746,14 @@ mod tests {
         // removes what the backfill wrote rather than reshaping anything, and
         // the probe asks whether any amendment is still missing from the trail.
         SchemaStep {
+            table: "tasks",
+            artifact: "blocked_until",
+            undo_sql: "ALTER TABLE tasks DROP COLUMN blocked_until;",
+            probe_sql: "SELECT EXISTS(
+                 SELECT 1 FROM pragma_table_info('tasks') WHERE name = 'blocked_until'
+             )",
+        },
+        SchemaStep {
             table: "task_activity",
             artifact: "amended",
             undo_sql: "DELETE FROM task_activity WHERE kind = 'amended';",
@@ -6652,6 +6768,26 @@ mod tests {
              )",
         },
     ];
+
+    /// The step that introduced a named artifact, rather than whichever is newest.
+    ///
+    /// A test about ONE migration must undo THAT migration. Using `newest_step`
+    /// couples it to whatever lands next: adding schema 102 made the amendment
+    /// backfill test undo the `blocked_until` column instead, so it migrated a
+    /// database that had never lost its amendment rows and asserted against a
+    /// backfill that never ran. It failed for a reason with nothing to do with
+    /// amendments.
+    ///
+    /// Third instance of this shape tonight, after a rollback test that used
+    /// "gemini" as its example of an unknown provider and a compatibility test
+    /// that tied `PROTOCOL_VERSION - 1` to a fixed payload. Pin to the thing
+    /// the test is about, never to a position in a list that grows.
+    fn step_for(artifact: &str) -> &'static SchemaStep {
+        RECENT_SCHEMA_STEPS
+            .iter()
+            .find(|step| step.artifact == artifact)
+            .expect("the named migration step is declared")
+    }
 
     fn newest_step() -> &'static SchemaStep {
         RECENT_SCHEMA_STEPS
@@ -6834,6 +6970,100 @@ mod tests {
     /// to run twice, because the harness rewinds `user_version` WITHOUT
     /// rewinding tables -- a duplicate does not raise, it just makes every task
     /// look freshly touched.
+    /// The block deadline is read from a MARKED line, and only a marked line.
+    ///
+    /// The stakes are asymmetric and the parser is built for that: a deadline
+    /// read where none was meant SUPPRESSES an escalation silently, while
+    /// failing to read one merely escalates something the operator could have
+    /// been spared. So anything ambiguous yields None.
+    #[test]
+    fn a_block_deadline_is_read_only_from_its_own_marked_line() {
+        // The epoch itself, then a date this Hive will actually see.
+        assert_eq!(
+            parse_block_deadline("Blocked until: 1970-01-01T00:00:00Z"),
+            Some(0)
+        );
+        assert_eq!(
+            parse_block_deadline("Waiting on the window.\nBlocked until: 2026-08-27T17:35:33Z"),
+            Some(1_787_852_133)
+        );
+
+        // A note that MENTIONS a time is not a note that names its deadline.
+        // This is the case that decides whether the operator hears about a
+        // stalled task, so it is not inferred from a stray timestamp.
+        assert_eq!(
+            parse_block_deadline("The window opened at 2026-08-27T17:35:33Z and we missed it"),
+            None
+        );
+        assert_eq!(parse_block_deadline("Blocked on Queen deciding"), None);
+        assert_eq!(parse_block_deadline(""), None);
+
+        // Refused rather than half-understood. An offset silently dropped would
+        // move a deadline by hours in whichever direction nobody checked.
+        assert_eq!(
+            parse_block_deadline("Blocked until: 2026-08-27T17:35:33+02:00"),
+            None
+        );
+        assert_eq!(parse_block_deadline("Blocked until: 2026-08-27"), None);
+        assert_eq!(parse_block_deadline("Blocked until: tomorrow"), None);
+        assert_eq!(
+            parse_block_deadline("Blocked until: 2026-13-01T00:00:00Z"),
+            None
+        );
+        assert_eq!(
+            parse_block_deadline("Blocked until: 2026-08-27T24:00:00Z"),
+            None
+        );
+    }
+
+    /// A deadline belongs to the block that named it and dies with it.
+    ///
+    /// A stale deadline left behind by an earlier block would suppress the NEXT
+    /// escalation silently, which is the worst way for this to fail: the task
+    /// goes quiet and nothing says why.
+    #[test]
+    fn a_block_deadline_is_cleared_when_the_task_leaves_blocked() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store
+            .create_task("Wait for the window", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store
+            .transition_task_with_note(
+                task.id,
+                TaskState::Blocked,
+                "Zero-traffic window.\nBlocked until: 2026-08-27T17:35:33Z",
+            )
+            .unwrap();
+
+        let deadline = |store: &TaskStore| -> Option<i64> {
+            store
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT blocked_until FROM tasks WHERE id = ?1",
+                    [task.id.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(deadline(&store), Some(1_787_852_133));
+
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        assert_eq!(
+            deadline(&store),
+            None,
+            "a deadline must not outlive the block that named it"
+        );
+
+        // Blocked again with no deadline: the previous one must not come back.
+        store
+            .transition_task_with_note(task.id, TaskState::Blocked, "Blocked on Queen deciding")
+            .unwrap();
+        assert_eq!(deadline(&store), None);
+    }
+
     #[test]
     fn the_amendment_backfill_carries_original_timestamps_and_survives_a_rerun() {
         let directory = tempfile::tempdir().unwrap();
@@ -6870,8 +7100,8 @@ mod tests {
                 .execute_batch(&format!(
                     "{};
                      PRAGMA user_version = {};",
-                    newest_step().undo(),
-                    CURRENT_SCHEMA_VERSION - 1
+                    step_for("amended").undo(),
+                    AMENDMENT_ACTIVITY_SCHEMA_VERSION - 1
                 ))
                 .unwrap();
             (task.id, worker.id)
@@ -6923,7 +7153,7 @@ mod tests {
             .unwrap()
             .execute_batch(&format!(
                 "PRAGMA user_version = {};",
-                CURRENT_SCHEMA_VERSION - 1
+                AMENDMENT_ACTIVITY_SCHEMA_VERSION - 1
             ))
             .unwrap();
         drop(migrated);

@@ -262,6 +262,8 @@ export type CoordinatorStatus = {
   automatic_start_batch_limit: number;
   /** What the coordinator is holding, once it has been true long enough to say. */
   held: HeldDelivery[];
+  /** Blocks past the twelve hours the operator asked to hear about directly. */
+  blocked_escalations?: BlockedEscalation[];
 };
 export type HeldDelivery = {
   /**
@@ -1782,3 +1784,11 @@ export async function stopTunnel(operatorToken: string): Promise<TunnelStatus> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/tunnel/stop", { method: "POST" });
   return (await response.json()) as TunnelStatus;
 }
+
+export type BlockedEscalation = {
+  task_id: string;
+  title: string;
+  worker_name: string;
+  workspace: string;
+  blocked_for_seconds: number;
+};

@@ -1639,6 +1639,11 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
    feature, not a fault the operator has to act on immediately. */
 .whats-new-pending { color: var(--muted); font-size: .74rem; }
 .whats-new-engine-note { margin-top: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-soft); }
+/* Blocks the operator asked to hear about directly. Sits with the other
+   attention cards rather than shouting: it is a stall, not an incident. */
+.blocked-escalation-list { display: grid; gap: 5px; margin: 6px 0 8px; padding: 0; list-style: none; }
+.blocked-escalation-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: .8rem; }
+.blocked-escalation-meta { color: var(--muted); font-size: .72rem; }
 .dialog { display: grid; width: min(440px, 100%); gap: 9px; padding: 18px; border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--panel-raised); box-shadow: var(--shadow); }
 .dialog h3 { margin: 0; font-size: 1.05rem; }
 .dialog p { margin: 0; color: var(--muted); font-size: .78rem; line-height: 1.45; }

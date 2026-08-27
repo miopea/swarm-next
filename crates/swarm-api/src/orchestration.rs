@@ -41,6 +41,18 @@ pub(super) struct CoordinatorStatusResponse {
     /// coordinator: declining to type into a terminal with an unanswered
     /// prompt is correct, and saying nothing about it for a day is not.
     held: Vec<HeldDeliveryResponse>,
+    /// Blocks old enough that the OPERATOR should hear about them directly,
+    /// not only Queen.
+    ///
+    /// Twelve hours, which the operator chose over the recommended twenty-four
+    /// (decision 01a0418f) — read as a preference to hear sooner, so nothing
+    /// here batches or coalesces to restore a longer effective delay.
+    ///
+    /// Carried on the coordinator payload the control room already polls
+    /// rather than on a surface of its own, so it lands in the Decision Inbox
+    /// beside the other attention cards — the place workers already ask instead
+    /// of interrupting a terminal.
+    blocked_escalations: Vec<BlockedEscalationResponse>,
     /// Briefings queued and not moving, and what each is waiting on.
     ///
     /// A held delivery was attempted and refused. A briefing the dispatcher
@@ -84,6 +96,49 @@ fn held_briefings(
         .held_task_dispatches(crate::unix_timestamp())
         .map_err(|error| task_store_error(&error))
 }
+
+/// One block the operator should know about, with what it is waiting on.
+#[derive(Debug, Serialize)]
+pub(super) struct BlockedEscalationResponse {
+    task_id: String,
+    title: String,
+    worker_name: String,
+    workspace: String,
+    blocked_for_seconds: i64,
+}
+
+/// Blocks past the operator's twelve-hour threshold.
+///
+/// The threshold lives here rather than in the query so the number the operator
+/// chose is stated once, next to the reason it is that number.
+fn blocked_escalations(state: &Arc<AppState>) -> Result<Vec<BlockedEscalationResponse>, ApiError> {
+    let store = crate::task_store(state)?;
+    let candidates = store
+        .operator_block_escalation_candidates(
+            crate::unix_timestamp(),
+            OPERATOR_BLOCK_ESCALATION_SECONDS,
+        )
+        .map_err(|error| task_store_error(&error))?;
+    Ok(candidates
+        .into_iter()
+        .filter_map(|candidate| {
+            let task = store.get_task(candidate.task_id).ok()?;
+            let worker = store.get_worker_profile(candidate.worker_id).ok()?;
+            Some(BlockedEscalationResponse {
+                task_id: candidate.task_id.to_string(),
+                title: task.title,
+                worker_name: worker.name,
+                workspace: task.workspace,
+                blocked_for_seconds: candidate.age_seconds,
+            })
+        })
+        .collect())
+}
+
+/// Twelve hours. The operator chose it over Queen's recommended twenty-four
+/// (decision 01a0418f, "Reach me after 12 hours"), which is a preference to
+/// hear sooner rather than a rounding of the same answer.
+const OPERATOR_BLOCK_ESCALATION_SECONDS: i64 = 12 * 60 * 60;
 
 fn held_deliveries(state: &Arc<AppState>) -> Result<Vec<HeldDeliveryResponse>, ApiError> {
     let refusals = crate::task_store(state)?
@@ -167,6 +222,7 @@ pub(super) async fn coordinator_status(
             automatic_start_batch_limit: usize::from(AUTOMATIC_WAKE_BATCH_LIMIT),
             held: held_deliveries(&state)?,
             held_briefings: held_briefings(&state)?,
+            blocked_escalations: blocked_escalations(&state)?,
         }),
     )
         .into_response())

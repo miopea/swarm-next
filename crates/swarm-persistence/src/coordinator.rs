@@ -598,6 +598,81 @@ impl TaskStore {
             .map_err(TaskStoreError::from)
     }
 
+    /// A block old enough that the operator should hear about it directly.
+    ///
+    /// The operator chose twelve hours over Queen's recommended twenty-four
+    /// (decision 01a0418f). Their report was that Queen never changes anything, so
+    /// surfacing an aged block to Queen alone tells the party that was already
+    /// silent -- this reaches past her.
+    ///
+    /// VISIBILITY, NOT AUTHORITY. Nothing here moves a task. Queen remains the only
+    /// actor that takes work out of Blocked, which the operator asked for in those
+    /// words, and the escalation is a listing rather than a transition.
+    ///
+    /// AGE COMES FROM `task_activity`, NOT `updated_at`, for the same reason the
+    /// four-hour version does: a sweep that touches the row resets `updated_at` and
+    /// would make a week-old block look new.
+    ///
+    /// A BLOCK THAT NAMED A FUTURE MOMENT IS NOT ESCALATED UNTIL IT ARRIVES, and
+    /// that clause is the whole design rather than a refinement. Without it the
+    /// first two things this ever says to the operator are both correct and
+    /// unactionable -- two tasks waiting on a zero-traffic window with hours left --
+    /// and a channel whose opening messages cannot be acted on is one its reader
+    /// learns to dismiss. A deadline that has ELAPSED escalates: the reason expired
+    /// and nobody came back.
+    ///
+    /// A block waiting on a decision still escalates, answered or not. Pending
+    /// means the operator answering it IS the action; answered means Queen has the
+    /// answer and has not moved, which is exactly what was reported.
+    ///
+    /// # Errors
+    /// Returns an error when the query fails.
+    pub fn operator_block_escalation_candidates(
+        &self,
+        now: i64,
+        minimum_age_seconds: i64,
+    ) -> Result<Vec<UnattendedBlockCandidate>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT task.assigned_worker_id, task.id, task.updated_at,
+                    MAX(0, ?1 - blocked.blocked_at), session.session_id
+             FROM tasks task
+             JOIN worker_profiles worker
+               ON worker.id = task.assigned_worker_id AND worker.archived_at IS NULL
+             JOIN (SELECT task_id, MAX(occurred_at) AS blocked_at
+                   FROM task_activity WHERE to_state = 'blocked'
+                   GROUP BY task_id) blocked
+               ON blocked.task_id = task.id
+             JOIN (SELECT worker_id, session_id,
+                          ROW_NUMBER() OVER (PARTITION BY worker_id
+                                             ORDER BY started_at DESC) AS recency
+                   FROM worker_sessions) session
+               ON session.worker_id = worker.id AND session.recency = 1
+             WHERE task.state = 'blocked' AND task.removed_at IS NULL
+               AND blocked.blocked_at + ?2 <= ?1
+               AND (task.blocked_until IS NULL OR task.blocked_until <= ?1)
+             ORDER BY blocked.blocked_at, task.id LIMIT ?3",
+        )?;
+        let candidates = statement
+            .query_map(
+                params![now, minimum_age_seconds, MAX_UNSTARTED_WORK_CANDIDATES],
+                |row| {
+                    Ok(UnattendedBlockCandidate {
+                        worker_id: WorkerId::from_str(&row.get::<_, String>(0)?)
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                        task_id: TaskId::from_str(&row.get::<_, String>(1)?)
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                        task_revision: row.get(2)?,
+                        age_seconds: row.get(3)?,
+                        session_id: WorkerSessionId::from_str(&row.get::<_, String>(4)?)
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    })
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(candidates)
+    }
+
     /// A blocked task nobody has come back to, and how long it has waited.
     ///
     /// AGE COMES FROM `task_activity`, NOT `updated_at`, and that is the whole
@@ -3371,6 +3446,210 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    /// The two blocks on the board today do NOT reach the operator, and one
+    /// that has genuinely stalled does.
+    ///
+    /// Modelled on the real population rather than an invented one: both #1714
+    /// tasks exceed twelve hours AND are waiting on a zero-traffic window with
+    /// hours left, so both are correct and unactionable. If the first two things
+    /// this channel ever says cannot be acted on, its reader learns to dismiss
+    /// it -- which is the failure this Hive spent a night removing from a
+    /// different flag.
+    #[test]
+    fn a_block_waiting_on_a_moment_that_has_not_arrived_does_not_reach_the_operator() {
+        let store = TaskStore::in_memory().unwrap();
+        let twelve_hours = 12 * 60 * 60;
+        let now = 1_000_000;
+
+        let blocked = |title: &str, note: &str, blocked_at: i64| {
+            let worker = store
+                .create_worker(title, ProviderKind::ClaudeCode, "/workspace/w", false, 1)
+                .unwrap();
+            let session = WorkerSessionId::new();
+            store.bind_worker_session(worker.id, session).unwrap();
+            let task = store.create_task(title, "/workspace/w").unwrap();
+            store.transition_task(task.id, TaskState::Ready).unwrap();
+            store
+                .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::operator())
+                .unwrap();
+            store.transition_task(task.id, TaskState::Active).unwrap();
+            store
+                .transition_task_with_note(task.id, TaskState::Blocked, note)
+                .unwrap();
+            store
+                .connection()
+                .unwrap()
+                .execute(
+                    "UPDATE task_activity SET occurred_at = ?2
+                     WHERE task_id = ?1 AND to_state = 'blocked'",
+                    params![task.id.to_string(), blocked_at],
+                )
+                .unwrap();
+            task.id
+        };
+
+        // 72 hours blocked, waiting on a window that opens in the future.
+        let waiting = blocked(
+            "Platform 1714 steps 4-5",
+            "Zero-traffic window.\nBlocked until: 2026-08-27T17:35:33Z",
+            now - 72 * 60 * 60,
+        );
+        // 18 hours blocked, nothing checkable named. This is the one that has
+        // actually stalled.
+        let stalled = blocked(
+            "Stalled on nobody",
+            "Blocked on Queen deciding",
+            now - 18 * 60 * 60,
+        );
+
+        let reaching: Vec<_> = store
+            .operator_block_escalation_candidates(now, twelve_hours)
+            .unwrap()
+            .into_iter()
+            .map(|candidate| candidate.task_id)
+            .collect();
+        assert!(
+            reaching.contains(&stalled),
+            "a block that named nothing and has waited 18 hours must reach the operator"
+        );
+        assert!(
+            !reaching.contains(&waiting),
+            "a block waiting on a moment that has not arrived is correct and \
+             unactionable, and must not be the first thing this channel says"
+        );
+
+        // The moment the named condition passes, it is no longer waiting: it is
+        // a block whose reason expired and nobody came back.
+        let after = 1_787_852_133 + 1;
+        let reaching_later: Vec<_> = store
+            .operator_block_escalation_candidates(after, twelve_hours)
+            .unwrap()
+            .into_iter()
+            .map(|candidate| candidate.task_id)
+            .collect();
+        assert!(
+            reaching_later.contains(&waiting),
+            "an elapsed deadline escalates -- the reason expired and nobody came back"
+        );
+    }
+
+    /// Escalating grants NO authority. The listing moves nothing.
+    ///
+    /// The operator asked not to lose "the design of the queen being an
+    /// arbitrator and keeping workers going", so the escalation is a read and
+    /// stays a read. Asserted rather than assumed, because the cheap way to
+    /// make an escalation useful is to let it act, and that is the thing that
+    /// was explicitly ruled out.
+    #[test]
+    fn reaching_the_operator_does_not_move_the_task() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store.create_task("Waiting", "/workspace/petal").unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::operator())
+            .unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store
+            .transition_task_with_note(task.id, TaskState::Blocked, "Blocked on Queen deciding")
+            .unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE task_activity SET occurred_at = ?2
+                 WHERE task_id = ?1 AND to_state = 'blocked'",
+                params![task.id.to_string(), 0],
+            )
+            .unwrap();
+
+        assert_eq!(
+            store
+                .operator_block_escalation_candidates(100_000, 12 * 60 * 60)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            store.get_task(task.id).unwrap().state,
+            TaskState::Blocked,
+            "the escalation reports; it does not unblock"
+        );
+    }
+
+    /// Twelve hours, and the age comes from the transition rather than the row.
+    #[test]
+    fn the_operator_hears_at_twelve_hours_measured_from_the_transition() {
+        let store = TaskStore::in_memory().unwrap();
+        let twelve_hours = 12 * 60 * 60;
+        let now = 1_000_000;
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store.create_task("Waiting", "/workspace/petal").unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::operator())
+            .unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store
+            .transition_task_with_note(task.id, TaskState::Blocked, "Blocked on Queen deciding")
+            .unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE task_activity SET occurred_at = ?2
+                 WHERE task_id = ?1 AND to_state = 'blocked'",
+                params![task.id.to_string(), now - twelve_hours + 1],
+            )
+            .unwrap();
+
+        assert!(
+            store
+                .operator_block_escalation_candidates(now, twelve_hours)
+                .unwrap()
+                .is_empty(),
+            "one second short of twelve hours is not twelve hours"
+        );
+
+        // A SWEEP TOUCHES THE ROW. Measuring from updated_at would restart the
+        // clock here and the block would never age past the threshold.
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET updated_at = ?2 WHERE id = ?1",
+                params![task.id.to_string(), now + 5],
+            )
+            .unwrap();
+        let candidate = store
+            .operator_block_escalation_candidates(now + 1, twelve_hours)
+            .unwrap()
+            .pop()
+            .expect("twelve hours from the TRANSITION, whatever touched the row since");
+        assert_eq!(candidate.task_id, task.id);
+        assert_eq!(candidate.age_seconds, twelve_hours);
     }
 
     /// A worker amending its Active task is working it, not sitting on it.

@@ -3354,6 +3354,67 @@ mod tests {
         assert!(matches!(denied, Err(ApplicationError::NotAuthorized)));
     }
 
+    /// WHO CAN TAKE WORK OUT OF BLOCKED, established by trying it.
+    ///
+    /// Recorded because the board says otherwise. The escalation task asserts
+    /// "Queen remains the only actor that moves a task out of Blocked... that
+    /// property is already built and tested", and the operator asked for the
+    /// arbitrator design to be preserved. Neither the lifecycle nor the role
+    /// gate enforces it: `Blocked -> Active` is a legal transition and a worker
+    /// is permitted to reach Active for its own assignment.
+    ///
+    /// This test does not argue for changing that -- a worker resuming its own
+    /// work when its blocker clears is defensible, and narrowing it would be a
+    /// behaviour change nobody asked for. It exists so the next person who
+    /// relies on the stronger claim finds out here rather than from a worker
+    /// that resumed itself.
+    #[test]
+    fn a_worker_can_move_its_own_blocked_task_back_to_active() {
+        let (service, _queen, worker) = setup();
+        let session = WorkerSessionId::new();
+        service
+            .store
+            .bind_worker_session(worker.id, session)
+            .unwrap();
+        let task = service
+            .store
+            .create_task_with_details("Mine", "", TaskPriority::Normal, "/workspace/worker")
+            .unwrap();
+        service
+            .store
+            .transition_task(task.id, TaskState::Ready)
+            .unwrap();
+        service
+            .store
+            .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::operator())
+            .unwrap();
+        service
+            .store
+            .transition_task(task.id, TaskState::Active)
+            .unwrap();
+        service
+            .store
+            .transition_task_with_note(task.id, TaskState::Blocked, "Blocked on Queen deciding")
+            .unwrap();
+
+        let principal = AgentPrincipal {
+            worker_id: worker.id,
+            role: WorkerRole::Worker,
+            active_session_id: Some(session),
+        };
+        let resumed = service.transition_task(principal, task.id, TaskState::Active, "Resuming");
+
+        assert!(
+            resumed.is_ok(),
+            "a worker CAN unblock its own task today; the arbitrator property is \
+             weaker than the board records it as"
+        );
+        assert_eq!(
+            service.store.get_task(task.id).unwrap().state,
+            TaskState::Active
+        );
+    }
+
     /// The dead end Queen hit: a worker records that a task had nothing to
     /// deploy, the store waits for an approval, and nothing above the store
     /// could ever give one. Three finished tasks sat in review with no legal

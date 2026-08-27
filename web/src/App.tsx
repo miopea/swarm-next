@@ -91,7 +91,7 @@ import {
   type TunnelStatus,
   recordAttentionSeen,
 } from "./api";
-import type { ReleaseVersionNotes } from "./api";
+import type { BlockedEscalation, ReleaseVersionNotes } from "./api";
 import { bundleIsStale } from "./staleBundle";
 import BeeMascot from "./brand/BeeMascot";
 import ApiaryAttentionCard from "./apiary/ApiaryAttentionCard";
@@ -108,6 +108,7 @@ import ShellModal from "./terminal/ShellModal";
 import CommandPalette, { type CommandChoice } from "./navigation/CommandPalette";
 import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
 import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
+import BlockedEscalationCard from "./decisions/BlockedEscalationCard";
 import RuntimeUpdateConfirm from "./runtime/RuntimeUpdateConfirm";
 import WhatsNewModal from "./runtime/WhatsNewModal";
 import { readSeenVersion, storeSeenVersion, whatsNewFor } from "./runtime/whatsNew";
@@ -338,6 +339,7 @@ export function App() {
   const [queenAutomation, setQueenAutomation] = useState<QueenAutomationStatus>();
   /** What the coordinator is holding behind an unanswered terminal prompt. */
   const [heldDeliveries, setHeldDeliveries] = useState<HeldDelivery[]>([]);
+  const [blockedEscalations, setBlockedEscalations] = useState<BlockedEscalation[]>([]);
   /** Bumped to re-read held work immediately rather than waiting for the tick. */
   const [heldDeliveryRefresh, setHeldDeliveryRefresh] = useState(0);
   const [providers, setProviders] = useState<ProviderCapabilities>({ claude_code: true, codex: false });
@@ -438,6 +440,7 @@ export function App() {
   useEffect(() => {
     if (!operatorToken) {
       setHeldDeliveries([]);
+      setBlockedEscalations([]);
       return undefined;
     }
     let cancelled = false;
@@ -446,7 +449,7 @@ export function App() {
         // Defaulted rather than assumed: during an update the page can briefly
         // be newer than the API answering it, and a missing field should not
         // take the control room down.
-        .then((status) => { if (!cancelled) setHeldDeliveries(status.held ?? []); })
+        .then((status) => { if (!cancelled) { setHeldDeliveries(status.held ?? []); setBlockedEscalations(status.blocked_escalations ?? []); } })
         .catch(() => { if (!cancelled) setHeldDeliveries([]); });
     };
     load();
@@ -1316,6 +1319,7 @@ export function App() {
   // plainly on the page. A badge that disagrees with the page teaches the
   // operator to stop believing the badge, which is the one thing it has to do.
   const heldDeliveryAttentionCount = heldDeliveries.length > 0 ? 1 : 0;
+  const blockedEscalationAttentionCount = blockedEscalations.length > 0 ? 1 : 0;
   const attentionCount = pendingDecisionCount + pendingAssistCount + queenAutomationAttentionCount
     + heldDeliveryAttentionCount + awaitingReply.length;
   // WHEN THEY ACTUALLY LOOKED. The watermark this advances is the only thing
@@ -1967,11 +1971,12 @@ export function App() {
               busy={busy}
               focusDecisionId={decisionFocus?.id}
               focusRequest={decisionFocus?.request}
-              additionalPendingCount={pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + awaitingReply.length}
+              additionalPendingCount={pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + blockedEscalationAttentionCount + awaitingReply.length}
               attentionCards={<>
                 <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onReviseReply={reviseAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
+                <BlockedEscalationCard escalations={blockedEscalations} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <HeldDeliveryAttentionCard held={heldDeliveries} onOpenWorker={(name) => { const worker = workers.find((candidate) => candidate.name === name); if (worker) openWorker(worker.id); }} />
               </>}
               onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }}
