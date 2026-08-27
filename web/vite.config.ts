@@ -15,5 +15,9 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
+    // Vitest's 5s default assumes the async utilities below it finish well
+    // inside it. They are now allowed 5s of their own, so a test that waits
+    // has to be able to outlast one.
+    testTimeout: 20_000,
   },
 });
