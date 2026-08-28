@@ -467,6 +467,19 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .mobile-worker-empty { display: grid; justify-items: start; gap: 6px; padding: 18px 12px; color: var(--muted); font-size: .84rem; line-height: 1.45; }
 .mobile-worker-empty strong { color: var(--text); font-size: .94rem; }
 .mobile-worker-empty button { min-height: 44px; margin-top: 5px; }
+/* The row holds the choice and its one action side by side. A button cannot
+   contain a button, so sleeping needed a sibling rather than a nested control. */
+.mobile-worker-row { display: flex; align-items: stretch; gap: 6px; }
+.mobile-worker-row > .mobile-worker-choice { flex: 1; min-width: 0; }
+/* Sized for a thumb, and visually quieter than the row it sits beside: it ends
+   a session, so it should be reachable without being the obvious thing to hit. */
+.mobile-worker-sleep {
+  flex: 0 0 auto; min-width: 64px; padding: 8px 10px;
+  border-color: var(--line); color: var(--muted); background: var(--panel);
+  font-size: .76rem;
+}
+.mobile-worker-sleep:hover { color: var(--text); border-color: var(--line-strong); }
+.mobile-worker-dialog-note { margin: 0; color: var(--muted); font-size: .72rem; }
 .mobile-worker-choice { display: grid; width: 100%; min-height: 66px; grid-template-columns: 42px minmax(0, 1fr) 9px; align-items: center; gap: 10px; padding: 8px 10px; border-color: var(--line); color: var(--text); background: var(--panel); text-align: left; }
 .mobile-worker-choice[aria-current="page"] { border-color: var(--good); background: var(--good-soft); box-shadow: inset 3px 0 var(--good); }
 .mobile-worker-choice .worker-avatar { width: 42px; height: 42px; }

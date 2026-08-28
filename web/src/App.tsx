@@ -1434,6 +1434,13 @@ export function App() {
       : false,
     [normalizedWorkerQuery, workerVisibility, workers],
   );
+  // UNFILTERED ON PURPOSE, and this is the record that it is a decision.
+  //
+  // The rail narrows its list with the search box beside it. The phone picker
+  // has no search field — it was removed because focusing it raised the
+  // keyboard over the roster it was meant to help you read — so there is no
+  // query to apply and filtering here would hide workers against a box the
+  // operator cannot see or clear.
   const mobileVisibleWorkers = visibleWorkers;
   const mobileVisibleOrphanSessions = orphanSessions;
   const liveWorkerCount = workers.filter((worker) => worker.running).length
@@ -1910,6 +1917,10 @@ export function App() {
               </div>
               <div className="mobile-worker-dialog-toolbar">
                 <p className="mobile-worker-dialog-summary">{liveWorkerCount} awake · {rosterWorkerCount - liveWorkerCount} sleeping</p>
+                {/* SAID, NOT SILENTLY ABSENT. An operator who goes looking for
+                    a control and cannot find it learns nothing about whether
+                    it exists; naming where it lives costs one line. */}
+                <p className="mobile-worker-dialog-note">Opening a shell, temporary workers and adopting are on the desktop roster.</p>
                 <div className="worker-visibility-toggle" role="group" aria-label="Workers shown">
                   <button type="button" aria-pressed={workerVisibility === "all"} onClick={() => changeWorkerVisibility("all")}>All</button>
                   <button type="button" aria-pressed={workerVisibility === "awake"} onClick={() => changeWorkerVisibility("awake")}>Awake</button>
@@ -1927,12 +1938,27 @@ export function App() {
                   const sessionId = worker.active_session_id;
                   const work = workByWorker.get(worker.id);
                   const assignedTask = work?.current ?? (sessionId ? tasksBySession.get(sessionId) : undefined);
+                  // TWO ACTIONS, NOT THE RAIL'S SIX, and that is a decision
+                  // rather than an omission. Waking is already the row's own
+                  // tap. Sleeping earns a target because the mobile case IS
+                  // noticing from away that something is running which should
+                  // not be — but it gets its own control, since a mis-tap on a
+                  // phone is easy and this one ends a session.
+                  //
+                  // The other four stay on the desk and the picker says so
+                  // below: a shell is barely usable on a phone and outlives
+                  // the screen that started it, spawning a temporary worker
+                  // needs a provider submenu, adopting prompts for a typed
+                  // name, and releasing is destructive and rare.
+                  //
+                  // Queen is never offered sleep, the same as on the rail.
+                  const canSleep = Boolean(sessionId) && worker.role !== "queen";
                   return (
+                    <div className="mobile-worker-row" key={worker.id}>
                     <button
                       type="button"
                       className="mobile-worker-choice"
                       aria-current={sessionId === activeSessionId ? "page" : undefined}
-                      key={worker.id}
                       disabled={busy}
                       onClick={() => {
                         if (sessionId) openWorker(sessionId);
@@ -1948,6 +1974,16 @@ export function App() {
                       </span>
                       <span className={`presence ${worker.running ? "online" : "offline"}`} aria-label={worker.running ? workerAttentionLabel(worker) : "Sleeping"} />
                     </button>
+                    {canSleep ? (
+                      <button
+                        type="button"
+                        className="mobile-worker-sleep"
+                        disabled={busy}
+                        aria-label={`Put ${worker.name} to sleep`}
+                        onClick={() => { if (sessionId) void stopSession(sessionId); }}
+                      >Sleep</button>
+                    ) : null}
+                    </div>
                   );
                 })}
                 {mobileVisibleOrphanSessions.map((session) => (

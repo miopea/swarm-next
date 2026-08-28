@@ -465,6 +465,14 @@ test("opens the mobile worker picker without raising the keyboard over it", asyn
       workspace: "/workspace/sculpt-studio", autostart: false, position: 2, active_session_id: null,
       running: false, attention_state: "sleeping", created_at: 1, updated_at: 1,
     },
+    {
+      // A running worker that is not the Queen, so the picker has one it can
+      // actually offer to sleep. Added rather than waking an existing worker,
+      // because the Awake toggle below asserts that Sculpt Studio drops out.
+      id: "worker-realtruth", hive_id: "hive-1", name: "Realtruth", role: "worker", provider: "claude_code",
+      workspace: "/workspace/rcg-realtruth", autostart: false, position: 3, active_session_id: "realtruth-session",
+      running: true, attention_state: "buzzing", created_at: 1, updated_at: 1,
+    },
   ];
   const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
@@ -511,11 +519,26 @@ test("opens the mobile worker picker without raising the keyboard over it", asyn
   expect(queenBee?.getAttribute("class")).toContain("bee-queen");
   expect(queenBee?.getAttribute("class")).toContain("bee-available");
 
-  const platformBee = within(dialog).getByRole("button", { name: /Platform API/ }).querySelector(".bee-mascot");
+  const platformBee = within(dialog).getByRole("button", { name: /^Platform API/ }).querySelector(".bee-mascot");
   expect(platformBee?.getAttribute("class")).toContain("bee-worker");
   expect(platformBee?.getAttribute("class")).toContain("bee-sleeping");
   // Two different workers, two different bees — the point of the marks.
   expect(platformBee?.getAttribute("class")).not.toBe(queenBee?.getAttribute("class"));
+
+  // TWO ACTIONS ON THE PHONE, NOT THE RAIL'S SIX, decided rather than defaulted.
+  // Waking is the row's own tap; sleeping earns a target because noticing from
+  // away that something is running is the mobile case. It is a sibling button
+  // rather than a nested one, which HTML does not allow.
+  // Queen is never offered sleep, the same as on the rail.
+  expect(within(dialog).queryByRole("button", { name: /Put Queen to sleep/ })).not.toBeInTheDocument();
+  // A sleeping worker has nothing to stop, so it is not offered either.
+  expect(within(dialog).queryByRole("button", { name: /Put Platform API to sleep/ })).not.toBeInTheDocument();
+  // A running worker that is not the Queen is.
+  expect(within(dialog).getByRole("button", { name: "Put Realtruth to sleep" })).toBeInTheDocument();
+
+  // AND THE FOUR THAT STAY ON THE DESK SAY SO. An operator who goes looking for
+  // a control and cannot find it learns nothing about whether it exists.
+  expect(within(dialog).getByText(/on the desktop roster/)).toBeInTheDocument();
   expect(within(dialog).getByRole("button", { name: /^Queen/ })).toBeInTheDocument();
 
   // Narrowing it is the Awake toggle's job, which needs no typing.
