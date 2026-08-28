@@ -22,6 +22,38 @@ cat > "$SWARM_SYSTEMCTL_BIN" <<'EOF'
 #!/bin/sh
 set -eu
 printf '%s\n' "$*" >> "$HOME/systemctl.log"
+# is-active ANSWERS HONESTLY, by tracking what this stub was told to start and
+# stop. A stub that exits 0 for everything reports every unit as permanently
+# ACTIVE, so a caller that verifies its own stop waits forever — which is what
+# happened the first time swarm-package started checking, on 2026-08-28.
+#
+# It is worth saying why the stub had to grow this rather than the check being
+# softened: the check exists because `systemctl stop` returned on the operator's
+# machine while the terminal host was still running. A harness that cannot
+# represent "this unit is still up" cannot test the thing that broke.
+stub_state="$HOME/unit-state"
+mkdir -p "$stub_state"
+stub_verb=
+stub_units=
+stub_now=
+for stub_argument in "$@"; do
+  case "$stub_argument" in
+    --now) stub_now=1; continue;;
+    --*) continue;;
+  esac
+  if [ -z "$stub_verb" ]; then stub_verb=$stub_argument; else stub_units="$stub_units $stub_argument"; fi
+done
+stub_mark() { for stub_unit in $stub_units; do : > "$stub_state/$stub_unit"; done; }
+stub_clear() { for stub_unit in $stub_units; do rm -f "$stub_state/$stub_unit"; done; }
+case "$stub_verb" in
+  start|restart) stub_mark;;
+  enable) [ -z "$stub_now" ] || stub_mark;;
+  stop) stub_clear;;
+  disable) [ -z "$stub_now" ] || stub_clear;;
+  is-active)
+    for stub_unit in $stub_units; do [ -f "$stub_state/$stub_unit" ] || exit 3; done
+    exit 0;;
+esac
 EOF
 cat > "$SWARM_CURL_BIN" <<'EOF'
 #!/bin/sh
