@@ -859,7 +859,7 @@ apply_release() {
   host_release=$(release_from_link "$install_root/host-current")
   if [ -n "$host_release" ] && [ -f "$host_release/PROTOCOL" ] \
     && [ "$(cat "$host_release/PROTOCOL")" != "$(cat "$requested/PROTOCOL")" ]; then
-    apply_command=migrate-protocol
+    apply_command=migrate-protocol-if-idle
     migration_marker='protocol_migration=1
 '
     printf 'state=installing\nversion=%s\n%s' "$requested_version" "$migration_marker" > "$status_path"
@@ -1139,7 +1139,19 @@ reconcile_host() {
   if [ -z "$running_engine" ]; then
     [ "$current" != "$host_release" ] || { printf 'Terminal host link already at %s; running engine unknown\n' "$(basename "$current")"; return; }
   fi
-  [ "$(cat "$current/PROTOCOL")" = "$(cat "$host_release/PROTOCOL")" ] || die "terminal host protocol migration is required"
+  # A protocol change is not this function's to make: it moves host-current
+  # alone, and a host speaking a different protocol from the API is the exact
+  # pair the guard exists to prevent. It refuses -- but it must not refuse
+  # LOUDLY when a migration is already prepared and waiting for idle workers,
+  # because this runs on a 2-minute timer and would otherwise fill the journal
+  # with a failure for a state that is progressing normally.
+  if [ "$(cat "$current/PROTOCOL")" != "$(cat "$host_release/PROTOCOL")" ]; then
+    if pending_protocol_release >/dev/null 2>&1; then
+      printf 'Terminal host reconciliation is waiting on the prepared protocol migration\n'
+      return
+    fi
+    die "terminal host protocol migration is required"
+  fi
 
   SWARM_TERMINAL_SOCKET=$(terminal_socket) "$host_release/bin/swarmctl" drain >/dev/null
   drain_release=$host_release
@@ -1174,6 +1186,22 @@ reconcile_host() {
 
 reconcile_host_requested() {
   request_path="$state_root/worker-engine-maintenance.request"
+  # A PENDING PROTOCOL MIGRATION IS THIS UNIT'S JOB TOO.
+  #
+  # It is the only thing on a timer that already knows how to wait for workers
+  # to go idle, and a deferred migration needs exactly that. Handled before the
+  # engine check because the migration swaps the engine as part of its own
+  # atomic step -- reconciling the host first would move host-current under it.
+  if pending_protocol_release >/dev/null 2>&1; then
+    if [ -f "$request_path" ]; then
+      # The card's force path stops the sessions itself, then writes this file.
+      complete_protocol_migration
+      rm -f "$request_path"
+    else
+      complete_protocol_migration if-idle
+    fi
+    return
+  fi
   [ -f "$request_path" ] || { reconcile_host if-idle; return; }
   requested_at=$(sed -n 's/^requested_at=//p' "$request_path")
   now=$(date +%s)
@@ -1189,22 +1217,24 @@ reconcile_host_requested() {
   rm -f "$request_path"
 }
 
-migrate_protocol() {
-  validate_bundle
-  validate_config
-  new_release=$(install_release)
+# THE ACTIVATION HALF: swap the API and the host together, atomically.
+#
+# Separated from migrate_protocol so a DEFERRED migration can be completed
+# later from the release already installed, without the download the request
+# named -- which apply_release deletes, and which a Hive that deferred
+# overnight would not still have.
+activate_protocol_migration() {
+  new_release=$1
+  # Taken from the release rather than inherited: completing a DEFERRED
+  # migration never ran validate_bundle, so `version` -- which names the
+  # pre-migration database backup -- would otherwise be unset, and `set -u`
+  # aborts partway through an activation that has already stopped the target.
+  version=$(cat "$new_release/VERSION")
+  protocol=$(cat "$new_release/PROTOCOL")
   old_release=$(release_from_link "$install_root/current")
   host_release=$(release_from_link "$install_root/host-current")
   [ -n "$old_release" ] || die "no current release is installed"
   [ -n "$host_release" ] || die "no terminal host release is installed"
-  [ "$(cat "$host_release/PROTOCOL")" != "$protocol" ] || die "protocol is unchanged; use update and reconcile-host"
-
-  SWARM_TERMINAL_SOCKET=$(terminal_socket) "$host_release/bin/swarmctl" drain >/dev/null
-  drain_release=$host_release
-  status=$(SWARM_TERMINAL_SOCKET=$(terminal_socket) "$host_release/bin/swarmctl" status)
-  running=$(printf '%s\n' "$status" | sed -n 's/.*"running_sessions":[[:space:]]*\([0-9][0-9]*\).*/\1/p')
-  case "$running" in *[!0-9]*|"") die "terminal host returned invalid status";; esac
-  [ "$running" -eq 0 ] || die "protocol migration deferred; $running sessions remain"
 
   create_update_backup "$old_release" "$new_release"
 
@@ -1216,6 +1246,7 @@ migrate_protocol() {
 
   rollback_release=$old_release
   rollback_host_release=$host_release
+  fail_step=activate
   run_systemctl stop swarm.target || true
   activate_link "$new_release"
   activate_host_link "$new_release"
@@ -1225,11 +1256,102 @@ migrate_protocol() {
     rollback_release=
     rollback_host_release=
     update_rollback=
+    fail_step=
+    rm -f "$state_root/protocol-migration.pending"
     prune_superseded_releases
-    printf 'Swarm protocol migrated to %s and is healthy at %s\n' "$version" "$health_url"
+    printf 'Swarm protocol migrated to %s and is healthy at %s\n' "$(basename "$new_release")" "$health_url"
     return
   fi
   die "protocol migration failed health verification; previous release will be restored"
+}
+
+# The release a deferred migration is waiting to activate, or nothing.
+#
+# Validated as a path inside the managed release root before it is used: this
+# file decides what gets activated, and a marker naming somewhere else would
+# be an install of whatever wrote it.
+pending_protocol_release() {
+  pending_file="$state_root/protocol-migration.pending"
+  [ -f "$pending_file" ] || return 1
+  pending=$(tr -d '\r\n' < "$pending_file")
+  case "$pending" in
+    "$install_root"/releases/*) :;;
+    *) rm -f "$pending_file"; return 1;;
+  esac
+  [ -d "$pending" ] && [ -f "$pending/PROTOCOL" ] || { rm -f "$pending_file"; return 1; }
+  printf '%s' "$pending"
+}
+
+migrate_protocol() {
+  migrate_mode=${1:-required}
+  validate_bundle
+  validate_config
+  new_release=$(install_release)
+  host_release=$(release_from_link "$install_root/host-current")
+  [ -n "$host_release" ] || die "no terminal host release is installed"
+  [ "$(cat "$host_release/PROTOCOL")" != "$protocol" ] || die "protocol is unchanged; use update and reconcile-host"
+
+  SWARM_TERMINAL_SOCKET=$(terminal_socket) "$host_release/bin/swarmctl" drain >/dev/null
+  drain_release=$host_release
+  status=$(SWARM_TERMINAL_SOCKET=$(terminal_socket) "$host_release/bin/swarmctl" status)
+  running=$(printf '%s\n' "$status" | sed -n 's/.*"running_sessions":[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+  case "$running" in *[!0-9]*|"") die "terminal host returned invalid status";; esac
+  if [ "$running" -ne 0 ]; then
+    # DEFER, DO NOT FAIL. This used to die, and on a Hive with any worker
+    # running that made a released protocol change UNINSTALLABLE: apply_release
+    # deletes its request file before installing, and swarm-release-apply.path
+    # triggers on that file existing, so nothing ever retried. The control room
+    # showed a permanent "install failed" and the only way through was for a
+    # person to sleep every worker and re-trigger by hand.
+    #
+    # The worker engine update already had the answer and this did not copy it:
+    # cancel the drain, say so, return 0, and let swarm-host-reconcile.timer
+    # (every 2 minutes) finish the job when the workers go quiet.
+    if [ "$migrate_mode" = "if-idle" ]; then
+      SWARM_TERMINAL_SOCKET=$(terminal_socket) \
+        "$host_release/bin/swarmctl" cancel-drain >/dev/null 2>&1 || true
+      drain_release=
+      # The RELEASE is recorded, not the download: apply_release removes the
+      # download, and a Hive that defers overnight would have nothing to
+      # activate from in the morning.
+      printf '%s\n' "$new_release" > "$state_root/protocol-migration.pending"
+      printf 'Protocol migration to %s is prepared and deferred; %s sessions are active. It will apply itself when they are idle, or you can apply it now from the worker engine card.\n' \
+        "$version" "$running"
+      return
+    fi
+    die "protocol migration deferred; $running sessions remain"
+  fi
+
+  activate_protocol_migration "$new_release"
+}
+
+# Finish a migration that was prepared earlier and deferred.
+complete_protocol_migration() {
+  complete_mode=${1:-required}
+  pending=$(pending_protocol_release) || { printf 'No protocol migration is pending\n'; return; }
+  host_release=$(release_from_link "$install_root/host-current")
+  [ -n "$host_release" ] || die "no terminal host release is installed"
+  if [ "$(cat "$host_release/PROTOCOL")" = "$(cat "$pending/PROTOCOL")" ]; then
+    rm -f "$state_root/protocol-migration.pending"
+    printf 'Protocol migration is no longer needed; the host already speaks %s\n' "$(cat "$pending/PROTOCOL")"
+    return
+  fi
+  SWARM_TERMINAL_SOCKET=$(terminal_socket) "$host_release/bin/swarmctl" drain >/dev/null
+  drain_release=$host_release
+  status=$(SWARM_TERMINAL_SOCKET=$(terminal_socket) "$host_release/bin/swarmctl" status)
+  running=$(printf '%s\n' "$status" | sed -n 's/.*"running_sessions":[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+  case "$running" in *[!0-9]*|"") die "terminal host returned invalid status";; esac
+  if [ "$running" -ne 0 ]; then
+    if [ "$complete_mode" = "if-idle" ]; then
+      SWARM_TERMINAL_SOCKET=$(terminal_socket) \
+        "$host_release/bin/swarmctl" cancel-drain >/dev/null 2>&1 || true
+      drain_release=
+      printf 'Protocol migration remains deferred; %s sessions are active\n' "$running"
+      return
+    fi
+    die "protocol migration deferred; $running sessions remain"
+  fi
+  activate_protocol_migration "$pending"
 }
 
 uninstall_product() {
@@ -1257,6 +1379,9 @@ case "$action" in
   reconcile-host-if-idle) reconcile_host if-idle;;
   reconcile-host-requested) reconcile_host_requested;;
   migrate-protocol) migrate_protocol;;
+  migrate-protocol-if-idle) migrate_protocol if-idle;;
+  complete-protocol-migration) complete_protocol_migration;;
+  complete-protocol-migration-if-idle) complete_protocol_migration if-idle;;
   apply-release) apply_release;;
   uninstall) uninstall_product;;
   restore) restore_database;;

@@ -324,6 +324,32 @@ pub(crate) async fn start_development_reload(
     })
 }
 
+/// The protocol a prepared-but-deferred migration is waiting to activate.
+///
+/// A protocol change cannot be applied while a worker holds a terminal, so
+/// `swarm-package` prepares it and leaves a marker naming the installed
+/// release. The 2-minute reconcile timer completes it once the workers go
+/// quiet — this is what lets the operator say "not in two minutes, now".
+///
+/// Read from the release's own PROTOCOL rather than remembered, because the
+/// marker outlives the process that wrote it.
+pub(crate) fn pending_protocol_migration(state: &AppState) -> Option<u16> {
+    let marker = state
+        .release_state_root
+        .as_ref()?
+        .join("protocol-migration.pending");
+    let release = std::fs::read_to_string(marker).ok()?;
+    let release = std::path::Path::new(release.trim());
+    // The shell validates this path before acting on it; here it is only read
+    // to decide what to wait for, so a bad value costs a missing number and
+    // not an install.
+    std::fs::read_to_string(release.join("PROTOCOL"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
 async fn maintain_worker_engine_locked(
     state: &AppState,
 ) -> Result<WorkerEngineMaintenanceResponse, ApiError> {
@@ -335,7 +361,16 @@ async fn maintain_worker_engine_locked(
         )
     })?;
     let previous = host_status_snapshot(state).await?;
-    if !worker_engine_update_required(&previous) {
+    // A DEFERRED PROTOCOL MIGRATION IS ALSO WORK THIS CARD CAN DO.
+    //
+    // Without this the button was a no-op for exactly the case an operator
+    // most wants it: a prepared migration leaves BOTH symlinks on the old
+    // release, so the engine build ids match and the engine check reports
+    // nothing to do, while the Hive sits waiting for its workers to go idle.
+    let pending_protocol = pending_protocol_migration(state);
+    let awaiting_protocol =
+        pending_protocol.is_some_and(|wanted| wanted != previous.protocol_version);
+    if !worker_engine_update_required(&previous) && !awaiting_protocol {
         return Ok(WorkerEngineMaintenanceResponse {
             previous_version: previous.host_version.clone(),
             current_version: previous.host_version,
@@ -399,6 +434,12 @@ async fn maintain_worker_engine_locked(
             if let Ok(status) = host_status_snapshot(state).await
                 && !worker_engine_update_required(&status)
                 && !status.draining
+                // A protocol migration moves current and host-current TOGETHER,
+                // so the engine ids already agree before it runs and the engine
+                // condition alone would return the instant the drain cleared —
+                // reporting success while the old protocol was still serving.
+                // The host's own protocol_version is the fact that changes.
+                && pending_protocol.is_none_or(|wanted| status.protocol_version == wanted)
             {
                 return status;
             }

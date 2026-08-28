@@ -59,6 +59,32 @@ function workerEngineUpdate(
       busy: true,
     };
   }
+  // A PREPARED PROTOCOL MIGRATION, waiting for the workers to go quiet.
+  //
+  // Checked before the engine update because a migration swaps the engine as
+  // part of its own atomic step: reporting an engine update here would offer
+  // an action that moves host-current out from under the migration.
+  //
+  // It applies itself within two minutes of the last worker going idle. This
+  // exists so the operator does not have to wait for that, and it carries the
+  // same consequence as the engine update because it costs the same thing.
+  if (
+    health?.protocol_migration_pending !== undefined
+    && host !== undefined
+    && health.protocol_migration_pending !== host.protocol_version
+  ) {
+    return {
+      kind: "worker_engine",
+      label: "Protocol migration ready",
+      detail: host.running_sessions > 0
+        ? `An update that changes how Swarm talks to its worker engine is installed and waiting. It applies itself once your ${host.running_sessions} running worker${host.running_sessions === 1 ? "" : "s"} ${host.running_sessions === 1 ? "is" : "are"} idle, or you can apply it now.`
+        : "An update that changes how Swarm talks to its worker engine is installed and waiting. Nothing is running, so it applies within two minutes — or you can apply it now.",
+      busy: false,
+      action: "apply_worker_engine",
+      actionLabel: "Apply the protocol migration",
+      consequence: "Every loaded worker is stopped and brought back. Work in a terminal that has not been saved is lost, and each worker reconnects on the new engine.",
+    };
+  }
   if (workerEngineUpdateRequired(health, host)) {
     return {
       kind: "worker_engine",

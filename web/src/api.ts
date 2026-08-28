@@ -203,6 +203,13 @@ export type Health = {
   attachment_max_bytes?: number;
   /** What is switched off; absent on older builds, empty when nothing is. */
   degraded?: DegradedSubsystem[];
+  /**
+   * The protocol a prepared-but-deferred migration is waiting to activate.
+   *
+   * Absent when nothing is waiting, and on builds before 0.8.20. Carried on
+   * health because it has to reach a Hive with development mode off.
+   */
+  protocol_migration_pending?: number;
 };
 export type ProcessResources = {
   resident_memory_bytes: number | null;

@@ -2233,6 +2233,14 @@ struct HealthResponse {
     /// different places -- the status line for the first, this list for the
     /// second.
     degraded: Vec<DegradedSubsystem>,
+    /// The protocol a prepared-but-deferred migration is waiting to activate.
+    ///
+    /// Carried on health for the same reason as the size limit above: it is the
+    /// one thing every client already asks for, and this has to reach a Hive
+    /// with development mode switched off — which is every Hive but this one.
+    /// `None` when nothing is waiting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    protocol_migration_pending: Option<u16>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3501,6 +3509,7 @@ async fn mcp(State(state): State<Arc<AppState>>, request: axum::extract::Request
 }
 async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
     let degraded = state.degraded_subsystems().to_vec();
+    let protocol_migration_pending = crate::maintenance::pending_protocol_migration(&state);
     Json(HealthResponse {
         // Reported honestly, and it costs nothing: no client keys on this
         // field, and the updater never reads the body at all.
@@ -3513,6 +3522,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
         attachment_max_bytes: attachments::MAX_ATTACHMENT_BYTES,
         worker_engine_build_id: worker_engine_build_id(),
         degraded,
+        protocol_migration_pending,
     })
 }
 

@@ -335,3 +335,44 @@ test("a failure that recorded nothing does not invent a cause", () => {
   expect(status.detail).toContain("did not record why");
   expect(status.detail).not.toContain("did not compile");
 });
+
+/**
+ * The operator, 2026-08-28: "it should allow it to be forced with the same (or
+ * a similar prompt) that we get with the worker engine update."
+ *
+ * A prepared migration applies itself within two minutes of the workers going
+ * idle. This is the card that says so and offers not to wait.
+ */
+test("a prepared protocol migration is offered with the worker engine's prompt", () => {
+  const [status] = runtimeUpdates(
+    { status: "ok", version: "0.8.20", protocol_migration_pending: 10 },
+    { protocol_version: 9, host_version: "0.8.19", draining: false, running_sessions: 3, retained_sessions: 3 },
+    undefined,
+  );
+  expect(status.actionLabel).toBe("Apply the protocol migration");
+  expect(status.action).toBe("apply_worker_engine");
+  // The same consequence, because it costs the same thing.
+  expect(status.consequence).toContain("Every loaded worker is stopped and brought back");
+  expect(status.detail).toContain("3 running workers");
+  expect(status.detail).toContain("apply it now");
+});
+
+/** Nothing is offered once the host already speaks the new protocol. */
+test("a completed protocol migration stops being offered", () => {
+  const updates = runtimeUpdates(
+    { status: "ok", version: "0.8.20", protocol_migration_pending: 10 },
+    { protocol_version: 10, host_version: "0.8.20", draining: false, running_sessions: 3, retained_sessions: 3 },
+    undefined,
+  );
+  expect(updates.map((update) => update.actionLabel)).not.toContain("Apply the protocol migration");
+});
+
+/** A build that does not report the field must not produce a phantom card. */
+test("a Hive with no pending migration is unaffected", () => {
+  const updates = runtimeUpdates(
+    { status: "ok", version: "0.8.20" },
+    { protocol_version: 9, host_version: "0.8.19", draining: false, running_sessions: 1, retained_sessions: 1 },
+    undefined,
+  );
+  expect(updates.map((update) => update.actionLabel)).not.toContain("Apply the protocol migration");
+});

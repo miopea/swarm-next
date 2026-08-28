@@ -236,3 +236,105 @@ sh "$SWARM_INSTALL_ROOT/current/swarm-package" apply-release >/dev/null \
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "9.0.0" ] || fail "the host was left on the old protocol"
 grep -q 'protocol_migration=1' "$SWARM_STATE_ROOT/release-apply.status" \
   || fail "the status did not say a protocol migration was chosen"
+
+# --- A PROTOCOL CHANGE ON A HIVE THAT IS ACTUALLY BEING USED ----------------
+#
+# The test above runs with zero sessions, which is the one case that already
+# worked. The operator asked the right question on 2026-08-28 — "are you
+# creating something that literally will never be able to install on other
+# devices?" — and the answer was yes: migrate_protocol used to `die` on live
+# sessions, apply_release deletes its request file before installing, and
+# swarm-release-apply.path triggers on that file existing. So nothing ever
+# retried and the control room showed a permanent "install failed".
+make_bundle 11.0.0 8
+mkdir -p "$SWARM_STATE_ROOT/downloads"
+cp -r "$test_root/bundle-11.0.0" "$SWARM_STATE_ROOT/downloads/11.0.0"
+printf '3\n' > "$HOME/running-sessions"
+printf '%s\n' "$SWARM_STATE_ROOT/downloads/11.0.0" > "$SWARM_STATE_ROOT/release-apply.request"
+sh "$SWARM_INSTALL_ROOT/current/swarm-package" apply-release >/dev/null \
+  || fail "a protocol change on a busy Hive was reported as a failed install"
+
+# NOTHING WAS SWAPPED UNDER THE RUNNING WORKERS. That is the guard doing its job.
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "9.0.0" ] \
+  || fail "a deferred migration swapped the API anyway"
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "9.0.0" ] \
+  || fail "a deferred migration swapped the host anyway"
+grep -q '^state=installed$' "$SWARM_STATE_ROOT/release-apply.status" \
+  || fail "a deferred migration was reported as a failure"
+[ -f "$SWARM_STATE_ROOT/protocol-migration.pending" ] \
+  || fail "the deferred migration left nothing to retry"
+
+# THE PREPARED RELEASE IS RECORDED, NOT THE DOWNLOAD. apply_release removes the
+# download on success, so a Hive that defers overnight must not be pointed at it.
+pending_target=$(cat "$SWARM_STATE_ROOT/protocol-migration.pending")
+case "$pending_target" in
+  "$SWARM_INSTALL_ROOT"/releases/*) :;;
+  *) fail "the pending migration names something outside the release root: $pending_target";;
+esac
+[ -d "$pending_target" ] || fail "the pending migration names a release that is not there"
+
+# THE 2-MINUTE TIMER KEEPS DEFERRING WHILE THEY WORK, and does not fail.
+sh "$SWARM_INSTALL_ROOT/current/swarm-package" reconcile-host-requested >/dev/null \
+  || fail "the reconcile timer failed on a Hive with a pending migration"
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "9.0.0" ] \
+  || fail "the timer migrated while workers were running"
+
+# AND APPLIES IT THE MOMENT THEY GO IDLE, with nobody at the keyboard.
+printf '0\n' > "$HOME/running-sessions"
+sh "$SWARM_INSTALL_ROOT/current/swarm-package" reconcile-host-requested >/dev/null \
+  || fail "the reconcile timer did not complete the pending migration"
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "11.0.0" ] \
+  || fail "the API was not migrated once the workers went idle"
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "11.0.0" ] \
+  || fail "the host was left behind the API — the exact pair the guard prevents"
+[ ! -f "$SWARM_STATE_ROOT/protocol-migration.pending" ] \
+  || fail "a completed migration is still pending"
+
+# --- FORCING IT, the same way the worker engine card does -------------------
+#
+# The card stops the sessions itself and then writes the maintenance request.
+# This asserts the request drives a pending migration to completion, which is
+# what makes that button work for a protocol change as well as an engine one.
+make_bundle 12.0.0 9
+cp -r "$test_root/bundle-12.0.0" "$SWARM_STATE_ROOT/downloads/12.0.0"
+printf '2\n' > "$HOME/running-sessions"
+printf '%s\n' "$SWARM_STATE_ROOT/downloads/12.0.0" > "$SWARM_STATE_ROOT/release-apply.request"
+sh "$SWARM_INSTALL_ROOT/current/swarm-package" apply-release >/dev/null \
+  || fail "the second protocol change was not deferred cleanly"
+[ -f "$SWARM_STATE_ROOT/protocol-migration.pending" ] || fail "nothing pending to force"
+# The card's force: sessions stopped by the API, then the request written.
+printf '0\n' > "$HOME/running-sessions"
+printf 'requested_at=%s\ntarget_version=12.0.0\n' "$(date +%s)" > "$SWARM_STATE_ROOT/worker-engine-maintenance.request"
+sh "$SWARM_INSTALL_ROOT/current/swarm-package" reconcile-host-requested >/dev/null \
+  || fail "the forced migration did not run"
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "12.0.0" ] || fail "the forced migration did not apply"
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "12.0.0" ] || fail "the forced migration left the host behind"
+[ ! -f "$SWARM_STATE_ROOT/worker-engine-maintenance.request" ] \
+  || fail "the maintenance request was left to re-fire"
+
+printf 'protocol migration deferral passed\n'
+
+# THE PENDING MARKER DECIDES WHAT GETS ACTIVATED, so it is validated as a path
+# inside the managed release root. Without this, whatever could write that file
+# could name any directory and have it installed as the running release.
+mkdir -p "$test_root/not-a-managed-release"
+printf '99\n' > "$test_root/not-a-managed-release/PROTOCOL"
+printf '99.0.0\n' > "$test_root/not-a-managed-release/VERSION"
+printf '%s\n' "$test_root/not-a-managed-release" > "$SWARM_STATE_ROOT/protocol-migration.pending"
+before_forced=$(cat "$SWARM_INSTALL_ROOT/current/VERSION")
+sh "$SWARM_INSTALL_ROOT/current/swarm-package" reconcile-host-requested >/dev/null 2>&1 \
+  || fail "an out-of-tree pending marker crashed the reconcile timer"
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "$before_forced" ] \
+  || fail "a pending marker outside the release root was activated"
+[ ! -f "$SWARM_STATE_ROOT/protocol-migration.pending" ] \
+  || fail "the rejected marker was left to be retried forever"
+
+# A marker naming a path inside the release root that is not there is refused
+# the same way, rather than half-activating nothing.
+printf '%s\n' "$SWARM_INSTALL_ROOT/releases/does-not-exist" > "$SWARM_STATE_ROOT/protocol-migration.pending"
+sh "$SWARM_INSTALL_ROOT/current/swarm-package" reconcile-host-requested >/dev/null 2>&1 \
+  || fail "a missing pending release crashed the reconcile timer"
+[ ! -f "$SWARM_STATE_ROOT/protocol-migration.pending" ] \
+  || fail "a marker naming a missing release was left pending"
+
+printf 'pending marker validation passed\n'
