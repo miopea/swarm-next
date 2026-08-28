@@ -49,6 +49,33 @@ for tarball in "$@"; do
   [ -n "$bundle" ] || die "$name is not a Swarm release"
   version=$(tr -d '\r\n' < "$bundle/VERSION")
   protocol=$(tr -d '\r\n' < "$bundle/PROTOCOL")
+  # WHICH HIVES MAY BE OFFERED THIS, which is not always the protocol the
+  # release speaks.
+  #
+  # A Hive filters the manifest for offers whose protocol EQUALS its own
+  # compiled PROTOCOL_VERSION (swarm-domain offers_speaking), and a miss is
+  # reported as "current" — so publishing a protocol bump does not make a
+  # release hard to install, it makes it INVISIBLE while telling the operator
+  # they are up to date. 0.9.0 shipped that way on 2026-08-28: fully published,
+  # verified end to end, and unreachable by every Hive in the field.
+  #
+  # The manifest's protocol is a DISCOVERY filter and nothing else — the
+  # install reads the bundle's own PROTOCOL file — so declaring the protocol a
+  # target Hive speaks is what lets it see a release that `update` is then able
+  # to migrate onto. Set SWARM_OFFER_PROTOCOL to that number.
+  #
+  # ONLY SOUND WHEN THE FIELD CAN ACTUALLY INSTALL IT. test-field-upgrade.sh is
+  # the evidence: it drives the real swarm-package from each release tag and
+  # installs a protocol-bumping bundle through it. Do not set this for a bump
+  # that path has not been shown to survive.
+  if [ -n "${SWARM_OFFER_PROTOCOL:-}" ]; then
+    case "$SWARM_OFFER_PROTOCOL" in
+      *[!0-9]*|"") die "SWARM_OFFER_PROTOCOL must be a protocol number";;
+    esac
+    printf '%s: offering at protocol %s rather than the %s it speaks\n' \
+      "$name" "$SWARM_OFFER_PROTOCOL" "$protocol" >&2
+    protocol=$SWARM_OFFER_PROTOCOL
+  fi
   [ -f "$bundle/WORKER_ENGINE_BUILD_ID" ] || die "$name predates the recorded engine build id and cannot be offered"
   engine=$(tr -d '\r\n' < "$bundle/WORKER_ENGINE_BUILD_ID")
   case "$version" in
