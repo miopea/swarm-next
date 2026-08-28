@@ -1358,7 +1358,12 @@ activate_protocol_migration() {
   # garbage." The install had worked. A timeout that reports a working install
   # as broken is worse than a slow one, and it also triggers a rollback of
   # something that succeeded.
-  health_attempts=${SWARM_MIGRATION_HEALTH_ATTEMPTS:-240}
+  # DEFERS TO AN EXPLICIT SWARM_HEALTH_ATTEMPTS rather than overriding it. A
+  # caller that has already chosen a budget — a harness making a deliberate
+  # failure fail fast, or an operator who knows their machine — means it, and
+  # ignoring them turned every intentionally-unhealthy migration test into a
+  # four-minute wait.
+  health_attempts=${SWARM_MIGRATION_HEALTH_ATTEMPTS:-${SWARM_HEALTH_ATTEMPTS:-240}}
   stop_swarm_stack
   activate_link "$new_release"
   activate_host_link "$new_release"

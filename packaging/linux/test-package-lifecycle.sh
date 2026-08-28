@@ -480,7 +480,7 @@ done
 [ "$(cat "$SWARM_INSTALL_ROOT/previous/VERSION")" = "1.0.0" ]
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "1.0.0" ]
 grep -q '^--user restart swarm-api.service$' "$HOME/systemctl.log"
-if grep -Eq 'stop swarm.target|restart swarm-terminal-host.service' "$HOME/systemctl.log"; then
+if grep -Eq 'stop .*swarm\.target|stop .*swarm-terminal-host\.service|restart swarm-terminal-host\.service' "$HOME/systemctl.log"; then
   echo "compatible update touched the terminal host" >&2
   exit 1
 fi
@@ -707,7 +707,10 @@ printf '0
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "4.0.0" ]
 
 [ "$(cat "$SWARM_INSTALL_ROOT/previous/VERSION")" = "7.0.0" ]
-grep -q '^--user stop swarm.target$' "$HOME/systemctl.log"
+grep -qE '^--user stop .*swarm-terminal-host\.service' "$HOME/systemctl.log" \
+  || { echo "the migration did not stop the terminal host by name" >&2; exit 1; }
+grep -qE '^--user stop .*swarm\.target' "$HOME/systemctl.log" \
+  || { echo "the migration did not stop the target" >&2; exit 1; }
 grep -q '^--user enable --now swarm.target$' "$HOME/systemctl.log"
 
 # A failed protocol migration restores both independently pinned pointers.
