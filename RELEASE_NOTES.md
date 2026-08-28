@@ -12,6 +12,32 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 0.9.2
+
+**Take this if 0.9.0 or 0.9.1 would not install for you.** Both of them could
+fail on a machine where stopping Swarm takes a moment: the update carried on
+before the old worker engine had actually shut down, the new one could not talk
+to it, and after four minutes the update gave up and rolled itself back. It
+reported the failure as a health check problem, which it never was — so nothing
+on screen pointed at the real cause.
+
+**It still restarts your workers**, like 0.9.0 and 0.9.1: the app and the worker
+engine have to move together. Workers set to start automatically come back on
+their own; the rest need waking from the roster.
+
+**Copy your database first.** This carries schema migration 103:
+
+    cp ~/.local/state/swarm/swarm.sqlite3 ~/swarm-database-backup.sqlite3
+
+### Fixes
+- An update now confirms Swarm has actually stopped before replacing it, and
+  asks again if something has not shut down, rather than assuming and carrying
+  on. This is what stopped 0.9.0 and 0.9.1 installing
+- A failed update no longer blames the health check for something else going
+  wrong, so the message points at the step that actually failed
+- The worker engine card no longer reports the engine as current when it cannot
+  reach it at all — an unreachable engine now says so
+
 ## 0.9.1
 
 **Take this instead of 0.9.0.** It is the same update and it finishes. On a
