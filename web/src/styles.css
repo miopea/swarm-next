@@ -411,6 +411,29 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .runtime-status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .72rem; }
 .runtime-status.error { color: var(--bad); }
 
+/* MACHINE PRESSURE — the header's warning that the box itself is in trouble.
+   Three channels, deliberately: a shape (the glyph), text (the label) and a
+   hue. Colour alone fails anyone who cannot rely on it and this app targets
+   WCAG 2.1 AA, so removing this stylesheet entirely must still leave a
+   readable badge. Text colours are the -strong / --danger pairs rather than
+   --warn / --bad: --warn measures 1.93:1 on --warn-soft, which is why
+   --warn-strong exists. */
+.machine-pressure { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 8px; border-radius: 999px; border: 1px solid transparent; font-size: .68rem; font-weight: 700; line-height: 1.2; }
+.machine-pressure-glyph { flex: 0 0 auto; width: 13px; height: 13px; stroke: currentColor; fill: none; }
+.machine-pressure-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.machine-pressure.advisory { color: var(--warn-strong); background: var(--warn-soft); border-color: var(--warn); }
+.machine-pressure.critical { color: var(--danger); background: var(--bad-soft); border-color: var(--danger); }
+/* Unknown is deliberately NOT a warning colour. It is not a mild problem, it
+   is the absence of a reading, and borrowing the amber would say something
+   this state does not know. The dashed border carries it without colour. */
+.machine-pressure.unknown { color: var(--muted); background: var(--soft); border-color: var(--line); border-style: dashed; }
+/* Harness only — laying the states out for comparison. */
+.harness-machine-states { display: flex; flex-direction: column; gap: 18px; }
+.harness-machine-state { border: 1px solid var(--line); border-radius: 10px; padding: 4px 12px 12px; }
+.harness-machine-caption { margin: 10px 0 4px; font-size: .74rem; color: var(--muted); }
+.harness-machine-state .rail-footer { margin-top: 0; }
+.harness-machine-silent { font-size: .68rem; color: var(--muted); }
+
 .workspace {
   /* Keep xterm's accelerated canvas inside the replaceable workspace layer.
      Without an explicit paint boundary Chromium can keep the detached terminal
@@ -1853,6 +1876,14 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .start-worker-disclosure .start-worker { display: none; margin-top: 9px; padding: 10px 0 2px; }
   .start-worker-disclosure .start-worker.mobile-expanded { display: grid; }
   .rail-footer { display: none; }
+  /* EXCEPT when the machine is in trouble. Hiding this footer on a phone is
+     right for a version string and an update card — but the operator asked for
+     this warning so a Hive could not quietly take their machine down, and they
+     read Swarm on a phone. A warning that only reaches the desktop is not the
+     warning they asked for. Everything else in the footer stays hidden, so the
+     phone gains exactly the one line worth its screen. */
+  .rail-footer:has(.machine-pressure) { display: flex; flex-direction: row; padding: 8px 12px; border-top: 0; }
+  .rail-footer:has(.machine-pressure) > *:not(.machine-pressure) { display: none; }
   /* A phone cannot usefully open a second window, so detaching is not offered
      there at all. Making these permanently visible because touch has no hover
      was the wrong answer to the right observation — it put five controls in the

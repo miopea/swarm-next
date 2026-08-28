@@ -26,6 +26,7 @@ import {
   type DecisionSurface,
   createWorker,
   fetchHealth,
+  fetchRuntimeResources,
   fetchTerminalHostStatus,
   fetchJiraTaskLinks,
   retryJiraTaskLink,
@@ -111,6 +112,8 @@ import CommandPalette, { type CommandChoice } from "./navigation/CommandPalette"
 import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
 import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
 import BlockedEscalationCard from "./decisions/BlockedEscalationCard";
+import MachinePressureBadge from "./runtime/MachinePressureBadge";
+import { machinePressureNotice, type MachineResourceState } from "./runtime/machinePressure";
 import RuntimeUpdateConfirm from "./runtime/RuntimeUpdateConfirm";
 import HeldBriefingList from "./orchestration/HeldBriefingList";
 import WhatsNewModal from "./runtime/WhatsNewModal";
@@ -319,6 +322,33 @@ export function App() {
       .catch(() => undefined), 30_000);
     return () => { current = false; window.clearInterval(interval); };
   }, []);
+  // WHETHER THE MACHINE UNDERNEATH CAN TAKE ANY MORE. Swarm starts processes,
+  // and a Hive that quietly exhausts a box takes the operator's machine with
+  // it. The server has computed this for some time and ADR 0040 already
+  // refuses automatic starts against it; it was only ever RENDERED in
+  // Settings -> Diagnostics, which is not a screen anyone sits on while their
+  // machine is dying.
+  //
+  // A FAILED READ IS NOT SWALLOWED. The polls above end in
+  // `.catch(() => undefined)`, which is right for them — a malformed answer
+  // during a rolling update should not empty the attention queue. It is wrong
+  // here: silence is indistinguishable from a healthy machine, so a failure
+  // becomes `failed` and the header says so.
+  const [machineResources, setMachineResources] = useState<MachineResourceState>({ kind: "loading" });
+  useEffect(() => {
+    if (!operatorToken) {
+      setMachineResources({ kind: "loading" });
+      return;
+    }
+    let current = true;
+    const load = () => void fetchRuntimeResources(operatorToken)
+      .then((resources) => { if (current) setMachineResources({ kind: "ready", resources }); })
+      .catch(() => { if (current) setMachineResources({ kind: "failed" }); });
+    load();
+    const interval = window.setInterval(load, 30_000);
+    return () => { current = false; window.clearInterval(interval); };
+  }, [operatorToken]);
+  const machinePressure = machinePressureNotice(machineResources);
   const [repository, setRepository] = useState<RepositoryState | null>();
   const [popoutBlocked, setPopoutBlocked] = useState(false);
   // A window opened to show one surface shows exactly that: no navigation, no
@@ -1804,6 +1834,11 @@ export function App() {
             is mostly a misclick risk. */}
         {detached ? null : <div className="rail-footer">
           <RuntimeStatus state={loadState} developmentMode={developmentMode} />
+          {/* Beside the runtime line because it is about the machine that line
+              is running on. Silent when the machine is fine — a header that
+              shows something most of the day stops being read, which is the
+              failure this exists to prevent. */}
+          <MachinePressureBadge notice={machinePressure} />
           {/* One per subsystem rather than only the most severe: they are
               independent and can all be true at once, and ranking them into a
               single pill hid the others until the first was dealt with.

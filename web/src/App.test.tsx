@@ -821,6 +821,20 @@ test("creates a persisted task draft from the task board", async () => {
     if (String(url).includes("/api/v1/runtime/terminal-host")) {
       return Promise.resolve(ok({ type: "host_status", status: { host_version: "0.1.0", draining: false } }));
     }
+    // The header reads machine pressure so a Hive cannot quietly run the box
+    // out of memory. Named here for the same reason as every branch around it:
+    // the queue below is consumed in call order, and leaving this one unnamed
+    // shifted every queued response by one — this test then failed on a
+    // heading several calls away from the cause, exactly as the note below
+    // says the what's-new request once did.
+    if (String(url).includes("/api/v1/runtime/resources")) {
+      return Promise.resolve(ok({
+        sampled_at: 1,
+        policy: { mode: "observe_only", advisory_percent: 85, critical_percent: 95 },
+        api: { resident_memory_bytes: 1, pressure: "normal" },
+        terminal_host: { resident_memory_bytes: 1, pressure: "normal" },
+      }));
+    }
     if (String(url).endsWith("/integrations/email/awaiting-reply")) {
       return Promise.resolve(ok([]));
     }
