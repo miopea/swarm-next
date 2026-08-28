@@ -23,6 +23,35 @@ function refusalReason(code: string): string {
   return code;
 }
 
+/**
+ * What the install actually left behind — and the reason this is a function
+ * rather than a sentence.
+ *
+ * The card used to state "Nothing was changed and this Hive is still on X" on
+ * every failure, unconditionally, having never looked. That is comfortable and
+ * sometimes false: an install can move the version and then fail. It is the
+ * same defect as the reload announcing a compile error for a build that
+ * compiled, and it is worse than saying nothing, because a reader who believes
+ * it stops looking.
+ *
+ * `null` is the pre-0.8.20 status file, which recorded no such field. It gets
+ * no sentence at all rather than the old confident one.
+ */
+function changedSentence(changed: string | null, version: string): string | null {
+  if (changed === "nothing") return `Nothing was changed and this Hive is still on ${version}.`;
+  if (changed === "partial") return "Part of it was applied. This Hive may be between releases — check the version below before retrying.";
+  if (changed === "unknown") return "Whether anything changed could not be determined.";
+  return null;
+}
+
+/** The step named the way an operator thinks of it, not the way we spell it. */
+function stepName(step: string | null): string | null {
+  if (step === "accept") return "accepting the download";
+  if (step === "update") return "installing";
+  if (step === "migrate-protocol") return "migrating the worker engine";
+  return step;
+}
+
 type Props = {
   busy: boolean;
   operatorToken: string;
@@ -223,9 +252,11 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
           {status.offer?.notes_url && <p><a href={status.offer.notes_url} target="_blank" rel="noreferrer noopener">What changed in {status.offer.version}</a></p>}
           {status.apply_state === "failed" || status.apply_state === "refused" ? (
             <p className="form-error" role="alert">
-              The install did not run. Nothing was changed and this Hive is still on {status.current_version}.
+              The install failed{stepName(status.apply_step) ? <> while <strong>{stepName(status.apply_step)}</strong></> : null}.
+              {" "}{changedSentence(status.apply_changed, status.current_version)}
               {status.apply_reason ? <> Reason: <strong>{refusalReason(status.apply_reason)}</strong></> : null}
-              {" "}<code>journalctl --user -u swarm-release-apply.service -n 30</code> says more.
+              {status.apply_detail ? <> It said: <code>{status.apply_detail}</code></> : null}
+              {!status.apply_detail && !status.apply_reason ? <> <code>journalctl --user -u swarm-release-apply.service -n 30</code> says more.</> : null}
             </p>
           ) : null}
           {installed && status.apply_state !== "failed" && status.apply_state !== "refused" ? (

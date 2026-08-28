@@ -39,6 +39,9 @@ function status(overrides: Partial<ReleaseStatus> = {}): ReleaseStatus {
     downloaded_version: null,
     apply_state: null,
     apply_reason: null,
+    apply_step: null,
+    apply_detail: null,
+    apply_changed: null,
     ...overrides,
   };
 }
@@ -124,7 +127,7 @@ test("ignores an install failure recorded against a different release", async ()
   render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
 
   expect(await screen.findByText("Swarm 0.2.0 is available")).toBeInTheDocument();
-  expect(screen.queryByText(/The install did not run/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/The install failed/)).not.toBeInTheDocument();
 });
 
 /**
@@ -138,9 +141,57 @@ test("says the install did not run rather than quietly offering it again", async
   );
   render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
 
-  expect(await screen.findByText(/The install did not run/)).toBeInTheDocument();
-  expect(screen.getByText(/still on 0.1.0/)).toBeInTheDocument();
+  expect(await screen.findByText(/The install failed/)).toBeInTheDocument();
+  // A status file written before 0.8.20 carries no `changed`, and the card no
+  // longer supplies the sentence it used to state unconditionally. journalctl
+  // is the fallback for exactly this case and no longer the default.
+  expect(screen.queryByText(/still on 0.1.0/)).not.toBeInTheDocument();
   expect(screen.getByText(/swarm-release-apply.service/)).toBeInTheDocument();
+});
+
+/**
+ * THE CARD USED TO SAY THIS WITHOUT LOOKING.
+ *
+ * "Nothing was changed and this Hive is still on X" was printed on every
+ * failure. It is true here — the install never moved the version — and the
+ * point is that it is now REPORTED rather than assumed, so the next test can
+ * show the same card telling the truth when the opposite happened.
+ */
+test("says nothing changed only when the install reported that nothing changed", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(
+    status({
+      downloaded_version: "0.2.0",
+      apply_state: "failed",
+      apply_step: "update",
+      apply_changed: "nothing",
+      apply_detail: "swarm-package: the pre-update database backup could not be created",
+    }),
+  );
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+
+  expect(await screen.findByText(/The install failed/)).toBeInTheDocument();
+  expect(screen.getByText(/installing/)).toBeInTheDocument();
+  expect(screen.getByText(/still on 0.1.0/)).toBeInTheDocument();
+  expect(screen.getByText(/pre-update database backup/)).toBeInTheDocument();
+  // The whole point: the installer's own words replace the pointer at the journal.
+  expect(screen.queryByText(/swarm-release-apply.service/)).not.toBeInTheDocument();
+});
+
+/** The case the old copy got wrong: it moved the version and still failed. */
+test("does not claim nothing changed when the install left this Hive between releases", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(
+    status({
+      downloaded_version: "0.2.0",
+      apply_state: "failed",
+      apply_step: "update",
+      apply_changed: "partial",
+      apply_detail: "swarm-package: the new release did not come up healthy",
+    }),
+  );
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+
+  expect(await screen.findByText(/Part of it was applied/)).toBeInTheDocument();
+  expect(screen.queryByText(/Nothing was changed/)).not.toBeInTheDocument();
 });
 
 /** Downloading is reversible and installing is not, so they are two consents. */
@@ -234,7 +285,7 @@ test("says why the install unit refused, not just that it did", async () => {
   );
   render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
 
-  expect(await screen.findByText(/The install did not run/)).toBeInTheDocument();
+  expect(await screen.findByText(/The install failed/)).toBeInTheDocument();
   expect(screen.getByText(/is not a Swarm release/)).toBeInTheDocument();
 });
 

@@ -29,18 +29,70 @@ update_schema_before=
 update_auth=
 update_incoming=
 dev_config="$config_root/swarm-dev.env"
-dev_failure_reason=
-dev_failure_detail=
 dev_reload_started=
 dev_status_path=
 dev_build_root=
 dev_reload_revision=
 
-die() { printf 'swarm-package: %s\n' "$*" >&2; exit 1; }
+# THE FAILURE RECORD — one shape, every path.
+#
+# 87 of this script's failures call die() and 6 of them used to reach a status
+# file. The other 81 spoke only to the journal, which is why a reload that was
+# refused at install and a reload that genuinely did not compile arrived at the
+# operator as the same sentence, and why finding out which took a chain of
+# journalctl queries. That is the complaint this exists to answer.
+#
+# RECORDED AT THE EXIT, NOT AT THE THROW. Everything ends in on_exit — die()
+# exits, and `set -e` aborts do too — so writing the record there covers the
+# paths nobody remembered to instrument as well as the ones they did. A helper
+# that each die() had to call would only ever cover the calls someone updated.
+#
+# The four fields are the four questions an operator asks, in order:
+#   step    which part failed, named the way they think of it, not internally
+#   detail  what the failing thing itself said — its words, not our paraphrase
+#   changed whether anything was left different: nothing / rolled-back / partial
+#   next    the command that moves forward, when one exists
+#
+# `changed` is MAINTAINED BY THE CODE THAT CHANGES THINGS rather than concluded
+# afterwards. A surface saying "nothing was changed" when it never looked is the
+# same defect as saying "did not compile" about a build that compiled.
+fail_step=
+fail_detail=
+fail_changed=nothing
+fail_next=
+fail_status=
+fail_stamp=
+
+# The detail is the message unless a step already captured something better —
+# a compiler's own error line beats this function's summary of it.
+die() {
+  [ -n "$fail_detail" ] || fail_detail="swarm-package: $*"
+  printf 'swarm-package: %s\n' "$*" >&2
+  exit 1
+}
+
+# One line per field, and the value stripped of newlines because these files are
+# parsed as key=value: a detail carrying a newline becomes a key of its own and
+# silently corrupts every field after it.
+record_failure() {
+  [ -n "$1" ] || return 0
+  {
+    printf 'state=failed\n'
+    [ -z "$fail_stamp" ] || printf '%s\n' "$fail_stamp"
+    printf 'step=%s\n' "${fail_step:-unknown}"
+    printf 'detail=%s\n' "$(printf '%s' "$fail_detail" | tr -d '\r' | tr '\n' ' ' | cut -c1-300)"
+    printf 'changed=%s\n' "$fail_changed"
+    [ -z "$fail_next" ] || printf 'next=%s\n' "$fail_next"
+  } > "$1" 2>/dev/null || true
+}
 run_systemctl() { "$systemctl_bin" --user "$@"; }
 terminal_socket() { printf '%s/swarm/terminal.sock\n' "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; }
 
-# The one line worth showing from a failed step, bounded and newline-free.
+# The one line worth showing from ANY failed step, bounded and newline-free.
+#
+# Shared by the development reload and the release install: both delegate to a
+# tool that explains itself on stderr, and both used to throw that explanation
+# away.
 #
 # THE FIRST STRONG MATCH, NOT THE LAST. Cargo prints the cause first and a
 # summary last: `error[E0433]: failed to resolve` then `error: could not
@@ -56,7 +108,7 @@ terminal_socket() { printf '%s/swarm/terminal.sock\n' "${XDG_RUNTIME_DIR:-/run/u
 # Bounded and stripped of newlines because the status file is parsed as
 # key=value — a detail carrying a newline becomes a key of its own and corrupts
 # every field after it.
-dev_last_error() {
+last_error() {
   awk '
     cause == "" && /^(error(\[|:)|Error:|swarm-package:)/ { cause = $0 }
     weak == "" && /error|cannot|Cannot|failed|refus/ { weak = $0 }
@@ -145,13 +197,19 @@ on_exit() {
     rm -f "$state_root/swarm.sqlite3-wal" "$state_root/swarm.sqlite3-shm"
     run_systemctl start swarm-api.service >/dev/null 2>&1 || true
   fi
+  # THESE TWO BRANCHES ARE THE ONLY CODE THAT KNOWS A ROLLBACK RAN, so they are
+  # what set `changed`. Concluding it anywhere else would be a guess, and a
+  # surface telling an operator "nothing was changed" on a guess is the same
+  # defect as telling them a build did not compile when it did.
   if [ -n "$rollback_host_release" ] && [ -d "$rollback_host_release" ]; then
+    fail_changed=rolled-back
     activate_link "$rollback_release" >/dev/null 2>&1 || true
     activate_host_link "$rollback_host_release" >/dev/null 2>&1 || true
     install_units "$rollback_release" >/dev/null 2>&1 || true
     restore_update_database >/dev/null || true
     run_systemctl enable --now swarm.target >/dev/null 2>&1 || true
   elif [ -n "$rollback_release" ] && [ -d "$rollback_release" ]; then
+    fail_changed=rolled-back
     activate_link "$rollback_release" >/dev/null 2>&1 || true
     install_units "$rollback_release" >/dev/null 2>&1 || true
     restore_update_database >/dev/null || true
@@ -161,14 +219,13 @@ on_exit() {
     SWARM_TERMINAL_SOCKET=$(terminal_socket) \
       "$drain_release/bin/swarmctl" cancel-drain >/dev/null 2>&1 || true
   fi
-  if [ -n "$dev_reload_started" ] && [ -n "$dev_status_path" ]; then
-    if [ "$result" -eq 0 ]; then
-      printf 'state=ready\nrevision=%s\n' "$dev_reload_revision" > "$dev_status_path" 2>/dev/null || true
-    else
-      printf 'state=failed\nrevision=%s\nreason=%s\ndetail=%s\n' \
-        "$dev_reload_revision" "${dev_failure_reason:-unknown}" "${dev_failure_detail:-}" \
-        > "$dev_status_path" 2>/dev/null || true
-    fi
+  if [ -n "$dev_reload_started" ] && [ -n "$dev_status_path" ] && [ "$result" -eq 0 ]; then
+    printf 'state=ready\nrevision=%s\n' "$dev_reload_revision" > "$dev_status_path" 2>/dev/null || true
+  elif [ "$result" -ne 0 ]; then
+    # EVERY failing path lands here, including the ones that never thought about
+    # a status file. fail_status is empty for an operation that has no surface
+    # to report to, and record_failure returns without writing.
+    record_failure "$fail_status"
   fi
   [ -z "$dev_build_root" ] || clear_managed_directory "$dev_build_root"
   exit "$result"
@@ -186,6 +243,7 @@ prune_update_backups() {
 }
 
 create_update_backup() {
+  fail_step=backup
   current_release=$1
   # Used ONLY when the rollback target carries no swarmctl, and then only
   # against a copy. See the verification block below for why it is never the
@@ -261,17 +319,29 @@ create_update_backup() {
   # as on a fetched one. Opening the database also folds in any -wal beside it.
   if [ -x "$current_release/bin/swarmctl" ]; then
     "$current_release/bin/swarmctl" verify-database "$update_incoming" >/dev/null \
-      || die "pre-update database backup failed verification (source: $backup_source)"
+      || die "pre-update database backup failed verification (source: $backup_source)
+
+The install stopped before changing anything. Copy the database aside yourself and retry:
+
+    cp $state_root/swarm.sqlite3 $home_dir/swarm-database-backup.sqlite3"
   elif [ -n "$fallback_verifier" ] && [ -x "$fallback_verifier/bin/swarmctl" ]; then
     # Verify a COPY, so integrity is still proven and the backup itself is
     # never opened by a newer schema. The copy is byte-identical at the moment
     # it is checked, so the verdict transfers to the file we keep.
     cp -f "$update_incoming" "$update_incoming.check"
     "$fallback_verifier/bin/swarmctl" verify-database "$update_incoming.check" >/dev/null \
-      || die "pre-update database backup failed verification (source: $backup_source)"
+      || die "pre-update database backup failed verification (source: $backup_source)
+
+The install stopped before changing anything. Copy the database aside yourself and retry:
+
+    cp $state_root/swarm.sqlite3 $home_dir/swarm-database-backup.sqlite3"
     rm -f "$update_incoming.check" "$update_incoming.check-wal" "$update_incoming.check-shm"
   else
-    die "no swarmctl is available to verify the pre-update database backup"
+    die "no swarmctl is available to verify the pre-update database backup
+
+The install stopped before changing anything. Copy the database aside yourself and retry:
+
+    cp $state_root/swarm.sqlite3 $home_dir/swarm-database-backup.sqlite3"
   fi
   rm -f "$update_incoming-wal" "$update_incoming-shm"
   update_rollback="$state_root/backups/pre-update-$version.sqlite3"
@@ -279,6 +349,7 @@ create_update_backup() {
   mv -f "$update_incoming" "$update_rollback"
   update_incoming=
   prune_update_backups
+  fail_step=
 }
 
 # Put the database back where the release we are rolling back to can read it.
@@ -638,8 +709,11 @@ reload_development() {
   dev_host_release=$(release_from_link "$install_root/host-current")
   if [ -n "$dev_protocol" ] && [ -n "$dev_host_release" ] && [ -f "$dev_host_release/PROTOCOL" ] \
     && [ "$(cat "$dev_host_release/PROTOCOL")" != "$dev_protocol" ]; then
-    printf 'state=failed\nrevision=%s\nreason=protocol-change\n' \
-      "$(git -C "$dev_checkout" rev-parse --short=12 HEAD 2>/dev/null)" > "$dev_status_path" 2>/dev/null || true
+    fail_status=$dev_status_path
+    fail_stamp="revision=$(git -C "$dev_checkout" rev-parse --short=12 HEAD 2>/dev/null)"
+    fail_step=protocol-change
+    fail_changed=nothing
+    fail_next="migrate-protocol"
     die "this checkout speaks terminal-host protocol $dev_protocol and the installed host speaks $(cat "$dev_host_release/PROTOCOL"), so a reload cannot install it — a reload deliberately leaves the terminal host running, which is what keeps worker terminals alive.
 
 Build and migrate instead, which swaps the API and the host together. It STOPS EVERY WORKER, so do it when they are idle:
@@ -650,6 +724,8 @@ Build and migrate instead, which swaps the API and the host together. It STOPS E
   dev_reload_started=1
   dev_reload_revision=$(git -C "$dev_checkout" rev-parse --short=12 HEAD)
   [ -n "$dev_reload_revision" ] || die "development source revision is unavailable"
+  fail_status=$dev_status_path
+  fail_stamp="revision=$dev_reload_revision"
   printf 'state=building\nrevision=%s\n' "$dev_reload_revision" > "$dev_status_path"
   rm -f "$state_root/development-reload.request"
   dev_build_root="$state_root/development-build"
@@ -663,22 +739,22 @@ Build and migrate instead, which swaps the API and the host together. It STOPS E
   # only way to learn otherwise was journalctl. The operator: "it is taking a
   # lot of work to find errors."
   dev_log="$state_root/development-reload.log"
-  dev_failure_reason=build
+  fail_step=build
   if ! bundle_path=$("$dev_checkout/packaging/linux/build-development-release.sh" "$dev_build_root" 2>"$dev_log"); then
-    dev_failure_detail=$(dev_last_error "$dev_log")
+    fail_detail=$(last_error "$dev_log")
     cat "$dev_log" >&2 || true
     die "the development build did not compile"
   fi
   cat "$dev_log" >&2 || true
   [ -d "$bundle_path" ] || die "development builder did not return a release directory"
-  dev_failure_reason=install
+  fail_step=install
   if ! "$bundle_path/swarm-package" update "$bundle_path" 2>"$dev_log"; then
-    dev_failure_detail=$(dev_last_error "$dev_log")
+    fail_detail=$(last_error "$dev_log")
     cat "$dev_log" >&2 || true
     die "the development build compiled but could not be installed"
   fi
   cat "$dev_log" >&2 || true
-  dev_failure_reason=
+  fail_step=
 }
 
 # Installs a release the operator accepted in the control room.
@@ -700,15 +776,15 @@ apply_release() {
   requested_version=$(basename "$requested")
   case "$requested" in
     "$state_root"/downloads/*) :;;
-    *) printf 'state=refused\nversion=%s\nreason=outside-downloads\n' "$requested_version" > "$status_path"
+    *) printf 'state=refused\nversion=%s\nstep=accept\nreason=outside-downloads\nchanged=nothing\n' "$requested_version" > "$status_path"
        die "a release install must name a downloaded release";;
   esac
   [ -d "$requested" ] || {
-    printf 'state=refused\nversion=%s\nreason=missing\n' "$requested_version" > "$status_path"
+    printf 'state=refused\nversion=%s\nstep=accept\nreason=missing\nchanged=nothing\n' "$requested_version" > "$status_path"
     die "the requested release directory is not there"
   }
   [ -x "$requested/swarm-package" ] || {
-    printf 'state=refused\nversion=%s\nreason=not-a-release\n' "$requested_version" > "$status_path"
+    printf 'state=refused\nversion=%s\nstep=accept\nreason=not-a-release\nchanged=nothing\n' "$requested_version" > "$status_path"
     die "the requested directory is not a Swarm release"
   }
   printf 'state=installing\nversion=%s\n' "$requested_version" > "$status_path"
@@ -738,12 +814,44 @@ apply_release() {
   fi
   # The bundle verifies its own SHA256SUMS on update, so integrity does not
   # depend on whoever wrote the request having been honest.
-  if "$requested/swarm-package" "$apply_command" "$requested"; then
+  #
+  # THE INSTALLER'S OWN WORDS ARE KEPT. This used to write `state=failed` and a
+  # version and nothing else, so the control room said "The install did not run"
+  # and sent the operator to journalctl — for the one path a person is most
+  # likely to be standing in front of. The bundle knows exactly why it refused;
+  # the only reason that never reached anybody is that nobody caught its stderr.
+  apply_log="$state_root/release-apply.log"
+  if "$requested/swarm-package" "$apply_command" "$requested" 2>"$apply_log"; then
+    cat "$apply_log" >&2 || true
     printf 'state=installed\nversion=%s\n%s' "$requested_version" "$migration_marker" > "$status_path"
     rm -rf "$requested"
   else
-    printf 'state=failed\nversion=%s\n%s' "$requested_version" "$migration_marker" > "$status_path"
+    cat "$apply_log" >&2 || true
+    fail_status=$status_path
+    fail_stamp="version=$requested_version"
+    fail_step=$apply_command
+    fail_detail=$(last_error "$apply_log")
+    # WHAT THE NESTED BUNDLE LEFT BEHIND IS NOT VISIBLE FROM HERE. It runs its
+    # own rollback in its own process, and this one cannot see whether that
+    # worked. `unknown` is the honest answer; claiming "nothing was changed" —
+    # which is what the card said unconditionally — is the guess this task
+    # exists to remove.
+    fail_changed=$(apply_changed "$requested_version")
     die "the requested release did not install"
+  fi
+}
+
+# Whether the install left this Hive on a different version, READ BACK rather
+# than assumed. The bundle it delegated to has exited by now, so the installed
+# VERSION file is evidence and the exit status alone is not.
+apply_changed() {
+  installed_now=$(cat "$install_root/current/VERSION" 2>/dev/null || true)
+  if [ -z "$installed_now" ]; then
+    printf 'unknown'
+  elif [ "$installed_now" = "$1" ]; then
+    printf 'partial'
+  else
+    printf 'nothing'
   fi
 }
 

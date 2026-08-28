@@ -413,6 +413,12 @@ export type ReleaseStatus = {
   apply_state: "installing" | "installed" | "failed" | "refused" | null;
   /** Why it refused, when it did. */
   apply_reason: string | null;
+  /** Which step it failed at, in the operator's vocabulary. */
+  apply_step: string | null;
+  /** What the failing bundle itself said, one bounded line. */
+  apply_detail: string | null;
+  /** What the failure left behind, read back rather than assumed. */
+  apply_changed: "nothing" | "partial" | "unknown" | null;
 };
 
 export async function fetchReleaseStatus(operatorToken: string): Promise<ReleaseStatus> {

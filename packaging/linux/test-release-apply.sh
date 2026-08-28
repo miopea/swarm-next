@@ -135,6 +135,61 @@ if sh "$SWARM_INSTALL_ROOT/current/swarm-package" apply-release >/dev/null 2>&1;
   fail "apply-release with no request succeeded"
 fi
 
+# 5a. AN INSTALL THAT FAILS SAYS WHY, IN THE BUNDLE'S OWN WORDS.
+#
+# This is the path a person is most likely to be standing in front of, and it
+# used to write `state=failed` plus a version and nothing else — so the control
+# room said "The install did not run", named no cause, and pointed at
+# journalctl. The bundle always knew why; nobody caught its stderr.
+mkdir -p "$SWARM_STATE_ROOT/downloads/3.0.0"
+printf '3.0.0\n' > "$SWARM_STATE_ROOT/downloads/3.0.0/VERSION"
+# Matching the running host's protocol keeps this on the `update` path. Without
+# it apply-release correctly picks migrate-protocol, which is a different step
+# and would make this test measure the wrong one.
+cp "$SWARM_INSTALL_ROOT/host-current/PROTOCOL" "$SWARM_STATE_ROOT/downloads/3.0.0/PROTOCOL"
+cat > "$SWARM_STATE_ROOT/downloads/3.0.0/swarm-package" <<'EOF'
+#!/bin/sh
+echo "swarm-package: the pre-update database backup could not be created" >&2
+exit 1
+EOF
+chmod +x "$SWARM_STATE_ROOT/downloads/3.0.0/swarm-package"
+printf '%s\n' "$SWARM_STATE_ROOT/downloads/3.0.0" > "$SWARM_STATE_ROOT/release-apply.request"
+if sh "$SWARM_INSTALL_ROOT/current/swarm-package" apply-release >/dev/null 2>&1; then
+  fail "a failing install reported success"
+fi
+grep -q '^state=failed$' "$SWARM_STATE_ROOT/release-apply.status" \
+  || fail "the failed install was not reported as failed"
+grep -q '^step=update$' "$SWARM_STATE_ROOT/release-apply.status" \
+  || fail "the failed install did not name the step it failed at"
+grep -q '^detail=.*pre-update database backup' "$SWARM_STATE_ROOT/release-apply.status" \
+  || fail "the failed install did not carry the bundle's own words"
+
+# AND IT DOES NOT CLAIM NOTHING CHANGED WITHOUT LOOKING. The card said
+# "Nothing was changed and this Hive is still on X" unconditionally. Here the
+# installed VERSION is read back: it is still 1.0.0, so `nothing` is a finding
+# rather than a hopeful default.
+grep -q '^changed=nothing$' "$SWARM_STATE_ROOT/release-apply.status" \
+  || fail "the failed install did not record what it left behind"
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "1.0.0" ] || fail "the failing install changed the release"
+
+# The same field reports `partial` when the version DID move and the install
+# still failed — the case where "nothing was changed" would have been a lie.
+cat > "$SWARM_STATE_ROOT/downloads/3.0.0/swarm-package" <<'EOF'
+#!/bin/sh
+printf '3.0.0\n' > "$SWARM_INSTALL_ROOT/current/VERSION"
+echo "swarm-package: the new release did not come up healthy" >&2
+exit 1
+EOF
+chmod +x "$SWARM_STATE_ROOT/downloads/3.0.0/swarm-package"
+printf '%s\n' "$SWARM_STATE_ROOT/downloads/3.0.0" > "$SWARM_STATE_ROOT/release-apply.request"
+if sh "$SWARM_INSTALL_ROOT/current/swarm-package" apply-release >/dev/null 2>&1; then
+  fail "a half-completed install reported success"
+fi
+grep -q '^changed=partial$' "$SWARM_STATE_ROOT/release-apply.status" \
+  || fail "an install that moved the version still claimed nothing changed"
+printf '1.0.0\n' > "$SWARM_INSTALL_ROOT/current/VERSION"
+rm -rf "$SWARM_STATE_ROOT/downloads/3.0.0"
+
 # --- the engine carries forward when it did not change ---------------------
 #
 # "I thought we were supposed to quietly move the worker engine to the installed

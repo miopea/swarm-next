@@ -111,6 +111,22 @@ pub(super) struct ReleaseStatusResponse {
     /// "nothing happened", and both look like a card that goes back to
     /// offering the release it just accepted.
     apply_state: Option<String>,
+    /// Which step the install failed at, in the operator's vocabulary:
+    /// `accept`, `update`, or `migrate-protocol`.
+    apply_step: Option<String>,
+    /// What the failing bundle itself said, one bounded line.
+    ///
+    /// The install used to record a state and a version and nothing else, so
+    /// the card said "The install did not run" and sent the reader to
+    /// journalctl for a sentence the installer had already written down.
+    apply_detail: Option<String>,
+    /// What the failed install left behind: `nothing`, `partial`, `unknown`.
+    ///
+    /// READ BACK FROM THE INSTALLED VERSION, not concluded from the exit
+    /// status. The card asserted "Nothing was changed" on every failure
+    /// without ever looking, which is the same defect as a reload claiming a
+    /// build did not compile when it compiled.
+    apply_changed: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -310,6 +326,21 @@ fn build_status(state: &Arc<AppState>) -> Result<ReleaseStatusResponse, ApiError
             state,
             offer.as_ref().map(|offer| offer.version.as_str()),
             "reason=",
+        ),
+        apply_step: apply_field(
+            state,
+            offer.as_ref().map(|offer| offer.version.as_str()),
+            "step=",
+        ),
+        apply_detail: apply_field(
+            state,
+            offer.as_ref().map(|offer| offer.version.as_str()),
+            "detail=",
+        ),
+        apply_changed: apply_field(
+            state,
+            offer.as_ref().map(|offer| offer.version.as_str()),
+            "changed=",
         ),
         downloaded_version: download_root(state)
             .as_deref()

@@ -154,6 +154,9 @@ if [ "$(basename "$0")" = "swarmctl" ]; then
   printf '%s\n' "$command" >> "$HOME/swarmctl.log"
   if [ "$command" = "verify-database" ]; then
     cat "$(dirname "$0")/../VERSION" >> "$HOME/verify-release.log"
+    # A corrupt backup is otherwise unreachable from here, and the refusal it
+    # produces is one of the failures the operator named as uninformative.
+    [ ! -f "$HOME/verify-fails" ] || exit 1
   fi
   if [ "$command" = "status" ]; then
     running=0
@@ -307,7 +310,7 @@ case "$protocol_refusal" in
   *) echo "the reload refusal does not say the migration stops workers" >&2; exit 1;;
 esac
 [ ! -f "$HOME/the-builder-ran" ] || { echo "the reload built before refusing" >&2; exit 1; }
-grep -q '^reason=protocol-change$' "$SWARM_STATE_ROOT/development-reload.status" \
+grep -q '^step=protocol-change$' "$SWARM_STATE_ROOT/development-reload.status" \
   || { echo "the status did not record why the reload was refused" >&2; exit 1; }
 # Back to a checkout whose protocol agrees, so the rest of this file is unaffected.
 printf 'pub const PROTOCOL_VERSION: u16 = 5;\n' > "$dev_checkout/crates/swarm-terminal/src/ipc.rs"
@@ -341,14 +344,16 @@ grep -q '^state=failed$' "$SWARM_STATE_ROOT/development-reload.status"
 # the compiler had spoken or not — and on 2026-08-27 it said exactly that about
 # a build that compiled fine and was refused at install. state=failed is the
 # fact; reason and detail are what make it actionable without journalctl.
-grep -q '^reason=build$' "$SWARM_STATE_ROOT/development-reload.status" \
-  || { echo "a failed build did not record reason=build" >&2; exit 1; }
+grep -q '^step=build$' "$SWARM_STATE_ROOT/development-reload.status" \
+  || { echo "a failed build did not record step=build" >&2; exit 1; }
 grep -q '^detail=.*E0433' "$SWARM_STATE_ROOT/development-reload.status" \
   || { echo "the status did not carry the compiler's own error line" >&2; exit 1; }
 # One line, no newlines: the file is parsed as key=value, and a detail carrying
 # a newline would silently become a key of its own.
-[ "$(wc -l < "$SWARM_STATE_ROOT/development-reload.status")" -eq 4 ] \
-  || { echo "the failure status is not four lines" >&2; exit 1; }
+[ "$(wc -l < "$SWARM_STATE_ROOT/development-reload.status")" -eq 5 ] \
+  || { echo "the failure status is not five lines" >&2; exit 1; }
+grep -q '^changed=nothing$' "$SWARM_STATE_ROOT/development-reload.status" \
+  || { echo "a failed build did not record that nothing changed" >&2; exit 1; }
 
 # A build that COMPILES and is refused at install must not be called a compile
 # error. This is the case the operator hit.
@@ -371,7 +376,7 @@ if "$package" reload-development; then
   echo "a refused install unexpectedly succeeded" >&2
   exit 1
 fi
-grep -q '^reason=install$' "$SWARM_STATE_ROOT/development-reload.status" \
+grep -q '^step=install$' "$SWARM_STATE_ROOT/development-reload.status" \
   || { echo "a refused install was not recorded as an install failure" >&2; exit 1; }
 grep -q '^detail=.*protocol 10 and the installed host speaks 9' "$SWARM_STATE_ROOT/development-reload.status" \
   || { echo "the status did not carry the installer's own refusal" >&2; exit 1; }
@@ -453,6 +458,33 @@ fi
 [ "$(tail -n 1 "$HOME/verify-release.log")" = "1.0.0" ]
 [ "$(find "$SWARM_STATE_ROOT/backups" -maxdepth 1 -type f -name 'pre-update-*.sqlite3' | wc -l)" -eq 10 ]
 [ ! -e "$SWARM_STATE_ROOT/backups/pre-update-old-1.sqlite3" ]
+
+# A BACKUP THAT CANNOT BE VERIFIED SAYS WHAT TO DO NEXT.
+#
+# The operator named this one directly: "a pre-update database backup failed
+# ... which named neither the cause nor a way forward". Naming the cause and
+# stopping is only half an answer — a person standing in front of a refused
+# install needs the next command, and this one is a plain cp they can read and
+# decide about.
+touch "$HOME/verify-fails"
+backup_refusal=$("$package" update "$test_root/bundle-5.0.0" 2>&1 || true)
+rm -f "$HOME/verify-fails"
+case "$backup_refusal" in
+  *"backup failed verification"*) :;;
+  *) echo "the backup refusal does not name the cause: $backup_refusal" >&2; exit 1;;
+esac
+case "$backup_refusal" in
+  *"cp $SWARM_STATE_ROOT/swarm.sqlite3"*) :;;
+  *) echo "the backup refusal does not name a way forward: $backup_refusal" >&2; exit 1;;
+esac
+# It stopped BEFORE changing anything, and says so rather than leaving the
+# reader to guess which half of an update they are standing in.
+case "$backup_refusal" in
+  *"stopped before changing anything"*) :;;
+  *) echo "the backup refusal does not say whether anything changed" >&2; exit 1;;
+esac
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" != "5.0.0" ] \
+  || { echo "a refused backup still installed the release" >&2; exit 1; }
 
 # API rollback is also sidecar-safe while a worker is active.
 # A unit latched failed by an earlier crash loop is cleared before starting.
