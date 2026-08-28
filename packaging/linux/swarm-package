@@ -117,6 +117,56 @@ last_error() {
   ' "$1" 2>/dev/null | tr -d '\r' | tr '\n' ' ' | cut -c1-300
 }
 
+# The ONLY two commands in this script that hold the operator token, and the one
+# place their output is allowed to go.
+#
+# WHY THIS EXISTS. e74affc made a failing step's stderr into `detail`, a field
+# rendered on a card. That was the right fix for "it is taking a lot of work to
+# find errors", and it quietly changed the trust boundary of every byte those
+# commands print: what used to reach only a 0600 journal now reaches a surface.
+# curl is called with --config naming a file that contains
+# `header = "Authorization: Bearer <the operator token>"`.
+#
+# MEASURED, NOT ASSUMED. curl 8.5.0 does not echo config contents for our shape
+# on any failure tried — connection refused, HTTP error, unreadable config,
+# malformed config, unwritable output. It echoes an argument only when the
+# secret is written AS an option, which is not how we write it.
+#
+# That measurement is not the guarantee. It is one version of one tool, and the
+# guarantee has to hold for the next one. So the credential-bearing command's
+# output does not enter the captured stream AT ALL: it goes to a private file
+# that is deleted, and what reaches the operator is curl's exit code translated
+# into a sentence. Nothing this function emits is derived from curl's output,
+# which is a property of the code rather than a property of curl.
+#
+# NOT A DENYLIST. Nothing here scans for things that look like secrets. A
+# pattern that misses one shape reads as protection and is not, and this Hive
+# has spent a day removing checks that could not fail.
+authenticated_curl() {
+  auth_file=$1
+  shift
+  curl_noise="$state_root/.curl-stderr-$$"
+  curl_status=0
+  # `|| status=$?` rather than `if`: POSIX exempts a command failing inside an
+  # AND-OR list from `set -e`, so this records the code instead of aborting.
+  "$curl_bin" --config "$auth_file" "$@" 2>"$curl_noise" || curl_status=$?
+  rm -f "$curl_noise"
+  [ "$curl_status" -eq 0 ] && return 0
+  # curl's documented exit codes, which are curl's own vocabulary and carry no
+  # bytes from the request. This tells the operator MORE than the raw stderr
+  # line did, not less.
+  case "$curl_status" in
+    7)  curl_meaning="the API is not reachable";;
+    22) curl_meaning="the API refused the request";;
+    28) curl_meaning="the API did not answer in time";;
+    23|26) curl_meaning="a local file could not be read or written";;
+    *)  curl_meaning="the request failed";;
+  esac
+  printf 'swarm-package: %s (curl exit %s). Its output is withheld because this request carries the operator token.\n' \
+    "$curl_meaning" "$curl_status" >&2
+  return 1
+}
+
 # The schema a database file is at, without opening it.
 #
 # user_version is a 4-byte big-endian integer at offset 60 of the SQLite
@@ -273,8 +323,8 @@ create_update_backup() {
   #
   # --connect-timeout so an unreachable API costs five seconds rather than
   # the two minutes she waited before being told anything at all.
-  if "$curl_bin" --fail --silent --show-error --connect-timeout 5 --max-time 300 \
-    --config "$update_auth" --output "$update_incoming" \
+  if authenticated_curl "$update_auth" --fail --silent --show-error \
+    --connect-timeout 5 --max-time 300 --output "$update_incoming" \
     "${health_url%/health}/api/v1/backups/database"; then
     backup_source=api
   else
@@ -432,7 +482,9 @@ restore_database() {
   token=$(sed -n 's/^SWARM_OPERATOR_TOKEN=//p' "$config_root/swarm.env")
   umask 077
   printf 'header = "Authorization: Bearer %s"\n' "$token" > "$restore_auth"
-  "$curl_bin" --fail --silent --show-error --config "$restore_auth" --output "$restore_rollback" "${health_url%/health}/api/v1/backups/database" || die "could not create the pre-restore rollback backup"
+  authenticated_curl "$restore_auth" --fail --silent --show-error \
+    --output "$restore_rollback" "${health_url%/health}/api/v1/backups/database" \
+    || die "could not create the pre-restore rollback backup"
   rm -f "$restore_auth"
   restore_auth=
   "$current/bin/swarmctl" verify-database "$restore_rollback" >/dev/null || die "pre-restore rollback backup failed verification"

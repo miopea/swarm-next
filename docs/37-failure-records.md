@@ -89,6 +89,84 @@ what was left behind rather than reverting to the assumption it used to state.
 - **`next` is carried but rendered by only one surface.** The record has the
   field and the backup path writes prose; a card that renders `next` uniformly
   does not exist yet.
-- **Redaction is not implemented.** `detail` is a tool's own stderr and could in
-  principle carry a path or a value. Nothing scrubs it. Bounding it to one line
-  is not the same as making it safe, and this is the open risk in the design.
+- **`detail` is not scrubbed, and deliberately so.** See the section below: the
+  credential-bearing command's output is excluded at the source instead. No
+  pattern matching is applied to what does get through.
+
+
+## What can reach `detail`, enumerated
+
+The acceptance for this was "enumerated from the code rather than imagined", so
+this is the list, not a description of one.
+
+`fail_detail` is set in exactly four places:
+
+| Source | What it carries |
+| --- | --- |
+| `die()` fallback | our own message — every one is a literal we wrote |
+| `build-development-release.sh` stderr | cargo, vite, git. Handles no credential. |
+| nested `swarm-package update` stderr | its own messages, plus any unredirected child |
+| nested `swarm-package <apply>` stderr | the same |
+
+The last two are the ones that matter, because a nested `swarm-package` runs
+`create_update_backup`, which calls the API **with the operator token in an
+`Authorization` header**. Before this change, curl's stderr flowed straight into
+the captured stream and onto a rendered card.
+
+### What was measured, and why measuring was not enough
+
+curl 8.5.0 does not echo config-file contents for our shape on any failure
+tried — connection refused, HTTP 4xx, unreadable config, malformed config,
+unwritable `--output`. It echoes an argument only when the secret is written
+*as an option*, which is not how it is written here.
+
+**That is one version of one tool, and the guarantee has to hold for the next
+one.** So the measurement is recorded as background, not relied on.
+
+### The rule
+
+`authenticated_curl()` is the only caller that passes `--config`. Its stderr
+goes to a private file that is deleted; what reaches the operator is curl's
+**exit code**, translated through curl's own documented table:
+
+| Exit | Rendered as |
+| --- | --- |
+| 7 | the API is not reachable |
+| 22 | the API refused the request |
+| 28 | the API did not answer in time |
+| 23, 26 | a local file could not be read or written |
+
+Nothing that function emits is derived from curl's output. That is a property of
+this code, not a property of curl — which is the whole point.
+
+The unauthenticated health poll in `wait_for_health` still reports normally. It
+carries no credential, and narrowing it would cost diagnosis for nothing.
+
+### Not a denylist
+
+Nothing scans `detail` for things that look like secrets. A pattern that misses
+one shape reads as protection and is not. The guarantee here is that the
+credential-bearing command's bytes never enter the channel — which is testable
+by ablation, and is tested: the harness's curl stub speaks a token back
+deliberately, and the assertion is that it does not appear in the captured
+stream. No real curl was observed doing that; the test asserts the channel is
+closed rather than asserting curl's manners.
+
+### Where the record can travel
+
+Both rendering endpoints — `/api/v1/runtime/development` and
+`/api/v1/runtime/release` — require the operator token and return 401 without
+it. Nothing forwards `detail` to a notification, an email, or an off-box log.
+
+**But the control room can be published through the tunnel**, so "it is only
+ever loopback" is not a property this design may assume. That is the specific
+reason the 2026-08-27 token-in-transcript ruling does not transfer: that one
+turned on the API being loopback-only and both files being 0600 under one user.
+A rendered card has neither guarantee.
+
+### Still open
+
+`build-development-release.sh` output is captured verbatim. It handles no
+credential today, and a build script that started printing one would reach a
+card. Nothing enforces that — it is an observation about the current script,
+not a mechanism.

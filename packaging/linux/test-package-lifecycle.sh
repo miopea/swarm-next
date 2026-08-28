@@ -44,6 +44,14 @@ for argument in "$@"; do
   previous=$argument
 done
 if [ -n "$output" ]; then
+  # A curl that SPEAKS THE CREDENTIAL BACK. No released curl is known to do
+  # this for our config shape — that was measured — but the guarantee has to
+  # hold for the next version of the tool, so the test asserts the channel is
+  # closed rather than asserting curl's manners.
+  if [ -f "$HOME/curl-leaks" ]; then
+    printf 'curl: (26) Authorization: Bearer %s\n' "$(cat "$HOME/curl-leaks")" >&2
+    exit 26
+  fi
   cp "$SWARM_STATE_ROOT/swarm.sqlite3" "$output"
   exit 0
 fi
@@ -511,6 +519,38 @@ if grep -q 'swarm-terminal-host.service' "$HOME/systemctl.log"; then
   echo "API rollback touched the terminal host" >&2
   exit 1
 fi
+"$package" update "$test_root/bundle-2.0.0"
+
+# THE CREDENTIAL-BEARING COMMAND'S OUTPUT NEVER REACHES THE CAPTURED STREAM.
+#
+# e74affc turned a failing step's stderr into `detail`, a field rendered on a
+# card. curl is called with --config naming a file holding the operator token,
+# so every byte curl prints on a failure now travels somewhere it did not
+# before. This asserts the CHANNEL is closed, not that curl behaves: the stub
+# speaks a token back deliberately, which no real curl was observed doing.
+printf 'swarm_tok_TESTONLY_%s\n' "aaaabbbbcccc" > "$HOME/curl-leaks"
+leak_probe=$(cat "$HOME/curl-leaks")
+: > "$HOME/systemctl.log"
+update_noise=$("$package" update "$test_root/bundle-5.0.0" 2>&1 || true)
+rm -f "$HOME/curl-leaks"
+case "$update_noise" in
+  *"$leak_probe"*)
+    echo "the credential-bearing command's output reached the captured stream" >&2
+    exit 1;;
+esac
+# AND THE OPERATOR IS NOT LEFT WITH LESS. curl's exit code is translated into
+# curl's own vocabulary, so the failure still says what happened.
+case "$update_noise" in
+  *"a local file could not be read or written (curl exit 26)"*) :;;
+  *) echo "the withheld curl failure did not say what happened: $update_noise" >&2; exit 1;;
+esac
+case "$update_noise" in
+  *"output is withheld because this request carries the operator token"*) :;;
+  *) echo "the withholding was not explained" >&2; exit 1;;
+esac
+# The update still completed, because a failed API backup falls back to a copy.
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "5.0.0" ] \
+  || { echo "withholding curl's output broke the update" >&2; exit 1; }
 "$package" update "$test_root/bundle-2.0.0"
 
 # Host reconciliation drains atomically and refuses to stop an active worker.
