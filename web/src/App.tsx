@@ -2089,9 +2089,12 @@ export function App() {
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
                 <BlockedEscalationCard escalations={blockedEscalations} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
-                <HeldBriefingList briefings={heldBriefings} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <HeldDeliveryAttentionCard held={heldDeliveries} onOpenWorker={(name) => { const worker = workers.find((candidate) => candidate.name === name); if (worker) openWorker(worker.id); }} />
               </>}
+              /* BELOW THE REQUESTS, not above them. Queued briefings say of
+                 themselves that nothing is wrong; they were rendering ahead of
+                 questions the operator has to answer before work continues. */
+              trailingCards={<HeldBriefingList briefings={heldBriefings} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />}
               onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }}
               onFetchActivity={() => fetchRecentTaskActivity(operatorToken)}
               onResolve={resolveInboxDecision}

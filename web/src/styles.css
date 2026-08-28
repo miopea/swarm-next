@@ -1430,7 +1430,16 @@ button:active:not(:disabled) { transform: translateY(1px); }
 /* The answer to the heading's promise, before the evidence for it. */
 /* The reply itself, where the operator already is. Bounded, because a long one
    must not push the rest of the attention queue off the screen. */
-.unanswered-email-draft { max-height: 160px; margin: 8px 0 0; padding: 9px 11px; overflow-y: auto; border-left: 3px solid var(--accent-strong); border-radius: 0 var(--radius-md) var(--radius-md) 0; color: var(--text); background: var(--panel-soft); font-size: .76rem; line-height: 1.45; white-space: pre-wrap; }
+/* SIZED FOR A WHOLE REPLY, not for three of its paragraphs.
+   160px showed about three paragraphs of a five-paragraph draft, so the
+   operator was asked to approve text they could not see while "Send this
+   reply" sat live beside it. The cap STAYS — a previous round removed it,
+   buried every card below, then truncated to 45 words and cut replies
+   mid-sentence ("we jumped to the other ditch"). Drafts are written to about
+   150 words, so this is sized to fit one whole and to scroll only the
+   exception. vh as well as px so a phone does not get a box taller than its
+   screen. */
+.unanswered-email-draft { max-height: min(52vh, 460px); margin: 8px 0 0; padding: 9px 11px; overflow-y: auto; border-left: 3px solid var(--accent-strong); border-radius: 0 var(--radius-md) var(--radius-md) 0; color: var(--text); background: var(--panel-soft); font-size: .76rem; line-height: 1.45; white-space: pre-wrap; }
 .unanswered-email-failure { margin: 0 0 8px; padding: 8px 11px; border-left: 3px solid var(--danger); border-radius: 0 var(--radius-md) var(--radius-md) 0; color: var(--text); background: color-mix(in srgb, var(--danger) 12%, transparent); font-size: .78rem; line-height: 1.45; }
 .unanswered-email-draft small { display: block; margin-top: 6px; color: var(--muted); font-size: .68rem; font-variant-numeric: tabular-nums; white-space: normal; }
 .unanswered-email-editor { display: block; margin-top: 8px; }
@@ -2436,6 +2445,11 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
    Quiet on purpose: this is status, not a fault. It sits below the attention
    cards and borrows none of their colour, because a panel that looks urgent
    for a queue behaving correctly is how the urgent ones stop being read. */
+/* A measure, so a title and its metadata are not at opposite ends of a 1250px
+   row with the eye travelling the gap. */
+.held-briefing-group { display: grid; gap: 3px; margin-top: 10px; max-width: 78ch; }
+.held-briefing-group-heading { margin: 0; color: var(--muted); font-size: .72rem; }
+.held-briefing-group-heading strong { color: var(--text); font-weight: 600; }
 .held-briefing-list {
   display: grid;
   gap: 6px;

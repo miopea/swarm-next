@@ -515,3 +515,36 @@ test("an ordinary decision shows no command block", () => {
   render(<DecisionInbox decisions={[pending]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} />);
   expect(screen.queryByText("Command this would allow")).not.toBeInTheDocument();
 });
+
+/**
+ * ORDER IS THE RANKING. The operator's screenshot, 2026-08-28, showed the
+ * "Briefings waiting their turn" panel — whose own copy says "Nothing is wrong
+ * with these" — sitting ABOVE a Queen request asking four questions that block
+ * work. Everything in attentionCards renders above the list and therefore
+ * claims to outrank it; a panel that is not asking anything must not.
+ */
+test("panels that are not asking anything render below the requests", () => {
+  const { container } = render(
+    <DecisionInbox
+      decisions={[pending]}
+      tasks={[]}
+      workers={[]}
+      busy={false}
+      attentionCards={<p data-testid="urgent">Someone is waiting</p>}
+      trailingCards={<p data-testid="benign">Nothing is wrong with these</p>}
+      onResolve={vi.fn()}
+    />,
+  );
+
+  const urgent = container.querySelector('[data-testid="urgent"]');
+  const list = container.querySelector(".decision-list");
+  const benign = container.querySelector('[data-testid="benign"]');
+  expect(urgent).not.toBeNull();
+  expect(list).not.toBeNull();
+  expect(benign).not.toBeNull();
+
+  // DOCUMENT_POSITION_FOLLOWING: the node passed in comes later in the document.
+  if (!urgent || !list || !benign) throw new Error("the three regions must all render");
+  expect(urgent.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(list.compareDocumentPosition(benign) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});

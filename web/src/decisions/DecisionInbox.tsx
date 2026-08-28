@@ -29,13 +29,22 @@ type Props = {
   focusRequest?: number;
   additionalPendingCount?: number;
   attentionCards?: ReactNode;
+  /**
+   * Rendered BELOW the requests, for panels that are not asking anything.
+   *
+   * Everything in `attentionCards` sits above the list and therefore claims to
+   * outrank it. Queued briefings do not: their own copy says "Nothing is wrong
+   * with these", and they were rendering above questions the operator has to
+   * answer before work can continue.
+   */
+  trailingCards?: ReactNode;
   onOpenTask?: (taskId: string) => void;
   onFetchActivity?: () => Promise<TaskActivityPage>;
   onResolve: (decision: DecisionRequest, action: string, note: string, surface: DecisionSurface) => Promise<void>;
   onAnswer?: (decision: DecisionRequest, answers: Record<string, string[]>, note: string) => Promise<void>;
 };
 
-export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, additionalPendingCount = 0, attentionCards, onOpenTask, onFetchActivity, onResolve, onAnswer }: Props) {
+export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, additionalPendingCount = 0, attentionCards, trailingCards, onOpenTask, onFetchActivity, onResolve, onAnswer }: Props) {
   const [view, setView] = useState<"attention" | "activity">("attention");
   const [showResolved, setShowResolved] = useState(false);
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -303,6 +312,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
         </div>
       )}
       </>}
+      {trailingCards}
     </section>
   );
 }

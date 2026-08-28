@@ -38,28 +38,65 @@ export default function HeldBriefingList({ briefings, onOpenTask }: Props) {
         Nothing is wrong with these — Swarm is holding them until the worker is free. Worth a look
         only if one has been waiting far longer than the task ahead of it should take.
       </p>
-      <ul className="held-briefing-rows">
-        {briefings.map((briefing) => (
-          <li key={briefing.task_id}>
-            {/* Reset explicitly. A bare <button> in this app is the big filled
-                control, so a title left unstyled renders as a full-width gold
-                call to action — louder than the attention card above it, on a
-                panel whose whole point is that nothing is wrong. */}
-            <button
-              type="button"
-              className="held-briefing-title"
-              onClick={() => onOpenTask?.(briefing.task_id)}
-            >
-              {briefing.title}
-            </button>
-            <span className="held-briefing-detail">
-              {briefing.worker_name} · {holdReason(briefing)} · waiting {waitedFor(now - briefing.queued_at)}
-            </span>
-          </li>
-        ))}
-      </ul>
+      {/* GROUPED BY WORKER, because that is what the repetition actually is.
+          The operator's screenshot showed seven rows each ending
+          "BFG Watchfaces · the worker is on something else · waiting 41
+          minutes", four of them identical but for the title — the same fact
+          restated four times, with the eye travelling the width of the window
+          to read it each time.
+
+          By worker rather than by reason: the reason is the same sentence for
+          every row in that screenshot, so grouping on it makes one group and
+          explains nothing. "Four of these are behind one worker" is the fact
+          worth seeing, and it is what tells the operator whether to look. */}
+      {groupByWorker(briefings).map((group) => (
+        <section className="held-briefing-group" key={group.workerName}>
+          <p className="held-briefing-group-heading">
+            <strong>{group.workerName}</strong>
+            {" · "}{holdReason(group.briefings[0])}
+            {" · "}
+            {group.briefings.length === 1
+              ? `waiting ${waitedFor(now - group.briefings[0].queued_at)}`
+              : `${group.briefings.length} briefings, longest waiting ${waitedFor(now - Math.min(...group.briefings.map((briefing) => briefing.queued_at)))}`}
+          </p>
+          <ul className="held-briefing-rows">
+            {group.briefings.map((briefing) => (
+              <li key={briefing.task_id}>
+                {/* Reset explicitly. A bare <button> in this app is the big
+                    filled control, so a title left unstyled renders as a
+                    full-width gold call to action — louder than the attention
+                    card above it, on a panel whose whole point is that nothing
+                    is wrong. */}
+                <button
+                  type="button"
+                  className="held-briefing-title"
+                  onClick={() => onOpenTask?.(briefing.task_id)}
+                >
+                  {briefing.title}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
     </section>
   );
+}
+
+/**
+ * The briefings behind each worker, in the order the workers first appear.
+ *
+ * Insertion order rather than sorted, so a list the operator has already looked
+ * at does not reshuffle under them when one group gains a briefing.
+ */
+function groupByWorker(briefings: HeldBriefing[]): { workerName: string; briefings: HeldBriefing[] }[] {
+  const groups = new Map<string, HeldBriefing[]>();
+  for (const briefing of briefings) {
+    const existing = groups.get(briefing.worker_name);
+    if (existing) existing.push(briefing);
+    else groups.set(briefing.worker_name, [briefing]);
+  }
+  return [...groups].map(([workerName, grouped]) => ({ workerName, briefings: grouped }));
 }
 
 /**

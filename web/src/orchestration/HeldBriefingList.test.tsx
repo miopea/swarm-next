@@ -89,3 +89,39 @@ test("renders nothing when none are held", () => {
  * that reused a stale cache and then broke the operator's development build.
  * Filed rather than half-built.
  */
+
+/**
+ * The operator's screenshot, 2026-08-28: seven rows each ending "BFG Watchfaces
+ * · the worker is on something else · waiting 41 minutes", four identical but
+ * for the title. The same fact restated four times, with the eye travelling the
+ * width of the window to read it each time.
+ */
+test("briefings behind one worker are stated once, not once per row", () => {
+  const queued = Math.floor(Date.now() / 1000);
+  render(<HeldBriefingList briefings={[
+    briefing({ task_id: "a", title: "Procedural texture engines", worker_name: "BFG Watchfaces", reason: "worker_already_working", queued_at: queued - 2_460 }),
+    briefing({ task_id: "b", title: "Detect the target watch", worker_name: "BFG Watchfaces", reason: "worker_already_working", queued_at: queued - 2_460 }),
+    briefing({ task_id: "c", title: "Complication spacing", worker_name: "BFG Watchfaces", reason: "worker_already_working", queued_at: queued - 2_460 }),
+    briefing({ task_id: "d", title: "Correct a logged set's load", worker_name: "Sculpt Studio", reason: "worker_already_working", queued_at: queued - 1_260 }),
+  ]} />);
+
+  // Every title still reachable — grouping must not hide work.
+  for (const title of ["Procedural texture engines", "Detect the target watch", "Complication spacing", "Correct a logged set's load"]) {
+    expect(screen.getByRole("button", { name: title })).toBeInTheDocument();
+  }
+
+  // But the worker and its wait are said ONCE per worker, not once per row.
+  expect(screen.getAllByText(/BFG Watchfaces/)).toHaveLength(1);
+  expect(screen.getAllByText(/Sculpt Studio/)).toHaveLength(1);
+  // And the group says how many are behind that worker rather than repeating.
+  expect(screen.getByText(/3 briefings, longest waiting/)).toBeInTheDocument();
+});
+
+/** A worker with one briefing reads as one, not as "1 briefings". */
+test("a single briefing keeps its own waiting time", () => {
+  const { container } = render(<HeldBriefingList briefings={[briefing({ worker_name: "Platform" })]} />);
+  const heading = container.querySelector(".held-briefing-group-heading")?.textContent ?? "";
+  expect(heading).toContain("Platform");
+  expect(heading).toMatch(/waiting /);
+  expect(heading).not.toContain("1 briefings");
+});
