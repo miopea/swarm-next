@@ -498,6 +498,24 @@ test("opens the mobile worker picker without raising the keyboard over it", asyn
   // The whole roster is reachable by scrolling instead.
   expect(within(dialog).getByRole("button", { name: /Platform API/ })).toBeInTheDocument();
   expect(within(dialog).getByRole("button", { name: /Sculpt Studio/ })).toBeInTheDocument();
+
+  // THE PICKER SHOWS EACH WORKER'S OWN STATE, which is what the operator
+  // reported by email on 2026-08-24: "It does not seem like worker's state is
+  // being updated in mobile on the picker."
+  //
+  // The mobile picker built its own row and passed BeeMascot only an
+  // expression — no role and no mark — so every worker there wore the default
+  // bee and the Queen was drawn as a worker, whatever their actual state. It
+  // reads from the same roster as the rail now, through the shared avatar.
+  const queenBee = within(dialog).getByRole("button", { name: /Queen/ }).querySelector(".bee-mascot");
+  expect(queenBee?.getAttribute("class")).toContain("bee-queen");
+  expect(queenBee?.getAttribute("class")).toContain("bee-available");
+
+  const platformBee = within(dialog).getByRole("button", { name: /Platform API/ }).querySelector(".bee-mascot");
+  expect(platformBee?.getAttribute("class")).toContain("bee-worker");
+  expect(platformBee?.getAttribute("class")).toContain("bee-sleeping");
+  // Two different workers, two different bees — the point of the marks.
+  expect(platformBee?.getAttribute("class")).not.toBe(queenBee?.getAttribute("class"));
   expect(within(dialog).getByRole("button", { name: /^Queen/ })).toBeInTheDocument();
 
   // Narrowing it is the Awake toggle's job, which needs no typing.
