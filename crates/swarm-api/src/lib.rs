@@ -1370,9 +1370,14 @@ impl AppState {
                     &format!("wake:{}", item.task_id),
                     Some(worker_id),
                     None,
+                    // NAMES THE CAUSE, not just the mechanism. "Not currently
+                    // admitted" told the operator a start had been refused and
+                    // left them unable to tell a machine out of memory from a
+                    // broken coordinator — and those want opposite responses.
                     &format!(
-                        "{} is not running and this Hive is not currently admitted to start it, so this work cannot be delivered",
-                        item.worker_name
+                        "{} is not running and cannot be started: {}. This work cannot be delivered until that clears.",
+                        item.worker_name,
+                        admission.refusal_reason()
                     ),
                     unix_timestamp(),
                 );
@@ -9138,6 +9143,119 @@ mod tests {
         assert_eq!(status.queued_actions, 1);
         assert_eq!(status.uncertain_actions, 0);
         assert_eq!(status.completed_actions, 0);
+    }
+
+    /// A refused start names the CAUSE, not just that it was refused.
+    ///
+    /// The refusal already reached the operator — it becomes a held-delivery
+    /// card and escalates after twelve hours — but it only said this Hive "is
+    /// not currently admitted", which is the mechanism. An operator reading
+    /// that cannot tell a machine out of memory from a broken coordinator, and
+    /// those two want opposite responses: close something, or come and look at
+    /// Swarm.
+    #[tokio::test]
+    async fn a_start_refused_for_pressure_tells_the_operator_which_pressure() {
+        for (admission, expected) in [
+            (
+                runtime::CoordinatorStartAdmission::DeferredCritical,
+                "critically short of memory",
+            ),
+            (
+                runtime::CoordinatorStartAdmission::DeferredAdvisory,
+                "under memory pressure",
+            ),
+            (
+                runtime::CoordinatorStartAdmission::DeferredUnavailable,
+                "cannot read this machine's resources",
+            ),
+        ] {
+            let store = TaskStore::in_memory().unwrap();
+            let queen = store.ensure_queen("/workspace/queen").unwrap();
+            let worker = store
+                .create_worker(
+                    "Sculpt Studio",
+                    ProviderKind::ClaudeCode,
+                    "/workspace/sculpt",
+                    false,
+                    1,
+                )
+                .unwrap();
+            let task = store
+                .create_task("Work that waits", "/workspace/sculpt")
+                .unwrap();
+            store.transition_task(task.id, TaskState::Ready).unwrap();
+            store
+                .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::worker(queen.id))
+                .unwrap();
+
+            AppState::default()
+                .run_deterministic_worker_wakes(&store, admission)
+                .await;
+
+            // Read through the surface the operator's queue reads.
+            let refusal = store
+                .standing_coordinator_refusals(unix_timestamp(), 0)
+                .unwrap()
+                .into_iter()
+                .find(|entry| entry.kind == swarm_persistence::REFUSAL_WAKE_NOT_ADMITTED)
+                .expect("a refused start is recorded as a refusal");
+            assert!(
+                refusal.reason.contains("Sculpt Studio"),
+                "{}",
+                refusal.reason
+            );
+            assert!(refusal.reason.contains(expected), "{}", refusal.reason);
+        }
+    }
+
+    /// AND IT SAYS NOTHING WHEN NOTHING IS WRONG.
+    ///
+    /// This is the acceptance line that actually constrains the design: a
+    /// channel that fires while the machine is fine is worse than no channel,
+    /// because it teaches the operator to ignore the one that matters. The
+    /// protection is structural rather than a threshold — a refusal exists only
+    /// when a start was OWED and denied, so an admitted Hive records nothing no
+    /// matter how much work is queued.
+    ///
+    /// ABLATION: make `permits_start` return false for `Allowed` and this
+    /// fails.
+    #[tokio::test]
+    async fn an_admitted_hive_records_no_pressure_refusal_however_much_is_waiting() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        for index in 0..5 {
+            let worker = store
+                .create_worker(
+                    &format!("Worker {index}"),
+                    ProviderKind::ClaudeCode,
+                    "/workspace/busy",
+                    false,
+                    index + 1,
+                )
+                .unwrap();
+            let task = store
+                .create_task(&format!("Queued work {index}"), "/workspace/busy")
+                .unwrap();
+            store.transition_task(task.id, TaskState::Ready).unwrap();
+            store
+                .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::worker(queen.id))
+                .unwrap();
+        }
+
+        AppState::default()
+            .run_deterministic_worker_wakes(&store, runtime::CoordinatorStartAdmission::Allowed)
+            .await;
+
+        let pressure_refusals = store
+            .standing_coordinator_refusals(unix_timestamp(), 0)
+            .unwrap()
+            .into_iter()
+            .filter(|entry| entry.kind == swarm_persistence::REFUSAL_WAKE_NOT_ADMITTED)
+            .count();
+        assert_eq!(
+            pressure_refusals, 0,
+            "an admitted Hive must not report pressure it is not under"
+        );
     }
 
     /// A wake that fails says WHY, durably, where the board can be read.

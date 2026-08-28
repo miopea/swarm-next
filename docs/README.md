@@ -89,6 +89,7 @@ Current decision records:
 - [ADR 0045: Engaged-device terminal geometry](decisions/0045-engaged-device-terminal-geometry.md)
 - [ADR 0047: Transparent developer guidance](decisions/0047-transparent-developer-guidance.md)
 - [ADR 0048: Workers use the default Claude configuration location](decisions/0048-default-claude-configuration-location.md)
+- [ADR 0058: Machine pressure reaches the operator on consequence](decisions/0058-machine-pressure-reaches-the-operator-on-consequence.md)
 35. [Worker shell and temporary alternate-provider workers](36-worker-shell-and-temporary-providers.md)
 36. [Failure records — one shape for every failure](37-failure-records.md)
 37. [Looking at the interface](38-looking-at-the-interface.md)

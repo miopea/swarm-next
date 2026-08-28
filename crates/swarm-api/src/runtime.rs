@@ -230,6 +230,38 @@ impl CoordinatorStartAdmission {
     pub(super) const fn permits_start(self) -> bool {
         matches!(self, Self::Allowed)
     }
+
+    /// Why a start was refused, in the operator's terms rather than the
+    /// admission code's.
+    ///
+    /// The refusal already reached them — it becomes a held-delivery card and
+    /// escalates after twelve hours — but it only said the Hive "is not
+    /// currently admitted to start it", which names the mechanism and not the
+    /// cause. An operator reading that cannot tell a machine under memory
+    /// pressure from a broken coordinator, and those want opposite responses:
+    /// one is "close something", the other is "come and look at Swarm".
+    ///
+    /// This is the second place machine pressure reaches the operator, and it
+    /// is deliberately the only one besides the header. It fires on a
+    /// CONSEQUENCE — work that could not be delivered — rather than on a gauge
+    /// crossing a line, so it cannot cry wolf while the machine is merely busy
+    /// and nothing is waiting.
+    pub(super) const fn refusal_reason(self) -> &'static str {
+        match self {
+            // Not a refusal at all; present so the match stays total if a
+            // caller ever asks about an admitted start.
+            Self::Allowed => "this Hive is admitted to start workers",
+            Self::DeferredAdvisory => {
+                "this machine is under memory pressure, so Swarm is not starting more workers until it eases"
+            }
+            Self::DeferredCritical => {
+                "this machine is critically short of memory, so Swarm has stopped starting workers to avoid taking the machine down"
+            }
+            Self::DeferredUnavailable => {
+                "Swarm cannot read this machine's resources, so it will not start more workers while it cannot tell whether that is safe"
+            }
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
