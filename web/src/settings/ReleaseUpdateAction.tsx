@@ -52,6 +52,46 @@ function stepName(step: string | null): string | null {
   return step;
 }
 
+/**
+ * What installing this release does to the workers that are running now.
+ *
+ * THE SENTENCE THIS REPLACES WAS UNCONDITIONAL. "Your workers keep running" is
+ * true of an ordinary release and the exact opposite of what a protocol change
+ * does — it swaps the API and the engine together and ends every session.
+ * v0.9.0 shipped saying it. This is the screen someone reads while deciding
+ * whether to install now or wait, so the cost of the wrong sentence lands
+ * entirely on the person who trusted it.
+ *
+ * UNKNOWN IS ITS OWN ANSWER, and that is the point rather than a nicety. When
+ * the Hive cannot tell — no readable protocol on the offer, or a host that did
+ * not answer — folding that into "your workers keep running" renders the
+ * failing case as the reassuring one. That is the shape this fleet keeps
+ * producing, so it says it does not know and lets the operator decide.
+ */
+function installConsequence(carriesProtocolChange: boolean | null) {
+  if (carriesProtocolChange === true) {
+    return (
+      <p className="form-error" role="alert">
+        <strong>This one stops your workers.</strong> It changes how Swarm talks to the
+        worker engine, and the two have to move together — so every worker session ends
+        and starts again. Workers that were loaded are brought back afterwards. Unsaved
+        work in a terminal is lost.
+      </p>
+    );
+  }
+  if (carriesProtocolChange === false) {
+    return <p>Installing this updates the app and API. Your workers keep running — Swarm restarts the API and leaves the terminal engine they are attached to alone.</p>;
+  }
+  return (
+    <p>
+      Swarm could not check whether this release changes how it talks to the worker
+      engine, so it cannot promise your workers keep running. Most releases leave them
+      alone; one that changes the engine protocol ends every session. Install when you
+      can afford to lose the running terminals.
+    </p>
+  );
+}
+
 type Props = {
   busy: boolean;
   operatorToken: string;
@@ -245,7 +285,7 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
 
       {offered && !status.development_build && (
         <>
-          <p>Installing this updates the app and API. Your workers keep running — Swarm restarts the API and leaves the terminal engine they are attached to alone.</p>
+          {installConsequence(status.carries_protocol_change)}
           {status.carries_new_worker_engine && (
             <p>It also carries a newer worker engine. That part is <strong>deferred while any worker is running</strong> and applied once they are idle, or when you ask for it from the worker engine card. Applying it restarts workers and brings back the ones loaded from their saved conversations.</p>
           )}

@@ -35,6 +35,7 @@ function status(overrides: Partial<ReleaseStatus> = {}): ReleaseStatus {
     },
     upgrade_available: true,
     carries_new_worker_engine: false,
+    carries_protocol_change: false,
     commits_ahead_of_release: null,
     downloaded_version: null,
     apply_state: null,
@@ -192,6 +193,43 @@ test("does not claim nothing changed when the install left this Hive between rel
 
   expect(await screen.findByText(/Part of it was applied/)).toBeInTheDocument();
   expect(screen.queryByText(/Nothing was changed/)).not.toBeInTheDocument();
+});
+
+/**
+ * THE SENTENCE v0.9.0 SHIPPED, in front of an operator whose workers were about
+ * to stop. "Your workers keep running" was unconditional; a protocol change
+ * swaps the API and the engine together and ends every session.
+ */
+test("a protocol release says it stops the workers, not that they keep running", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({ carries_protocol_change: true }));
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+
+  expect(await screen.findByText(/This one stops your workers/)).toBeInTheDocument();
+  expect(screen.getByText(/every worker session ends/)).toBeInTheDocument();
+  expect(screen.queryByText(/Your workers keep running/)).not.toBeInTheDocument();
+});
+
+/** An ordinary release keeps the wording that is true of it. */
+test("an ordinary release still says workers keep running", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({ carries_protocol_change: false }));
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+
+  expect(await screen.findByText(/Your workers keep running/)).toBeInTheDocument();
+  expect(screen.queryByText(/stops your workers/)).not.toBeInTheDocument();
+});
+
+/**
+ * THE CASE THE BRIEF CALLED LOAD-BEARING. When the Hive cannot tell, the card
+ * must not fall back to the reassuring sentence — that renders the failing case
+ * as the safe one, which is the shape this fleet keeps producing.
+ */
+test("a release whose effect cannot be determined does not promise workers keep running", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({ carries_protocol_change: null }));
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+
+  expect(await screen.findByText(/could not check/)).toBeInTheDocument();
+  expect(screen.queryByText(/Your workers keep running/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/This one stops your workers/)).not.toBeInTheDocument();
 });
 
 /** Downloading is reversible and installing is not, so they are two consents. */

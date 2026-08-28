@@ -87,6 +87,18 @@ pub(super) struct ReleaseStatusResponse {
     /// moment of consent; the consequence is a deferred engine update, not an
     /// immediate stop.
     carries_new_worker_engine: bool,
+    /// Whether installing this release ends every worker session.
+    ///
+    /// TRI-STATE ON PURPOSE. `Some(true)` changes the terminal-host protocol,
+    /// which swaps the API and the engine together and stops every session.
+    /// `Some(false)` does not. `None` means this Hive could not tell — the host
+    /// did not answer, or the offer carries no readable protocol.
+    ///
+    /// A bool would have to fold "cannot tell" into one of the two answers, and
+    /// folding it into `false` renders the unknown case as the reassuring one.
+    /// That is the shape that put "your workers keep running" in front of an
+    /// operator whose workers were about to stop.
+    carries_protocol_change: Option<bool>,
     /// How many commits this working copy is ahead of the released tag.
     ///
     /// The version strings alone say nothing: a working copy and the release it
@@ -155,11 +167,40 @@ pub(super) async fn status(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    // Asked of the RUNNING host rather than a symlink or this build's own
+    // constant: the host is a separate process that deliberately outlives an
+    // API restart, so it can be a release behind, and a symlink comparison is
+    // how a staleness check once reported current while the host was two
+    // releases back.
+    let protocol_change = offered_protocol_change(&state).await;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
-        Json(build_status(&state)?),
+        Json(build_status(&state, protocol_change)?),
     )
         .into_response())
+}
+
+/// Whether the offer changes the protocol, or `None` when this Hive cannot say.
+///
+/// UNKNOWN IS NOT "NO". Both halves have to be known: an offer with no readable
+/// protocol, and a host that does not answer, each leave the question open. The
+/// card says so rather than guessing, because guessing wrong in the reassuring
+/// direction costs somebody their session.
+///
+/// Deliberately NOT `protocol_change_offered`, which answers a different
+/// question for a different caller: that one decides whether to stop every
+/// worker, so an unknown protocol must mean "do not", and folding unknown into
+/// `false` is right there and wrong here. Same input, opposite cost of error.
+async fn offered_protocol_change(state: &Arc<AppState>) -> Option<bool> {
+    let offered = build_status(state, None)
+        .ok()?
+        .offer?
+        .protocol
+        .trim()
+        .parse::<u16>()
+        .ok()?;
+    let host = crate::maintenance::host_status_snapshot(state).await.ok()?;
+    Some(host.protocol_version != offered)
 }
 
 /// Chooses whether this Hive contacts an origin at all.
@@ -174,7 +215,7 @@ pub(super) async fn set_mode(
         .map_err(|error| crate::task_store_error(&error))?;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
-        Json(build_status(&state)?),
+        Json(build_status(&state, None)?),
     )
         .into_response())
 }
@@ -191,7 +232,7 @@ pub(super) async fn check_now(
     check(&state).await;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
-        Json(build_status(&state)?),
+        Json(build_status(&state, None)?),
     )
         .into_response())
 }
@@ -206,7 +247,7 @@ pub(super) async fn download(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let status = build_status(&state)?;
+    let status = build_status(&state, None)?;
     if !status.upgrade_available {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
@@ -237,7 +278,7 @@ pub(super) async fn download(
     })?;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
-        Json(build_status(&state)?),
+        Json(build_status(&state, None)?),
     )
         .into_response())
 }
@@ -307,7 +348,7 @@ pub(super) async fn apply(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let status = build_status(&state)?;
+    let status = build_status(&state, None)?;
     let request_path = state.release_apply_request_path.as_ref().ok_or_else(|| {
         ApiError::new(
             StatusCode::CONFLICT,
@@ -372,7 +413,10 @@ pub(super) async fn apply(
     Ok(StatusCode::ACCEPTED.into_response())
 }
 
-fn build_status(state: &Arc<AppState>) -> Result<ReleaseStatusResponse, ApiError> {
+fn build_status(
+    state: &Arc<AppState>,
+    protocol_change: Option<bool>,
+) -> Result<ReleaseStatusResponse, ApiError> {
     let stored = crate::task_store(state)?
         .release_check_state()
         .map_err(|error| crate::task_store_error(&error))?;
@@ -395,6 +439,7 @@ fn build_status(state: &Arc<AppState>) -> Result<ReleaseStatusResponse, ApiError
         development_build,
         last_checked_at: stored.last_checked_at,
         last_outcome: stored.last_outcome,
+        carries_protocol_change: protocol_change,
         carries_new_worker_engine: offer
             .as_ref()
             .is_some_and(|offer| offer.worker_engine_build_id != worker_engine_build_id()),

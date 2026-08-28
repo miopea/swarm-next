@@ -413,6 +413,15 @@ export type ReleaseStatus = {
    * the engine is swapped later, when sessions are idle.
    */
   carries_new_worker_engine: boolean;
+  /**
+   * Whether installing this release ends every worker session.
+   *
+   * `true` changes the terminal-host protocol, which swaps the API and the
+   * engine together. `false` does not. `null` means the Hive could not tell —
+   * the host did not answer, or the offer carries no readable protocol, and
+   * the card must say so rather than fall back to the reassuring sentence.
+   */
+  carries_protocol_change: boolean | null;
   /** Commits this working copy is ahead of the released tag; null when uncountable. */
   commits_ahead_of_release: number | null;
   downloaded_version: string | null;
