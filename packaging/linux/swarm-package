@@ -1288,6 +1288,23 @@ activate_protocol_migration() {
   rollback_release=$old_release
   rollback_host_release=$host_release
   fail_step=activate
+  # A MIGRATION IS NOT AN ORDINARY RESTART, AND 30 SECONDS IS NOT ITS BUDGET.
+  #
+  # An ordinary update restarts the API and nothing else, so the default is
+  # generous for it. This stops the whole stack, swaps the API and the terminal
+  # host together, brings both back, and the new API then runs every schema
+  # migration between the installed database and its own — 96 through 103 for a
+  # Hive coming from 0.8.17. On a slower machine that comfortably exceeds 30
+  # attempts of one second.
+  #
+  # WHAT THAT COST, 2026-08-28: the operator's WSL Hive installed 0.9.0
+  # correctly, the health check ran out while the API was still starting, the
+  # install was declared failed, and the card told them to go and read the
+  # journal. "It said it failed and now I am showing 0.9.0. Your installer is
+  # garbage." The install had worked. A timeout that reports a working install
+  # as broken is worse than a slow one, and it also triggers a rollback of
+  # something that succeeded.
+  health_attempts=${SWARM_MIGRATION_HEALTH_ATTEMPTS:-240}
   run_systemctl stop swarm.target || true
   activate_link "$new_release"
   activate_host_link "$new_release"

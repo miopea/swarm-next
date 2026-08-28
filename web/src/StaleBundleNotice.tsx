@@ -35,11 +35,28 @@ export default function StaleBundleNotice({ stale, serverVersion, dismissed, onD
         <small>The Hive has been updated to {serverVersion}. Reload to pick it up — until you do, fixes that have already shipped will look like they are still broken.</small>
       </span>
       <span className="stale-bundle-actions">
-        {/* A plain reload, which is all that is needed: static responses are
-            served no-cache and the service worker caches no assets, so the
-            only reason this page is old is that nothing has navigated since
-            the upgrade. */}
-        <button type="button" className="primary-action" onClick={() => window.location.reload()}>Reload</button>
+        {/* A VERSION-STAMPED NAVIGATION, NOT window.location.reload().
+            This said a plain reload was "all that is needed: static responses
+            are served no-cache". That reasoning is sound about our headers and
+            was still wrong in practice — the operator pressed this button on
+            2026-08-28, stayed on the old bundle, and had to use ctrl-shift-F5
+            to get the new one. A reload revalidates through whatever sits
+            between the browser and the API, and this Hive can be published
+            through a tunnel with its own edge cache.
+
+            Navigating to a URL the browser has never seen cannot be answered
+            from a cache entry, so the version it is stamped with is the thing
+            that guarantees the fetch. replace() rather than assign() so the
+            stale page does not stay in history behind it. */}
+        <button
+          type="button"
+          className="primary-action"
+          onClick={() => {
+            const fresh = new URL(window.location.href);
+            fresh.searchParams.set("v", serverVersion);
+            window.location.replace(fresh.toString());
+          }}
+        >Reload</button>
         <button type="button" className="text-button" onClick={() => onDismiss(serverVersion)}>Not now</button>
       </span>
     </div>
