@@ -231,6 +231,36 @@ pub async fn handle(
             // exactly the state an outside tool found this endpoint in. The
             // `resource_metadata` parameter turns the same refusal into an
             // invitation the client can act on.
+            // AN OAUTH TOKEN THAT IS REAL BUT NOT YET USABLE GETS ITS OWN
+            // ANSWER. The authorization server issues genuine tokens, and the
+            // principal that would let one act on the board is the next piece
+            // of this work. Answering 401 here would tell the client its token
+            // is bad and send it round the whole flow again, forever, for a
+            // reason no retry can fix. 403 with a plain sentence says the
+            // connection worked and the feature is unfinished — which is true,
+            // and is the difference between a bug report and a retry loop.
+            let presented = request
+                .headers()
+                .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.strip_prefix("Bearer "))
+                .unwrap_or_default();
+            if crate::mcp_oauth::client_for_token(&state, presented, crate::unix_timestamp())
+                .is_some()
+            {
+                return (
+                    StatusCode::FORBIDDEN,
+                    [(header::CACHE_CONTROL, "no-store")],
+                    axum::Json(serde_json::json!({
+                        "error": "connection_not_yet_authorised",
+                        "error_description":
+                            "This Hive recognises the connection, but connecting an outside tool \
+                             is not finished: it has no identity to write to the board as yet. \
+                             Nothing is wrong with the token.",
+                    })),
+                )
+                    .into_response();
+            }
             let challenge = crate::mcp_oauth::challenge(
                 crate::mcp_oauth::base_url(&state, request.headers()).as_deref(),
             );

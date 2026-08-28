@@ -2853,6 +2853,14 @@ fn api_router(state: AppState) -> Router {
             mcp_oauth::AUTHORIZATION_SERVER_PATH,
             get(mcp_oauth::authorization_server),
         )
+        // The three endpoints the discovery documents above promise. They are
+        // registered together with those documents on purpose: a metadata
+        // document that advertises a registration endpoint which answers 404
+        // sends a client further down a road that ends nowhere, which is worse
+        // than the bare refusal it replaced.
+        .route("/oauth/register", post(mcp_oauth::register))
+        .route("/oauth/authorize", get(mcp_oauth::authorize_client))
+        .route("/oauth/token", post(mcp_oauth::token))
         .route("/health", get(health))
         .route(
             "/api/v1/auth/session",
