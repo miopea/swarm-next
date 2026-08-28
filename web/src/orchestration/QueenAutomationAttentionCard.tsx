@@ -30,7 +30,7 @@ export default function QueenAutomationAttentionCard({ status, coveredBySpecific
   const canRetry = Boolean(onRetry) && status?.state === "uncertain";
   return (
     <section className="queen-attention-card" aria-labelledby="queen-attention-heading">
-      <span className="queen-attention-bee" aria-hidden="true"><BeeMascot expression="blocked" /></span>
+      <span className="queen-attention-bee" aria-hidden="true"><BeeMascot role="queen" expression="blocked" /></span>
       <div>
         <p className="eyebrow">Queen automation</p>
         <h3 id="queen-attention-heading">{queenAutomationStateLabel(status)}</h3>

@@ -127,6 +127,7 @@ import TerminalLoadBoundary from "./terminal/TerminalLoadBoundary";
 import { initialMobileKeysVisibility, rememberMobileKeysVisibility } from "./terminal/MobileTerminalComposer";
 import { terminalWorkspace } from "./terminal/TerminalWorkspace";
 import WorkerRosterItem from "./workers/WorkerRosterItem";
+import WorkerAvatar from "./workers/WorkerAvatar";
 import WorkerContextBar from "./workers/WorkerContextBar";
 import { workerWork } from "./workers/workerWork";
 import { normalizeRosterQuery, orphanSessionMatchesRosterQuery, repositoryName, workerMatchesRosterQuery } from "./workers/workerRoster";
@@ -1844,7 +1845,9 @@ export function App() {
           </div>
           {surface === "workers" && operatorToken ? (
             <button className="mobile-worker-switcher-trigger" type="button" aria-haspopup="dialog" aria-label={`Switch worker, current ${activeWorker?.name ?? (activeSession ? workerName(activeSession.session_id) : "none")}${activeWorkerWork?.current ? `, carrying ${activeWorkerWork.current.title}` : ""}`} onClick={() => setShowMobileWorkers(true)}>
-              <span className="worker-avatar"><BeeMascot expression={activeWorker ? workerExpression(activeWorker) : "sleeping"} /></span>
+              {activeWorker
+                    ? <WorkerAvatar worker={activeWorker} />
+                    : <span className="worker-avatar"><BeeMascot expression="sleeping" /></span>}
               {/* On a phone this trigger replaces the header's worker name and
                   Hive line entirely, and the context bar's task chip is hidden
                   because a row of chips would return the vertical space the
@@ -1937,7 +1940,7 @@ export function App() {
                         setShowMobileWorkers(false);
                       }}
                     >
-                      <span className="worker-avatar"><BeeMascot expression={workerExpression(worker)} /></span>
+                      <WorkerAvatar worker={worker} />
                       <span className="mobile-worker-choice-copy">
                         <span><strong>{worker.name}</strong><small>{worker.role === "queen" ? "Queen" : repositoryName(worker.workspace)}</small></span>
                         <small>{worker.runtime_error ?? workerSwitcherDetail(worker, assignedTask?.title)}</small>
@@ -2216,10 +2219,6 @@ function taskStateLabel(task: Task): string {
 
 function workerAttentionLabel(worker: Worker): string {
   return workerAttention(worker).label;
-}
-
-function workerExpression(worker: Worker) {
-  return workerAttention(worker).expression;
 }
 
 function presenceModeLabel(mode: PresenceMode) {
