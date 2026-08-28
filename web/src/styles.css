@@ -1021,12 +1021,19 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .apiary-attention-card h3 { margin: 1px 0 3px; font-size: 1rem; }
 .apiary-attention-card p:not(.eyebrow) { margin: 0; color: var(--muted); font-size: .76rem; line-height: 1.45; }
 .apiary-attention-card button { flex: 0 0 auto; }
-.queen-attention-card { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; border-color: color-mix(in srgb, var(--bad) 42%, var(--line)); background: color-mix(in srgb, var(--bad-soft) 48%, var(--panel)); }
-.queen-attention-bee { display: grid; width: 42px; height: 42px; place-items: center; }
+/* TWO ROWS, NOT THREE COLUMNS. The third column held the actions, and on a
+   card as tall as an email draft that left a measured 413px of nothing between
+   the text and the buttons — the draft is capped at 68ch, so it never reached
+   the column beside it. A reply is read top to bottom and then acted on; an
+   action column on the right asks the eye to travel back up to reach it. */
+.queen-attention-card { display: grid; grid-template-columns: 44px minmax(0, 1fr); border-color: color-mix(in srgb, var(--bad) 42%, var(--line)); background: color-mix(in srgb, var(--bad-soft) 48%, var(--panel)); }
+/* Level with the heading it belongs to. Centred, it floated in the middle of
+   an otherwise empty column, level with nothing in particular. */
+.queen-attention-bee { display: grid; width: 42px; height: 42px; place-items: center; align-self: start; }
 .queen-attention-bee svg { width: 40px; height: 40px; }
 .queen-attention-card h3 { margin: 1px 0 3px; font-size: 1rem; }
 .queen-attention-card p:not(.eyebrow) { margin: 0; color: var(--muted); font-size: .76rem; line-height: 1.45; }
-.queen-attention-actions { display: flex; gap: 8px; }
+.queen-attention-actions { display: flex; flex-wrap: wrap; grid-column: 2; margin-top: 12px; gap: 8px; }
 /* Two children, so two columns. The shared card is a three-column grid — bee,
    content, actions — and this one carries no bee, so its text was laid into the
    44px icon track and wrapped one word per line. */
@@ -1067,7 +1074,19 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .activity-copy small { color: var(--quiet); font-size: .7rem; line-height: 1.35; }
 .work-activity-list time { color: var(--quiet); font-size: .69rem; white-space: nowrap; }
 .work-activity-footnote, .activity-state { margin: 0; padding: 18px; color: var(--muted); text-align: center; }
-.decision-list { display: grid; max-width: 1180px; margin: 0 auto; gap: 14px; }
+/* ONE MEASURE FOR THE WHOLE SURFACE. The panels solved their emptiness in
+   different directions — the email card had a hole in its middle, the
+   briefings a wide empty right side — and that mismatch is what made the page
+   read as unsettled rather than merely wide. The attention cards, the decision
+   list and the briefings are SIBLINGS, so capping one of them only made the
+   widths disagree three ways instead of two. They share a measure here, set
+   once. */
+.decision-inbox { --attention-measure: 880px; }
+.decision-inbox-intro,
+.decision-list,
+.held-briefing-list,
+.queen-attention-card { max-width: var(--attention-measure); margin-inline: auto; }
+.decision-list { display: grid; gap: 14px; }
 .decision-card { display: grid; gap: 16px; padding: 21px; border: 1px solid var(--line); border-left: 4px solid var(--good); border-radius: var(--radius-lg); background: var(--panel); box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 6%, transparent); }
 .decision-card.urgency-time_sensitive { border-left-color: var(--accent); background: color-mix(in srgb, var(--warn-soft) 22%, var(--panel)); }
 .decision-card.state-resolved { border-left-color: var(--line-strong); opacity: .82; }
@@ -1462,7 +1481,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
    150 words, so this is sized to fit one whole and to scroll only the
    exception. vh as well as px so a phone does not get a box taller than its
    screen. */
-.unanswered-email-draft { max-width: 68ch; max-height: min(64vh, 520px); margin: 8px 0 0; padding: 9px 11px; overflow-y: auto; border-left: 3px solid var(--accent-strong); border-radius: 0 var(--radius-md) var(--radius-md) 0; color: var(--text); background: var(--panel-soft); font-size: .76rem; line-height: 1.45; white-space: pre-wrap; }
+.unanswered-email-draft { max-width: 78ch; max-height: min(64vh, 520px); margin: 8px 0 0; padding: 9px 11px; overflow-y: auto; border-left: 3px solid var(--accent-strong); border-radius: 0 var(--radius-md) var(--radius-md) 0; color: var(--text); background: var(--panel-soft); font-size: .76rem; line-height: 1.45; white-space: pre-wrap; }
 .unanswered-email-failure { margin: 0 0 8px; padding: 8px 11px; border-left: 3px solid var(--danger); border-radius: 0 var(--radius-md) var(--radius-md) 0; color: var(--text); background: color-mix(in srgb, var(--danger) 12%, transparent); font-size: .78rem; line-height: 1.45; }
 .unanswered-email-draft small { display: block; margin-top: 6px; color: var(--muted); font-size: .68rem; font-variant-numeric: tabular-nums; white-space: normal; }
 .unanswered-email-editor { display: block; margin-top: 8px; }
@@ -2478,7 +2497,14 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
    for a queue behaving correctly is how the urgent ones stop being read. */
 /* A measure, so a title and its metadata are not at opposite ends of a 1250px
    row with the eye travelling the gap. */
-.held-briefing-group { display: grid; gap: 3px; margin-top: 10px; max-width: 78ch; }
+/* A GROUP MUST LOOK LIKE ONE. Grouping the data worked; the spacing did not
+   express it — every heading and every title sat at the same x with the same
+   width, 4px apart inside a group and 16px between two, which reads as one
+   flat list. The titles are now indented under a rule that starts at their
+   heading, so containment is drawn rather than implied, and the space between
+   two groups is several times the space within one. */
+.held-briefing-group { display: grid; gap: 3px; margin-top: 24px; max-width: 78ch; }
+.held-briefing-group:first-of-type { margin-top: 12px; }
 .held-briefing-group-heading { margin: 0; color: var(--muted); font-size: .72rem; }
 .held-briefing-group-heading strong { color: var(--text); font-weight: 600; }
 .held-briefing-list {
@@ -2491,7 +2517,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 }
 .held-briefing-list h4 { margin: 0; font-size: .86rem; }
 .held-briefing-note { margin: 0; color: var(--muted); font-size: .74rem; line-height: 1.45; }
-.held-briefing-rows { display: grid; gap: 4px; margin: 4px 0 0; padding: 0; list-style: none; }
+.held-briefing-rows { display: grid; gap: 5px; margin: 3px 0 0; padding: 0 0 0 13px; border-left: 2px solid color-mix(in srgb, var(--line) 78%, transparent); list-style: none; }
 /* Title and detail share a baseline row, matching the blocked-escalation list
    directly above it. Two adjacent lists of waiting work that read differently
    are two things to learn instead of one. */
