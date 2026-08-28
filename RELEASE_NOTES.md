@@ -12,6 +12,33 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 0.9.1
+
+**Take this instead of 0.9.0.** It is the same update and it finishes. On a
+slower machine 0.9.0 ran out of time waiting for the API to come back, called
+the install failed, and rolled itself back — correctly, but repeatedly, so the
+update could not be completed at all.
+
+**It still restarts your workers**, for the same reason 0.9.0 did: the app and
+the worker engine have to move together. Workers set to start automatically
+come back on their own; the rest need waking from the roster.
+
+**Copy your database first.** This carries schema migration 103:
+
+    cp ~/.local/state/swarm/swarm.sqlite3 ~/swarm-database-backup.sqlite3
+
+### Fixes
+- An update that changes the worker engine no longer gives up while the app is
+  still starting. It used to allow thirty seconds for a step that stops
+  everything, swaps both halves, restarts them and migrates the database — then
+  report a working install as failed and tell you to read the system log
+- The Reload button on the "running an older version" notice now actually loads
+  the new version, instead of leaving you on the old page until you did a hard
+  refresh yourself
+- The bee picker no longer squashes the worker name field into a sliver when
+  you edit a worker
+- What is New is wider on a desktop screen, where it read as a narrow strip
+
 ## 0.9.0
 
 **This update restarts your workers.** It changes the protocol the app uses to
