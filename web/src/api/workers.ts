@@ -86,7 +86,6 @@ export type CreateWorkerInput = {
   provider?: ProviderKind;
   autostart?: boolean;
   allow_outside_roots?: boolean;
-  mark?: string;
 };
 
 export type UpdateWorkerInput = {
@@ -96,6 +95,8 @@ export type UpdateWorkerInput = {
   autostart?: boolean;
   workspace?: string;
   allow_outside_roots?: boolean;
+  /** The bee this worker wears. An empty string returns it to the derived one. */
+  mark?: string;
 };
 
 export type RepositoryState = {

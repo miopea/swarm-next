@@ -247,6 +247,45 @@ impl TaskStore {
         )
     }
 
+    /// Records the bee an operator chose for a worker, or clears it.
+    ///
+    /// SEPARATE FROM `update_worker_profile`, which already carries six
+    /// arguments and refuses an empty change. Choosing a bee is not renaming or
+    /// moving a worker: it cannot fail validation, it does not care whether the
+    /// worker is running, and it must not be tangled with workspace checks that
+    /// have nothing to do with it.
+    ///
+    /// NOT VALIDATED AGAINST A LIST HERE. The set of marks lives in the browser
+    /// and will grow; a database that refuses tomorrow's mark would make adding
+    /// one a schema change, which is the trap migration 96 removed for
+    /// providers. The reader falls back to the derived mark for anything it does
+    /// not recognise, so an unknown value costs a worker nothing.
+    ///
+    /// None clears the choice and returns the worker to its derived bee.
+    ///
+    /// # Errors
+    /// Returns an error when the worker does not exist, or the write fails.
+    pub fn set_worker_mark(
+        &self,
+        worker_id: WorkerId,
+        mark: Option<&str>,
+    ) -> Result<WorkerProfile, TaskStoreError> {
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            "UPDATE worker_profiles SET mark = ?2, updated_at = unixepoch()
+             WHERE id = ?1 AND archived_at IS NULL",
+            rusqlite::params![
+                worker_id.to_string(),
+                mark.map(str::trim).filter(|m| !m.is_empty())
+            ],
+        )?;
+        if changed == 0 {
+            return Err(TaskStoreError::WorkerNotFound);
+        }
+        drop(connection);
+        self.get_worker_profile(worker_id)
+    }
+
     /// Updates operator-owned worker preferences without changing repository or conversation identity.
     ///
     /// # Errors
@@ -572,7 +611,8 @@ impl TaskStore {
                    (EXISTS(SELECT 1 FROM worker_sessions history WHERE history.worker_id = p.id)
                     OR p.provider_conversation_resume = 1),
                    e.expires_at,
-                   p.created_at, p.updated_at, p.description, p.ephemeral
+                   p.created_at, p.updated_at, p.description, p.ephemeral,
+                   p.mark
             FROM worker_profiles p
             LEFT JOIN worker_sessions s
               ON s.worker_id = p.id AND s.ended_at IS NULL
@@ -634,7 +674,8 @@ impl TaskStore {
                        (EXISTS(SELECT 1 FROM worker_sessions history WHERE history.worker_id = p.id)
                         OR p.provider_conversation_resume = 1),
                        e.expires_at,
-                       p.created_at, p.updated_at, p.description, p.ephemeral
+                       p.created_at, p.updated_at, p.description, p.ephemeral,
+                   p.mark
                 FROM worker_profiles p
                 LEFT JOIN worker_sessions s
                   ON s.worker_id = p.id AND s.ended_at IS NULL
@@ -1543,7 +1584,8 @@ impl TaskStore {
                        (EXISTS(SELECT 1 FROM worker_sessions history WHERE history.worker_id = p.id)
                         OR p.provider_conversation_resume = 1),
                        e.expires_at,
-                       p.created_at, p.updated_at, p.description, p.ephemeral
+                       p.created_at, p.updated_at, p.description, p.ephemeral,
+                   p.mark
                 FROM worker_profiles p
                 LEFT JOIN worker_sessions s
                   ON s.worker_id = p.id AND s.ended_at IS NULL
@@ -1731,6 +1773,10 @@ fn profile_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerProfile> 
         created_at: row.get(12)?,
         updated_at: row.get(13)?,
         ephemeral: row.get::<_, i64>(15)? != 0,
+        // Appended at index 16 on purpose: every field above is read by
+        // position, so inserting a column anywhere else silently re-maps all of
+        // them — a change that compiles, passes, and returns the wrong field.
+        mark: row.get(16)?,
     })
 }
 

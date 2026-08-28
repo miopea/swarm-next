@@ -677,6 +677,7 @@ mod tests {
             created_at: 1,
             updated_at: 1,
             ephemeral: false,
+            mark: None,
         }
     }
 }

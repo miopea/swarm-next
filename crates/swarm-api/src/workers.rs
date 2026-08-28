@@ -50,6 +50,9 @@ pub(super) struct UpdateWorkerRequest {
     workspace: Option<String>,
     #[serde(default)]
     allow_outside_roots: bool,
+    /// The bee this worker wears. An empty string clears the choice and returns
+    /// it to the mark derived from its id.
+    mark: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -367,16 +370,37 @@ pub(super) async fn update_worker(
         ),
         None => None,
     };
-    let profile = task_store(&state)?
-        .update_worker_profile(
-            worker_id,
-            request.name.as_deref(),
-            request.description.as_deref(),
-            request.provider,
-            request.autostart,
-            workspace.as_deref(),
-        )
-        .map_err(|error| task_store_error(&error))?;
+    // Set on its own, and BEFORE the rest, so choosing a bee alone is a valid
+    // request. update_worker_profile refuses a change with none of its fields
+    // set — correctly, since renaming a worker to nothing is a mistake — and a
+    // picker that sends only a mark would otherwise come back as an empty update.
+    if let Some(mark) = request.mark.as_deref() {
+        task_store(&state)?
+            .set_worker_mark(worker_id, Some(mark))
+            .map_err(|error| task_store_error(&error))?;
+    }
+    let only_the_mark = request.mark.is_some()
+        && request.name.is_none()
+        && request.description.is_none()
+        && request.provider.is_none()
+        && request.autostart.is_none()
+        && workspace.is_none();
+    let profile = if only_the_mark {
+        task_store(&state)?
+            .get_worker_profile(worker_id)
+            .map_err(|error| task_store_error(&error))?
+    } else {
+        task_store(&state)?
+            .update_worker_profile(
+                worker_id,
+                request.name.as_deref(),
+                request.description.as_deref(),
+                request.provider,
+                request.autostart,
+                workspace.as_deref(),
+            )
+            .map_err(|error| task_store_error(&error))?
+    };
     if request.autostart.is_some() {
         state.worker_errors.write().await.remove(&worker_id);
         state

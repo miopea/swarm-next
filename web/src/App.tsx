@@ -752,6 +752,22 @@ export function App() {
     });
   }
 
+  /**
+   * Applies a chosen bee on its own.
+   *
+   * Its own call rather than a seventh argument to maintainWorkerProfile: a
+   * mark is applied the moment it is clicked, while everything else in that
+   * form is a draft the operator reviews before saving. Sending both together
+   * would either save a half-typed name or make choosing a bee wait for one.
+   */
+  async function chooseWorkerMark(workerId: string, mark: string) {
+    if (!operatorToken) return;
+    await perform(async () => {
+      const updated = await updateWorker(operatorToken, workerId, { mark });
+      setWorkers((current) => current.map((worker) => worker.id === updated.id ? updated : worker));
+    });
+  }
+
   async function removeWorkerProfile(workerId: string) {
     if (!operatorToken) return;
     await perform(async () => {
@@ -2072,6 +2088,7 @@ export function App() {
               onTestNotification={testNotification}
               onCreateWorker={configureWorker}
               onUpdateWorker={maintainWorkerProfile}
+              onChooseWorkerMark={chooseWorkerMark}
               onRemoveWorker={removeWorkerProfile}
               onReorderWorkers={reorderWorkerProfiles}
               onRestartProviders={restartProviders}

@@ -155,7 +155,8 @@ const DECISION_COMMAND_GRANT_SCHEMA_VERSION: i64 = 99;
 const UNATTENDED_BLOCK_SCHEMA_VERSION: i64 = 100;
 const AMENDMENT_ACTIVITY_SCHEMA_VERSION: i64 = 101;
 const BLOCK_DEADLINE_SCHEMA_VERSION: i64 = 102;
-const CURRENT_SCHEMA_VERSION: i64 = BLOCK_DEADLINE_SCHEMA_VERSION;
+const WORKER_MARK_SCHEMA_VERSION: i64 = 103;
+const CURRENT_SCHEMA_VERSION: i64 = WORKER_MARK_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -3204,7 +3205,51 @@ fn migrate_newest_schema_steps(
     if schema_version < BLOCK_DEADLINE_SCHEMA_VERSION {
         migrate_block_deadline(transaction)?;
     }
+    if schema_version < WORKER_MARK_SCHEMA_VERSION {
+        migrate_worker_mark(transaction)?;
+    }
     Ok(())
+}
+
+/// The bee an operator chose for a worker.
+///
+/// NULLABLE, AND NULL IS THE ORDINARY CASE. A worker with no choice draws a mark
+/// derived from its id, so every Hive is dressed without anybody setting
+/// anything and this column stays empty until somebody disagrees with the
+/// derivation. That is why there is no default and no backfill: writing a
+/// derived value into every row would freeze today's derivation into the
+/// database and make the set impossible to extend without a second migration.
+///
+/// UNCONSTRAINED ON PURPOSE. A CHECK listing the marks would make adding one a
+/// schema change, which is exactly the trap migration 96 was written to remove
+/// for providers. The reader validates instead: an unrecognised mark falls back
+/// to the derived one, so a value from a newer build, or one since retired,
+/// costs a worker nothing.
+///
+/// # Errors
+/// Returns an error when the step cannot be applied.
+fn migrate_worker_mark(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    // Table existence AND column absence, for the reason migrate_ephemeral_workers
+    // records: the migration tests rewind user_version WITHOUT rewinding tables,
+    // and pragma_table_info on a missing table returns no rows rather than
+    // failing — so checking only the column reads "not present" and then ALTERs
+    // a table that is not there.
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                        WHERE type = 'table' AND name = 'worker_profiles')",
+        [],
+        |row| row.get(0),
+    )?;
+    let has_column: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('worker_profiles')
+                        WHERE name = 'mark')",
+        [],
+        |row| row.get(0),
+    )?;
+    if present && !has_column {
+        transaction.execute_batch("ALTER TABLE worker_profiles ADD COLUMN mark TEXT;")?;
+    }
+    transaction.pragma_update(None, "user_version", WORKER_MARK_SCHEMA_VERSION)
 }
 
 /// When a block's own stated condition arrives, if it named one.
@@ -6751,6 +6796,14 @@ mod tests {
             undo_sql: "ALTER TABLE tasks DROP COLUMN blocked_until;",
             probe_sql: "SELECT EXISTS(
                  SELECT 1 FROM pragma_table_info('tasks') WHERE name = 'blocked_until'
+             )",
+        },
+        SchemaStep {
+            table: "worker_profiles",
+            artifact: "mark",
+            undo_sql: "",
+            probe_sql: "SELECT EXISTS(
+                 SELECT 1 FROM pragma_table_info('worker_profiles') WHERE name = 'mark'
              )",
         },
         SchemaStep {

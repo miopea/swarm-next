@@ -2,6 +2,7 @@ import { useState, type DragEvent, type FormEvent, type KeyboardEvent } from "re
 
 import type { ProviderCapabilities, ProviderKind, Worker, WorkspaceChoice } from "../api";
 import BeeMascot from "../brand/BeeMascot";
+import { BEE_MARKS, BEE_MARK_LABELS, markFor, resolveMark } from "../brand/beeMarks";
 import UnsavedChangesPrompt from "../shared/UnsavedChangesPrompt";
 import { useReorderDrag } from "../shared/useReorderDrag";
 import { workerAttention } from "../workers/workerAttention";
@@ -14,13 +15,15 @@ type Props = {
   providerCapabilitiesUnavailable?: boolean;
   onCreate: (name: string, workspace: string, provider: ProviderKind, allowOutsideRoots: boolean) => Promise<void>;
   onUpdate: (workerId: string, name: string, description: string, provider: ProviderKind, autostart: boolean, workspace?: string, allowOutsideRoots?: boolean) => Promise<void>;
+  /** Applies a chosen bee on its own, without the rest of the edit form. */
+  onChooseMark: (workerId: string, mark: string) => Promise<void>;
   onRemove: (workerId: string) => Promise<void>;
   onDraftDescription: (workerId: string) => Promise<string>;
   onImproveDescription?: (workerId: string) => Promise<string>;
   onReorder: (workerIds: string[]) => Promise<void>;
 };
 
-export default function WorkerSettings({ workers, workspaces, busy, providers, providerCapabilitiesUnavailable = false, onCreate, onUpdate, onRemove, onDraftDescription, onImproveDescription, onReorder }: Props) {
+export default function WorkerSettings({ workers, workspaces, busy, providers, providerCapabilitiesUnavailable = false, onCreate, onUpdate, onChooseMark, onRemove, onDraftDescription, onImproveDescription, onReorder }: Props) {
   const scout = workers.find((worker) => worker.system_role === "scout");
   const roster = workers.filter((worker) => worker.role !== "queen" && worker.system_role !== "scout");
   const available = workspaces.filter((workspace) => !workspace.configured_worker_id);
@@ -112,6 +115,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, p
             dropTarget={false}
             onMove={() => undefined}
             onUpdate={onUpdate}
+            onChooseMark={onChooseMark}
             onRemove={onRemove}
             onDraftDescription={onDraftDescription}
             onImproveDescription={onImproveDescription}
@@ -140,6 +144,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, p
             dropTarget={workerReorder.dropTargetId === worker.id && workerReorder.draggedId !== worker.id}
             onMove={(offset) => move(index, offset)}
             onUpdate={onUpdate}
+            onChooseMark={onChooseMark}
             onRemove={onRemove}
             onDraftDescription={onDraftDescription}
             onImproveDescription={onImproveDescription}
@@ -241,6 +246,7 @@ type WorkerPreferenceRowProps = {
   dropTarget: boolean;
   onMove: (offset: -1 | 1) => void;
   onUpdate: Props["onUpdate"];
+  onChooseMark: Props["onChooseMark"];
   onRemove: Props["onRemove"];
   onDraftDescription: Props["onDraftDescription"];
   onImproveDescription: Props["onImproveDescription"];
@@ -253,7 +259,7 @@ type WorkerPreferenceRowProps = {
   onDrop: (event: DragEvent) => void;
 };
 
-function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, orderingDisabled, dragging, dropTarget, onMove, onUpdate, onRemove, onDraftDescription, onImproveDescription, providers, providerCapabilitiesUnavailable, onDragStart, onDragEnd, onDragTarget, onDragLeave, onDrop }: WorkerPreferenceRowProps) {
+function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, orderingDisabled, dragging, dropTarget, onMove, onUpdate, onChooseMark, onRemove, onDraftDescription, onImproveDescription, providers, providerCapabilitiesUnavailable, onDragStart, onDragEnd, onDragTarget, onDragLeave, onDrop }: WorkerPreferenceRowProps) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(worker.name);
   const [description, setDescription] = useState(worker.description ?? "");
@@ -348,10 +354,40 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
       onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onDragLeave(); }}
       onDrop={onDrop}
     >
-      <span className="worker-settings-bee"><BeeMascot expression={attention.expression} /></span>
+      <span className="worker-settings-bee"><BeeMascot expression={attention.expression} mark={resolveMark(worker.id, worker.mark)} /></span>
       {editing ? (
         <form className="worker-preference-form" aria-label={`Edit ${worker.name}`} onSubmit={(event) => void save(event)}>
           <label><span>Worker name</span><input value={name} disabled={managed} onChange={(event) => setName(event.target.value)} maxLength={80} autoFocus /></label>
+          {/* SAVED ON CLICK, not with the form. Everything else here is a draft
+              the operator reviews before saving — a name half-typed must not
+              reach the roster. A bee is different: the only way to judge one is
+              to see it worn, so choosing applies immediately and choosing
+              another undoes it. There is nothing to discard. */}
+          <fieldset className="worker-mark-field">
+            <legend>Bee</legend>
+            <small>Assigned from this worker&rsquo;s id so every worker differs without anyone
+              choosing. Pick another if you would rather.</small>
+            <div className="worker-mark-choices" role="radiogroup" aria-label={`Bee for ${worker.name}`}>
+              {BEE_MARKS.map((choice) => {
+                const current = resolveMark(worker.id, worker.mark) === choice;
+                return (
+                  <button
+                    key={choice}
+                    type="button"
+                    role="radio"
+                    aria-checked={current}
+                    aria-label={BEE_MARK_LABELS[choice] + (markFor(worker.id) === choice ? " (assigned)" : "")}
+                    title={BEE_MARK_LABELS[choice]}
+                    className={`worker-mark-choice${current ? " selected" : ""}`}
+                    disabled={busy}
+                    onClick={() => void onChooseMark(worker.id, choice)}
+                  >
+                    <BeeMascot expression="available" mark={choice} />
+                  </button>
+                );
+              })}
+            </div>
+          </fieldset>
           {managed && <small className="privacy-note">Scout is pinned after Queen and keeps ordinary worker authority for deliberate cross-repository work.</small>}
           <div className="worker-repository-field">
             <label htmlFor={`worker-repository-${worker.id}`}>Repository</label>

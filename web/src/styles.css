@@ -2468,3 +2468,19 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   font-size: .78rem;
   line-height: 1.45;
 }
+
+/* Choosing a worker's bee.
+   Shown at roughly the size it is worn, because the only way to judge one is to
+   see it the way it will appear in the roster. */
+.worker-mark-field { display: grid; gap: 6px; margin: 0; padding: 0; border: 0; }
+.worker-mark-field legend { padding: 0; color: var(--muted); font-size: .72rem; }
+.worker-mark-choices { display: flex; flex-wrap: wrap; gap: 6px; }
+.worker-mark-choice {
+  display: grid; width: 40px; height: 40px; padding: 0; place-items: center;
+  overflow: hidden; border: 1px solid var(--line); border-radius: 50%;
+  background: color-mix(in srgb, var(--good-soft) 75%, var(--panel)); cursor: pointer;
+}
+.worker-mark-choice .bee-mascot { width: 44px; height: 44px; transform: translateY(5px); }
+.worker-mark-choice:hover { border-color: var(--line-strong); }
+.worker-mark-choice.selected { border-color: var(--accent-strong); outline: 2px solid var(--accent); outline-offset: 1px; }
+.worker-mark-choice:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

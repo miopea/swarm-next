@@ -220,6 +220,15 @@ pub struct WorkerProfile {
     /// temporary worker that looks permanent is one an operator will rely on and
     /// then lose.
     pub ephemeral: bool,
+    /// The bee this worker wears, when an operator chose one.
+    ///
+    /// None is the ordinary case and means "derive it from my id", so a Hive
+    /// where nobody has chosen anything is still dressed. An unrecognised value
+    /// falls back to the derived mark at the render boundary rather than
+    /// failing — a choice from a newer build, or one since retired, must not
+    /// cost a worker its face.
+    #[serde(default)]
+    pub mark: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }

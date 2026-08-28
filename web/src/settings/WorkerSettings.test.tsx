@@ -25,7 +25,7 @@ test("configures and reorders durable workers with progressive path completion",
       busy={false}
       providers={{ claude_code: true, codex: false }}
       onCreate={onCreate}
-      onUpdate={onUpdate}
+      onUpdate={onUpdate} onChooseMark={vi.fn()}
       onRemove={vi.fn().mockResolvedValue(undefined)}
       onDraftDescription={vi.fn().mockResolvedValue("Drafted routing context.")}
       onReorder={onReorder}
@@ -67,7 +67,7 @@ test("requires explicit confirmation before removing a sleeping worker", async (
       busy={false}
       providers={{ claude_code: true, codex: true }}
       onCreate={vi.fn()}
-      onUpdate={vi.fn()}
+      onUpdate={vi.fn()} onChooseMark={vi.fn()}
       onRemove={onRemove}
       onDraftDescription={vi.fn()}
       onReorder={vi.fn()}
@@ -90,7 +90,7 @@ test("accepts a complete typed path when it is not in the bounded suggestions", 
       busy={false}
       providers={{ claude_code: true, codex: false }}
       onCreate={onCreate}
-      onUpdate={vi.fn()}
+      onUpdate={vi.fn()} onChooseMark={vi.fn()}
       onRemove={vi.fn()}
       onDraftDescription={vi.fn()}
       onReorder={vi.fn()}
@@ -115,7 +115,7 @@ test("offers Codex only when the terminal host reports it ready", () => {
       busy={false}
       providers={{ claude_code: true, codex: true }}
       onCreate={onCreate}
-      onUpdate={vi.fn()}
+      onUpdate={vi.fn()} onChooseMark={vi.fn()}
       onRemove={vi.fn()}
       onDraftDescription={vi.fn()}
       onReorder={vi.fn()}
@@ -139,7 +139,7 @@ test("desktop drag ordering keeps accessible arrow controls as a fallback", () =
       busy={false}
       providers={{ claude_code: true, codex: false }}
       onCreate={vi.fn()}
-      onUpdate={vi.fn()}
+      onUpdate={vi.fn()} onChooseMark={vi.fn()}
       onRemove={vi.fn()}
       onDraftDescription={vi.fn()}
       onReorder={onReorder}
@@ -168,7 +168,7 @@ test("drafts private repository context into an editable unsaved description", a
       busy={false}
       providers={{ claude_code: true, codex: true }}
       onCreate={vi.fn()}
-      onUpdate={onUpdate}
+      onUpdate={onUpdate} onChooseMark={vi.fn()}
       onRemove={vi.fn()}
       onDraftDescription={onDraftDescription}
       onImproveDescription={onImproveDescription}
@@ -213,7 +213,7 @@ test("moves a sleeping worker to a repository that is not a discovered one", () 
       busy={false}
       providers={{ claude_code: true, codex: true }}
       onCreate={vi.fn()}
-      onUpdate={onUpdate}
+      onUpdate={onUpdate} onChooseMark={vi.fn()}
       onRemove={vi.fn()}
       onDraftDescription={vi.fn()}
       onReorder={vi.fn()}
@@ -251,7 +251,7 @@ test("will not move a running worker out from under itself", () => {
       busy={false}
       providers={{ claude_code: true, codex: true }}
       onCreate={vi.fn()}
-      onUpdate={vi.fn()}
+      onUpdate={vi.fn()} onChooseMark={vi.fn()}
       onRemove={vi.fn()}
       onDraftDescription={vi.fn()}
       onReorder={vi.fn()}
@@ -273,7 +273,7 @@ test("does not guess provider availability when the worker engine cannot be chec
       providers={{ claude_code: true, codex: false }}
       providerCapabilitiesUnavailable
       onCreate={onCreate}
-      onUpdate={vi.fn()}
+      onUpdate={vi.fn()} onChooseMark={vi.fn()}
       onRemove={vi.fn()}
       onDraftDescription={vi.fn()}
       onReorder={vi.fn()}
@@ -296,7 +296,7 @@ test("protects a generated routing draft from an accidental cancel", async () =>
       busy={false}
       providers={{ claude_code: true, codex: true }}
       onCreate={vi.fn()}
-      onUpdate={vi.fn()}
+      onUpdate={vi.fn()} onChooseMark={vi.fn()}
       onRemove={vi.fn()}
       onDraftDescription={vi.fn().mockResolvedValue("A useful routing draft.")}
       onReorder={vi.fn()}
@@ -326,7 +326,7 @@ test("filters a large roster without making hidden ordering ambiguous", () => {
       busy={false}
       providers={{ claude_code: true, codex: true }}
       onCreate={vi.fn()}
-      onUpdate={vi.fn()}
+      onUpdate={vi.fn()} onChooseMark={vi.fn()}
       onRemove={vi.fn()}
       onDraftDescription={vi.fn()}
       onReorder={onReorder}
@@ -350,7 +350,7 @@ test("shows the real Claude improvement failure instead of appearing inert", asy
       busy={false}
       providers={{ claude_code: true, codex: true }}
       onCreate={vi.fn()}
-      onUpdate={vi.fn()}
+      onUpdate={vi.fn()} onChooseMark={vi.fn()}
       onRemove={vi.fn()}
       onDraftDescription={vi.fn()}
       onImproveDescription={onImproveDescription}
@@ -371,7 +371,7 @@ test("pins managed Scout after Queen while keeping provider and routing settings
       busy={false}
       providers={{ claude_code: true, codex: true }}
       onCreate={vi.fn()}
-      onUpdate={vi.fn()}
+      onUpdate={vi.fn()} onChooseMark={vi.fn()}
       onRemove={vi.fn()}
       onDraftDescription={vi.fn()}
       onReorder={vi.fn()}
@@ -405,3 +405,31 @@ function worker(id: string, name: string, workspace: string, position: number, r
     attention_state: "sleeping",
   };
 }
+
+test("choosing a bee saves it on its own, without the rest of the form", async () => {
+  // Everything else in this form is a draft the operator reviews before saving.
+  // A bee is different: the only way to judge one is to see it worn, so it
+  // applies on click. Sending it with the form would either save a half-typed
+  // name or make choosing a bee wait for one.
+  const onChooseMark = vi.fn();
+  const onUpdate = vi.fn();
+  render(
+    <WorkerSettings
+      workers={[worker("w1", "Platform", "/repo/platform", 0)]}
+      workspaces={[]}
+      busy={false}
+      providers={{ claude_code: true, codex: true }}
+      onCreate={vi.fn()}
+      onUpdate={onUpdate}
+      onChooseMark={onChooseMark}
+      onRemove={vi.fn()}
+      onDraftDescription={vi.fn()}
+      onReorder={vi.fn()}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /^Edit/ }));
+  fireEvent.click(screen.getByRole("radio", { name: /Pigtails/ }));
+
+  expect(onChooseMark).toHaveBeenCalledWith(expect.any(String), "pigtails");
+  expect(onUpdate).not.toHaveBeenCalled();
+});
