@@ -128,6 +128,17 @@ struct DevelopmentRuntimeResponse {
     /// cannot install. None means the host could not be asked, or there is no
     /// development checkout to compare against.
     protocol_migration_required: Option<bool>,
+    /// Which step failed: `build`, `install`, `protocol-change`, or absent.
+    ///
+    /// Every failure used to reach the operator as "the working copy did not
+    /// compile", whatever had happened — so an install refused for a good
+    /// reason read as a compiler error and the only way to learn otherwise was
+    /// the journal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_reason: Option<String>,
+    /// The failing step's own last words, one bounded line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_detail: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -284,6 +295,8 @@ pub(super) async fn development(
             deployed_source_published: source.is_some_and(|status| status.published),
             worker_engine_update_required: engine_update_required(&state).await,
             protocol_migration_required: protocol_migration_required(&state).await,
+            failure_reason: development_status_field(&state, "reason="),
+            failure_detail: development_status_field(&state, "detail="),
         }),
     )
         .into_response())
@@ -422,6 +435,22 @@ pub(super) fn build_source_revision() -> Option<String> {
 /// build that has made no progress in this long has stopped, whether it failed,
 /// was never picked up, or its watcher is not running.
 const STALLED_BUILD_AFTER: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+
+/// One field from the reload status file, when it says anything.
+///
+/// The file is key=value lines written by `swarm-package`. An empty value is
+/// treated as absent: "the step recorded nothing" and "there is no step" should
+/// both render as no detail rather than as an empty quote.
+fn development_status_field(state: &AppState, prefix: &str) -> Option<String> {
+    let path = state.development_reload_status_path.as_ref()?;
+    let value = std::fs::read_to_string(path.as_ref()).ok()?;
+    value
+        .lines()
+        .find_map(|line| line.strip_prefix(prefix))
+        .map(str::trim)
+        .filter(|found| !found.is_empty())
+        .map(ToOwned::to_owned)
+}
 
 pub(super) fn development_reload_state_for_source(
     state: &AppState,

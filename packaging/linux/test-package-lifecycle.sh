@@ -317,6 +317,71 @@ exit 1
 EOF
 chmod +x "$dev_checkout/packaging/linux/build-development-release.sh"
 
+cat > "$dev_checkout/packaging/linux/build-development-release.sh" <<'EOF'
+#!/bin/sh
+echo "   Compiling swarm-api v0.0.0" >&2
+echo "error[E0433]: failed to resolve: use of undeclared crate or module \`nope\`" >&2
+echo "error: could not compile \`swarm-api\` (lib) due to 1 previous error" >&2
+exit 1
+EOF
+chmod +x "$dev_checkout/packaging/linux/build-development-release.sh"
+
+printf 'state=requested\n' > "$SWARM_STATE_ROOT/development-reload.status"
+printf 'request\n' > "$SWARM_STATE_ROOT/development-reload.request"
+mkdir -p "$SWARM_STATE_ROOT/development-build/stale-one" "$SWARM_STATE_ROOT/development-build/stale-two"
+printf 'stale\n' > "$SWARM_STATE_ROOT/development-build/stale-one/file"
+if "$package" reload-development; then
+  echo "failing development build unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q '^state=failed$' "$SWARM_STATE_ROOT/development-reload.status"
+
+# WHY THIS IS ASSERTED SEPARATELY FROM state=failed. Every reload failure used
+# to write the same status, so the control room said "did not compile" whether
+# the compiler had spoken or not — and on 2026-08-27 it said exactly that about
+# a build that compiled fine and was refused at install. state=failed is the
+# fact; reason and detail are what make it actionable without journalctl.
+grep -q '^reason=build$' "$SWARM_STATE_ROOT/development-reload.status" \
+  || { echo "a failed build did not record reason=build" >&2; exit 1; }
+grep -q '^detail=.*E0433' "$SWARM_STATE_ROOT/development-reload.status" \
+  || { echo "the status did not carry the compiler's own error line" >&2; exit 1; }
+# One line, no newlines: the file is parsed as key=value, and a detail carrying
+# a newline would silently become a key of its own.
+[ "$(wc -l < "$SWARM_STATE_ROOT/development-reload.status")" -eq 4 ] \
+  || { echo "the failure status is not four lines" >&2; exit 1; }
+
+# A build that COMPILES and is refused at install must not be called a compile
+# error. This is the case the operator hit.
+cat > "$dev_checkout/packaging/linux/build-development-release.sh" <<'EOF'
+#!/bin/sh
+bundle="$1/refused"
+mkdir -p "$bundle"
+cat > "$bundle/swarm-package" <<'INNER'
+#!/bin/sh
+echo "swarm-package: this release speaks terminal-host protocol 10 and the installed host speaks 9" >&2
+exit 1
+INNER
+chmod +x "$bundle/swarm-package"
+echo "$bundle"
+EOF
+chmod +x "$dev_checkout/packaging/linux/build-development-release.sh"
+printf 'state=requested\n' > "$SWARM_STATE_ROOT/development-reload.status"
+printf 'request\n' > "$SWARM_STATE_ROOT/development-reload.request"
+if "$package" reload-development; then
+  echo "a refused install unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q '^reason=install$' "$SWARM_STATE_ROOT/development-reload.status" \
+  || { echo "a refused install was not recorded as an install failure" >&2; exit 1; }
+grep -q '^detail=.*protocol 10 and the installed host speaks 9' "$SWARM_STATE_ROOT/development-reload.status" \
+  || { echo "the status did not carry the installer's own refusal" >&2; exit 1; }
+
+# Back to a plainly failing builder for the state the rest of this file expects.
+cat > "$dev_checkout/packaging/linux/build-development-release.sh" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$dev_checkout/packaging/linux/build-development-release.sh"
 printf 'state=requested\n' > "$SWARM_STATE_ROOT/development-reload.status"
 printf 'request\n' > "$SWARM_STATE_ROOT/development-reload.request"
 mkdir -p "$SWARM_STATE_ROOT/development-build/stale-one" "$SWARM_STATE_ROOT/development-build/stale-two"

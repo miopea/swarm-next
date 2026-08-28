@@ -9,6 +9,7 @@ import {
   createTask,
   fetchReleaseNotes,
   fetchDevelopmentRuntime,
+  type DevelopmentRuntime,
   answerDecision,
   resolveDecision,
   claimWorker,
@@ -165,6 +166,29 @@ type WorkerVisibility = "all" | "awake";
 
 function workerName(sessionId: string): string {
   return `Claude ${sessionId.slice(-4).toUpperCase()}`;
+}
+
+/**
+ * What actually went wrong with a development reload, in the operator's terms.
+ *
+ * The reload records `reason` (which step) and `detail` (that step's own last
+ * line). Both are repeated rather than interpreted: a message we compose from a
+ * cause we did not observe is how "did not compile" came to be shown for a
+ * build that compiled.
+ */
+function developmentFailureMessage(runtime?: DevelopmentRuntime): string {
+  const detail = runtime?.failure_detail?.trim();
+  const said = detail ? ` It said: ${detail}` : "";
+  switch (runtime?.failure_reason) {
+    case "build":
+      return `The development working copy did not compile. The current release is still running.${said}`;
+    case "install":
+      return `The development build compiled, but could not be installed. The current release is still running.${said}`;
+    case "protocol-change":
+      return `This checkout changes the terminal-host protocol, which a reload cannot install — it stops every worker, so run the protocol migration when they are idle.${said}`;
+    default:
+      return `The development reload failed and did not record why. The current release is still running; the development reload service log has the detail.${said}`;
+  }
 }
 
 export function App() {
@@ -1208,7 +1232,13 @@ export function App() {
         return;
       }
       if (development.state === "failed") {
-        setOperationError("The development working copy did not compile. The current release is still running; check the development reload service log for the build error.");
+        // NEVER ASSERT A CAUSE WE DID NOT OBSERVE. This said "did not compile"
+        // for every failure, so an install refused for a good reason read as a
+        // compiler error and sent the operator to the wrong file. The reload
+        // now records which step failed and what it said; this repeats that
+        // rather than guessing, and only falls back to a generic sentence when
+        // there is genuinely nothing recorded.
+        setOperationError(developmentFailureMessage(development));
         return;
       }
     }

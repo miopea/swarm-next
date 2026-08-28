@@ -374,6 +374,10 @@ export type DevelopmentRuntime = {
    * it if nothing says it is pending.
    */
   protocol_migration_required?: boolean | null;
+  /** Which step failed: "build", "install", "protocol-change", or absent. */
+  failure_reason?: string | null;
+  /** The failing step's own last words, one bounded line. */
+  failure_detail?: string | null;
 };
 /** One release the origin currently offers. Absent from the manifest means withdrawn. */
 export type ReleaseOffer = {

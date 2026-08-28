@@ -29,6 +29,8 @@ update_schema_before=
 update_auth=
 update_incoming=
 dev_config="$config_root/swarm-dev.env"
+dev_failure_reason=
+dev_failure_detail=
 dev_reload_started=
 dev_status_path=
 dev_build_root=
@@ -37,6 +39,31 @@ dev_reload_revision=
 die() { printf 'swarm-package: %s\n' "$*" >&2; exit 1; }
 run_systemctl() { "$systemctl_bin" --user "$@"; }
 terminal_socket() { printf '%s/swarm/terminal.sock\n' "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; }
+
+# The one line worth showing from a failed step, bounded and newline-free.
+#
+# THE FIRST STRONG MATCH, NOT THE LAST. Cargo prints the cause first and a
+# summary last: `error[E0433]: failed to resolve` then `error: could not
+# compile \`swarm-api\` due to 1 previous error`. Taking the last match hands the
+# operator the summary, which names no file and no reason and is exactly the
+# uninformative sentence this whole mechanism exists to replace.
+#
+# Three tiers, because not every tool announces itself the same way: a line that
+# opens with an error marker, else the first line merely mentioning a failure
+# (vite says "Could not resolve" with no marker), else the last non-empty line
+# so something always reaches the operator.
+#
+# Bounded and stripped of newlines because the status file is parsed as
+# key=value — a detail carrying a newline becomes a key of its own and corrupts
+# every field after it.
+dev_last_error() {
+  awk '
+    cause == "" && /^(error(\[|:)|Error:|swarm-package:)/ { cause = $0 }
+    weak == "" && /error|cannot|Cannot|failed|refus/ { weak = $0 }
+    NF { last = $0 }
+    END { print (cause != "" ? cause : (weak != "" ? weak : last)) }
+  ' "$1" 2>/dev/null | tr -d '\r' | tr '\n' ' ' | cut -c1-300
+}
 
 # The schema a database file is at, without opening it.
 #
@@ -138,7 +165,9 @@ on_exit() {
     if [ "$result" -eq 0 ]; then
       printf 'state=ready\nrevision=%s\n' "$dev_reload_revision" > "$dev_status_path" 2>/dev/null || true
     else
-      printf 'state=failed\nrevision=%s\n' "$dev_reload_revision" > "$dev_status_path" 2>/dev/null || true
+      printf 'state=failed\nrevision=%s\nreason=%s\ndetail=%s\n' \
+        "$dev_reload_revision" "${dev_failure_reason:-unknown}" "${dev_failure_detail:-}" \
+        > "$dev_status_path" 2>/dev/null || true
     fi
   fi
   [ -z "$dev_build_root" ] || clear_managed_directory "$dev_build_root"
@@ -626,9 +655,30 @@ Build and migrate instead, which swaps the API and the host together. It STOPS E
   dev_build_root="$state_root/development-build"
   mkdir -p "$dev_build_root"
   clear_managed_directory "$dev_build_root"
-  bundle_path=$("$dev_checkout/packaging/linux/build-development-release.sh" "$dev_build_root")
+  # WHICH STEP FAILED, AND WHAT IT SAID, recorded where the control room reads it.
+  #
+  # Every failure used to reach the operator as "the development working copy
+  # did not compile", whatever had actually happened — so a build that compiled
+  # perfectly and was then refused at install read as a compiler error, and the
+  # only way to learn otherwise was journalctl. The operator: "it is taking a
+  # lot of work to find errors."
+  dev_log="$state_root/development-reload.log"
+  dev_failure_reason=build
+  if ! bundle_path=$("$dev_checkout/packaging/linux/build-development-release.sh" "$dev_build_root" 2>"$dev_log"); then
+    dev_failure_detail=$(dev_last_error "$dev_log")
+    cat "$dev_log" >&2 || true
+    die "the development build did not compile"
+  fi
+  cat "$dev_log" >&2 || true
   [ -d "$bundle_path" ] || die "development builder did not return a release directory"
-  "$bundle_path/swarm-package" update "$bundle_path"
+  dev_failure_reason=install
+  if ! "$bundle_path/swarm-package" update "$bundle_path" 2>"$dev_log"; then
+    dev_failure_detail=$(dev_last_error "$dev_log")
+    cat "$dev_log" >&2 || true
+    die "the development build compiled but could not be installed"
+  fi
+  cat "$dev_log" >&2 || true
+  dev_failure_reason=
 }
 
 # Installs a release the operator accepted in the control room.

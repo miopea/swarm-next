@@ -117,7 +117,12 @@ function appUpdate(development: DevelopmentRuntime | undefined): RuntimeUpdateSu
     return {
       kind: "failed",
       label: "App and API build failed",
-      detail: "The development working copy did not compile. The current release is still running.",
+      // Repeats what the reload recorded rather than asserting a cause. The
+      // fixed sentence here claimed a compiler error for every failure,
+      // including installs that were refused after compiling cleanly.
+      detail: development.failure_detail?.trim()
+        ? `${developmentFailureHeadline(development.failure_reason)} It said: ${development.failure_detail.trim()}`
+        : developmentFailureHeadline(development.failure_reason),
       busy: false,
       action: "build",
       actionLabel: "Build again",
@@ -201,4 +206,18 @@ export function nextRuntimeUpdates(
 ): RuntimeUpdateSummary[] | undefined {
   if (!health && !host && !development) return previous;
   return runtimeUpdates(health, host, development, superseded);
+}
+
+/** One sentence for the step that failed, and none invented when it is unknown. */
+function developmentFailureHeadline(reason?: string | null): string {
+  switch (reason) {
+    case "build":
+      return "The development working copy did not compile. The current release is still running.";
+    case "install":
+      return "The development build compiled, but could not be installed. The current release is still running.";
+    case "protocol-change":
+      return "This checkout changes the terminal-host protocol, which a reload cannot install.";
+    default:
+      return "The development reload failed and did not record why. The current release is still running.";
+  }
 }

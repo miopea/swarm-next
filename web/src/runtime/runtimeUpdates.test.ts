@@ -277,3 +277,61 @@ test("names a development mode pointing at somewhere that does not exist", () =>
   expect(misconfigured?.label).toBe("Development mode is misconfigured");
   expect(misconfigured?.action).toBeUndefined();
 });
+
+/**
+ * The operator, after a reload that compiled perfectly and was refused at
+ * install: "it is taking a lot of work to find errors."
+ *
+ * Every failure reached them as "the working copy did not compile" — a
+ * confident claim about a cause nobody observed, which sent them to the wrong
+ * file. The real message existed in the journal and nowhere else.
+ */
+test("an install that was refused is not reported as a compile error", () => {
+  const [status] = runtimeUpdates(undefined, undefined, {
+    enabled: true,
+    version: "0.1.0",
+    state: "failed",
+    reload_available: true,
+    deployed_source_revision: "aaaaaaaaaaaa",
+    source_revision: "bbbbbbbbbbbb",
+    source_dirty: false,
+    deployed_source_published: true,
+    failure_reason: "install",
+    failure_detail: "swarm-package: this release speaks terminal-host protocol 10 and the installed host speaks 9",
+  });
+  expect(status.detail).toContain("compiled, but could not be installed");
+  expect(status.detail).toContain("protocol 10 and the installed host speaks 9");
+  expect(status.detail).not.toContain("did not compile.");
+});
+
+test("a real compile failure still says so", () => {
+  const [status] = runtimeUpdates(undefined, undefined, {
+    enabled: true,
+    version: "0.1.0",
+    state: "failed",
+    reload_available: true,
+    deployed_source_revision: "aaaaaaaaaaaa",
+    source_revision: "bbbbbbbbbbbb",
+    source_dirty: false,
+    deployed_source_published: true,
+    failure_reason: "build",
+    failure_detail: "error[E0308]: mismatched types",
+  });
+  expect(status.detail).toContain("did not compile");
+  expect(status.detail).toContain("E0308");
+});
+
+test("a failure that recorded nothing does not invent a cause", () => {
+  const [status] = runtimeUpdates(undefined, undefined, {
+    enabled: true,
+    version: "0.1.0",
+    state: "failed",
+    reload_available: true,
+    deployed_source_revision: "aaaaaaaaaaaa",
+    source_revision: "bbbbbbbbbbbb",
+    source_dirty: false,
+    deployed_source_published: true,
+  });
+  expect(status.detail).toContain("did not record why");
+  expect(status.detail).not.toContain("did not compile");
+});
