@@ -59,7 +59,7 @@ version=$(cat "$SWARM_INSTALL_ROOT/current/VERSION")
 printf '%s\n' "$version" >> "$HOME/curl.log"
 [ "$version" != "3.0.0" ] || printf 'database-v3\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
 [ "$version" != "6.0.0" ] || printf 'database-v6\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
-[ "$version" != "3.0.0" ] && [ "$version" != "6.0.0" ]
+[ "$version" != "3.0.0" ] && [ "$version" != "6.0.0" ] && [ "$version" != "8.0.0" ]
 EOF
 chmod +x "$SWARM_SYSTEMCTL_BIN" "$SWARM_CURL_BIN"
 
@@ -192,6 +192,8 @@ make_bundle 3.0.0
 make_bundle 4.0.0 6
 make_bundle 5.0.0
 make_bundle 6.0.0 7
+make_bundle 7.0.0 7
+make_bundle 8.0.0 8
 package="$repo_root/packaging/linux/swarm-package"
 
 # Initial install owns both API/browser and terminal-host pointers.
@@ -576,13 +578,6 @@ printf '0\n' > "$HOME/running-sessions"
 [ -x "$SWARM_BIN_ROOT/swarm-terminal-host" ]
 grep -q '^--user restart swarm-terminal-host.service$' "$HOME/systemctl.log"
 
-# Protocol changes fail closed against the independently pinned host.
-if "$package" update "$test_root/bundle-4.0.0"; then
-  echo "incompatible protocol update unexpectedly succeeded" >&2
-  exit 1
-fi
-[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "2.0.0" ]
-
 # A failed API health check restores only the previous API/browser pointer.
 printf 'database-v2\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
 if "$package" update "$test_root/bundle-3.0.0"; then
@@ -595,41 +590,91 @@ fi
 [ "$(cat "$SWARM_STATE_ROOT/backups/pre-update-3.0.0.sqlite3")" = "database-v2" ]
 [ "$(tail -n 2 "$HOME/curl.log" | tr '\n' ' ')" = "3.0.0 2.0.0 " ]
 
-# THE REFUSAL NAMES THE COMMAND THAT WORKS. `update` correctly declines a
-# protocol change, and for three hours on 2026-08-27 that refusal was a dead
-# end: it said a compatibility migration was required and never said that
-# migrate-protocol is one. The release was reverted instead of migrated.
-migrate_refusal=$("$package" update "$test_root/bundle-4.0.0" 2>&1 || true)
-case "$migrate_refusal" in
-  *migrate-protocol*) :;;
-  *) echo "the protocol refusal does not name migrate-protocol: $migrate_refusal" >&2; exit 1;;
-esac
-# And it names both protocols, so the operator can see WHICH way they differ
-# rather than being told only that they do.
-case "$migrate_refusal" in
-  *"protocol 6"*|*"speaks 5"*) :;;
-  *) echo "the protocol refusal does not name the protocols: $migrate_refusal" >&2; exit 1;;
-esac
-# The refusal must still refuse: nothing moved.
-[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "2.0.0" ]
-[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "2.0.0" ]
+# --- A PROTOCOL CHANGE INSTALLS IN ONE HOP, FROM THE ENTRY POINT A HIVE USES --
+#
+# THE REASON THIS IS `update` AND NOT `migrate-protocol`: a Hive installs a
+# release by handing control to the NEW bundle, and every version in the field
+# ultimately runs `"$requested/swarm-package" update "$requested"` --
+# v0.8.19 hardcodes exactly that and never selects migrate-protocol. So `update`
+# is the only door a release can arrive through on the Hives that already exist.
+# While it refused here, a protocol-bumping release was uninstallable in the
+# field and the only alternative was a two-stage rollout: ship one release to
+# teach every Hive, wait for everyone to take it, then ship the real one. The
+# operator: "I have to count on a bunch of people to run an update, report back,
+# and then I release another update and they update ... there has to be a better
+# way."
+: > "$HOME/systemctl.log"
+"$package" update "$test_root/bundle-4.0.0" \
+  || { echo "a protocol-bumping release could not be installed by update" >&2; exit 1; }
 
-# Explicit protocol migration refuses active workers, then atomically switches
-# both processes while retaining the old API and host for rollback.
-printf '1\n' > "$HOME/running-sessions"
-if "$package" migrate-protocol "$test_root/bundle-4.0.0"; then
+# THE INVARIANT THE OLD REFUSAL WAS PROTECTING, asserted directly rather than
+# via the refusal it happened to use. A host and an API speaking different
+# protocols is the failure; the guard is not weakened by moving them TOGETHER.
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "4.0.0" ] \
+  || { echo "the API was not moved by the protocol update" >&2; exit 1; }
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "4.0.0" ] \
+  || { echo "the host was left behind the API — the divergence the guard exists to prevent" >&2; exit 1; }
+[ "$(cat "$SWARM_INSTALL_ROOT/current/PROTOCOL")" = "$(cat "$SWARM_INSTALL_ROOT/host-current/PROTOCOL")" ] \
+  || { echo "the API and host protocols disagree after an update" >&2; exit 1; }
+# The engine really was swapped, not just relinked.
+grep -q '^--user enable --now swarm.target$' "$HOME/systemctl.log" \
+  || { echo "the protocol update did not restart the stack" >&2; exit 1; }
+# And rollback is still possible.
+[ "$(cat "$SWARM_INSTALL_ROOT/previous/VERSION")" = "2.0.0" ] \
+  || { echo "the protocol update did not retain a rollback target" >&2; exit 1; }
+
+# IT SAYS WHAT IT COSTS. `update` otherwise promises workers keep running, and
+# a protocol change cannot keep that promise. Announcing it is the difference
+# between a surprise and a warned restart.
+protocol_notice=$("$package" update "$test_root/bundle-7.0.0" 2>&1)
+case "$protocol_notice" in
+  *"changes the terminal-host protocol from 6 to 7"*) :;;
+  *) echo "the protocol update did not name both protocols: $protocol_notice" >&2; exit 1;;
+esac
+case "$protocol_notice" in
+  *"every worker session ends"*) :;;
+  *) echo "the protocol update did not say it ends worker sessions" >&2; exit 1;;
+esac
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "7.0.0" ]
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "7.0.0" ]
+
+# --- AND A BOTCHED ONE ROLLS BOTH BACK -------------------------------------
+#
+# "we have botched updates MANY times ... this needs to be certain." The risk
+# of doing the migration inside `update` is a half-applied stack, so the
+# unhealthy case is asserted on BOTH links, not just the API.
+printf 'database-v7
+' > "$SWARM_STATE_ROOT/swarm.sqlite3"
+if "$package" update "$test_root/bundle-8.0.0"; then
+  echo "an unhealthy protocol update unexpectedly succeeded" >&2
+  exit 1
+fi
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "7.0.0" ] \
+  || { echo "a failed protocol update left the API moved" >&2; exit 1; }
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "7.0.0" ] \
+  || { echo "a failed protocol update left the host moved" >&2; exit 1; }
+[ "$(cat "$SWARM_INSTALL_ROOT/current/PROTOCOL")" = "$(cat "$SWARM_INSTALL_ROOT/host-current/PROTOCOL")" ] \
+  || { echo "a failed protocol update left the stack half-applied" >&2; exit 1; }
+[ "$(cat "$SWARM_STATE_ROOT/swarm.sqlite3")" = "database-v7" ] \
+  || { echo "a failed protocol update did not restore the database" >&2; exit 1; }
+
+# Explicit migrate-protocol still refuses active workers and still works.
+printf '1
+' > "$HOME/running-sessions"
+if "$package" migrate-protocol "$test_root/bundle-6.0.0"; then
   echo "active protocol migration unexpectedly succeeded" >&2
   exit 1
 fi
-[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "2.0.0" ]
-[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "2.0.0" ]
-printf '0\n' > "$HOME/running-sessions"
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "7.0.0" ]
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "7.0.0" ]
+printf '0
+' > "$HOME/running-sessions"
 : > "$HOME/systemctl.log"
-"$package" migrate-protocol "$test_root/bundle-4.0.0"
+"$package" update "$test_root/bundle-4.0.0"
 [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "4.0.0" ]
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "4.0.0" ]
 
-[ "$(cat "$SWARM_INSTALL_ROOT/previous/VERSION")" = "2.0.0" ]
+[ "$(cat "$SWARM_INSTALL_ROOT/previous/VERSION")" = "7.0.0" ]
 grep -q '^--user stop swarm.target$' "$HOME/systemctl.log"
 grep -q '^--user enable --now swarm.target$' "$HOME/systemctl.log"
 

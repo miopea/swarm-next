@@ -958,9 +958,43 @@ install_or_update() {
     # A procedure nobody can find from the error is barely better than one that
     # does not exist.
     if [ "$host_protocol" != "$protocol" ]; then
-      die "this release speaks terminal-host protocol $protocol and the installed host speaks $host_protocol, so 'update' cannot install it. Run the protocol migration instead, which swaps the API and the host together and defers if any worker session is live:
-
-    $bundle/swarm-package migrate-protocol $bundle"
+      # UPDATE DOES THE MIGRATION RATHER THAN REFUSING IT, and that is the
+      # difference between a release a Hive can take and one that strands it.
+      #
+      # THE REASON IS WHOSE CODE RUNS. A Hive installs a release by handing
+      # control to the NEW bundle: swarm-release-apply runs
+      # `$current/swarm-package apply-release`, and every version of that
+      # ultimately calls `"$requested/swarm-package" update "$requested"`.
+      # v0.8.19 hardcodes `update` and never selects migrate-protocol. So on
+      # every Hive already in the field, `update` is the ONLY entry point a
+      # release can arrive through, and refusing here is refusing the release.
+      #
+      # The alternative considered and rejected was a two-stage rollout: ship a
+      # protocol-unchanged release teaching each Hive to choose
+      # migrate-protocol, wait for everyone to take it, then ship the real one.
+      # The operator: "I have to count on a bunch of people to run an update,
+      # report back, and then I release another update and they update ...
+      # there has to be a better way." There is, and this is it.
+      #
+      # THE GUARD IS NOT WIDENED. Nothing here lets a host and an API run on
+      # different protocols; they are swapped together, atomically, by the same
+      # activation the explicit command uses. What changes is that `update`
+      # stops declining a job it was always able to do.
+      #
+      # WHAT IT COSTS, said plainly because `update` otherwise promises the
+      # opposite: this restarts the terminal host, so every worker session ends.
+      # A protocol change cannot be applied any other way -- the API and host
+      # must move together -- so the honest thing is to do it and announce it,
+      # not to refuse and leave the operator with no route at all.
+      printf 'swarm-package: this release changes the terminal-host protocol from %s to %s.\n' \
+        "$host_protocol" "$protocol" >&2
+      printf 'swarm-package: the API and the worker engine are swapped together, so every worker session ends and workers are brought back afterwards.\n' >&2
+      # Drained first so nothing new attaches between here and the swap.
+      SWARM_TERMINAL_SOCKET=$(terminal_socket) \
+        "$host_release/bin/swarmctl" drain >/dev/null 2>&1 || true
+      drain_release=$host_release
+      activate_protocol_migration "$new_release"
+      return
     fi
   fi
   # When the new release carries the same engine, move host-current onto it
