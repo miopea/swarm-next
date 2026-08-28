@@ -156,7 +156,8 @@ const UNATTENDED_BLOCK_SCHEMA_VERSION: i64 = 100;
 const AMENDMENT_ACTIVITY_SCHEMA_VERSION: i64 = 101;
 const BLOCK_DEADLINE_SCHEMA_VERSION: i64 = 102;
 const WORKER_MARK_SCHEMA_VERSION: i64 = 103;
-const CURRENT_SCHEMA_VERSION: i64 = WORKER_MARK_SCHEMA_VERSION;
+const CONNECTION_PRINCIPAL_SCHEMA_VERSION: i64 = 104;
+const CURRENT_SCHEMA_VERSION: i64 = CONNECTION_PRINCIPAL_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -3208,6 +3209,9 @@ fn migrate_newest_schema_steps(
     if schema_version < WORKER_MARK_SCHEMA_VERSION {
         migrate_worker_mark(transaction)?;
     }
+    if schema_version < CONNECTION_PRINCIPAL_SCHEMA_VERSION {
+        migrate_connection_principal(transaction)?;
+    }
     Ok(())
 }
 
@@ -3250,6 +3254,62 @@ fn migrate_worker_mark(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Res
         transaction.execute_batch("ALTER TABLE worker_profiles ADD COLUMN mark TEXT;")?;
     }
     transaction.pragma_update(None, "user_version", WORKER_MARK_SCHEMA_VERSION)
+}
+
+/// Which outside tool a profile IS, when it is not a person's worker.
+///
+/// ONE NULLABLE COLUMN, AND NULL IS EVERY EXISTING ROW. An outside tool that
+/// files work needs a durable identity: `worker_profiles` is referenced by
+/// foreign keys from tasks, activity, briefings, decisions and a dozen other
+/// tables, so a connection that writes to the board must BE one of these rows
+/// or the writes have nothing to point at. Flagging the row is what keeps it
+/// out of the roster and the live-worker count without inventing a second kind
+/// of author the rest of the schema has never heard of.
+///
+/// DELIBERATELY NOT A WIDENED `system_role` CHECK. That column already exists
+/// and already means "a profile the Hive made rather than the operator", so it
+/// looked like the natural home. `SQLite` cannot alter a CHECK constraint: taking
+/// that route means rebuilding `worker_profiles` — the table seventeen others
+/// hold foreign keys into, and the one whose rebuild already failed once on the
+/// operator's real database. An added nullable column needs no rebuild, no
+/// backfill and no data movement, so the worst case is a column nothing reads.
+///
+/// # Errors
+///
+/// Returns an error when the step cannot be applied.
+fn migrate_connection_principal(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    // Table existence AND column absence, for the reason migrate_worker_mark
+    // records above: the migration tests rewind user_version without rewinding
+    // tables, and pragma_table_info on a missing table returns no rows rather
+    // than failing.
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                        WHERE type = 'table' AND name = 'worker_profiles')",
+        [],
+        |row| row.get(0),
+    )?;
+    let has_column: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('worker_profiles')
+                        WHERE name = 'connection_client_id')",
+        [],
+        |row| row.get(0),
+    )?;
+    if present && !has_column {
+        transaction
+            .execute_batch("ALTER TABLE worker_profiles ADD COLUMN connection_client_id TEXT;")?;
+    }
+    if present {
+        // One profile per client. A second registration by the same client must
+        // find the identity it already has rather than quietly grow another,
+        // which is how a board fills with duplicate authors nobody can tell
+        // apart.
+        transaction.execute_batch(
+            "CREATE UNIQUE INDEX IF NOT EXISTS one_profile_per_connection
+                 ON worker_profiles(connection_client_id)
+                 WHERE connection_client_id IS NOT NULL;",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", CONNECTION_PRINCIPAL_SCHEMA_VERSION)
 }
 
 /// When a block's own stated condition arrives, if it named one.

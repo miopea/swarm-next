@@ -95,6 +95,17 @@ impl ProfileStartup {
     }
 }
 
+/// Stands where a worker's repository path would be, for a profile that is an
+/// outside tool rather than a worker.
+///
+/// A workspace must be an absolute path and a connection has none: it files
+/// work against whatever workspace the task names, and never starts a process
+/// of its own. This is deliberately a path that does not exist rather than a
+/// real one borrowed for the shape — if anything ever did try to route here it
+/// would fail immediately and visibly, where a borrowed real path would quietly
+/// do something plausible and wrong.
+const CONNECTION_WORKSPACE: &str = "/outside-tool";
+
 impl TaskStore {
     /// Returns the singleton Queen profile, creating it on first start.
     ///
@@ -434,6 +445,125 @@ impl TaskStore {
         )
     }
 
+    /// The identity an outside tool writes to the board as.
+    ///
+    /// FIND OR CREATE, keyed on the OAuth client id, so a tool that reconnects
+    /// keeps the identity its earlier work is already attributed to. Growing a
+    /// second profile on every reconnection is how a board fills with duplicate
+    /// authors nobody can tell apart; the unique index added with schema 104
+    /// makes that impossible rather than merely unlikely.
+    ///
+    /// The row is a real `worker_profiles` row because it has to be — tasks,
+    /// activity, briefings and decisions all hold foreign keys into that table,
+    /// so an author that is not one of these rows has nothing to point at. It
+    /// carries `connection_client_id`, which is what keeps it out of the roster
+    /// and out of anything that counts workers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the profile cannot be read or created.
+    pub fn connection_principal(
+        &self,
+        client_id: &str,
+        name: &str,
+    ) -> Result<WorkerProfile, TaskStoreError> {
+        if let Some(existing) = self.connection_profile_id(client_id)? {
+            return self.get_worker_profile(existing);
+        }
+        // Never autostart and never in the roster's order: a connection has no
+        // process to start and no place in a list of people's workers.
+        let profile = self.insert_profile(
+            &self.available_connection_name(name)?,
+            "",
+            WorkerRole::Worker,
+            ProviderKind::ClaudeCode,
+            CONNECTION_WORKSPACE,
+            ProfileStartup {
+                autostart: false,
+                position: 0,
+                ephemeral: false,
+            },
+        )?;
+        // SCOPED, because `connection()` hands out a MutexGuard and a Mutex is
+        // not reentrant: holding this one across `get_worker_profile` — which
+        // takes its own — deadlocks the process rather than failing. It cost
+        // four hung test binaries, the oldest running two hours, and every
+        // build that queued behind the lock they were holding looked like a
+        // slow machine.
+        {
+            let connection = self.connection()?;
+            connection.execute(
+                "UPDATE worker_profiles SET connection_client_id = ?2, updated_at = unixepoch()
+                  WHERE id = ?1",
+                rusqlite::params![profile.id.to_string(), client_id],
+            )?;
+        }
+        self.get_worker_profile(profile.id)
+    }
+
+    fn connection_profile_id(&self, client_id: &str) -> Result<Option<WorkerId>, TaskStoreError> {
+        let connection = self.connection()?;
+        let found: Option<String> = connection
+            .query_row(
+                "SELECT id FROM worker_profiles WHERE connection_client_id = ?1",
+                [client_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        found
+            .map(|value| {
+                WorkerId::from_str(&value)
+                    .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))
+            })
+            .transpose()
+    }
+
+    /// A profile name is UNIQUE across the whole table, so a connection calling
+    /// itself something a worker is already called must not take the name and
+    /// must not fail the connection either.
+    fn available_connection_name(&self, requested: &str) -> Result<String, TaskStoreError> {
+        let base = {
+            let trimmed = requested.trim();
+            if trimmed.is_empty() {
+                "Connected tool".to_owned()
+            } else {
+                trimmed.to_owned()
+            }
+        };
+        let connection = self.connection()?;
+        for suffix in 0..64 {
+            let candidate = if suffix == 0 {
+                base.clone()
+            } else {
+                format!("{base} ({suffix})")
+            };
+            let taken: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM worker_profiles WHERE name = ?1 COLLATE NOCASE)",
+                [&candidate],
+                |row| row.get(0),
+            )?;
+            if !taken {
+                return Ok(candidate);
+            }
+        }
+        Err(TaskStoreError::NotFound)
+    }
+
+    /// Whether this profile is an outside tool rather than a worker.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the profile cannot be read.
+    pub fn is_connection(&self, worker_id: WorkerId) -> Result<bool, TaskStoreError> {
+        let connection = self.connection()?;
+        let value: Option<String> = connection.query_row(
+            "SELECT connection_client_id FROM worker_profiles WHERE id = ?1",
+            [worker_id.to_string()],
+            |row| row.get(0),
+        )?;
+        Ok(value.is_some())
+    }
+
     /// Adopts a temporary worker into the Hive under a permanent name.
     ///
     /// A FLAG CHANGE, deliberately, not a re-creation. The worker keeps its id,
@@ -619,7 +749,10 @@ impl TaskStore {
             LEFT JOIN worker_engagements e
               ON e.worker_id = p.id AND e.session_id = s.session_id
              AND e.expires_at > unixepoch()
-            WHERE p.archived_at IS NULL
+            -- An outside tool is an author, not a member of the crew. It has no
+            -- process, no terminal and no place in a list of people's workers,
+            -- and counting one as a worker would misreport the machine.
+            WHERE p.archived_at IS NULL AND p.connection_client_id IS NULL
             ORDER BY CASE
                          WHEN p.role = 'queen' THEN 0
                          WHEN p.system_role = 'scout' THEN 1
@@ -3075,6 +3208,92 @@ mod tests {
     /// Releasing archives rather than deletes, for the same reason: the row has
     /// to outlive the worker or its writes point at nothing. That is why the
     /// action is called Release rather than Kill.
+    /// An outside tool is an author, not a member of the crew.
+    ///
+    /// It needs a real profile row because tasks, activity and briefings all
+    /// hold foreign keys into `worker_profiles` — an author that is not one of
+    /// these rows has nothing to point at. It must not therefore turn up in the
+    /// roster, or the operator gains a "worker" with no process, no terminal
+    /// and nothing to open.
+    #[test]
+    fn a_connection_is_an_author_and_never_appears_in_the_roster() {
+        let store = TaskStore::in_memory().unwrap();
+        store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker(
+                "Sculpt Studio",
+                ProviderKind::ClaudeCode,
+                "/workspace/s",
+                false,
+                1,
+            )
+            .unwrap();
+
+        let connection = store
+            .connection_principal("client-abc", "Claude Desktop")
+            .unwrap();
+        assert!(store.is_connection(connection.id).unwrap());
+        assert!(!store.is_connection(worker.id).unwrap());
+
+        // It exists and can be read as an author...
+        assert_eq!(
+            store.get_worker_profile(connection.id).unwrap().id,
+            connection.id
+        );
+        // ...and is absent from the roster.
+        let roster = store.list_worker_profiles().unwrap();
+        assert!(
+            roster.iter().all(|profile| profile.id != connection.id),
+            "a connection must not appear in the roster"
+        );
+        assert!(roster.iter().any(|profile| profile.id == worker.id));
+    }
+
+    /// Reconnecting keeps the identity the earlier work is attributed to.
+    ///
+    /// A second profile per reconnection is how a board fills with duplicate
+    /// authors nobody can tell apart.
+    #[test]
+    fn reconnecting_finds_the_same_identity_rather_than_growing_another() {
+        let store = TaskStore::in_memory().unwrap();
+        store.ensure_queen("/workspace/queen").unwrap();
+        let first = store
+            .connection_principal("client-abc", "Claude Desktop")
+            .unwrap();
+        let again = store
+            .connection_principal("client-abc", "Claude Desktop")
+            .unwrap();
+        assert_eq!(first.id, again.id);
+
+        // A different client is a different author.
+        let other = store
+            .connection_principal("client-xyz", "Claude Desktop")
+            .unwrap();
+        assert_ne!(first.id, other.id);
+    }
+
+    /// A connection asking for a name a worker already holds must neither take
+    /// the name nor fail to connect — profile names are unique table-wide.
+    #[test]
+    fn a_connection_whose_name_is_taken_still_connects() {
+        let store = TaskStore::in_memory().unwrap();
+        store.ensure_queen("/workspace/queen").unwrap();
+        store
+            .create_worker(
+                "Claude Desktop",
+                ProviderKind::ClaudeCode,
+                "/workspace/s",
+                false,
+                1,
+            )
+            .unwrap();
+        let connection = store
+            .connection_principal("client-abc", "Claude Desktop")
+            .unwrap();
+        assert_ne!(connection.name, "Claude Desktop");
+        assert!(connection.name.starts_with("Claude Desktop"));
+    }
+
     #[test]
     fn a_temporary_worker_keeps_its_identity_through_adoption_and_release() {
         let store = TaskStore::in_memory().unwrap();
