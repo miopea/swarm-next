@@ -470,6 +470,34 @@ pub(super) fn development_reload_state_for_source(
             .is_some_and(std::path::Path::is_dir);
         return if configured { "idle" } else { "unavailable" };
     };
+    // A build reports progress by rewriting this file. One that has not been
+    // touched for longer than any build takes is not in progress; nothing is
+    // acting on it, and saying "building" forever is worse than saying so.
+    let stalled = std::fs::metadata(path.as_ref())
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|since| since > STALLED_BUILD_AFTER);
+    reload_state_from(
+        &value,
+        source_revision,
+        build_source_revision().as_deref(),
+        stalled,
+    )
+}
+
+/// The rule, separated so it can be tested against this function rather than
+/// against a copy of it.
+///
+/// `deployed_revision` is what this binary was built from. It is what makes a
+/// superseded failure distinguishable from a live one, and it is the reason
+/// this takes four arguments rather than reading the world itself.
+fn reload_state_from(
+    value: &str,
+    source_revision: Option<&str>,
+    deployed_revision: Option<&str>,
+    stalled: bool,
+) -> &'static str {
     let marker_revision = value
         .lines()
         .find_map(|line| line.strip_prefix("revision="));
@@ -479,14 +507,29 @@ pub(super) fn development_reload_state_for_source(
     {
         return "idle";
     }
-    // A build reports progress by rewriting this file. One that has not been
-    // touched for longer than any build takes is not in progress; nothing is
-    // acting on it, and saying "building" forever is worse than saying so.
-    let stalled = std::fs::metadata(path.as_ref())
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|modified| modified.elapsed().ok())
-        .is_some_and(|since| since > STALLED_BUILD_AFTER);
+    // A FAILURE THAT NAMES THE REVISION NOW RUNNING HAS BEEN OVERTAKEN BY EVENTS.
+    //
+    // The check above only forgets a stale status when it names a DIFFERENT
+    // revision from the checkout. That misses the case an operator actually
+    // hits: a reload fails, the revision is installed another way, and the card
+    // still reports a failure for code that is now serving the page it is drawn
+    // on. On 2026-08-28 a reload was refused for a protocol change, the
+    // migration installed that very revision minutes later, and the control
+    // room went on offering a build that was already running.
+    //
+    // Compared against the DEPLOYED revision rather than the checkout, because
+    // "this failed" and "this is what you are running" cannot both be useful
+    // and the second one wins.
+    // BOTH must be known. `None == None` would make every failure that
+    // recorded no revision, on a Hive that cannot say what it was built from,
+    // look superseded — swallowing exactly the failures with the least
+    // information attached to them.
+    if marker_state == Some("failed")
+        && let Some(deployed) = deployed_revision
+        && marker_revision == Some(deployed)
+    {
+        return "idle";
+    }
     match marker_state {
         Some("requested" | "building") if stalled => "stalled",
         Some("requested") => "requested",
@@ -791,7 +834,56 @@ pub(super) async fn worker_engine_update_required(state: &AppState) -> Option<St
 
 #[cfg(test)]
 mod tests {
+    use super::reload_state_from;
     use super::{ResourcePressure, layer_pressure, machine_of as machine};
+
+    /// The operator, 2026-08-28: "I have a pending build showing that needs to
+    /// be installed" — when the revision it was offering was already the one
+    /// serving them the page.
+    ///
+    /// A reload was refused for a protocol change; the migration installed that
+    /// very revision minutes later. The status file outlived the attempt, and
+    /// the only staleness check compared it against the CHECKOUT, which still
+    /// matched. Nothing compared it against what was running.
+    #[test]
+    fn a_failure_for_the_revision_now_running_is_not_reported() {
+        let failed = "state=failed\nrevision=b9220d224bb2\n";
+        assert_eq!(
+            reload_state_from(failed, Some("b9220d224bb2"), Some("b9220d224bb2"), false),
+            "idle"
+        );
+    }
+
+    /// And a failure for a revision that is NOT deployed is still a failure —
+    /// the case the card exists for.
+    #[test]
+    fn a_failure_for_a_revision_that_is_not_running_still_reports() {
+        let failed = "state=failed\nrevision=b9220d224bb2\n";
+        assert_eq!(
+            reload_state_from(failed, Some("b9220d224bb2"), Some("5a966cfd048b"), false),
+            "failed"
+        );
+    }
+
+    /// A build in flight for the deployed revision is not a superseded failure.
+    /// Only `failed` is forgotten; `building` still reports, or a reload of
+    /// unchanged source would look idle while it ran.
+    #[test]
+    fn a_build_in_flight_is_untouched_by_the_supersede_rule() {
+        let building = "state=building\nrevision=b9220d224bb2\n";
+        assert_eq!(
+            reload_state_from(building, Some("b9220d224bb2"), Some("b9220d224bb2"), false),
+            "building"
+        );
+    }
+
+    /// A Hive that cannot say what it was built from must not swallow failures:
+    /// `None == None` would make every failure with no revision look superseded.
+    #[test]
+    fn an_unknown_deployed_revision_does_not_swallow_a_failure() {
+        let failed = "state=failed\n";
+        assert_eq!(reload_state_from(failed, None, None, false), "failed");
+    }
 
     const GIB: u64 = 1024 * 1024 * 1024;
 
