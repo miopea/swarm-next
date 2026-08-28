@@ -225,53 +225,51 @@ pub async fn handle(
     let principal = match bridge.authenticate(request.headers()) {
         Ok(principal) => principal,
         Err(AgentBridgeError::Unauthorized) => {
-            // NAME WHERE TO AUTHENTICATE, do not merely refuse. A bare `Bearer`
-            // tells a client it needs a token and not where to get one, so the
-            // 401 is a dead end and the tool simply cannot connect — which is
-            // exactly the state an outside tool found this endpoint in. The
-            // `resource_metadata` parameter turns the same refusal into an
-            // invitation the client can act on.
-            // AN OAUTH TOKEN THAT IS REAL BUT NOT YET USABLE GETS ITS OWN
-            // ANSWER. The authorization server issues genuine tokens, and the
-            // principal that would let one act on the board is the next piece
-            // of this work. Answering 401 here would tell the client its token
-            // is bad and send it round the whole flow again, forever, for a
-            // reason no retry can fix. 403 with a plain sentence says the
-            // connection worked and the feature is unfinished — which is true,
-            // and is the difference between a bug report and a retry loop.
+            // AN OAUTH TOKEN RESOLVES TO A CONNECTION, not to a worker.
+            // `authenticate` above only knows worker agent credentials, which
+            // is right — a connected tool is not a worker and must not borrow
+            // one's identity. It gets its own durable profile instead, found or
+            // created here on first use, so a board write says which tool made
+            // it and still says so after the connection is gone.
+            //
+            // The name is carried in the client id, signed at registration.
+            // Verifying it is also what stops a forged id creating a profile.
             let presented = request
                 .headers()
                 .get(header::AUTHORIZATION)
                 .and_then(|value| value.to_str().ok())
                 .and_then(|value| value.strip_prefix("Bearer "))
                 .unwrap_or_default();
-            if crate::mcp_oauth::client_for_token(&state, presented, crate::unix_timestamp())
-                .is_some()
-            {
+            let now = crate::unix_timestamp();
+            if let Some(client_id) = crate::mcp_oauth::client_for_token(&state, presented, now) {
+                let name = crate::mcp_oauth::connection_name_for_token(&state, presented, now)
+                    .unwrap_or_else(|| "An outside tool".to_owned());
+                match bridge.tasks.store().connection_principal(&client_id, &name) {
+                    Ok(profile) => AgentPrincipal::from(&profile),
+                    Err(error) => {
+                        tracing::error!(message = %error, "connection principal could not be resolved");
+                        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                    }
+                }
+            } else {
+                // NAME WHERE TO AUTHENTICATE, do not merely refuse. A bare `Bearer`
+                // tells a client it needs a token and not where to get one, so the
+                // 401 is a dead end and the tool simply cannot connect — which is
+                // exactly the state an outside tool found this endpoint in. The
+                // `resource_metadata` parameter turns the same refusal into an
+                // invitation the client can act on.
+                let challenge = crate::mcp_oauth::challenge(
+                    crate::mcp_oauth::base_url(&state, request.headers()).as_deref(),
+                );
                 return (
-                    StatusCode::FORBIDDEN,
-                    [(header::CACHE_CONTROL, "no-store")],
-                    axum::Json(serde_json::json!({
-                        "error": "connection_not_yet_authorised",
-                        "error_description":
-                            "This Hive recognises the connection, but connecting an outside tool \
-                             is not finished: it has no identity to write to the board as yet. \
-                             Nothing is wrong with the token.",
-                    })),
+                    StatusCode::UNAUTHORIZED,
+                    [
+                        (header::WWW_AUTHENTICATE, challenge.as_str()),
+                        (header::CACHE_CONTROL, "no-store"),
+                    ],
                 )
                     .into_response();
             }
-            let challenge = crate::mcp_oauth::challenge(
-                crate::mcp_oauth::base_url(&state, request.headers()).as_deref(),
-            );
-            return (
-                StatusCode::UNAUTHORIZED,
-                [
-                    (header::WWW_AUTHENTICATE, challenge.as_str()),
-                    (header::CACHE_CONTROL, "no-store"),
-                ],
-            )
-                .into_response();
         }
         Err(error) => {
             tracing::error!(message = %error, "agent authentication failed");
@@ -2928,6 +2926,85 @@ mod tests {
             )
         })
     }
+    /// An outside tool's token reaches the board as ITSELF.
+    ///
+    /// This is the join the whole feature turns on: the OAuth server issues a
+    /// real token, and `authenticate` above only knows worker agent
+    /// credentials — correctly, because a connected tool is not a worker and
+    /// must not borrow one's identity. It gets its own durable profile,
+    /// created on first use.
+    #[tokio::test]
+    async fn a_connected_tool_reaches_the_board_as_itself() {
+        let (bridge, store, _, _, _) = setup();
+        let state = Arc::new(
+            crate::AppState::default()
+                .with_terminal_host(
+                    swarm_terminal::HostClient::new("/unreachable/terminal.sock"),
+                    "operator-token-for-tests",
+                )
+                .with_task_store(store.clone()),
+        );
+        let token = crate::mcp_oauth::test_support::issue_access_token(&state, "Claude Desktop")
+            .expect("a token this Hive signed");
+
+        let response = handle(
+            bridge,
+            Arc::clone(&state),
+            mcp_request(Some(&token), "tools/list", &json!({})),
+        )
+        .await;
+        // Not 401 and not 403: the connection acts.
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // It exists as an author the board can point at, under the name the
+        // tool registered — carried in the signed client id, because there is
+        // no clients table to look it up in.
+        let connections = store.list_connections().unwrap();
+        assert_eq!(connections.len(), 1);
+        assert_eq!(connections[0].name, "Claude Desktop");
+
+        // And it is NOT in the roster: an outside tool is an author, not a
+        // member of the crew.
+        assert!(
+            store
+                .list_worker_profiles()
+                .unwrap()
+                .iter()
+                .all(|profile| profile.id != connections[0].id),
+            "a connection must not appear in the roster"
+        );
+    }
+
+    /// A forged client id cannot conjure an identity.
+    ///
+    /// The id is signed, so verifying it is also what stops an attacker
+    /// creating profiles by presenting ids this Hive never issued.
+    #[tokio::test]
+    async fn a_token_this_hive_did_not_sign_is_refused() {
+        let (bridge, store, _, _, _) = setup();
+        let state = Arc::new(
+            crate::AppState::default()
+                .with_terminal_host(
+                    swarm_terminal::HostClient::new("/unreachable/terminal.sock"),
+                    "operator-token-for-tests",
+                )
+                .with_task_store(store.clone()),
+        );
+        let before = store.list_worker_profiles().unwrap().len();
+        let response = handle(
+            bridge,
+            state,
+            mcp_request(Some("not.a.token"), "tools/list", &json!({})),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            store.list_worker_profiles().unwrap().len(),
+            before,
+            "a refused token must not create a profile"
+        );
+    }
+
     #[tokio::test]
     async fn endpoint_fails_closed_without_a_scoped_worker_credential() {
         let (bridge, _, _, _, _) = setup();

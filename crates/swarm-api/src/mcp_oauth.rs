@@ -228,7 +228,13 @@ fn unsign(key: &[u8; 32], token: &str, now: i64) -> Option<Value> {
     }
     let decoded = Base64UrlUnpadded::decode_vec(body).ok()?;
     let payload: Value = serde_json::from_slice(&decoded).ok()?;
-    if payload.get("exp")?.as_i64()? <= now {
+    // A missing `exp` means "does not expire", which is only ever used for a
+    // client id. Every token minted by `mint` carries one, so a token cannot
+    // reach this branch by losing a field — the MAC covers the whole payload.
+    if payload
+        .get("exp")
+        .is_some_and(|expires_at| expires_at.as_i64().is_none_or(|value| value <= now))
+    {
         return None;
     }
     Some(payload)
@@ -287,6 +293,40 @@ fn redirect_is_allowed(value: &str) -> bool {
     }
 }
 
+/// A client id that carries the tool's name and proves this Hive issued it.
+///
+/// THE NAME HAS TO TRAVEL SOMEHOW. It is chosen at registration, and the
+/// principal that needs it is created much later, when a token is first used —
+/// with a deliberately stateless flow in between, so there is no row to look it
+/// up in. Signing it into the id is what lets "Claude Desktop" appear on a board
+/// write instead of a random string, without a clients table.
+///
+/// It also means a forged id cannot mint a principal: the id is checked before
+/// anything is created.
+fn sign_client_id(key: &[u8; 32], name: &str) -> Option<String> {
+    let mut bytes = [0u8; 12];
+    getrandom::fill(&mut bytes).ok()?;
+    Some(sign(
+        key,
+        &json!({ "n": name, "r": Base64UrlUnpadded::encode_string(&bytes) }),
+    ))
+}
+
+/// The registered name behind a client id, or None if this Hive did not issue it.
+fn client_id_name(key: &[u8; 32], client_id: &str) -> Option<String> {
+    unsign(key, client_id, 0)?
+        .get("n")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+/// What an outside tool should be called on the board, given the token it presented.
+pub(crate) fn connection_name_for_token(state: &AppState, token: &str, now: i64) -> Option<String> {
+    let key = signing_key(state)?;
+    let client_id = client_for_token(state, token, now)?;
+    client_id_name(&key, &client_id)
+}
+
 fn random_id() -> Option<String> {
     let mut bytes = [0u8; 18];
     getrandom::fill(&mut bytes).ok()?;
@@ -322,7 +362,13 @@ pub(super) async fn register(
             "that redirect URI is not one this Hive will send an authorization code to",
         );
     }
-    let Some(client_id) = random_id() else {
+    let name = request
+        .client_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
+        .unwrap_or("An outside tool");
+    let Some(client_id) = sign_client_id(&key, name) else {
         return unavailable();
     };
     let secret = Base64UrlUnpadded::encode_string(&hmac_sha256(&key, client_id.as_bytes()));
@@ -336,7 +382,7 @@ pub(super) async fn register(
             "client_id_issued_at": crate::unix_timestamp(),
             "client_secret_expires_at": 0,
             "redirect_uris": request.redirect_uris,
-            "client_name": request.client_name.unwrap_or_else(|| "An outside tool".to_owned()),
+            "client_name": name,
             "token_endpoint_auth_method": "client_secret_post",
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
@@ -640,6 +686,30 @@ fn oauth_error(status: StatusCode, code: &'static str, description: &str) -> Res
         Json(json!({ "error": code, "error_description": description })),
     )
         .into_response()
+}
+
+/// Minting a token the way the token endpoint does, for tests in other modules.
+///
+/// Exposed rather than duplicated: a test that hand-rolls a token stops
+/// testing the thing that issues them the moment either drifts.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::{ACCESS_TOKEN_TTL, AppState, mint, sign_client_id, signing_key};
+
+    pub(crate) fn issue_access_token(state: &AppState, client_name: &str) -> Option<String> {
+        let key = signing_key(state)?;
+        let client_id = sign_client_id(&key, client_name)?;
+        // Minted against the real clock, because the caller verifies against it
+        // too. Minting at zero produced a token that was already an hour stale
+        // and failed as "unauthorised" rather than "expired".
+        Some(mint(
+            &key,
+            "access",
+            &client_id,
+            ACCESS_TOKEN_TTL,
+            crate::unix_timestamp(),
+        ))
+    }
 }
 
 #[cfg(test)]

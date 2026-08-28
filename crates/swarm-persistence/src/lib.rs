@@ -109,7 +109,7 @@ pub use decisions::{HeldForAnswer, INTERVIEW_ANSWERED_ACTION, OPERATOR_ANSWER_HE
 use events::insert_control_room_event;
 #[cfg(test)]
 use events::{MAX_CONTROL_ROOM_EVENT_PAGE, MAX_CONTROL_ROOM_EVENTS};
-pub use workers::{ActiveWorkerSession, GeometryContention};
+pub use workers::{ActiveWorkerSession, ConnectionProfile, GeometryContention};
 pub(crate) const MAX_TASK_TITLE_BYTES: usize = 240;
 pub(crate) const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;

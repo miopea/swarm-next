@@ -106,6 +106,18 @@ impl ProfileStartup {
 /// do something plausible and wrong.
 const CONNECTION_WORKSPACE: &str = "/outside-tool";
 
+/// An outside tool that has connected to this Hive.
+#[derive(Debug, Clone)]
+pub struct ConnectionProfile {
+    pub id: WorkerId,
+    pub name: String,
+    /// The OAuth client id it authenticates as. Not a secret — the secret is
+    /// derived from it and never stored.
+    pub client_id: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 impl TaskStore {
     /// Returns the singleton Queen profile, creating it on first start.
     ///
@@ -547,6 +559,48 @@ impl TaskStore {
             }
         }
         Err(TaskStoreError::NotFound)
+    }
+
+    /// Every outside tool that has ever connected, for Settings -> Connections.
+    ///
+    /// Separate from `list_worker_profiles` on purpose: these are deliberately
+    /// absent from the roster, so the only way to see or revoke one is a
+    /// listing that asks for them by name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the listing cannot be read.
+    pub fn list_connections(&self) -> Result<Vec<ConnectionProfile>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT id, name, connection_client_id, created_at, updated_at
+               FROM worker_profiles
+              WHERE connection_client_id IS NOT NULL AND archived_at IS NULL
+              ORDER BY created_at DESC",
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(id, name, client_id, created_at, updated_at)| {
+                Ok(ConnectionProfile {
+                    id: WorkerId::from_str(&id)
+                        .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?,
+                    name,
+                    client_id,
+                    created_at,
+                    updated_at,
+                })
+            })
+            .collect()
     }
 
     /// Whether this profile is an outside tool rather than a worker.
