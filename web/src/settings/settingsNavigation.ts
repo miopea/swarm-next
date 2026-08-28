@@ -48,6 +48,8 @@ export const SETTINGS_CARDS: readonly SettingsCard[] = [
     keywords: ["access", "token", "operator token", "passkey", "password", "sign in", "sign out", "rotate", "credential", "webauthn", "unlock", "security"] },
   { id: "settings-remote", section: "settings-access", title: "Open on my phone",
     keywords: ["remote", "tunnel", "phone", "qr", "qr code", "cloudflare", "cloudflared", "public address", "share", "mobile", "away from my desk"] },
+  { id: "settings-connections-tools", section: "settings-connections", title: "Outside tools",
+    keywords: ["mcp", "connector", "outside tool", "claude desktop", "external", "oauth", "connection", "disconnect", "revoke"] },
   { id: "settings-apiary", section: "settings-connections", title: "Apiary",
     keywords: ["apiary", "hive name", "identity", "keeper", "member", "join", "federation", "invite"] },
   { id: "settings-integrations", section: "settings-connections", title: "Jira",

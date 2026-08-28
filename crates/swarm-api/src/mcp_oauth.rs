@@ -520,21 +520,179 @@ pub(super) async fn authorize_client(
             "sign in to this Hive in the browser, then connect the tool again",
         );
     }
-    let now = crate::unix_timestamp();
-    let Some(code) = issue_code(&query.client_id, &query.redirect_uri, challenge, now) else {
+    // ASK, DO NOT ASSUME. Issuing a code the moment a signed-in operator lands
+    // here means anything that can get their browser to this URL connects a
+    // tool to their Hive without them ever seeing it happen. The redirect
+    // allow-list bounds where a code can GO; it does not make the approval
+    // theirs. Legacy rendered a consent page and this is that page.
+    let Some(key) = signing_key(&state) else {
         return unavailable();
     };
+    let Some(name) = client_id_name(&key, &query.client_id) else {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_client",
+            "that client id was not issued by this Hive",
+        );
+    };
+    let now = crate::unix_timestamp();
+    let consent = sign(
+        &key,
+        &json!({
+            "typ": "consent",
+            "cid": query.client_id,
+            "redirect_uri": query.redirect_uri,
+            "challenge": challenge,
+            "state": query.state,
+            "exp": now + CONSENT_TTL,
+        }),
+    );
+    consent_page(&name, &consent)
+}
+
+/// How long a rendered consent page stays good for. Long enough to read, short
+/// enough that a page left open in a tab is not a standing approval.
+const CONSENT_TTL: i64 = 600;
+
+/// What the operator is actually agreeing to, said plainly.
+fn consent_page(name: &str, consent: &str) -> Response {
+    let name = html_escape(name);
+    let consent = html_escape(consent);
+    let body = format!(
+        "<!doctype html><meta charset=utf-8><title>Connect {name}?</title>\
+<style>body{{font:16px/1.5 system-ui,sans-serif;max-width:34rem;margin:12vh auto;padding:0 1.5rem;color:#20261f;background:#faf8f0}}\
+h1{{font-size:1.35rem;margin:0 0 .25rem}}p{{color:#4a5347}}ul{{padding-left:1.1rem}}li{{margin:.35rem 0}}\
+form{{display:flex;gap:.6rem;margin-top:1.6rem}}button{{font:inherit;padding:.55rem 1.1rem;border-radius:.5rem;cursor:pointer}}\
+.yes{{background:#e8c56a;border:1px solid #c7a544;font-weight:600}}.no{{background:transparent;border:1px solid #cfcbb8}}</style>\
+<h1>Connect {name} to this Hive?</h1>\
+<p>It asked to connect as an outside tool. If you did not just start this, close this page.</p>\
+<p>It will be able to:</p>\
+<ul><li>read this Hive's tasks, workers and decisions</li>\
+<li>file new work, and move work it owns</li>\
+<li>record deployments</li></ul>\
+<p>It will <strong>not</strong> be able to approve work or assign it to a worker — those stay yours and Queen's. \
+Anything it does is recorded under the name <strong>{name}</strong>, and you can disconnect it \
+at any time in Settings &rarr; Connections.</p>\
+<form method=post action=\"/oauth/consent\">\
+<input type=hidden name=consent value=\"{consent}\">\
+<button class=yes name=approve value=yes>Connect {name}</button>\
+<button class=no name=approve value=no>Cancel</button>\
+</form>"
+    );
+    (
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, "no-store")],
+        axum::response::Html(body),
+    )
+        .into_response()
+}
+
+/// Escapes text that goes into the consent page.
+///
+/// The tool's name is attacker-chosen — it arrives in a registration request —
+/// so putting it into HTML unescaped would let a registration script the page
+/// the operator is being asked to trust.
+fn html_escape(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(|character| match character {
+            '&' => "&amp;".chars().collect::<Vec<_>>(),
+            '<' => "&lt;".chars().collect(),
+            '>' => "&gt;".chars().collect(),
+            '"' => "&quot;".chars().collect(),
+            '\'' => "&#39;".chars().collect(),
+            other => vec![other],
+        })
+        .collect()
+}
+
+#[derive(Deserialize)]
+pub(super) struct ConsentDecision {
+    consent: String,
+    #[serde(default)]
+    approve: Option<String>,
+}
+
+/// The operator's answer to the consent page.
+pub(super) async fn consent(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Form(decision): Form<ConsentDecision>,
+) -> Response {
+    // Gated again: the page cannot be the gate, because a POST does not have to
+    // come from one.
+    if crate::auth::authorize(&state, &headers).is_err() {
+        return oauth_error(
+            StatusCode::UNAUTHORIZED,
+            "access_denied",
+            "sign in to this Hive in the browser, then connect the tool again",
+        );
+    }
+    let Some(key) = signing_key(&state) else {
+        return unavailable();
+    };
+    let now = crate::unix_timestamp();
+    let Some(payload) = unsign(&key, &decision.consent, now) else {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "that approval has expired or was not issued here — start the connection again",
+        );
+    };
+    if payload.get("typ").and_then(Value::as_str) != Some("consent") {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "that is not an approval",
+        );
+    }
+    let (Some(client_id), Some(redirect_uri), Some(challenge)) = (
+        payload.get("cid").and_then(Value::as_str),
+        payload.get("redirect_uri").and_then(Value::as_str),
+        payload.get("challenge").and_then(Value::as_str),
+    ) else {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "that approval is incomplete",
+        );
+    };
+    // Re-checked when it is ACTED ON, not only when it was rendered.
+    if !redirect_is_allowed(redirect_uri) {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_redirect_uri",
+            "that redirect URI is not one this Hive will send an authorization code to",
+        );
+    }
+    if decision.approve.as_deref() != Some("yes") {
+        return (
+            StatusCode::OK,
+            [(header::CACHE_CONTROL, "no-store")],
+            axum::response::Html(
+                "<!doctype html><meta charset=utf-8><title>Not connected</title><p>Nothing was connected. You can close this page.</p>".to_owned(),
+            ),
+        )
+            .into_response();
+    }
+    let Some(code) = issue_code(client_id, redirect_uri, challenge, now) else {
+        return unavailable();
+    };
+    redirect_with_code(
+        redirect_uri,
+        &code,
+        payload.get("state").and_then(Value::as_str),
+    )
+}
+
+fn redirect_with_code(redirect_uri: &str, code: &str, state: Option<&str>) -> Response {
     let mut location = format!(
         "{}{}code={}",
-        query.redirect_uri,
-        if query.redirect_uri.contains('?') {
-            '&'
-        } else {
-            '?'
-        },
+        redirect_uri,
+        if redirect_uri.contains('?') { '&' } else { '?' },
         code
     );
-    if let Some(value) = query.state.as_deref() {
+    if let Some(value) = state {
         location.push_str("&state=");
         location.push_str(value);
     }
@@ -547,10 +705,6 @@ pub(super) async fn authorize_client(
     )
         .into_response()
 }
-
-// ---------------------------------------------------------------------------
-// Token
-// ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
 pub(super) struct TokenRequest {
@@ -679,6 +833,61 @@ fn issued(key: &[u8; 32], client_id: &str, now: i64) -> Response {
         .into_response()
 }
 
+/// The outside tools connected to this Hive, for Settings -> Connections.
+///
+/// Operator-gated like every other settings route. The client id is included
+/// because it identifies the registration; the client SECRET is derived from
+/// it and never stored, so there is nothing here to leak.
+pub(super) async fn list_connections_route(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, crate::ApiError> {
+    crate::auth::authorize(&state, &headers)?;
+    let connections = crate::task_store(&state)?
+        .list_connections()
+        .map_err(|error| crate::task_store_error(&error))?;
+    let body: Vec<Value> = connections
+        .into_iter()
+        .map(|connection| {
+            json!({
+                "id": connection.id.to_string(),
+                "name": connection.name,
+                "connected_at": connection.created_at,
+                "last_seen_at": connection.updated_at,
+            })
+        })
+        .collect();
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(json!({ "connections": body })),
+    )
+        .into_response())
+}
+
+/// Disconnects one outside tool.
+pub(super) async fn revoke_connection_route(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    axum::extract::Path(worker_id): axum::extract::Path<String>,
+) -> Result<Response, crate::ApiError> {
+    crate::auth::authorize(&state, &headers)?;
+    let worker_id = worker_id.parse().map_err(|_| {
+        crate::ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_connection",
+            "that is not a connection id",
+        )
+    })?;
+    crate::task_store(&state)?
+        .revoke_connection(worker_id)
+        .map_err(|error| crate::task_store_error(&error))?;
+    Ok((
+        StatusCode::NO_CONTENT,
+        [(header::CACHE_CONTROL, "no-store")],
+    )
+        .into_response())
+}
+
 fn oauth_error(status: StatusCode, code: &'static str, description: &str) -> Response {
     (
         status,
@@ -736,6 +945,13 @@ mod tests {
             .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
             .await
             .unwrap()
+    }
+
+    async fn body_text(response: axum::response::Response) -> String {
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
     }
 
     async fn body_json(response: axum::response::Response) -> Value {
@@ -936,8 +1152,42 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(authorized.status(), StatusCode::FOUND);
-        let location = authorized.headers()[header::LOCATION].to_str().unwrap();
+        // The operator is ASKED, not assumed. No code exists yet.
+        assert_eq!(authorized.status(), StatusCode::OK);
+        let page = body_text(authorized).await;
+        assert!(page.contains("A tool"), "the page names the tool: {page}");
+        assert!(
+            !page.contains("code="),
+            "no code is issued by rendering: {page}"
+        );
+        let consent = page
+            .split("name=consent value=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .to_owned();
+
+        // ...and approving is what issues it.
+        let approved = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/oauth/consent")
+                    .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(format!(
+                        "approve=yes&consent={}",
+                        urlencode(&consent)
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(approved.status(), StatusCode::FOUND);
+        let location = approved.headers()[header::LOCATION].to_str().unwrap();
         assert!(location.starts_with(redirect), "{location}");
         assert!(location.contains("state=xyz"), "{location}");
         let code = location
@@ -991,6 +1241,151 @@ mod tests {
                 _ => format!("%{byte:02X}"),
             })
             .collect()
+    }
+
+    /// Declining connects nothing.
+    #[tokio::test]
+    async fn declining_the_consent_page_issues_no_code() {
+        let app = signed_app();
+        let redirect = "https://claude.ai/api/mcp/auth_callback";
+        let client = register_a_client(&app, redirect).await;
+        let client_id = client["client_id"].as_str().unwrap().to_owned();
+        let (_, challenge) = verifier_and_challenge();
+        let page = body_text(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!(
+                            "/oauth/authorize?client_id={}&redirect_uri={redirect}\
+                             &response_type=code&code_challenge={challenge}&code_challenge_method=S256",
+                            urlencode(&client_id)
+                        ))
+                        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        let consent = page
+            .split("name=consent value=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .to_owned();
+
+        let declined = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/oauth/consent")
+                    .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(format!(
+                        "approve=no&consent={}",
+                        urlencode(&consent)
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(declined.status(), StatusCode::OK);
+        assert!(declined.headers().get(header::LOCATION).is_none());
+    }
+
+    /// An approval this Hive did not issue is not an approval.
+    ///
+    /// Without this the consent form is decoration: anyone could post a
+    /// hand-written body and skip the page entirely.
+    #[tokio::test]
+    async fn a_forged_consent_is_refused() {
+        let app = signed_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/oauth/consent")
+                    .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from("approve=yes&consent=not.a.consent"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response.headers().get(header::LOCATION).is_none());
+    }
+
+    /// The consent page cannot be gated by the page itself.
+    #[tokio::test]
+    async fn consent_without_an_operator_session_is_refused() {
+        let app = signed_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/oauth/consent")
+                    .header(header::HOST, "swarm.example.test")
+                    .header("x-forwarded-for", "203.0.113.9")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from("approve=yes&consent=anything"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// A tool's name is attacker-chosen — it arrives in a registration request
+    /// — and it is rendered into the page the operator is asked to trust.
+    #[tokio::test]
+    async fn a_registered_name_cannot_script_the_consent_page() {
+        let app = signed_app();
+        let redirect = "https://claude.ai/api/mcp/auth_callback";
+        let hostile = "<script>alert(1)</script>";
+        let registered = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/oauth/register")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({ "redirect_uris": [redirect], "client_name": hostile }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let client_id = body_json(registered).await["client_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let (_, challenge) = verifier_and_challenge();
+        let page = body_text(
+            app.oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/oauth/authorize?client_id={}&redirect_uri={redirect}\
+                         &response_type=code&code_challenge={challenge}&code_challenge_method=S256",
+                        urlencode(&client_id)
+                    ))
+                    .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert!(
+            !page.contains("<script>"),
+            "the name was not escaped: {page}"
+        );
+        assert!(page.contains("&lt;script&gt;"), "{page}");
     }
 
     /// Criterion 5, and THIS IS THE ABLATION. A test that only registers the

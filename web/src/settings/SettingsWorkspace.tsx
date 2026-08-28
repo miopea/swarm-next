@@ -22,6 +22,7 @@ import ProviderReleaseAction from "./ProviderReleaseAction";
 import { useDevelopmentRuntime } from "./useDevelopmentRuntime";
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
 import EmailSettings from "./EmailSettings";
+import ConnectionsSettings from "./ConnectionsSettings";
 import JiraSettings from "./JiraSettings";
 import LegacyMigrationSettings from "./LegacyMigrationSettings";
 import WorkerSettings from "./WorkerSettings";
@@ -501,6 +502,9 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
         </section>
       )}
 
+      {shows("settings-connections-tools") && (
+    <ConnectionsSettings operatorToken={operatorToken} />
+      )}
       {shows("settings-integrations") && (
     <JiraSettings operatorToken={operatorToken} readiness={jiraReadiness} unavailable={jiraUnavailable} onRetryReadiness={() => setJiraReadinessAttempt((attempt) => attempt + 1)} />
       )}

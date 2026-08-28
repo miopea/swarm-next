@@ -479,7 +479,17 @@ impl TaskStore {
         client_id: &str,
         name: &str,
     ) -> Result<WorkerProfile, TaskStoreError> {
-        if let Some(existing) = self.connection_profile_id(client_id)? {
+        // REVOCATION HAS TO BE STICKY, and find-or-create is exactly the shape
+        // that would undo it: a revoked tool presenting the same client id
+        // would simply be given a fresh profile. The row is kept and archived
+        // rather than deleted, the unique index still reserves its client id,
+        // and this refuses instead of recreating. Reconnecting after a revoke
+        // means registering again and being approved again, which is what the
+        // operator meant by revoking.
+        if let Some((existing, revoked)) = self.connection_profile_id(client_id)? {
+            if revoked {
+                return Err(TaskStoreError::ConnectionRevoked);
+            }
             return self.get_worker_profile(existing);
         }
         // Never autostart and never in the roster's order: a connection has no
@@ -513,21 +523,53 @@ impl TaskStore {
         self.get_worker_profile(profile.id)
     }
 
-    fn connection_profile_id(&self, client_id: &str) -> Result<Option<WorkerId>, TaskStoreError> {
+    /// The profile for a client id, and whether it has been revoked.
+    ///
+    /// Deliberately does not filter archived rows out: a revoked connection
+    /// must still be FOUND, or the caller would create a second one and undo
+    /// the revocation.
+    fn connection_profile_id(
+        &self,
+        client_id: &str,
+    ) -> Result<Option<(WorkerId, bool)>, TaskStoreError> {
         let connection = self.connection()?;
-        let found: Option<String> = connection
+        let found: Option<(String, Option<i64>)> = connection
             .query_row(
-                "SELECT id FROM worker_profiles WHERE connection_client_id = ?1",
+                "SELECT id, archived_at FROM worker_profiles WHERE connection_client_id = ?1",
                 [client_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
         found
-            .map(|value| {
+            .map(|(value, archived_at)| {
                 WorkerId::from_str(&value)
+                    .map(|id| (id, archived_at.is_some()))
                     .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))
             })
             .transpose()
+    }
+
+    /// Disconnects an outside tool, for good.
+    ///
+    /// Archives rather than deletes, for two reasons: the board writes it
+    /// already made still point at it, and the archived row keeps its client id
+    /// reserved so the same registration cannot walk back in.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the profile is not a connection, or cannot be written.
+    pub fn revoke_connection(&self, worker_id: WorkerId) -> Result<(), TaskStoreError> {
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            "UPDATE worker_profiles
+                SET archived_at = unixepoch(), updated_at = unixepoch()
+              WHERE id = ?1 AND connection_client_id IS NOT NULL AND archived_at IS NULL",
+            [worker_id.to_string()],
+        )?;
+        if changed == 0 {
+            return Err(TaskStoreError::NotFound);
+        }
+        Ok(())
     }
 
     /// A profile name is UNIQUE across the whole table, so a connection calling
@@ -3324,6 +3366,65 @@ mod tests {
             .connection_principal("client-xyz", "Claude Desktop")
             .unwrap();
         assert_ne!(first.id, other.id);
+    }
+
+    /// Revoking is final, and find-or-create must not undo it.
+    ///
+    /// The obvious failure is that a revoked tool presents the same client id,
+    /// finds nothing (because the row was deleted or filtered out), and is
+    /// handed a fresh profile — a revoke that lasts until the next request.
+    #[test]
+    fn a_revoked_connection_cannot_walk_back_in() {
+        let store = TaskStore::in_memory().unwrap();
+        store.ensure_queen("/workspace/queen").unwrap();
+        let connected = store
+            .connection_principal("client-abc", "Claude Desktop")
+            .unwrap();
+        assert_eq!(store.list_connections().unwrap().len(), 1);
+
+        store.revoke_connection(connected.id).unwrap();
+
+        // Gone from the listing the operator reads...
+        assert!(store.list_connections().unwrap().is_empty());
+        // ...and the same client id is refused rather than given a new profile.
+        assert!(matches!(
+            store.connection_principal("client-abc", "Claude Desktop"),
+            Err(TaskStoreError::ConnectionRevoked)
+        ));
+
+        // A DIFFERENT registration is a different tool and may still connect,
+        // which is what "register again and be approved again" means.
+        let fresh = store
+            .connection_principal("client-xyz", "Claude Desktop")
+            .unwrap();
+        assert_ne!(fresh.id, connected.id);
+        assert_eq!(store.list_connections().unwrap().len(), 1);
+    }
+
+    /// Revoking something that is not a connection is refused, so the endpoint
+    /// cannot be used to archive a real worker.
+    #[test]
+    fn revoke_refuses_anything_that_is_not_a_connection() {
+        let store = TaskStore::in_memory().unwrap();
+        store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker(
+                "Sculpt Studio",
+                ProviderKind::ClaudeCode,
+                "/workspace/s",
+                false,
+                1,
+            )
+            .unwrap();
+        assert!(store.revoke_connection(worker.id).is_err());
+        assert!(
+            store
+                .list_worker_profiles()
+                .unwrap()
+                .iter()
+                .any(|profile| profile.id == worker.id),
+            "a real worker must survive a misdirected revoke"
+        );
     }
 
     /// A connection asking for a name a worker already holds must neither take

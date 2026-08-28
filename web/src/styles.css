@@ -428,6 +428,17 @@ button:active:not(:disabled) { transform: translateY(1px); }
    this state does not know. The dashed border carries it without colour. */
 .machine-pressure.unknown { color: var(--muted); background: var(--soft); border-color: var(--line); border-style: dashed; }
 
+/* Outside tools, in Settings -> Connections. */
+.connection-list { display: grid; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; max-width: 78ch; }
+.connection-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel-soft); }
+.connection-identity { display: grid; gap: 2px; min-width: 0; }
+.connection-identity small { color: var(--muted); font-size: .7rem; }
+.connection-confirm { flex: 1 1 100%; display: grid; gap: 8px; }
+.connection-confirm p { margin: 0; color: var(--danger); font-size: .74rem; line-height: 1.45; }
+.connection-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+/* A failed read is not "nothing is connected". */
+.connections-unknown { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin: 10px 0 0; color: var(--danger); font-size: .74rem; }
+
 /* The title-length warning. Shown in the field, because "task title must
    contain 1 to 240 bytes" is a sentence about UTF-8 rather than about the
    title in front of the operator. */

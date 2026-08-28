@@ -1061,6 +1061,24 @@ export async function fetchTerminalHostStatus(operatorToken: string): Promise<Te
   return payload.status;
 }
 
+/** An outside tool connected to this Hive through MCP. */
+export type Connection = {
+  id: string;
+  name: string;
+  connected_at: number;
+  last_seen_at: number;
+};
+
+export async function fetchConnections(operatorToken: string): Promise<Connection[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/connections");
+  const payload = (await response.json()) as { connections: Connection[] };
+  return Array.isArray(payload.connections) ? payload.connections : [];
+}
+
+export async function revokeConnection(operatorToken: string, id: string): Promise<void> {
+  await authenticatedFetch(operatorToken, `/api/v1/connections/${id}`, { method: "DELETE" });
+}
+
 export async function fetchRuntimeResources(operatorToken: string): Promise<RuntimeResources> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/resources");
   return response.json() as Promise<RuntimeResources>;

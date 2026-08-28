@@ -2861,6 +2861,15 @@ fn api_router(state: AppState) -> Router {
         .route("/oauth/register", post(mcp_oauth::register))
         .route("/oauth/authorize", get(mcp_oauth::authorize_client))
         .route("/oauth/token", post(mcp_oauth::token))
+        .route("/oauth/consent", post(mcp_oauth::consent))
+        .route(
+            "/api/v1/connections",
+            get(mcp_oauth::list_connections_route),
+        )
+        .route(
+            "/api/v1/connections/{worker_id}",
+            axum::routing::delete(mcp_oauth::revoke_connection_route),
+        )
         .route("/health", get(health))
         .route(
             "/api/v1/auth/session",
@@ -7693,6 +7702,11 @@ fn email_attachment_error(error: email_attachments::EmailAttachmentError) -> Api
 #[allow(clippy::too_many_lines)]
 fn task_store_error(error: &TaskStoreError) -> ApiError {
     match error {
+        TaskStoreError::ConnectionRevoked => ApiError::new(
+            StatusCode::FORBIDDEN,
+            "connection_revoked",
+            error.to_string(),
+        ),
         TaskStoreError::InvalidDecisionSummary => ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_decision_summary",
