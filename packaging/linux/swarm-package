@@ -845,10 +845,18 @@ apply_release() {
   # protocol change by design, so an operator accepting such a release from the
   # control room got the refusal and no route forward.
   #
-  # Choosing migrate-protocol here is safe rather than bold: it drains the host
-  # and DEFERS when any session is live, so it cannot take a worker's terminal
-  # out from under them. The dangerous version would be widening the guard, and
-  # that is untouched.
+  # ONE COMMAND FOR EVERY RELEASE, INCLUDING A PROTOCOL CHANGE.
+  #
+  # This chose migrate-protocol-if-idle for a protocol change, which DEFERS
+  # while any session is live and leaves the reconcile timer to finish. That
+  # cannot finish: supervise_workers revives an autostart worker within seconds
+  # of it stopping, so running_sessions never reaches 0 and the deferral waits
+  # forever. Measured on this Hive -- 34 workers, one autostart, every pass
+  # reporting "1 sessions are active" after the operator had killed everything.
+  #
+  # It also made the NEWER Hives the broken ones. Every version in the field
+  # hardcodes `update` here, and `update` performs the migration outright, so
+  # 0.8.17 through 0.8.19 install a protocol change and 0.9.0 would have hung.
   apply_command=update
   # Carried into the FINAL status too, not only the in-flight one. A status file
   # outlives the attempt that wrote it, and "installed" alone cannot be told
@@ -859,7 +867,6 @@ apply_release() {
   host_release=$(release_from_link "$install_root/host-current")
   if [ -n "$host_release" ] && [ -f "$host_release/PROTOCOL" ] \
     && [ "$(cat "$host_release/PROTOCOL")" != "$(cat "$requested/PROTOCOL")" ]; then
-    apply_command=migrate-protocol-if-idle
     migration_marker='protocol_migration=1
 '
     printf 'state=installing\nversion=%s\n%s' "$requested_version" "$migration_marker" > "$status_path"

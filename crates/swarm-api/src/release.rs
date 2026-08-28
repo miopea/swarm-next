@@ -247,6 +247,61 @@ pub(super) async fn download(
 /// Writes a request naming the verified directory. `swarm-package`
 /// re-verifies that bundle's own `SHA256SUMS` before installing it, so the
 /// integrity check does not depend on this having been honest.
+/// Whether the release on offer moves the terminal-host protocol.
+///
+/// Compared against what the HOST reports about itself rather than a symlink,
+/// because a symlink comparison is how a staleness check reported current while
+/// the running host was two releases behind.
+async fn carries_protocol_change(state: &AppState, status: &ReleaseStatusResponse) -> bool {
+    let offered = status.offer.as_ref().map(|offer| offer.protocol.as_str());
+    crate::maintenance::host_status_snapshot(state)
+        .await
+        .is_ok_and(|host| protocol_change_offered(offered, host.protocol_version))
+}
+
+/// The rule, separated so it can be tested against this function rather than a
+/// copy of it — the same reason `apply_field_from` is separate.
+///
+/// UNPARSEABLE OR ABSENT IS "NO CHANGE", deliberately. This decides whether to
+/// stop every worker and write down who was running; getting it wrong in the
+/// other direction costs a needless roster wipe on an ordinary update. A
+/// missing protocol is an older manifest, not a migration.
+fn protocol_change_offered(offered: Option<&str>, host_protocol: u16) -> bool {
+    offered
+        .and_then(|value| value.trim().parse::<u16>().ok())
+        .is_some_and(|offered| offered != host_protocol)
+}
+
+/// Write down every worker that is loaded now, so the supervisor brings them
+/// back after the install has stopped everything.
+async fn record_revival_intents(state: &AppState) -> Result<(), ApiError> {
+    let swarm_terminal::HostResponse::Sessions { sessions } =
+        crate::terminal_host::request_host(state, swarm_terminal::HostRequest::ListSessions)
+            .await?
+    else {
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "unexpected_host_response",
+            "terminal host returned an unexpected session response",
+        ));
+    };
+    let running = sessions
+        .into_iter()
+        .filter(|session| session.running)
+        .map(|session| session.session_id)
+        .collect::<std::collections::HashSet<_>>();
+    let store = crate::task_store(state)?;
+    let loaded = crate::maintenance::loaded_workers(
+        &store
+            .list_worker_profiles()
+            .map_err(|error| crate::task_store_error(&error))?,
+        &running,
+    );
+    store
+        .record_worker_revival_intents(&loaded, crate::unix_timestamp())
+        .map_err(|error| crate::task_store_error(&error))
+}
+
 pub(super) async fn apply(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -278,6 +333,33 @@ pub(super) async fn apply(
             "no release has been downloaded",
         )
     })?;
+    // A PROTOCOL CHANGE ENDS EVERY WORKER SESSION, so the workers owed a return
+    // are written down BEFORE the install is asked for.
+    //
+    // The installer stops swarm.target and swaps the API and the host together;
+    // it has no way to remember who was loaded, and on restart the supervisor
+    // only revives workers set to start automatically. Without this, taking a
+    // protocol release leaves every other worker asleep and the operator wakes
+    // them one at a time — which is what happened on 2026-08-28.
+    //
+    // Recorded under the worker lifecycle lock, the same one maintain_worker_engine
+    // holds, so a worker cannot start between the roster being read and the
+    // intents being written. Recorded BEFORE the request rather than after,
+    // because the install can begin the moment the file appears.
+    if carries_protocol_change(&state, &status).await {
+        let guard = state.worker_lifecycle.lock().await;
+        let recorded = record_revival_intents(&state).await;
+        drop(guard);
+        if let Err(error) = recorded {
+            // Not fatal: an operator who accepted a protocol release should get
+            // it. Losing the roster is worse than a wake-one-at-a-time morning,
+            // so this is reported and the install proceeds.
+            tracing::warn!(
+                message = %error.message,
+                "workers owed a return could not be recorded before a protocol install"
+            );
+        }
+    }
     tokio::fs::write(request_path.as_ref(), release.to_string_lossy().as_bytes())
         .await
         .map_err(|_| {
@@ -705,6 +787,35 @@ mod tests {
 #[cfg(test)]
 mod apply_status_tests {
     use super::apply_field_from;
+    use super::protocol_change_offered;
+
+    /// A protocol change ends every worker session, so this decides whether the
+    /// roster is written down first. On 2026-08-28 it was not, and the operator
+    /// woke workers one at a time.
+    #[test]
+    fn a_differing_protocol_is_a_change() {
+        assert!(protocol_change_offered(Some("10"), 9));
+    }
+
+    /// The ordinary case, which must not wipe the roster.
+    #[test]
+    fn a_matching_protocol_is_not_a_change() {
+        assert!(!protocol_change_offered(Some("10"), 10));
+    }
+
+    /// An older manifest carries no protocol. Treating absent as "changed"
+    /// would stop every worker on an ordinary update.
+    #[test]
+    fn an_absent_protocol_is_not_a_change() {
+        assert!(!protocol_change_offered(None, 9));
+    }
+
+    /// And neither is a value that is not a number.
+    #[test]
+    fn an_unparseable_protocol_is_not_a_change() {
+        assert!(!protocol_change_offered(Some("ten"), 9));
+        assert!(!protocol_change_offered(Some(""), 9));
+    }
 
     /// This test previously carried its own copy of the rule and passed while
     /// the real function was untouched — the version comparison never reached

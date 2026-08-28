@@ -496,7 +496,7 @@ async fn stop_running_sessions(
 /// Matched by the exact session each profile currently holds, so a worker that
 /// was already asleep is not woken by maintenance it was not part of, and a
 /// session with no profile behind it revives nothing.
-fn loaded_workers(
+pub(crate) fn loaded_workers(
     profiles: &[swarm_domain::WorkerProfile],
     running_sessions: &std::collections::HashSet<swarm_domain::WorkerSessionId>,
 ) -> Vec<swarm_domain::WorkerId> {
