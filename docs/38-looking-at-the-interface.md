@@ -75,3 +75,43 @@ card above them, which no single-component render can show.
 
 Transcribe fixtures from what the operator actually saw where you can. Inventing
 plausible data renders a surface nobody has ever looked at.
+
+## Publishing a picture of the interface
+
+A screenshot of a running Hive is not a screenshot of the interface. It is a
+screenshot of the operator's work, and the two are only the same when nothing
+real is on the screen.
+
+**The terminal cannot be anonymized.** It is an xterm canvas, so DOM mutation —
+which is how everything else in a capture gets scrubbed — does not reach a single
+character of it. Sessions inspected while producing the 0.9.2 marketing captures
+held the operator's banking institutions and another product's password-policy
+internals. **Never publish a capture of an actual worker session.** The only safe
+way to show a terminal is composed demo material drawn over real UI chrome.
+
+**Git makes a mistake permanent.** An image committed and then deleted is still
+in the history, and a public repository has been cloned by then. That is why the
+check happens before the commit rather than after someone notices.
+
+So, before any capture is referenced from a committed file:
+
+1. **Look at every image yourself.** Not the description of how it was made —
+   the pixels. A scrub that silently failed and a scrub that worked produce
+   identical prose and different pictures.
+2. **Look for what DOM scrubbing cannot reach**: the terminal, anything else
+   drawn to canvas, text baked into an image, and window or tab titles.
+3. **Then look for what it can reach but may have missed**: client and project
+   names, email addresses, identifiers, and paths under a home directory.
+
+**Prefer the harness.** Everything above is a procedure for making a live
+capture safe, and it is only ever as good as the person following it. The
+harness has no Hive, no session and no real data behind it, so a capture taken
+from it is safe by construction rather than by inspection. It cannot yet show
+every screen — that is a reason to add surfaces to it, not a reason to go back
+to photographing production.
+
+**A screenshot dates faster than prose.** The 0.9.2 captures show the briefing
+list before `d133349` gave it a rule and an indent, which is to say they show the
+exact layout an operator had just called unbalanced. Prose describing a screen
+survives a redesign; a picture of it does not. Re-take them when the surface they
+show changes, and treat a stale screenshot as a defect rather than as old news.
