@@ -12,6 +12,45 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 0.9.0
+
+**This update restarts your workers.** It changes the protocol the app uses to
+talk to the worker engine, and those two have to move together, so every worker
+session ends and starts again. Workers set to start automatically come back on
+their own; the rest need waking from the roster. Nothing else in Swarm does
+this — ordinary updates leave your terminals alone.
+
+**Copy your database first.** This carries a schema migration, and the backup
+that protects a local rebuild does not cover a downloaded release:
+
+    cp ~/.local/state/swarm/swarm.sqlite3 ~/swarm-database-backup.sqlite3
+
+### New features
+- Every worker wears a different bee, so one repository's worker can be told
+  from another's at a glance. Assigned automatically and changeable per worker
+  on the worker page — 23 to choose from
+- The control room's own bee is the Queen
+- Gemini, Grok and OpenCode can be chosen when creating a worker, labelled
+  alpha where you pick them (after the worker engine update)
+
+### Fixes
+- A failed update now tells you which step failed and quotes what the failing
+  tool actually said, instead of one sentence that was the same whatever went
+  wrong. A build that compiled fine and was refused at install used to report
+  "did not compile"
+- The install card no longer claims "nothing was changed" without checking. It
+  reads back what actually happened and says so, including when an install
+  stopped partway
+- An update that changes the worker engine protocol now installs in one step.
+  Before, a Hive would refuse it with no way forward and the only route was
+  editing files by hand
+- A refused install names the command that fixes it rather than describing one
+- A failure whose fix arrived another way stops being reported, so the control
+  room no longer offers you a build of the code it is already running
+- A pre-update database backup that cannot be verified now says what to do next
+- The update no longer prints anything from the one request that carries your
+  operator token
+
 ## 0.8.19
 
 ### New features
