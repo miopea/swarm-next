@@ -38,6 +38,8 @@ import TaskBoardControls, { type TaskBoardFilter, type TaskBoardSort, type TaskB
 import TaskCard from "./TaskCard";
 import { buildTaskBoardView } from "./taskBoardModel";
 
+import { TITLE_BYTE_LIMIT, clampTitleToBytes, titleByteLength, titleFits } from "./titleLimit";
+
 type Props = {
   tasks: Task[];
   jiraTaskLinks: JiraTaskLink[];
@@ -150,6 +152,9 @@ export default function TaskBoard({
   onJiraSync,
 }: Props) {
   const [title, setTitle] = useState("");
+  // The server counts UTF-8 bytes; a maxLength counts UTF-16 units. They
+  // agree only for ASCII, so a pasted subject can look short and be refused.
+  const titleTooLong = title.trim().length > 0 && !titleFits(title);
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<TaskPriority>("normal");
   const [workScope, setWorkScope] = useState<"hive" | "apiary">("hive");
@@ -432,8 +437,14 @@ export default function TaskBoard({
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               placeholder="What should be true when this is done?"
-              maxLength={240}
+              aria-invalid={titleTooLong || undefined}
             />
+            {titleTooLong ? (
+              <small className="task-title-limit" role="status">
+                {titleByteLength(title.trim()) - TITLE_BYTE_LIMIT} too long. Punctuation copied from an email can count for more than one character.
+                <button type="button" className="text-button" onClick={() => setTitle(clampTitleToBytes(title))}>Shorten it for me</button>
+              </small>
+            ) : null}
           </div>
           <div className="field-stack task-description-field">
             <label htmlFor="task-description">Description <span>optional</span></label>
@@ -467,7 +478,7 @@ export default function TaskBoard({
               {apiaryTargetMembers.map((member) => <option key={member.hive_id} value={member.hive_id}>{member.hive_name} · {member.operator_display_name}</option>)}
             </select>
           </div>}
-          <button disabled={busy || creating || !title.trim() || (workScope === "hive" && !workerId) || (workScope === "apiary" && isStewardCreator && !targetHiveId)}>{creating ? "Creating…" : workScope === "apiary" ? isStewardCreator ? "Route through Keeper" : "Create for Apiary" : "Create draft"}</button>
+          <button disabled={busy || creating || !title.trim() || titleTooLong || (workScope === "hive" && !workerId) || (workScope === "apiary" && isStewardCreator && !targetHiveId)}>{creating ? "Creating…" : workScope === "apiary" ? isStewardCreator ? "Route through Keeper" : "Create for Apiary" : "Create draft"}</button>
           {createError ? <p className="form-error task-create-error" role="alert">{createError}</p> : null}
         </form>}
         {jiraMounted ? <div id="jira-work-source" hidden={!jiraOpen}><JiraTaskIntake operatorToken={operatorToken} onImported={onJiraImported} /></div> : null}

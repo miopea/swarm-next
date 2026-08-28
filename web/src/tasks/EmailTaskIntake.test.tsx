@@ -169,3 +169,86 @@ test("distinguishes a temporary Outlook failure from a missing connection", asyn
 function ok(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 }
+
+test("a long email subject produces a title the server will accept", async () => {
+  // THE REPORTED BUG, 01a049b4: "Runtime request returned 400: task title must
+  // contain 1 to 240 bytes. Even when I edit the this error appears."
+  //
+  // The title is set from the subject with setTitle(). `maxLength` constrains
+  // TYPING and does nothing to a programmatic value, so the auto-filled title
+  // was never bounded — and the field's limit, which counts UTF-16 units,
+  // could not have matched the server's UTF-8 byte count anyway. The curly
+  // apostrophes and em dashes below are three bytes each, which is exactly
+  // what a mail client puts in a subject line.
+  const subject = `${"The worker’s state isn’t updating — thread ".repeat(8)}end`;
+  expect(new TextEncoder().encode(subject).length).toBeGreaterThan(240);
+
+  const requests: { url: string; method: string; body?: string }[] = [];
+  const summary = {
+    id: "message-long", conversation_id: "thread-long", internet_message_id: "<long@example.com>", subject,
+    sender_name: "Alex", sender_address: "alex@example.com", received_at: 1_786_000_000,
+    web_url: "https://outlook.test/message-long", has_attachments: false, preview: "A long one.",
+  };
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    requests.push({ url, method, body: typeof init?.body === "string" ? init.body : undefined });
+    if (url.endsWith("/readiness")) return ok({ configured: true, connection: "ready", account_name: "Bea", account_address: "bea@example.com" });
+    if (url.endsWith("/inbox")) return ok([summary]);
+    if (url.endsWith("/messages/message-long") && method === "GET") return ok({ summary, body_text: "A long one.", attachments: [] });
+    if (url.endsWith("/integrations/email/import") && method === "POST") return ok({ created: true, task: { id: "task-1" }, source: { id: "source-1" }, sources: [{ id: "source-1" }] });
+    throw new Error(`Unexpected request: ${method} ${url}`);
+  }));
+  const imported = vi.fn().mockResolvedValue(undefined);
+
+  render(<EmailTaskIntake operatorToken="operator-token" onImported={imported} />);
+  fireEvent.click(await screen.findByRole("checkbox"));
+  fireEvent.click(screen.getByRole("button", { name: "Review 1 message" }));
+
+  const field = await screen.findByLabelText("Task title");
+  // Fits the server's limit, and says it was shortened rather than silently
+  // dropping the end of the subject.
+  const value = (field as HTMLInputElement).value;
+  expect(new TextEncoder().encode(value).length).toBeLessThanOrEqual(240);
+  expect(value.endsWith("…")).toBe(true);
+
+  fireEvent.click(screen.getByRole("button", { name: "Create task" }));
+  await waitFor(() => expect(imported).toHaveBeenCalledOnce());
+  const request = requests.find((item) => item.url.endsWith("/integrations/email/import"));
+  const sent = JSON.parse(request?.body ?? "{}") as { title: string };
+  expect(new TextEncoder().encode(sent.title).length).toBeLessThanOrEqual(240);
+});
+
+test("a title edited past the limit is refused in the field, not by a 400", async () => {
+  // The second half of the report — "even when I edit". An over-long title now
+  // says how much has to go and blocks the request, instead of letting the
+  // operator press Create and read a sentence about UTF-8 bytes.
+  const summary = {
+    id: "message-1", conversation_id: "thread-1", internet_message_id: "<one@example.com>", subject: "Short subject",
+    sender_name: "Alex", sender_address: "alex@example.com", received_at: 1_786_000_000,
+    web_url: "https://outlook.test/message-1", has_attachments: false, preview: "Short.",
+  };
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    if (url.endsWith("/readiness")) return ok({ configured: true, connection: "ready", account_name: "Bea", account_address: "bea@example.com" });
+    if (url.endsWith("/inbox")) return ok([summary]);
+    if (url.endsWith("/messages/message-1") && method === "GET") return ok({ summary, body_text: "Short.", attachments: [] });
+    throw new Error(`Unexpected request: ${method} ${url}`);
+  }));
+
+  render(<EmailTaskIntake operatorToken="operator-token" onImported={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("checkbox"));
+  fireEvent.click(screen.getByRole("button", { name: "Review 1 message" }));
+
+  const field = await screen.findByLabelText("Task title");
+  fireEvent.change(field, { target: { value: "…".repeat(100) } });
+
+  expect(screen.getByRole("button", { name: "Create task" })).toBeDisabled();
+  expect(field).toHaveAttribute("aria-invalid", "true");
+  expect(screen.getByText(/too long/)).toBeInTheDocument();
+
+  // And the way out is one press, rather than counting bytes by hand.
+  fireEvent.click(screen.getByRole("button", { name: "Shorten it for me" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Create task" })).not.toBeDisabled());
+});

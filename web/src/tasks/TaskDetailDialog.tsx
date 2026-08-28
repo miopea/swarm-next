@@ -14,6 +14,7 @@ import {
 import { useModalFocus } from "../shared/useModalFocus";
 import UnsavedChangesPrompt from "../shared/UnsavedChangesPrompt";
 import ImageViewer from "../shared/ImageViewer";
+import { TITLE_BYTE_LIMIT, clampTitleToBytes, titleByteLength, titleFits } from "./titleLimit";
 
 type LoadedImage = JiraTaskAttachment & { url: string };
 const noEmailSources: EmailTaskSource[] = [];
@@ -114,6 +115,8 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
     };
   }, [attempt, emailSources, jiraLink, operatorToken, task.description, task.id]);
 
+  const titleTooLong = title.trim().length > 0 && !titleFits(title);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!title.trim()) return;
@@ -157,7 +160,13 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
         <form id={formId} className="task-detail-content task-detail-editor" onSubmit={(event) => void submit(event)}>
           <section>
             <label htmlFor={`detail-title-${task.id}`}>Title</label>
-            <input ref={titleInput} id={`detail-title-${task.id}`} value={title} onChange={(event) => setTitle(event.target.value)} maxLength={240} />
+            <input ref={titleInput} id={`detail-title-${task.id}`} value={title} onChange={(event) => setTitle(event.target.value)} aria-invalid={titleTooLong || undefined} />
+            {titleTooLong ? (
+              <small className="task-title-limit" role="status">
+                {titleByteLength(title.trim()) - TITLE_BYTE_LIMIT} too long. Punctuation copied from an email can count for more than one character.
+                <button type="button" className="text-button" onClick={() => setTitle(clampTitleToBytes(title))}>Shorten it for me</button>
+              </small>
+            ) : null}
             <label htmlFor={`detail-description-${task.id}`}>Work brief</label>
             <textarea id={`detail-description-${task.id}`} value={description} onChange={(event) => setDescription(event.target.value)} maxLength={10000} rows={6} placeholder="Add the outcome, context, and what done looks like" />
             <label htmlFor={`detail-instruction-${task.id}`}>How to approach this</label>
@@ -212,7 +221,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
             {(task.state === "active" || task.state === "review") && <small>Finish or move this work out of progress before removing it.</small>}
             {removeFailed && <small className="task-detail-save-error" role="alert">The task was not removed. Nothing changed—try again when the connection is ready.</small>}
           </div>
-          <button form={formId} disabled={busy || !title.trim()}>{busy ? "Saving…" : "Save changes"}</button></>}
+          <button form={formId} disabled={busy || !title.trim() || titleTooLong}>{busy ? "Saving…" : "Save changes"}</button></>}
         </footer>
       </section>
     </div>

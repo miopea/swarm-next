@@ -15,6 +15,7 @@ import {
 } from "../api";
 import IntegrationSourceState from "../shared/IntegrationSourceState";
 import ImageViewer from "../shared/ImageViewer";
+import { TITLE_BYTE_LIMIT, clampTitleToBytes, titleByteLength, titleFits } from "./titleLimit";
 
 type Props = {
   operatorToken: string;
@@ -134,9 +135,15 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
       setMessage("");
       setSelectedMessages(selected);
       setPreviewIndex(0);
-      setTitle(selected.length === 1
+      // CLAMPED, because this value never went through the input's own limit.
+      // `maxLength` constrains typing and does nothing to a value set here, so
+      // a long subject produced a title the server refused with "1 to 240
+      // bytes" — and editing a field whose limit had never applied could not
+      // clear it. Bytes, not characters: the server counts UTF-8, and a mail
+      // client's curly quotes and em dashes are three bytes each.
+      setTitle(clampTitleToBytes(selected.length === 1
         ? selected[0].summary.subject || "Email request"
-        : `${selected[0].summary.subject || "Related email requests"} (+${selected.length - 1} related)`);
+        : `${selected[0].summary.subject || "Related email requests"} (+${selected.length - 1} related)`));
       setDescription(selected.map((item) => [
         `From: ${item.summary.sender_name || item.summary.sender_address} <${item.summary.sender_address}>`,
         `Received: ${formatReceived(item.summary.received_at)}`,
@@ -149,8 +156,10 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
     }
   }
 
+  const titleTooLong = title.trim().length > 0 && !titleFits(title);
+
   async function importSelected() {
-    if (!selectedMessages.length || !title.trim()) return;
+    if (!selectedMessages.length || !title.trim() || !titleFits(title)) return;
     setBusy(true);
     setMessage("");
     try {
@@ -245,13 +254,31 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
           <section ref={reviewRef} className="email-task-setup" aria-labelledby="email-task-setup-heading" tabIndex={-1}>
             <div><p className="eyebrow">Task draft</p><h4 id="email-task-setup-heading">Finish the task before saving it</h4></div>
             <div className="email-task-fields">
-              <div className="email-task-field email-task-title"><label htmlFor="email-task-title">Task title</label><input id="email-task-title" value={title} maxLength={240} onChange={(event) => setTitle(event.target.value)} /></div>
+              <div className="email-task-field email-task-title">
+                <label htmlFor="email-task-title">Task title</label>
+                <input
+                  id="email-task-title"
+                  value={title}
+                  onChange={(event) => setTitle(event.target.value)}
+                  aria-invalid={titleTooLong || undefined}
+                  aria-describedby={titleTooLong ? "email-task-title-limit" : undefined}
+                />
+                {/* Said in the field rather than left to a 400. "1 to 240
+                    bytes" is a sentence about UTF-8, not about the title in
+                    front of the operator; this says how much has to go. */}
+                {titleTooLong ? (
+                  <small id="email-task-title-limit" className="email-task-title-limit" role="status">
+                    {titleByteLength(title.trim()) - TITLE_BYTE_LIMIT} too long. Titles hold {TITLE_BYTE_LIMIT} characters, and punctuation copied from an email can count for more than one.
+                    <button type="button" className="text-button" onClick={() => setTitle(clampTitleToBytes(title))}>Shorten it for me</button>
+                  </small>
+                ) : null}
+              </div>
               <div className="email-task-field email-task-description"><label htmlFor="email-task-description">Task description</label><textarea id="email-task-description" value={description} rows={6} onChange={(event) => setDescription(event.target.value)} /></div>
               <div className="email-task-field"><label htmlFor="email-task-priority">Priority</label><select id="email-task-priority" value={priority} onChange={(event) => setPriority(event.target.value as TaskPriority)}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></div>
               <div className="email-task-field"><label htmlFor="email-task-status">Starting status</label><select id="email-task-status" value={initialState} onChange={(event) => setInitialState(event.target.value as "draft" | "ready")}><option value="draft">Draft — review later</option><option value="ready">Ready — available to work</option></select></div>
               <div className="email-task-field email-task-worker"><label htmlFor="email-task-worker">Worker</label><select id="email-task-worker" value={workerId} onChange={(event) => setWorkerId(event.target.value)}><option value="">Unassigned</option>{assignableWorkers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name} · {worker.attention_state}</option>)}</select></div>
             </div>
-            <div className="email-import-actions"><small>{selectedMessages.length} source email{selectedMessages.length === 1 ? "" : "s"} and every attachment will stay linked to this task.</small><button className="primary-action" type="button" disabled={busy || !title.trim()} onClick={() => void importSelected()}>{busy ? "Creating task…" : "Create task"}</button></div>
+            <div className="email-import-actions"><small>{selectedMessages.length} source email{selectedMessages.length === 1 ? "" : "s"} and every attachment will stay linked to this task.</small><button className="primary-action" type="button" disabled={busy || !title.trim() || titleTooLong} onClick={() => void importSelected()}>{busy ? "Creating task…" : "Create task"}</button></div>
           </section>
           <section className="email-source-workbench" aria-labelledby="email-source-review-heading">
             <div className="email-detail-toolbar">

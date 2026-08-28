@@ -427,6 +427,15 @@ button:active:not(:disabled) { transform: translateY(1px); }
    is the absence of a reading, and borrowing the amber would say something
    this state does not know. The dashed border carries it without colour. */
 .machine-pressure.unknown { color: var(--muted); background: var(--soft); border-color: var(--line); border-style: dashed; }
+
+/* The title-length warning. Shown in the field, because "task title must
+   contain 1 to 240 bytes" is a sentence about UTF-8 rather than about the
+   title in front of the operator. */
+.email-task-title-limit,
+.task-title-limit { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin-top: 4px; color: var(--danger); font-size: .7rem; line-height: 1.4; }
+.email-task-title-limit .text-button,
+.task-title-limit .text-button { padding: 0; font-size: .7rem; }
+input[aria-invalid="true"] { border-color: var(--danger); }
 /* Harness only — laying the states out for comparison. */
 .harness-machine-states { display: flex; flex-direction: column; gap: 18px; }
 .harness-machine-state { border: 1px solid var(--line); border-radius: 10px; padding: 4px 12px 12px; }
