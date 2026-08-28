@@ -17,6 +17,7 @@ mod feedback;
 mod jira;
 mod jira_oauth;
 mod maintenance;
+mod mcp_oauth;
 mod microsoft_oauth;
 mod migration;
 mod notifications;
@@ -2832,6 +2833,21 @@ fn router_with_optional_asset_root(
 fn api_router(state: AppState) -> Router {
     Router::new()
         .route("/mcp", post(mcp))
+        // Discovery for an outside tool. PUBLIC, and deliberately so: these are
+        // the documents a client reads to find out how to authenticate, and
+        // putting them behind the credential they exist to obtain is a loop.
+        // Anything absent under /.well-known/ must stay a 404 — this router has
+        // no blanket auth layer, so an unregistered path already answers 404
+        // rather than 401, which is the behaviour legacy had to arrange
+        // explicitly (api.py:384).
+        .route(
+            mcp_oauth::PROTECTED_RESOURCE_PATH,
+            get(mcp_oauth::protected_resource),
+        )
+        .route(
+            mcp_oauth::AUTHORIZATION_SERVER_PATH,
+            get(mcp_oauth::authorization_server),
+        )
         .route("/health", get(health))
         .route(
             "/api/v1/auth/session",

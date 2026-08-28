@@ -225,10 +225,19 @@ pub async fn handle(
     let principal = match bridge.authenticate(request.headers()) {
         Ok(principal) => principal,
         Err(AgentBridgeError::Unauthorized) => {
+            // NAME WHERE TO AUTHENTICATE, do not merely refuse. A bare `Bearer`
+            // tells a client it needs a token and not where to get one, so the
+            // 401 is a dead end and the tool simply cannot connect — which is
+            // exactly the state an outside tool found this endpoint in. The
+            // `resource_metadata` parameter turns the same refusal into an
+            // invitation the client can act on.
+            let challenge = crate::mcp_oauth::challenge(
+                crate::mcp_oauth::base_url(&state, request.headers()).as_deref(),
+            );
             return (
                 StatusCode::UNAUTHORIZED,
                 [
-                    (header::WWW_AUTHENTICATE, "Bearer"),
+                    (header::WWW_AUTHENTICATE, challenge.as_str()),
                     (header::CACHE_CONTROL, "no-store"),
                 ],
             )
@@ -2899,7 +2908,21 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(response.headers()[header::WWW_AUTHENTICATE], "Bearer");
+        // STILL CLOSED, and now it also says where to go. A bare `Bearer` told
+        // an outside tool it needed a token and not where to obtain one, so the
+        // refusal was a dead end and the client could never connect — which is
+        // the state the operator's own connector was stuck in. Refusing and
+        // directing are not in tension: this asserts both.
+        let challenge = response.headers()[header::WWW_AUTHENTICATE]
+            .to_str()
+            .unwrap();
+        assert!(challenge.starts_with("Bearer "), "{challenge}");
+        assert!(
+            challenge.contains(
+                r#"resource_metadata="http://127.0.0.1:8876/.well-known/oauth-protected-resource""#
+            ),
+            "{challenge}"
+        );
     }
 
     #[test]
