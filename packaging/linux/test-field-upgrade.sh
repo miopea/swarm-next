@@ -107,16 +107,19 @@ fail() { printf 'test-field-upgrade: %s\n' "$1" >&2; exit 1; }
 # 0.8.17 and the devs are on 0.8.19; all three release lines speak protocol 9
 # and all three hardcode `update` in apply_release, so one fix has to cover the
 # lot — and that is asserted here rather than assumed from reading one of them.
-for field_tag in v0.8.17 v0.8.18 v0.8.19; do
+for field_tag in v0.8.17 v0.8.18 v0.8.19 v0.9.0; do
   field_package="$test_root/field-swarm-package"
   git -C "$repo_root" show "$field_tag:packaging/linux/swarm-package" > "$field_package" 2>/dev/null \
     || fail "could not extract $field_tag swarm-package — is the tag fetched?"
   chmod +x "$field_package"
   # The assumption this whole test rests on: a Hive of this vintage installs a
-  # release by handing control to the NEW bundle's `update`, and never selects
-  # migrate-protocol itself.
-  grep -q 'update "\$requested"' "$field_package" \
-    || fail "$field_tag no longer matches the assumption this test is built on"
+  # release by handing control to the NEW bundle's swarm-package. v0.8.x
+  # hardcodes `update`; v0.9.0 selects a command into $apply_command and can
+  # choose migrate-protocol-if-idle. Both are handoffs, and the check has to
+  # admit both without ceasing to be a check — if a future tag stops handing
+  # off at all, every assertion below is measuring the wrong thing.
+  grep -qE 'swarm-package" (update|"\$apply_command") "\$requested"' "$field_package" \
+    || fail "$field_tag no longer hands the install to the new bundle"
 
   # A clean Hive for each vintage, or the second run inherits the first's fix.
   rm -rf "$SWARM_INSTALL_ROOT" "$SWARM_CONFIG_ROOT" "$SWARM_STATE_ROOT" "$SWARM_SYSTEMD_USER_ROOT"
@@ -156,3 +159,50 @@ for field_tag in v0.8.17 v0.8.18 v0.8.19; do
 
   printf 'field upgrade from %s passed\n' "$field_tag"
 done
+
+# --- WHAT A 0.9.0 HIVE ACTUALLY DOES WITH THIS RELEASE -----------------------
+#
+# The loop above runs with no sessions, which is the case that was never in
+# doubt. A 0.9.0 Hive is different from the 0.8.x ones in exactly one way: its
+# apply_release SELECTS a command, and picks migrate-protocol-if-idle when the
+# protocols differ — the deferring path that cannot finish while an autostart
+# worker keeps reviving. So the question this release turns on is what a 0.9.0
+# Hive does with a SAME-protocol release while a worker is running.
+field_package="$test_root/field-swarm-package"
+git -C "$repo_root" show v0.9.0:packaging/linux/swarm-package > "$field_package" 2>/dev/null \
+  || fail "could not extract v0.9.0 swarm-package"
+chmod +x "$field_package"
+
+rm -rf "$SWARM_INSTALL_ROOT" "$SWARM_CONFIG_ROOT" "$SWARM_STATE_ROOT" "$SWARM_SYSTEMD_USER_ROOT"
+mkdir -p "$SWARM_STATE_ROOT"
+make_bundle 1.0.0 6
+sh "$test_root/bundle-1.0.0/swarm-package" install "$test_root/bundle-1.0.0" >/dev/null
+cp "$field_package" "$SWARM_INSTALL_ROOT/current/swarm-package"
+chmod +x "$SWARM_INSTALL_ROOT/current/swarm-package"
+
+# Same protocol as the installed host, which is what 0.9.1 is to a 0.9.0 Hive.
+make_bundle 2.0.0 6
+mkdir -p "$SWARM_STATE_ROOT/downloads"
+rm -rf "$SWARM_STATE_ROOT/downloads/2.0.0"
+cp -r "$test_root/bundle-2.0.0" "$SWARM_STATE_ROOT/downloads/2.0.0"
+# A worker that keeps coming back, which is what defeats the deferring path.
+printf '3\n' > "$HOME/running-sessions"
+# The log is cumulative and the first-time install wrote to it, so it is cleared
+# here or the assertion below measures the install rather than this update.
+: > "$HOME/systemctl.log"
+printf '%s\n' "$SWARM_STATE_ROOT/downloads/2.0.0" > "$SWARM_STATE_ROOT/release-apply.request"
+sh "$SWARM_INSTALL_ROOT/current/swarm-package" apply-release >/dev/null 2>&1 \
+  || fail "a 0.9.0 Hive could not install a same-protocol release while a worker was running"
+
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "2.0.0" ] \
+  || fail "a 0.9.0 Hive did not install a same-protocol release"
+# THE POINT: no deferral was entered, so nothing is waiting on an idle that an
+# autostart worker will never allow.
+[ ! -f "$SWARM_STATE_ROOT/protocol-migration.pending" ] \
+  || fail "a same-protocol release put a 0.9.0 Hive into the deferring path"
+# And the workers were not taken away for an ordinary update.
+if grep -q '^--user stop swarm.target$' "$HOME/systemctl.log" 2>/dev/null; then
+  fail "a same-protocol release stopped the whole stack on a 0.9.0 Hive"
+fi
+
+printf 'a 0.9.0 Hive takes a same-protocol release with workers running\n'

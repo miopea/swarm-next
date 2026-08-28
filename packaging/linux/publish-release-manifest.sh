@@ -68,14 +68,19 @@ for tarball in "$@"; do
   # the evidence: it drives the real swarm-package from each release tag and
   # installs a protocol-bumping bundle through it. Do not set this for a bump
   # that path has not been shown to survive.
-  if [ -n "${SWARM_OFFER_PROTOCOL:-}" ]; then
-    case "$SWARM_OFFER_PROTOCOL" in
-      *[!0-9]*|"") die "SWARM_OFFER_PROTOCOL must be a protocol number";;
+  # A LIST, BECAUSE ONE NUMBER CANNOT REACH EVERYONE. Offering only 9 hides the
+  # release from every Hive that already speaks 10; offering only 10 hides it
+  # from the whole field. Nothing requires a version to appear once: the
+  # manifest's validate() checks only that a version parses and a protocol is
+  # non-empty, and offers_speaking filters by protocol BEFORE taking the newest,
+  # so one entry per protocol means each Hive sees exactly one and they all see
+  # the same artifact and digest.
+  offer_protocols=${SWARM_OFFER_PROTOCOL:-$protocol}
+  for offer_protocol in $(printf '%s' "$offer_protocols" | tr ',' ' '); do
+    case "$offer_protocol" in
+      *[!0-9]*|"") die "SWARM_OFFER_PROTOCOL must be protocol numbers";;
     esac
-    printf '%s: offering at protocol %s rather than the %s it speaks\n' \
-      "$name" "$SWARM_OFFER_PROTOCOL" "$protocol" >&2
-    protocol=$SWARM_OFFER_PROTOCOL
-  fi
+  done
   [ -f "$bundle/WORKER_ENGINE_BUILD_ID" ] || die "$name predates the recorded engine build id and cannot be offered"
   engine=$(tr -d '\r\n' < "$bundle/WORKER_ENGINE_BUILD_ID")
   case "$version" in
@@ -96,8 +101,14 @@ for tarball in "$@"; do
       || die "$artifact_url answers $status, not 200 — the manifest would offer an artifact no Hive can download"
   fi
 
-  offer=$(printf '{"version":"%s","protocol":"%s","artifact_url":"%s","artifact_sha256":"%s","artifact_bytes":%s,"worker_engine_build_id":"%s","notes_url":null}' \
-    "$version" "$protocol" "$artifact_url" "$digest" "$bytes" "$engine")
+  offer=
+  for offer_protocol in $(printf '%s' "$offer_protocols" | tr ',' ' '); do
+    [ "$offer_protocol" = "$protocol" ] || printf '%s: also offered at protocol %s (it speaks %s)\n' \
+      "$name" "$offer_protocol" "$protocol" >&2
+    entry=$(printf '{"version":"%s","protocol":"%s","artifact_url":"%s","artifact_sha256":"%s","artifact_bytes":%s,"worker_engine_build_id":"%s","notes_url":null}' \
+      "$version" "$offer_protocol" "$artifact_url" "$digest" "$bytes" "$engine")
+    if [ -z "$offer" ]; then offer=$entry; else offer="$offer,$entry"; fi
+  done
   if [ -z "$offers" ]; then offers=$offer; else offers="$offers,$offer"; fi
 done
 
