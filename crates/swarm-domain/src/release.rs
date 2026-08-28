@@ -203,8 +203,8 @@ impl ReleaseManifest {
     /// refuses to order one in either direction, so replacing a working copy's
     /// binary with a release can never be proposed. ADR 0050 point 4.
     #[must_use]
-    pub fn upgrade_for(&self, current: &SwarmVersion, protocol: &str) -> Option<&ReleaseOffer> {
-        self.offers_speaking(protocol)
+    pub fn upgrade_for(&self, current: &SwarmVersion) -> Option<&ReleaseOffer> {
+        self.installable_offers()
             .into_iter()
             .filter(|(version, _)| version.supersedes(current))
             .max_by(|(left, _), (right, _)| left.cmp(right))
@@ -217,17 +217,37 @@ impl ReleaseManifest {
     /// nothing: "0.2.0 has been released" is useful, and pretending otherwise
     /// would leave a developer worse informed than a user.
     #[must_use]
-    pub fn newest_offer(&self, protocol: &str) -> Option<&ReleaseOffer> {
-        self.offers_speaking(protocol)
+    pub fn newest_offer(&self) -> Option<&ReleaseOffer> {
+        self.installable_offers()
             .into_iter()
             .max_by(|(left, _), (right, _)| left.cmp(right))
             .map(|(_, offer)| offer)
     }
 
-    fn offers_speaking(&self, protocol: &str) -> Vec<(SwarmVersion, &ReleaseOffer)> {
+    /// Every offer this Hive could install, newest last.
+    ///
+    /// THE PROTOCOL NO LONGER GATES DISCOVERY, and removing that is the whole
+    /// point rather than a simplification.
+    ///
+    /// This filtered on `offer.protocol == protocol`, an exact match against
+    /// the Hive's own compiled `PROTOCOL_VERSION`. That was correct while
+    /// `update` REFUSED a protocol change: a release the installer would not
+    /// take was not worth offering. ccc4872 made `update` perform the migration
+    /// instead, so the filter began excluding releases the Hive can install.
+    ///
+    /// v0.9.0 is what that cost. Fully published, signed, artifact fetchable
+    /// with matching hashes, every deploy step green — and visible to nobody,
+    /// because it declared protocol 10 and every Hive in the field compiled 9.
+    /// The operator: "I keep checking and my copy of swarm doesn't see anything
+    /// newer than 0.8.17."
+    ///
+    /// An offer whose version cannot be parsed is still dropped, because
+    /// nothing downstream can order it — but the manifest is asked whether it
+    /// listed anything, so dropping them all is reported rather than read as
+    /// being up to date.
+    fn installable_offers(&self) -> Vec<(SwarmVersion, &ReleaseOffer)> {
         self.releases
             .iter()
-            .filter(|offer| offer.protocol == protocol)
             .filter_map(|offer| Some((offer.parsed_version()?, offer)))
             .collect()
     }
@@ -453,7 +473,7 @@ mod tests {
 
         let payload = verify_release_manifest(&document, Some(&public), 2_000).unwrap();
         let current = SwarmVersion::parse("0.1.0").unwrap();
-        let upgrade = payload.upgrade_for(&current, PROTOCOL).unwrap();
+        let upgrade = payload.upgrade_for(&current).unwrap();
 
         assert_eq!(upgrade.version, "0.3.0");
         assert_eq!(upgrade.worker_engine_build_id, "engine-c");
@@ -505,7 +525,7 @@ mod tests {
     /// offered, because offering it would make the operator the one who
     /// discovers the incompatibility." ADR 0050 point 2.
     #[test]
-    fn a_release_speaking_another_terminal_protocol_is_not_offered() {
+    fn the_newest_release_wins_whatever_protocol_it_declares() {
         let (signing_key, public) = keypair();
         let mut newer = offer("0.9.0", "engine-z");
         newer.protocol = "4".to_owned();
@@ -517,11 +537,17 @@ mod tests {
         let payload = verify_release_manifest(&document, Some(&public), 2_000).unwrap();
         let current = SwarmVersion::parse("0.1.0").unwrap();
 
-        assert_eq!(
-            payload.upgrade_for(&current, PROTOCOL).unwrap().version,
-            "0.2.0"
-        );
-        assert_eq!(payload.newest_offer(PROTOCOL).unwrap().version, "0.2.0");
+        // THIS TEST ASSERTED THE OPPOSITE, and it was right to until ccc4872.
+        // It pinned "a release declaring another protocol is not offered",
+        // which was correct while `update` refused a protocol change: offering
+        // a release the installer would decline helps nobody. `update` now
+        // performs the migration, so the same rule hides releases the Hive can
+        // install — and it hid v0.9.0 from every Hive in the field while
+        // reporting them up to date.
+        //
+        // The version decides now, and only the version.
+        assert_eq!(payload.upgrade_for(&current).unwrap().version, "0.9.0");
+        assert_eq!(payload.newest_offer().unwrap().version, "0.9.0");
     }
 
     /// "Replacing someone's checkout-built binary with a release would discard
@@ -535,8 +561,8 @@ mod tests {
         let payload = verify_release_manifest(&document, Some(&public), 2_000).unwrap();
         let current = SwarmVersion::parse("0.1.0-dev-5394d9a6b872-20260820201150").unwrap();
 
-        assert!(payload.upgrade_for(&current, PROTOCOL).is_none());
-        assert_eq!(payload.newest_offer(PROTOCOL).unwrap().version, "0.2.0");
+        assert!(payload.upgrade_for(&current).is_none());
+        assert_eq!(payload.newest_offer().unwrap().version, "0.2.0");
     }
 
     /// A signature covers whatever it covers. Refusing malformed offers is
@@ -598,6 +624,46 @@ mod tests {
         );
     }
 
+    /// THE DEFECT THIS EXISTS FOR, at the layer where it happened.
+    ///
+    /// v0.9.0 declared protocol 10, every Hive in the field compiled 9, and the
+    /// exact-equality filter meant a fully published and correctly signed
+    /// release was visible to nobody. The operator: "I keep checking and my
+    /// copy of swarm doesn't see anything newer than 0.8.17."
+    ///
+    /// This is asserted at DISCOVERY rather than at install, because
+    /// test-field-upgrade.sh writes the release-apply request directly — it
+    /// proves a Hive can install such a release and never asks whether it can
+    /// find one, which is exactly how this survived a full deploy with every
+    /// step green.
+    #[test]
+    fn a_release_that_moves_the_protocol_is_still_offered() {
+        let (signing_key, public) = keypair();
+        let mut newer = offer("0.2.0", "engine-b");
+        newer.protocol = "10".to_owned();
+        let document = sign(manifest(vec![newer]), &signing_key);
+
+        let payload = verify_release_manifest(&document, Some(&public), 2_000).unwrap();
+        let current = SwarmVersion::parse("0.1.0").unwrap();
+
+        assert_eq!(payload.newest_offer().unwrap().version, "0.2.0");
+        assert_eq!(payload.upgrade_for(&current).unwrap().version, "0.2.0");
+    }
+
+    /// And it is offered in the other direction too: a Hive that has already
+    /// moved on must still see a release declaring an older protocol, or every
+    /// Hive that takes one becomes invisible to the next.
+    #[test]
+    fn an_offer_declaring_an_older_protocol_is_still_seen() {
+        let (signing_key, public) = keypair();
+        let mut older_protocol = offer("0.3.0", "engine-c");
+        older_protocol.protocol = "1".to_owned();
+        let document = sign(manifest(vec![older_protocol]), &signing_key);
+
+        let payload = verify_release_manifest(&document, Some(&public), 2_000).unwrap();
+        assert_eq!(payload.newest_offer().unwrap().version, "0.3.0");
+    }
+
     #[test]
     fn an_empty_manifest_offers_nothing_without_being_an_error() {
         let (signing_key, public) = keypair();
@@ -606,7 +672,7 @@ mod tests {
         let payload = verify_release_manifest(&document, Some(&public), 2_000).unwrap();
         let current = SwarmVersion::parse("0.1.0").unwrap();
 
-        assert!(payload.upgrade_for(&current, PROTOCOL).is_none());
-        assert!(payload.newest_offer(PROTOCOL).is_none());
+        assert!(payload.upgrade_for(&current).is_none());
+        assert!(payload.newest_offer().is_none());
     }
 }

@@ -523,8 +523,21 @@ pub(super) async fn check(state: &Arc<AppState>) {
     let (outcome, offer) = match fetch_manifest(&url, now).await {
         Err(outcome) => (outcome, None),
         Ok(manifest) => {
-            let protocol = swarm_terminal::PROTOCOL_VERSION.to_string();
-            match manifest.newest_offer(&protocol) {
+            match manifest.newest_offer() {
+                // `current` IS NOW TRUE HERE, which it was not before.
+                //
+                // This branch used to be reached whenever the newest release
+                // declared a different protocol, so "you are up to date" was
+                // said to Hives that were several releases behind and could
+                // have installed every one of them.
+                //
+                // I tried to add an `incompatible` outcome for "the manifest
+                // offered releases and none could be read" and then removed it:
+                // verify_release_manifest refuses a manifest containing an
+                // unparseable version outright, so a verified manifest cannot
+                // reach here with releases listed. The branch could never have
+                // fired, and a branch that cannot fire is what this whole
+                // session has been deleting.
                 None => ("current", None),
                 Some(offer) => {
                     let current = SwarmVersion::parse(build_version());

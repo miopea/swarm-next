@@ -271,6 +271,36 @@ sh packaging/linux/publish-release-manifest.sh "$KEY" \
 rm -f "$KEY"
 ```
 
+### Offering to Hives whose protocol differs — `SWARM_OFFER_PROTOCOL`
+
+**A Hive can only see offers its own installed code will show it**, and every
+release up to 0.9.1 filters the manifest for offers whose protocol EQUALS its
+compiled `PROTOCOL_VERSION`, reporting a miss as "current". So a release that
+bumps the protocol is invisible to the field while telling operators they are up
+to date. That is how v0.9.0 shipped, fully signed and verified, to nobody.
+
+Discovery no longer filters on protocol from 0.9.2 onward — but that fix lives
+in the installed binary, so it does nothing for a Hive already in the field.
+**Until every Hive is past 0.9.1, list a release under every protocol you need
+to reach:**
+
+```bash
+SWARM_OFFER_PROTOCOL=9,10 sh packaging/linux/publish-release-manifest.sh ...
+```
+
+One entry per protocol, all naming the same artifact and digest. Check both:
+
+```bash
+python3 -c "import json;d=json.load(open('releases.json'));print(sorted((r['version'],r['protocol']) for r in d['payload']['releases']))"
+```
+
+**Only sound when the field can actually install it.** The manifest's protocol
+is a discovery filter and the install reads the bundle's own `PROTOCOL` file, so
+this offers a release the Hive will then migrate onto — which is true only
+because `update` performs the migration and `test-field-upgrade.sh` proves the
+real `swarm-package` from each field tag can install a protocol-bumping bundle.
+**Do not use this for a bump that test has not been shown to survive.**
+
 The base URL **must include the `/vX.Y.Z/` segment**. Omitting it is how 0.8.7
 published a manifest pointing at a 404 and stranded a developer on a download
 error.

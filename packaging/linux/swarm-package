@@ -86,6 +86,47 @@ record_failure() {
   } > "$1" 2>/dev/null || true
 }
 run_systemctl() { "$systemctl_bin" --user "$@"; }
+
+# Stop the whole stack, and CONFIRM IT STOPPED.
+#
+# `systemctl stop swarm.target` completes when the TARGET is inactive. The
+# units it pulls down through PartOf= are separate jobs, and a job that has not
+# started yet can be dropped by a daemon-reload. That is not theoretical:
+# 2026-08-28 09:17:04 on the operator's machine, from the user manager's own
+# journal --
+#
+#   Stopped target swarm.target
+#   Stopping swarm-api.service...            <- already started, so it finished
+#   Reload requested from client PID 5251    <- install_units, mid-stop
+#   (swarm-terminal-host.service: never mentioned at all)
+#
+# The API's stop was in flight and completed. The terminal host's was still
+# queued, the reload dropped it, and a protocol-9 host stayed alive into a
+# protocol-10 world. The new swarmctl got "Broken pipe", wait_for_host spun for
+# four minutes, and the failure was reported as health verification. Three
+# installs failed that way and none of them said why.
+#
+# So the units are NAMED rather than left to propagation, and then the stop is
+# ASSERTED rather than trusted. `|| true` used to hide the whole thing.
+stop_swarm_stack() {
+  run_systemctl stop swarm-api.service swarm-terminal-host.service swarm.target >/dev/null 2>&1 || true
+  for stopping_unit in swarm-api.service swarm-terminal-host.service; do
+    stop_attempts=0
+    while run_systemctl is-active --quiet "$stopping_unit" 2>/dev/null; do
+      stop_attempts=$((stop_attempts + 1))
+      if [ "$stop_attempts" -ge 60 ]; then
+        die "$stopping_unit is still running after being asked to stop; refusing to swap the release underneath it"
+      fi
+      # RE-ISSUED, NOT JUST WAITED ON. A unit that is slow to stop only needs
+      # time; a unit whose stop job was DROPPED will never stop no matter how
+      # long this waits, and waiting was the whole failure. Asking again costs
+      # nothing when the first ask is still working.
+      [ $((stop_attempts % 10)) -ne 0 ] \
+        || run_systemctl stop "$stopping_unit" >/dev/null 2>&1 || true
+      sleep 1
+    done
+  done
+}
 terminal_socket() { printf '%s/swarm/terminal.sock\n' "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; }
 
 # The one line worth showing from ANY failed step, bounded and newline-free.
@@ -1175,10 +1216,23 @@ reconcile_host() {
       "$(basename "$current")" \
       "$(printf '%s' "$desired_engine" | cut -c1-12)"
   fi
-  # A host that cannot be reached says nothing either way, so fall through to
-  # the link comparison rather than claiming it is current.
+  # AN UNREACHABLE HOST IS NOT A CURRENT ONE.
+  #
+  # This compared the two symlinks when it could not reach the host and, if
+  # they matched, returned success -- printing "Terminal host link already at
+  # X; running engine unknown". It said exactly that at 09:18:12 on
+  # 2026-08-28 while a stale protocol-9 host was running and answering nobody,
+  # which is how the engine card came to contradict itself.
+  #
+  # A symlink agreeing with a symlink is not evidence about a process. Say the
+  # host is unreachable and stop claiming the engine is current.
   if [ -z "$running_engine" ]; then
-    [ "$current" != "$host_release" ] || { printf 'Terminal host link already at %s; running engine unknown\n' "$(basename "$current")"; return; }
+    if [ "$current" = "$host_release" ]; then
+      printf 'Terminal host is not answering; its engine cannot be confirmed (link is at %s)\n' \
+        "$(basename "$current")" >&2
+      [ "$reconcile_mode" = "if-idle" ] && return
+      die "terminal host is not answering, so its engine cannot be reconciled"
+    fi
   fi
   # A protocol change is not this function's to make: it moves host-current
   # alone, and a host speaking a different protocol from the API is the exact
@@ -1305,7 +1359,7 @@ activate_protocol_migration() {
   # as broken is worse than a slow one, and it also triggers a rollback of
   # something that succeeded.
   health_attempts=${SWARM_MIGRATION_HEALTH_ATTEMPTS:-240}
-  run_systemctl stop swarm.target || true
+  stop_swarm_stack
   activate_link "$new_release"
   activate_host_link "$new_release"
   install_units "$new_release"
