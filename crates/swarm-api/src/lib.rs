@@ -12944,9 +12944,19 @@ mod tests {
 
     #[tokio::test]
     async fn jira_outage_keeps_the_local_transition_and_queues_remote_delivery() {
-        let unavailable = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = unavailable.local_addr().unwrap();
-        drop(unavailable);
+        // AN ADDRESS NOTHING CAN ANSWER ON, rather than one that merely happens to
+        // be free. Binding an ephemeral port and dropping it returns that port to
+        // the pool (32768-60999 here), and eleven other tests in this binary bind
+        // ephemeral ports and serve on them. When one of them won this port, the
+        // "outage" stopped being an outage: the client connected, got 404 from a
+        // router that had never heard of /rest/api/3/issue/WEB-42/transitions,
+        // and ensure_success turned that into PermissionDenied -> Conflict, so
+        // outbound_state read "conflict" instead of "queued".
+        //
+        // Port 1 is below ip_unprivileged_port_start (1024) and outside the
+        // ephemeral range, so no test here can bind it, and connecting refuses
+        // immediately -- no listener to accept, so no timeout to tune.
+        let address = "127.0.0.1:1";
         let store = TaskStore::in_memory().unwrap();
         let binding = store
             .upsert_jira_project_binding(&JiraProjectBindingInput {
@@ -13023,6 +13033,102 @@ mod tests {
             response_json(authorized_get(app, "/api/v1/integrations/jira/task-links").await).await;
         assert_eq!(links[0]["jira_status_name"], "To Do");
         assert_eq!(links[0]["outbound_state"], "queued");
+    }
+    #[tokio::test]
+    async fn jira_answering_an_unknown_route_is_a_conflict_not_a_retry() {
+        let unavailable = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = unavailable.local_addr().unwrap();
+        // Jira answers, but not with a transitions endpoint. That is a
+        // misconfiguration, not an outage, and it must NOT be retried forever:
+        // 404 -> PermissionDenied -> Conflict, which parks the delivery for the
+        // operator instead of spinning. This is also the exact condition that
+        // made the outage test above flaky when it shared a port with a stranger.
+        unavailable.set_nonblocking(true).unwrap();
+        let stranger = tokio::net::TcpListener::from_std(unavailable).unwrap();
+        let stranger_server = axum::Router::new().route(
+            "/rest/api/3/search/jql",
+            axum::routing::get(|| async { "{}" }),
+        );
+        tokio::spawn(async move { axum::serve(stranger, stranger_server).await });
+        let store = TaskStore::in_memory().unwrap();
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10001",
+                project_key: "WEB",
+                project_name: "Website Services",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[
+                    JiraStatusMapping {
+                        jira_status_id: "1".into(),
+                        jira_status_name: "To Do".into(),
+                        task_state: TaskState::Ready,
+                    },
+                    JiraStatusMapping {
+                        jira_status_id: "3".into(),
+                        jira_status_name: "In Progress".into(),
+                        task_state: TaskState::Active,
+                    },
+                ],
+            )
+            .unwrap();
+        let task = store
+            .sync_jira_issues(
+                binding.id,
+                &[JiraIssueSnapshot {
+                    issue_id: "20001",
+                    issue_key: "WEB-42",
+                    summary: "Polish the launch page",
+                    description: "",
+                    status_id: "1",
+                    status_name: "To Do",
+                    assignee_account_id: None,
+                    assignee_name: None,
+                    remote_updated_at: "2026-08-13T12:00:00.000+0000",
+                }],
+            )
+            .unwrap()
+            .remove(0);
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone())
+                .with_jira_configuration(
+                    &format!("http://{address}"),
+                    "operator@example.test",
+                    "api-token",
+                )
+                .unwrap(),
+        );
+
+        let transitioned = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/v1/tasks/{}/state", task.id))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"state":"active"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(transitioned.status(), StatusCode::OK);
+        assert_eq!(response_json(transitioned).await["state"], "active");
+        assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Active);
+        let links =
+            response_json(authorized_get(app, "/api/v1/integrations/jira/task-links").await).await;
+        assert_eq!(links[0]["jira_status_name"], "To Do");
+        assert_eq!(
+            links[0]["outbound_state"], "conflict",
+            "a reachable Jira that cannot transition is parked, not retried"
+        );
     }
 
     #[tokio::test]
