@@ -161,7 +161,9 @@ const CONNECTION_PRINCIPAL_SCHEMA_VERSION: i64 = 104;
 const UNVERIFIABLE_CLOSURE_SCHEMA_VERSION: i64 = 105;
 /// Where a dogfood report went, when it went anywhere.
 const FEEDBACK_ISSUE_SCHEMA_VERSION: i64 = 106;
-const CURRENT_SCHEMA_VERSION: i64 = FEEDBACK_ISSUE_SCHEMA_VERSION;
+/// GitHub issues that have already come down as tasks.
+const GITHUB_ISSUE_INTAKE_SCHEMA_VERSION: i64 = 107;
+const CURRENT_SCHEMA_VERSION: i64 = GITHUB_ISSUE_INTAKE_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -3381,6 +3383,9 @@ fn migrate_newest_schema_steps(
     if schema_version < FEEDBACK_ISSUE_SCHEMA_VERSION {
         migrate_feedback_issue(transaction)?;
     }
+    if schema_version < GITHUB_ISSUE_INTAKE_SCHEMA_VERSION {
+        migrate_github_issue_intake(transaction)?;
+    }
     Ok(())
 }
 
@@ -3479,6 +3484,30 @@ fn migrate_connection_principal(transaction: &rusqlite::Transaction<'_>) -> rusq
         )?;
     }
     transaction.pragma_update(None, "user_version", CONNECTION_PRINCIPAL_SCHEMA_VERSION)
+}
+
+/// Which GitHub issues have already arrived, so none arrives twice.
+///
+/// The intake polls; a poll that could not remember what it had seen would file
+/// the same issue on every tick and bury the board it is meant to feed. Keyed on
+/// the issue's own URL because that is stable, unique per repository, and is
+/// what a person clicks.
+fn migrate_github_issue_intake(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let tasks: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks')",
+        [],
+        |row| row.get(0),
+    )?;
+    if tasks {
+        transaction.execute_batch(
+            "CREATE TABLE IF NOT EXISTS github_issue_tasks (
+                 issue_url TEXT PRIMARY KEY,
+                 task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                 imported_at INTEGER NOT NULL DEFAULT (unixepoch())
+             );",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", GITHUB_ISSUE_INTAKE_SCHEMA_VERSION)
 }
 
 /// Where a dogfood report went, when it went anywhere.

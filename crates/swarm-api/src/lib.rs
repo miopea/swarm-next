@@ -218,6 +218,7 @@ pub struct AppState {
     provider_activity: Arc<RwLock<HashMap<WorkerSessionId, provider_activity::ProviderSignals>>>,
     coordinator_start_admission: Arc<AtomicU8>,
     github_feedback: Option<github_feedback::GithubFeedback>,
+    github_issue_workspace: String,
     /// Subsystems that failed to configure at startup and were left off.
     ///
     /// Fixed at startup rather than mutable: these come from configuration
@@ -299,6 +300,7 @@ impl AppState {
             worker_recovery_attempts: Arc::new(RwLock::new(HashMap::new())),
             provider_activity: Arc::new(RwLock::new(HashMap::new())),
             github_feedback: None,
+            github_issue_workspace: String::new(),
             coordinator_start_admission: Arc::new(AtomicU8::new(
                 runtime::CoordinatorStartAdmission::DeferredUnavailable.code(),
             )),
@@ -513,6 +515,10 @@ impl AppState {
     /// becoming a request to somewhere unintended.
     pub fn with_github_feedback(mut self, repository: &str, token: &str) -> Result<Self, String> {
         self.github_feedback = Some(github_feedback::GithubFeedback::new(repository, token)?);
+        // The same shape the email intake uses for its own arrivals: a marker
+        // rather than a checkout, because an issue has no repository on this
+        // machine until Queen routes it to a worker that does.
+        "github://issues".clone_into(&mut self.github_issue_workspace);
         Ok(self)
     }
 
@@ -1474,6 +1480,53 @@ impl AppState {
                     tracing::warn!(action_id = %action.action_id, message = %error, "coordinator action outcome could not be persisted");
                 }
             }
+        }
+    }
+
+    /// Brings open GitHub issues down as DRAFT tasks for Queen to triage.
+    ///
+    /// The operator's shape, from the ruling that authorised this: "the issues
+    /// would come down to my copy of Swarm as a draft task that the queen could
+    /// review or run by me. Then if valid make it ready, or if a duplicate
+    /// merge." So this files DRAFTS and nothing else — an issue is somebody's
+    /// opinion that something is wrong, and it becomes work when Queen says so.
+    ///
+    /// Silent when there is no credential, which is the ordinary case. A Hive
+    /// with no GitHub configured has nothing to poll and should not say so
+    /// every minute.
+    pub async fn intake_github_issues(&self) {
+        let Some(github) = self.github_feedback.as_ref() else {
+            return;
+        };
+        let Ok(store) = task_store(self) else { return };
+        let issues = match github.open_issues().await {
+            Ok(issues) => issues,
+            Err(error) => {
+                tracing::warn!(?error, "GitHub issues could not be read");
+                return;
+            }
+        };
+        let workspace = self.github_issue_workspace.clone();
+        let mut arrived = 0_usize;
+        for issue in issues {
+            match store.import_github_issue(
+                &issue.html_url,
+                &issue.title,
+                issue.body.as_deref().unwrap_or_default(),
+                &workspace,
+            ) {
+                // None means it already came down; the poll remembers, so the
+                // same issue does not refile every tick.
+                Ok(Some(_)) => arrived += 1,
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(%error, issue = %issue.html_url, "a GitHub issue could not be filed");
+                }
+            }
+        }
+        if arrived > 0 {
+            tracing::info!(arrived, "GitHub issues arrived as draft tasks");
+            self.control_room_notify.notify_waiters();
         }
     }
 

@@ -2,7 +2,10 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use swarm_domain::{Task, TaskId};
+
 use super::{TaskStore, TaskStoreError};
+use crate::events::insert_control_room_event;
 
 const MAX_FEEDBACK_NOTE_BYTES: usize = 8_000;
 const MAX_FEEDBACK_BUNDLE_BYTES: usize = 128 * 1024;
@@ -65,6 +68,74 @@ impl TaskStore {
         let report = read_report(&transaction, &id)?;
         transaction.commit()?;
         Ok(report)
+    }
+
+    /// Brings one GitHub issue down as a DRAFT task, once.
+    ///
+    /// DRAFT ON PURPOSE, and it is the operator's own shape: "the issues would
+    /// come down to my copy of Swarm as a draft task that the queen could
+    /// review or run by me. Then if valid make it ready, or if a duplicate
+    /// merge." An issue is somebody else's opinion that something is wrong; it
+    /// becomes work when Queen says so, not when a poller notices it.
+    ///
+    /// Returns None when this issue has already arrived. The intake polls, so
+    /// without that memory the same issue would be filed on every tick and
+    /// would bury the board it exists to feed.
+    ///
+    /// # Errors
+    /// Returns validation or persistence failures.
+    pub fn import_github_issue(
+        &self,
+        issue_url: &str,
+        title: &str,
+        body: &str,
+        workspace: &str,
+    ) -> Result<Option<Task>, TaskStoreError> {
+        let issue_url = issue_url.trim();
+        if issue_url.is_empty() || issue_url.len() > 2_048 {
+            return Err(TaskStoreError::InvalidDogfoodReport);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let seen: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM github_issue_tasks WHERE issue_url = ?1)",
+            [issue_url],
+            |row| row.get(0),
+        )?;
+        if seen {
+            transaction.commit()?;
+            return Ok(None);
+        }
+        let hive_id: String = transaction.query_row(
+            "SELECT hive_id FROM local_hive_identity WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        let task_id = TaskId::new();
+        let title = clamp_issue_title(title);
+        let description = format!("{}\n\nFrom {issue_url}", body.trim());
+        transaction.execute(
+            "INSERT INTO tasks (id, hive_id, title, description, priority, workspace, state, position)
+             VALUES (?1, ?2, ?3, ?4, 'normal', ?5, 'draft',
+                 COALESCE((SELECT MAX(position) + 1 FROM tasks WHERE hive_id = ?2), 0))",
+            params![task_id.to_string(), hive_id, title, description, workspace],
+        )?;
+        transaction.execute(
+            "INSERT INTO task_activity (task_id, kind, to_state, note, actor_kind)
+             VALUES (?1, 'created', 'draft', ?2, 'system')",
+            params![task_id.to_string(), format!("Arrived from {issue_url}")],
+        )?;
+        transaction.execute(
+            "INSERT INTO github_issue_tasks (issue_url, task_id) VALUES (?1, ?2)",
+            params![issue_url, task_id.to_string()],
+        )?;
+        insert_control_room_event(&transaction, crate::ControlRoomEventKind::TasksChanged)?;
+        transaction.commit()?;
+        drop(connection);
+        // Read after commit, the way the email intake does: there is no
+        // in-transaction task reader and inventing one to save a query would
+        // duplicate the row mapping.
+        Ok(Some(self.get_task(task_id)?))
     }
 
     /// Records where a report was filed, so a person can tell afterwards.
@@ -181,6 +252,22 @@ fn map_report(row: &rusqlite::Row<'_>) -> rusqlite::Result<DogfoodReport> {
     })
 }
 
+/// A title that fits the board, cut on a char boundary.
+fn clamp_issue_title(title: &str) -> String {
+    let title = title.trim();
+    if title.is_empty() {
+        return "GitHub issue".to_owned();
+    }
+    if title.len() <= crate::MAX_TASK_TITLE_BYTES {
+        return title.to_owned();
+    }
+    let mut end = crate::MAX_TASK_TITLE_BYTES;
+    while end > 0 && !title.is_char_boundary(end) {
+        end -= 1;
+    }
+    title[..end].trim_end().to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,6 +301,53 @@ mod tests {
         assert!(matches!(
             store.create_dogfood_report("expected", "observed", "bundle", Some("../secret")),
             Err(TaskStoreError::InvalidDogfoodAttachment)
+        ));
+    }
+    #[test]
+    fn an_issue_arrives_as_a_draft_and_never_arrives_twice() {
+        let store = TaskStore::in_memory().unwrap();
+        let url = "https://github.com/miopea/swarm-next/issues/7";
+
+        let first = store
+            .import_github_issue(
+                url,
+                "Terminal drops a line on my phone",
+                "Every redraw.",
+                "github://issues",
+            )
+            .unwrap()
+            .expect("the first sighting files a task");
+
+        // A DRAFT, which is the operator's ruling: an issue is somebody's
+        // opinion that something is wrong, and Queen decides whether it is work.
+        assert_eq!(first.state, swarm_domain::TaskState::Draft);
+        assert_eq!(first.title, "Terminal drops a line on my phone");
+        assert!(
+            first.description.contains(url),
+            "the task says where it came from: {}",
+            first.description
+        );
+
+        // The poll runs every five minutes forever. Without this, the board
+        // fills with one copy of every open issue per tick.
+        let second = store
+            .import_github_issue(
+                url,
+                "Terminal drops a line on my phone",
+                "Every redraw.",
+                "github://issues",
+            )
+            .unwrap();
+        assert!(second.is_none(), "the same issue does not refile");
+        assert_eq!(store.list_tasks().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_issue_with_no_url_is_refused_rather_than_filed() {
+        let store = TaskStore::in_memory().unwrap();
+        assert!(matches!(
+            store.import_github_issue("  ", "A title", "A body", "github://issues"),
+            Err(TaskStoreError::InvalidDogfoodReport)
         ));
     }
 }

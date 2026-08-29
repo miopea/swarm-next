@@ -27,6 +27,20 @@ struct CreatedIssue {
     html_url: String,
 }
 
+/// One open issue, as much of it as a draft task needs.
+#[derive(Debug, Deserialize)]
+pub(super) struct OpenIssue {
+    pub(super) html_url: String,
+    pub(super) title: String,
+    #[serde(default)]
+    pub(super) body: Option<String>,
+    /// Present on pull requests and absent on issues. GitHub returns both from
+    /// the issues endpoint, and a pull request is not a piece of work for this
+    /// board.
+    #[serde(default)]
+    pub(super) pull_request: Option<serde_json::Value>,
+}
+
 /// The reasons filing can fail, kept apart so the caller can say which.
 #[derive(Debug)]
 pub(super) enum GithubError {
@@ -98,6 +112,48 @@ impl GithubFeedback {
             .map(|issue| issue.html_url)
             .map_err(|_| GithubError::Unreachable)
     }
+}
+
+impl GithubFeedback {
+    /// The open issues, newest first, bounded.
+    ///
+    /// Pull requests are dropped: GitHub returns them from the issues endpoint
+    /// and they are not work for this board.
+    pub(super) async fn open_issues(&self) -> Result<Vec<OpenIssue>, GithubError> {
+        let response = reqwest::Client::new()
+            .get(format!(
+                "https://api.github.com/repos/{}/issues?state=open&per_page=20&sort=created&direction=desc",
+                self.repository
+            ))
+            .header("authorization", format!("Bearer {}", self.token))
+            .header("accept", "application/vnd.github+json")
+            .header("user-agent", "swarm-next")
+            .send()
+            .await
+            .map_err(|_| GithubError::Unreachable)?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(GithubError::Refused(format!(
+                "GitHub refused the issue list with {status}"
+            )));
+        }
+        let issues = response
+            .json::<Vec<OpenIssue>>()
+            .await
+            .map_err(|_| GithubError::Unreachable)?;
+        Ok(issues_for_the_board(issues))
+    }
+}
+
+/// Drops the pull requests GitHub returns from its issues endpoint.
+///
+/// Separate from the request so it can be tested without a credential: the
+/// network leg of this client has never run, and this part need not wait on it.
+fn issues_for_the_board(issues: Vec<OpenIssue>) -> Vec<OpenIssue> {
+    issues
+        .into_iter()
+        .filter(|issue| issue.pull_request.is_none())
+        .collect()
 }
 
 /// A title someone can scan in a list, from the words the reporter wrote.
@@ -207,5 +263,23 @@ mod tests {
             "falls back to the expectation when nothing was observed"
         );
         assert_eq!(issue_title(&report("", "", None)), "Dogfood report");
+    }
+
+    #[test]
+    fn a_pull_request_is_not_a_piece_of_work_for_this_board() {
+        // The shape GitHub actually returns: /issues carries pull requests too,
+        // distinguished only by a `pull_request` key nobody would notice.
+        let payload = serde_json::json!([
+            {"html_url": "https://github.com/o/n/issues/1", "title": "Terminal drops a line", "body": "on my phone"},
+            {"html_url": "https://github.com/o/n/pull/2", "title": "Fix the terminal", "body": "",
+             "pull_request": {"url": "https://api.github.com/repos/o/n/pulls/2"}}
+        ]);
+        let issues: Vec<OpenIssue> = serde_json::from_value(payload).unwrap();
+        assert_eq!(issues.len(), 2, "both arrive from GitHub");
+
+        let kept = issues_for_the_board(issues);
+
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].title, "Terminal drops a line");
     }
 }

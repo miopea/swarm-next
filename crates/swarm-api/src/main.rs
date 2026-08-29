@@ -250,6 +250,18 @@ fn start_background_services(state: &AppState) {
             supervisor.supervise_workers().await;
         }
     });
+    // Issues come down as drafts on a slow tick. Slow because nobody files an
+    // issue expecting it to appear in a control room within seconds, and a
+    // faster poll would spend the API budget for nothing.
+    let github_intake = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5 * 60));
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            github_intake.intake_github_issues().await;
+        }
+    });
     let jira_reconciler = state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
