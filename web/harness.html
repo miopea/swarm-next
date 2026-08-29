@@ -4,6 +4,32 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Swarm harness</title>
+    <style>
+      /*
+        Two xterm internals that the WEBGL renderer never paints, and the DOM
+        renderer does. The harness forces the DOM renderer so the terminal can
+        be photographed at all, which drags these into view: a white input box
+        floating over the first row, and a span of repeated glyphs xterm uses to
+        measure character width. Neither exists in the product as an operator
+        sees it, so hiding them makes a capture MORE faithful rather than less.
+      */
+      .xterm-helper-textarea,
+      .xterm-char-measure-element {
+        opacity: 0 !important;
+        pointer-events: none;
+      }
+      /*
+        The measure span is position:static, so hiding it alone still left its
+        16px box in flow and pushed the first line of output down by a row.
+        Absolute keeps it measurable — xterm reads its bounding box, which an
+        out-of-flow element still has — while returning that row to the output.
+      */
+      .xterm-char-measure-element {
+        position: absolute !important;
+        top: 0;
+        left: 0;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

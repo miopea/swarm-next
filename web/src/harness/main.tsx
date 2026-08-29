@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 
 import "../styles.css";
 import { hiveFixture } from "./hiveFixture";
+import { FixtureWebSocket } from "./terminalFixture";
 import { SURFACES } from "./surfaces";
 
 /**
@@ -59,6 +60,44 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const served = hiveFixture(path);
   return served === undefined ? json([]) : json(served);
 }) as typeof fetch;
+
+/**
+ * A socket is network, so it is stubbed where the network is stubbed.
+ *
+ * Without this the Workers screen renders an empty black canvas: the terminal
+ * asks for an attach grant, dials a WebSocket, and nothing answers. The
+ * fixture socket plays an invented session instead — which is the ONLY way a
+ * terminal can be photographed at all, because a canvas cannot be scrubbed
+ * after the fact the way the DOM can.
+ */
+globalThis.WebSocket = FixtureWebSocket as unknown as typeof WebSocket;
+
+/**
+ * The terminal draws with WebGL when it can, and a WebGL canvas photographs
+ * BLANK. Not empty — blank: xterm's buffer held all 35 lines and reported them,
+ * aria-busy was down, the canvas was visible at full opacity, and the capture
+ * still came back as an unbroken dark rectangle. A screenshot that looks like a
+ * dead terminal while the terminal is fine is exactly the kind of evidence that
+ * gets believed.
+ *
+ * XtermSurface already falls back to the DOM renderer when WebGL2 is missing —
+ * that path exists for headless environments and GPU denylists. Denying WebGL2
+ * here takes it deliberately, so the glyphs are real DOM text that any browser
+ * on any machine renders identically. Slower, and nothing here is racing.
+ */
+const originalGetContext = HTMLCanvasElement.prototype.getContext;
+HTMLCanvasElement.prototype.getContext = function getContext(
+  this: HTMLCanvasElement,
+  contextId: string,
+  ...rest: unknown[]
+) {
+  if (contextId === "webgl2" || contextId === "webgl" || contextId === "experimental-webgl") return null;
+  return (originalGetContext as (this: HTMLCanvasElement, id: string, ...args: unknown[]) => unknown).call(
+    this,
+    contextId,
+    ...rest,
+  );
+} as typeof HTMLCanvasElement.prototype.getContext;
 
 const requested = new URLSearchParams(window.location.search).get("surface");
 const surface = SURFACES.find((entry) => entry.id === requested);

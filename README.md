@@ -11,6 +11,11 @@ architecture and implementation-driven behaviour.
 
 ![The Swarm control room: the rail on the left with Needs you, Tasks, Workers and Settings, and the one queue open, showing a worker asking the operator whether a slow export should fail or write a partial file.](docs/images/needs-you.png)
 
+Every worker keeps a terminal that survives browser reloads and application
+updates, so you can read what one is doing and take the keyboard at any point.
+
+![A worker's terminal in Swarm: the rail and roster on the left with four workers, and Orchard Web selected, showing its session working through a redirect loop — reading the route and guard, naming the two rules that conflict, and reporting which tests passed and what it did not verify.](docs/images/workers.png)
+
 ## Start here
 
 | If you want to | Read |

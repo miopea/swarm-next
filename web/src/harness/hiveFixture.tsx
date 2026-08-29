@@ -20,6 +20,17 @@ import { demoDecision, demoTasks, demoWorkers } from "./productFixtures";
 const now = Math.floor(Date.now() / 1000);
 
 export function hiveFixture(path: string): unknown | undefined {
+  // A terminal attachment asks for a grant at a per-session path, so it cannot
+  // be an arm of the switch below. The grant is a fiction like everything else
+  // here: FixtureWebSocket never dials the websocket_path it names.
+  if (path.startsWith("/api/v1/terminal/sessions/") && path.endsWith("/attach-grants")) {
+    return {
+      grant: "harness-grant",
+      protocol: "swarm-terminal.v1",
+      websocket_path: "/api/v1/terminal/attach",
+      expires_in_ms: 60_000,
+    };
+  }
   switch (path) {
     case "/health":
       return { status: "ok", version: "1.0.0", degraded: [] };
@@ -42,8 +53,16 @@ export function hiveFixture(path: string): unknown | undefined {
       // and says nothing about what Swarm does.
       return [demoDecision];
     case "/api/v1/terminal/sessions":
-      // Enveloped, unlike the bare arrays around it.
-      return { sessions: [] };
+      // Enveloped, unlike the bare arrays around it. These two session ids are
+      // the ones demoWorkers carries, so the roster shows running workers and
+      // the selected one has a terminal to attach.
+      return {
+        type: "sessions",
+        sessions: [
+          { session_id: "session-queen", running: true },
+          { session_id: "session-web", running: true },
+        ],
+      };
     case "/api/v1/workspaces":
       return ["/home/you/projects/orchard", "/home/you/projects/orchard-web"];
     case "/api/v1/runtime/resources":

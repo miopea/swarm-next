@@ -130,6 +130,47 @@ interpolated identifiers — a sixty-prop refactor of the navigation, risked on 
 live control room, for three pictures. Stubbing the network instead costs
 nothing in production and yields a truer image.
 
+**The terminal can be photographed, and only from here.** A worker view is
+mostly an xterm CANVAS, so it is the one screen where the anonymise-then-capture
+procedure above does not work at all: there is no node to rewrite and no regex
+that reaches pixels. The sessions inspected for the 0.9.2 captures held the
+operator's banking institutions and another product's password-policy internals.
+So the rule has no exception — **never publish a capture of a real worker
+session** — and the harness is what makes the picture possible instead.
+
+Three pieces make it work, all of them at the harness boundary, none of them in
+production code:
+
+- `harness/terminalFixture.ts` invents the session. It replaces `WebSocket`
+  the same way `main.tsx` already replaces `fetch`, and answers the terminal's
+  `resume` with a canonical snapshot frame carrying invented output. Threading a
+  `websocketFactory` prop down instead was rejected for the reason the fetch stub
+  was: the seam has to be the network, or every socket added later escapes it.
+- `main.tsx` denies WebGL2. `XtermSurface` falls back to the DOM renderer when
+  WebGL is unavailable — a path that exists for headless environments — and that
+  fallback is the difference between a screenshot and a blank rectangle. **A
+  WebGL terminal photographs empty**: xterm reported all 35 lines in its buffer,
+  `aria-busy` was down and the canvas was visible at full opacity, and the
+  capture still came back an unbroken dark block. A picture that looks like a
+  dead terminal while the terminal is fine is exactly the sort of evidence that
+  gets believed.
+- `harness.html` hides two xterm internals the DOM renderer exposes and WebGL
+  never draws: the helper textarea, which photographs as a white box over the
+  first row, and the char-measure span, which is `position: static` and pushed
+  every line down by a row until it was taken out of flow.
+
+**Match the transcript to the roster.** The first version of this capture put
+Orchard Web's session under a header that said Queen, and the second put a
+promo-code bug under a task about a redirect loop. Both rendered perfectly and
+both were wrong in the only way that matters for a README: a reader who looks at
+the picture for five seconds sees a product that contradicts itself. The
+transcript, the selected worker and that worker's task in `productFixtures.tsx`
+all have to tell one story.
+
+    cd web && npm run harness
+    # then, at 1440x900, select Orchard Web in the roster:
+    http://127.0.0.1:5199/harness.html?surface=app&screen=workers
+
 **Two Needs-you surfaces exist, and the difference matters.** `needs-you` is
 transcribed from the operator's real screen, which is what makes it useful for
 debugging and unpublishable: it carries their name, a real reply, real project
