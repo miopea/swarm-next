@@ -536,6 +536,20 @@ test("opens the mobile worker picker without raising the keyboard over it", asyn
   // A running worker that is not the Queen is.
   expect(within(dialog).getByRole("button", { name: "Put Realtruth to sleep" })).toBeInTheDocument();
 
+  // AND THE ROW YOU ARE ON SAYS SO, IN WORDS.
+  //
+  // The operator photographed this picker with the worker they were on
+  // highlighted and asked "Shouldn't it be showing that I'm on that worker
+  // currently?" It was showing it — with aria-current="page" and a faint green
+  // tint, which tells a screen reader and leaves a sighted operator to infer a
+  // colour convention. A label they can read costs nothing and needs no
+  // learning.
+  //
+  // Exactly one row carries it, or it says nothing at all.
+  const here = within(dialog).getAllByText(/You’re here/);
+  expect(here).toHaveLength(1);
+  expect(within(dialog).getByRole("button", { name: /^Queen/ })).toContainElement(here[0]);
+
   // AND THE FOUR THAT STAY ON THE DESK SAY SO. An operator who goes looking for
   // a control and cannot find it learns nothing about whether it exists.
   expect(within(dialog).getByText(/on the desktop roster/)).toBeInTheDocument();

@@ -2003,7 +2003,24 @@ export function App() {
                     >
                       <WorkerAvatar worker={worker} />
                       <span className="mobile-worker-choice-copy">
-                        <span><strong>{worker.name}</strong><small>{worker.role === "queen" ? "Queen" : repositoryName(worker.workspace)}</small></span>
+                        <span>
+                          <strong>{worker.name}</strong>
+                          <small>{worker.role === "queen" ? "Queen" : repositoryName(worker.workspace)}</small>
+                          {/* SAID, NOT IMPLIED BY A BACKGROUND COLOUR. The row
+                              already carried aria-current="page", so a screen
+                              reader was told and a sighted operator got a faint
+                              green tint. Looking straight at the row for the
+                              worker they were on, they asked "Shouldn't it be
+                              showing that I'm on that worker currently?" — which
+                              is what a tint that has to be learned gets you.
+
+                              Deliberately NOT the "With you" state: that one
+                              means the engagement claim from Work here. Viewing
+                              a worker from a phone is not engaging it, and
+                              conflating the two would say something false about
+                              who is driving. */}
+                          {sessionId === activeSessionId ? <em className="mobile-worker-here">You&rsquo;re here</em> : null}
+                        </span>
                         <small>{worker.runtime_error ?? workerSwitcherDetail(worker, assignedTask?.title)}</small>
                         {work?.summary ? <span className="worker-work-summary" title={`${worker.name}'s open work: ${work.summary}`}>Open work · {work.summary}</span> : null}
                       </span>
@@ -2024,7 +2041,7 @@ export function App() {
                 {mobileVisibleOrphanSessions.map((session) => (
                   <button type="button" className="mobile-worker-choice" aria-current={session.session_id === activeSessionId ? "page" : undefined} key={session.session_id} onClick={() => { openWorker(session.session_id); setShowMobileWorkers(false); }}>
                     <span className="worker-avatar"><BeeMascot expression={session.running ? "focused" : "sleeping"} /></span>
-                    <span className="mobile-worker-choice-copy"><span><strong>{workerName(session.session_id)}</strong><small>Unconfigured session</small></span><small>{tasksBySession.get(session.session_id)?.title ?? "Pre-roster session"}</small></span>
+                    <span className="mobile-worker-choice-copy"><span><strong>{workerName(session.session_id)}</strong><small>Unconfigured session</small>{session.session_id === activeSessionId ? <em className="mobile-worker-here">You&rsquo;re here</em> : null}</span><small>{tasksBySession.get(session.session_id)?.title ?? "Pre-roster session"}</small></span>
                     <span className={`presence ${session.running ? "online" : "offline"}`} aria-label={session.running ? "Running" : "Exited"} />
                   </button>
                 ))}

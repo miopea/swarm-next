@@ -544,6 +544,8 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .mobile-worker-dialog-note { margin: 0; color: var(--muted); font-size: .72rem; }
 .mobile-worker-choice { display: grid; width: 100%; min-height: 66px; grid-template-columns: 42px minmax(0, 1fr) 9px; align-items: center; gap: 10px; padding: 8px 10px; border-color: var(--line); color: var(--text); background: var(--panel); text-align: left; }
 .mobile-worker-choice[aria-current="page"] { border-color: var(--good); background: var(--good-soft); box-shadow: inset 3px 0 var(--good); }
+/* Reads as a label rather than as emphasis, which is what <em> would give it. */
+.mobile-worker-here { flex: 0 0 auto; padding: 1px 6px; border-radius: 999px; color: var(--on-accent, var(--text)); background: var(--good); font-size: .62rem; font-style: normal; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
 .mobile-worker-choice .worker-avatar { width: 42px; height: 42px; }
 .mobile-worker-choice .worker-avatar .bee-mascot { width: 46px; height: 46px; }
 .mobile-worker-choice-copy { display: grid; min-width: 0; gap: 4px; }
