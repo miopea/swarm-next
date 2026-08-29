@@ -1232,10 +1232,27 @@ fn insert_email_attachments(
 ) -> Result<(), TaskStoreError> {
     for attachment in attachments {
         transaction.execute(
+            // ON CONFLICT because one email can legitimately carry the SAME
+            // FILE TWICE. storage_name is a content hash, so an image that is
+            // both inline in the body and attached, or simply attached twice,
+            // produces two rows with identical (source_id, storage_name) and
+            // hits the UNIQUE constraint.
+            //
+            // That aborted the whole import with a SQL error, which the API
+            // reports as "task persistence is temporarily unavailable" — so a
+            // duplicate screenshot in one message looked like the database was
+            // down, and no amount of editing the task could clear it. Measured
+            // 2026-08-29 on the operator's Inbox:
+            //   UNIQUE constraint failed: email_task_attachments.source_id,
+            //   email_task_attachments.storage_name
+            //
+            // Keeping the first row is right: both rows name the same stored
+            // bytes, so nothing is lost and the attachment still resolves.
             "INSERT INTO email_task_attachments (
                  id, source_id, task_id, storage_name, display_name, media_type,
                  byte_size, is_inline, content_id
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT (source_id, storage_name) DO NOTHING",
             params![
                 Uuid::now_v7().to_string(),
                 source_id,
@@ -1967,6 +1984,58 @@ mod tests {
             body_text: "The form loses my phone number after I press Save.",
             attachments,
         }
+    }
+
+    /// One email carrying the same file twice must still import.
+    ///
+    /// storage_name is a content hash, so an image that is both inline in the
+    /// body and attached — or simply attached twice — produces two rows with
+    /// the same (source_id, storage_name). That hit the UNIQUE constraint and
+    /// aborted the import with a SQL error, which the API reports as "task
+    /// persistence is temporarily unavailable". The operator saw a database
+    /// outage; the cause was a duplicated screenshot in one message.
+    #[test]
+    fn one_email_carrying_the_same_file_twice_still_imports() {
+        let store = TaskStore::in_memory().unwrap();
+        // Identical bytes stored once, referenced twice: inline and attached.
+        let duplicated = [
+            EmailAttachmentSnapshot {
+                storage_name: "sha256-screen.png",
+                display_name: "screen.png",
+                media_type: "image/png",
+                byte_size: 1_024,
+                inline: true,
+                content_id: Some("screen-1"),
+            },
+            EmailAttachmentSnapshot {
+                storage_name: "sha256-screen.png",
+                display_name: "screen.png",
+                media_type: "image/png",
+                byte_size: 1_024,
+                inline: false,
+                content_id: None,
+            },
+        ];
+
+        let imported = store
+            .import_email_messages(
+                std::slice::from_ref(&message(&duplicated)),
+                &EmailTaskDraft {
+                    title: "A report with the screenshot twice",
+                    description: "x",
+                    priority: TaskPriority::Normal,
+                    worker_id: None,
+                    state: TaskState::Draft,
+                },
+            )
+            .expect("a duplicated attachment must not abort the whole import");
+
+        assert!(imported.created);
+        assert_eq!(
+            imported.source.attachments.len(),
+            1,
+            "the duplicate collapses to one row naming the same stored bytes"
+        );
     }
 
     /// Removing a task frees the emails it held.
