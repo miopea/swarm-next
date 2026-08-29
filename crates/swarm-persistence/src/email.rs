@@ -13,6 +13,17 @@ use crate::{
 const MAX_SOURCE_ID_BYTES: usize = 512;
 const MAX_CONVERSATION_ID_BYTES: usize = 512;
 const MAX_INTERNET_MESSAGE_ID_BYTES: usize = 998;
+/// A mail subject is SOURCE METADATA, not a task title, and it is bounded like
+/// the other source fields rather than by the task-title limit.
+///
+/// Conflating the two is the bug this constant exists to end: a subject over
+/// 240 bytes made `validate_email_message` refuse the whole import with "task
+/// title must contain 1 to 240 bytes", naming the one field the operator could
+/// see and edit and which was never the problem. They reported exactly that —
+/// "the title was fine, and that shouldn't matter anyway" — and both halves
+/// were right. 998 is RFC 5322's line limit, which is what actually bounds a
+/// subject in transit.
+const MAX_EMAIL_SUBJECT_BYTES: usize = 998;
 const MAX_SENDER_NAME_BYTES: usize = 320;
 const MAX_SENDER_ADDRESS_BYTES: usize = 320;
 const MAX_WEB_URL_BYTES: usize = 2_048;
@@ -1449,9 +1460,13 @@ pub(crate) fn migrate_email_reply_targets(
 }
 
 fn validate_email_message(message: &EmailMessageSnapshot<'_>) -> Result<(), TaskStoreError> {
-    let subject = email_task_title(message);
     let body = message.body_text.trim();
-    validate_text(&subject, "email://inbox")?;
+    // NOT validate_text: that raises InvalidTitle, whose message talks about a
+    // task title. The operator's own title governs this import and is checked
+    // separately; the subject only has to be storable.
+    if !bounded_text(&email_task_title(message), MAX_EMAIL_SUBJECT_BYTES) {
+        return Err(TaskStoreError::InvalidEmailMessage);
+    }
     validate_description(body)?;
     if !bounded_text(message.integration_id.trim(), MAX_SOURCE_ID_BYTES)
         || !bounded_text(message.message_id.trim(), MAX_SOURCE_ID_BYTES)
@@ -1497,7 +1512,29 @@ fn validate_email_message(message: &EmailMessageSnapshot<'_>) -> Result<(), Task
     Ok(())
 }
 
+/// A task title derived from a message, for the paths that have no operator
+/// title to use.
+///
+/// CLAMPED rather than refused. A subject longer than a task title is a normal
+/// thing for mail to contain, and refusing the import over it strands the
+/// message with an error about a field the operator did not write. Truncation
+/// is on a char boundary so it can never split a multi-byte character.
 fn email_task_title(message: &EmailMessageSnapshot<'_>) -> String {
+    clamp_to_title_bytes(&email_subject_or_sender(message))
+}
+
+fn clamp_to_title_bytes(value: &str) -> String {
+    if value.len() <= crate::MAX_TASK_TITLE_BYTES {
+        return value.to_owned();
+    }
+    let mut end = crate::MAX_TASK_TITLE_BYTES;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].trim_end().to_owned()
+}
+
+fn email_subject_or_sender(message: &EmailMessageSnapshot<'_>) -> String {
     let subject = message.subject.trim();
     if subject.is_empty() {
         let sender = message.sender_name.trim();
@@ -1891,6 +1928,79 @@ mod tests {
             body_text: "The form loses my phone number after I press Save.",
             attachments,
         }
+    }
+
+    /// The operator's report, reproduced: "the title was fine, and that
+    /// shouldn't matter anyway."
+    ///
+    /// Both halves were right. Their title WAS fine — the import was refused
+    /// over the EMAIL'S subject, which `validate_email_message` ran through
+    /// `validate_text`, whose error says "task title must contain 1 to 240
+    /// bytes". So the message named the one field the operator could see and
+    /// edit, and editing it could never help. A previous fix clamped the typed
+    /// title and did not touch this, which is why the error survived it.
+    ///
+    /// A subject longer than a task title is a normal thing for mail to carry.
+    /// It is source metadata and is bounded as such.
+    #[test]
+    fn a_subject_longer_than_a_task_title_still_imports_under_the_operators_own_title() {
+        let store = TaskStore::in_memory().unwrap();
+        let long_subject = "Re: ".to_owned() + &"escalation ".repeat(40);
+        assert!(
+            long_subject.len() > crate::MAX_TASK_TITLE_BYTES,
+            "the premise: {} bytes",
+            long_subject.len()
+        );
+        let mut snapshot = message(&[]);
+        snapshot.subject = &long_subject;
+
+        let imported = store
+            .import_email_messages(
+                std::slice::from_ref(&snapshot),
+                &EmailTaskDraft {
+                    // Short, valid, and entirely the operator's own.
+                    title: "Chase the member form escalation",
+                    description: "Body kept for context.",
+                    priority: TaskPriority::Normal,
+                    worker_id: None,
+                    state: TaskState::Draft,
+                },
+            )
+            .expect("a long subject must not refuse an import the operator titled correctly");
+
+        assert!(imported.created);
+        assert_eq!(
+            imported.task.title, "Chase the member form escalation",
+            "and the operator's title is what the task carries"
+        );
+    }
+
+    /// The other path, where the subject genuinely BECOMES the title.
+    ///
+    /// Nothing supplies a title there, so refusing would strand the message.
+    /// It is clamped instead, on a char boundary.
+    #[test]
+    fn a_single_message_with_an_overlong_subject_is_clamped_rather_than_refused() {
+        let store = TaskStore::in_memory().unwrap();
+        // Multi-byte on purpose: a naive byte cut would split one of these.
+        let long_subject = "é".repeat(300);
+        let mut snapshot = message(&[]);
+        snapshot.subject = &long_subject;
+
+        let imported = store
+            .import_email_message(&snapshot, TaskPriority::Normal)
+            .expect("a long subject is clamped, not refused");
+
+        assert!(
+            imported.task.title.len() <= crate::MAX_TASK_TITLE_BYTES,
+            "clamped to the limit, {} bytes",
+            imported.task.title.len()
+        );
+        assert!(
+            imported.task.title.starts_with('é'),
+            "and never split mid-character: {:?}",
+            imported.task.title
+        );
     }
 
     #[test]
