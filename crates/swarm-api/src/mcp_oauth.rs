@@ -685,6 +685,21 @@ pub(super) async fn consent(
     )
 }
 
+/// Hands the client back its authorization code.
+///
+/// A PAGE THAT NAVIGATES ITSELF, NOT A 302, and that is not a stylistic
+/// preference — a redirect here does not work at all. This Hive sends
+/// `form-action 'self'`, and Chrome enforces that across the REDIRECT CHAIN of a
+/// form submission: the consent form posts same-origin, the response redirects
+/// to claude.ai, and the browser blocks the whole submission. The operator sees
+/// their click do nothing, with the only trace a console line they were never
+/// going to open. Reproduced against a minimal server with the same header, and
+/// confirmed fixed by this shape.
+///
+/// `form-action` does not govern a navigation the page performs itself, so the
+/// meta refresh completes. The visible link is not decoration either: if
+/// anything ever blocks the automatic hop, the operator still has a way to
+/// finish rather than a page that appears broken.
 fn redirect_with_code(redirect_uri: &str, code: &str, state: Option<&str>) -> Response {
     let mut location = format!(
         "{}{}code={}",
@@ -694,16 +709,39 @@ fn redirect_with_code(redirect_uri: &str, code: &str, state: Option<&str>) -> Re
     );
     if let Some(value) = state {
         location.push_str("&state=");
-        location.push_str(value);
+        location.push_str(&percent_encode(value));
     }
+    // The state is client-supplied and lands in an HTML attribute.
+    let escaped = html_escape(&location);
+    let body = format!(
+        "<!doctype html><meta charset=utf-8><title>Connected</title>\
+<meta http-equiv=\"refresh\" content=\"0;url={escaped}\">\
+<style>body{{font:16px/1.5 system-ui,sans-serif;max-width:34rem;margin:12vh auto;padding:0 1.5rem;color:#20261f;background:#faf8f0}}</style>\
+<p>Connected. Handing you back&hellip;</p>\
+<p><a href=\"{escaped}\">Continue</a></p>"
+    );
     (
-        StatusCode::FOUND,
-        [
-            (header::LOCATION, location.as_str()),
-            (header::CACHE_CONTROL, "no-store"),
-        ],
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, "no-store")],
+        axum::response::Html(body),
     )
         .into_response()
+}
+
+/// Percent-encodes a value for a query string.
+///
+/// The `state` is chosen by the client and handed straight back; leaving it raw
+/// would let an `&` in it graft extra parameters onto the callback URL.
+fn percent_encode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
+            other => format!("%{other:02X}"),
+        })
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -1186,15 +1224,24 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(approved.status(), StatusCode::FOUND);
-        let location = approved.headers()[header::LOCATION].to_str().unwrap();
-        assert!(location.starts_with(redirect), "{location}");
-        assert!(location.contains("state=xyz"), "{location}");
-        let code = location
+        // NOT a 302. This Hive sends form-action 'self', and Chrome enforces it
+        // across a form submission's redirect chain — a redirect to claude.ai
+        // here blocks the whole submission and the operator's click does
+        // nothing at all. The page navigates itself instead.
+        assert_eq!(approved.status(), StatusCode::OK);
+        assert!(
+            approved.headers().get(header::LOCATION).is_none(),
+            "handing back must not be a redirect from a form POST"
+        );
+        let handback = body_text(approved).await;
+        assert!(handback.contains("http-equiv=\"refresh\""), "{handback}");
+        assert!(handback.contains(redirect), "{handback}");
+        assert!(handback.contains("state=xyz"), "{handback}");
+        let code = handback
             .split("code=")
             .nth(1)
             .unwrap()
-            .split('&')
+            .split(['&', '"'])
             .next()
             .unwrap()
             .to_owned();
@@ -1241,6 +1288,13 @@ mod tests {
                 _ => format!("%{byte:02X}"),
             })
             .collect()
+    }
+
+    /// A state containing an ampersand cannot graft parameters onto the callback.
+    #[test]
+    fn the_client_state_is_encoded_on_the_way_back() {
+        assert_eq!(percent_encode("a&b=c"), "a%26b%3Dc");
+        assert_eq!(percent_encode("plain-state_1.0~"), "plain-state_1.0~");
     }
 
     /// Declining connects nothing.
