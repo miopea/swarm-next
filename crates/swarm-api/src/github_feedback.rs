@@ -192,7 +192,23 @@ fn issue_body(report: &DogfoodReport) -> String {
             "A screenshot was attached to this report and is kept privately on the reporter's Hive; it was deliberately not uploaded.\n\n",
         );
     }
-    body.push_str("_Filed from Swarm._");
+    // ANONYMOUS, ON THE OPERATOR'S RULING, and it says the one thing a reader
+    // has to know: there is nobody on the other end of this thread.
+    //
+    // "If someone has not connected, I don't care about their swarm name or
+    // their username. They can be an anonymous issue submission. If they have
+    // GitHub, then they can link their GitHub account to the issue, which would
+    // be automatic in theory, and therefore they can get a response."
+    //
+    // So no name, no Hive, no operator id — publishing any of those to satisfy
+    // routing nobody asked for would be a privacy cost with no buyer. What is
+    // NOT optional is the second sentence: this issue is authored by the Hive's
+    // credential, not by the person who hit the button, so closing it with
+    // "fixed!" reaches nobody. A maintainer who does not know that is being
+    // quietly misled by their own issue tracker.
+    body.push_str(
+        "_Filed from Swarm by an anonymous reporter, using this Hive's credential rather than their own account. Replies here will not reach them._",
+    );
     body
 }
 
@@ -281,5 +297,35 @@ mod tests {
 
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].title, "Terminal drops a line");
+    }
+
+    /// An anonymous report must say that nobody can be replied to.
+    ///
+    /// The operator ruled that an un-connected reporter is anonymous — "I don't
+    /// care about their swarm name or their username" — which removes the
+    /// privacy question entirely and leaves one obligation behind it. The issue
+    /// is authored by the HIVE's credential, so a maintainer closing it with
+    /// "fixed!" is talking to themselves. Saying so is the whole job of that
+    /// last line.
+    #[test]
+    fn an_anonymous_report_names_nobody_and_says_replies_reach_nobody() {
+        let report = DogfoodReport {
+            id: "report-1".to_owned(),
+            expectation: "The terminal keeps its width".to_owned(),
+            observation: "It jumps back on every scroll".to_owned(),
+            diagnostic_bundle: String::new(),
+            attachment_name: None,
+            github_issue_url: None,
+            created_at: 0,
+        };
+
+        let body = issue_body(&report);
+
+        // The reporter's own words survive.
+        assert!(body.contains("It jumps back on every scroll"), "{body}");
+        // AND THE DEAD END IS STATED. Without this a maintainer closes the
+        // issue believing the reporter will hear about it.
+        assert!(body.contains("will not reach them"), "{body}");
+        assert!(body.contains("anonymous"), "{body}");
     }
 }
