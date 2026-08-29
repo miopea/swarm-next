@@ -130,6 +130,42 @@ interpolated identifiers — a sixty-prop refactor of the navigation, risked on 
 live control room, for three pictures. Stubbing the network instead costs
 nothing in production and yields a truer image.
 
+**The harness port cannot reach a Hive, and that is now structural.** It used
+to be able to. `npm run harness` started plain vite with the normal config, so
+port 5199 served `harness.html` (fixtures) and `index.html` (the product,
+proxied to the developer's API on 8765) side by side — one path segment apart,
+both rendering something that looks like a control room, and the wrong one full
+of real data that passes every downstream safety check *because* it is real.
+A worker hit it by accident while capturing the worker-view screenshot.
+
+`web/vite.harness.config.ts` closes it with three mechanisms, and it takes all
+three:
+
+- **No proxy.** The dev config forwards `/api` — including the WebSocket
+  upgrade a terminal attaches over — and `/health` to `127.0.0.1:8765`. The
+  harness config declares none of it, so nothing on that port can reach a Hive
+  even if the product renders. This is the real control; the other two are
+  about not rendering the product in the first place.
+- **`appType: "mpa"`.** Vite's SPA fallback serves `index.html` for every
+  unmatched path, so refusing `/` and `/index.html` alone left the product
+  reachable at `/health`, at a typo, at anything. That was measured, not
+  assumed: the block reported itself working while `/typo-path` returned the
+  product's HTML.
+- **A middleware that refuses the product's entries**, registered in
+  `configureServer` directly — returning a function registers it *after* vite's
+  html middleware, by which point `index.html` has already been sent.
+
+Proven by ablation rather than assertion. With the guard: `/` 404, `/health`
+404, `/typo-path` 404, zero bytes from 8765. With the dev config on another
+port and a stub answering on 8765: `/` 200 serving the product, `/health` and
+`/api/v1/hive` both returning the stub's payload, `/typo-path` serving the
+product. Every assertion fails when the mechanism is removed, and the same run
+shows `npm run dev` still proxying, which is what a dev server is for.
+
+**Do not add a proxy to the harness config.** It is the mechanism. A banner or
+a note here is not a substitute — the failure mode is someone not realising
+which page they are on, and a warning they do not read is not a control.
+
 **The terminal can be photographed, and only from here.** A worker view is
 mostly an xterm CANVAS, so it is the one screen where the anonymise-then-capture
 procedure above does not work at all: there is no node to rewrite and no regex
