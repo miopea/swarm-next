@@ -493,3 +493,75 @@ test("the device that owns the claim still asserts its own size", async () => {
 
   expect(connection.resize).toHaveBeenCalledWith(60, 40, "echo");
 });
+
+/**
+ * THE INVARIANT, asserted across EVERY path rather than the one the report came
+ * in through.
+ *
+ * This is the third defect in this area and the first two were both "fixed the
+ * path in front of me". aa4de4a called the mutating fit() where it must not;
+ * e088777 guarded the snapshot path and left attach and ResizeObserver still
+ * mutating, so a phone narrowed its own grid on attach and on every scroll —
+ * a phone hides and shows its address bar as you scroll, which resizes the
+ * container and wakes the observer — while each arriving snapshot restored the
+ * owner's width. The operator: "terminal is unstable. Keeps jumping back time.
+ * I am required to do redraws because it's unstable." Redraw was a workaround
+ * for two code paths fighting.
+ *
+ * So this test does not check one call site. It drives attach, the observer and
+ * the snapshot, and asserts the mutating fit() is never reached on any of them.
+ */
+test("a device that does not own the geometry never resizes its own grid, on any path", async () => {
+  const surface = fakeSurface();
+  vi.mocked(surface.proposeFit!).mockReturnValue({ rows: 60, columns: 40 });
+  const connection = { ...fakeConnection(), ownsGeometry: false };
+  const controller = new TerminalController(() => surface, () => connection);
+
+  // 1. ATTACH. The old code fitted here unconditionally, before it had any
+  //    reason to believe it owned anything.
+  controller.attach(document.createElement("div"));
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledTimes(1));
+  expect(surface.fit).not.toHaveBeenCalled();
+
+  const handlers = vi.mocked(connection.start).mock.calls[0][0];
+  document.hasFocus = () => true;
+
+  // 2. THE OBSERVER, which on a phone is woken by scrolling rather than by any
+  //    deliberate resize.
+  const resizeListener = vi.mocked(surface.onResize).mock.calls[0]?.[0];
+  if (resizeListener) {
+    // "viewport" is exactly the phone case: the address bar hiding on scroll
+    // resizes the container, not the operator deliberately resizing anything.
+    resizeListener({ rows: 60, columns: 40, origin: "viewport" });
+    await vi.waitFor(() => expect(connection.resize).toHaveBeenCalled());
+  }
+  expect(surface.fit).not.toHaveBeenCalled();
+
+  // 3. THE SNAPSHOT PATH, which e088777 already covered — kept so a later change
+  //    cannot trade one path for another.
+  await handlers.onSnapshot({
+    sequence: 4, rows: 24, columns: 120, truncated: false,
+    reason: "attached" as const, bytes: new Uint8Array(),
+  });
+  expect(surface.fit).not.toHaveBeenCalled();
+
+  // AND THE MEASUREMENT STILL REACHES THE SERVER. Not mutating is not the same
+  // as going quiet: the server decides the claim, and it needs to hear the size.
+  expect(connection.resize).toHaveBeenCalledWith(60, 40, expect.any(String));
+});
+
+/**
+ * The other direction, which is the one aa4de4a existed to fix and which a
+ * careless guard would break: a device that DOES own the geometry must still
+ * size its own terminal.
+ */
+test("a device that owns the geometry still fits its own grid", async () => {
+  const surface = fakeSurface();
+  const connection = { ...fakeConnection(), ownsGeometry: true };
+  const controller = new TerminalController(() => surface, () => connection);
+
+  controller.attach(document.createElement("div"));
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledTimes(1));
+
+  expect(surface.fit).toHaveBeenCalled();
+});

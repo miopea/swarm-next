@@ -71,6 +71,14 @@ export class XtermSurface implements TerminalSurface {
   /** The sizes this renderer recently applied, newest first, and when. */
   #appliedSizes: { rows: number; columns: number; at: number }[] = [];
   #resizeObserver: ResizeObserver | undefined;
+  /**
+   * Whether this device may resize its own grid.
+   *
+   * Defaults to true so a surface nobody told stays exactly as it was. The
+   * controller sets it from the connection, because ownership is a fact about
+   * the SESSION and this class can only see pixels.
+   */
+  #ownsGeometry: () => boolean = () => true;
   #resizeTimer: ReturnType<typeof setTimeout> | undefined;
   #redrawFrame: number | undefined;
   #redrawRetryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -278,6 +286,24 @@ export class XtermSurface implements TerminalSurface {
     window.addEventListener("pageshow", this.#handleViewportChange);
     window.visualViewport?.addEventListener("resize", this.#handleViewportChange);
     document.addEventListener("visibilitychange", this.#handleVisibilityChange);
+  }
+
+  /**
+   * Tells this surface whether it is allowed to resize its own grid.
+   *
+   * THE MUTATION THIS GUARDS IS IN `#fitIfUsable`, which the ResizeObserver
+   * drives — and on a phone the observer is woken by SCROLLING, because hiding
+   * and showing the address bar resizes the container. So a phone viewing a
+   * terminal a desktop owns re-fitted its grid to phone width on every scroll,
+   * while each arriving snapshot restored the owner's width. The operator:
+   * "terminal is unstable. Keeps jumping back time. I am required to do redraws
+   * because it's unstable."
+   *
+   * The controller already refused to mutate on its own three paths. It could
+   * not reach this one, which is the one the operator was actually hitting.
+   */
+  observeGeometryOwnership(owns: () => boolean): void {
+    this.#ownsGeometry = owns;
   }
 
   focus(): void {
@@ -624,6 +650,16 @@ export class XtermSurface implements TerminalSurface {
       // so could not tell a settled size from one half of a flip.
       return;
     }
+    if (changed && !this.#ownsGeometry()) {
+      // MEASURE AND SAY SO, BUT DO NOT APPLY. Another device owns the grid;
+      // resizing here reflows its wide content at this width, which is a
+      // shredded terminal rather than a small one. Publishing the measurement
+      // is still right — it is how this device asks — and the size that
+      // actually lands arrives back as a snapshot.
+      this.#publishProposedGeometry(usable);
+      this.#scheduleRedraw();
+      return;
+    }
     if (changed) {
       this.#rememberApplied(usable);
       // The size moved, so any earlier repair says nothing about where the
@@ -750,6 +786,23 @@ export class XtermSurface implements TerminalSurface {
         listener({ ...size, origin });
       }
     });
+  }
+
+  /**
+   * Publishes a size this renderer measured but deliberately did not apply.
+   *
+   * `#queueGeometryPublication` reads the size off the terminal, which is
+   * correct everywhere else and useless here: the terminal still holds the
+   * OWNER's dimensions, so publishing them would tell the server what it
+   * already believes and this device would never be heard.
+   */
+  #publishProposedGeometry(size: { rows: number; columns: number }): void {
+    if (this.#disposed) return;
+    for (const [listener, previous] of this.#resizeListeners) {
+      if (previous.rows === size.rows && previous.columns === size.columns) continue;
+      this.#resizeListeners.set(listener, size);
+      listener({ ...size, origin: "viewport" });
+    }
   }
 
   #scheduleFit(): void {

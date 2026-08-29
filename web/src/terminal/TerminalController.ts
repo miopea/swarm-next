@@ -18,6 +18,11 @@ export interface TerminalSurface {
    * does not ask for geometry it does not own.
    */
   proposeFit?(): { rows: number; columns: number } | undefined;
+  /**
+   * Lets this controller tell the surface whether it may resize its own grid.
+   * Optional so a test double without it keeps working.
+   */
+  observeGeometryOwnership?(owns: () => boolean): void;
   write(bytes: Uint8Array): Promise<void>;
   restore(snapshot: TerminalSnapshot): Promise<void>;
   onData(listener: (text: string) => void): Disposable;
@@ -245,16 +250,60 @@ export class TerminalController {
       });
   }
 
+  /**
+   * Measures this viewport, applying it locally ONLY if this device owns the
+   * geometry.
+   *
+   * THE INVARIANT, in one place: a device that does not own the geometry never
+   * mutates its own grid. `fit()` resizes the local grid as a side effect, so
+   * calling it while another device holds the claim reflows that device's wide
+   * content at this width — a shredded terminal, not a small one.
+   *
+   * This exists because stating the rule at each call site did not survive.
+   * aa4de4a fixed one direction by calling `fit()` where it should not have;
+   * e088777 fixed the snapshot path and left the other two, so a phone still
+   * narrowed its grid on attach and on every ResizeObserver wake, while each
+   * arriving snapshot restored the owner's width. That alternation is what the
+   * operator reported as "terminal is unstable, keeps jumping back time. I am
+   * required to do redraws". Redraw was a workaround for a fight between two
+   * code paths.
+   *
+   * Measuring is always safe and is what the server needs to hear; whether the
+   * claim is granted is the server's to decide, and the grid that results
+   * arrives as a snapshot.
+   */
+  async #measureForResize(): Promise<{ rows: number; columns: number } | undefined> {
+    if (this.#connection.ownsGeometry === false) {
+      return this.#surface.proposeFit?.();
+    }
+    return this.#surface.fit();
+  }
+
   async #refitAttachedSurface(intent: "operator" | "echo" = "operator"): Promise<void> {
-    const { rows, columns } = await this.#surface.fit();
+    // A phone hides and shows its address bar as the operator scrolls, which
+    // resizes the container and wakes the observer. The old comment claiming
+    // the container "never changed" was true of a column-count change and false
+    // of a phone, so this path re-shredded the terminal on every scroll.
+    const measured = await this.#measureForResize();
+    if (!measured) return;
     if (this.#disposed || !this.#started || !this.#host.parentElement) return;
-    this.#connection.resize(rows, columns, intent);
+    this.#connection.resize(measured.rows, measured.columns, intent);
   }
 
   async #fitAndStart(): Promise<void> {
     // A new attach is a new chance to ask, and only one.
     this.#reclaimedGeometry = false;
-    const { rows, columns } = await this.#surface.fit();
+    // The surface owns the ResizeObserver, so it has to know this too. A
+    // predicate rather than a value: ownership changes mid-session when another
+    // device takes or releases the claim, and a copied boolean goes stale.
+    this.#surface.observeGeometryOwnership?.(() => this.#connection.ownsGeometry !== false);
+    // Ownership is usually unknown on a first attach, and unknown is not
+    // `false`, so this still fits — a device attaching to an unowned terminal
+    // must size it. When the connection already knows another device holds the
+    // claim, this measures instead.
+    const measured = await this.#measureForResize();
+    if (!measured) return;
+    const { rows, columns } = measured;
     if (this.#disposed || this.#started || !this.#host.parentElement) return;
     // Connecting is not a claim; the resume frame carries that intent.
     this.#connection.resize(rows, columns, "echo");
@@ -323,7 +372,7 @@ export class TerminalController {
             // redraw arrives as a snapshot, whose dimensions `restore` applies.
             // So nothing needs to be applied optimistically here, and refusing
             // costs the viewer nothing.
-            const wanted = this.#surface.proposeFit?.();
+            const wanted = await this.#measureForResize();
             if (wanted) {
               this.#connection.resize(wanted.rows, wanted.columns, "operator");
             }

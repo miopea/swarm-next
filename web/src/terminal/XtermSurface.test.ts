@@ -1046,3 +1046,92 @@ test("repairs the host once, not on every settled fit that changed nothing", asy
   element.remove();
   vi.useRealTimers();
 });
+
+/**
+ * A phone scrolling a terminal it does not own must not re-fit its grid.
+ *
+ * THE PATH THE OPERATOR WAS ACTUALLY HITTING, and the one two previous fixes
+ * could not reach. The ResizeObserver lives in this class, and on a phone it is
+ * woken by SCROLLING — hiding and showing the address bar resizes the
+ * container. So every scroll narrowed the grid to phone width and reflowed a
+ * desktop's wide content into it, while each arriving snapshot restored the
+ * owner's width. "Terminal is unstable. Keeps jumping back time. I am required
+ * to do redraws because it's unstable."
+ *
+ * The controller was taught not to mutate on its own three paths, which was
+ * necessary and not sufficient: this mutation is inside the surface, below
+ * where the controller can see.
+ */
+test("a surface that does not own the geometry measures on resize but never applies it", () => {
+  let wake = (): void => {};
+  vi.stubGlobal("ResizeObserver", class {
+    constructor(callback: () => void) { wake = callback; }
+    observe(): void {}
+    disconnect(): void {}
+  });
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    callback(0);
+    return 1;
+  });
+  // The owner's width, which is what the snapshot put there.
+  xterm.propose.mockReset().mockReturnValue({ rows: 24, cols: 45 });
+
+  // Attached, because the fit path refuses to measure a detached element —
+  // and a detached one would make this test pass for the wrong reason.
+  const host = document.createElement("div");
+  document.body.append(host);
+  const surface = new XtermSurface();
+  surface.open(host);
+  surface.observeGeometryOwnership(() => false);
+
+  const heard: { rows: number; columns: number }[] = [];
+  surface.onResize((size) => heard.push({ rows: size.rows, columns: size.columns }));
+
+  const before = { rows: xterm.terminal?.rows, cols: xterm.terminal?.cols };
+  xterm.resize.mockClear();
+
+  // The observer settles on a timer before it fits, so the wake alone proves
+  // nothing — run the timer out.
+  vi.useFakeTimers();
+  wake();
+  vi.runAllTimers();
+  vi.useRealTimers();
+
+  // NOT APPLIED: the owner's grid is left exactly as the snapshot set it.
+  expect(xterm.resize).not.toHaveBeenCalled();
+  expect(xterm.terminal).toMatchObject(before);
+  // BUT STILL HEARD: refusing to mutate is not the same as going silent, and
+  // the server decides the claim from what this device reports.
+  expect(heard).toContainEqual({ rows: 24, columns: 45 });
+});
+
+/**
+ * The other direction, which a careless guard would break: a device that owns
+ * its geometry must still re-fit when its own viewport changes.
+ */
+test("a surface that owns the geometry still applies a resize", () => {
+  let wake = (): void => {};
+  vi.stubGlobal("ResizeObserver", class {
+    constructor(callback: () => void) { wake = callback; }
+    observe(): void {}
+    disconnect(): void {}
+  });
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    callback(0);
+    return 1;
+  });
+  xterm.propose.mockReset().mockReturnValue({ rows: 31, cols: 97 });
+
+  const host = document.createElement("div");
+  document.body.append(host);
+  const surface = new XtermSurface();
+  surface.open(host);
+  xterm.resize.mockClear();
+
+  vi.useFakeTimers();
+  wake();
+  vi.runAllTimers();
+  vi.useRealTimers();
+
+  expect(xterm.resize).toHaveBeenCalledWith(97, 31);
+});
