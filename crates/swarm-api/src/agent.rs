@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-const AGENT_TOOL_SURFACE_REVISION: u32 = 2;
+const AGENT_TOOL_SURFACE_REVISION: u32 = 3;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -403,7 +403,7 @@ const AGENT_TOOL_SURFACE_REVISION: u32 = 2;
 #[cfg(test)]
 /// The served surface as of revision 2. Update this and the revision together.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "d95fb2634567c7b6bbf6686c82423ebee3ffcf7729bec5726b0571abe172a0ea";
+    "8a8eb751ba537dd80241f0e34921e48bd7d3537df5be13f448a8253fb08523c4";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -580,6 +580,7 @@ impl ServerHandler for AgentMcp {
             record_deployment_tool(),
             correct_task_record_tool(),
             amend_task_facts_tool(),
+            record_task_note_tool(),
             retitle_task_tool(),
             record_no_deployment_tool(),
             draft_email_reply_tool(),
@@ -672,6 +673,7 @@ impl ServerHandler for AgentMcp {
             "swarm_transition_task" => self.transition_task(arguments).await,
             "swarm_correct_task_record" => self.correct_task_record(arguments),
             "swarm_amend_task_facts" => self.amend_task_facts(arguments),
+            "swarm_record_task_note" => self.record_task_note(arguments),
             "swarm_retitle_task" => self.retitle_task(arguments),
             "swarm_list_jira_comments" => self.list_jira_comments(arguments).await,
             "swarm_comment_jira_task" => self.comment_jira_task(arguments),
@@ -1689,6 +1691,21 @@ impl AgentMcp {
         }))
     }
 
+    fn record_task_note(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<RecordTaskNoteInput>(arguments)?;
+        let task_id = self.task_evidence_may_reach(&input.task_id)?;
+        let sequence =
+            self.tasks
+                .store()
+                .record_task_note(task_id, self.principal.worker_id, &input.note)?;
+        structured(json!({
+            "task_id": task_id,
+            "sequence": sequence,
+            "recorded": "Appended to this task's history, attributed to you and timestamped. \
+                         The task did not move and its state is unchanged.",
+        }))
+    }
+
     /// A task this agent may record evidence against, INCLUDING one that has
     /// just closed underneath it.
     ///
@@ -2095,6 +2112,12 @@ struct CorrectTaskRecordInput {
 struct AmendTaskFactsInput {
     task_id: String,
     correction: String,
+}
+
+#[derive(Deserialize)]
+struct RecordTaskNoteInput {
+    task_id: String,
+    note: String,
 }
 
 #[derive(Deserialize)]
@@ -2697,6 +2720,26 @@ fn amend_task_facts_tool() -> Tool {
                 }
             },
             "required": ["task_id", "correction"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
+fn record_task_note_tool() -> Tool {
+    tool(
+        "swarm_record_task_note",
+        "Put something on the record NOW, while the work continues, without moving the task. For a claim whose value depends on when it was written: a prediction made before the code exists, a measurement taken before a change, a reason for choosing one approach that the outcome can later confirm or refute. Timestamped and attributed, it appears in this task's history in sequence. It does not change state, and it is NOT a status update — \"still working on it\" is noise, and writing notes buys you nothing: a note does not count as acting on the task, so work that stops changing is still reported as unchanged whatever you write here. Use swarm_amend_task_facts instead when the description states something untrue; an amendment travels beside the task and tells readers to believe it over the description, which is wrong for a claim the outcome may falsify.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string" },
+                "note": {
+                    "type": "string",
+                    "description": "What you want on the record, and what would make it wrong. A prediction a later reader cannot check against the outcome is worth no more than silence."
+                }
+            },
+            "required": ["task_id", "note"],
             "additionalProperties": false
         }),
         false,
@@ -3486,6 +3529,85 @@ mod tests {
         );
     }
 
+    /// A worker records a prediction without lying to the board about its state.
+    ///
+    /// Before this existed, a worker asked to state a prediction BEFORE writing
+    /// the code had two ways to say anything -- finish, or change state -- so
+    /// one moved its own task to Blocked, wrote the note, and moved it back.
+    /// For that interval the board said BLOCKED about work that was not
+    /// blocked, which `blocked_work_unattended_attention` and Queen's triage
+    /// both read. The discipline the fleet most wants cost a false attention
+    /// row to exercise.
+    #[tokio::test]
+    async fn a_worker_puts_a_prediction_on_the_record_without_moving_its_task() {
+        let (bridge, store, _queen_id, worker_id, _) = setup();
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(worker_id, session).unwrap();
+        let task = store
+            .create_task("Make the checkout faster", "/workspace/swarm-next")
+            .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store
+            .assign_task_to_worker_as(
+                task.id,
+                worker_id,
+                &swarm_domain::TaskActivityActor::operator(),
+            )
+            .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Active)
+            .unwrap();
+        let before = store.get_task(task.id).unwrap();
+
+        let recorded = response_json(
+            handle(
+                bridge,
+                plain_state(),
+                mcp_request(
+                    Some(&worker_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_record_task_note",
+                        "arguments": {
+                            "task_id": task.id.to_string(),
+                            "note": "Predicting the cache is the bottleneck: p50 should fall below 400ms. If it does not, this approach is wrong and the query planner is the next place to look.",
+                        }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        assert!(
+            recorded["result"]["isError"].as_bool() != Some(true),
+            "a worker must be able to do this for its own work: {recorded}"
+        );
+
+        let after = store.get_task(task.id).unwrap();
+        assert_eq!(
+            (before.state, before.updated_at),
+            (after.state, after.updated_at),
+            "the board says exactly what it said before -- no bounce through Blocked, and the \
+             stale-work clock is untouched"
+        );
+
+        let history = store.list_task_activity(task.id, 50).unwrap();
+        let note = history
+            .events
+            .iter()
+            .find(|event| event.kind == swarm_domain::TaskActivityKind::Noted)
+            .expect("the prediction is in the trail, in sequence, before the outcome exists");
+        assert!(note.note.contains("p50 should fall below 400ms"));
+        assert_eq!(
+            note.actor_kind,
+            swarm_domain::TaskActivityActorKind::Worker,
+            "and it is attributed, because a prediction nobody can attribute is worth less"
+        );
+    }
+
     #[tokio::test]
     async fn discovery_is_role_scoped_and_credentials_survive_bridge_recreation() {
         let (bridge, store, queen_id, worker_id, directory) = setup();
@@ -3556,6 +3678,10 @@ mod tests {
                 // Review to say so.
                 "swarm_correct_task_record",
                 "swarm_amend_task_facts",
+                // Putting a claim on the record while the work continues is
+                // worker work by definition: the worker is the one whose
+                // prediction is worth timestamping before the outcome exists.
+                "swarm_record_task_note",
                 "swarm_retitle_task",
                 "swarm_record_no_deployment",
                 "swarm_draft_email_reply",

@@ -1295,6 +1295,76 @@ impl TaskStore {
         })
     }
 
+    /// Appends a worker's note to a task's trail, changing nothing else.
+    ///
+    /// A worker mid-task had exactly two ways to say anything: finish, or
+    /// change state. So one that was asked to state a prediction BEFORE
+    /// writing the code moved its own task to Blocked, wrote the note, and
+    /// moved it back — leaving the board saying BLOCKED about work that was
+    /// not blocked, which `blocked_work_unattended_attention` and Queen's
+    /// triage both read. The discipline the fleet most wants cost a false
+    /// attention row to exercise.
+    ///
+    /// DELIBERATELY NOT AN AMENDMENT, though the plumbing is nearly identical.
+    /// `amend_task_facts` also writes `task_amendments`, which every task
+    /// listing carries beside the description under "believe the amendment
+    /// where it contradicts". A prediction is not a correction of fact: the
+    /// outcome may falsify it, and filing it there would tell every later
+    /// reader to believe something that turned out wrong. This writes the
+    /// trail only.
+    ///
+    /// AND DELIBERATELY NOT AN ACTION. `last_task_action_source!` counts
+    /// `corrected`, `details_updated` and `amended`; `noted` is absent, so a
+    /// note does not push back the stale-work clock. A worker that writes
+    /// notes and does nothing else is still reported as unchanged after the
+    /// threshold. That is the mechanical answer to "do not let this become a
+    /// way to look busy" — the note buys the record and nothing else.
+    ///
+    /// # Errors
+    /// Returns an error when the note is empty or oversized, the author is not
+    /// a live worker, or the task does not exist.
+    pub fn record_task_note(
+        &self,
+        id: TaskId,
+        author: WorkerId,
+        body: &str,
+    ) -> Result<i64, TaskStoreError> {
+        let body = body.trim();
+        if body.is_empty() || body.len() > MAX_TASK_ACTIVITY_NOTE_BYTES {
+            return Err(TaskStoreError::InvalidTaskActivityNote);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let author_exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM worker_profiles WHERE id = ?1 AND archived_at IS NULL)",
+            [author.to_string()],
+            |row| row.get(0),
+        )?;
+        if !author_exists {
+            return Err(TaskStoreError::WorkerNotFound);
+        }
+        let exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE id = ?1 AND removed_at IS NULL)",
+            [id.to_string()],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(TaskStoreError::NotFound);
+        }
+        transaction.execute(
+            "INSERT INTO task_activity (task_id, kind, note, actor_kind, actor_id)
+             VALUES (?1, 'noted', ?2, 'worker', ?3)",
+            params![id.to_string(), body, author.to_string()],
+        )?;
+        // The task's own row is untouched: no state, and no updated_at. Both
+        // are load-bearing. updated_at is the stale-work clock, and moving it
+        // here would let a note buy the quiet the note is not supposed to buy.
+        let sequence = transaction.last_insert_rowid();
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        transaction.commit()?;
+        Ok(sequence)
+    }
+
     /// Amendments for MANY tasks at once, keyed by task.
     ///
     /// One query rather than one per task: the listing that needs this is

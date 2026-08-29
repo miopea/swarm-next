@@ -260,6 +260,23 @@ pub enum TaskActivityKind {
     /// histories of the same task and the authoritative-looking one was the
     /// one missing the entries.
     Amended,
+    /// A note a worker attached to work in progress, changing nothing else.
+    ///
+    /// Distinct from `Amended`, and the distinction is the whole reason this
+    /// exists. An amendment is a correction of FACT about the description —
+    /// every listing carries it beside the task and tells a reader to believe
+    /// it over the description where they disagree. A prediction made before
+    /// the code exists is not that: it is a claim about the future that the
+    /// outcome may well falsify, and filing it as a standing correction would
+    /// tell every later reader to believe something that turned out wrong.
+    ///
+    /// It also does NOT count as acting on the task. `last_task_action_source!`
+    /// lists `corrected`, `details_updated` and `amended`, and this is
+    /// deliberately absent, so writing notes cannot hold off the stale-work
+    /// flag. A worker that talks instead of working is still reported as
+    /// unchanged after the threshold, which is what keeps this from becoming a
+    /// way to look busy.
+    Noted,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -366,6 +383,7 @@ impl fmt::Display for TaskActivityKind {
             Self::Restored => "restored",
             Self::Corrected => "corrected",
             Self::Amended => "amended",
+            Self::Noted => "noted",
         })
     }
 }
@@ -384,6 +402,7 @@ impl FromStr for TaskActivityKind {
             "restored" => Ok(Self::Restored),
             "corrected" => Ok(Self::Corrected),
             "amended" => Ok(Self::Amended),
+            "noted" => Ok(Self::Noted),
             _ => Err(ParseTaskActivityKindError),
         }
     }

@@ -3792,6 +3792,141 @@ mod tests {
         assert_eq!(candidate.age_seconds, twelve_hours);
     }
 
+    /// A note is a record, not an alibi.
+    ///
+    /// The worry when this was filed was that a progress note becomes a way to
+    /// look busy. It cannot: `last_task_action_source!` counts `corrected`,
+    /// `details_updated` and `amended`, and `noted` is deliberately absent, so
+    /// work that stops changing is still reported as unchanged however much
+    /// its worker writes. The answer is structural rather than a rule someone
+    /// has to remember.
+    ///
+    /// The second half is the control. Without it this test would pass just as
+    /// happily if the stale query had stopped working altogether, which is the
+    /// failure shape this repository keeps producing.
+    #[test]
+    fn a_note_does_not_hold_off_the_stale_flag_although_an_amendment_does() {
+        let store = TaskStore::in_memory().unwrap();
+        let (worker, _session, task) = active_owned_work(&store, "Sorrel", 100);
+        assert_eq!(
+            store.stale_owned_work_candidates(1_000, 600).unwrap().len(),
+            1,
+            "work nobody has touched in 900 seconds is what this flag is for"
+        );
+
+        store
+            .record_task_note(
+                task,
+                worker,
+                "Prediction before the code exists: p50 falls below 400ms, and if it does not \
+                 the cache is not the bottleneck and this approach is wrong.",
+            )
+            .unwrap();
+        // occurred_at defaults to the real clock while this fixture runs on a
+        // synthetic one.
+        store
+            .connection()
+            .unwrap()
+            .execute_batch("UPDATE task_activity SET occurred_at = 900 WHERE kind = 'noted';")
+            .unwrap();
+
+        assert_eq!(
+            store.stale_owned_work_candidates(1_000, 600).unwrap().len(),
+            1,
+            "a note must buy no quiet at all, or writing one becomes a way to look busy"
+        );
+
+        // THE CONTROL: the same shape of write, in a kind that IS an action,
+        // does stop it. Without this the assertion above could be measuring a
+        // stale query that no longer works rather than the kind.
+        store
+            .amend_task_facts(
+                task,
+                worker,
+                "The 400ms figure came from staging, not production.",
+            )
+            .unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute_batch(
+                "UPDATE task_amendments SET created_at = 900;
+                 UPDATE task_activity SET occurred_at = 900 WHERE kind = 'amended';",
+            )
+            .unwrap();
+        assert!(
+            store
+                .stale_owned_work_candidates(1_000, 600)
+                .unwrap()
+                .is_empty(),
+            "an amendment does hold it off, so the assertion above measures the KIND rather than \
+             a query that has stopped selecting anything"
+        );
+    }
+
+    /// The workaround this replaced told the board something false.
+    ///
+    /// A worker asked to state a prediction before writing code had two ways
+    /// to say anything -- finish, or change state -- so it moved its own task
+    /// to Blocked, wrote the note, and moved it back. For that interval the
+    /// board said BLOCKED about work that was not blocked, which
+    /// `blocked_work_unattended_attention` and Queen's triage both read.
+    #[test]
+    fn a_note_leaves_the_board_saying_exactly_what_it_said_before() {
+        let store = TaskStore::in_memory().unwrap();
+        let (worker, _session, task) = active_owned_work(&store, "Sorrel", 100);
+        let before = store.get_task(task).unwrap();
+
+        store
+            .record_task_note(
+                task,
+                worker,
+                "Predicting the redirect loop is in the guard.",
+            )
+            .unwrap();
+
+        let after = store.get_task(task).unwrap();
+        assert_eq!(
+            before.state, after.state,
+            "a note must not move the task; the false Blocked row is the whole reason this exists"
+        );
+        assert_eq!(
+            before.updated_at, after.updated_at,
+            "and it must not touch the stale-work clock either"
+        );
+
+        let history = store.list_task_activity(task, 50).unwrap();
+        let note = history
+            .events
+            .iter()
+            .find(|event| event.kind == swarm_domain::TaskActivityKind::Noted)
+            .expect("the note is in the trail a reader actually reads");
+        assert_eq!(note.actor_kind, swarm_domain::TaskActivityActorKind::Worker);
+        assert!(note.note.contains("Predicting"));
+        assert!(
+            note.from_state.is_none() && note.to_state.is_none(),
+            "it carries no state change, because it is not one"
+        );
+
+        assert!(
+            store
+                .amendments_for_tasks(&[task])
+                .unwrap()
+                .get(&task)
+                .is_none_or(std::vec::Vec::is_empty),
+            "and it is NOT an amendment: every listing carries those beside the description under \
+             \"believe this over it\", which is wrong for a claim the outcome may falsify"
+        );
+
+        assert!(
+            store
+                .current_coordinator_attention(1_000)
+                .unwrap()
+                .is_empty(),
+            "nothing about a worker writing a sentence should wake a coordinator"
+        );
+    }
+
     /// A worker amending its Active task is working it, not sitting on it.
     ///
     /// `updated_at` moves on a transition and not on an amendment, so a worker
