@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
 
-import type { DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
+import type { Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
 import DecisionInbox from "../decisions/DecisionInbox";
 import HeldBriefingList from "../orchestration/HeldBriefingList";
 import UnansweredEmailAttentionCard from "../tasks/UnansweredEmailAttentionCard";
+import ConnectionsSettings from "../settings/ConnectionsSettings";
 import MachinePressureBadge from "../runtime/MachinePressureBadge";
 import { machinePressureNotice, type MachineResourceState } from "../runtime/machinePressure";
 
@@ -133,6 +134,30 @@ const MACHINE_STATES: { name: string; state: MachineResourceState }[] = [
   { name: "Loading — silent on purpose, so it does not flash on every page load.", state: { kind: "loading" } },
 ];
 
+/**
+ * The Connections card, against fixtures rather than a Hive.
+ *
+ * It is given its loader, because it reads for itself. The failed-read state is
+ * the one most worth looking at — an empty list is the reassuring answer and
+ * would be a lie — and no real API response can produce it.
+ */
+const connectedTools: Connection[] = [
+  {
+    id: "01a04a00-0000-7000-8000-000000000001",
+    name: "Claude Desktop",
+    connected_at: now - 86_400 * 3,
+    last_seen_at: now - 900,
+  },
+  {
+    id: "01a04a00-0000-7000-8000-000000000002",
+    name: "VS Code",
+    connected_at: now - 86_400 * 11,
+    last_seen_at: now - 86_400 * 6,
+  },
+];
+
+
+
 export type Surface = { id: string; title: string; why: string; render: () => ReactNode };
 
 export const SURFACES: Surface[] = [
@@ -177,6 +202,29 @@ export const SURFACES: Surface[] = [
             </div>
           );
         })}
+      </div>
+    ),
+  },
+  {
+    id: "connections",
+    title: "Connections",
+    why: "the outside-tools card in all three states — connected, empty, and the read that failed",
+    render: () => (
+      <div className="harness-machine-states">
+        <div className="harness-machine-state">
+          <p className="harness-machine-caption">Two tools connected.</p>
+          <ConnectionsSettings operatorToken="harness" load={async () => connectedTools} />
+        </div>
+        <div className="harness-machine-state">
+          <p className="harness-machine-caption">Nothing connected — says how to connect one.</p>
+          <ConnectionsSettings operatorToken="harness" load={async () => []} />
+        </div>
+        <div className="harness-machine-state">
+          <p className="harness-machine-caption">
+            The read failed. Must NOT read as &ldquo;nothing is connected&rdquo;.
+          </p>
+          <ConnectionsSettings operatorToken="harness" load={async () => { throw new Error("offline"); }} />
+        </div>
       </div>
     ),
   },

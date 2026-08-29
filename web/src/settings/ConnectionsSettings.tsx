@@ -23,7 +23,21 @@ function whenText(seconds: number): string {
   return new Date(seconds * 1000).toLocaleString();
 }
 
-export default function ConnectionsSettings({ operatorToken }: { operatorToken: string }) {
+type Props = {
+  operatorToken: string;
+  /**
+   * How the list is read. Defaults to the API.
+   *
+   * A seam, not a convenience: this card reads for itself, so without one the
+   * harness cannot render it at all — and the state most worth LOOKING at is
+   * the one where the read failed, which cannot be reached by any real API
+   * response. Monkey-patching global fetch was tried first and silently showed
+   * the failed state for every fixture.
+   */
+  load?: (operatorToken: string) => Promise<Connection[]>;
+};
+
+export default function ConnectionsSettings({ operatorToken, load: read = fetchConnections }: Props) {
   const [connections, setConnections] = useState<Connection[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -32,10 +46,10 @@ export default function ConnectionsSettings({ operatorToken }: { operatorToken: 
   const load = useCallback(() => {
     // A failed read must not render as "no tools are connected" — that reads as
     // a safe answer and is not one.
-    void fetchConnections(operatorToken)
+    void read(operatorToken)
       .then((found) => { setConnections(found); setFailed(false); })
       .catch(() => setFailed(true));
-  }, [operatorToken]);
+  }, [operatorToken, read]);
 
   useEffect(load, [load]);
 

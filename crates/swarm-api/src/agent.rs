@@ -246,6 +246,26 @@ pub async fn handle(
                     .unwrap_or_else(|| "An outside tool".to_owned());
                 match bridge.tasks.store().connection_principal(&client_id, &name) {
                     Ok(profile) => AgentPrincipal::from(&profile),
+                    // REVOKED IS NOT BROKEN. A disconnected tool presenting its
+                    // old token is unauthorised, not evidence of a server
+                    // fault: 503 would tell it to retry something that will
+                    // never work, and would put an error in the operator's log
+                    // for a decision they made on purpose. It is sent back
+                    // through the front door instead, where registering and
+                    // being approved again is the way in.
+                    Err(swarm_persistence::TaskStoreError::ConnectionRevoked) => {
+                        let challenge = crate::mcp_oauth::challenge(
+                            crate::mcp_oauth::base_url(&state, request.headers()).as_deref(),
+                        );
+                        return (
+                            StatusCode::UNAUTHORIZED,
+                            [
+                                (header::WWW_AUTHENTICATE, challenge.as_str()),
+                                (header::CACHE_CONTROL, "no-store"),
+                            ],
+                        )
+                            .into_response();
+                    }
                     Err(error) => {
                         tracing::error!(message = %error, "connection principal could not be resolved");
                         return StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -2926,6 +2946,19 @@ mod tests {
             )
         })
     }
+    /// A state that can sign tokens and reach the board, which every
+    /// connection test needs.
+    fn connected_state(store: &TaskStore) -> Arc<crate::AppState> {
+        Arc::new(
+            crate::AppState::default()
+                .with_terminal_host(
+                    swarm_terminal::HostClient::new("/unreachable/terminal.sock"),
+                    "operator-token-for-tests",
+                )
+                .with_task_store(store.clone()),
+        )
+    }
+
     /// An outside tool's token reaches the board as ITSELF.
     ///
     /// This is the join the whole feature turns on: the OAuth server issues a
@@ -2972,6 +3005,155 @@ mod tests {
                 .iter()
                 .all(|profile| profile.id != connections[0].id),
             "a connection must not appear in the roster"
+        );
+    }
+
+    /// Criterion 7. A board write through a connection names THAT CONNECTION,
+    /// and is distinguishable from a worker's write and from the operator's.
+    ///
+    /// This is the whole reason a connection gets a durable profile rather than
+    /// an anonymous session: the attribution has to survive the connection
+    /// ending.
+    #[tokio::test]
+    async fn work_filed_by_a_connection_is_attributed_to_it() {
+        let (bridge, store, _, worker_id, _) = setup();
+        let state = connected_state(&store);
+        let token = crate::mcp_oauth::test_support::issue_access_token(&state, "Claude Desktop")
+            .expect("a token this Hive signed");
+
+        let response = response_json(
+            handle(
+                bridge,
+                Arc::clone(&state),
+                mcp_request(
+                    Some(&token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_create_task",
+                        "arguments": {
+                            "title": "Filed by an outside tool",
+                            "workspace": "/workspace/petal"
+                        }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await
+        .to_string();
+        assert!(response.contains("Filed by an outside tool"), "{response}");
+
+        // The author is the connection's own profile — not the worker, and not
+        // the operator.
+        let connection = store.list_connections().unwrap();
+        assert_eq!(connection.len(), 1);
+        assert_eq!(connection[0].name, "Claude Desktop");
+        assert_ne!(connection[0].id, worker_id);
+    }
+
+    /// Criterion 8. A connection has a worker's surface and no more: approving
+    /// work and assigning it stay with Queen and the operator.
+    ///
+    /// It needs no rule of its own — the profile is `WorkerRole::Worker`, so the
+    /// existing Queen-only gates apply. That is the point of testing it: an
+    /// inherited rule is only load-bearing if something proves it is inherited.
+    #[tokio::test]
+    async fn a_connection_cannot_approve_work_or_assign_it() {
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        let state = connected_state(&store);
+        let token = crate::mcp_oauth::test_support::issue_access_token(&state, "Claude Desktop")
+            .expect("a token this Hive signed");
+        let task = store
+            .create_task("Work a tool must not approve", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(
+                task.id,
+                worker_id,
+                &swarm_domain::TaskActivityActor::worker(queen_id),
+            )
+            .unwrap();
+
+        // The tools Queen is served are not in a connection's list at all.
+        let listed = response_json(
+            handle(
+                bridge.clone(),
+                Arc::clone(&state),
+                mcp_request(Some(&token), "tools/list", &json!({})),
+            )
+            .await,
+        )
+        .await
+        .to_string();
+        assert!(
+            !listed.contains("swarm_assign_task"),
+            "assign must not be offered to a connection: {listed}"
+        );
+
+        // And calling one anyway is refused rather than merely hidden.
+        let refused = response_json(
+            handle(
+                bridge,
+                state,
+                mcp_request(
+                    Some(&token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_assign_task",
+                        "arguments": { "task_id": task.id.to_string(), "worker_id": worker_id.to_string() }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await
+        .to_string();
+        assert!(
+            refused.contains("not authorized") && refused.contains("\"isError\":true"),
+            "assigning must be refused, not merely unlisted: {refused}"
+        );
+        // The assignment is unchanged.
+        assert_eq!(
+            store.get_task(task.id).unwrap().assigned_worker_id,
+            Some(worker_id)
+        );
+    }
+
+    /// Criterion 10. Revoking in Settings -> Connections stops the next request.
+    ///
+    /// 401 rather than 503: a disconnected tool presenting its old token is
+    /// unauthorised, not evidence of a server fault. 503 would tell it to retry
+    /// something that will never work.
+    #[tokio::test]
+    async fn revoking_a_connection_stops_the_very_next_request() {
+        let (bridge, store, _, _, _) = setup();
+        let state = connected_state(&store);
+        let token = crate::mcp_oauth::test_support::issue_access_token(&state, "Claude Desktop")
+            .expect("a token this Hive signed");
+
+        let before = handle(
+            bridge.clone(),
+            Arc::clone(&state),
+            mcp_request(Some(&token), "tools/list", &json!({})),
+        )
+        .await;
+        assert_eq!(before.status(), StatusCode::OK);
+
+        let connected = store.list_connections().unwrap();
+        store.revoke_connection(connected[0].id).unwrap();
+
+        let after = handle(
+            bridge,
+            state,
+            mcp_request(Some(&token), "tools/list", &json!({})),
+        )
+        .await;
+        assert_eq!(after.status(), StatusCode::UNAUTHORIZED);
+        assert_ne!(
+            after.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "a revoked connection is not a broken server"
         );
     }
 
