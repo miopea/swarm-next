@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
-import type { Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
+import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
+import BlockedEscalationCard from "../decisions/BlockedEscalationCard";
 import DecisionInbox from "../decisions/DecisionInbox";
 import HeldBriefingList from "../orchestration/HeldBriefingList";
 import UnansweredEmailAttentionCard from "../tasks/UnansweredEmailAttentionCard";
@@ -158,6 +159,24 @@ const connectedTools: Connection[] = [
 
 
 
+/**
+ * The card that escaped the measure.
+ *
+ * It is in the fixture BECAUSE it escaped: the earlier fix capped four card
+ * classes by name and this one was not among them, so it rendered full width
+ * beside content capped at 880 and the operator saw three widths on one screen.
+ * A surface that renders only the cards someone remembered cannot catch that.
+ */
+const agedBlock: BlockedEscalation[] = [
+  {
+    task_id: "01a04a00-0000-7000-8000-0000000000aa",
+    title: "Add FLEET_PR_TOKEN so sync-propagate can open its PR — and run the success path for the first time",
+    worker_name: "Codex Shared Config",
+    workspace: "/workspace/codex-shared-config",
+    blocked_for_seconds: 13 * 3600,
+  },
+];
+
 export type Surface = { id: string; title: string; why: string; render: () => ReactNode };
 
 export const SURFACES: Surface[] = [
@@ -173,7 +192,10 @@ export const SURFACES: Surface[] = [
           workers={[]}
           busy={false}
           additionalPendingCount={1}
-          attentionCards={<UnansweredEmailAttentionCard awaiting={[waitingEmail]} busy={false} onOpenTask={() => undefined} />}
+          attentionCards={<>
+            <BlockedEscalationCard escalations={agedBlock} />
+            <UnansweredEmailAttentionCard awaiting={[waitingEmail]} busy={false} onOpenTask={() => undefined} />
+          </>}
           trailingCards={<HeldBriefingList briefings={briefings} />}
           onResolve={async () => undefined}
         />

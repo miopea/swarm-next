@@ -1102,10 +1102,14 @@ input[aria-invalid="true"] { border-color: var(--danger); }
    widths disagree three ways instead of two. They share a measure here, set
    once. */
 .decision-inbox { --attention-measure: 880px; }
-.decision-inbox-intro,
-.decision-list,
-.held-briefing-list,
-.queen-attention-card { max-width: var(--attention-measure); margin-inline: auto; }
+/* ONE RULE ON THE CONTAINER'S CHILDREN, not a list of card class names.
+   The list was tried first and it is a trap: it caps the cards that existed
+   when it was written, and every card added afterwards escapes silently and
+   renders full width beside them. BlockedEscalationCard did exactly that —
+   the operator saw three different widths on one screen and called it
+   whack-a-mole, correctly. Everything the inbox lays out is a direct child of
+   it, so this cannot be outgrown. */
+.decision-inbox > * { max-width: var(--attention-measure); margin-inline: auto; }
 .decision-list { display: grid; gap: 14px; }
 .decision-card { display: grid; gap: 16px; padding: 21px; border: 1px solid var(--line); border-left: 4px solid var(--good); border-radius: var(--radius-lg); background: var(--panel); box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 6%, transparent); }
 .decision-card.urgency-time_sensitive { border-left-color: var(--accent); background: color-mix(in srgb, var(--warn-soft) 22%, var(--panel)); }
