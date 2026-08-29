@@ -49,6 +49,7 @@ export {
   assignTask,
   createTask,
   fetchRecentTaskActivity,
+  recordTaskUnverifiable,
   fetchRemovedTasks,
   fetchTaskActivity,
   fetchTasks,

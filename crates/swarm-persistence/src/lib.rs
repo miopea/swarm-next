@@ -157,7 +157,9 @@ const AMENDMENT_ACTIVITY_SCHEMA_VERSION: i64 = 101;
 const BLOCK_DEADLINE_SCHEMA_VERSION: i64 = 102;
 const WORKER_MARK_SCHEMA_VERSION: i64 = 103;
 const CONNECTION_PRINCIPAL_SCHEMA_VERSION: i64 = 104;
-const CURRENT_SCHEMA_VERSION: i64 = CONNECTION_PRINCIPAL_SCHEMA_VERSION;
+/// An operator's record that finished work cannot now be shown to be live.
+const UNVERIFIABLE_CLOSURE_SCHEMA_VERSION: i64 = 105;
+const CURRENT_SCHEMA_VERSION: i64 = UNVERIFIABLE_CLOSURE_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1365,6 +1367,82 @@ impl TaskStore {
         Ok(sequence)
     }
 
+    /// Records that finished work cannot now be shown to be live.
+    ///
+    /// The operator's ruling, decision 01a04d9f-da18-7d02-b47b-978f0a6b9a01:
+    /// "Add a control that records them UNVERIFIABLE". Nineteen tasks finished
+    /// before the 2026-08-21 evidence gate and sat in a panel that asked for
+    /// evidence while offering no way to give any. The work is ten days old and
+    /// was done by workers against other repositories, so an operator asserting
+    /// "deployed, sha abc123" today would be attesting to something they did
+    /// not do and cannot check -- which is the failure the gate exists to
+    /// prevent, arriving through the button meant to help.
+    ///
+    /// So this asserts the only thing that is actually true: nobody can now
+    /// establish where this went. It is NOT evidence and must never be counted
+    /// as any; `closed_on_evidence` stays false, and the badge stays honest.
+    ///
+    /// Deliberately does NOT move the task's state. These are already
+    /// completed, and a record about what is knowable should not rewrite what
+    /// happened.
+    ///
+    /// # Errors
+    /// Returns an error when the note is empty or oversized, the task does not
+    /// exist, or it already carries real evidence -- work whose deployment IS
+    /// recorded is not unverifiable, and saying so would be false.
+    pub fn record_task_unverifiable(
+        &self,
+        id: TaskId,
+        note: &str,
+        recorded_at: i64,
+    ) -> Result<bool, TaskStoreError> {
+        let note = note.trim();
+        if note.is_empty() || note.len() > MAX_TASK_ACTIVITY_NOTE_BYTES {
+            return Err(TaskStoreError::InvalidTaskActivityNote);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE id = ?1 AND removed_at IS NULL)",
+            [id.to_string()],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(TaskStoreError::NotFound);
+        }
+        // Work that HAS evidence is not unverifiable. Refusing here rather than
+        // silently overwriting keeps the two records from ever disagreeing.
+        let has_evidence: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = ?1)
+                 OR EXISTS(SELECT 1 FROM task_completion_exemptions e
+                           WHERE e.task_id = ?1 AND e.approved_at IS NOT NULL)",
+            [id.to_string()],
+            |row| row.get(0),
+        )?;
+        if has_evidence {
+            return Err(TaskStoreError::CompletionEvidenceRequired);
+        }
+        let changed = transaction.execute(
+            "INSERT OR IGNORE INTO task_unverifiable_closures (task_id, note, recorded_at)
+             VALUES (?1, ?2, ?3)",
+            params![id.to_string(), note, recorded_at],
+        )? == 1;
+        if changed {
+            transaction.execute(
+                "INSERT INTO task_activity (task_id, kind, note, occurred_at, actor_kind)
+                 VALUES (?1, 'noted', ?2, ?3, 'operator')",
+                params![
+                    id.to_string(),
+                    format!("Recorded as unverifiable: {note}"),
+                    recorded_at
+                ],
+            )?;
+            insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        }
+        transaction.commit()?;
+        Ok(changed)
+    }
+
     /// Amendments for MANY tasks at once, keyed by task.
     ///
     /// One query rather than one per task: the listing that needs this is
@@ -1524,7 +1602,8 @@ impl TaskStore {
                      OR EXISTS(SELECT 1 FROM task_completion_exemptions e
                                WHERE e.task_id = t.id AND e.approved_at IS NOT NULL),
                    EXISTS(SELECT 1 FROM task_activity worked
-                          WHERE worked.task_id = t.id AND worked.actor_kind = 'worker')
+                          WHERE worked.task_id = t.id AND worked.actor_kind = 'worker'),
+                   EXISTS(SELECT 1 FROM task_unverifiable_closures u WHERE u.task_id = t.id)
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
@@ -1564,7 +1643,8 @@ impl TaskStore {
                      OR EXISTS(SELECT 1 FROM task_completion_exemptions e
                                WHERE e.task_id = t.id AND e.approved_at IS NOT NULL),
                    EXISTS(SELECT 1 FROM task_activity worked
-                          WHERE worked.task_id = t.id AND worked.actor_kind = 'worker')
+                          WHERE worked.task_id = t.id AND worked.actor_kind = 'worker'),
+                   EXISTS(SELECT 1 FROM task_unverifiable_closures u WHERE u.task_id = t.id)
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
@@ -1601,7 +1681,8 @@ impl TaskStore {
                      OR EXISTS(SELECT 1 FROM task_completion_exemptions e
                                WHERE e.task_id = t.id AND e.approved_at IS NOT NULL),
                    EXISTS(SELECT 1 FROM task_activity worked
-                          WHERE worked.task_id = t.id AND worked.actor_kind = 'worker')
+                          WHERE worked.task_id = t.id AND worked.actor_kind = 'worker'),
+                   EXISTS(SELECT 1 FROM task_unverifiable_closures u WHERE u.task_id = t.id)
                 FROM tasks t
                 LEFT JOIN task_assignments a
                   ON a.task_id = t.id AND a.released_at IS NULL
@@ -3284,6 +3365,12 @@ fn migrate_newest_schema_steps(
     if schema_version < CONNECTION_PRINCIPAL_SCHEMA_VERSION {
         migrate_connection_principal(transaction)?;
     }
+    // LAST, because every step above ends by stamping its own user_version and
+    // the final one wins. Dispatched from migrate_schema instead, this ran
+    // before the 40-104 chain and its stamp was overwritten by a lower number.
+    if schema_version < UNVERIFIABLE_CLOSURE_SCHEMA_VERSION {
+        migrate_unverifiable_closures(transaction)?;
+    }
     Ok(())
 }
 
@@ -3382,6 +3469,36 @@ fn migrate_connection_principal(transaction: &rusqlite::Transaction<'_>) -> rusq
         )?;
     }
     transaction.pragma_update(None, "user_version", CONNECTION_PRINCIPAL_SCHEMA_VERSION)
+}
+
+/// The operator's record that finished work cannot now be shown to be live.
+///
+/// A SEPARATE TABLE FROM `task_completion_exemptions` ON PURPOSE, and the
+/// distinction is the whole reason the operator asked for this. An exemption
+/// says there was nothing to ship — somebody looked and agreed. This says the
+/// opposite shape: something may well have shipped, and nobody can now prove
+/// it. Overloading one table with both would collapse exactly the difference
+/// the record exists to preserve, and the board would show "verified" for work
+/// nobody verified.
+///
+/// Both guards are required, for the reason `migrate_block_deadline` records: a
+/// database old enough to predate the tasks table reaches this step too.
+fn migrate_unverifiable_closures(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let tasks: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks')",
+        [],
+        |row| row.get(0),
+    )?;
+    if tasks {
+        transaction.execute_batch(
+            "CREATE TABLE IF NOT EXISTS task_unverifiable_closures (
+                 task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+                 note TEXT NOT NULL,
+                 recorded_at INTEGER NOT NULL DEFAULT (unixepoch())
+             );",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", UNVERIFIABLE_CLOSURE_SCHEMA_VERSION)
 }
 
 /// When a block's own stated condition arrives, if it named one.
@@ -4658,6 +4775,7 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         deployment_recorded: row.get(15).unwrap_or(false),
         closed_on_evidence: row.get(16).unwrap_or(false),
         worked_here: row.get(17).unwrap_or(false),
+        closed_unverifiable: row.get(18).unwrap_or(false),
         outcome_delivery_state: outcome_delivery_state
             .map(|value| TaskOutcomeDeliveryState::from_str(&value))
             .transpose()

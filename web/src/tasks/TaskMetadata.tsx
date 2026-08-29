@@ -27,6 +27,11 @@ function taskStateLabel(task: Task): string {
   // nothing-to-deploy claim Queen approved IS verified — somebody looked and
   // agreed there was nothing to ship. Reading deployment_recorded alone called
   // 30 of the 68 rows this touched unverified when they were properly done.
+  // Recorded-unverifiable is its OWN label, never "verified". The operator
+  // said nobody can now establish where this went; showing it as verified
+  // would claim a check that never happened, which is the exact thing the
+  // control was added to avoid rather than to enable.
+  if (task.state === "completed" && task.closed_unverifiable) return "Finished · unverifiable";
   if (task.state === "completed" && !task.closed_on_evidence) return "Finished · unverified";
   return stateLabels[task.state];
 }
@@ -45,7 +50,7 @@ export default function TaskMetadata({ task, jiraLink, busy, onRetryJira }: {
           section below keeps its label, because there it distinguishes. */}
       <section className="task-metadata-section" aria-label="Swarm details">
         <dl>
-          <div><dt>Status</dt><dd><span className={`task-state state-${task.state}${task.state === "completed" && !task.closed_on_evidence ? " unverified" : ""}`} title={task.state === "completed" && !task.closed_on_evidence ? "The work is finished. Nothing has recorded where it is running, and no nothing-to-deploy claim has been approved, so nothing has shown it to be live." : undefined}>{taskStateLabel(task)}</span></dd></div>
+          <div><dt>Status</dt><dd><span className={`task-state state-${task.state}${task.state === "completed" && task.closed_unverifiable ? " unverifiable" : task.state === "completed" && !task.closed_on_evidence ? " unverified" : ""}`} title={task.state === "completed" && task.closed_unverifiable ? "Finished, and recorded as impossible to verify now. Nobody established where this went; this is a record of that, not evidence that it shipped." : task.state === "completed" && !task.closed_on_evidence ? "The work is finished. Nothing has recorded where it is running, and no nothing-to-deploy claim has been approved, so nothing has shown it to be live." : undefined}>{taskStateLabel(task)}</span></dd></div>
           <div><dt>Priority</dt><dd><span className={`task-priority priority-${task.priority}`}>{priorityLabels[task.priority]}</span></dd></div>
           {/* The date, with the elapsed time in the tooltip. It was the other
               way round until the operator asked for the date: an age answers

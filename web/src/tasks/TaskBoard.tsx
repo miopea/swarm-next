@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "re
 
 import {
   claimApiaryTask,
+  recordTaskUnverifiable,
   createApiaryTask,
   fetchApiaryMembers,
   fetchApiaryTasks,
@@ -151,6 +152,12 @@ export default function TaskBoard({
   projects = [],
   onJiraSync,
 }: Props) {
+  // Which unverified row is being recorded, and the operator's reason. Kept
+  // here rather than in TaskCard because the control belongs to THIS panel:
+  // the same card appears elsewhere on the board where the action makes no
+  // sense.
+  const [unverifiableFor, setUnverifiableFor] = useState<string | null>(null);
+  const [unverifiableNote, setUnverifiableNote] = useState("");
   const [title, setTitle] = useState("");
   // The server counts UTF-8 bytes; a maxLength counts UTF-16 units. They
   // agree only for ASCII, so a pasted subject can look short and be refused.
@@ -317,6 +324,17 @@ export default function TaskBoard({
   const { open: openTasks, unverified: unverifiedTasks, completed: completedTasks, jiraByTask } = taskView;
   const focusedTaskCompleted = Boolean(focusTaskId && completedTasks.some((task) => task.id === focusTaskId));
   const canReorder = sort === "queue" && !query.trim() && filter === "all";
+  // No refresh prop: the write emits a TasksChanged control-room event and the
+  // board already re-reads on that stream, which is how every other mutation
+  // here lands.
+  const markUnverifiable = async (task: Task) => {
+    const note = unverifiableNote.trim();
+    if (!note) return;
+    await recordTaskUnverifiable(operatorToken, task.id, note);
+    setUnverifiableFor(null);
+    setUnverifiableNote("");
+  };
+
   const taskReorder = useReorderDrag(openTasks.map((task) => task.id), (taskIds) => void onReorder(taskIds));
   const draggedTask = tasks.find((task) => task.id === taskReorder.draggedId);
 
@@ -605,8 +623,8 @@ export default function TaskBoard({
           </div>
           <div className="task-grid compact">
             {unverifiedTasks.map((task) => (
+              <div className="unverified-row" key={task.id}>
               <TaskCard
-                key={task.id}
                 task={task}
                 jiraLink={jiraTaskLinks.find((link) => link.task_id === task.id)}
                 emailSources={emailTaskSources.filter((source) => source.task_id === task.id)}
@@ -634,6 +652,49 @@ export default function TaskBoard({
                 onDragStart={taskReorder.start}
                 onDragEnd={taskReorder.end}
               />
+              {/* The panel reported a problem and offered nothing that could
+                  resolve it, which is what the operator hit. It deliberately
+                  does NOT offer "mark verified": this work is ten days old and
+                  was done by workers against other repositories, so the only
+                  thing the operator can honestly assert is that nobody can
+                  establish where it went now. Operator ruling 2026-08-29,
+                  decision 01a04d9f-da18-7d02-b47b-978f0a6b9a01. */}
+              {unverifiableFor === task.id ? (
+                <form
+                  className="unverifiable-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void markUnverifiable(task);
+                  }}
+                >
+                  <label htmlFor={`unverifiable-${task.id}`}>Why can this no longer be checked?</label>
+                  <textarea
+                    id={`unverifiable-${task.id}`}
+                    value={unverifiableNote}
+                    onChange={(event) => setUnverifiableNote(event.target.value)}
+                    placeholder="What you looked at, and what stopped you establishing where this went."
+                    rows={2}
+                  />
+                  <div className="unverifiable-actions">
+                    <button type="submit" className="secondary-button" disabled={busy || !unverifiableNote.trim()}>
+                      Record as unverifiable
+                    </button>
+                    <button type="button" className="ghost-button" onClick={() => setUnverifiableFor(null)}>
+                      Cancel
+                    </button>
+                  </div>
+                  <small>This records that nobody could verify it. It never records that it shipped.</small>
+                </form>
+              ) : (
+                <button
+                  type="button"
+                  className="ghost-button unverifiable-trigger"
+                  onClick={() => { setUnverifiableFor(task.id); setUnverifiableNote(""); }}
+                >
+                  Cannot be verified now
+                </button>
+              )}
+              </div>
             ))}
           </div>
         </section>

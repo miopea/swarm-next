@@ -3792,7 +3792,90 @@ mod tests {
         assert_eq!(candidate.age_seconds, twelve_hours);
     }
 
-    /// A note is a record, not an alibi.
+    /// Recording work unverifiable is not recording it verified.
+    ///
+    /// The operator ruled for this control after nineteen finished tasks sat in
+    /// a panel that asked for evidence and offered no way to give any. The
+    /// danger in building it is obvious and is the whole reason the assertions
+    /// below exist: a control that quietly counted as evidence would empty the
+    /// panel and destroy the difference between "finished" and "shown to be
+    /// live" that the panel exists to draw.
+    #[test]
+    fn recording_work_unverifiable_never_counts_as_evidence_and_never_moves_it() {
+        let store = TaskStore::in_memory().unwrap();
+        let (_worker, _session, task) = active_owned_work(&store, "Marigold", 100);
+        let before = store.get_task(task).unwrap();
+
+        assert!(
+            store
+                .record_task_unverifiable(
+                    task,
+                    "Ten days old, in another repo, no run to point at.",
+                    2_000
+                )
+                .unwrap()
+        );
+        let after = store.get_task(task).unwrap();
+
+        assert!(
+            after.closed_unverifiable,
+            "the record exists and the board can see it"
+        );
+        assert!(
+            !after.closed_on_evidence,
+            "and it is NOT evidence -- nobody checked, so nothing may render this as verified"
+        );
+        assert!(
+            !after.deployment_recorded,
+            "and it certainly is not a deployment"
+        );
+        assert_eq!(
+            (before.state, before.updated_at),
+            (after.state, after.updated_at),
+            "it says what is knowable about the work, so it must not rewrite what happened to it"
+        );
+
+        assert!(
+            store
+                .list_task_activity(task, 50)
+                .unwrap()
+                .events
+                .iter()
+                .any(|event| event.note.contains("Recorded as unverifiable")
+                    && event.actor_kind == swarm_domain::TaskActivityActorKind::Operator),
+            "and it is in the trail, attributed to the operator who asserted it"
+        );
+
+        assert!(
+            !store
+                .record_task_unverifiable(task, "again", 2_100)
+                .unwrap(),
+            "recording it twice changes nothing rather than stacking records"
+        );
+    }
+
+    /// Work that HAS evidence is not unverifiable, and saying so would be false.
+    #[test]
+    fn work_with_a_recorded_deployment_cannot_be_called_unverifiable() {
+        let store = TaskStore::in_memory().unwrap();
+        let (_worker, _session, task) = active_owned_work(&store, "Marigold", 100);
+        // A deployment is only accepted once the work is finished or handed
+        // off, so the fixture's Active task has to get there first.
+        store.transition_task(task, TaskState::Review).unwrap();
+        store
+            .record_task_deployment(task, "production", "sha abc123", 2_000_000_000)
+            .unwrap();
+
+        assert!(
+            matches!(
+                store.record_task_unverifiable(task, "cannot check", 2_000_000_001),
+                Err(TaskStoreError::CompletionEvidenceRequired)
+            ),
+            "refused rather than silently overwritten, so the two records can never disagree"
+        );
+    }
+
+    /// A note is a record, not an alibi.    /// A note is a record, not an alibi.
     ///
     /// The worry when this was filed was that a progress note becomes a way to
     /// look busy. It cannot: `last_task_action_source!` counts `corrected`,

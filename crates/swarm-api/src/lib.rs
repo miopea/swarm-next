@@ -3449,6 +3449,10 @@ fn api_router(state: AppState) -> Router {
             get(task_deployments).post(record_task_deployment),
         )
         .route(
+            "/api/v1/tasks/{task_id}/unverifiable",
+            post(record_task_unverifiable),
+        )
+        .route(
             "/api/v1/tasks/{task_id}/email/reply",
             get(email_reply)
                 .post(prepare_email_reply)
@@ -5817,6 +5821,11 @@ struct RecordDeploymentRequest {
 }
 
 #[derive(Deserialize)]
+struct RecordUnverifiableRequest {
+    note: String,
+}
+
+#[derive(Deserialize)]
 struct EmailReplyRequest {
     body: String,
 }
@@ -6484,6 +6493,35 @@ async fn record_task_deployment(
         StatusCode::CREATED,
         [(header::CACHE_CONTROL, "no-store")],
         Json(record),
+    )
+        .into_response())
+}
+
+/// The operator's record that finished work cannot now be shown to be live.
+///
+/// Operator-authenticated like every other route here, and deliberately NOT an
+/// agent tool. The claim is "nobody can establish this now", which is a
+/// judgement about the state of the world that the person who owns the board
+/// makes. A worker asserting it about its own unverified work would be marking
+/// its own homework in the one direction the evidence gate exists to prevent.
+async fn record_task_unverifiable(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+    Json(request): Json<RecordUnverifiableRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let recorded = task_store(&state)?
+        .record_task_unverifiable(parse_task_id(&task_id)?, &request.note, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    Ok((
+        if recorded {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({ "task_id": task_id, "closed_unverifiable": true })),
     )
         .into_response())
 }

@@ -18,6 +18,14 @@ export type Task = {
   deployment_recorded?: boolean;
   /** Deployment recorded, or a nothing-to-deploy claim Queen approved. Either closes a task. */
   closed_on_evidence?: boolean;
+  /**
+   * The operator recorded that this work cannot NOW be shown to be live.
+   *
+   * A third outcome, not a kind of evidence. It takes a task out of the
+   * waiting-on-evidence queue because nothing is coming, and it must never be
+   * rendered as verified: nobody checked, and the record says so.
+   */
+  closed_unverifiable?: boolean;
   /** Whether any Swarm worker has ever acted on this task. False for a Jira issue mirrored in. */
   worked_here?: boolean;
   priority: TaskPriority;
@@ -105,6 +113,14 @@ export async function updateTask(operatorToken: string, taskId: string, input: T
     body: JSON.stringify(input),
   });
   return response.json() as Promise<Task>;
+}
+
+export async function recordTaskUnverifiable(operatorToken: string, taskId: string, note: string): Promise<void> {
+  await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/unverifiable`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note }),
+  });
 }
 
 export async function fetchRemovedTasks(operatorToken: string): Promise<Task[]> {

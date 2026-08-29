@@ -982,6 +982,13 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 /* Its own section, above Completed work and outside its fold. The visual weight
    is deliberate: this is finished work that still needs somebody. */
 .unverified-tasks { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--accent-line); border-radius: var(--radius-md); background: var(--honey-wash); }
+.unverified-row { display: grid; gap: 6px; }
+.unverifiable-trigger { justify-self: start; font-size: 0.85rem; }
+.unverifiable-form { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--accent-line); border-radius: var(--radius-md); background: var(--surface); }
+.unverifiable-form label { font-size: 0.85rem; font-weight: 600; }
+.unverifiable-form textarea { width: 100%; resize: vertical; }
+.unverifiable-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.unverifiable-form small { color: var(--muted); }
 
 .completed-tasks, .removed-tasks { max-width: 1400px; margin: 24px auto 0; color: var(--muted); }
 .completed-tasks summary, .removed-tasks summary { display: inline-flex; min-height: 34px; cursor: pointer; list-style: none; align-items: center; gap: 9px; padding: 5px 9px; border-radius: var(--radius-sm); font-size: .79rem; font-weight: 500; }
@@ -1590,6 +1597,10 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .development-build-landed { margin: 0; font-size: .78rem; color: var(--good); font-weight: 500; }
 /* Written with paragraphs in it, so it is shown with them. */
 .task-state.unverified { color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, transparent); }
+/* Its own badge, never the verified one. The operator recorded that nobody
+   could establish where this went; rendering it like checked work would claim
+   the check this control exists to avoid faking. */
+.task-state.unverifiable { color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, transparent); border: 1px dashed color-mix(in srgb, var(--muted) 45%, transparent); }
 /* The status and priority values wrap inside their own cells.
    "Finished · unverified" is 151px of unbreakable text — white-space: nowrap is
    inherited here — in a 59px cell, so it ran straight across the Priority label

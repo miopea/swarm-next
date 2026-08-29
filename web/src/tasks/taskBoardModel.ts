@@ -113,11 +113,17 @@ export function buildTaskBoardView(
   // on this Hive, which is precisely why it is written down rather than left to
   // the shape of today's data.
   const ownedElsewhere = (task: Task) => Boolean(jiraByTask.get(task.id)) && !task.worked_here;
-  const unverified = closed.filter((task) => !task.closed_on_evidence && !ownedElsewhere(task));
+  // Recorded-unverifiable leaves this queue because nothing is coming for it:
+  // the operator has said nobody can now establish where it went. It does NOT
+  // move to the verified side either -- completed still renders it as
+  // unverifiable, so the board never claims somebody checked.
+  const unverified = closed.filter(
+    (task) => !task.closed_on_evidence && !task.closed_unverifiable && !ownedElsewhere(task),
+  );
   return {
     open,
     unverified,
-    completed: closed.filter((task) => task.closed_on_evidence || ownedElsewhere(task)),
+    completed: closed.filter((task) => task.closed_on_evidence || task.closed_unverifiable || ownedElsewhere(task)),
     allOpenCount: allOpen.length,
     jiraByTask,
   };

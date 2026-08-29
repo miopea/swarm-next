@@ -110,6 +110,22 @@ export const demoWorkers: Worker[] = [
 ];
 
 export const demoTasks: Task[] = [
+  // A finished task nobody showed to be live. Present so the harness can render
+  // the "Waiting on evidence" panel at all -- the panel the operator reported,
+  // and the one the unverifiable control lives in.
+  {
+    ...task(
+      "0199bbbb-0000-7000-8000-00000000000f",
+      "Send the launch digest on the new schedule",
+      "Shipped by a worker whose session has long ended. Nothing recorded where it went.",
+      "completed",
+      "/home/you/projects/field-notes",
+      "0199aaaa-0000-7000-8000-000000000004",
+      5,
+    ),
+    closed_on_evidence: false,
+    deployment_recorded: false,
+  },
   task(
     "0199bbbb-0000-7000-8000-000000000001",
     "Signed-out visitors see the pricing page instead of a redirect loop",

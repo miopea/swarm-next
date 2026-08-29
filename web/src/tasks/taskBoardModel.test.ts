@@ -31,6 +31,30 @@ test("separates completed work and retains the total open count while filtering"
   expect(view.allOpenCount).toBe(3);
 });
 
+test("work recorded unverifiable leaves the waiting queue without ever counting as verified", () => {
+  // The operator ruled for this control because the panel asked for evidence
+  // and offered no way to give any. It has to take a row OUT of the queue —
+  // nothing is coming for it — while never joining the side of the board that
+  // means somebody checked.
+  const base = tasks[0];
+  const waiting = { ...base, id: "waiting", state: "completed", closed_on_evidence: false } as Task;
+  const unverifiable = {
+    ...base,
+    id: "unverifiable",
+    state: "completed",
+    closed_on_evidence: false,
+    closed_unverifiable: true,
+  } as Task;
+
+  const view = buildTaskBoardView([waiting, unverifiable], [], [], baseQuery);
+
+  expect(view.unverified.map((task) => task.id)).toEqual(["waiting"]);
+  expect(view.completed.map((task) => task.id)).toEqual(["unverifiable"]);
+  // The row that left is still not evidence. Anything reading closed_on_evidence
+  // to mean "somebody checked" must keep getting false for it.
+  expect(view.completed[0].closed_on_evidence).toBe(false);
+});
+
 test("finished work with no evidence is held apart from completed work", () => {
   // Completed is where work goes to stop being looked at. Filing unverified
   // work there put the one closed state that still needs somebody in the place

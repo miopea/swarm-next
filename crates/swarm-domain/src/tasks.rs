@@ -468,6 +468,10 @@ pub struct TaskAmendment {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent, separately computed fact about the task, and they are not mutually exclusive: work can be untouched by any Swarm worker and also carry a deployment. Collapsing them into one enum would assert an exclusivity the board does not have"
+)]
 pub struct Task {
     pub id: TaskId,
     pub hive_id: HiveId,
@@ -496,6 +500,20 @@ pub struct Task {
     /// Hive that was 29 of the 67 rows the badge appeared on.
     #[serde(default)]
     pub closed_on_evidence: bool,
+    /// Whether the operator has recorded that this work CANNOT now be shown to
+    /// be live.
+    ///
+    /// A third outcome, and deliberately not a kind of evidence. A deployment
+    /// says where the work is running; an approved exemption says there was
+    /// nothing to ship. This says neither could be established — something may
+    /// well have shipped and nobody can prove it now. Collapsing it into either
+    /// of the other two would make the board claim something nobody checked,
+    /// which is the exact failure the evidence gate exists to prevent.
+    ///
+    /// It takes a task out of the "waiting on evidence" queue, because nothing
+    /// is coming, and it must never read as verified anywhere it is shown.
+    #[serde(default)]
+    pub closed_unverifiable: bool,
     /// Whether any Swarm worker has ever acted on this task.
     ///
     /// A task imported from Jira and completed there has none: its only
