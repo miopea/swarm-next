@@ -1204,11 +1204,31 @@ impl TaskStore {
     ///
     /// # Errors
     /// Returns a persistence error.
+    /// `background_work` is whether something the worker STARTED is still
+    /// running — a build, a `gh run watch`, a measurement loop — while its
+    /// prompt rests. The classifier deliberately lets a resting prompt outrank
+    /// a background shell, so both situations arrive here as a resting worker
+    /// on unchanged work, and reporting them identically cost Queen three
+    /// rounds of hand-verification in one night: each time she had to open the
+    /// worker's repository to find out that waiting WAS the work.
+    ///
+    /// It changes the reason rather than the kind on purpose. A new kind would
+    /// have to be added to the CHECK constraint, to `LIVE_ATTENTION_SOURCE`, and
+    /// — the one that actually bites — to the NOT EXISTS in
+    /// `stale_owned_work_candidates`, which dedupes on
+    /// `kind = 'stale_owned_work_attention'`. Miss that last one and the
+    /// candidate is re-selected and re-flagged every tick, which is worse than
+    /// the false positive being fixed.
+    ///
+    /// It is still FLAGGED, not suppressed. A worker resting beside a `sleep`
+    /// loop it forgot about is genuinely stalled, and a detector that went
+    /// quiet whenever any process was alive would never say so.
     pub fn record_stale_owned_work_attention(
         &self,
         candidate: &StaleOwnedWorkCandidate,
         now: i64,
         minimum_age_seconds: i64,
+        background_work: bool,
     ) -> Result<bool, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
@@ -1281,10 +1301,16 @@ impl TaskStore {
                 "This worker was never given this brief — the delivery was never confirmed, so it has nothing to act on. Re-assign the task to send it again rather than steering the worker.",
                 "owned-work-never-briefed",
             )
+        } else if background_work {
+            (
+                "stale_owned_work_attention",
+                "Active work is unchanged while its loaded worker rests, but something the worker started is still running — a build, a run watch, or a measurement. Waiting may be the work. Read the terminal before steering.",
+                "stale-owned-work",
+            )
         } else {
             (
                 "stale_owned_work_attention",
-                "Active work is unchanged while its loaded worker is resting",
+                "Active work is unchanged while its loaded worker is resting, and nothing it started is still running",
                 "stale-owned-work",
             )
         };
@@ -3852,7 +3878,7 @@ mod tests {
             .unwrap();
         assert!(
             store
-                .record_stale_owned_work_attention(&candidate, 1_000, 600)
+                .record_stale_owned_work_attention(&candidate, 1_000, 600, false)
                 .unwrap()
         );
         let attention = store.current_coordinator_attention(0).unwrap();
@@ -4015,7 +4041,7 @@ mod tests {
             .unwrap();
         assert!(
             store
-                .record_stale_owned_work_attention(&candidate, 1_000, 600)
+                .record_stale_owned_work_attention(&candidate, 1_000, 600, false)
                 .unwrap()
         );
 
@@ -4078,12 +4104,12 @@ mod tests {
 
         assert!(
             store
-                .record_stale_owned_work_attention(&candidate, 1_000, 600)
+                .record_stale_owned_work_attention(&candidate, 1_000, 600, false)
                 .unwrap()
         );
         assert!(
             !store
-                .record_stale_owned_work_attention(&candidate, 1_001, 600)
+                .record_stale_owned_work_attention(&candidate, 1_001, 600, false)
                 .unwrap()
         );
         let attention = store.current_coordinator_attention(0).unwrap();
@@ -4122,7 +4148,7 @@ mod tests {
 
         assert!(
             !store
-                .record_stale_owned_work_attention(&candidate, 1_000, 600)
+                .record_stale_owned_work_attention(&candidate, 1_000, 600, false)
                 .unwrap()
         );
         assert!(store.current_coordinator_attention(0).unwrap().is_empty());

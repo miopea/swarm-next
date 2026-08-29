@@ -1472,16 +1472,26 @@ impl AppState {
         }
         let activity = self.provider_activity.read().await;
         for candidate in candidates {
-            if worker_is_mid_turn(
-                activity
-                    .get(&candidate.session_id)
-                    .map(|signals| signals.activity)
-                    .as_ref(),
-            ) {
+            let signals = activity.get(&candidate.session_id);
+            if worker_is_mid_turn(signals.map(|signals| signals.activity).as_ref()) {
                 continue;
             }
-            match store.record_stale_owned_work_attention(&candidate, now, STALE_OWNED_WORK_SECONDS)
-            {
+            // A resting prompt with a build still running reads exactly like a
+            // resting prompt with nothing running, because the classifier lets
+            // the prompt outrank the shell -- deliberately, since the turn HAS
+            // ended. `background_work` is the signal that was built to tell the
+            // two apart, and this flag never consulted it.
+            //
+            // Absent from the map means no evidence either way, and the honest
+            // default is the plain reason rather than an excuse invented for a
+            // worker nothing could be read from.
+            let background_work = candidate_background_work(signals);
+            match store.record_stale_owned_work_attention(
+                &candidate,
+                now,
+                STALE_OWNED_WORK_SECONDS,
+                background_work,
+            ) {
                 Ok(true) => self.control_room_notify.notify_waiters(),
                 Ok(false) => {}
                 Err(error) => tracing::warn!(
@@ -2661,6 +2671,27 @@ fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
 /// never fired for, and before their clocks read task activity that population
 /// would have produced exactly the false positives this flag family has already
 /// cost Queen a night of hand-verification over.
+/// Whether something this candidate's worker started is still running.
+///
+/// A named function rather than an inline `is_some_and` so the ABSENT case is
+/// stated and tested. Queen could not tell, from the flags alone, whether the
+/// false positives came from the screen classifying as Resting or from the
+/// session missing from the activity map entirely -- and those have different
+/// fixes, so the difference had to be settled rather than assumed.
+///
+/// It is settled: a session is in the map whenever it is a profile's active
+/// session, the host lists it live, and a read comes back running. All three
+/// held for the workers that were flagged, and the classifier tests in
+/// `provider_activity` show that screen resting with background work true.
+///
+/// Absent therefore means the worker could not be read at all, and no evidence
+/// of background work is not evidence of it. False is the honest answer: it
+/// gives the plain reason rather than inventing an excuse for a worker nothing
+/// could be observed from.
+fn candidate_background_work(signals: Option<&provider_activity::ProviderSignals>) -> bool {
+    signals.is_some_and(|signals| signals.background_work)
+}
+
 fn worker_is_mid_turn(activity: Option<&ProviderActivity>) -> bool {
     matches!(
         activity,
@@ -12127,6 +12158,152 @@ mod tests {
 
     /// A worker BUSY WITH OTHER WORK has not ignored its queued briefing.
     ///
+    /// The absent case, which is the half Queen could not settle from outside.
+    #[test]
+    fn a_worker_nothing_could_be_read_from_claims_no_background_work() {
+        assert!(candidate_background_work(Some(
+            &provider_activity::ProviderSignals {
+                activity: ProviderActivity::Resting,
+                background_work: true,
+            }
+        )));
+        assert!(!candidate_background_work(Some(
+            &provider_activity::ProviderSignals {
+                activity: ProviderActivity::Resting,
+                background_work: false,
+            }
+        )));
+        assert!(
+            !candidate_background_work(None),
+            "a session absent from the activity map is no evidence of background work, \
+             and inventing an excuse for a worker nothing could be read from would silence \
+             the flag for exactly the workers least able to speak for themselves"
+        );
+    }
+
+    /// Two workers whose screens differ by ONE LINE must not get the same
+    /// reason.
+    ///
+    /// Queen flagged three workers as stale in one night while each was waiting
+    /// on something it had started -- an Android build, a production p50 that
+    /// needs many poll cycles. Waiting WAS the work in every case, and each one
+    /// cost her a round of hand-verification in the worker's own repository to
+    /// establish that nothing was wrong. The flag could not tell them from a
+    /// worker resting beside nothing, because the classifier deliberately lets
+    /// a resting prompt outrank a background shell and the flag read only the
+    /// activity.
+    ///
+    /// The booleans here come from the REAL classifier reading two real
+    /// screens, not from hand-written `true`/`false`. Passing them by hand
+    /// would test the plumbing while assuming the very premise that needed
+    /// establishing.
+    #[tokio::test]
+    async fn stale_work_beside_a_running_build_reads_differently_from_stale_work_beside_nothing() {
+        fn screen(text: &str) -> swarm_terminal::TerminalSnapshot {
+            let mut state = swarm_terminal::CanonicalTerminalState::new(
+                swarm_terminal::JournalLimits::new(64, 64 * 1024),
+                swarm_terminal::TerminalSize::new(24, 100),
+            );
+            state.push(text.as_bytes().to_vec());
+            state.snapshot()
+        }
+
+        let waiting = screen(
+            "● Re-triggered the build and I am watching the run.\r\n\r\n❯ \r\n  ? for shortcuts                              2 shells still running",
+        );
+        let idle = screen("● Done.\r\n\r\n❯ \r\n  ? for shortcuts");
+        // Both rest. That is the whole difficulty, and it is asserted rather
+        // than assumed so this test fails loudly if the classifier changes.
+        for snapshot in [&waiting, &idle] {
+            assert_eq!(
+                provider_activity::classify_observed_activity(ProviderKind::ClaudeCode, snapshot),
+                ProviderActivity::Resting
+            );
+        }
+        let waiting_background =
+            swarm_terminal::background_work_running(ProviderKind::ClaudeCode, &waiting);
+        let idle_background =
+            swarm_terminal::background_work_running(ProviderKind::ClaudeCode, &idle);
+        assert!(
+            waiting_background && !idle_background,
+            "the two screens disagree about background work"
+        );
+
+        let store = TaskStore::in_memory().unwrap();
+        let mut recorded = Vec::new();
+        for (name, background) in [("Sculpt", waiting_background), ("Clover", idle_background)] {
+            let worker = store
+                .create_worker(
+                    name,
+                    ProviderKind::ClaudeCode,
+                    &format!("/workspace/{name}"),
+                    false,
+                    1,
+                )
+                .unwrap();
+            let session = WorkerSessionId::new();
+            store.bind_worker_session(worker.id, session).unwrap();
+            let task = store
+                .create_task(&format!("{name} owns this"), &format!("/workspace/{name}"))
+                .unwrap();
+            store.transition_task(task.id, TaskState::Ready).unwrap();
+            store
+                .assign_task_to_worker_as(
+                    task.id,
+                    worker.id,
+                    &swarm_domain::TaskActivityActor::operator(),
+                )
+                .unwrap();
+            store.transition_task(task.id, TaskState::Active).unwrap();
+            // Looked at from far enough ahead that the work is stale, rather
+            // than by ageing the row -- the query takes `now` as a parameter.
+            let later = unix_timestamp() + 4_000;
+            let candidate = store
+                .stale_owned_work_candidates(later, STALE_OWNED_WORK_SECONDS)
+                .unwrap()
+                .into_iter()
+                .find(|candidate| candidate.task_id == task.id)
+                .expect("work nobody has touched is a candidate");
+            assert!(
+                store
+                    .record_stale_owned_work_attention(
+                        &candidate,
+                        later,
+                        STALE_OWNED_WORK_SECONDS,
+                        background,
+                    )
+                    .unwrap()
+            );
+            recorded.push((name, later));
+        }
+
+        let attention = store.current_coordinator_attention(recorded[1].1).unwrap();
+        let reason_for = |name: &str| {
+            attention
+                .iter()
+                .find(|row| row.worker_name == name)
+                .unwrap_or_else(|| panic!("{name} was flagged"))
+                .reason
+                .clone()
+        };
+        let waiting_reason = reason_for("Sculpt");
+        let idle_reason = reason_for("Clover");
+
+        assert_ne!(
+            waiting_reason, idle_reason,
+            "a coordinator must be able to tell these apart from the attention row alone, \
+             which is exactly what cost three rounds of checking a worker's repository"
+        );
+        assert!(
+            waiting_reason.contains("still running"),
+            "the waiting worker's row must say something it started is still going: {waiting_reason}"
+        );
+        assert!(
+            idle_reason.contains("nothing it started is still running"),
+            "and the idle worker's row must say the opposite, or the distinction is one-sided: {idle_reason}"
+        );
+    }
+
     /// The flag existed to catch a briefing that was delivered and then sat
     /// there. It could not tell that case from a briefing correctly queued
     /// behind the thing its worker is doing right now — so it fired on a task

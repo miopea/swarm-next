@@ -364,6 +364,49 @@ mod tests {
         state.snapshot()
     }
 
+    /// The premise behind the stale-work false positives, measured rather than
+    /// inferred.
+    ///
+    /// Queen flagged three workers as stale while each was waiting on a build
+    /// or a measurement it had started, and reasoned that they must be
+    /// classifying as Resting. They could equally have been Unknown, or absent
+    /// from the activity map — which would have made the screen classifier a
+    /// red herring and the real defect somewhere else entirely. This pins it:
+    /// the screen a waiting worker actually shows classifies as Resting, and
+    /// the background signal beside it is true at the same moment.
+    #[test]
+    fn a_prompt_resting_beside_a_running_build_reports_both_resting_and_background_work() {
+        let snapshot = snapshot(
+            "● Re-triggered Build Android AAB and I am watching the run.\r\n\r\n❯ \r\n  ? for shortcuts                              2 shells still running",
+        );
+
+        assert_eq!(
+            classify_observed_activity(ProviderKind::ClaudeCode, &snapshot),
+            ProviderActivity::Resting,
+            "the turn HAS ended, so Resting is correct -- this is the premise the stale flag then misreads"
+        );
+        assert!(
+            swarm_terminal::background_work_running(ProviderKind::ClaudeCode, &snapshot),
+            "and the signal that tells this apart from an idle worker is true at the same instant"
+        );
+    }
+
+    /// The counter-case, without which the one above proves only that the
+    /// marker matches a string.
+    #[test]
+    fn a_prompt_resting_with_nothing_running_reports_no_background_work() {
+        let snapshot = snapshot("● Done.\r\n\r\n❯ \r\n  ? for shortcuts");
+
+        assert_eq!(
+            classify_observed_activity(ProviderKind::ClaudeCode, &snapshot),
+            ProviderActivity::Resting
+        );
+        assert!(
+            !swarm_terminal::background_work_running(ProviderKind::ClaudeCode, &snapshot),
+            "a genuinely idle worker must still read as having nothing running, or the stale flag goes blind"
+        );
+    }
+
     #[test]
     fn claude_slash_palette_remains_resting_when_suggestions_hide_the_prompt() {
         let suggestions = (0..18)
