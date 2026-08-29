@@ -296,6 +296,7 @@ pub async fn handle(
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     };
+    let bridge_state = Arc::clone(&state);
     let handler = AgentMcp {
         tasks: bridge.tasks.clone(),
         principal,
@@ -309,12 +310,52 @@ pub async fn handle(
         StreamableHttpServerConfig::default()
             .with_legacy_session_mode(false)
             .with_json_response(true)
-            .with_sse_keep_alive(None),
+            .with_sse_keep_alive(None)
+            .with_allowed_hosts(allowed_mcp_hosts(&bridge_state)),
     );
     match service.oneshot(request).await {
         Ok(response) => response.into_response(),
         Err(error) => match error {},
     }
+}
+
+/// Which `Host` values the MCP endpoint will answer to.
+///
+/// rmcp defaults this to loopback only, deliberately: it is DNS-rebinding
+/// protection for servers running on someone's machine, where a hostile page
+/// could otherwise point a name it controls at 127.0.0.1 and talk to a local
+/// server through the browser. That default is right for a laptop and wrong for
+/// a Hive published through a tunnel — every tunnelled request arrives with the
+/// public hostname, and rmcp answered every one of them with
+/// "403 Forbidden: Host header is not allowed".
+///
+/// It cost a full connection: Claude completed OAuth, got a working token, and
+/// then reported "Couldn't connect to the server" because the first real call
+/// after the handshake was refused. The endpoint had never been exercised
+/// through the tunnel with a credential — only without one, which is refused
+/// earlier and never reaches this check.
+///
+/// ONLY the configured public address is added, never the request's own Host.
+/// Trusting the Host a request arrives with would delete the protection rather
+/// than configure it: any name at all would then vouch for itself.
+fn allowed_mcp_hosts(state: &crate::AppState) -> Vec<String> {
+    let mut hosts = vec![
+        "localhost".to_owned(),
+        "127.0.0.1".to_owned(),
+        "::1".to_owned(),
+    ];
+    if let Some((host, port)) = state
+        .public_base_url
+        .as_deref()
+        .and_then(|base| reqwest::Url::parse(base).ok())
+        .and_then(|url| url.host_str().map(|host| (host.to_owned(), url.port())))
+    {
+        if let Some(port) = port {
+            hosts.push(format!("{host}:{port}"));
+        }
+        hosts.push(host);
+    }
+    hosts
 }
 
 #[derive(Clone)]
@@ -3154,6 +3195,54 @@ mod tests {
             after.status(),
             StatusCode::SERVICE_UNAVAILABLE,
             "a revoked connection is not a broken server"
+        );
+    }
+
+    /// The MCP endpoint must answer to the address it is published at.
+    ///
+    /// rmcp defaults to loopback-only Host validation as DNS-rebinding
+    /// protection. That is right for a laptop and wrong for a published Hive:
+    /// every tunnelled request arrives with the public hostname and was refused
+    /// with "403 Forbidden: Host header is not allowed" — after OAuth had
+    /// succeeded, so the client reported "couldn't connect to the server" while
+    /// holding a perfectly good token.
+    #[test]
+    fn the_mcp_endpoint_answers_to_its_published_address_and_nothing_else() {
+        let published = crate::AppState::default()
+            .with_public_base_url("https://swarm.example.test")
+            .unwrap();
+        let hosts = allowed_mcp_hosts(&published);
+        assert!(
+            hosts.contains(&"swarm.example.test".to_owned()),
+            "{hosts:?}"
+        );
+        // Loopback survives, so a local client keeps working.
+        assert!(hosts.contains(&"localhost".to_owned()), "{hosts:?}");
+        assert!(hosts.contains(&"127.0.0.1".to_owned()), "{hosts:?}");
+
+        // ABLATION: the request's own Host is never trusted. If it were, any
+        // name would vouch for itself and the protection would be gone rather
+        // than configured.
+        assert!(
+            !hosts.iter().any(|host| host.contains("attacker")),
+            "only the configured address is added: {hosts:?}"
+        );
+
+        // With no public address configured, nothing is added.
+        let unpublished = allowed_mcp_hosts(&crate::AppState::default());
+        assert_eq!(unpublished.len(), 3, "{unpublished:?}");
+    }
+
+    /// A non-default port is part of the authority and must be carried.
+    #[test]
+    fn a_published_port_is_allowed_too() {
+        let published = crate::AppState::default()
+            .with_public_base_url("https://swarm.example.test:8443")
+            .unwrap();
+        let hosts = allowed_mcp_hosts(&published);
+        assert!(
+            hosts.contains(&"swarm.example.test:8443".to_owned()),
+            "{hosts:?}"
         );
     }
 
