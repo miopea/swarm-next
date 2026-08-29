@@ -407,14 +407,22 @@ test("transport waits for a post-layout renderer fit", async () => {
   expect(surface.onResize).toHaveBeenCalledTimes(1);
 });
 
-test("a focused device that has lost the geometry claim stops arguing", async () => {
-  // "I had the terminal open on my computer... I went away, opened it on my
-  // phone, and on my phone it's constantly jumping."
+test("a device that has lost the geometry claim asks once, then stops arguing", async () => {
+  // Two operator reports, one mechanism, pulling in opposite directions.
   //
-  // The desktop holds the engagement, so the phone's claim is refused and the
-  // PTY keeps the desktop's size. The phone has focus, so focus alone let it
-  // re-fit, get refused, receive the canonical snapshot, and re-fit again.
-  // Nothing bounded that loop.
+  // "I had the terminal open on my computer... I went away, opened it on my
+  // phone, and on my phone it's constantly jumping." The phone had focus and no
+  // claim, so it re-fit, was refused, received the canonical snapshot, and
+  // re-fit again. Nothing bounded that loop.
+  //
+  // "After being on mobile the screen gets stuck like this. Refresh doesn't fix
+  // it." The fix for the first report was to never re-fit without the claim,
+  // which left a desktop reopened after a phone session rendering at the
+  // phone's columns permanently — ResizeObserver watches the container, which
+  // never changed, so nothing ever nudged it.
+  //
+  // ONE ATTEMPT PER ATTACH satisfies both: the device in front of the operator
+  // gets to insist once, and the exchange terminates by construction.
   const surface = fakeSurface();
   vi.mocked(surface.fit).mockResolvedValue({ rows: 60, columns: 40 });
   const connection = { ...fakeConnection(), ownsGeometry: false };
@@ -430,7 +438,37 @@ test("a focused device that has lost the geometry claim stops arguing", async ()
   await handlers.onSnapshot(snapshot);
 
   expect(surface.restore).toHaveBeenCalledWith(snapshot);
-  expect(surface.fit).not.toHaveBeenCalled();
+  // Asks, and with operator intent — an echo would not claim anything.
+  expect(connection.resize).toHaveBeenCalledTimes(1);
+  expect(connection.resize).toHaveBeenCalledWith(60, 40, "operator");
+
+  // AND THIS IS THE GUARD THE OLD ASSERTION COULD NOT EXPRESS. It checked that
+  // nothing was sent at all, which cannot tell "once" from "forever" because it
+  // only ever delivered one snapshot. Every later snapshot on this attach must
+  // be accepted in silence, or the phone jumps again.
+  vi.mocked(connection.resize).mockClear();
+  for (const sequence of [5, 6, 7]) {
+    await handlers.onSnapshot({ ...snapshot, sequence });
+  }
+  expect(connection.resize).not.toHaveBeenCalled();
+});
+
+test("a device that never had focus does not ask at all", async () => {
+  // The pop-out and the window it came from share a device id, so the server
+  // sees one device and would apply both their resizes. Focus picks exactly one
+  // window browser-wide.
+  const surface = fakeSurface();
+  vi.mocked(surface.fit).mockResolvedValue({ rows: 60, columns: 40 });
+  const connection = { ...fakeConnection(), ownsGeometry: false };
+  const controller = new TerminalController(() => surface, () => connection);
+  controller.attach(document.createElement("div"));
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledTimes(1));
+  const handlers = vi.mocked(connection.start).mock.calls[0][0];
+  vi.mocked(connection.resize).mockClear();
+  document.hasFocus = () => false;
+
+  await handlers.onSnapshot({ sequence: 4, rows: 24, columns: 120, truncated: false, reason: "attached" as const, bytes: new Uint8Array() });
+
   expect(connection.resize).not.toHaveBeenCalled();
 });
 

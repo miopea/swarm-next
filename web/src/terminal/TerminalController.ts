@@ -74,6 +74,17 @@ export class TerminalController {
    */
   #attached = false;
   #visible = true;
+  /**
+   * Whether this attach has already tried to take the geometry it was refused.
+   *
+   * ONE ATTEMPT, and that bound is the whole safety argument. Two devices each
+   * re-claiming on every snapshot is the flapping this file has been fixed for
+   * three times: each claim sends the other a canonical snapshot, which
+   * provokes another claim, forever. Capping it per ATTACH rather than per
+   * snapshot makes the exchange terminate by construction — each device may
+   * insist once, the last one to open wins, and the loser stops.
+   */
+  #reclaimedGeometry = false;
   readonly #surfaceSubscriptions: Disposable[];
   readonly #statusSubscribers = new Set<TerminalStatusListener>();
   readonly #scrollSubscribers = new Set<TerminalScrollListener>();
@@ -235,6 +246,8 @@ export class TerminalController {
   }
 
   async #fitAndStart(): Promise<void> {
+    // A new attach is a new chance to ask, and only one.
+    this.#reclaimedGeometry = false;
     const { rows, columns } = await this.#surface.fit();
     if (this.#disposed || this.#started || !this.#host.parentElement) return;
     // Connecting is not a claim; the resume frame carries that intent.
@@ -272,7 +285,28 @@ export class TerminalController {
           // operator could not use it. A device that does not own the geometry
           // accepts the size it is given; typing takes the claim, which is what
           // moving to another device is supposed to mean.
-          if (!documentHasFocus() || this.#connection.ownsGeometry === false) {
+          if (!documentHasFocus()) {
+            return this.#applyRestoredFocus(restoreFocus);
+          }
+          if (this.#connection.ownsGeometry === false) {
+            // THE DEVICE THE OPERATOR IS LOOKING AT ASKS ONCE, then accepts.
+            //
+            // Without this a desktop reopened after a phone session renders at
+            // the phone's columns and stays there: the operator's own report
+            // was "after being on mobile the screen gets stuck like this,
+            // refresh doesn't fix it". Nothing repairs it because ResizeObserver
+            // watches the CONTAINER, which never changed — only the terminal's
+            // column count did — so the one path that reclaims geometry is
+            // never reached until the window is resized by hand.
+            //
+            // The attach frame does ask, but the server grants an attach claim
+            // only over UNOWNED geometry, deliberately: claiming on every
+            // socket open used to steal a running desktop's size. So the ask
+            // has to carry operator intent, which is what a resize does.
+            if (this.#reclaimedGeometry) return this.#applyRestoredFocus(restoreFocus);
+            this.#reclaimedGeometry = true;
+            const reclaimed = await this.#surface.fit();
+            this.#connection.resize(reclaimed.rows, reclaimed.columns, "operator");
             return this.#applyRestoredFocus(restoreFocus);
           }
           const fitted = await this.#surface.fit();
