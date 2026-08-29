@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-const AGENT_TOOL_SURFACE_REVISION: u32 = 3;
+const AGENT_TOOL_SURFACE_REVISION: u32 = 4;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -403,7 +403,7 @@ const AGENT_TOOL_SURFACE_REVISION: u32 = 3;
 #[cfg(test)]
 /// The served surface as of revision 2. Update this and the revision together.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "8a8eb751ba537dd80241f0e34921e48bd7d3537df5be13f448a8253fb08523c4";
+    "99055bcce506c67fa0d0e20d970cfe2b14b964c2b75f5476d2e1316555223222";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -520,8 +520,11 @@ fn standing_brief(role: WorkerRole) -> String {
              on a sleeping worker is yours to move rather than yours to wait on. Only \
              Ready work wakes anyone: work left Active or Blocked on a sleeping worker \
              wakes nobody, so return it to Ready first and then assign. Observe the live \
-             session before you call that work Active again. Nothing sleeps or stops a \
-             worker; that is the operator's alone, and you cannot ask for it.\n\n\
+             session before you call that work Active again. A worker with NO session at \
+             all is a different case: assigning to it wakes nobody, because there is no \
+             session to put a briefing in — start it with swarm_start_worker first, then \
+             assign. Standing one down is swarm_sleep_worker. Both are yours and both are \
+             deliberate acts; neither happens as a side effect of routing.\n\n\
              WHEN YOU RUN. You are woken automatically whenever the actionable board \
              changes, and again after fifteen minutes on an unchanged board while \
              actionable work remains. Nothing else prompts you, and nothing else needs \
@@ -601,6 +604,7 @@ impl ServerHandler for AgentMcp {
                 hold_reviewed_work_tool(),
                 promote_task_tool(),
                 sleep_worker_tool(),
+                start_worker_tool(),
                 list_apiary_hives_tool(),
                 list_apiary_tasks_tool(),
                 create_apiary_task_tool(),
@@ -670,6 +674,7 @@ impl ServerHandler for AgentMcp {
             "swarm_hold_reviewed_work" => self.hold_reviewed_work(arguments),
             "swarm_promote_task" => self.promote_task(arguments),
             "swarm_sleep_worker" => self.sleep_worker(arguments).await,
+            "swarm_start_worker" => self.start_worker(arguments).await,
             "swarm_transition_task" => self.transition_task(arguments).await,
             "swarm_correct_task_record" => self.correct_task_record(arguments),
             "swarm_amend_task_facts" => self.amend_task_facts(arguments),
@@ -747,9 +752,30 @@ impl ServerHandler for AgentMcp {
                     .map_err(|_| ApplicationError::NotAuthorized)?;
                 let worker_id = WorkerId::from_str(&input.worker_id)
                     .map_err(|_| ApplicationError::NotAuthorized)?;
-                self.tasks
-                    .assign_task(self.principal, task_id, worker_id)
-                    .and_then(structured)
+                let task = self.tasks.assign_task(self.principal, task_id, worker_id)?;
+                // SAYS SO AT THE MOMENT OF THE CALL. Assigning to a worker with
+                // no session succeeds and reaches nobody: there is no session to
+                // put a briefing in, so nothing is queued and no wake fires.
+                // That was visible only in unreachable_assignments, which a
+                // coordinator has to think to read — and it cost three manual
+                // starts on 2026-08-29 before anyone did. Re-assigning does not
+                // help; the fix is to start the worker.
+                let reached_nobody = task.assigned_session_id.is_none();
+                let mut value = json!(task);
+                if reached_nobody
+                    && let Some(object) = value.as_object_mut()
+                {
+                    object.insert("reached_nobody".into(), json!(true));
+                    object.insert(
+                        "what_to_do".into(),
+                        json!(
+                            "That worker has no session, so this briefing reached nobody and \
+                             assigning again will not change that. Start it with \
+                             swarm_start_worker, then assign."
+                        ),
+                    );
+                }
+                structured(value)
             }),
             "swarm_list_apiary_tasks" => {
                 if self.principal.role == WorkerRole::Queen {
@@ -1226,6 +1252,83 @@ impl AgentMcp {
             "worker_id": input.worker_id,
             "asleep": true,
             "note": "Its Ready work stays assigned and is wakeable by assigning it again.",
+        }))
+    }
+
+    /// Gives a worker a session, so assignment has somewhere to land.
+    ///
+    /// THE CASE ASSIGNMENT CANNOT COVER. Assigning READY work to a SLEEPING
+    /// worker queues a guarded wake and works — Queen uses it constantly. A
+    /// worker with no session at all has nowhere to put a briefing, so the same
+    /// call returns a normal-looking result while the work reaches nobody, and
+    /// re-assigning does not help. Measured three times on 2026-08-29, each
+    /// costing a decision card and a manual start by the operator.
+    ///
+    /// EXPLICIT, never implicit. Assignment must not start anything: autostart
+    /// is false on nearly every profile, which is deliberate, and routing that
+    /// spawned processes as a side effect would override that every time Queen
+    /// moved work.
+    ///
+    /// The same operation as the operator's Start button, for the reason the
+    /// sleep tool gives for sharing `stand_worker_down`: one operation rather
+    /// than two that drift.
+    async fn start_worker(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<StartWorkerInput>(arguments)?;
+        if self.principal.role != WorkerRole::Queen {
+            return Err(ApplicationError::NotAuthorized);
+        }
+        let worker_id =
+            WorkerId::from_str(&input.worker_id).map_err(|_| ApplicationError::NotAuthorized)?;
+        let reason = input.reason.trim();
+        if reason.is_empty() {
+            return Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(
+                "say why this worker is being started; a session that appeared with no explanation is the same failure a silent stand-down is".to_owned(),
+            )));
+        }
+        let store = self.tasks.store();
+        let profile = store
+            .get_worker_profile(worker_id)
+            .map_err(ApplicationError::Store)?;
+
+        // Sampled FRESH rather than read from the coordinator's cached tick.
+        // This is an explicit request at a moment, and the machine's answer a
+        // tick ago is not the answer now.
+        let admission = crate::runtime::coordinator_start_admission(&self.state).await;
+        if admission != crate::runtime::CoordinatorStartAdmission::Allowed {
+            return Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(
+                format!(
+                    "{} was not started: {}",
+                    profile.name,
+                    admission.refusal_reason()
+                ),
+            )));
+        }
+
+        let already_running = profile.active_session_id.is_some();
+        // The default geometry, as the operator's Start button uses when the
+        // browser has not measured one yet. The first attached viewport
+        // re-fits it, so this decides nothing lasting.
+        let view = crate::worker_runtime::start_worker_process(
+            &self.state,
+            worker_id,
+            swarm_terminal::TerminalSize::default(),
+        )
+        .await
+        .map_err(|error| {
+            ApplicationError::Store(TaskStoreError::IntegrityFailure(error.message.clone()))
+        })?;
+        tracing::info!(%worker_id, worker = %profile.name, reason, "Queen started a worker");
+        structured(json!({
+            "worker_id": input.worker_id,
+            "running": view.running,
+            // Already running is success, and saying which it was stops a
+            // caller reading "running: true" as proof it caused something.
+            "already_running": already_running,
+            "note": if already_running {
+                "That worker already had a session; nothing was started. Assign its Ready work as usual."
+            } else {
+                "Started. Assign its Ready work now — the briefing has somewhere to land."
+            },
         }))
     }
 
@@ -2056,6 +2159,13 @@ struct SleepWorkerInput {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct StartWorkerInput {
+    worker_id: String,
+    reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PromoteTaskInput {
     task_id: String,
 }
@@ -2293,6 +2403,28 @@ fn reload_app_tool() -> Tool {
                 }
             },
             "required": ["action"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
+fn start_worker_tool() -> Tool {
+    tool(
+        "swarm_start_worker",
+        "Queen only: give a worker a session so work can reach it. The counterpart to swarm_sleep_worker, and the case assignment cannot cover — assigning READY work wakes a SLEEPING worker, but a worker with no session at all has nowhere to put a briefing, so the work reaches nobody and stays that way however many times you assign it. Start it, then assign. DELIBERATE, never a side effect: assignment does not start anything, because most profiles have autostart off on purpose and routing must not spawn processes. Already running is success, not an error, and says so. REFUSED while the machine is under pressure, and the refusal names which pressure — that gate exists because a coordinator starting workers is exactly what it guards.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "worker_id": { "type": "string", "format": "uuid" },
+                "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500,
+                    "description": "Why this worker is being started now. Recorded with the start, the way a stand-down records why — a session that appeared with no explanation is the same failure in the other direction."
+                }
+            },
+            "required": ["worker_id", "reason"],
             "additionalProperties": false
         }),
         false,
@@ -2933,6 +3065,10 @@ mod tests {
         "swarm_approve_no_deployment",
         // Retiring work is a routing judgement, which is Queen's.
         "swarm_retire_task",
+        // Giving a worker a session is the counterpart to standing one down,
+        // and both are Queen's for the same reason: she is the one who knows
+        // whether there is work for it.
+        "swarm_start_worker",
         "swarm_preview_jira_project",
         "swarm_sync_jira_project",
         "swarm_refresh_jira_project",
@@ -3605,6 +3741,107 @@ mod tests {
             note.actor_kind,
             swarm_domain::TaskActivityActorKind::Worker,
             "and it is attributed, because a prediction nobody can attribute is worth less"
+        );
+    }
+
+    /// Assigning to a worker with no session reached nobody and said nothing.
+    ///
+    /// It returns a normal-looking task, so a coordinator has no reason to look
+    /// further; the only trace was `unreachable_assignments`, which she has to
+    /// think to read. Measured three times on 2026-08-29, each costing a
+    /// decision card and a manual start. Re-assigning does not help, so a
+    /// caller who does not learn this at the moment of the call learns it from
+    /// the operator hours later.
+    #[tokio::test]
+    async fn assigning_to_a_worker_with_no_session_says_the_work_reached_nobody() {
+        let (bridge, store, queen_id, _worker_id, _) = setup();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        // A worker that exists on the roster and has never been started.
+        let idle = store
+            .create_worker(
+                "Dormant",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace/dormant",
+                false,
+                2,
+            )
+            .unwrap();
+        assert!(idle.active_session_id.is_none(), "the premise: no session");
+        let task = store
+            .create_task("Work nobody can receive", "/workspace/dormant")
+            .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+
+        let assigned = response_json(
+            handle(
+                bridge,
+                plain_state(),
+                mcp_request(
+                    Some(&queen_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_assign_task",
+                        "arguments": { "task_id": task.id.to_string(), "worker_id": idle.id.to_string() }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+
+        let content = &assigned["result"]["structuredContent"];
+        assert_eq!(
+            content["reached_nobody"],
+            json!(true),
+            "the call must say the work reached nobody, at the moment of the call: {assigned}"
+        );
+        assert!(
+            content["what_to_do"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("swarm_start_worker"),
+            "and must name the remedy, because assigning again is not one: {assigned}"
+        );
+    }
+
+    /// A session that appeared with no explanation is the same failure a silent
+    /// stand-down is, so the start tool asks for a reason the way sleep does.
+    #[tokio::test]
+    async fn starting_a_worker_without_saying_why_is_refused() {
+        let (bridge, store, queen_id, _worker_id, _) = setup();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let idle = store
+            .create_worker(
+                "Dormant",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace/dormant",
+                false,
+                2,
+            )
+            .unwrap();
+
+        let refused = response_json(
+            handle(
+                bridge,
+                plain_state(),
+                mcp_request(
+                    Some(&queen_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_start_worker",
+                        "arguments": { "worker_id": idle.id.to_string(), "reason": "   " }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(
+            refused["result"]["isError"],
+            json!(true),
+            "an empty reason is refused: {refused}"
         );
     }
 
