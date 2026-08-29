@@ -8148,7 +8148,7 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "invalid_email_workflow",
             error.to_string(),
         ),
-        TaskStoreError::EmailMergeConflict => ApiError::new(
+        TaskStoreError::EmailMergeConflict(_) => ApiError::new(
             StatusCode::CONFLICT,
             "email_merge_conflict",
             error.to_string(),

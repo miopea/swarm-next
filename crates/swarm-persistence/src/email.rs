@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use swarm_domain::{Task, TaskId, TaskPriority, TaskState, WorkerId};
 use uuid::Uuid;
 
+use std::fmt::Write as _;
+
 use crate::{
     ControlRoomEventKind, EMAIL_REPLY_FROM_REVIEW_SCHEMA_VERSION, TaskStore, TaskStoreError,
     insert_control_room_event, parse_domain_id, validate_description, validate_text,
@@ -1010,24 +1012,47 @@ fn existing_email_task_id(
 ) -> Result<Option<TaskId>, TaskStoreError> {
     let mut task_ids = Vec::new();
     let mut linked_count = 0_usize;
+    let mut held = Vec::new();
     for message in messages {
-        if let Some(task_id) = transaction
+        // JOINED TO tasks, and a REMOVED task does not count as holding the
+        // message. Without this a task removed by mistake kept its emails
+        // forever: removal is a soft delete, so the link outlived it and there
+        // was no route anywhere in the product to break it. The remedy for a
+        // wrong import is to remove the task it made, and that has to work.
+        if let Some((task_id, title)) = transaction
             .query_row(
-                "SELECT task_id FROM email_message_links
-                 WHERE integration_id = ?1 AND message_id = ?2",
+                "SELECT link.task_id, task.title
+                 FROM email_message_links link
+                 JOIN tasks task ON task.id = link.task_id AND task.removed_at IS NULL
+                 WHERE link.integration_id = ?1 AND link.message_id = ?2",
                 params![message.integration_id.trim(), message.message_id.trim()],
-                |row| row.get::<_, String>(0),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )
             .optional()?
         {
             linked_count += 1;
+            held.push((email_task_title(message), title));
             task_ids.push(task_id);
         }
     }
     task_ids.sort();
     task_ids.dedup();
     if task_ids.len() > 1 || (!task_ids.is_empty() && linked_count != messages.len()) {
-        return Err(TaskStoreError::EmailMergeConflict);
+        // NAMES THEM. The bare sentence was accurate and unactionable: it said a
+        // selection conflicted without saying which of six messages did it, so
+        // the only way forward was to deselect one at a time.
+        let mut detail = format!(
+            "{linked_count} of the {} selected messages are already attached to a task",
+            messages.len()
+        );
+        for (subject, task_title) in held.iter().take(4) {
+            let _ = write!(detail, "\n  \"{subject}\" is on \"{task_title}\"");
+        }
+        if held.len() > 4 {
+            let _ = write!(detail, "\n  and {} more", held.len() - 4);
+        }
+        detail.push_str("\nDeselect those, or remove the task holding them to free the messages.");
+        return Err(TaskStoreError::EmailMergeConflict(detail));
     }
     Ok(task_ids
         .first()
@@ -1163,10 +1188,24 @@ fn insert_email_sources(
     for message in messages {
         let source_id = Uuid::now_v7().to_string();
         transaction.execute(
+            // ON CONFLICT because the row may still exist from a task that has
+            // since been REMOVED. The check above deliberately ignores those,
+            // so without this the import walks into the UNIQUE constraint and
+            // surfaces as an opaque 503 -- trading one confusing failure for
+            // another. Reassigning keeps the message addressable and moves it
+            // to the task that now owns it.
             "INSERT INTO email_message_links (
                  id, task_id, integration_id, message_id, conversation_id,
                  internet_message_id, sender_name, sender_address, received_at, web_url
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             ON CONFLICT (integration_id, message_id) DO UPDATE SET
+                 task_id = excluded.task_id,
+                 conversation_id = excluded.conversation_id,
+                 internet_message_id = excluded.internet_message_id,
+                 sender_name = excluded.sender_name,
+                 sender_address = excluded.sender_address,
+                 received_at = excluded.received_at,
+                 web_url = excluded.web_url",
             params![
                 source_id,
                 task_id.to_string(),
@@ -1928,6 +1967,114 @@ mod tests {
             body_text: "The form loses my phone number after I press Save.",
             attachments,
         }
+    }
+
+    /// Removing a task frees the emails it held.
+    ///
+    /// Found by causing it: a message imported to verify a fix stayed attached
+    /// to that task forever. Removal is a soft delete, `existing_email_task_id`
+    /// queried the links alone, and no route in the product could break the
+    /// bond — so a single mistaken import poisoned a message permanently and
+    /// the only remedy was a direct database write.
+    #[test]
+    fn removing_a_task_frees_the_emails_it_held() {
+        let store = TaskStore::in_memory().unwrap();
+        let snapshot = message(&[]);
+        let first = store
+            .import_email_messages(
+                std::slice::from_ref(&snapshot),
+                &EmailTaskDraft {
+                    title: "Imported by mistake",
+                    description: "x",
+                    priority: TaskPriority::Normal,
+                    worker_id: None,
+                    state: TaskState::Draft,
+                },
+            )
+            .unwrap();
+        assert!(first.created);
+
+        // The operator removes the task the mistake made.
+        store
+            .remove_task_as(
+                first.task.id,
+                &swarm_domain::TaskActivityActor::operator(),
+                "wrong import",
+            )
+            .unwrap();
+
+        let second = store
+            .import_email_messages(
+                std::slice::from_ref(&snapshot),
+                &EmailTaskDraft {
+                    title: "Where it actually belongs",
+                    description: "x",
+                    priority: TaskPriority::Normal,
+                    worker_id: None,
+                    state: TaskState::Draft,
+                },
+            )
+            .expect("the message is free once the task holding it is gone");
+
+        assert!(second.created, "a NEW task, not the removed one revived");
+        assert_ne!(second.task.id, first.task.id);
+        assert_eq!(second.task.title, "Where it actually belongs");
+    }
+
+    /// The refusal now says which messages, and on what.
+    ///
+    /// It used to say only that the selection "belong to different existing
+    /// tasks" — accurate, and leaving the operator to deselect six messages one
+    /// at a time to find the one that mattered.
+    #[test]
+    fn a_mixed_selection_names_the_messages_that_are_already_attached() {
+        let store = TaskStore::in_memory().unwrap();
+        let held = message(&[]);
+        store
+            .import_email_messages(
+                std::slice::from_ref(&held),
+                &EmailTaskDraft {
+                    title: "Holds the first message",
+                    description: "x",
+                    priority: TaskPriority::Normal,
+                    worker_id: None,
+                    state: TaskState::Draft,
+                },
+            )
+            .unwrap();
+
+        let mut free = message(&[]);
+        free.message_id = "AAMk-message-2";
+        free.internet_message_id = Some("<issue-2@example.test>");
+        free.subject = "A second, unattached report";
+
+        let error = store
+            .import_email_messages(
+                &[held, free],
+                &EmailTaskDraft {
+                    title: "Both together",
+                    description: "x",
+                    priority: TaskPriority::Normal,
+                    worker_id: None,
+                    state: TaskState::Draft,
+                },
+            )
+            .expect_err("a mixed selection is still refused");
+
+        let text = error.to_string();
+        assert!(text.contains("1 of the 2"), "says how many: {text}");
+        assert!(
+            text.contains("The member form is not saving"),
+            "names the message that is attached: {text}"
+        );
+        assert!(
+            text.contains("Holds the first message"),
+            "and the task holding it: {text}"
+        );
+        assert!(
+            text.contains("remove the task"),
+            "and what to do about it: {text}"
+        );
     }
 
     /// The operator's report, reproduced: "the title was fine, and that

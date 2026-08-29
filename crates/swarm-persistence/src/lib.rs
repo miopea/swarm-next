@@ -353,8 +353,13 @@ pub enum TaskStoreError {
     JiraCommentQueueFull,
     #[error("email message metadata or content is invalid")]
     InvalidEmailMessage,
-    #[error("selected email messages belong to different existing tasks")]
-    EmailMergeConflict,
+    /// Carries WHICH messages are already attached and to what.
+    ///
+    /// It used to be a bare sentence. Accurate, and unactionable: the operator
+    /// was told a selection conflicted and not which of six messages caused it,
+    /// so the only way forward was to deselect them one at a time.
+    #[error("{0}")]
+    EmailMergeConflict(String),
     #[error("email attachment metadata exceeds its private bounds")]
     InvalidEmailAttachment,
     #[error("email source was not found")]
