@@ -2,6 +2,9 @@ import type { ReactNode } from "react";
 
 import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
 import BlockedEscalationCard from "../decisions/BlockedEscalationCard";
+import TaskBoard from "../tasks/TaskBoard";
+import WorkerRosterItem from "../workers/WorkerRosterItem";
+import { demoTasks, demoWorkers } from "./productFixtures";
 import DecisionInbox from "../decisions/DecisionInbox";
 import HeldBriefingList from "../orchestration/HeldBriefingList";
 import UnansweredEmailAttentionCard from "../tasks/UnansweredEmailAttentionCard";
@@ -159,6 +162,7 @@ const connectedTools: Connection[] = [
 
 
 
+
 /**
  * The card that escaped the measure.
  *
@@ -176,6 +180,68 @@ const agedBlock: BlockedEscalation[] = [
     blocked_for_seconds: 13 * 3600,
   },
 ];
+
+/**
+ * Invented content for the picture that goes in the README.
+ *
+ * The `needs-you` fixture above is transcribed from the operator's real screen
+ * on purpose — that is what makes it useful for DEBUGGING, and exactly what
+ * makes it unpublishable. It carries their name, a real reply, real project
+ * names and a real credential name. Two surfaces, two jobs.
+ */
+const demoDecision: DecisionRequest = {
+  id: "demo-decision-1",
+  hive_id: "demo-hive",
+  requesting_worker_id: "demo-orchard-api",
+  task_id: "demo-task-export",
+  kind: "input",
+  urgency: "normal",
+  title: "Should a slow source fail the export, or write what it has?",
+  summary:
+    "The nightly export can finish before the source has answered. Failing loudly means a missed night; writing a partial file means nobody downstream can tell it is partial. Both are recoverable, and by different people, so this is yours rather than mine.",
+  reason:
+    "I can implement either in about the same time. I am asking because the wrong choice is silent: a partial export looks exactly like a quiet day.",
+  risk: "",
+  evidence: "",
+  suggested_action: "Write what arrived and mark it partial",
+  allowed_actions: ["Fail the run and alert", "Write what arrived and mark it partial"],
+  deadline: null,
+  state: "pending",
+  resolution_action: null,
+  resolution_note: "",
+  resolved_by_operator_id: null,
+  created_at: now - 5_400,
+  updated_at: now - 5_400,
+  resolved_at: null,
+  delivery_state: "delivered",
+};
+
+const demoBlocked: BlockedEscalation[] = [
+  {
+    task_id: "demo-task-index",
+    title: "Give the search index a way to say it is stale",
+    worker_name: "Orchard API",
+    workspace: "/home/you/projects/orchard-api",
+    blocked_for_seconds: 14 * 3600,
+  },
+];
+
+const demoBriefings: HeldBriefing[] = [
+  ["Retry the upload before giving up on the attachment", "Field Notes", 2_100],
+  ["Say which settings moved in the 2.0 config change", "Field Notes", 900],
+].map(([title, worker, age], index) => ({
+  task_id: `demo-briefing-${index}`,
+  title: title as string,
+  worker_id: `demo-worker-${index}`,
+  worker_name: worker as string,
+  queued_at: now - (age as number),
+  reason: "worker_already_working",
+  blocked_by: null,
+}));
+
+/** Every callback a surface needs and a picture never uses. */
+const noop = () => undefined;
+const asyncNoop = async () => undefined;
 
 export type Surface = { id: string; title: string; why: string; render: () => ReactNode };
 
@@ -247,6 +313,75 @@ export const SURFACES: Surface[] = [
           </p>
           <ConnectionsSettings operatorToken="harness" load={async () => { throw new Error("offline"); }} />
         </div>
+      </div>
+    ),
+  },
+  {
+    id: "needs-you-demo",
+    title: "Needs you (publishable)",
+    why: "the same surface against INVENTED data — the needs-you fixture is transcribed from the operator's real screen and must never be published",
+    render: () => (
+      <div className="attention-workspace">
+        <DecisionInbox
+          decisions={[demoDecision]}
+          tasks={[]}
+          workers={[]}
+          busy={false}
+          attentionCards={<BlockedEscalationCard escalations={demoBlocked} />}
+          trailingCards={<HeldBriefingList briefings={demoBriefings} />}
+          onResolve={async () => undefined}
+        />
+      </div>
+    ),
+  },
+  {
+    id: "tasks",
+    title: "Tasks",
+    why: "the board, against invented work — the source for the README screenshot",
+    render: () => (
+      <TaskBoard
+        tasks={demoTasks}
+        jiraTaskLinks={[]}
+        operatorToken="harness"
+        sessions={[]}
+        workers={demoWorkers}
+        busy={false}
+        onCreate={asyncNoop}
+        onUpdate={asyncNoop}
+        onRemove={asyncNoop}
+        onRestore={asyncNoop}
+        onTransition={asyncNoop}
+        onAssign={asyncNoop}
+        onStartWorker={asyncNoop}
+        onOpenWorker={noop}
+        onFetchActivity={async () => ({ events: [], truncated: false })}
+        onFetchJiraComments={async () => []}
+        onAddJiraComment={async () => ({ state: "queued" })}
+        onRetryJira={asyncNoop}
+        onJiraImported={asyncNoop}
+        onReorder={asyncNoop}
+      />
+    ),
+  },
+  {
+    id: "workers",
+    title: "Workers",
+    why: "the roster, in its four attention states — the terminal itself is a canvas and is never captured",
+    render: () => (
+      <div className="harness-roster">
+        {demoWorkers.map((worker, index) => (
+          <WorkerRosterItem
+            key={worker.id}
+            worker={worker}
+            selected={index === 0}
+            detail={worker.workspace.split("/").pop() ?? ""}
+            workSummary={index === 1 ? "1 active · 2 ready" : undefined}
+            busy={false}
+            onOpen={noop}
+            onStart={noop}
+            onStop={noop}
+          />
+        ))}
       </div>
     ),
   },

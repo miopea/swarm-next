@@ -18,11 +18,36 @@ import { SURFACES } from "./surfaces";
  * fetches, authenticates or touches a Hive. Open one surface at a time with
  * ?surface=<id>, which is how a browser can be pointed at exactly one thing.
  *
+ * NOTHING REACHES THE NETWORK. Components that read for themselves are the
+ * norm, not the exception, and each one that fails a fetch paints its own
+ * "could not be refreshed" banner over whatever is being looked at. Handing
+ * every such component a loader prop was tried and is the wrong shape: it caps
+ * the fetches that exist today and every one added later escapes, which is the
+ * same trap the enumerated CSS measure fell into. The network is the boundary,
+ * so the network is what gets stubbed — once, here, for everything.
+ *
  * IT IS NOT A TEST AND DOES NOT ASSERT. There are no baselines on purpose:
  * a screenshot diff fails on every legitimate change, and this repo had three
  * legitimate changes in one evening. A check that cries wolf gets ignored,
  * which is worse than no check. This is for looking before claiming.
  */
+/**
+ * Every API call answers empty, and none of them reach a Hive.
+ *
+ * An empty list is the right default: it is what a component sees on a Hive
+ * with nothing in it, so it renders the state the fixture asked for rather than
+ * an error about a server that was never there. Anything a surface genuinely
+ * needs comes from its fixture props, not from here.
+ */
+const originalFetch = globalThis.fetch;
+globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  if (!url.startsWith("/api/") && !url.includes("/api/v1/")) {
+    return originalFetch(input as RequestInfo, init);
+  }
+  return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+}) as typeof fetch;
+
 const requested = new URLSearchParams(window.location.search).get("surface");
 const surface = SURFACES.find((entry) => entry.id === requested);
 

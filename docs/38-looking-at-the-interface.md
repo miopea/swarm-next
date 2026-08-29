@@ -110,6 +110,19 @@ from it is safe by construction rather than by inspection. It cannot yet show
 every screen — that is a reason to add surfaces to it, not a reason to go back
 to photographing production.
 
+**The published screenshots come from here.** `docs/images/*.png` are harness
+captures, not photographs of a Hive: `?surface=needs-you-demo`, `?surface=tasks`
+and `?surface=workers`, against `harness/productFixtures.tsx`. Nothing in them
+ever existed — Orchard Web, Field Notes and the rest are invented, so there is
+no scrubbing to get right and no terminal to worry about.
+
+**Two Needs-you surfaces exist, and the difference matters.** `needs-you` is
+transcribed from the operator's real screen, which is what makes it useful for
+debugging and unpublishable: it carries their name, a real reply, real project
+names and a real credential name. `needs-you-demo` is the one that goes in the
+README. Capturing the wrong one is a single character in a URL, so check the
+pixels before committing, every time.
+
 **A screenshot dates faster than prose.** The 0.9.2 captures show the briefing
 list before `d133349` gave it a rule and an indent, which is to say they show the
 exact layout an operator had just called unbalanced. Prose describing a screen

@@ -447,6 +447,11 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .email-task-title-limit .text-button,
 .task-title-limit .text-button { padding: 0; font-size: .7rem; }
 input[aria-invalid="true"] { border-color: var(--danger); }
+/* Harness only. The roster lives in a ~286px rail in the app; rendered loose
+   it would stretch to the window and read as a full-width list, which is not
+   what anyone sees. */
+.harness-roster { width: 286px; display: grid; gap: 2px; padding: 8px; }
+
 /* Harness only — laying the states out for comparison. */
 .harness-machine-states { display: flex; flex-direction: column; gap: 18px; }
 .harness-machine-state { border: 1px solid var(--line); border-radius: 10px; padding: 4px 12px 12px; }

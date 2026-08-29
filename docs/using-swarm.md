@@ -17,13 +17,23 @@ question, an email nobody has answered, a Queen review that stopped. Routine
 work never appears here. When it is empty, nothing needs you, and that is the
 answer rather than an absence of one.
 
+![The Needs you queue, with an escalated block, a worker's question and the briefings panel.](images/needs-you.png)
+
 **Tasks** — the board. Work that survives sessions and restarts. A task carries
 its own description, its state, and who owns it. Tasks come from you, from Jira,
 from an imported email, or from a worker that found follow-up work.
 
+![The task board: five tasks in progress, assigned, ready, review and draft, each showing its owner and the one action available next.](images/tasks.png)
+
 **Workers** — the roster and the terminals. Every worker is a real provider
 process in a real repository. Selecting one shows its live terminal; you can
 type into it exactly as you would in a shell.
+
+![The worker roster: four workers showing buzzing, resting and sleeping states beside their repositories.](images/workers.png)
+
+The terminal itself is not pictured here, and deliberately: it is a canvas
+rather than markup, so its contents cannot be redacted the way the rest of a
+screenshot can. See [docs/38](38-looking-at-the-interface.md).
 
 **Apiary** — other Hives, when you federate. Ignore it if you run one machine.
 
