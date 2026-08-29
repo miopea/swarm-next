@@ -204,6 +204,20 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .surface-nav .stale-bundle-notice strong { color: var(--text); font-size: .82rem; }
 .surface-nav .stale-bundle-notice small { color: var(--text-muted); font-size: .74rem; line-height: 1.35; }
 .surface-nav .stale-bundle-actions { display: flex; align-items: center; gap: 8px; }
+/* SPAN THE WHOLE NAV. Below 680px `.surface-nav` becomes a 4- or 5-column grid
+   for the tab strip, and these two panels are grid children like every tab — so
+   each was laid out in ONE column, a fifth of the screen. The version notice
+   wrapped to "This page is / running an older / version", broke the build string
+   over four lines, and pushed "Not now" outside its own border; the operator
+   photographed it and wrote "Formatting issues on repeat for mobile".
+
+   `1 / -1` is a no-op on the single-column desktop rail, so this is stated once
+   rather than duplicated into the media query — and it protects the panels if
+   the nav ever gains columns at another width. */
+.surface-nav .stale-bundle-notice,
+.surface-nav .public-address-warning { grid-column: 1 / -1; }
+/* The actions wrap rather than overflow when the panel is still narrow. */
+.surface-nav .stale-bundle-actions { flex-wrap: wrap; }
 .surface-nav .public-address-open { display: flex; min-height: 0; align-items: center; justify-content: flex-start; gap: 9px; padding: 0; border: 0; color: var(--warn-strong); background: transparent; }
 .surface-nav .public-address-open:hover { background: transparent; text-decoration: underline; }
 .surface-nav .public-address-open > span:last-child { display: grid; min-width: 0; gap: 1px; }

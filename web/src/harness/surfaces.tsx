@@ -12,6 +12,7 @@ import HeldBriefingList from "../orchestration/HeldBriefingList";
 import UnansweredEmailAttentionCard from "../tasks/UnansweredEmailAttentionCard";
 import ConnectionsSettings from "../settings/ConnectionsSettings";
 import MachinePressureBadge from "../runtime/MachinePressureBadge";
+import StaleBundleNotice from "../StaleBundleNotice";
 import { machinePressureNotice, type MachineResourceState } from "../runtime/machinePressure";
 
 /**
@@ -198,6 +199,29 @@ const asyncNoop = async () => undefined;
 export type Surface = { id: string; title: string; why: string; render: () => ReactNode };
 
 export const SURFACES: Surface[] = [
+  {
+    id: "nav-panels",
+    title: "Rail panels in the mobile nav",
+    why: "below 680px the nav is a 5-column grid and these panels are grid children, so each was laid out in one column — a fifth of the screen",
+    render: () => (
+      // The real nav container, with the class the product puts on it when the
+      // Apiary tab is present, because that is the 5-column case. Buttons stand
+      // in for the tabs so the grid has the columns it really has.
+      <nav className="surface-nav with-apiary" aria-label="Harness nav">
+        <button type="button"><span>Needs you</span></button>
+        <button type="button"><span>Tasks</span></button>
+        <button type="button" className="selected"><span>Workers</span></button>
+        <button type="button"><span>Apiary</span></button>
+        <button type="button"><span>Settings</span></button>
+        <StaleBundleNotice
+          stale
+          serverVersion="0.9.2-dev-df05c92f7378-20260829191026-560886"
+          dismissed={null}
+          onDismiss={() => {}}
+        />
+      </nav>
+    ),
+  },
   {
     id: "needs-you",
     title: "Needs you",
