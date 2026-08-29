@@ -9,8 +9,6 @@ It is a ground-up redesign of the earlier Python Swarm — now called Swarm
 Legacy — preserving the outcomes that proved useful while replacing accidental
 architecture and implementation-driven behaviour.
 
-![Swarm's Needs you queue: one blocked task escalated after twelve hours, a worker asking the operator to choose how a slow export should fail, and two briefings waiting their turn.](docs/images/needs-you.png)
-
 ## Start here
 
 | If you want to | Read |
