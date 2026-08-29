@@ -25,6 +25,7 @@ function fakeSurface(): FakeSurface {
     open: vi.fn(),
     focus: vi.fn(),
     fit: vi.fn().mockResolvedValue({ rows: 24, columns: 80 }),
+    proposeFit: vi.fn(() => ({ rows: 24, columns: 80 })),
     write: vi.fn().mockResolvedValue(undefined),
     restore: vi.fn().mockResolvedValue(undefined),
     onData: vi.fn(() => ({ dispose: vi.fn() })),
@@ -424,7 +425,7 @@ test("a device that has lost the geometry claim asks once, then stops arguing", 
   // ONE ATTEMPT PER ATTACH satisfies both: the device in front of the operator
   // gets to insist once, and the exchange terminates by construction.
   const surface = fakeSurface();
-  vi.mocked(surface.fit).mockResolvedValue({ rows: 60, columns: 40 });
+  vi.mocked(surface.proposeFit!).mockReturnValue({ rows: 60, columns: 40 });
   const connection = { ...fakeConnection(), ownsGeometry: false };
   const controller = new TerminalController(() => surface, () => connection);
   controller.attach(document.createElement("div"));
@@ -441,6 +442,10 @@ test("a device that has lost the geometry claim asks once, then stops arguing", 
   // Asks, and with operator intent — an echo would not claim anything.
   expect(connection.resize).toHaveBeenCalledTimes(1);
   expect(connection.resize).toHaveBeenCalledWith(60, 40, "operator");
+  // AND DOES NOT APPLY IT. fit() resizes the grid; this device does not own the
+  // geometry, so applying its own width before the server agrees is what left a
+  // phone reflowing a desktop's content — shredded rather than narrow.
+  expect(surface.fit).not.toHaveBeenCalled();
 
   // AND THIS IS THE GUARD THE OLD ASSERTION COULD NOT EXPRESS. It checked that
   // nothing was sent at all, which cannot tell "once" from "forever" because it

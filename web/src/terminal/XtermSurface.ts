@@ -587,6 +587,25 @@ export class XtermSurface implements TerminalSurface {
     this.#scheduleRedraw();
   }
 
+  /**
+   * What this viewport WOULD fit, without changing what is on screen.
+   *
+   * The mutating `fit` is wrong for a device that does not own the geometry: it
+   * narrows the local grid before the server has agreed, and when the server
+   * refuses — which it does, because another device holds the claim — the grid
+   * is left reflowing the owner's wide content at this device's width. That is
+   * not a small terminal, it is a shredded one, and it is what a phone showed
+   * beside a desktop mid-session.
+   *
+   * Asking with this instead leaves the owner's columns on screen. If the claim
+   * IS granted, the resize that follows arrives as a snapshot and `restore`
+   * applies its dimensions, so nothing has to apply them optimistically.
+   */
+  proposeFit(): { rows: number; columns: number } | undefined {
+    if (this.#disposed || !this.#element?.isConnected) return undefined;
+    return usableDimensions(this.#fit.proposeDimensions());
+  }
+
   #fitIfUsable(): void {
     if (this.#disposed || !this.#element?.isConnected) return;
     const dimensions = this.#fit.proposeDimensions();

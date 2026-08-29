@@ -12,6 +12,12 @@ export interface TerminalSurface {
   open(element: HTMLElement): void;
   focus(): void;
   fit(): Promise<{ rows: number; columns: number }>;
+  /**
+   * What this viewport would fit, WITHOUT applying it. Optional so a test
+   * double that does not model it keeps working; a surface without it simply
+   * does not ask for geometry it does not own.
+   */
+  proposeFit?(): { rows: number; columns: number } | undefined;
   write(bytes: Uint8Array): Promise<void>;
   restore(snapshot: TerminalSnapshot): Promise<void>;
   onData(listener: (text: string) => void): Disposable;
@@ -305,8 +311,22 @@ export class TerminalController {
             // has to carry operator intent, which is what a resize does.
             if (this.#reclaimedGeometry) return this.#applyRestoredFocus(restoreFocus);
             this.#reclaimedGeometry = true;
-            const reclaimed = await this.#surface.fit();
-            this.#connection.resize(reclaimed.rows, reclaimed.columns, "operator");
+            // ASKS WITHOUT APPLYING. `fit` resizes the local grid as a side
+            // effect, and this device does NOT own the geometry — so when the
+            // server refuses, as it does while another device holds the claim,
+            // the grid is left reflowing the owner's wide content at this
+            // width. A phone beside a mid-session desktop rendered its terminal
+            // shredded: words broken mid-word, stray characters down the right
+            // edge. Unreadable rather than merely narrow.
+            //
+            // If the claim IS granted the server resizes the PTY and the
+            // redraw arrives as a snapshot, whose dimensions `restore` applies.
+            // So nothing needs to be applied optimistically here, and refusing
+            // costs the viewer nothing.
+            const wanted = this.#surface.proposeFit?.();
+            if (wanted) {
+              this.#connection.resize(wanted.rows, wanted.columns, "operator");
+            }
             return this.#applyRestoredFocus(restoreFocus);
           }
           const fitted = await this.#surface.fit();
