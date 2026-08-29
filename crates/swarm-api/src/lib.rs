@@ -8213,11 +8213,26 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         | TaskStoreError::FederationEntropyUnavailable
         | TaskStoreError::InvalidAgentCredentialDigest
         | TaskStoreError::UnsupportedSchemaVersion { .. }
-        | TaskStoreError::IntegrityFailure(_) => ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "task_store_unavailable",
-            "task persistence is temporarily unavailable",
-        ),
+        | TaskStoreError::IntegrityFailure(_) => {
+            // LOGGED, because this arm is a catch-all and its message is a
+            // guess about the cause. A SQL constraint violation, a full disk
+            // and a poisoned lock all reach the operator as "task persistence
+            // is temporarily unavailable", which is true of none of them
+            // specifically and sends the reader to restart something.
+            //
+            // On 2026-08-29 an email import failed here repeatedly and four
+            // rounds of hypothesis were spent guessing at the cause, because
+            // nothing anywhere recorded what the store actually said. The
+            // response stays deliberately vague — a constraint message is not
+            // for an operator and can carry row data — but the log now holds
+            // the real error.
+            tracing::warn!(%error, "task persistence refused an operation");
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "task_store_unavailable",
+                "task persistence is temporarily unavailable",
+            )
+        }
     }
 }
 
