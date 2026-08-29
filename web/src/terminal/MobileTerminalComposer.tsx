@@ -108,6 +108,17 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
         <span>Terminal tools</span>
         <div>
           <input ref={attachmentInput} hidden type="file" onChange={(event) => void chooseAttachment(event)} />
+          {/* BESIDE Add file, not inside the keys panel it used to live in.
+              This is the way out when the VIEW itself has gone wrong — a
+              terminal that will not scroll, or is drawn at the wrong size — and
+              it was reachable only by first tapping Show keys. The one control
+              you need when the screen is broken should not be hidden behind
+              another tap on that same broken screen. Operator's request,
+              emailed 2026-08-28. It rebuilds this screen's view and changes
+              nothing in the worker. */}
+          {onRedraw ? (
+            <button type="button" className="terminal-redraw-button" onClick={onRedraw}>Redraw</button>
+          ) : null}
           <button type="button" className="terminal-image-button" disabled={!connected || !onAttachment || attachmentState === "uploading"} onClick={() => attachmentInput.current?.click()}>{attachmentState === "uploading" ? "Adding…" : "Add file"}</button>
           <button type="button" className="terminal-keys-toggle" aria-expanded={keysExpanded} onClick={toggleKeys}>{keysExpanded ? "Hide keys" : "Show keys"}</button>
         </div>
@@ -120,14 +131,6 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
           <button type="button" aria-label="Arrow right" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.right)} disabled={!connected}>→</button>
         </div>
         <div className="terminal-key-actions">
-          {/* The way out when the view itself has gone wrong — a terminal that
-              will not scroll, or is drawn at the wrong size. It rebuilds this
-              screen's view of the session and changes nothing in the worker.
-              The desktop header has carried this all along; a phone, where the
-              view is most likely to end up wrong, had no way to reach it. */}
-          {onRedraw ? (
-            <button type="button" className="terminal-redraw-button" onClick={onRedraw}>Redraw</button>
-          ) : null}
           <button type="button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.enter)} disabled={!connected}>Enter</button>
           <button type="button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.escape)} disabled={!connected}>Esc</button>
           <button type="button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.tab)} disabled={!connected}>Tab</button>

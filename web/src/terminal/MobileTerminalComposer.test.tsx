@@ -147,3 +147,26 @@ test("says nothing about redrawing when there is no way to do it", () => {
 
   expect(screen.queryByRole("button", { name: "Redraw" })).not.toBeInTheDocument();
 });
+
+test("Redraw survives with the keys panel closed", () => {
+  // It used to live INSIDE the keys panel, so the one control that rescues a
+  // broken view vanished whenever that panel was shut — on the same broken
+  // screen. The operator asked for it beside Add file.
+  const onRedraw = vi.fn();
+  render(
+    <MobileTerminalComposer
+      connectionState="connected"
+      onInput={vi.fn()}
+      onRedraw={onRedraw}
+    />,
+  );
+
+  // Shut the keys panel; the keys go, Redraw stays.
+  fireEvent.click(screen.getByRole("button", { name: "Hide keys" }));
+  expect(screen.queryByRole("button", { name: "Enter" })).toBeNull();
+
+  const redraw = screen.getByRole("button", { name: "Redraw" });
+  expect(redraw.closest(".terminal-key-actions")).toBeNull();
+  fireEvent.click(redraw);
+  expect(onRedraw).toHaveBeenCalledTimes(1);
+});
