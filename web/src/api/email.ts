@@ -235,6 +235,8 @@ export type UnansweredEmailTask = {
   thread_count: number;
   /** Why the last delivery attempt failed, when one did. A cancelled reply is terminal. */
   delivery_failure?: string | null;
+  /** Why no reply exists, when the board knows. See UnansweredEmailAttentionCard. */
+  no_reply_reason?: string | null;
 };
 
 export async function fetchEmailTasksAwaitingReply(operatorToken: string): Promise<UnansweredEmailTask[]> {

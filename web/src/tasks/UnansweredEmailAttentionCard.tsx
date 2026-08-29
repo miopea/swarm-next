@@ -129,6 +129,18 @@ function UnansweredEmailCard({ item, busy, onOpenTask, onSendReply, onSaveReply,
             ? " This reply is being sent now."
             : item.draft_body ? " A reply is written and waiting for you to read it." : item.drafted ? " A reply is written but was never sent." : " No reply has been written."}
         </p>
+        {/* WHY IT IS EMPTY, when the board knows why. The operator opened a
+            completed email task, found a blank textarea, and read it as an
+            instruction: "It wanted me to write it? that isn't how this should
+            be working." They were right that it should not. A worker had
+            written a reply and the gate refused it, and that refusal died with
+            the worker's turn, so the card had nothing to say except that the
+            box was empty. Writing the reply is the worker's job; reading it is
+            theirs. When no reply exists, say what happened instead of leaving
+            the blank to imply an instruction. */}
+        {!item.sending && !item.draft_body && !item.drafted && item.no_reply_reason ? (
+          <p className="unanswered-email-no-reply">{item.no_reply_reason} Writing it is the worker&rsquo;s job, not yours.</p>
+        ) : null}
         {editing ? (
           <div className="unanswered-email-editor">
             <label>

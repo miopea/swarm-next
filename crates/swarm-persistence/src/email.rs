@@ -200,6 +200,14 @@ pub struct UnansweredEmailTask {
     /// Hive's own history. Deciding whether to press Send without knowing how
     /// many people hear about it is not a decision.
     pub thread_count: usize,
+    /// Why no reply exists, when the board knows.
+    ///
+    /// The operator was shown an empty textarea on a completed task and read it
+    /// as a request: "It wanted me to write it? that isn't how this should be
+    /// working." It was not a request — a worker HAD written a reply and the
+    /// gate refused it, and that refusal died with the worker's turn. Now it is
+    /// recorded on the task, and the card says it out loud.
+    pub no_reply_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -540,7 +548,15 @@ impl TaskStore {
                     COUNT(link.id),
                     (SELECT r.last_error FROM email_reply_deliveries r
                      WHERE r.task_id = t.id AND r.state = 'cancelled'
-                     ORDER BY r.updated_at DESC, r.id DESC LIMIT 1)
+                     ORDER BY r.updated_at DESC, r.id DESC LIMIT 1),
+                    -- WHY NOBODY WROTE ONE, when nobody did. Saying only that
+                    -- no reply has been written is accurate and useless: it
+                    -- tells the operator the box is empty, which they can see,
+                    -- and leaves them to conclude the writing is theirs.
+                    (SELECT a.note FROM task_activity a
+                     WHERE a.task_id = t.id AND a.kind = 'noted'
+                       AND a.note LIKE '%email reply%refused%'
+                     ORDER BY a.sequence DESC LIMIT 1)
              FROM tasks t
              JOIN email_message_links link ON link.task_id = t.id
              WHERE t.state = 'completed' AND t.removed_at IS NULL
@@ -583,6 +599,7 @@ impl TaskStore {
                     row.get::<_, Option<String>>(9)?,
                     row.get::<_, i64>(10)?,
                     row.get::<_, Option<String>>(11)?,
+                    row.get::<_, Option<String>>(12)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -703,31 +720,51 @@ impl TaskStore {
         }
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
+        // WRITING IS NOT SENDING, and this used to conflate them.
+        //
+        // The evidence test — deployment or approved exemption — lived HERE, on
+        // the draft, while queue_email_reply, which actually puts words in
+        // somebody's inbox, tested `state = 'draft'` and nothing else. So the
+        // rule everyone believed was being enforced was guarding a textarea and
+        // not the send.
+        //
+        // It also could not be satisfied. The evidence is approved by Queen
+        // AFTER the worker's turn ends, so the one window in which a worker
+        // could write the reply was a window it usually did not have. The
+        // operator got a blank box with "No reply has been written" and became
+        // the author of a reply a worker was supposed to write: "It wanted me to
+        // write it? that isn't how this should be working."
+        //
+        // So drafting now asks only that the work is done being worked —
+        // review or completed — and the evidence test moved to the send, where
+        // it is enforced for the first time. This is not a loosening. Nothing
+        // reaches a person any earlier than it did before.
         let ready: bool = transaction.query_row(
-            // A DEPLOYMENT OR AN APPROVED EXEMPTION — the same evidence that
-            // closes the task. Requiring a deployment specifically made work
-            // that legitimately shipped nothing permanently unanswerable: a
-            // worker established that a question needed no change, Queen
-            // approved the exemption, the worker noted "Answer drafted", and
-            // there was nowhere to put it. Approved only; a claim nobody has
-            // approved is not evidence here either.
             "SELECT EXISTS(
                  SELECT 1 FROM tasks task
                  JOIN email_message_links source ON source.task_id = task.id
                  WHERE task.id = ?1 AND task.state IN ('completed', 'review')
-                   AND (
-                       EXISTS (SELECT 1 FROM task_deployments deployment
-                                WHERE deployment.task_id = task.id)
-                       OR EXISTS (SELECT 1 FROM task_completion_exemptions exemption
-                                   WHERE exemption.task_id = task.id
-                                     AND exemption.approved_at IS NOT NULL)
-                   )
              )",
             [task_id.to_string()],
             |row| row.get(0),
         )?;
         if !ready {
-            return Err(TaskStoreError::EmailReplyNotReady);
+            // A REFUSAL THAT DIES WITH THE TURN IS INVISIBLE. That is the other
+            // half of this defect: a worker hit the old gate, its turn ended,
+            // and nothing on the board recorded that a reply had been attempted
+            // at all. Commit the trace before returning the error, so the next
+            // reader sees it instead of an unexplained empty box.
+            transaction.execute(
+                "INSERT INTO task_activity (task_id, kind, note, actor_kind)
+                 VALUES (?1, 'noted', ?2, 'system')",
+                params![
+                    task_id.to_string(),
+                    "An email reply was written and refused: a reply can be drafted once the task \
+                     is in review or completed, and this task is neither."
+                ],
+            )?;
+            transaction.commit()?;
+            return Err(TaskStoreError::EmailDraftNotReady);
         }
         let queued: i64 = transaction.query_row(
             "SELECT COUNT(*) FROM email_reply_deliveries
@@ -839,6 +876,35 @@ impl TaskStore {
     pub fn queue_email_reply(&self, id: &str) -> Result<EmailReplyDispatch, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
+        // THE EVIDENCE TEST LIVES HERE NOW, and this is the first time it has
+        // guarded anything that reaches a person. It was on the draft, which is
+        // private and reversible; sending is neither.
+        //
+        // A DEPLOYMENT OR AN APPROVED EXEMPTION — the same evidence that closes
+        // the task. Requiring a deployment specifically made work that
+        // legitimately shipped nothing permanently unanswerable: a worker
+        // established that a question needed no change, Queen approved the
+        // exemption, the worker noted "Answer drafted", and there was nowhere to
+        // put it. Approved only; a claim nobody has approved is not evidence.
+        let ready: bool = transaction.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM email_reply_deliveries reply
+                 JOIN tasks task ON task.id = reply.task_id
+                 WHERE reply.id = ?1 AND task.state IN ('completed', 'review')
+                   AND (
+                       EXISTS (SELECT 1 FROM task_deployments deployment
+                                WHERE deployment.task_id = task.id)
+                       OR EXISTS (SELECT 1 FROM task_completion_exemptions exemption
+                                   WHERE exemption.task_id = task.id
+                                     AND exemption.approved_at IS NOT NULL)
+                   )
+             )",
+            [id],
+            |row| row.get(0),
+        )?;
+        if !ready {
+            return Err(TaskStoreError::EmailReplyNotReady);
+        }
         let changed = transaction.execute(
             "UPDATE email_reply_deliveries SET state = 'queued', updated_at = unixepoch()
              WHERE id = ?1 AND state = 'draft'",
@@ -1914,6 +1980,61 @@ pub(super) fn migrate_reply_allows_approved_exemption(
     )
 }
 
+/// Moves the evidence rule from the DRAFT to the SEND.
+///
+/// The trigger has always fired BEFORE INSERT on `email_reply_deliveries` —
+/// that is, on writing words into a textarea. Sending tested `state = 'draft'`
+/// and nothing else. So the database refused to let a worker WRITE an unevidenced
+/// reply, and would happily have SENT one.
+///
+/// It also made the reply unwritable in practice. Evidence is approved by Queen
+/// after the worker's turn ends, so the worker's only window to draft closed
+/// before the thing it was waiting on could exist. The operator was handed an
+/// empty box on a completed task and asked to write the reply themselves.
+///
+/// So: two triggers instead of one. Drafting asks only that the work is done
+/// being worked. Sending asks for everything the old rule asked for, at the
+/// moment it actually matters. Nothing reaches a person any earlier than before.
+pub(super) fn migrate_reply_evidence_guards_the_send(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        // All three drops, because this chain is re-run over databases that
+        // already carry the new triggers — every schema-vN migration test builds
+        // a modern store, tears it back to an old version and migrates forward
+        // again. A CREATE that is not preceded by its own DROP fails there with
+        // "already exists", and fourteen of those tests said so at once.
+        "DROP TRIGGER IF EXISTS email_reply_requires_completed_deployment;
+         DROP TRIGGER IF EXISTS email_reply_draft_requires_finished_work;
+         DROP TRIGGER IF EXISTS email_reply_send_requires_evidence;
+         CREATE TRIGGER email_reply_draft_requires_finished_work
+             BEFORE INSERT ON email_reply_deliveries
+             WHEN NOT EXISTS (
+                 SELECT 1 FROM tasks task
+                 WHERE task.id = NEW.task_id
+                   AND task.state IN ('completed', 'review')
+             )
+             BEGIN SELECT RAISE(ABORT, 'An email reply can be drafted once the task is in review or completed'); END;
+         CREATE TRIGGER email_reply_send_requires_evidence
+             BEFORE UPDATE OF state ON email_reply_deliveries
+             WHEN NEW.state = 'queued' AND OLD.state <> 'queued'
+              AND NOT EXISTS (
+                 SELECT 1 FROM tasks task
+                 WHERE task.id = NEW.task_id
+                   AND task.state IN ('completed', 'review')
+                   AND (
+                       EXISTS (SELECT 1 FROM task_deployments deployment
+                                WHERE deployment.task_id = task.id)
+                       OR EXISTS (SELECT 1 FROM task_completion_exemptions exemption
+                                   WHERE exemption.task_id = task.id
+                                     AND exemption.approved_at IS NOT NULL)
+                   )
+             )
+             BEGIN SELECT RAISE(ABORT, 'An email reply cannot be sent without a recorded deployment or an approved no-deployment exemption'); END;
+         PRAGMA user_version = 108;",
+    )
+}
+
 /// One waiting requester, built from the row the queue query returned.
 ///
 /// Extracted so that query stays under the line limit. An eleven-column
@@ -1932,6 +2053,7 @@ type UnansweredEmailRow = (
     Option<String>,
     i64,
     Option<String>,
+    Option<String>,
 );
 
 fn unanswered_email_task(row: UnansweredEmailRow) -> Result<UnansweredEmailTask, TaskStoreError> {
@@ -1948,6 +2070,7 @@ fn unanswered_email_task(row: UnansweredEmailRow) -> Result<UnansweredEmailTask,
         worker_name,
         thread_count,
         delivery_failure,
+        no_reply_reason,
     ) = row;
     Ok(UnansweredEmailTask {
         task_id: TaskId::from_str(&id)
@@ -1963,6 +2086,7 @@ fn unanswered_email_task(row: UnansweredEmailRow) -> Result<UnansweredEmailTask,
         worker_name,
         thread_count: usize::try_from(thread_count).unwrap_or(1).max(1),
         delivery_failure,
+        no_reply_reason,
     })
 }
 
@@ -2552,7 +2676,8 @@ mod tests {
         let mut connection = store.connection().unwrap();
         let transaction = connection.transaction().unwrap();
         transaction.execute_batch(
-            "DROP TRIGGER email_reply_requires_completed_deployment;
+            // All three, IF EXISTS: one old trigger became two when the evidence rule moved to the send.
+            "DROP TRIGGER IF EXISTS email_reply_requires_completed_deployment; DROP TRIGGER IF EXISTS email_reply_draft_requires_finished_work; DROP TRIGGER IF EXISTS email_reply_send_requires_evidence;
              DROP INDEX email_reply_delivery_queue;
              DROP INDEX email_messages_by_task;
              DROP INDEX email_messages_by_conversation;
@@ -2654,13 +2779,12 @@ mod tests {
         let imported = store
             .import_email_message(&message(&[]), TaskPriority::Normal)
             .unwrap();
-        assert_eq!(
-            store
-                .prepare_email_reply(imported.task.id, "The issue is fixed and available now.")
-                .unwrap_err()
-                .to_string(),
-            TaskStoreError::EmailReplyNotReady.to_string()
-        );
+        // Work nobody has finished cannot be answered yet, and the refusal says
+        // so in its own words rather than talking about deployments.
+        assert!(matches!(
+            store.prepare_email_reply(imported.task.id, "The issue is fixed and available now."),
+            Err(TaskStoreError::EmailDraftNotReady)
+        ));
         for state in [
             TaskState::Ready,
             TaskState::Active,
@@ -2669,13 +2793,10 @@ mod tests {
         ] {
             store.transition_task(imported.task.id, state).unwrap();
         }
-        assert!(matches!(
-            store.prepare_email_reply(imported.task.id, "Still too early"),
-            Err(TaskStoreError::EmailReplyNotReady)
-        ));
-        store
-            .record_task_deployment(imported.task.id, "production", "release-42", 1_786_730_100)
-            .unwrap();
+        // THE DRAFT IS NOW ALLOWED WITH NO EVIDENCE AT ALL, and that is the
+        // point of the change. Writing is private and reversible. The operator
+        // was being handed a blank box because the worker's only window to write
+        // closed before Queen approved the evidence.
         let draft = store
             .prepare_email_reply(
                 imported.task.id,
@@ -2683,6 +2804,21 @@ mod tests {
             )
             .unwrap();
         assert_eq!(draft.state, EmailReplyState::Draft);
+
+        // AND THE SEND IS STILL HELD, which is the property that actually
+        // protects the person on the other end. Before this change the send
+        // tested `state = 'draft'` and nothing else, so it would have gone out.
+        assert!(
+            matches!(
+                store.queue_email_reply(&draft.id),
+                Err(TaskStoreError::EmailReplyNotReady)
+            ),
+            "an unevidenced reply must not be sendable"
+        );
+
+        store
+            .record_task_deployment(imported.task.id, "production", "release-42", 1_786_730_100)
+            .unwrap();
         assert!(matches!(
             store.prepare_email_reply(imported.task.id, "Duplicate"),
             Err(TaskStoreError::EmailReplyAlreadyExists)
@@ -2891,6 +3027,39 @@ mod tests {
     /// a form asking them to record a deployment that did not exist and should
     /// not exist — against their own ruling that the worker verifies what is
     /// running and they only review the words.
+    /// A refusal that only the refused worker ever saw is how this defect hid.
+    ///
+    /// The worker wrote the reply, the gate refused it, the turn ended, and the
+    /// board recorded nothing. The task then completed and the operator was
+    /// handed an empty textarea on a card that said "No reply has been written"
+    /// — accurate, useless, and silent about the fact that a reply HAD been
+    /// written and thrown away.
+    #[test]
+    fn a_refused_draft_is_recorded_on_the_board_rather_than_dying_with_the_turn() {
+        let store = TaskStore::in_memory().unwrap();
+        let imported = store
+            .import_email_message(&message(&[]), TaskPriority::Normal)
+            .unwrap();
+
+        // Still being worked, so a reply is genuinely premature.
+        assert!(matches!(
+            store.prepare_email_reply(imported.task.id, "An answer written too early."),
+            Err(TaskStoreError::EmailDraftNotReady)
+        ));
+
+        let activity = store.list_task_activity(imported.task.id, 50).unwrap();
+        let trace = activity
+            .events
+            .iter()
+            .find(|event| event.note.contains("refused"))
+            .expect("the refusal is on the board");
+        assert!(
+            trace.note.contains("review or completed"),
+            "the trace says what was missing: {}",
+            trace.note
+        );
+    }
+
     #[test]
     fn an_approved_no_deployment_exemption_lets_the_reply_be_written() {
         let store = TaskStore::in_memory().unwrap();
@@ -2909,12 +3078,17 @@ mod tests {
             .claim_completion_exemption(imported.task.id, "Question, not a change", None, 1_000)
             .unwrap();
 
-        // A CLAIM alone is not evidence, and must not open the reply path
-        // either — that is the same rule that governs closing the task.
-        let refused = store
+        // THE WORKER CAN WRITE IT NOW, on a claim nobody has approved yet. That
+        // is the whole fix: this is the moment a worker actually has, and it
+        // used to be the moment it was refused.
+        let reply = store
             .prepare_email_reply(imported.task.id, "Answering the question.")
-            .unwrap_err()
-            .to_string();
+            .unwrap();
+        assert_eq!(reply.body, "Answering the question.");
+
+        // A CLAIM ALONE IS STILL NOT EVIDENCE, and must not open the SEND —
+        // that is the same rule that governs closing the task.
+        let refused = store.queue_email_reply(&reply.id).unwrap_err().to_string();
 
         // AND THE REFUSAL NAMES WHAT IS ACTUALLY MISSING. The old wording,
         // "requires completed and deployed work", was true and read as a
@@ -2928,14 +3102,27 @@ mod tests {
         );
         assert!(refused.contains("recorded deployment"), "{refused}");
 
+        // THE DRAFT SURVIVES THE REFUSED SEND. A worker's words are not thrown
+        // away because Queen has not signed off yet; that is what left the
+        // operator with a blank box.
+        assert_eq!(
+            store
+                .email_reply_for_task(imported.task.id)
+                .unwrap()
+                .unwrap()
+                .body,
+            "Answering the question."
+        );
+
         store
             .approve_completion_exemption(imported.task.id, "queen", 1_100)
             .unwrap();
 
-        let reply = store
-            .prepare_email_reply(imported.task.id, "Answering the question.")
-            .unwrap();
-        assert_eq!(reply.body, "Answering the question.");
+        // And with the exemption approved, the same draft sends.
+        assert_eq!(
+            store.queue_email_reply(&reply.id).unwrap().state,
+            EmailReplyState::Queued
+        );
     }
 
     /// A send that failed is reported as failed, and can still be retried.

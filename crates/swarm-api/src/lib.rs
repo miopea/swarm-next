@@ -8242,6 +8242,15 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
                 error.to_string(),
             )
         }
+        // Its own code, because the two refusals now mean different things and
+        // a caller that cannot tell them apart gives up on both. This one says
+        // "the work is not finished yet"; the one above says "it is finished,
+        // but nothing has been shown to have shipped".
+        TaskStoreError::EmailDraftNotReady => ApiError::new(
+            StatusCode::CONFLICT,
+            "email_draft_not_ready",
+            error.to_string(),
+        ),
         TaskStoreError::EmailReplyQueueFull => ApiError::new(
             StatusCode::TOO_MANY_REQUESTS,
             "email_reply_queue_full",

@@ -163,7 +163,9 @@ const UNVERIFIABLE_CLOSURE_SCHEMA_VERSION: i64 = 105;
 const FEEDBACK_ISSUE_SCHEMA_VERSION: i64 = 106;
 /// GitHub issues that have already come down as tasks.
 const GITHUB_ISSUE_INTAKE_SCHEMA_VERSION: i64 = 107;
-const CURRENT_SCHEMA_VERSION: i64 = GITHUB_ISSUE_INTAKE_SCHEMA_VERSION;
+/// The evidence rule moves off the draft and onto the send.
+const REPLY_EVIDENCE_GUARDS_THE_SEND_SCHEMA_VERSION: i64 = 108;
+const CURRENT_SCHEMA_VERSION: i64 = REPLY_EVIDENCE_GUARDS_THE_SEND_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -390,9 +392,16 @@ pub enum TaskStoreError {
     // specifically so the reply could be drafted. He heard nothing for eleven
     // days because a message described the wrong precondition.
     #[error(
-        "email resolution replies need the task in review or completed AND either a recorded deployment or an approved no-deployment exemption; this task has neither"
+        "an email reply cannot be SENT until the task is in review or completed AND has either a recorded deployment or an approved no-deployment exemption; this task has neither. The draft is kept — only sending is held."
     )]
     EmailReplyNotReady,
+    // Drafting asks far less than sending, and says so separately. The two used
+    // to share one message, which is why a worker that hit it concluded it had
+    // simply arrived too early and gave up instead of writing the reply.
+    #[error(
+        "an email reply can be drafted once the task is in review or completed; this task is neither"
+    )]
+    EmailDraftNotReady,
     #[error("this task already has an email resolution reply")]
     EmailReplyAlreadyExists,
     #[error("this Hive already has the maximum number of pending email replies")]
@@ -3385,6 +3394,9 @@ fn migrate_newest_schema_steps(
     }
     if schema_version < GITHUB_ISSUE_INTAKE_SCHEMA_VERSION {
         migrate_github_issue_intake(transaction)?;
+    }
+    if schema_version < REPLY_EVIDENCE_GUARDS_THE_SEND_SCHEMA_VERSION {
+        email::migrate_reply_evidence_guards_the_send(transaction)?;
     }
     Ok(())
 }
@@ -6739,7 +6751,7 @@ mod tests {
         // narrower rule so the migration has something real to widen.
         SchemaStep {
             table: "email_reply_deliveries",
-            artifact: "",
+            artifact: "the widened evidence rule",
             undo_sql: "DROP TRIGGER IF EXISTS email_reply_requires_completed_deployment;
                  CREATE TRIGGER email_reply_requires_completed_deployment
                      BEFORE INSERT ON email_reply_deliveries
@@ -6749,10 +6761,40 @@ mod tests {
                          WHERE task.id = NEW.task_id AND task.state = 'completed'
                      )
                      BEGIN SELECT RAISE(ABORT, 'Email replies require completed deployed work'); END",
+            // The widened rule now lives on the SEND trigger: 108 renamed this
+            // step's artifact when it moved the evidence test off the draft.
+            // Probing the old name here asserted the end state of a chain that
+            // no longer ends there, and said so as "did not survive".
             probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
                  WHERE type = 'trigger'
-                   AND name = 'email_reply_requires_completed_deployment'
+                   AND name = 'email_reply_send_requires_evidence'
                    AND sql LIKE '%review%')",
+        },
+        // 108: the evidence rule guards the send rather than the draft. The undo
+        // puts the single INSERT-time trigger back, so the migration has the
+        // real old shape to move rather than a stand-in.
+        SchemaStep {
+            table: "email_reply_deliveries",
+            artifact: "the evidence rule moved to the send",
+            undo_sql: "DROP TRIGGER IF EXISTS email_reply_draft_requires_finished_work;
+                 DROP TRIGGER IF EXISTS email_reply_send_requires_evidence;
+                 DROP TRIGGER IF EXISTS email_reply_requires_completed_deployment;
+                 CREATE TRIGGER email_reply_requires_completed_deployment
+                     BEFORE INSERT ON email_reply_deliveries
+                     WHEN NOT EXISTS (
+                         SELECT 1 FROM tasks task
+                         WHERE task.id = NEW.task_id
+                           AND task.state IN ('completed', 'review')
+                           AND EXISTS (SELECT 1 FROM task_deployments deployment
+                                        WHERE deployment.task_id = task.id)
+                     )
+                     BEGIN SELECT RAISE(ABORT, 'Email replies require deployed work in review or completed'); END",
+            probe_sql: "SELECT (SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'trigger'
+                   AND name IN ('email_reply_draft_requires_finished_work',
+                                'email_reply_send_requires_evidence')) = 2
+                 AND NOT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'trigger' AND name = 'email_reply_requires_completed_deployment')",
         },
         // A widened CHECK on an existing column. The undo restores the narrower
         // one by rebuilding the table, which is the only way SQLite changes a
@@ -6939,7 +6981,7 @@ mod tests {
         },
         SchemaStep {
             table: "email_reply_deliveries",
-            artifact: "",
+            artifact: "the approved-exemption clause",
             undo_sql: "DROP TRIGGER IF EXISTS email_reply_requires_completed_deployment;
                  CREATE TRIGGER email_reply_requires_completed_deployment
                      BEFORE INSERT ON email_reply_deliveries
@@ -6949,8 +6991,11 @@ mod tests {
                          WHERE task.id = NEW.task_id AND task.state IN ('completed', 'review')
                      )
                      BEGIN SELECT RAISE(ABORT, 'Email replies require deployed work in review or completed'); END",
+            // Same rename as the step above: 108 moved the evidence test off the
+            // draft, so the exemption clause this step added now lives on the
+            // send trigger. The old name is gone by the end of the chain.
             probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
-                 WHERE type = 'trigger' AND name = 'email_reply_requires_completed_deployment'
+                 WHERE type = 'trigger' AND name = 'email_reply_send_requires_evidence'
                    AND sql LIKE '%task_completion_exemptions%')",
         },
         // A table REBUILD rather than an added column, so the undo restores the
@@ -7615,7 +7660,11 @@ mod tests {
             let restored: bool = connection
                 .query_row(&step.probe(), [], |row| row.get(0))
                 .unwrap();
-            assert!(restored, "{} did not survive the migration", step.artifact);
+            assert!(
+                restored,
+                "{} on {} did not survive the migration",
+                step.artifact, step.table
+            );
         }
         assert_eq!(
             connection

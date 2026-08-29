@@ -31,6 +31,33 @@ test("names the person still waiting and how to reach the task", () => {
   expect(onOpenTask).toHaveBeenCalledWith("task-1");
 });
 
+/**
+ * An empty box on a finished task reads as an instruction, and it is the wrong one.
+ *
+ * The operator opened the Needs you queue after six email tasks completed and
+ * found a blank textarea: "Nothing filled out. It wanted me to write it? that
+ * isn't how this should be working." A worker HAD written the reply; the
+ * evidence gate refused it while the exemption was still unapproved, and the
+ * refusal died with that worker's turn. The card had nothing left to say except
+ * that the box was empty, which the operator could already see.
+ */
+test("says why no reply exists rather than leaving the blank to imply the operator should write it", () => {
+  render(
+    <UnansweredEmailAttentionCard
+      awaiting={[{
+        ...waiting,
+        no_reply_reason:
+          "An email reply was written and refused: a reply can be drafted once the task is in review or completed, and this task is neither.",
+      }]}
+      onOpenTask={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByText(/was written and refused/)).toBeInTheDocument();
+  // And it names whose job the writing is, because the blank box implied the wrong answer.
+  expect(screen.getByText(/Writing it is the worker/)).toBeInTheDocument();
+});
+
 test("separates a reply that was written from one that was sent", () => {
   // Drafting is not answering; the requester has still heard nothing.
   render(<UnansweredEmailAttentionCard awaiting={[{ ...waiting, drafted: true }]} onOpenTask={vi.fn()} />);
