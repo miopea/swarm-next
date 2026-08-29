@@ -602,6 +602,78 @@ pub(super) async fn resources(
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(response)).into_response())
 }
 
+/// Runnable work per core before a machine is called busy, and before it is
+/// called critical.
+///
+/// LOAD, NOT PSI, and that is the opposite of the memory case. `/proc/pressure/cpu`
+/// looked like the better signal — it measures stall directly — but measured on
+/// this Hive it flaps: 9.54 to 1.23 to 3.28 inside one minute while the machine's
+/// actual state changed only gradually. Worse, an IDLE four-core box here sits at
+/// 1.27-2.62, so memory's Advisory threshold of 2.0 would fire on a quiet
+/// machine, which is precisely the alarm-nobody-reads failure this exists to
+/// avoid. `load1` over the same windows moved smoothly and tracked the real
+/// condition; it is already a one-minute average, so it resists that oscillation
+/// by construction.
+///
+/// DO NOT REACH FOR `cpu_full_avg10`. It is the variant an implementer would
+/// reasonably pick as the stronger signal, the way `full` is stronger for memory.
+/// Linux never reports it for CPU — something is always runnable — so it reads
+/// 0.00 even at load 6.76 on four cores. A check written against it can never
+/// fire.
+///
+/// The numbers: measured idle on this Hive over four minutes, load-per-CPU held
+/// 0.25-0.37. Advisory at 1.0 is where every core has work queued behind it, and
+/// leaves nearly three times the observed idle band as headroom. Critical at 2.0
+/// is twice oversubscribed. The two saturation events on record land at 1.27 and
+/// 1.69, with a peak of 2.46 — Advisory, rising to Critical at the peak, which is
+/// the shape wanted: slow enough to say so, and only critical when it is.
+const CPU_ADVISORY_LOAD_PER_CPU: f64 = 1.0;
+const CPU_CRITICAL_LOAD_PER_CPU: f64 = 2.0;
+
+fn cpu_pressure(load_average: Option<[f64; 3]>, logical_cpus: Option<usize>) -> ResourcePressure {
+    // Both are needed: a load figure without a core count says nothing, because
+    // load 4 is idle on 8 cores and desperate on 1.
+    let (Some(load), Some(cpus)) = (load_average, logical_cpus) else {
+        return ResourcePressure::Unavailable;
+    };
+    if cpus == 0 {
+        return ResourcePressure::Unavailable;
+    }
+    let per_cpu = load[0] / f64::from(u32::try_from(cpus).unwrap_or(u32::MAX));
+    if per_cpu >= CPU_CRITICAL_LOAD_PER_CPU {
+        ResourcePressure::Critical
+    } else if per_cpu >= CPU_ADVISORY_LOAD_PER_CPU {
+        ResourcePressure::Advisory
+    } else {
+        ResourcePressure::Normal
+    }
+}
+
+/// The worse of two readings, where NOT KNOWING is worse than being fine.
+///
+/// Operator ruling 01a04a38: "CPU is first-class — it can raise Critical too."
+/// So neither input can cap the other, and taking the worse of the two is what
+/// that means in code.
+///
+/// Unavailable ranks above Normal deliberately. If one signal is missing, the
+/// machine has not been shown to be healthy — it has been shown to be healthy in
+/// one respect and unmeasured in another, and this fleet has repeatedly shipped
+/// the version where absence renders as good news.
+const fn worst_pressure(left: ResourcePressure, right: ResourcePressure) -> ResourcePressure {
+    match (left, right) {
+        (ResourcePressure::Critical, _) | (_, ResourcePressure::Critical) => {
+            ResourcePressure::Critical
+        }
+        (ResourcePressure::Advisory, _) | (_, ResourcePressure::Advisory) => {
+            ResourcePressure::Advisory
+        }
+        (ResourcePressure::Unavailable, _) | (_, ResourcePressure::Unavailable) => {
+            ResourcePressure::Unavailable
+        }
+        _ => ResourcePressure::Normal,
+    }
+}
+
 fn sample_machine_resources() -> MachineResourceResponse {
     #[cfg(target_os = "linux")]
     {
@@ -633,7 +705,9 @@ fn sample_machine_resources() -> MachineResourceResponse {
         let memory_pressure_avg10 = read_psi_avg10("/proc/pressure/memory");
         let cpu_pressure_avg10 = read_psi_avg10("/proc/pressure/cpu");
         let io_pressure_avg10 = read_psi_avg10("/proc/pressure/io");
-        let pressure = match (memory_used_percent, memory_pressure_avg10) {
+        // Memory, unchanged. These were tuned against a real report and 01a04982
+        // fenced them explicitly.
+        let memory = match (memory_used_percent, memory_pressure_avg10) {
             (_, Some(psi)) if psi >= 10.0 => ResourcePressure::Critical,
             (Some(used), _) if used >= 95.0 => ResourcePressure::Critical,
             (_, Some(psi)) if psi >= 2.0 => ResourcePressure::Advisory,
@@ -641,6 +715,10 @@ fn sample_machine_resources() -> MachineResourceResponse {
             (Some(_), _) => ResourcePressure::Normal,
             _ => ResourcePressure::Unavailable,
         };
+        // Read once and shared with the response below, so the verdict and the
+        // number an operator reads in Diagnostics cannot disagree.
+        let logical_cpus = std::thread::available_parallelism().ok().map(usize::from);
+        let pressure = worst_pressure(memory, cpu_pressure(load_average, logical_cpus));
         MachineResourceResponse {
             memory_total_bytes,
             memory_available_bytes,
@@ -649,7 +727,7 @@ fn sample_machine_resources() -> MachineResourceResponse {
             swap_used_bytes,
             swap_used_percent,
             load_average,
-            logical_cpus: std::thread::available_parallelism().ok().map(usize::from),
+            logical_cpus,
             memory_pressure_avg10,
             cpu_pressure_avg10,
             io_pressure_avg10,
@@ -867,7 +945,121 @@ pub(super) async fn worker_engine_update_required(state: &AppState) -> Option<St
 #[cfg(test)]
 mod tests {
     use super::reload_state_from;
-    use super::{ResourcePressure, layer_pressure, machine_of as machine};
+    use super::{
+        ResourcePressure, cpu_pressure, layer_pressure, machine_of as machine, worst_pressure,
+    };
+
+    /// Load-per-CPU, measured on this Hive rather than guessed.
+    ///
+    /// The idle band comes from 22 samples over two minutes on the operator's
+    /// four-core box: load-per-CPU held 0.18-0.37, average 0.26. The two
+    /// saturation events on record sat at 1.27 and 1.69 with a peak of 2.46.
+    #[test]
+    fn cpu_load_per_core_decides_and_the_idle_band_is_nowhere_near_it() {
+        let four = Some(4);
+        // Measured idle. This is the assertion the acceptance turns on: a
+        // signal that fires on a quiet box is worse than no signal.
+        assert_eq!(
+            cpu_pressure(Some([1.04, 1.0, 1.0]), four),
+            ResourcePressure::Normal
+        );
+        assert_eq!(
+            cpu_pressure(Some([1.48, 1.4, 1.4]), four),
+            ResourcePressure::Normal,
+            "the busiest idle sample must still be Normal"
+        );
+        // Queen's observation, 5.07 on four cores.
+        assert_eq!(
+            cpu_pressure(Some([5.07, 4.9, 4.5]), four),
+            ResourcePressure::Advisory
+        );
+        // The episode where builds ran fifteen times slow.
+        assert_eq!(
+            cpu_pressure(Some([6.76, 6.0, 5.5]), four),
+            ResourcePressure::Advisory
+        );
+        // Its peak.
+        assert_eq!(
+            cpu_pressure(Some([9.82, 8.0, 6.0]), four),
+            ResourcePressure::Critical
+        );
+    }
+
+    /// The same load means different things on different machines.
+    #[test]
+    fn load_is_read_against_the_core_count_not_alone() {
+        assert_eq!(
+            cpu_pressure(Some([4.0, 4.0, 4.0]), Some(16)),
+            ResourcePressure::Normal
+        );
+        assert_eq!(
+            cpu_pressure(Some([4.0, 4.0, 4.0]), Some(1)),
+            ResourcePressure::Critical
+        );
+    }
+
+    /// Not knowing is not being fine.
+    ///
+    /// A load figure without a core count says nothing, and reporting Normal
+    /// from it is the defect this fleet keeps shipping — absence rendering as
+    /// good news.
+    #[test]
+    fn an_unreadable_cpu_signal_is_unknown_rather_than_healthy() {
+        assert_eq!(cpu_pressure(None, Some(4)), ResourcePressure::Unavailable);
+        assert_eq!(
+            cpu_pressure(Some([1.0, 1.0, 1.0]), None),
+            ResourcePressure::Unavailable
+        );
+        assert_eq!(
+            cpu_pressure(Some([1.0, 1.0, 1.0]), Some(0)),
+            ResourcePressure::Unavailable
+        );
+    }
+
+    /// Operator ruling 01a04a38: "CPU is first-class — it can raise Critical
+    /// too." Neither input may cap the other.
+    ///
+    /// ABLATION: make `worst_pressure` return its memory argument and the first
+    /// assertion fails — that is the whole of the old behaviour.
+    #[test]
+    fn cpu_can_raise_critical_on_its_own_and_memory_is_not_capped_either() {
+        // Memory perfectly clean, CPU desperate. This is the reported case.
+        assert_eq!(
+            worst_pressure(ResourcePressure::Normal, ResourcePressure::Critical),
+            ResourcePressure::Critical
+        );
+        // And the reverse still holds: CPU idle does not soothe a dying memory.
+        assert_eq!(
+            worst_pressure(ResourcePressure::Critical, ResourcePressure::Normal),
+            ResourcePressure::Critical
+        );
+        assert_eq!(
+            worst_pressure(ResourcePressure::Normal, ResourcePressure::Advisory),
+            ResourcePressure::Advisory
+        );
+        assert_eq!(
+            worst_pressure(ResourcePressure::Normal, ResourcePressure::Normal),
+            ResourcePressure::Normal
+        );
+    }
+
+    /// One signal missing does not make the machine healthy, and does not hide
+    /// the other signal shouting.
+    #[test]
+    fn an_unknown_half_never_reads_as_normal_and_never_masks_the_other() {
+        assert_eq!(
+            worst_pressure(ResourcePressure::Normal, ResourcePressure::Unavailable),
+            ResourcePressure::Unavailable
+        );
+        assert_eq!(
+            worst_pressure(ResourcePressure::Unavailable, ResourcePressure::Critical),
+            ResourcePressure::Critical
+        );
+        assert_eq!(
+            worst_pressure(ResourcePressure::Unavailable, ResourcePressure::Advisory),
+            ResourcePressure::Advisory
+        );
+    }
 
     /// The operator, 2026-08-28: "I have a pending build showing that needs to
     /// be installed" — when the revision it was offering was already the one
