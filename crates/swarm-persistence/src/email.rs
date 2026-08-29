@@ -1988,9 +1988,9 @@ mod tests {
 
     /// One email carrying the same file twice must still import.
     ///
-    /// storage_name is a content hash, so an image that is both inline in the
+    /// `storage_name` is a content hash, so an image that is both inline in the
     /// body and attached — or simply attached twice — produces two rows with
-    /// the same (source_id, storage_name). That hit the UNIQUE constraint and
+    /// the same (`source_id`, `storage_name`). That hit the UNIQUE constraint and
     /// aborted the import with a SQL error, which the API reports as "task
     /// persistence is temporarily unavailable". The operator saw a database
     /// outage; the cause was a duplicated screenshot in one message.
