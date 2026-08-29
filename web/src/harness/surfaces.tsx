@@ -13,6 +13,7 @@ import UnansweredEmailAttentionCard from "../tasks/UnansweredEmailAttentionCard"
 import ConnectionsSettings from "../settings/ConnectionsSettings";
 import MachinePressureBadge from "../runtime/MachinePressureBadge";
 import StaleBundleNotice from "../StaleBundleNotice";
+import WorkerContextBar from "../workers/WorkerContextBar";
 import { machinePressureNotice, type MachineResourceState } from "../runtime/machinePressure";
 
 /**
@@ -199,6 +200,37 @@ const asyncNoop = async () => undefined;
 export type Surface = { id: string; title: string; why: string; render: () => ReactNode };
 
 export const SURFACES: Surface[] = [
+  {
+    id: "worker-row",
+    title: "The worker row at phone width",
+    why: "the operator ruled it down to the name and Work here; everything else competed with them across a 390px screen",
+    render: () => (
+      // The real header trigger and the real context bar, in the classes the
+      // product puts them in, so the mobile rules under test actually apply.
+      <div className="workspace-header">
+        <div><p className="eyebrow">Persistent terminal</p><div className="workspace-heading"><h2>BFG Watchfaces</h2></div></div>
+        <button className="mobile-worker-switcher-trigger" type="button" aria-haspopup="dialog" aria-label="Switch worker, current BFG Watchfaces">
+          <span className="worker-avatar" />
+          <span>
+            <span className="mobile-worker-task">Build the catalog service: anonymous submit, moderation queue</span>
+            <strong>BFG Watchfaces</strong>
+          </span>
+          <span aria-hidden="true">⌄</span>
+        </button>
+        <WorkerContextBar
+          worker={demoWorkers[0]}
+          currentTask={demoTasks[0]}
+          openCount={3}
+          workSummary="1 active · 2 ready"
+          repository={{ branch: "main", detached: false, changed_paths: 2 }}
+          engagement={{ deviceClass: "desktop", detail: "another desktop is driving this worker" }}
+          onClaim={() => {}}
+          taskStateLabel={(task) => task.state}
+          onOpenQueue={() => {}}
+        />
+      </div>
+    ),
+  },
   {
     id: "nav-panels",
     title: "Rail panels in the mobile nav",

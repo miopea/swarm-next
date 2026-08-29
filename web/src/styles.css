@@ -1988,6 +1988,34 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .mobile-worker-switcher-trigger .hive-context-indicator { max-width: 100%; margin: 0; }
   .mobile-worker-switcher-trigger .hive-context-role { font-size: .47rem; }
   .mobile-worker-switcher-trigger strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* THE ROW IS THE NAME AND Work here, ON THE OPERATOR'S RULING.
+     Decision 01a04edb-249e-7100-a157-e7f58e0d834d, "Keep Work here and the name,
+     drop the rest" — answered against a screenshot of this row carrying eight
+     things across a phone width, with their own words: "All the little bits of
+     information break the UI on mobile."
+
+     The trigger itself stays, because the name lives in it and tapping it is how
+     a phone changes worker. What goes is everything competing with the name
+     inside and beside it: the avatar, the task line, the chevron, the
+     "On another desktop" pill, the +N queue button and the branch chip.
+
+     None of it becomes unreachable. The task is the terminal's own first line
+     and the switcher repeats it; the queue is a tap away on Tasks; the branch is
+     in Settings; the engagement pill only ever restated what the Work here
+     button already implies by existing. */
+  .mobile-worker-switcher-trigger { grid-template-columns: minmax(0, 1fr); }
+  .mobile-worker-switcher-trigger .worker-avatar,
+  .mobile-worker-switcher-trigger .mobile-worker-task,
+  .mobile-worker-switcher-trigger .hive-context-indicator,
+  .mobile-worker-switcher-trigger > span[aria-hidden="true"] { display: none; }
+  /* Only the pill. The +N queue button and the branch chip are ALREADY hidden at
+     this width by existing rules — measured with these selectors ablated, both
+     still computed display:none — so listing them here would be a rule that
+     cannot fail and would read like it was doing something. */
+  .worker-context .worker-engaged-elsewhere { display: none; }
+  /* Work here is what survives beside the name, so it gets a real target
+     rather than the leftovers of one. */
+  .worker-context .worker-claim { min-height: var(--pill-touch-height); }
   .mobile-worker-switcher-trigger strong { font-size: .76rem; }
   .mobile-worker-backdrop { display: grid; }
   .header-actions { gap: 5px; }
