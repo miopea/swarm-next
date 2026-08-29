@@ -78,8 +78,49 @@ export function foreignEngagement(
   };
 }
 
-export function workerSwitcherDetail(worker: Worker, assignedTaskTitle?: string): string {
-  const state = worker.running ? workerAttention(worker).label : "Sleeping";
+/**
+ * The one line under a worker's name in the switcher.
+ *
+ * WHY AN ACTIVE ASSIGNMENT OUTRANKS "Resting" HERE, and only here. The operator
+ * photographed this row reading "Resting · An email task can comple…" and wrote
+ * "it shows resting even though it's actively working". The assignment was
+ * already on the line and they still read the row as idle, because the state
+ * word came first and the title read as decoration.
+ *
+ * `Resting` is not wrong — it describes the PROMPT, which is genuinely idle
+ * between one thing and the next. It just does not describe the TURN, and the
+ * turn is what somebody scanning this list wants to know about.
+ *
+ * CLASSIFICATION IS UNTOUCHED. This changes a sentence, not a state: nothing
+ * downstream — delivery, the coordinator, the stale-work flag — sees anything
+ * different, and 0d3d920's rule that a resting prompt outranks a background
+ * shell is exactly as it was. Only the switcher's own line reads the board.
+ *
+ * Narrow on purpose, so it cannot lie in the other direction:
+ *   - only when the label would otherwise be exactly "Resting", so a worker
+ *     waiting on the operator (AwaitingOperator, which outranks Resting) still
+ *     reads "Awaiting you" and never "Working";
+ *   - only for an ACTIVE assignment, because ready, blocked and draft work does
+ *     not make a worker busy;
+ *   - "Resting · task running" keeps its own label, which answers the different
+ *     question of a turn that ENDED with something still running.
+ *
+ * The trade, stated rather than buried: this line now trusts the BOARD about
+ * activity. If a worker's turn ends while its task is still Active, the row
+ * says Working beside an idle terminal. That is the stale-owned-work case, it
+ * has its own signal and its own handling, and papering over it here would hide
+ * it rather than fix it.
+ */
+export function workerSwitcherDetail(
+  worker: Worker,
+  assignedTaskTitle?: string,
+  assignedTaskIsActive = false,
+): string {
+  const attention = worker.running ? workerAttention(worker) : undefined;
+  const resting = attention?.state === "resting" && attention.label === "Resting";
+  const state = attention
+    ? (resting && assignedTaskIsActive ? "Working" : attention.label)
+    : "Sleeping";
   if (assignedTaskTitle) return `${state} · ${assignedTaskTitle}`;
   return worker.running ? state : "Sleeping · tap to wake";
 }

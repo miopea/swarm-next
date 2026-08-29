@@ -80,3 +80,42 @@ test("tells a worker with nothing to do apart from one whose task is still runni
   expect(workerAttention(stillRunning).state).toBe("resting");
   expect(workerAttention(stillRunning).presence).toBe(workerAttention(idle).presence);
 });
+
+/**
+ * A worker inside an active turn should not read like one with nothing to do.
+ *
+ * The operator's row said "Resting · An email task can comple…" while that
+ * worker was mid-turn, and they wrote "it shows resting even though it's
+ * actively working". The assignment was already on the line; the state word led
+ * and the title read as decoration.
+ *
+ * Resting is not wrong — it describes the PROMPT, which really is idle between
+ * one thing and the next. It just does not describe the TURN, and the turn is
+ * what somebody scanning a list of workers is asking about.
+ */
+test("an active assignment leads the switcher line instead of the resting prompt", () => {
+  const running = { ...worker, running: true, attention_state: "resting" as const };
+
+  expect(workerSwitcherDetail(running, "Fix the importer", true)).toBe("Working · Fix the importer");
+
+  // NOT for work that is merely assigned. Ready, blocked and draft do not make
+  // a worker busy, and claiming they do would make the word meaningless.
+  expect(workerSwitcherDetail(running, "Fix the importer", false)).toBe("Resting · Fix the importer");
+  expect(workerSwitcherDetail(running, "Fix the importer")).toBe("Resting · Fix the importer");
+
+  // AND NOT WHEN THE WORKER IS WAITING ON THE OPERATOR. That state outranks
+  // resting, so it must survive untouched — telling somebody a worker is
+  // Working when it is blocked on their answer is worse than the original bug.
+  const waiting = { ...running, attention_state: "awaiting_operator" as const };
+  expect(workerSwitcherDetail(waiting, "Fix the importer", true)).toBe("Awaiting you · Fix the importer");
+
+  // AND THE TURN-ENDED-WITH-WORK-RUNNING LABEL KEEPS ITS OWN ANSWER, which is a
+  // different question from this one.
+  const leftRunning = { ...running, background_work: true };
+  expect(workerSwitcherDetail(leftRunning, "Fix the importer", false))
+    .toBe("Resting · task running · Fix the importer");
+
+  // A sleeping worker is still sleeping, whatever the board believes.
+  const asleep = { ...worker, running: false, attention_state: "sleeping" as const };
+  expect(workerSwitcherDetail(asleep, "Fix the importer", true)).toBe("Sleeping · Fix the importer");
+});

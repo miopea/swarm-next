@@ -2021,7 +2021,7 @@ export function App() {
                               who is driving. */}
                           {sessionId === activeSessionId ? <em className="mobile-worker-here">You&rsquo;re here</em> : null}
                         </span>
-                        <small>{worker.runtime_error ?? workerSwitcherDetail(worker, assignedTask?.title)}</small>
+                        <small>{worker.runtime_error ?? workerSwitcherDetail(worker, assignedTask?.title, assignedTask?.state === "active")}</small>
                         {work?.summary ? <span className="worker-work-summary" title={`${worker.name}'s open work: ${work.summary}`}>Open work · {work.summary}</span> : null}
                       </span>
                       <span className={`presence ${worker.running ? "online" : "offline"}`} aria-label={worker.running ? workerAttentionLabel(worker) : "Sleeping"} />
