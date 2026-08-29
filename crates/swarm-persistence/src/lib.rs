@@ -159,7 +159,9 @@ const WORKER_MARK_SCHEMA_VERSION: i64 = 103;
 const CONNECTION_PRINCIPAL_SCHEMA_VERSION: i64 = 104;
 /// An operator's record that finished work cannot now be shown to be live.
 const UNVERIFIABLE_CLOSURE_SCHEMA_VERSION: i64 = 105;
-const CURRENT_SCHEMA_VERSION: i64 = UNVERIFIABLE_CLOSURE_SCHEMA_VERSION;
+/// Where a dogfood report went, when it went anywhere.
+const FEEDBACK_ISSUE_SCHEMA_VERSION: i64 = 106;
+const CURRENT_SCHEMA_VERSION: i64 = FEEDBACK_ISSUE_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -3376,6 +3378,9 @@ fn migrate_newest_schema_steps(
     if schema_version < UNVERIFIABLE_CLOSURE_SCHEMA_VERSION {
         migrate_unverifiable_closures(transaction)?;
     }
+    if schema_version < FEEDBACK_ISSUE_SCHEMA_VERSION {
+        migrate_feedback_issue(transaction)?;
+    }
     Ok(())
 }
 
@@ -3474,6 +3479,36 @@ fn migrate_connection_principal(transaction: &rusqlite::Transaction<'_>) -> rusq
         )?;
     }
     transaction.pragma_update(None, "user_version", CONNECTION_PRINCIPAL_SCHEMA_VERSION)
+}
+
+/// Where a dogfood report went, when it went anywhere.
+///
+/// Feedback saved locally and stopped. A person who submitted one had no way to
+/// tell afterwards whether it had reached anybody — a colleague filed a report,
+/// believed she had raised an issue, and it sat in a Hive nobody was watching.
+/// Recording the issue is what makes the answer readable off the report itself
+/// rather than inferred from whether a button once said "Saved".
+///
+/// A plain ADD COLUMN, guarded on the column's absence and on the table's, for
+/// the reason `migrate_block_deadline` records.
+fn migrate_feedback_issue(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let table: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dogfood_reports')",
+        [],
+        |row| row.get(0),
+    )?;
+    if table {
+        let present: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('dogfood_reports') WHERE name = 'github_issue_url')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !present {
+            transaction
+                .execute_batch("ALTER TABLE dogfood_reports ADD COLUMN github_issue_url TEXT;")?;
+        }
+    }
+    transaction.pragma_update(None, "user_version", FEEDBACK_ISSUE_SCHEMA_VERSION)
 }
 
 /// The operator's record that finished work cannot now be shown to be live.

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 
 import {
+  fetchGithubFeedbackReadiness,
   fetchHistoryDiagnostics,
+  fileDogfoodReportOnGithub,
   fetchRuntimeResources,
   fetchTerminalHostStatus,
   saveDogfoodReport,
@@ -40,6 +42,11 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
   const [preview, setPreview] = useState<string>();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "unavailable">("idle");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  // Whether this Hive can file anywhere. Undefined until asked, so the dialog
+  // never flashes a promise it may not be able to keep.
+  const [github, setGithub] = useState<{ configured: boolean; repository: string | null }>();
+  const [issueUrl, setIssueUrl] = useState<string>();
+  const [filingError, setFilingError] = useState<string>();
   const [screenshot, setScreenshot] = useState<File>();
   const [screenshotUrl, setScreenshotUrl] = useState<string>();
   const [imageError, setImageError] = useState<string>();
@@ -58,6 +65,14 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
     setPreview(undefined);
     setCopyState("idle");
     setSaveState("idle");
+    setIssueUrl(undefined);
+    setFilingError(undefined);
+    void fetchGithubFeedbackReadiness(operatorToken)
+      .then(setGithub)
+      // A Hive that cannot answer is treated as one that cannot file. Better a
+      // dialog that says reports stay here than one that offers a button which
+      // fails when pressed.
+      .catch(() => setGithub({ configured: false, repository: null }));
   }
 
   useEffect(() => {
@@ -154,7 +169,7 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
       const attachmentName = screenshot
         ? await uploadDogfoodScreenshot(operatorToken, screenshot)
         : null;
-      await saveDogfoodReport(operatorToken, {
+      const saved = await saveDogfoodReport(operatorToken, {
         expectation,
         observation,
         diagnostic_bundle: report,
@@ -162,6 +177,19 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
       });
       setSaveState("saved");
       onSaved?.();
+      // SAVED FIRST, ALWAYS. The report is on this Hive before GitHub is
+      // attempted, so an outage cannot lose somebody's words — which is the
+      // failure this whole feature exists to end.
+      if (github?.configured) {
+        try {
+          const filed = await fileDogfoodReportOnGithub(operatorToken, saved.id);
+          setIssueUrl(filed.issue_url);
+        } catch (error) {
+          setFilingError(
+            error instanceof Error ? error.message : "GitHub could not be reached.",
+          );
+        }
+      }
     } catch {
       setSaveState("error");
     }
@@ -194,10 +222,22 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
         {closeConfirm ? <UnsavedChangesPrompt label="Discard this feedback?" description="Your notes and attached screenshot have not been saved to the Hive." discardLabel="Discard feedback" onDiscard={onClose} onKeep={() => setCloseConfirm(false)} /> : <div className="diagnostic-actions">
           <button type="button" disabled={!runtime.loaded} onClick={buildPreview}>{runtime.loaded ? "Preview bundle" : "Gathering evidence…"}</button>
           <button type="button" className="primary-action" disabled={!runtime.loaded} onClick={() => void copyBundle()}>{copyState === "copied" ? "Copied" : "Copy notes & diagnostics"}</button>
-          <button type="button" className="primary-action" disabled={!runtime.loaded || (!expectation.trim() && !observation.trim()) || saveState === "saving" || saveState === "saved"} onClick={() => void saveToHive()}>{saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved to Hive" : "Save to this Hive"}</button>
+          <button type="button" className="primary-action" disabled={!runtime.loaded || (!expectation.trim() && !observation.trim()) || saveState === "saving" || saveState === "saved"} onClick={() => void saveToHive()}>{saveState === "saving" ? (github?.configured ? "Sending…" : "Saving…") : saveState === "saved" ? (github?.configured ? "Sent" : "Saved to Hive") : github?.configured ? "Send to GitHub" : "Save to this Hive"}</button>
         </div>}
         {copyState === "unavailable" ? <p role="status">Clipboard access is unavailable. Select the preview and copy it manually.</p> : null}
-        {saveState === "saved" ? <p role="status">Saved privately. Open Settings, then Saved dogfood reports, to review the bundle or download its screenshot.</p> : null}
+        {saveState === "saved" ? (
+          issueUrl ? (
+            // WHERE IT WENT, in the one place the person who sent it is looking.
+            <p role="status">Filed on GitHub: <a href={issueUrl} target="_blank" rel="noreferrer">{issueUrl}</a>. Your screenshot stayed on this device.</p>
+          ) : filingError ? (
+            <p role="status">Saved on this Hive, but GitHub could not be reached: {filingError} Nothing is lost — open Settings, then Saved dogfood reports, to send it later.</p>
+          ) : (
+            // SAYS SO PLAINLY. It always did only this; what was wrong was a
+            // screen that let a person believe otherwise. A colleague pressed
+            // Save, thought she had raised an issue, and her report sat here.
+            <p role="status">Saved on this Hive and sent nowhere else. Open Settings, then Saved dogfood reports, to review the bundle or download its screenshot.</p>
+          )
+        ) : null}
         {saveState === "error" ? <p role="alert">The report was not saved. Your notes and screenshot remain in this dialog.</p> : null}
         {preview ? <pre className="diagnostic-preview feedback-preview" aria-label="Dogfood feedback bundle">{preview}</pre> : null}
       </section>

@@ -14,6 +14,7 @@ mod email_attachments;
 mod email_reply_ai;
 pub mod federation_http;
 mod feedback;
+mod github_feedback;
 mod jira;
 mod jira_oauth;
 mod maintenance;
@@ -216,6 +217,7 @@ pub struct AppState {
     worker_recovery_attempts: Arc<RwLock<HashMap<WorkerId, i64>>>,
     provider_activity: Arc<RwLock<HashMap<WorkerSessionId, provider_activity::ProviderSignals>>>,
     coordinator_start_admission: Arc<AtomicU8>,
+    github_feedback: Option<github_feedback::GithubFeedback>,
     /// Subsystems that failed to configure at startup and were left off.
     ///
     /// Fixed at startup rather than mutable: these come from configuration
@@ -296,6 +298,7 @@ impl AppState {
             agent_tool_surfaces: Arc::new(RwLock::new(HashMap::new())),
             worker_recovery_attempts: Arc::new(RwLock::new(HashMap::new())),
             provider_activity: Arc::new(RwLock::new(HashMap::new())),
+            github_feedback: None,
             coordinator_start_admission: Arc::new(AtomicU8::new(
                 runtime::CoordinatorStartAdmission::DeferredUnavailable.code(),
             )),
@@ -495,6 +498,22 @@ impl AppState {
     #[must_use]
     pub fn degraded_subsystems(&self) -> &[DegradedSubsystem] {
         &self.degraded
+    }
+
+    /// Lets this Hive file dogfood reports as GitHub issues.
+    ///
+    /// ABSENT IS A REAL ANSWER, not a failure. Without a credential the product
+    /// says feedback stays on this Hive, which is true and is what it always
+    /// did; the defect was a UI that implied otherwise. A Hive with no token
+    /// must not grow a Send button that cannot work.
+    ///
+    /// # Errors
+    /// Returns a message when the repository is not `owner/name` or the token
+    /// is empty, so a misconfiguration is refused at startup rather than
+    /// becoming a request to somewhere unintended.
+    pub fn with_github_feedback(mut self, repository: &str, token: &str) -> Result<Self, String> {
+        self.github_feedback = Some(github_feedback::GithubFeedback::new(repository, token)?);
+        Ok(self)
     }
 
     /// Configures the HTTPS endpoint placed in signed federation invitations.
@@ -3302,6 +3321,11 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/feedback/reports",
             get(feedback::list_reports).post(feedback::create_report),
+        )
+        .route("/api/v1/feedback/github", get(feedback::github_readiness))
+        .route(
+            "/api/v1/feedback/reports/{report_id}/github",
+            post(feedback::file_on_github),
         )
         .route(
             "/api/v1/feedback/attachments",

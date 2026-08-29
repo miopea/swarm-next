@@ -102,7 +102,7 @@ test("saves reviewed notes and an optional screenshot privately to the Hive", as
   await waitFor(() => expect(screen.getByRole("button", { name: "Save to this Hive" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "Save to this Hive" }));
 
-  expect(await screen.findByText(/Saved privately/)).toBeInTheDocument();
+  expect(await screen.findByText(/sent nowhere else/)).toBeInTheDocument();
   expect(onSaved).toHaveBeenCalledOnce();
   expect(screen.getByRole("button", { name: "Saved to Hive" })).toBeDisabled();
   expect(fetch).toHaveBeenCalledWith("/api/v1/feedback/attachments", expect.objectContaining({ method: "POST", body: image }));

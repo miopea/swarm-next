@@ -926,6 +926,8 @@ export type DogfoodReport = {
   diagnostic_bundle: string;
   attachment_name: string | null;
   created_at: number;
+  /** Where it went, if anywhere. Null means it is on this Hive and nowhere else. */
+  github_issue_url?: string | null;
 };
 /** One question in an interview-shaped decision request. */
 export type DecisionQuestion = {
@@ -1667,6 +1669,27 @@ export async function stopClaudeSession(operatorToken: string, sessionId: string
     `/api/v1/terminal/sessions/${encodeURIComponent(sessionId)}`,
     { method: "DELETE" },
   );
+}
+
+/** Whether this Hive can file a report anywhere, so the UI never offers what it cannot do. */
+export async function fetchGithubFeedbackReadiness(
+  operatorToken: string,
+): Promise<{ configured: boolean; repository: string | null }> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/feedback/github");
+  return response.json() as Promise<{ configured: boolean; repository: string | null }>;
+}
+
+/** Files a saved report as a GitHub issue and returns where it went. */
+export async function fileDogfoodReportOnGithub(
+  operatorToken: string,
+  reportId: string,
+): Promise<{ issue_url: string; created: boolean }> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/feedback/reports/${encodeURIComponent(reportId)}/github`,
+    { method: "POST" },
+  );
+  return response.json() as Promise<{ issue_url: string; created: boolean }>;
 }
 
 export async function saveDogfoodReport(

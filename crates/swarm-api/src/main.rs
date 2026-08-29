@@ -9,6 +9,33 @@ use swarm_terminal::{HostClient, default_terminal_socket_path};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+/// GitHub feedback is OPTIONAL and its absence is the ordinary case.
+///
+/// Without a credential the product says reports stay on this Hive, which is
+/// the truth and always was the behaviour; the defect was a UI that implied
+/// otherwise. A bad value DEGRADES rather than refusing to boot, for the reason
+/// the public base URL records: nothing here is needed to serve a request, and
+/// a Hive that will not start helps nobody.
+fn configure_github_feedback(state: AppState) -> AppState {
+    match (
+        env::var("SWARM_GITHUB_REPOSITORY").ok(),
+        env::var("SWARM_GITHUB_TOKEN").ok(),
+    ) {
+        (Some(repository), Some(token)) => {
+            match state.clone().with_github_feedback(&repository, &token) {
+                Ok(configured) => configured,
+                Err(error) => state.with_degraded_subsystem("GitHub feedback", error),
+            }
+        }
+        // Half a credential is a mistake worth naming rather than ignoring.
+        (Some(_), None) | (None, Some(_)) => state.with_degraded_subsystem(
+            "GitHub feedback",
+            "set both SWARM_GITHUB_REPOSITORY and SWARM_GITHUB_TOKEN, or neither".to_owned(),
+        ),
+        (None, None) => state,
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -95,6 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(error) => state.with_degraded_subsystem("Public base URL", error),
         };
     }
+    state = configure_github_feedback(state);
     state = state.with_email_oauth_paths(
         email_configuration_path(&database_path),
         email_token_path(&database_path),

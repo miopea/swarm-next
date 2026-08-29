@@ -16,6 +16,14 @@ pub struct DogfoodReport {
     pub observation: String,
     pub diagnostic_bundle: String,
     pub attachment_name: Option<String>,
+    /// Where this report went, if it went anywhere.
+    ///
+    /// None means it is on this Hive and nowhere else — which is the honest
+    /// answer, and was previously the ONLY answer while looking like a
+    /// submission. A colleague filed a report, believed she had raised an
+    /// issue, and it sat here unread.
+    #[serde(default)]
+    pub github_issue_url: Option<String>,
     pub created_at: i64,
 }
 
@@ -59,6 +67,33 @@ impl TaskStore {
         Ok(report)
     }
 
+    /// Records where a report was filed, so a person can tell afterwards.
+    ///
+    /// # Errors
+    /// Returns `NotFound` for an unknown report, or a persistence failure.
+    pub fn record_dogfood_report_issue(
+        &self,
+        id: &str,
+        issue_url: &str,
+    ) -> Result<DogfoodReport, TaskStoreError> {
+        let issue_url = issue_url.trim();
+        if issue_url.is_empty() || issue_url.len() > 2_048 {
+            return Err(TaskStoreError::InvalidDogfoodReport);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let changed = transaction.execute(
+            "UPDATE dogfood_reports SET github_issue_url = ?2 WHERE id = ?1",
+            params![id, issue_url],
+        )?;
+        if changed != 1 {
+            return Err(TaskStoreError::NotFound);
+        }
+        let report = read_report(&transaction, id)?;
+        transaction.commit()?;
+        Ok(report)
+    }
+
     /// Lists the newest private dogfood reports first.
     ///
     /// # Errors
@@ -69,7 +104,8 @@ impl TaskStore {
         }
         let connection = self.connection()?;
         let mut statement = connection.prepare(
-            "SELECT id, expectation, observation, diagnostic_bundle, attachment_name, created_at
+            "SELECT id, expectation, observation, diagnostic_bundle, attachment_name,
+                    github_issue_url, created_at
              FROM dogfood_reports ORDER BY created_at DESC, id DESC LIMIT ?1",
         )?;
         statement
@@ -125,7 +161,8 @@ fn read_report(
     id: &str,
 ) -> Result<DogfoodReport, rusqlite::Error> {
     connection.query_row(
-        "SELECT id, expectation, observation, diagnostic_bundle, attachment_name, created_at
+        "SELECT id, expectation, observation, diagnostic_bundle, attachment_name,
+                github_issue_url, created_at
          FROM dogfood_reports WHERE id = ?1",
         [id],
         map_report,
@@ -139,7 +176,8 @@ fn map_report(row: &rusqlite::Row<'_>) -> rusqlite::Result<DogfoodReport> {
         observation: row.get(2)?,
         diagnostic_bundle: row.get(3)?,
         attachment_name: row.get(4)?,
-        created_at: row.get(5)?,
+        github_issue_url: row.get(5)?,
+        created_at: row.get(6)?,
     })
 }
 

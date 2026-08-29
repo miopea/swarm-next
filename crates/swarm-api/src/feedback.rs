@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use axum::extract::Path as AxumPath;
 use axum::{
     Json,
     body::Bytes,
@@ -57,6 +58,91 @@ pub(super) async fn create_report(
         )
         .map_err(|error| task_store_error(&error))?;
     Ok((StatusCode::CREATED, Json(report)).into_response())
+}
+
+/// Whether this Hive can file a report anywhere, so the UI can stop implying it.
+pub(super) async fn github_readiness(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let repository = state
+        .github_feedback
+        .as_ref()
+        .map(crate::github_feedback::GithubFeedback::repository);
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({
+            "configured": repository.is_some(),
+            "repository": repository,
+        })),
+    )
+        .into_response())
+}
+
+/// Files a saved report as a GitHub issue and records where it went.
+///
+/// SEPARATE FROM SAVING, deliberately. The report is written to this Hive
+/// first and stays there whatever happens here, so a GitHub outage cannot lose
+/// somebody's words — which is the failure the whole feature exists to end.
+pub(super) async fn file_on_github(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(report_id): AxumPath<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let Some(github) = state.github_feedback.as_ref() else {
+        // Says which. "Not configured" and "GitHub refused" send a reader to
+        // completely different places, and collapsing them is how the original
+        // defect stayed invisible for so long.
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "github_feedback_unconfigured",
+            "this Hive has no GitHub credential, so reports stay on it",
+        ));
+    };
+    let store = task_store(&state)?;
+    let report = store
+        .list_dogfood_reports(swarm_persistence::MAX_DOGFOOD_REPORTS)
+        .map_err(|error| task_store_error(&error))?
+        .into_iter()
+        .find(|candidate| candidate.id == report_id)
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "dogfood_report_not_found",
+                "that report is not on this Hive",
+            )
+        })?;
+    if let Some(existing) = report.github_issue_url.as_deref() {
+        // Already filed. Returning it rather than opening a second issue: a
+        // double tap must not scatter duplicates across the tracker.
+        return Ok((
+            StatusCode::OK,
+            [(header::CACHE_CONTROL, "no-store")],
+            Json(serde_json::json!({ "issue_url": existing, "created": false })),
+        )
+            .into_response());
+    }
+    let issue_url = github.file(&report).await.map_err(|error| match error {
+        crate::github_feedback::GithubError::Refused(message) => {
+            ApiError::new(StatusCode::BAD_GATEWAY, "github_refused", message)
+        }
+        crate::github_feedback::GithubError::Unreachable => ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "github_unreachable",
+            "GitHub could not be reached; the report is still saved on this Hive",
+        ),
+    })?;
+    let recorded = store
+        .record_dogfood_report_issue(&report_id, &issue_url)
+        .map_err(|error| task_store_error(&error))?;
+    Ok((
+        StatusCode::CREATED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({ "issue_url": recorded.github_issue_url, "created": true })),
+    )
+        .into_response())
 }
 
 pub(super) async fn upload_attachment(
