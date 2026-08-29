@@ -3,6 +3,12 @@ import type { HeldDelivery } from "../api";
 type Props = {
   held: HeldDelivery[];
   onOpenWorker?: (workerName: string) => void;
+  /**
+   * Whether that worker has a live session. Decides the VERB, because the two
+   * cases are different actions and a button that says Open cannot wake.
+   * Absent means unknown, and unknown reads as awake — the old wording.
+   */
+  workerIsAwake?: (workerName: string) => boolean;
 };
 
 /**
@@ -18,7 +24,7 @@ type Props = {
  * "stranded input was a real category, something waiting in a terminal nobody
  * was looking at" — so it is surfaced where the operator already looks.
  */
-export default function HeldDeliveryAttentionCard({ held, onOpenWorker }: Props) {
+export default function HeldDeliveryAttentionCard({ held, onOpenWorker, workerIsAwake }: Props) {
   if (held.length === 0) return null;
   const queen = held.find((entry) => entry.subject === "queen-review");
   const oldest = held.reduce((worst, entry) =>
@@ -69,11 +75,19 @@ export default function HeldDeliveryAttentionCard({ held, onOpenWorker }: Props)
           Since {new Date(oldest.first_observed_at * 1000).toLocaleString()} · retried {oldest.observations} times
         </p>
       </div>
-      {onOpenWorker && (queen ? "Queen" : oldest.worker_name) ? (
-        <button type="button" onClick={() => onOpenWorker(queen ? "Queen" : (oldest.worker_name ?? ""))}>
-          Open {queen ? "Queen" : oldest.worker_name}
-        </button>
-      ) : null}
+      {onOpenWorker && (queen ? "Queen" : oldest.worker_name) ? (() => {
+        const target = queen ? "Queen" : (oldest.worker_name ?? "");
+        // SAY WHICH ACT THIS IS. The card can already be telling the operator to
+        // "wake it yourself"; a button labelled Open beside that sentence reads
+        // as a different, weaker thing, and for a sleeping worker there is
+        // nothing to open. The verb is the promise.
+        const awake = workerIsAwake ? workerIsAwake(target) : true;
+        return (
+          <button type="button" onClick={() => onOpenWorker(target)}>
+            {awake ? "Open" : "Wake"} {target}
+          </button>
+        );
+      })() : null}
     </section>
   );
 }

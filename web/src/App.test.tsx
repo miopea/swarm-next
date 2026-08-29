@@ -1246,3 +1246,67 @@ test("a queued briefing is shown but does not inflate the Needs you count", asyn
   // And the badge is unmoved.
   expect(screen.getByRole("button", { name: /^Needs you/ })).toHaveTextContent("0");
 });
+
+/**
+ * The Needs you button for a worker that never started must actually start it.
+ *
+ * The operator routed two tasks to a sleeping Voice Bridge worker, saw the
+ * "assigned work that never started" card, pressed its button, and reported:
+ * "there was an option in needs you to open it and that did nothing either."
+ *
+ * It did nothing for two reasons on one line. App called
+ * openWorker(worker.id) — openWorker takes a SESSION id, and every other call
+ * site passes active_session_id — and a sleeping worker has no session, so the
+ * correct id would have been undefined too. The card's own sentence is "Wake it
+ * yourself and it picks up from there"; nothing behind the button could wake
+ * anything.
+ */
+test("waking a stalled worker from Needs you actually starts it", async () => {
+  const sleeping = {
+    id: "worker-voice-bridge", name: "Voice Bridge", role: "worker",
+    workspace: "/home/op/projects/voice-bridge", provider: "claude_code",
+    autostart: false, running: false, active_session_id: null,
+    attention_state: "sleeping", position: 0,
+  };
+  let started: string | undefined;
+  const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/start")) { started = url; return Promise.resolve(ok({ ...sleeping, running: true, active_session_id: "session-vb" })); }
+    if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
+    if (url === "/api/v1/auth/session") return Promise.resolve(ok({}));
+    if (url.endsWith("/integrations/email/awaiting-reply")) return Promise.resolve(ok([]));
+    if (url === "/api/v1/hive") return Promise.resolve(ok({
+      operator: { id: "operator-1", display_name: "Bea" },
+      hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: null },
+    }));
+    if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: [] }));
+    if (url === "/api/v1/workers") return Promise.resolve(ok([sleeping]));
+    if (["/api/v1/workspaces", "/api/v1/tasks", "/api/v1/decisions"].includes(url)) return Promise.resolve(ok([]));
+    if (url === "/api/v1/integrations/jira/bindings") return Promise.resolve(ok([]));
+    if (url === "/api/v1/apiary/join-links") return Promise.resolve(ok([]));
+    if (url.includes("/api/v1/control-room/events")) return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
+    if (url.includes("/api/v1/orchestration/queen-policy")) return Promise.resolve(ok({ at_hive: "coordinate", away: "coordinate", night_watch: "local_execution" }));
+    if (url.includes("/api/v1/orchestration/coordinator")) return Promise.resolve(ok({
+      completed_actions: 0, queen_calls_avoided: 0, uncertain_actions: 0, queued_actions: 0,
+      stale_attention_actions: 0, worker_exit_attention_actions: 0, unstarted_attention_actions: 1,
+      last_action_at: null, automatic_start_admission: "allowed", automatic_start_batch_limit: 1,
+      held: [{ kind: "wake_uncertain", subject: "task", worker_name: "Voice Bridge",
+               reason: "Swarm could not confirm this worker woke",
+               first_observed_at: 1_788_036_057, observations: 3 }],
+    }));
+    if (url.includes("/api/v1/providers")) return Promise.resolve(ok({ claude_code: true, codex: false }));
+    if (url.includes("/api/v1/preferences/presentation/desktop")) return Promise.resolve(ok({ device_class: "desktop", color_theme: "light", terminal_keys_visible: true, configured: true }));
+    if (url.includes("/api/v1/integrations/jira/task-links")) return Promise.resolve(ok([]));
+    if (url.includes("/api/v1/preferences/start-surface")) return Promise.resolve(ok({ start_surface: "decisions" }));
+    return Promise.resolve(ok({ policy: "important_only", subscription_count: 0 }));
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(<App />);
+
+  // The verb names the act, because there is nothing to "open" on a worker
+  // with no session.
+  const wake = await screen.findByRole("button", { name: "Wake Voice Bridge" });
+  fireEvent.click(wake);
+
+  await waitFor(() => expect(started).toBe("/api/v1/workers/worker-voice-bridge/start"));
+});

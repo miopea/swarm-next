@@ -153,3 +153,62 @@ test("renders the two top-level children its grid is sized for", () => {
   expect(card).not.toBeNull();
   expect(card?.children).toHaveLength(2);
 });
+
+/**
+ * The card exists for a worker that never started, and its button could not
+ * start one.
+ *
+ * The operator routed two tasks to a sleeping Voice Bridge worker, saw this
+ * card, pressed its button and reported: "there was an option in needs you to
+ * open it and that did nothing either."
+ *
+ * It did nothing, twice over. App passed openWorker(worker.id) where a SESSION
+ * id is required — every other call site passes active_session_id — and a
+ * sleeping worker has no session for the correct id to have found either. The
+ * card's own sentence says "Wake it yourself and it picks up from there", so
+ * the button was promising something it had no route to.
+ */
+test("says Wake, not Open, when the worker has no live session", () => {
+  const held = [{
+    kind: "wake_uncertain" as const,
+    subject: "task",
+    worker_name: "Voice Bridge",
+    reason: "Swarm could not confirm this worker woke",
+    first_observed_at: 1_788_036_057,
+    observations: 3,
+  }];
+  const onOpenWorker = vi.fn();
+
+  render(
+    <HeldDeliveryAttentionCard
+      held={held}
+      workerIsAwake={() => false}
+      onOpenWorker={onOpenWorker}
+    />,
+  );
+
+  // The verb is the promise. "Open" beside "wake it yourself" reads as a
+  // weaker, different act — and there is nothing to open.
+  const button = screen.getByRole("button", { name: "Wake Voice Bridge" });
+  expect(screen.queryByRole("button", { name: "Open Voice Bridge" })).toBeNull();
+
+  fireEvent.click(button);
+  expect(onOpenWorker).toHaveBeenCalledWith("Voice Bridge");
+});
+
+test("still says Open for a worker that is already running", () => {
+  const held = [{
+    kind: "delivery_held" as const,
+    subject: "task",
+    worker_name: "Voice Bridge",
+    reason: "a prompt is open",
+    first_observed_at: 1_788_036_057,
+    observations: 3,
+  }];
+
+  render(
+    <HeldDeliveryAttentionCard held={held} workerIsAwake={() => true} onOpenWorker={vi.fn()} />,
+  );
+
+  expect(screen.getByRole("button", { name: "Open Voice Bridge" })).toBeInTheDocument();
+});

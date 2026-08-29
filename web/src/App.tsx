@@ -2141,7 +2141,30 @@ export function App() {
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
                 <BlockedEscalationCard escalations={blockedEscalations} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
-                <HeldDeliveryAttentionCard held={heldDeliveries} onOpenWorker={(name) => { const worker = workers.find((candidate) => candidate.name === name); if (worker) openWorker(worker.id); }} />
+                <HeldDeliveryAttentionCard
+                  held={heldDeliveries}
+                  workerIsAwake={(name) => Boolean(workers.find((candidate) => candidate.name === name)?.active_session_id)}
+                  /* TWO BUGS LIVED ON ONE LINE HERE, and the card they broke is
+                     the one that exists for a worker that never started.
+
+                     It called openWorker(worker.id). openWorker takes a SESSION
+                     id — every other call site passes active_session_id — so
+                     this set the active session to an id no session has. And a
+                     SLEEPING worker has no session at all, so even the right id
+                     would have been undefined.
+
+                     The card's own words are "Wake it yourself and it picks up
+                     from there". The button could not wake anything. The
+                     operator pressed it on two tasks routed to a sleeping Voice
+                     Bridge worker and reported "there was an option in needs you
+                     to open it and that did nothing either". It did nothing. */
+                  onOpenWorker={(name) => {
+                    const worker = workers.find((candidate) => candidate.name === name);
+                    if (!worker) return;
+                    if (worker.active_session_id) openWorker(worker.active_session_id);
+                    else void startExistingWorker(worker);
+                  }}
+                />
               </>}
               /* BELOW THE REQUESTS, not above them. Queued briefings say of
                  themselves that nothing is wrong; they were rendering ahead of
