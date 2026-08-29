@@ -9,6 +9,8 @@ It is a ground-up redesign of the earlier Python Swarm — now called Swarm
 Legacy — preserving the outcomes that proved useful while replacing accidental
 architecture and implementation-driven behaviour.
 
+![The Swarm control room: the rail on the left with Needs you, Tasks, Workers and Settings, and the one queue open, showing a worker asking the operator whether a slow export should fail or write a partial file.](docs/images/needs-you.png)
+
 ## Start here
 
 | If you want to | Read |

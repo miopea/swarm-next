@@ -1,0 +1,74 @@
+import { demoDecision, demoTasks, demoWorkers } from "./productFixtures";
+
+/**
+ * Enough of a Hive for the real App to mount against.
+ *
+ * WHY THIS EXISTS. A harness surface renders one component, which is right for
+ * looking at a card while fixing it and useless as a product screenshot: the
+ * picture is a panel on a beige field with no rail, no header and no way to
+ * tell what application it belongs to. That mistake reached a public README.
+ *
+ * Extracting the shell out of App.tsx was the obvious alternative and was
+ * measured first: 236 lines of JSX, thirty call sites and thirty-four
+ * interpolated identifiers — a sixty-prop refactor of the NAVIGATION, risked on
+ * the operator's live control room, to produce three pictures. Not worth it.
+ *
+ * So the App mounts unchanged and the NETWORK answers with fixtures. Nothing in
+ * production learns that a harness exists, and the capture is the real shell
+ * because it IS the real shell.
+ */
+const now = Math.floor(Date.now() / 1000);
+
+export function hiveFixture(path: string): unknown | undefined {
+  switch (path) {
+    case "/health":
+      return { status: "ok", version: "1.0.0", degraded: [] };
+    // Answering this at all is what unlocks the app: App.tsx restores a browser
+    // session before it will render anything but the token form.
+    case "/api/v1/auth/session":
+      return { authenticated: true };
+    case "/api/v1/hive":
+      return {
+        operator: { id: "demo-operator", display_name: "You" },
+        hive: { id: "demo-hive", name: "Orchard", operator_id: "demo-operator", apiary_id: null },
+      };
+    case "/api/v1/workers":
+      return demoWorkers;
+    case "/api/v1/tasks":
+      return demoTasks;
+    case "/api/v1/decisions":
+      // An EMPTY queue is a poor advertisement for the product's main screen:
+      // the first capture showed "Nothing needs your attention", which is true
+      // and says nothing about what Swarm does.
+      return [demoDecision];
+    case "/api/v1/terminal/sessions":
+      // Enveloped, unlike the bare arrays around it.
+      return { sessions: [] };
+    case "/api/v1/workspaces":
+      return ["/home/you/projects/orchard", "/home/you/projects/orchard-web"];
+    case "/api/v1/runtime/resources":
+      // Normal, so the header carries no pressure badge in a screenshot.
+      return {
+        sampled_at: now,
+        policy: { mode: "observe_only", advisory_percent: 85, critical_percent: 95 },
+        api: { resident_memory_bytes: 92 * 1024 * 1024, pressure: "normal" },
+        terminal_host: { resident_memory_bytes: 48 * 1024 * 1024, pressure: "normal" },
+        machine: {
+          memory_total_bytes: 32 * 1024 ** 3,
+          memory_available_bytes: 20 * 1024 ** 3,
+          memory_used_percent: 37,
+          swap_total_bytes: 8 * 1024 ** 3,
+          swap_used_bytes: 0,
+          swap_used_percent: 0,
+          load_average: [0.9, 0.8, 0.7],
+          logical_cpus: 8,
+          memory_pressure_avg10: 0,
+          cpu_pressure_avg10: 0.4,
+          io_pressure_avg10: 0,
+          pressure: "normal",
+        },
+      };
+    default:
+      return undefined;
+  }
+}

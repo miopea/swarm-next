@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import "../styles.css";
+import { hiveFixture } from "./hiveFixture";
 import { SURFACES } from "./surfaces";
 
 /**
@@ -40,12 +41,23 @@ import { SURFACES } from "./surfaces";
  * needs comes from its fixture props, not from here.
  */
 const originalFetch = globalThis.fetch;
+const json = (body: unknown) =>
+  new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-  if (!url.startsWith("/api/") && !url.includes("/api/v1/")) {
+  // /health is not under /api, and letting it fall through to the dev server
+  // returned 500 — which the app reads as "Runtime unavailable" and refuses to
+  // render anything useful behind.
+  if (!url.startsWith("/api/") && !url.includes("/api/v1/") && !url.endsWith("/health")) {
     return originalFetch(input as RequestInfo, init);
   }
-  return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+  // A handful of endpoints answer with fixtures rather than nothing, which is
+  // what lets the WHOLE APP mount here instead of a single card. Everything
+  // else keeps answering empty.
+  const path = url.split("?")[0];
+  const served = hiveFixture(path);
+  return served === undefined ? json([]) : json(served);
 }) as typeof fetch;
 
 const requested = new URLSearchParams(window.location.search).get("surface");

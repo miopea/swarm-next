@@ -1,4 +1,4 @@
-import type { Task, Worker } from "../api";
+import type { BlockedEscalation, DecisionRequest, HeldBriefing, Task, Worker } from "../api";
 
 /**
  * A Hive that never existed, for pictures that can be published.
@@ -158,3 +158,54 @@ export const demoTasks: Task[] = [
     "low",
   ),
 ];
+
+export const demoDecision: DecisionRequest = {
+  id: "demo-decision-1",
+  hive_id: "demo-hive",
+  requesting_worker_id: "demo-orchard-api",
+  task_id: "demo-task-export",
+  kind: "input",
+  urgency: "normal",
+  title: "Should a slow source fail the export, or write what it has?",
+  summary:
+    "The nightly export can finish before the source has answered. Failing loudly means a missed night; writing a partial file means nobody downstream can tell it is partial. Both are recoverable, and by different people, so this is yours rather than mine.",
+  reason:
+    "I can implement either in about the same time. I am asking because the wrong choice is silent: a partial export looks exactly like a quiet day.",
+  risk: "",
+  evidence: "",
+  suggested_action: "Write what arrived and mark it partial",
+  allowed_actions: ["Fail the run and alert", "Write what arrived and mark it partial"],
+  deadline: null,
+  state: "pending",
+  resolution_action: null,
+  resolution_note: "",
+  resolved_by_operator_id: null,
+  created_at: now - 5_400,
+  updated_at: now - 5_400,
+  resolved_at: null,
+  delivery_state: "delivered",
+};
+
+export const demoBlocked: BlockedEscalation[] = [
+  {
+    task_id: "demo-task-index",
+    title: "Give the search index a way to say it is stale",
+    worker_name: "Orchard API",
+    workspace: "/home/you/projects/orchard-api",
+    blocked_for_seconds: 14 * 3600,
+  },
+];
+
+export const demoBriefings: HeldBriefing[] = [
+  ["Retry the upload before giving up on the attachment", "Field Notes", 2_100],
+  ["Say which settings moved in the 2.0 config change", "Field Notes", 900],
+].map(([title, worker, age], index) => ({
+  task_id: `demo-briefing-${index}`,
+  title: title as string,
+  worker_id: `demo-worker-${index}`,
+  worker_name: worker as string,
+  queued_at: now - (age as number),
+  reason: "worker_already_working",
+  blocked_by: null,
+}));
+

@@ -110,11 +110,25 @@ from it is safe by construction rather than by inspection. It cannot yet show
 every screen — that is a reason to add surfaces to it, not a reason to go back
 to photographing production.
 
-**The published screenshots come from here.** `docs/images/*.png` are harness
-captures, not photographs of a Hive: `?surface=needs-you-demo`, `?surface=tasks`
-and `?surface=workers`, against `harness/productFixtures.tsx`. Nothing in them
-ever existed — Orchard Web, Field Notes and the rest are invented, so there is
-no scrubbing to get right and no terminal to worry about.
+**The published screenshots come from here**, and they mount the WHOLE APP:
+`?surface=app&screen=decisions|tasks|workers`. That surface renders the real
+`App` while `harness/hiveFixture.tsx` answers the network, so the picture has a
+rail, a header and navigation because it IS the application, not a component
+lifted out of it.
+
+That distinction is the whole reason this section exists. The first attempt
+captured single surfaces — `?surface=needs-you`, `?surface=tasks` — and each
+picture was a panel floating on a beige field with no way to tell what
+application it belonged to. They reached a public README before the operator
+said "that makes no sense". A capture was checked for leaked data and for
+whether the component rendered, and never for whether a stranger could tell
+what it was of. **Ask that third question.**
+
+Extracting the shell out of `App.tsx` was the obvious alternative and was
+measured before being rejected: 236 lines of JSX, thirty call sites, thirty-four
+interpolated identifiers — a sixty-prop refactor of the navigation, risked on a
+live control room, for three pictures. Stubbing the network instead costs
+nothing in production and yields a truer image.
 
 **Two Needs-you surfaces exist, and the difference matters.** `needs-you` is
 transcribed from the operator's real screen, which is what makes it useful for
