@@ -2636,6 +2636,99 @@ mod tests {
         (TaskService::new(store), queen, worker)
     }
 
+    /// Nineteen finished tasks sat "waiting on evidence" for ten days and the
+    /// operator reported there was no clear path to close them. The obvious
+    /// theory was a dead end: evidence is a worker tool, so a task whose worker
+    /// session had ended would have nobody left who could supply it.
+    ///
+    /// THAT THEORY IS WRONG, and this test is what says so rather than a
+    /// reading of the code. Evidence is keyed on the WORKER, not the session,
+    /// and Queen can reach any task at all. The path was there the whole time;
+    /// nothing surfaced it.
+    ///
+    /// The third assertion is the one that must never stop holding: none of
+    /// this makes it easier to close work without evidence.
+    #[test]
+    fn finished_work_without_evidence_can_still_be_reached_after_its_session_ends() {
+        let (service, queen, worker) = setup();
+        let store = service.store.clone();
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store
+            .create_task("Ship the guard", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::operator())
+            .unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        store
+            .record_task_deployment(task.id, "production", "sha abc123", 1_000)
+            .unwrap();
+        store
+            .transition_task(task.id, TaskState::Completed)
+            .unwrap();
+
+        // The session that did the work is gone, exactly like the 19.
+        store.release_worker_session(session).unwrap();
+
+        let worker_principal = AgentPrincipal {
+            worker_id: worker.id,
+            role: WorkerRole::Worker,
+            active_session_id: None,
+        };
+        assert_eq!(
+            service
+                .task_this_worker_finished(worker_principal, task.id)
+                .unwrap()
+                .id,
+            task.id,
+            "the worker that did the work can still reach it after its session ended -- keyed on \
+             the worker, not the session, so an ended session strands nothing"
+        );
+
+        let queen_principal = AgentPrincipal {
+            worker_id: queen.id,
+            role: WorkerRole::Queen,
+            active_session_id: None,
+        };
+        assert_eq!(
+            service
+                .task_this_worker_finished(queen_principal, task.id)
+                .unwrap()
+                .id,
+            task.id,
+            "and Queen reaches any finished task, so there is no state with nobody able to act"
+        );
+
+        // NOTHING ABOVE MAKES CLOSING EASIER. A second task with no evidence
+        // still cannot be completed by anyone, Queen included.
+        let bare = store
+            .create_task("No evidence", "/workspace/petal")
+            .unwrap();
+        store.transition_task(bare.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(bare.id, worker.id, &TaskActivityActor::operator())
+            .unwrap();
+        store.transition_task(bare.id, TaskState::Active).unwrap();
+        store.transition_task(bare.id, TaskState::Review).unwrap();
+        assert!(
+            matches!(
+                service.transition_task(
+                    queen_principal,
+                    bare.id,
+                    TaskState::Completed,
+                    "verified by hand",
+                ),
+                Err(ApplicationError::Store(
+                    TaskStoreError::CompletionEvidenceRequired
+                ))
+            ),
+            "the 2026-08-21 ruling still holds: nothing closes without evidence, not even for Queen"
+        );
+    }
+
     #[test]
     fn connection_card_is_a_public_identity_action_not_membership() {
         let store = TaskStore::in_memory().unwrap();
