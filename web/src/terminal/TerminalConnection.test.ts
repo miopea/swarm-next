@@ -684,3 +684,70 @@ test("the terminal keeps retrying through a restart and says so", async () => {
   expect(fetch).toHaveBeenCalledTimes(2);
   connection.dispose();
 });
+
+/**
+ * A tab that was frozen cannot have noticed its socket dying.
+ *
+ * The operator, on mobile: "the app seems to die and reconnect when I am not
+ * looking at it... I have to refresh to get it to load."
+ *
+ * A backgrounded mobile tab is FROZEN — timers stop and no JavaScript runs. If
+ * the connection is dropped during that freeze, the close event is never
+ * delivered, because nothing is running to deliver it. On resume `readyState`
+ * still reads OPEN on a socket the network discarded long ago. Nothing arrives,
+ * nothing retries, and refresh is the only move left.
+ *
+ * OPEN means "nobody has told us otherwise", not "alive". So coming back asks.
+ */
+test("a socket that went quiet while the tab was frozen is replaced on return", async () => {
+  vi.useFakeTimers();
+  const { connection, handlers, sockets } = harness();
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(0n, 24, 80, "screen"));
+  await vi.waitFor(() => expect(handlers.onSnapshot).toHaveBeenCalled());
+  const sentBeforeFreeze = sockets[0].sent.length;
+
+  // The freeze: the socket is dead, but nothing ran to observe it, so it still
+  // claims OPEN and no close event was ever dispatched.
+  document.dispatchEvent(new Event("visibilitychange"));
+  await vi.advanceTimersByTimeAsync(0);
+
+  // Coming back ASKS rather than assuming.
+  expect(sockets[0].sent.length).toBe(sentBeforeFreeze + 1);
+  expect(JSON.parse(sockets[0].sent.at(-1)!)).toMatchObject({ type: "resume" });
+
+  // A dead socket cannot answer, so the confirmation timer closes it and the
+  // ordinary reconnect path takes over — no new recovery machinery.
+  await vi.advanceTimersByTimeAsync(3_000);
+  expect(sockets[0].close).toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(50);
+  await vi.waitFor(() => expect(sockets.length).toBeGreaterThan(1));
+
+  vi.useRealTimers();
+});
+
+/**
+ * And a healthy connection is not thrown away for coming back. The check costs
+ * one message; answering it keeps the socket.
+ */
+test("a live socket survives the return, having answered", async () => {
+  vi.useFakeTimers();
+  const { connection, handlers, sockets } = harness();
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(0n, 24, 80, "screen"));
+  await vi.waitFor(() => expect(handlers.onSnapshot).toHaveBeenCalled());
+
+  document.dispatchEvent(new Event("visibilitychange"));
+  await vi.advanceTimersByTimeAsync(0);
+  // It answers, as a live socket does.
+  sockets[0].message(snapshotFrame(1n, 24, 80, "still here"));
+  await vi.advanceTimersByTimeAsync(3_000);
+
+  expect(sockets[0].close).not.toHaveBeenCalled();
+  expect(sockets).toHaveLength(1);
+  vi.useRealTimers();
+});

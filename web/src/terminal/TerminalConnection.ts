@@ -165,6 +165,9 @@ export class TerminalConnection {
     if (!this.#size) throw new Error("Cannot start a terminal connection before measuring its renderer");
     this.#started = true;
     this.#handlers = handlers;
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", this.#handleVisibilityChange);
+    }
     void this.#connect();
   }
 
@@ -205,6 +208,9 @@ export class TerminalConnection {
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", this.#handleVisibilityChange);
+    }
     if (this.#retryTimer !== undefined) clearTimeout(this.#retryTimer);
     this.#retryTimer = undefined;
     this.#clearConfirmationTimer();
@@ -267,8 +273,46 @@ export class TerminalConnection {
     }
   }
 
+  /// Re-checks the socket when the tab comes back, because a frozen page
+  /// cannot have noticed it dying.
+  ///
+  /// A backgrounded mobile tab is FROZEN: timers stop and no JavaScript runs.
+  /// If the connection is dropped during that freeze, the close event is never
+  /// delivered — there is nothing running to deliver it. On resume
+  /// `readyState` still reads OPEN, so the client believes it is connected to
+  /// a socket the network discarded long ago. Nothing arrives, nothing retries,
+  /// and the only move left is the one the operator described: "I have to
+  /// refresh to get it to load."
+  ///
+  /// OPEN means "nobody has told us otherwise", which is not the same as alive.
+  /// So this asks: it re-sends resume and arms the SAME confirmation timer a
+  /// fresh connection uses. A live socket answers with a snapshot and confirms;
+  /// a dead one does not, and after the timeout that timer closes it and
+  /// reconnects through the ordinary path. No new recovery machinery, and a
+  /// healthy connection pays one message.
+  #handleVisibilityChange = (): void => {
+    if (this.#disposed || this.#fatal) return;
+    if (typeof document === "undefined" || document.visibilityState !== "visible") return;
+    const socket = this.#socket;
+    // Anything not OPEN is already the reconnect path's business; asking again
+    // here would double it.
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    this.#sendResume(socket);
+    this.#armConfirmationTimer(socket);
+  };
+
   #handleOpen(socket: WebSocket): void {
     if (socket !== this.#socket || this.#disposed) return;
+    this.#sendResume(socket);
+  }
+
+  /// The resume frame, sent from the one place that knows its shape.
+  ///
+  /// Extracted rather than copied when the resume-time liveness check needed
+  /// it: a second hand-written copy would drift from this one, and the two are
+  /// required to be identical — the server answers a resume with the snapshot
+  /// that both attachment and recovery depend on.
+  #sendResume(socket: WebSocket): void {
     const size = this.#size;
     if (!size) {
       this.#fail("terminal renderer size was unavailable during attachment");
