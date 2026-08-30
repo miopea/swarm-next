@@ -147,7 +147,7 @@ function appUpdate(development: DevelopmentRuntime | undefined): RuntimeUpdateSu
       // fixed sentence here claimed a compiler error for every failure,
       // including installs that were refused after compiling cleanly.
       detail: development.failure_detail?.trim()
-        ? `${developmentFailureHeadline(development.failure_reason)} It said: ${development.failure_detail.trim()}`
+        ? `${developmentFailureHeadline(development.failure_reason, true)} It said: ${development.failure_detail.trim()}`
         : developmentFailureHeadline(development.failure_reason),
       busy: false,
       action: "build",
@@ -235,7 +235,7 @@ export function nextRuntimeUpdates(
 }
 
 /** One sentence for the step that failed, and none invented when it is unknown. */
-function developmentFailureHeadline(reason?: string | null): string {
+function developmentFailureHeadline(reason?: string | null, hasDetail = false): string {
   switch (reason) {
     case "build":
       return "The development working copy did not compile. The current release is still running.";
@@ -243,7 +243,14 @@ function developmentFailureHeadline(reason?: string | null): string {
       return "The development build compiled, but could not be installed. The current release is still running.";
     case "protocol-change":
       return "This checkout changes the terminal-host protocol, which a reload cannot install.";
+    case "source-moved":
+      return "The checkout changed while the build was running, so nothing was installed and the current release is still running.";
     default:
-      return "The development reload failed and did not record why. The current release is still running.";
+      // See App.tsx: a step this function has not been taught about is still a
+      // step that recorded its cause, and claiming otherwise contradicts the
+      // detail printed beside it.
+      return hasDetail
+        ? "The development reload failed. The current release is still running."
+        : "The development reload failed and did not record why. The current release is still running.";
   }
 }

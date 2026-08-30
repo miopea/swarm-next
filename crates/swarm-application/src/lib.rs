@@ -2605,6 +2605,15 @@ fn require_completion_evidence(
 pub enum ApplicationError {
     #[error("this agent is not authorized for that outcome")]
     NotAuthorized,
+    // A MALFORMED IDENTIFIER IS NOT AN AUTHORISATION PROBLEM, and calling it
+    // one sends the reader to check assignment, principal, role and routing
+    // when the remedy is to read the id. Twenty-one call sites reported it as
+    // NotAuthorized; the operator hit it while approving M0 with an id they had
+    // guessed rather than read, and the refusal said nothing true.
+    #[error(
+        "that is not a valid {0} — check the identifier you passed rather than your permissions"
+    )]
+    MalformedIdentifier(&'static str),
     #[error("the target worker does not have an active session")]
     WorkerNotRunning,
     #[error("integration unavailable: {0}")]

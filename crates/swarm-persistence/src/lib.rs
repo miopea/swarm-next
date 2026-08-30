@@ -307,6 +307,11 @@ pub enum TaskStoreError {
     FederationInvitationConflict,
     #[error("task was not found")]
     NotFound,
+    // Not an authorisation failure, which is what it used to say. A task with
+    // no Jira issue behind it is an ordinary state with an obvious remedy, and
+    // reporting it as forbidden sent the reader to check their permissions.
+    #[error("this task has no Jira issue linked to it")]
+    TaskHasNoJiraIssue,
     #[error("decision request was not found")]
     DecisionNotFound,
     #[error("decision request content is invalid")]

@@ -749,9 +749,9 @@ impl ServerHandler for AgentMcp {
             }),
             "swarm_assign_task" => parse::<AssignTaskInput>(arguments).and_then(|input| {
                 let task_id = TaskId::from_str(&input.task_id)
-                    .map_err(|_| ApplicationError::NotAuthorized)?;
+                    .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
                 let worker_id = WorkerId::from_str(&input.worker_id)
-                    .map_err(|_| ApplicationError::NotAuthorized)?;
+                    .map_err(|_| ApplicationError::MalformedIdentifier("worker id"))?;
                 let task = self.tasks.assign_task(self.principal, task_id, worker_id)?;
                 // SAYS SO AT THE MOMENT OF THE CALL. Assigning to a worker with
                 // no session succeeds and reaches nobody: there is no session to
@@ -816,7 +816,7 @@ impl ServerHandler for AgentMcp {
                 if self.principal.role == WorkerRole::Queen {
                     parse::<ApiaryTaskInput>(arguments).and_then(|input| {
                         let task_id = ApiaryTaskId::from_str(&input.task_id)
-                            .map_err(|_| ApplicationError::NotAuthorized)?;
+                            .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
                         ApiaryService::new(self.tasks.store().clone())
                             .queue_federation_task_claim(task_id, crate::unix_timestamp())
                             .and_then(structured)
@@ -829,9 +829,9 @@ impl ServerHandler for AgentMcp {
                 if self.principal.role == WorkerRole::Queen {
                     parse::<AssignApiaryTaskInput>(arguments).and_then(|input| {
                         let task_id = ApiaryTaskId::from_str(&input.task_id)
-                            .map_err(|_| ApplicationError::NotAuthorized)?;
+                            .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
                         let worker_id = WorkerId::from_str(&input.worker_id)
-                            .map_err(|_| ApplicationError::NotAuthorized)?;
+                            .map_err(|_| ApplicationError::MalformedIdentifier("worker id"))?;
                         ApiaryService::new(self.tasks.store().clone())
                             .materialize_local_apiary_task_execution(
                                 task_id,
@@ -848,7 +848,7 @@ impl ServerHandler for AgentMcp {
                 if self.principal.role == WorkerRole::Queen {
                     parse::<TransitionApiaryTaskInput>(arguments).and_then(|input| {
                         let task_id = ApiaryTaskId::from_str(&input.task_id)
-                            .map_err(|_| ApplicationError::NotAuthorized)?;
+                            .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
                         ApiaryService::new(self.tasks.store().clone())
                             .queue_federation_task_transition(
                                 task_id,
@@ -942,7 +942,7 @@ impl ServerHandler for AgentMcp {
                         .as_deref()
                         .map(TaskId::from_str)
                         .transpose()
-                        .map_err(|_| ApplicationError::NotAuthorized)?;
+                        .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
                     self.tasks
                         .create_decision(
                             self.principal,
@@ -1193,8 +1193,8 @@ impl AgentMcp {
 
     fn retire_task(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
         let input = parse::<RetireTaskInput>(arguments)?;
-        let task_id =
-            TaskId::from_str(&input.task_id).map_err(|_| ApplicationError::NotAuthorized)?;
+        let task_id = TaskId::from_str(&input.task_id)
+            .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
         self.tasks
             .retire_task(self.principal, task_id, &input.reason)?;
         structured(json!({ "task_id": input.task_id, "retired": true }))
@@ -1212,8 +1212,8 @@ impl AgentMcp {
         if self.principal.role != WorkerRole::Queen {
             return Err(ApplicationError::NotAuthorized);
         }
-        let worker_id =
-            WorkerId::from_str(&input.worker_id).map_err(|_| ApplicationError::NotAuthorized)?;
+        let worker_id = WorkerId::from_str(&input.worker_id)
+            .map_err(|_| ApplicationError::MalformedIdentifier("worker id"))?;
         let reason = input.reason.trim();
         if reason.is_empty() {
             return Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(
@@ -1277,8 +1277,8 @@ impl AgentMcp {
         if self.principal.role != WorkerRole::Queen {
             return Err(ApplicationError::NotAuthorized);
         }
-        let worker_id =
-            WorkerId::from_str(&input.worker_id).map_err(|_| ApplicationError::NotAuthorized)?;
+        let worker_id = WorkerId::from_str(&input.worker_id)
+            .map_err(|_| ApplicationError::MalformedIdentifier("worker id"))?;
         let reason = input.reason.trim();
         if reason.is_empty() {
             return Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(
@@ -1334,16 +1334,16 @@ impl AgentMcp {
 
     fn promote_task(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
         let input = parse::<PromoteTaskInput>(arguments)?;
-        let task_id =
-            TaskId::from_str(&input.task_id).map_err(|_| ApplicationError::NotAuthorized)?;
+        let task_id = TaskId::from_str(&input.task_id)
+            .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
         self.tasks.promote_task(self.principal, task_id)?;
         structured(json!({ "task_id": input.task_id, "promoted": true }))
     }
 
     fn hold_reviewed_work(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
         let input = parse::<HoldReviewedWorkInput>(arguments)?;
-        let task_id =
-            TaskId::from_str(&input.task_id).map_err(|_| ApplicationError::NotAuthorized)?;
+        let task_id = TaskId::from_str(&input.task_id)
+            .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
         if input.release {
             let released = self
                 .tasks
@@ -1366,8 +1366,8 @@ impl AgentMcp {
 
     fn approve_no_deployment(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
         let input = parse::<ApproveNoDeploymentInput>(arguments)?;
-        let task_id =
-            TaskId::from_str(&input.task_id).map_err(|_| ApplicationError::NotAuthorized)?;
+        let task_id = TaskId::from_str(&input.task_id)
+            .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
         let evidence = self
             .tasks
             .approve_completion_exemption(self.principal, task_id)?;
@@ -1479,8 +1479,8 @@ impl AgentMcp {
 
     fn read_task_history(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
         let input = parse::<ReadTaskHistoryInput>(arguments)?;
-        let task_id =
-            TaskId::from_str(&input.task_id).map_err(|_| ApplicationError::NotAuthorized)?;
+        let task_id = TaskId::from_str(&input.task_id)
+            .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
         let page = self.tasks.read_task_history(
             self.principal,
             task_id,
@@ -1496,10 +1496,29 @@ impl AgentMcp {
         }))
     }
 
+    /// Why a task is not available to act on, told apart honestly.
+    ///
+    /// "You may not do this" and "that does not exist" have different remedies.
+    /// The first sends a reader to check assignment, principal, role and Queen's
+    /// routing; the second is fixed by reading the id. Collapsing them cost the
+    /// operator a detour while approving M0 with an id nobody had read.
+    ///
+    /// ONLY AN ID THAT MATCHES NOTHING IS NAMED. A task that exists but belongs
+    /// to somebody else still answers "not authorized" and nothing more, or the
+    /// refusal becomes an oracle for enumerating the board. Task ids are 128-bit
+    /// and unguessable, so confirming that a well-formed id matches no row
+    /// reveals nothing a caller could exploit; confirming that one DOES would.
+    fn unavailable_task(&self, task_id: TaskId) -> ApplicationError {
+        match self.tasks.store().get_task(task_id) {
+            Err(TaskStoreError::NotFound) => ApplicationError::Store(TaskStoreError::NotFound),
+            _ => ApplicationError::NotAuthorized,
+        }
+    }
+
     async fn transition_task(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
         let input = parse::<TransitionTaskInput>(arguments)?;
-        let task_id =
-            TaskId::from_str(&input.task_id).map_err(|_| ApplicationError::NotAuthorized)?;
+        let task_id = TaskId::from_str(&input.task_id)
+            .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
         if self.principal.role != WorkerRole::Queen
             && !matches!(
                 input.state,
@@ -1513,7 +1532,7 @@ impl AgentMcp {
             .list_visible_tasks(self.principal)?
             .into_iter()
             .find(|task| task.id == task_id)
-            .ok_or(ApplicationError::NotAuthorized)?;
+            .ok_or_else(|| self.unavailable_task(task_id))?;
         if !current.state.can_transition_to(input.state) {
             return Err(ApplicationError::Store(TaskStoreError::InvalidTransition {
                 from: current.state,
@@ -1551,7 +1570,7 @@ impl AgentMcp {
             .tasks
             .store()
             .jira_issue_link_for_task(task_id)?
-            .ok_or(ApplicationError::NotAuthorized)?;
+            .ok_or(ApplicationError::Store(TaskStoreError::TaskHasNoJiraIssue))?;
         let comments = self
             .jira
             .comments(&link.issue_key)
@@ -1623,8 +1642,8 @@ impl AgentMcp {
         // a completed task is deliberately outside a worker's visible set. The
         // two rules together made the tool unreachable by the only agent the
         // dispatch tells to use it. See task_this_worker_finished.
-        let task_id =
-            TaskId::from_str(&input.task_id).map_err(|_| ApplicationError::NotAuthorized)?;
+        let task_id = TaskId::from_str(&input.task_id)
+            .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
         let task_id = self
             .tasks
             .task_this_worker_finished(self.principal, task_id)?
@@ -1835,7 +1854,8 @@ impl AgentMcp {
         if let Ok(task_id) = self.visible_task_id(value) {
             return Ok(task_id);
         }
-        let task_id = TaskId::from_str(value).map_err(|_| ApplicationError::NotAuthorized)?;
+        let task_id = TaskId::from_str(value)
+            .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
         Ok(self
             .tasks
             .task_this_worker_finished(self.principal, task_id)?
@@ -1843,13 +1863,14 @@ impl AgentMcp {
     }
 
     fn visible_task_id(&self, value: &str) -> Result<TaskId, ApplicationError> {
-        let task_id = TaskId::from_str(value).map_err(|_| ApplicationError::NotAuthorized)?;
+        let task_id = TaskId::from_str(value)
+            .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
         self.tasks
             .list_visible_tasks(self.principal)?
             .into_iter()
             .any(|task| task.id == task_id)
             .then_some(task_id)
-            .ok_or(ApplicationError::NotAuthorized)
+            .ok_or_else(|| self.unavailable_task(task_id))
     }
 
     async fn preview_jira_project(
@@ -1861,7 +1882,7 @@ impl AgentMcp {
         }
         let input = parse::<PreviewJiraProjectInput>(arguments)?;
         let binding_id = JiraProjectBindingId::from_str(&input.binding_id)
-            .map_err(|_| ApplicationError::NotAuthorized)?;
+            .map_err(|_| ApplicationError::MalformedIdentifier("Jira project binding id"))?;
         let store = self.tasks.store();
         let binding = store.get_jira_project_binding(binding_id)?;
         let issues = self
@@ -1890,7 +1911,7 @@ impl AgentMcp {
         }
         let input = parse::<SyncJiraProjectInput>(arguments)?;
         let binding_id = JiraProjectBindingId::from_str(&input.binding_id)
-            .map_err(|_| ApplicationError::NotAuthorized)?;
+            .map_err(|_| ApplicationError::MalformedIdentifier("Jira project binding id"))?;
         let store = self.tasks.store();
         let binding = store.get_jira_project_binding(binding_id)?;
         let issues = self
@@ -1953,7 +1974,7 @@ impl AgentMcp {
         }
         let input = parse::<PreviewJiraProjectInput>(arguments)?;
         let binding_id = JiraProjectBindingId::from_str(&input.binding_id)
-            .map_err(|_| ApplicationError::NotAuthorized)?;
+            .map_err(|_| ApplicationError::MalformedIdentifier("Jira project binding id"))?;
         let store = self.tasks.store();
         let binding = store.get_jira_project_binding(binding_id)?;
         let imported_ids = store
@@ -4190,6 +4211,79 @@ mod tests {
         let denied =
             response_json(handle(bridge, plain_state(), request(&worker_token)).await).await;
         assert!(denied["result"]["isError"].as_bool().unwrap_or(false));
+    }
+
+    /// A refusal must name the problem the caller actually has.
+    ///
+    /// The operator hit this while approving M0: `swarm_transition_task` with a
+    /// task id that had been GUESSED rather than read answered "this agent is
+    /// not authorized for that outcome". There was no such task, and nothing
+    /// about authorisation was wrong. "You may not" sends a reader to check
+    /// assignment, principal, role and routing; "that does not exist" is fixed
+    /// by reading the id.
+    ///
+    /// THE THIRD CASE IS THE ONE THAT CONSTRAINS THE FIX. A task that exists
+    /// but is not yours must still answer "not authorized" and nothing more, or
+    /// the refusal becomes an oracle for enumerating the board. A test covering
+    /// only the first two would pass while that leaked.
+    #[tokio::test]
+    async fn a_refusal_names_the_caller_s_actual_problem() {
+        async fn call(bridge: AgentBridge, token: &str, id: String) -> Value {
+            response_json(
+                handle(
+                    bridge,
+                    plain_state(),
+                    mcp_request(
+                        Some(token),
+                        "tools/call",
+                        &json!({
+                            "name": "swarm_transition_task",
+                            "arguments": { "task_id": id, "state": "active", "note": "n" }
+                        }),
+                    ),
+                )
+                .await,
+            )
+            .await
+        }
+
+        let (bridge, store, _queen_id, worker_id, worker_session) = setup();
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+
+        // 1. NOT AN ID AT ALL. Nothing to do with permissions.
+        let malformed = call(bridge.clone(), &worker_token, "not-a-uuid".to_owned()).await;
+        let text = malformed["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(text.contains("not a valid task id"), "{text}");
+        assert!(!text.contains("not authorized"), "{text}");
+
+        // 2. A WELL-FORMED ID MATCHING NOTHING. Says so, so the reader checks
+        //    the id rather than their own permissions.
+        let absent = call(bridge.clone(), &worker_token, TaskId::new().to_string()).await;
+        let text = absent["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(text.contains("task was not found"), "{text}");
+        assert!(!text.contains("not authorized"), "{text}");
+
+        // 3. A REAL TASK THAT IS NOT THIS WORKER'S. Still refused, and still
+        //    tells the caller nothing about it. This is the leak guard.
+        let someone_elses = store.create_task("Not yours", "/workspace/other").unwrap();
+        store
+            .transition_task(someone_elses.id, TaskState::Ready)
+            .unwrap();
+        let forbidden = call(bridge.clone(), &worker_token, someone_elses.id.to_string()).await;
+        let text = forbidden["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(text.contains("not authorized"), "{text}");
+        assert!(
+            !text.contains("not found"),
+            "existence must not leak: {text}"
+        );
+
+        let _ = worker_session;
     }
 
     #[tokio::test]

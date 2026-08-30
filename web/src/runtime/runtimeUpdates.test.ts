@@ -376,3 +376,44 @@ test("a Hive with no pending migration is unaffected", () => {
   );
   expect(updates.map((update) => update.actionLabel)).not.toContain("Apply the protocol migration");
 });
+
+/**
+ * A failure that recorded its cause must not claim it did not.
+ *
+ * The operator hit this the moment a new failure step existed and this switch
+ * had not been told about it: the card read "The development reload failed and
+ * did not record why... It said: the working copy changed while this build was
+ * running". Both halves in one sentence, contradicting each other.
+ *
+ * The specific case is now named. The general case matters more — the next step
+ * added will not be in this switch either, and it should not make the interface
+ * lie in the meantime.
+ */
+test("names a moved checkout, and never denies a cause it is about to print", () => {
+  const failed = (reason: string, detail?: string) =>
+    runtimeUpdates(undefined, undefined, {
+      enabled: true,
+      version: "0.1.0",
+      state: "failed",
+      reload_available: true,
+      deployed_source_revision: "aaaaaaaaaaaa",
+      source_revision: "bbbbbbbbbbbb",
+      source_dirty: false,
+      deployed_source_published: true,
+      failure_reason: reason,
+      failure_detail: detail,
+    })[0];
+
+  const moved = failed("source-moved", "the working copy changed while this build was running");
+  expect(moved.detail).toContain("checkout changed while the build was running");
+  expect(moved.detail).toContain("nothing was installed");
+  expect(moved.detail).not.toContain("did not record why");
+
+  // A step nobody has taught this about is still a step that recorded a cause.
+  const unknownWithCause = failed("something-nobody-has-added-yet", "the disk filled up");
+  expect(unknownWithCause.detail).toContain("the disk filled up");
+  expect(unknownWithCause.detail).not.toContain("did not record why");
+
+  // And when there genuinely is no cause, saying so is still right.
+  expect(failed("something-nobody-has-added-yet").detail).toContain("did not record why");
+});

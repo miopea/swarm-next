@@ -6982,6 +6982,14 @@ fn application_error(error: ApplicationError) -> ApiError {
             "task_outcome_not_authorized",
             error.to_string(),
         ),
+        // 400, not 403. A caller that reads the status alone must not conclude
+        // it lacks permission when it mistyped an identifier — that is the same
+        // wrong turn the message used to send them on.
+        ApplicationError::MalformedIdentifier(_) => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "malformed_identifier",
+            error.to_string(),
+        ),
         ApplicationError::WorkerNotRunning => ApiError::new(
             StatusCode::CONFLICT,
             "worker_session_not_active",
@@ -8382,6 +8390,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::TaskHasNoEmailThread => ApiError::new(
             StatusCode::CONFLICT,
             "task_has_no_email_thread",
+            error.to_string(),
+        ),
+        TaskStoreError::TaskHasNoJiraIssue => ApiError::new(
+            StatusCode::CONFLICT,
+            "task_has_no_jira_issue",
             error.to_string(),
         ),
         TaskStoreError::EmailReplyQueueFull => ApiError::new(

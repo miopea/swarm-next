@@ -190,8 +190,19 @@ function developmentFailureMessage(runtime?: DevelopmentRuntime): string {
       return `The development build compiled, but could not be installed. The current release is still running.${said}`;
     case "protocol-change":
       return `This checkout changes the terminal-host protocol, which a reload cannot install — it stops every worker, so run the protocol migration when they are idle.${said}`;
+    case "source-moved":
+      return `The checkout changed while the build was running, so nothing was installed and the current release is still running. Reload again once the files have stopped moving.${said}`;
     default:
-      return `The development reload failed and did not record why. The current release is still running; the development reload service log has the detail.${said}`;
+      // "DID NOT RECORD WHY" MUST NOT BE SAID WHEN IT DID. This branch used to
+      // claim the reason was missing and then print it in the next sentence —
+      // hit the moment source-moved was added and this switch was not told,
+      // which is the same defect as every refusal that names the wrong field.
+      // A step nobody has taught this function about is still a step that
+      // recorded its cause, so the default now leans on the detail rather than
+      // denying it exists.
+      return detail
+        ? `The development reload failed. The current release is still running.${said}`
+        : "The development reload failed and did not record why. The current release is still running; the development reload service log has the detail.";
   }
 }
 
