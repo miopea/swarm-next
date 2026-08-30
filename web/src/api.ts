@@ -1682,9 +1682,9 @@ export async function fetchGithubFeedbackReadiness(
 /** Which GitHub account this Hive files as, if a person has connected one. */
 export async function fetchGithubConnection(
   operatorToken: string,
-): Promise<{ connected: boolean; login: string | null }> {
+): Promise<{ connected: boolean; lapsed: boolean; login: string | null }> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/github/connection");
-  return response.json() as Promise<{ connected: boolean; login: string | null }>;
+  return response.json() as Promise<{ connected: boolean; lapsed: boolean; login: string | null }>;
 }
 
 /**

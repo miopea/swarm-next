@@ -22,7 +22,7 @@ test("tells an unconnected person their report is anonymous, and offers the reas
   render(
     <GithubConnectPanel
       operatorToken="token"
-      connection={{ connected: false, login: null }}
+      connection={{ connected: false, lapsed: false, login: null }}
       onChanged={vi.fn()}
     />,
   );
@@ -37,7 +37,7 @@ test("names the account once connected, and offers to undo it", () => {
   render(
     <GithubConnectPanel
       operatorToken="token"
-      connection={{ connected: true, login: "miopea" }}
+      connection={{ connected: true, lapsed: false, login: "miopea" }}
       onChanged={vi.fn()}
     />,
   );
@@ -74,7 +74,7 @@ test("keeps waiting while the person is still entering the code", async () => {
   const onChanged = vi.fn();
 
   render(
-    <GithubConnectPanel operatorToken="token" connection={{ connected: false, login: null }} onChanged={onChanged} />,
+    <GithubConnectPanel operatorToken="token" connection={{ connected: false, lapsed: false, login: null }} onChanged={onChanged} />,
   );
   fireEvent.click(screen.getByRole("button", { name: /hear back/i }));
 
@@ -104,7 +104,7 @@ test("says so when the person declines, instead of waiting forever", async () =>
   }));
 
   render(
-    <GithubConnectPanel operatorToken="token" connection={{ connected: false, login: null }} onChanged={vi.fn()} />,
+    <GithubConnectPanel operatorToken="token" connection={{ connected: false, lapsed: false, login: null }} onChanged={vi.fn()} />,
   );
   fireEvent.click(screen.getByRole("button", { name: /hear back/i }));
   await screen.findByText("AAAA-BBBB");
@@ -113,4 +113,33 @@ test("says so when the person declines, instead of waiting forever", async () =>
 
   expect(await screen.findByText(/declined on GitHub/i)).toBeInTheDocument();
   vi.useRealTimers();
+});
+
+/**
+ * A lapse is not the same as never having connected.
+ *
+ * The App expires user tokens — measured from the operator's own grant: an
+ * access token good for eight hours against a refresh token good for six
+ * months. When one lapses, filing keeps working and silently goes anonymous, so
+ * the person who connected SPECIFICALLY to hear back simply stops hearing
+ * anything and nothing looks broken.
+ *
+ * Telling them "this will be filed anonymously" as though they had never
+ * connected would be true and useless. They are owed the reason and the name of
+ * the account that stopped working.
+ */
+test("says a connection expired, and names it, rather than pretending it never existed", () => {
+  render(
+    <GithubConnectPanel
+      operatorToken="token"
+      connection={{ connected: false, lapsed: true, login: "miopea" }}
+      onChanged={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByText(/has expired/i)).toBeInTheDocument();
+  expect(screen.getByText("miopea")).toBeInTheDocument();
+  // The verb changes with the situation: this is not a first connection.
+  expect(screen.getByRole("button", { name: "Reconnect GitHub" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Connect GitHub to hear back/ })).toBeNull();
 });

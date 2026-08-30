@@ -49,7 +49,7 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
   const [github, setGithub] = useState<{ configured: boolean; repository: string | null }>();
   // Which account a submission will be filed as. Undefined until asked, so the
   // dialog never claims anonymity or attribution before it knows.
-  const [connection, setConnection] = useState<{ connected: boolean; login: string | null }>();
+  const [connection, setConnection] = useState<{ connected: boolean; lapsed: boolean; login: string | null }>();
   const [issueUrl, setIssueUrl] = useState<string>();
   const [filingError, setFilingError] = useState<string>();
   const [screenshot, setScreenshot] = useState<File>();
@@ -74,7 +74,7 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
     setFilingError(undefined);
     void fetchGithubConnection(operatorToken)
       .then(setConnection)
-      .catch(() => setConnection({ connected: false, login: null }));
+      .catch(() => setConnection({ connected: false, lapsed: false, login: null }));
     void fetchGithubFeedbackReadiness(operatorToken)
       .then(setGithub)
       // A Hive that cannot answer is treated as one that cannot file. Better a
@@ -246,7 +246,7 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
             onChanged={() => {
               void fetchGithubConnection(operatorToken)
                 .then(setConnection)
-                .catch(() => setConnection({ connected: false, login: null }));
+                .catch(() => setConnection({ connected: false, lapsed: false, login: null }));
             }}
           />
         ) : null}

@@ -188,17 +188,27 @@ pub(super) async fn github_connection(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let store = task_store(&state)?;
-    let held = store
-        .github_connection()
-        .map_err(|error| task_store_error(&error))?;
+    // REFRESHES AS A SIDE EFFECT, deliberately. Opening the feedback dialog asks
+    // this, so a connection that expired overnight is renewed before the person
+    // types a word — which is the "refreshed without the person doing anything"
+    // half of the requirement. The other half is the `lapsed` flag below.
+    let state_of_it = usable_github_connection(&state, store).await?;
+    let (connected, lapsed, login) = match state_of_it {
+        Some(ConnectionState::Usable { login, .. }) => (true, false, Some(login)),
+        // Says WHOSE connection ended. "Not connected" would be true and
+        // useless: the person did connect, and needs to know it stopped.
+        Some(ConnectionState::Lapsed { login }) => (false, true, Some(login)),
+        None => (false, false, None),
+    };
     Ok((
         StatusCode::OK,
         [(header::CACHE_CONTROL, "no-store")],
         Json(serde_json::json!({
-            "connected": held.is_some(),
+            "connected": connected,
+            "lapsed": lapsed,
             // The login and nothing else. A token in a response body is a token
             // in a browser's memory, a proxy log and a screenshot.
-            "login": held.map(|connection| connection.login),
+            "login": login,
         })),
     )
         .into_response())
@@ -215,6 +225,96 @@ pub(super) async fn github_disconnect(
         .forget_github_connection()
         .map_err(|error| task_store_error(&error))?;
     Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// The connected account's token, refreshed if it was about to lapse.
+///
+/// THE WHOLE POINT OF CONNECTING IS THE ANSWER COMING BACK, and an expired
+/// token quietly turns that off: filing keeps working, reports keep reaching
+/// GitHub, and the person simply stops hearing anything. Nothing looks broken.
+/// So expiry is handled here, in the one place both filing and the status
+/// endpoint pass through, rather than left to whichever caller remembers.
+///
+/// Measured rather than assumed: the operator's own grant came back with an
+/// access token good for eight hours and a refresh token good for six months,
+/// so this is a live clock and not a hypothetical.
+enum ConnectionState {
+    Usable {
+        login: String,
+        token: String,
+    },
+    /// Somebody connected and it is over. The row is KEPT so the interface can
+    /// say whose connection ended, instead of pretending there never was one.
+    Lapsed {
+        login: String,
+    },
+}
+
+/// Refreshed a minute EARLY rather than on the stroke: a token that expires
+/// while a request is in flight fails for the person holding it.
+const REFRESH_SKEW_SECONDS: i64 = 60;
+
+/// Whether a stored access token can still be used.
+///
+/// A pure function so the decision that triggers a refresh can be tested at
+/// all: the refresh itself needs GitHub, and the thing most likely to be wrong
+/// is not the HTTP call but WHEN it is made. Getting the skew backwards, or
+/// treating a missing expiry as expired, both fail silently in the direction of
+/// this whole defect — a person who thinks they are connected and is not.
+fn access_token_is_still_good(expires_at: Option<i64>, now: i64) -> bool {
+    // No expiry means the app does not expire user tokens. Not the case for the
+    // app this ships with, but a fork can register its own with the setting off
+    // and must not be forced through a pointless refresh.
+    expires_at.is_none_or(|expires| expires > now + REFRESH_SKEW_SECONDS)
+}
+
+async fn usable_github_connection(
+    state: &AppState,
+    store: &swarm_persistence::TaskStore,
+) -> Result<Option<ConnectionState>, ApiError> {
+    let Some(held) = store
+        .github_connection()
+        .map_err(|error| task_store_error(&error))?
+    else {
+        return Ok(None);
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| i64::try_from(since.as_secs()).unwrap_or(0));
+    let still_good = access_token_is_still_good(held.access_expires_at, now);
+    if still_good {
+        return Ok(Some(ConnectionState::Usable {
+            login: held.login,
+            token: held.access_token,
+        }));
+    }
+    let Some(refresh_token) = held.refresh_token.as_deref() else {
+        return Ok(Some(ConnectionState::Lapsed { login: held.login }));
+    };
+    match crate::github_device::refresh(state.github_client_id(), refresh_token).await {
+        Ok(tokens) => {
+            store
+                .save_github_connection(
+                    &held.login,
+                    &tokens.access_token,
+                    tokens.expires_in.map(|seconds| now + seconds),
+                    // THE REFRESH TOKEN ROTATES. Keeping the old one works once
+                    // and dies at the NEXT refresh — a bug that would surface a
+                    // week later, on somebody else's Hive.
+                    tokens.refresh_token.as_deref(),
+                    tokens.refresh_token_expires_in.map(|seconds| now + seconds),
+                )
+                .map_err(|error| task_store_error(&error))?;
+            Ok(Some(ConnectionState::Usable {
+                login: held.login,
+                token: tokens.access_token,
+            }))
+        }
+        Err(error) => {
+            tracing::warn!(?error, "a GitHub connection could not be refreshed");
+            Ok(Some(ConnectionState::Lapsed { login: held.login }))
+        }
+    }
 }
 
 /// GitHub's own words, kept, because the two failures a person can cause here —
@@ -281,14 +381,20 @@ pub(super) async fn file_on_github(
     // it is read here rather than defaulted. A connected account authors its own
     // issue and GitHub notifies them; without one the report is filed
     // anonymously on this Hive's credential and says so in its own body.
-    let connection = store
-        .github_connection()
-        .map_err(|error| task_store_error(&error))?;
+    let connection = usable_github_connection(&state, store).await?;
+    let as_user = match connection.as_ref() {
+        Some(ConnectionState::Usable { token, .. }) => Some(token.as_str()),
+        // A LAPSED CONNECTION STILL FILES — losing somebody's words would be
+        // worse — but anonymously, and the response says so, so nobody is left
+        // believing an answer is coming that never will.
+        Some(ConnectionState::Lapsed { .. }) | None => None,
+    };
+    let lapsed_login = match &connection {
+        Some(ConnectionState::Lapsed { login }) => Some(login.clone()),
+        _ => None,
+    };
     let issue_url = github
-        .file(
-            &report,
-            connection.as_ref().map(|held| held.access_token.as_str()),
-        )
+        .file(&report, as_user)
         .await
         .map_err(|error| match error {
             crate::github_feedback::GithubError::Refused(message) => {
@@ -306,7 +412,15 @@ pub(super) async fn file_on_github(
     Ok((
         StatusCode::CREATED,
         [(header::CACHE_CONTROL, "no-store")],
-        Json(serde_json::json!({ "issue_url": recorded.github_issue_url, "created": true })),
+        Json(serde_json::json!({
+            "issue_url": recorded.github_issue_url,
+            "created": true,
+            // NAMED WHEN IT HAPPENS, because this is the moment the person finds
+            // out. They connected in order to hear back; if the connection
+            // lapsed between then and now, this report went out anonymously and
+            // no reply will ever reach them. Silence here is the defect.
+            "filed_anonymously_after_lapse": lapsed_login,
+        })),
     )
         .into_response())
 }
@@ -391,4 +505,38 @@ pub(super) async fn download_attachment(
             .map_err(|_| attachment_error(AttachmentError::Unavailable))?,
     );
     Ok((response_headers, bytes).into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{REFRESH_SKEW_SECONDS, access_token_is_still_good};
+
+    /// The decision that triggers a refresh, which is the part most likely to be
+    /// wrong and the only part testable without GitHub.
+    #[test]
+    fn a_token_is_refreshed_before_it_expires_rather_than_after() {
+        let now = 1_788_051_000;
+
+        // Comfortably alive.
+        assert!(access_token_is_still_good(Some(now + 3_600), now));
+        // Already gone.
+        assert!(!access_token_is_still_good(Some(now - 1), now));
+
+        // AND THE SKEW IS THE POINT. A token expiring inside the next minute is
+        // treated as spent, because one that lapses mid-request fails for the
+        // person holding it and there is nothing to gain by cutting it fine.
+        assert!(!access_token_is_still_good(
+            Some(now + REFRESH_SKEW_SECONDS - 1),
+            now
+        ));
+        assert!(access_token_is_still_good(
+            Some(now + REFRESH_SKEW_SECONDS + 1),
+            now
+        ));
+
+        // No expiry is not "expired". Reading it that way would send every
+        // request through a refresh that cannot succeed, on any app registered
+        // without token expiry.
+        assert!(access_token_is_still_good(None, now));
+    }
 }

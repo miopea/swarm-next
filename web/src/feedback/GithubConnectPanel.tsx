@@ -20,7 +20,7 @@ import { claimGithubConnection, disconnectGithub, startGithubConnection } from "
 export default function GithubConnectPanel({ operatorToken, connection, onChanged }: {
   operatorToken: string;
   /** Undefined until asked, so nothing is promised before it is known. */
-  connection: { connected: boolean; login: string | null } | undefined;
+  connection: { connected: boolean; lapsed: boolean; login: string | null } | undefined;
   onChanged: () => void;
 }) {
   const [invitation, setInvitation] = useState<{ user_code: string; verification_uri: string }>();
@@ -102,11 +102,23 @@ export default function GithubConnectPanel({ operatorToken, connection, onChange
 
   return (
     <p className="feedback-github-connection">
-      {/* Says what connecting BUYS rather than what it is. "Connect GitHub"
-          describes a mechanism; hearing back is the reason to bother. */}
-      This will be filed anonymously, so nobody can reply to you.{" "}
+      {/* A LAPSE IS NOT THE SAME AS NEVER HAVING CONNECTED, and saying "this
+          will be filed anonymously" to someone who deliberately connected reads
+          as though they never did. They are owed the reason and the name of the
+          account that stopped working — otherwise the first they know of it is
+          that answers quietly stopped arriving. */}
+      {connection?.lapsed ? (
+        <>
+          Your GitHub connection{connection.login ? <> as <strong>{connection.login}</strong></> : null}{" "}
+          has expired, so this will be filed anonymously and nobody can reply to you.{" "}
+        </>
+      ) : (
+        // Says what connecting BUYS rather than what it is. "Connect GitHub"
+        // describes a mechanism; hearing back is the reason to bother.
+        <>This will be filed anonymously, so nobody can reply to you.{" "}</>
+      )}
       <button type="button" className="text-button" disabled={busy} onClick={() => void connect()}>
-        {busy ? "Starting…" : "Connect GitHub to hear back"}
+        {busy ? "Starting…" : connection?.lapsed ? "Reconnect GitHub" : "Connect GitHub to hear back"}
       </button>
       {problem ? <span className="feedback-github-problem"> {problem}</span> : null}
     </p>

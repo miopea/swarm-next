@@ -204,6 +204,48 @@ fn read_outcome(body: &str) -> Result<DeviceOutcome, DeviceError> {
     }))
 }
 
+/// Trades a refresh token for a fresh access token.
+///
+/// WHY THIS HAS TO EXIST AT ALL. The app expires user tokens — measured from
+/// GitHub's own grant rather than read off a settings page: the operator's
+/// connection came back with an access token good for eight hours and a refresh
+/// token good for six months. Without this, a connection dies overnight and
+/// filing silently falls back to anonymous, so the person who connected
+/// SPECIFICALLY to hear back stops hearing back and nothing tells them.
+///
+/// # Errors
+/// Returns `Unreachable`, or `Refused` when GitHub declines — a refresh token
+/// that has been revoked or has itself expired lands there, and that is a
+/// connection which is genuinely over rather than one worth retrying.
+pub(super) async fn refresh(
+    client_id: &str,
+    refresh_token: &str,
+) -> Result<GrantedTokens, DeviceError> {
+    let response = reqwest::Client::new()
+        .post(ACCESS_TOKEN_URL)
+        .header("accept", "application/json")
+        .json(&serde_json::json!({
+            "client_id": client_id,
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
+        }))
+        .send()
+        .await
+        .map_err(|_| DeviceError::Unreachable)?;
+    let body = response
+        .text()
+        .await
+        .map_err(|_| DeviceError::Unreachable)?;
+    match read_outcome(&body)? {
+        DeviceOutcome::Granted(tokens) => Ok(tokens),
+        // A refresh does not have a "still waiting" state; anything that is not
+        // a grant means this connection is over.
+        other => Err(DeviceError::Refused(format!(
+            "GitHub would not refresh this connection ({other:?})"
+        ))),
+    }
+}
+
 /// Who a granted token belongs to, so the UI can say which account is connected.
 ///
 /// Asked once at connect time rather than stored from the grant, because the
@@ -373,5 +415,28 @@ mod tests {
             read_login(r#"{"login":""}"#),
             Err(DeviceError::Refused(_))
         ));
+    }
+
+    /// A refresh that GitHub declines is a connection that is over, not one to
+    /// retry — and it must be told apart from a grant, or a dead connection
+    /// looks alive forever.
+    #[test]
+    fn a_refused_refresh_is_a_connection_that_has_ended() {
+        // The shape GitHub returns when a refresh token has been revoked.
+        assert!(matches!(
+            read_outcome(r#"{"error":"bad_refresh_token","error_description":"The refresh token passed is incorrect or expired."}"#),
+            Err(DeviceError::Refused(message)) if message.contains("incorrect or expired")
+        ));
+        // And a good one still parses as a grant, with its successor tokens.
+        let DeviceOutcome::Granted(tokens) = read_outcome(
+            r#"{"access_token":"ghu_new","refresh_token":"ghr_new","expires_in":28800}"#,
+        )
+        .unwrap() else {
+            panic!("expected a grant");
+        };
+        assert_eq!(tokens.access_token, "ghu_new");
+        // The refresh token ROTATES. Keeping the old one is how a connection
+        // dies at the next refresh instead of this one.
+        assert_eq!(tokens.refresh_token.as_deref(), Some("ghr_new"));
     }
 }
