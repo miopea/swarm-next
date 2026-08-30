@@ -12,6 +12,81 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.0.0
+
+**Your workers keep running through this one.** The terminal protocol did not
+move, so this installs with `update` and leaves live sessions alone — unlike
+0.9.0 through 0.9.2, which all had to stop the worker engine.
+
+**Copy your database first.** This carries schema migrations 104 through 109 —
+six of them, the largest jump any release has asked for. A tarball install
+migrates without taking its own backup:
+
+    cp ~/.local/state/swarm/swarm.sqlite3 ~/swarm-database-backup.sqlite3
+
+### New features
+
+- **Feedback goes to GitHub.** The feedback dialog now files a real issue on
+  the repository, and tells you where it went — including when it could not get
+  there, instead of silently keeping it local
+- **Connect your own GitHub account** from the feedback dialog itself, so the
+  issue is filed as you and the answer comes back to you when it is closed.
+  Connecting takes a code and a browser tab; nothing is typed into Swarm
+- **Without a connection you still get to file.** The issue goes up anonymously
+  and says so in its own footer, so nobody waits for a reply that has no address
+  to arrive at
+- **A connection that lapsed renews itself** in the background, and says plainly
+  when it cannot rather than failing at the moment you try to use it
+- **Issues come back as work.** An issue opened on the repository arrives as a
+  draft task for the queen to judge, rather than needing to be copied across by
+  hand
+- **The phone can wake and sleep a worker**, and a worker with a wake already in
+  flight says so instead of looking dead for four minutes
+- **Queen can start a worker directly**, and an assignment that reached nobody
+  now says that it reached nobody
+- **The control room says when the machine itself is in trouble** — a
+  CPU-saturated box no longer reports itself as normal, and a start refused for
+  pressure names which pressure refused it
+- **Finished work can be recorded as unverifiable** from the panel that asks
+  about it, so work that genuinely cannot be verified stops accumulating as an
+  open question
+- **An outside tool can register, be approved, and be issued a token**, arriving
+  on the board as itself so its work is attributable
+
+### Fixes
+
+- Importing email as tasks works again. A long subject line no longer blocks a
+  task you titled correctly, an email carrying the same attachment twice no
+  longer fails the whole import, and removing a task releases the emails it was
+  holding instead of stranding them
+- A store failure is reported as what it was. The blanket "temporarily
+  unavailable" that swallowed every underlying error now records the actual
+  cause
+- Swarm no longer closes email work that owes somebody a reply, and the check
+  that was supposed to guard sending a reply now guards the send rather than the
+  draft box
+- A task with no email thread says exactly that, instead of blaming its own state
+- Refusals name the caller's real problem in twenty-five places that previously
+  reported the wrong reason — most visibly, work you cannot see is reported as
+  not yours rather than as missing
+- **A page load stops replaying the whole event history.** Opening the control
+  room on a phone read thousands of entries to show the newest sixteen, which is
+  the reason it felt slow and needed a refresh
+- A terminal that went quiet while its tab was frozen in the background is now
+  replaced when you come back, instead of looking connected and being dead
+- A phone no longer resizes or shreds a terminal another device owns, and a
+  desktop reopened after a phone session takes its own width back
+- The collapsed worker picker keeps one consistent second line and no longer
+  throws while drawing, a worker on an active task reads "Working" rather than
+  "Resting", and the switcher says which row you are on instead of tinting it
+- "Needs you" reads as one column on a phone, ranks what it shows, and its reply
+  box is readable without scrolling
+- The terminal's Refresh button is called Refresh, and Redraw sits beside Add
+  file rather than inside the panel it hides
+- The MCP endpoint accepts requests arriving through the tunnel, its 401 says
+  where to authenticate, and the consent button works — its redirect was being
+  blocked outright
+
 ## 0.9.2
 
 **Take this if 0.9.0 or 0.9.1 would not install for you.** Both of them could
