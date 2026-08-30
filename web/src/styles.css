@@ -2005,20 +2005,11 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
      button already implies by existing. */
   .mobile-worker-switcher-trigger { grid-template-columns: minmax(0, 1fr); }
   .mobile-worker-switcher-trigger .worker-avatar,
-  .mobile-worker-switcher-trigger .mobile-worker-task,
   .mobile-worker-switcher-trigger > span[aria-hidden="true"] { display: none; }
-  /* THE SECOND LINE HAS TWO FORMS AND BOTH HAVE TO GO.
-     The trigger renders the task title when the worker is carrying one and the
-     apiary indicator when it is not. Hiding them in one list looked complete and
-     was not: `.workspace-header .hive-context-indicator.compact` above sets
-     `display: flex` with three classes, so a two-class rule here lost and only
-     the task line disappeared. The operator saw the result immediately —
-     "different every time. This one shows the apiary name, and some of the
-     others are blank" — blank being a worker with a task and the apiary name
-     one without.
-
-     Four classes, so it does not depend on source order to win. */
-  .workspace-header .mobile-worker-switcher-trigger .hive-context-indicator.compact { display: none; }
+  /* The second line STAYS, on the operator's ruling, and is now a single
+     element rather than one of two branches — so there is nothing left that can
+     be hidden on one worker and not another. */
+  .mobile-worker-switcher-trigger .mobile-worker-task { overflow: hidden; color: var(--muted); font-size: .62rem; text-overflow: ellipsis; white-space: nowrap; }
   /* Only the pill. The +N queue button and the branch chip are ALREADY hidden at
      this width by existing rules — measured with these selectors ablated, both
      still computed display:none — so listing them here would be a rule that

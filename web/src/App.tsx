@@ -1507,6 +1507,17 @@ export function App() {
     return new Map([...grouped].map(([workerId, assigned]) => [workerId, workerWork(assigned)]));
   }, [tasks]);
   const activeWorkerWork = activeWorker ? workByWorker.get(activeWorker.id) : undefined;
+  /**
+   * The one line under the worker's name in the collapsed picker.
+   *
+   * The task it is carrying, or the repository it works in. Never blank and
+   * never a different KIND of fact for different workers — that inconsistency
+   * is exactly what the operator reported.
+   */
+  const activeWorkerSecondLine = activeWorkerWork?.current?.title
+    ?? (activeWorker
+      ? (activeWorker.role === "queen" ? "Queen" : repositoryName(activeWorker.workspace))
+      : "No worker selected");
   const activeWorkerEngagement = activeWorker ? foreignEngagement(activeWorker, presenceDeviceId()) : undefined;
   const taskProjects = useMemo(() => [...new Map(jiraTaskLinks.map((link) => [link.project_key, {
     key: link.project_key,
@@ -1899,9 +1910,22 @@ export function App() {
                   could not see at all, and the Hive line is on every other
                   surface's header. */}
               <span>
-                {activeWorkerWork?.current
-                  ? <span className="mobile-worker-task">{activeWorkerWork.current.title}</span>
-                  : <HiveContextIndicator identity={hiveIdentity} compact />}
+                {/* ONE SECOND LINE, ALWAYS, on the operator's ruling: "name plus
+                    one consistent second line, either the repo name or the
+                    current issue being worked on."
+
+                    It used to be the task title OR the apiary indicator, which
+                    is how the line came to differ between workers — and a
+                    specificity loss then hid one branch and not the other, so
+                    it read blank on a worker with a task and "Grand Garden
+                    KEEPER" on one without. The apiary is deliberately NOT the
+                    fallback now: it says which Hive you are on, which is on
+                    every other surface's header and is not what somebody
+                    scanning a worker wants to know.
+
+                    One element rather than two branches, so there is no second
+                    thing that can be styled differently from the first. */}
+                <span className="mobile-worker-task">{activeWorkerSecondLine}</span>
                 <strong>{activeWorker?.name ?? (activeSession ? workerName(activeSession.session_id) : "Choose worker")}</strong>
               </span>
               <span aria-hidden="true">⌄</span>
