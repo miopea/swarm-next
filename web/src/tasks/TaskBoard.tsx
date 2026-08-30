@@ -91,6 +91,7 @@ const stateLabels: Record<TaskState, string> = {
   blocked: "Blocked",
   review: "Review",
   completed: "Completed",
+  abandoned: "Abandoned",
 };
 
 const priorityLabels: Record<TaskPriority, string> = {
@@ -108,6 +109,8 @@ const validTargets: Record<TaskState, TaskState[]> = {
   // explicit review form rather than an evidence-free drag shortcut.
   review: ["active"],
   completed: [],
+  // Terminal, like completed. Reopening closed work is a correction, not a drag.
+  abandoned: [],
 };
 
 export default function TaskBoard({

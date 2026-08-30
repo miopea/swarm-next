@@ -1,3 +1,4 @@
+import { isClosedTaskState, isOpenTaskState } from "./api/tasks";
 import PublicAddressWarning from "./PublicAddressWarning";
 import StaleBundleNotice from "./StaleBundleNotice";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
@@ -1403,7 +1404,7 @@ export function App() {
 
   const activeSession = sessions.find((session) => session.session_id === activeSessionId);
   const activeWorker = workers.find((worker) => worker.active_session_id === activeSessionId);
-  const openTaskCount = tasks.filter((task) => task.state !== "completed").length;
+  const openTaskCount = tasks.filter((task) => isOpenTaskState(task.state)).length;
   const pendingDecisionCount = decisions.filter((decision) => decision.state === "pending").length;
   const pendingAssistCount = stewardAssists?.incoming?.filter((request) => request.state === "pending").length ?? 0;
   const queenWorkerId = workers.find((worker) => worker.role === "queen")?.id;
@@ -1492,7 +1493,7 @@ export function App() {
   const tasksBySession = useMemo(
     () => new Map(
       tasks
-        .filter((task) => task.assigned_session_id && task.state !== "completed")
+        .filter((task) => task.assigned_session_id && isOpenTaskState(task.state))
         .map((task) => [task.assigned_session_id, task]),
     ),
     [tasks],
@@ -1512,7 +1513,7 @@ export function App() {
   const workByWorker = useMemo(() => {
     const grouped = new Map<string, Task[]>();
     tasks.forEach((task) => {
-      if (!task.assigned_worker_id || task.state === "completed") return;
+      if (!task.assigned_worker_id || isClosedTaskState(task.state)) return;
       const assigned = grouped.get(task.assigned_worker_id) ?? [];
       assigned.push(task);
       grouped.set(task.assigned_worker_id, assigned);

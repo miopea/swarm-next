@@ -646,7 +646,7 @@ impl TaskStore {
              WHERE g.worker_id = ?1
                AND g.consumed_at IS NULL
                AND t.removed_at IS NULL
-               AND t.state != 'completed'
+               AND t.state NOT IN ('completed','abandoned')
              ORDER BY g.created_at",
         )?;
         let commands = statement

@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-const AGENT_TOOL_SURFACE_REVISION: u32 = 4;
+const AGENT_TOOL_SURFACE_REVISION: u32 = 5;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -401,9 +401,9 @@ const AGENT_TOOL_SURFACE_REVISION: u32 = 4;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 2. Update this and the revision together.
+/// The served surface as of revision 5. Update this and the revision together.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "99055bcce506c67fa0d0e20d970cfe2b14b964c2b75f5476d2e1316555223222";
+    "c012f90f72b8fcb9fdbae13866cd1dfd1c8373538e68326cfeeeffd6de20ee99";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -2790,12 +2790,12 @@ fn refresh_jira_project_tool() -> Tool {
 fn transition_task_tool() -> Tool {
     tool(
         "swarm_transition_task",
-        "Move a task through its explicit lifecycle. Workers may report only Active, Blocked, or Review for their own assignment. Queen must wake an assigned sleeping worker and observe its live session before moving Ready or Blocked work to Active. Include a concise Blocked reason or Review handoff note. Completed requires verification evidence, including release or handoff evidence when shipping was part of done.",
+        "Move a task through its explicit lifecycle. Workers may report only Active, Blocked, or Review for their own assignment. Queen must wake an assigned sleeping worker and observe its live session before moving Ready or Blocked work to Active. Include a concise Blocked reason or Review handoff note. Completed requires verification evidence, including release or handoff evidence when shipping was part of done. Abandoned closes work that was superseded or given up on and asks for no evidence, because nothing shipped and nothing is coming; it is Queen's to set, like Completed.",
         &json!({
             "type": "object",
             "properties": {
                 "task_id": { "type": "string", "format": "uuid" },
-                "state": { "type": "string", "enum": ["draft", "ready", "active", "blocked", "review", "completed"] },
+                "state": { "type": "string", "enum": ["draft", "ready", "active", "blocked", "review", "completed", "abandoned"] },
                 "note": { "type": "string", "maxLength": 4000, "description": "Concise blocker reason, review handoff, or completion verification evidence. Required for Completed." }
             },
             "required": ["task_id", "state"],
@@ -4482,6 +4482,65 @@ mod tests {
 
         assert_eq!(refused["result"]["isError"], true);
         assert!(store.task_deployments(other.id).unwrap().is_empty());
+    }
+
+    /// A worker cannot abandon its own work, and gets that for free.
+    ///
+    /// The allow-list names the three states a worker may report -- Active,
+    /// Blocked, Review -- so a new state is Queen's by construction rather than
+    /// by an exception somebody has to remember to add.
+    ///
+    /// THERE ARE TWO SUCH LISTS, and this test was written believing there was
+    /// one. Ablating the bridge's copy left it passing, because the application
+    /// service carries the same check; only removing both fails it. That is a
+    /// genuine second line of defence rather than duplication -- the service is
+    /// reachable by callers that never pass through this bridge -- but a test
+    /// that names one of them describes a guard it is not measuring.
+    ///
+    /// It matters more here than it looks: abandoning is the one closure that
+    /// asks for no evidence. A worker able to reach it could close any
+    /// inconvenient task and leave nothing behind to check.
+    #[tokio::test]
+    async fn a_worker_cannot_abandon_its_own_work() {
+        let (bridge, store, _, worker_id, _) = setup();
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let mine = store
+            .create_task("Work I would rather not finish", "/workspace/petal")
+            .unwrap();
+        store.transition_task(mine.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(mine.id, worker_id).unwrap();
+        store.transition_task(mine.id, TaskState::Active).unwrap();
+
+        let refused = response_json(
+            handle(
+                bridge,
+                plain_state(),
+                mcp_request(
+                    Some(&worker_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_transition_task",
+                        "arguments": {
+                            "task_id": mine.id.to_string(),
+                            "state": "abandoned",
+                            "note": "I would like this to stop existing",
+                        }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+
+        assert_eq!(refused["result"]["isError"], true);
+        assert_eq!(
+            store.get_task(mine.id).unwrap().state,
+            TaskState::Active,
+            "the task must not have moved"
+        );
     }
 
     /// The dispatch tells the worker: record the deployment, then write the

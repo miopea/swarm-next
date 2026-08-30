@@ -1,4 +1,5 @@
 import type { JiraTaskLink, Task, TaskPriority, TaskState, Worker } from "../api";
+import { isClosedTaskState, isOpenTaskState } from "../api/tasks";
 
 export type TaskBoardFilter = "all" | "unassigned" | "assigned" | "active" | "attention";
 export type TaskBoardSource = "all" | "jira" | "email" | "local";
@@ -30,7 +31,7 @@ export type TaskBoardView = {
 };
 
 const priorityOrder: Record<TaskPriority, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
-const stateOrder: Record<TaskState, number> = { blocked: 0, review: 1, active: 2, ready: 3, draft: 4, completed: 5 };
+const stateOrder: Record<TaskState, number> = { blocked: 0, review: 1, active: 2, ready: 3, draft: 4, completed: 5, abandoned: 6 };
 
 function taskComparator(
   sort: TaskBoardSort,
@@ -58,8 +59,8 @@ export function buildTaskBoardView(
   query: TaskBoardQuery,
   emailTaskIds: ReadonlySet<string> = new Set(),
 ): TaskBoardView {
-  const allOpen = tasks.filter((task) => task.state !== "completed");
-  const completed = tasks.filter((task) => task.state === "completed");
+  const allOpen = tasks.filter((task) => isOpenTaskState(task.state));
+  const completed = tasks.filter((task) => isClosedTaskState(task.state));
   const jiraByTask = new Map(jiraTaskLinks.map((link) => [link.task_id, link]));
   const jiraProjects = new Map(jiraTaskLinks.map((link) => [link.task_id, link.project_name]));
   const workerNames = new Map(workers.map((worker) => [worker.id, worker.name]));
@@ -117,13 +118,32 @@ export function buildTaskBoardView(
   // the operator has said nobody can now establish where it went. It does NOT
   // move to the verified side either -- completed still renders it as
   // unverifiable, so the board never claims somebody checked.
+  // ABANDONED WORK OWES NOTHING, so it never joins this queue. It carries no
+  // evidence for the same reason it was abandoned -- nothing shipped and
+  // nothing is coming -- and without this line every abandoned task would
+  // appear here asking somebody to chase evidence that cannot exist. That is
+  // the clicking this state was added to delete, reintroduced one layer up.
   const unverified = closed.filter(
-    (task) => !task.closed_on_evidence && !task.closed_unverifiable && !ownedElsewhere(task),
+    (task) =>
+      task.state !== "abandoned" &&
+      !task.closed_on_evidence &&
+      !task.closed_unverifiable &&
+      !ownedElsewhere(task),
   );
   return {
     open,
     unverified,
-    completed: closed.filter((task) => task.closed_on_evidence || task.closed_unverifiable || ownedElsewhere(task)),
+    // ABANDONED WORK BELONGS HERE, and the alternative was invisibility. It
+    // is excluded from `unverified` because it owes no evidence, so unless
+    // it is admitted here it lands in neither list and disappears from the
+    // board -- closed in the database and nowhere on the screen.
+    completed: closed.filter(
+      (task) =>
+        task.state === "abandoned" ||
+        task.closed_on_evidence ||
+        task.closed_unverifiable ||
+        ownedElsewhere(task),
+    ),
     allOpenCount: allOpen.length,
     jiraByTask,
   };

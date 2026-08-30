@@ -731,7 +731,7 @@ impl TaskStore {
                                WHERE worker_id = worker_profiles.id AND ended_at IS NULL),
                         EXISTS(SELECT 1 FROM tasks
                                WHERE assigned_worker_id = worker_profiles.id
-                                 AND state != 'completed' AND removed_at IS NULL)
+                                 AND state NOT IN ('completed','abandoned') AND removed_at IS NULL)
                  FROM worker_profiles WHERE id = ?1 AND archived_at IS NULL",
                 [worker_id.to_string()],
                 |row| {
@@ -1027,7 +1027,7 @@ impl TaskStore {
             let mut statement = transaction.prepare(
                 "SELECT task.id, task.state
                  FROM tasks task
-                 WHERE task.assigned_worker_id = ?1 AND task.state != 'completed'
+                 WHERE task.assigned_worker_id = ?1 AND task.state NOT IN ('completed','abandoned')
                    AND NOT EXISTS (
                        SELECT 1 FROM task_assignments assignment
                        WHERE assignment.task_id = task.id AND assignment.released_at IS NULL

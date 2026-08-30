@@ -2655,7 +2655,7 @@ fn keeper_departure_readiness(
     )?;
     let open_swarm_task_count = connection.query_row(
         "SELECT COUNT(*) FROM apiary_tasks
-         WHERE apiary_id = ?1 AND home_hive_id = ?2 AND state <> 'completed'",
+         WHERE apiary_id = ?1 AND home_hive_id = ?2 AND state NOT IN ('completed','abandoned')",
         params![member.apiary.to_string(), member.hive.to_string()],
         |row| row.get::<_, usize>(0),
     )?;

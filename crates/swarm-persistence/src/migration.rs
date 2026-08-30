@@ -1161,7 +1161,7 @@ impl TaskStore {
             let matching_task = connection.query_row(
                 "SELECT EXISTS(SELECT 1 FROM tasks
                  WHERE lower(trim(title)) = lower(trim(?1)) AND workspace = ?2
-                   AND state != 'completed')",
+                   AND state NOT IN ('completed','abandoned'))",
                 params![title, workspace],
                 |row| row.get::<_, bool>(0),
             )?;

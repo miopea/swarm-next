@@ -2657,6 +2657,86 @@ mod tests {
     ///
     /// The third assertion is the one that must never stop holding: none of
     /// this makes it easier to close work without evidence.
+    /// Abandoning work asks for no evidence, and that is the whole point.
+    ///
+    /// Completing the same task without evidence is refused, so this pair is
+    /// the difference the state was added to make: one outcome asks what shows
+    /// the work is running, the other never asks. If this test ever passes for
+    /// both, the state has become Completed-with-a-flag.
+    #[test]
+    fn abandoning_work_needs_no_evidence_while_completing_it_still_does() {
+        let (service, _queen, worker) = setup();
+        let store = service.store.clone();
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+
+        let refused = store
+            .create_task("Spike a thing", "/workspace/petal")
+            .unwrap();
+        store.transition_task(refused.id, TaskState::Ready).unwrap();
+        store
+            .transition_task(refused.id, TaskState::Active)
+            .unwrap();
+        store
+            .transition_task(refused.id, TaskState::Review)
+            .unwrap();
+        assert!(
+            require_completion_evidence(&store, TaskState::Completed, refused.id, "done").is_err(),
+            "completing without evidence must still be refused"
+        );
+
+        // Same task, same absence of evidence, different outcome.
+        assert!(
+            require_completion_evidence(&store, TaskState::Abandoned, refused.id, "superseded")
+                .is_ok(),
+            "abandoning must not ask for evidence"
+        );
+        store
+            .transition_task(refused.id, TaskState::Abandoned)
+            .unwrap();
+        assert_eq!(
+            store.get_task(refused.id).unwrap().state,
+            TaskState::Abandoned
+        );
+    }
+
+    /// Abandoned work stops being the worker's problem.
+    ///
+    /// `archive_worker_profile` refuses while a worker still owns open work,
+    /// and it decided that with `state != 'completed'` -- written when completed
+    /// was the only way to close anything. Left alone, an abandoned task would
+    /// have pinned its worker open forever: closed on the board, and still
+    /// blocking the roster.
+    #[test]
+    fn abandoned_work_stops_blocking_its_worker() {
+        let (service, _queen, worker) = setup();
+        let store = service.store.clone();
+        let task = store
+            .create_task("Chase a dead end", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::operator())
+            .unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+
+        assert!(
+            matches!(
+                store.archive_worker_profile(worker.id),
+                Err(TaskStoreError::WorkerOwnsOpenTasks)
+            ),
+            "precondition: open work blocks archiving"
+        );
+
+        store
+            .transition_task(task.id, TaskState::Abandoned)
+            .unwrap();
+
+        store
+            .archive_worker_profile(worker.id)
+            .expect("abandoned work must not keep its worker open");
+    }
+
     #[test]
     fn finished_work_without_evidence_can_still_be_reached_after_its_session_ends() {
         let (service, queen, worker) = setup();

@@ -189,3 +189,35 @@ test("orders by when work was created, oldest first, so neglect surfaces", () =>
   expect(byUpdated.open.map((task) => task.id)).toEqual(["oldest", "newest", "middle"]);
   expect(byCreated.open.map((task) => task.id)).not.toEqual(byUpdated.open.map((task) => task.id));
 });
+
+/**
+ * Abandoned work is closed, and it owes nothing.
+ *
+ * Two separate ways this could go wrong, so both are asserted. `allOpenCount`
+ * decided openness with `state !== "completed"`, which would have counted
+ * abandoned work as open forever. And the unverified queue selects closed work
+ * carrying no evidence -- which abandoned work never carries, by definition --
+ * so without excluding it every abandoned task would sit there asking somebody
+ * to chase evidence that cannot exist. That is the clicking this state was
+ * added to delete, reappearing one layer up.
+ */
+const abandoned: Task = {
+  id: "dropped", hive_id: "hive", title: "Superseded by the rewrite", workspace: "/projects/a",
+  state: "abandoned", description: "", operator_instruction: "", priority: "normal",
+  assigned_worker_id: worker.id, assigned_session_id: null, position: 4, created_at: 1, updated_at: 6,
+};
+
+test("abandoned work is not open, and never asks for evidence", () => {
+  const view = buildTaskBoardView([...tasks, abandoned], [jiraLink], [worker], baseQuery);
+
+  expect(view.open.map((task) => task.id)).not.toContain("dropped");
+  expect(view.unverified.map((task) => task.id)).not.toContain("dropped");
+  // Still visible: a state that only exists in the database is not a state.
+  expect(view.completed.map((task) => task.id)).toContain("dropped");
+});
+
+test("abandoned work is excluded from the open count", () => {
+  const before = buildTaskBoardView(tasks, [jiraLink], [worker], baseQuery).allOpenCount;
+  const after = buildTaskBoardView([...tasks, abandoned], [jiraLink], [worker], baseQuery).allOpenCount;
+  expect(after).toBe(before);
+});

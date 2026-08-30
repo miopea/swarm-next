@@ -1,6 +1,32 @@
 import { authenticatedFetch } from "./request";
 
-export type TaskState = "draft" | "ready" | "active" | "blocked" | "review" | "completed";
+export type TaskState =
+  | "draft"
+  | "ready"
+  | "active"
+  | "blocked"
+  | "review"
+  | "completed"
+  /** Closed for a reason other than success, so the evidence question never applies. */
+  | "abandoned";
+
+/**
+ * States in which work is closed, whether or not it succeeded.
+ *
+ * ONE LIST, because the old test was `state !== "completed"` in six places and
+ * every one of them silently meant "still open". Adding a second terminal
+ * state would have enrolled abandoned work in every queue, count and worker
+ * workload in the product, and nothing would have failed.
+ */
+export const CLOSED_TASK_STATES: readonly TaskState[] = ["completed", "abandoned"];
+
+export function isClosedTaskState(state: TaskState): boolean {
+  return CLOSED_TASK_STATES.includes(state);
+}
+
+export function isOpenTaskState(state: TaskState): boolean {
+  return !isClosedTaskState(state);
+}
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
 
 export type Task = {

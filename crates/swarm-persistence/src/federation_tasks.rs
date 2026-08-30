@@ -1263,6 +1263,82 @@ fn insert_task_command_receipt(
     Ok(receipt)
 }
 
+/// `apiary_tasks` learns the abandoned state, because local state is mirrored here.
+///
+/// `publish_local_apiary_task` writes `task.state.to_string()` straight into
+/// this column, so a CHECK that does not know a state is not a stale comment --
+/// it is a constraint violation the moment anyone abandons a federated task.
+/// The local `tasks` rebuild alone would have shipped that bug.
+///
+/// A rebuild, because `SQLite` cannot alter a CHECK. Three tables hold a
+/// foreign key into `apiary_tasks(id)`, so `legacy_alter_table` is ON for the
+/// rename:
+/// that leaves their REFERENCES clauses naming `apiary_tasks`, which is what
+/// makes them land on the new table instead of following the old one.
+pub(super) fn migrate_abandoned_apiary_task_state(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    // Absent and unmigrated are different answers -- see the note on
+    // `migrate_abandoned_state`. A database being migrated forward from an
+    // early version has no apiary tables yet, and rebuilding one that is not
+    // there fails the whole open.
+    let table_exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'apiary_tasks')",
+        [],
+        |row| row.get(0),
+    )?;
+    let already: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+         WHERE type = 'table' AND name = 'apiary_tasks' AND sql LIKE '%abandoned%')",
+        [],
+        |row| row.get(0),
+    )?;
+    // AND ITS FOREIGN KEY TARGETS. Rebuilding means re-issuing this table's
+    // CREATE, which names `apiaries` and `hives`; the rename that precedes it
+    // reparses the schema and fails outright when either is absent. That is not
+    // hypothetical -- the schema-v23 test migrates a database forward that has
+    // apiary_tasks and neither of them, and it failed here first.
+    let targets_exist: bool = transaction.query_row(
+        "SELECT (SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name IN ('apiaries','hives')) = 2",
+        [],
+        |row| row.get(0),
+    )?;
+    if !table_exists || !targets_exist || already {
+        return Ok(());
+    }
+    transaction.execute_batch(
+        "DROP INDEX IF EXISTS apiary_tasks_by_apiary_state;
+         PRAGMA legacy_alter_table = ON;
+         ALTER TABLE apiary_tasks RENAME TO apiary_tasks_v109;
+         CREATE TABLE apiary_tasks (
+             id TEXT PRIMARY KEY,
+             apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+             source TEXT NOT NULL CHECK (source = 'swarm'),
+             title TEXT NOT NULL,
+             description TEXT NOT NULL DEFAULT '',
+             priority TEXT NOT NULL CHECK (priority IN ('low','normal','high','urgent')),
+             state TEXT NOT NULL CHECK (state IN ('draft','ready','active','blocked','review','completed','abandoned')),
+             home_node_id TEXT,
+             home_hive_id TEXT REFERENCES hives(id),
+             revision INTEGER NOT NULL CHECK (revision > 0),
+             created_at INTEGER NOT NULL CHECK (created_at >= 0),
+             updated_at INTEGER NOT NULL CHECK (updated_at >= created_at),
+             CHECK ((home_node_id IS NULL) = (home_hive_id IS NULL))
+         );
+         INSERT INTO apiary_tasks
+             (id, apiary_id, source, title, description, priority, state,
+              home_node_id, home_hive_id, revision, created_at, updated_at)
+         SELECT id, apiary_id, source, title, description, priority, state,
+                home_node_id, home_hive_id, revision, created_at, updated_at
+           FROM apiary_tasks_v109;
+         DROP TABLE apiary_tasks_v109;
+         CREATE INDEX apiary_tasks_by_apiary_state
+             ON apiary_tasks(apiary_id, state, updated_at DESC);
+         PRAGMA legacy_alter_table = OFF;",
+    )
+}
+
 fn next_lifecycle_transition(current: TaskState, desired: TaskState) -> Option<TaskState> {
     if current == desired {
         return None;
@@ -1289,7 +1365,14 @@ fn next_lifecycle_transition(current: TaskState, desired: TaskState) -> Option<T
         TaskState::Ready => (current == TaskState::Review)
             .then_some(TaskState::Active)
             .or_else(|| (current == TaskState::Active).then_some(TaskState::Blocked)),
-        TaskState::Draft => None,
+        // NEITHER HAS AN INTERMEDIATE HOP, for opposite reasons. Nothing walks
+        // toward Draft, because work does not go back to being unfiled. And
+        // nothing needs to walk toward Abandoned: it is directly reachable from
+        // every unfinished state, so `can_transition_to` above has already
+        // returned it, and anything arriving here is asking to abandon work
+        // that is already terminal -- which would mean reopening closed work in
+        // order to close it again.
+        TaskState::Draft | TaskState::Abandoned => None,
     }
 }
 

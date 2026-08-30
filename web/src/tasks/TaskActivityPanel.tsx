@@ -7,6 +7,7 @@ const stateLabels: Record<TaskState, string> = {
   blocked: "Blocked",
   review: "Review",
   completed: "Completed",
+  abandoned: "Abandoned",
 };
 
 export default function TaskActivityPanel({ activity, loading, failed, onRetry }: {

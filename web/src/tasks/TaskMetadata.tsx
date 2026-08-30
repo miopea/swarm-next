@@ -8,6 +8,7 @@ const stateLabels: Record<TaskState, string> = {
   blocked: "Blocked",
   review: "Review",
   completed: "Completed",
+  abandoned: "Abandoned",
 };
 
 const priorityLabels: Record<TaskPriority, string> = {

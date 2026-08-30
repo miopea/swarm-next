@@ -43,6 +43,14 @@ pub enum TaskState {
     Blocked,
     Review,
     Completed,
+    /// Closed for a reason other than success.
+    ///
+    /// NOT Completed-with-a-flag, on purpose. Completed asks what evidence
+    /// shows the work is running, and for work nobody finished that question
+    /// has no answer -- so it was being answered with an exemption claim
+    /// somebody then had to approve. A separate state does not make the
+    /// question cheaper to answer; it removes the question.
+    Abandoned,
 }
 
 impl TaskState {
@@ -55,6 +63,17 @@ impl TaskState {
                 | (Self::Active, Self::Blocked | Self::Review)
                 | (Self::Blocked, Self::Ready | Self::Active)
                 | (Self::Review, Self::Active | Self::Ready | Self::Completed)
+                // ABANDONED IS REACHABLE FROM EVERY UNFINISHED STATE, including
+                // Draft. Forcing a detour through Blocked to abandon something
+                // would be clicking, which is the thing this state exists to
+                // delete. Draft is included because a draft Queen decides
+                // against is a decision worth keeping: `remove_task` disposes
+                // of mistakes and duplicates and destroys the record, which is
+                // a different act from declining work on purpose.
+                | (
+                    Self::Draft | Self::Ready | Self::Active | Self::Blocked | Self::Review,
+                    Self::Abandoned,
+                )
         )
     }
 }
@@ -68,6 +87,7 @@ impl fmt::Display for TaskState {
             Self::Blocked => "blocked",
             Self::Review => "review",
             Self::Completed => "completed",
+            Self::Abandoned => "abandoned",
         };
         formatter.write_str(value)
     }
@@ -84,6 +104,7 @@ impl FromStr for TaskState {
             "blocked" => Ok(Self::Blocked),
             "review" => Ok(Self::Review),
             "completed" => Ok(Self::Completed),
+            "abandoned" => Ok(Self::Abandoned),
             _ => Err(ParseTaskStateError),
         }
     }

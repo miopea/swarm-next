@@ -1232,3 +1232,60 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod abandoned_state_tests {
+    use crate::tasks::TaskState;
+
+    #[test]
+    fn every_unfinished_state_can_be_abandoned_directly() {
+        // Directly, with no detour. Forcing a trip through Blocked to abandon
+        // something would be clicking, which is what this state exists to delete.
+        for from in [
+            TaskState::Draft,
+            TaskState::Ready,
+            TaskState::Active,
+            TaskState::Blocked,
+            TaskState::Review,
+        ] {
+            assert!(
+                from.can_transition_to(TaskState::Abandoned),
+                "{from} should reach Abandoned directly"
+            );
+        }
+    }
+
+    #[test]
+    fn abandoned_is_terminal_exactly_like_completed() {
+        for target in [
+            TaskState::Draft,
+            TaskState::Ready,
+            TaskState::Active,
+            TaskState::Blocked,
+            TaskState::Review,
+            TaskState::Completed,
+        ] {
+            assert!(
+                !TaskState::Abandoned.can_transition_to(target),
+                "Abandoned must not reopen into {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn completed_and_abandoned_do_not_convert_into_each_other() {
+        // Two different outcomes, not two spellings of one. Converting between
+        // them would be a correction of the record, not a transition.
+        assert!(!TaskState::Completed.can_transition_to(TaskState::Abandoned));
+        assert!(!TaskState::Abandoned.can_transition_to(TaskState::Completed));
+    }
+
+    #[test]
+    fn abandoned_survives_the_round_trip_through_text() {
+        // It is stored as text and read back through FromStr, so a Display that
+        // disagrees with the parser is a task that cannot be loaded.
+        let parsed: TaskState = TaskState::Abandoned.to_string().parse().unwrap();
+        assert_eq!(parsed, TaskState::Abandoned);
+        assert_eq!(TaskState::Abandoned.to_string(), "abandoned");
+    }
+}
