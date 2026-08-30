@@ -404,6 +404,11 @@ pub enum TaskStoreError {
         "an email reply can be drafted once the task is in review or completed; this task is neither"
     )]
     EmailDraftNotReady,
+    // Named separately because it is not a state problem and cannot be waited
+    // out. A task with no inbound email has nobody to reply to, and telling
+    // somebody to finish the work first would send them to fix the wrong thing.
+    #[error("this task did not come from an email, so there is no thread to reply to")]
+    TaskHasNoEmailThread,
     #[error("this task already has an email resolution reply")]
     EmailReplyAlreadyExists,
     #[error("this Hive already has the maximum number of pending email replies")]

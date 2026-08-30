@@ -8365,6 +8365,13 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "email_draft_not_ready",
             error.to_string(),
         ),
+        // A different code, because a caller can wait out the one above and
+        // never wait out this one.
+        TaskStoreError::TaskHasNoEmailThread => ApiError::new(
+            StatusCode::CONFLICT,
+            "task_has_no_email_thread",
+            error.to_string(),
+        ),
         TaskStoreError::EmailReplyQueueFull => ApiError::new(
             StatusCode::TOO_MANY_REQUESTS,
             "email_reply_queue_full",

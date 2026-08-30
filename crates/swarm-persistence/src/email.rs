@@ -739,10 +739,28 @@ impl TaskStore {
         // review or completed — and the evidence test moved to the send, where
         // it is enforced for the first time. This is not a loosening. Nothing
         // reaches a person any earlier than it did before.
+        // ASKED AS TWO QUESTIONS, because they have different answers and one
+        // message for both names the wrong precondition.
+        //
+        // This used to be a single EXISTS with a JOIN onto email_message_links,
+        // so a task with no email thread at all reported itself as "this task is
+        // neither in review nor completed" — while sitting in completed. That is
+        // the same shape as the subject-length error that told an operator their
+        // task title was wrong when it was the email SUBJECT being validated,
+        // and the deployment message that sent two sessions away believing they
+        // had merely arrived too early. A refusal that names the wrong field
+        // sends the reader to the wrong place, and they can be there a while.
+        let has_thread: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM email_message_links WHERE task_id = ?1)",
+            [task_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if !has_thread {
+            return Err(TaskStoreError::TaskHasNoEmailThread);
+        }
         let ready: bool = transaction.query_row(
             "SELECT EXISTS(
                  SELECT 1 FROM tasks task
-                 JOIN email_message_links source ON source.task_id = task.id
                  WHERE task.id = ?1 AND task.state IN ('completed', 'review')
              )",
             [task_id.to_string()],
@@ -3034,6 +3052,32 @@ mod tests {
     /// handed an empty textarea on a card that said "No reply has been written"
     /// — accurate, useless, and silent about the fact that a reply HAD been
     /// written and thrown away.
+    /// A task with no email thread says so, instead of blaming its own state.
+    ///
+    /// Hit for real: a completed task was refused with "an email reply can be
+    /// drafted once the task is in review or completed; this task is neither"
+    /// while it was sitting in completed. The gate joined onto the email links,
+    /// so "there is nothing to reply to" came out wearing the state error's
+    /// words. Same shape as the subject-length message that reported a bad task
+    /// TITLE when the email SUBJECT was being validated.
+    #[test]
+    fn a_task_that_never_came_from_an_email_says_that_rather_than_blaming_its_state() {
+        let store = TaskStore::in_memory().unwrap();
+        let ordinary = store
+            .create_task("Ship the thing", "/projects/app")
+            .unwrap();
+        for state in [TaskState::Ready, TaskState::Active, TaskState::Review] {
+            store.transition_task(ordinary.id, state).unwrap();
+        }
+
+        // In review, so the state precondition is satisfied and cannot be the
+        // reason. The only thing missing is an email thread.
+        assert!(matches!(
+            store.prepare_email_reply(ordinary.id, "Answering nobody."),
+            Err(TaskStoreError::TaskHasNoEmailThread)
+        ));
+    }
+
     #[test]
     fn a_refused_draft_is_recorded_on_the_board_rather_than_dying_with_the_turn() {
         let store = TaskStore::in_memory().unwrap();
