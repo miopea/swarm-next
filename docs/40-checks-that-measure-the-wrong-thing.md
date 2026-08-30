@@ -59,6 +59,14 @@ rule changed.
 Both branch-shaped defects here were fixture defects, not assertion defects. If
 the code says `A ? x : y`, the fixture owes you both.
 
+**An edit that matches nothing reports success.** Three times in one session a
+find-and-replace silently did nothing — usually because `cargo fmt` had reflowed
+the target after it was written — and each time the tool said it had worked. Once
+this happened *while ablating a guard*: the ablation modified an unmodified file,
+the test stayed green, and the conclusion was that the guard did not bite. It did.
+Assert the match count before writing (`assert s.count(old) == 1`); the edits that
+went wrong were the ones that skipped it.
+
 **An ablation is the only evidence a check works.** Break the mechanism, watch
 the check go red, restore it. A check that has never failed has told you
 nothing — and this is where the fifth instance came from: an ablation that
