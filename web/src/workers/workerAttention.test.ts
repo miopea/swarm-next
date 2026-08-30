@@ -119,3 +119,43 @@ test("an active assignment leads the switcher line instead of the resting prompt
   const asleep = { ...worker, running: false, attention_state: "sleeping" as const };
   expect(workerSwitcherDetail(asleep, "Fix the importer", true)).toBe("Sleeping · Fix the importer");
 });
+
+/**
+ * Four and a half minutes of silence is what actually hurt.
+ *
+ * Two tasks were routed to a sleeping Voice Bridge worker at 20:40:57. The
+ * coordinator woke it at 20:45:28. Nothing anywhere said a wake was coming, so
+ * the operator watched a worker marked Sleeping, concluded "the queen didn't
+ * wake the worker", and filed that report FIFTEEN SECONDS after it woke.
+ *
+ * Queen had done nothing wrong and neither had they. The wake sat in
+ * coordinator_actions the whole time. The fact existed; no surface showed it.
+ */
+test("a worker with a wake in flight says so instead of just sleeping", () => {
+  const asleep = { ...worker, running: false, attention_state: "sleeping" as const };
+  const waking = { ...asleep, waking_since: 1_788_036_057 };
+
+  expect(workerAttention(asleep).label).toBe("Sleeping");
+  expect(workerAttention(waking).label).toBe("Waking…");
+
+  // SAME STATE, deliberately. An asleep worker really is asleep; this is a fact
+  // beside the state, like background_work. Rewriting what Sleeping means for
+  // every consumer to carry one more piece of news is how the Resting collapse
+  // happened, and delivery and coordination both route on this.
+  expect(workerAttention(waking).state).toBe("sleeping");
+  expect(workerAttention(waking).presence).toBe(workerAttention(asleep).presence);
+});
+
+/**
+ * A wake recorded against a worker that is already running is stale
+ * bookkeeping, not news — and saying "Waking…" over a live terminal would be
+ * worse than saying nothing.
+ */
+test("a running worker is never described as waking", () => {
+  const running = {
+    ...worker, running: true, attention_state: "resting" as const,
+    waking_since: 1_788_036_057,
+  };
+
+  expect(workerAttention(running).label).toBe("Resting");
+});

@@ -53,6 +53,8 @@ export type Worker = {
   ephemeral?: boolean;
   /** Something this worker started is still running after its turn ended. */
   background_work?: boolean;
+  /** A wake is queued or in flight for this worker, since this unix time. */
+  waking_since?: number;
   /** Wall-clock second this worker's terminal last produced output. */
   last_output_at?: number;
   /** When this worker's oldest unanswered request was filed, while it holds. */

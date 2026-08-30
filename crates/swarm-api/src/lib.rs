@@ -2443,6 +2443,13 @@ struct WorkerView {
     profile: WorkerProfile,
     running: bool,
     attention_state: WorkerAttentionState,
+    /// A wake is queued or in flight for this worker, and since when.
+    ///
+    /// Beside the state, not inside it: an asleep worker really is asleep, and
+    /// rewriting what Sleeping means for every consumer to carry one more piece
+    /// of news is how the Resting collapse happened.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    waking_since: Option<i64>,
     /// Something this worker started is still running after its turn ended.
     ///
     /// Sits beside the state rather than changing it: a resting prompt
@@ -2682,6 +2689,8 @@ struct WorkerViewFacts {
     /// Reported beside the activity rather than inside it: both situations
     /// classify as Resting, deliberately, but "finished with a shell running"
     /// and "nothing to do" are not the same thing to look at.
+    /// A wake is queued or in flight for this worker, and since when.
+    waking_since: Option<i64>,
     background_work: bool,
     /// The worker's system role, if it holds one. Carried as the role itself
     /// rather than a flag per role, so adding a second one does not add a
@@ -2703,6 +2712,7 @@ impl Default for WorkerViewFacts {
             runtime_error: None,
             rest_reason: None,
             provider_activity: ProviderActivity::Unknown,
+            waking_since: None,
             background_work: false,
             system_role: None,
             last_output_at: None,
@@ -2763,6 +2773,7 @@ fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
         runtime_error,
         rest_reason,
         provider_activity,
+        waking_since,
         background_work,
         system_role,
         last_output_at,
@@ -2808,6 +2819,7 @@ fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
         running,
         attention_state,
         background_work,
+        waking_since,
         engagement_expires_at,
         runtime_error,
         rest_reason,
@@ -12247,6 +12259,7 @@ mod tests {
             runtime_error: None,
             rest_reason: None,
             provider_activity: ProviderActivity::Resting,
+            waking_since: None,
             background_work: false,
             system_role: None,
             last_output_at: None,

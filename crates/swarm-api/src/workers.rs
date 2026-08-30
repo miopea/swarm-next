@@ -103,6 +103,9 @@ pub(super) async fn list_workers(
     let scout_id = task_store(&state)?
         .scout_worker_id()
         .map_err(|error| task_store_error(&error))?;
+    let waking = task_store(&state)?
+        .workers_being_woken()
+        .map_err(|error| task_store_error(&error))?;
     let workers = profiles
         .into_iter()
         .map(|profile| {
@@ -139,6 +142,10 @@ pub(super) async fn list_workers(
                         })
                         .flatten(),
                     provider_activity: activity,
+                    // A wake queued or in flight for this worker. Read once for
+                    // the whole roster rather than per worker, because this
+                    // list is rendered on every control-room poll.
+                    waking_since: waking.get(&profile_id).copied(),
                     background_work,
                     system_role: is_scout.then_some("scout"),
                     last_output_at,

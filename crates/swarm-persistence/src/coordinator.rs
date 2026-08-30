@@ -1,4 +1,5 @@
 use rusqlite::params;
+use std::collections::HashMap;
 use std::str::FromStr;
 use swarm_domain::{ControlRoomEventKind, TaskId, WorkerId, WorkerSessionId};
 use uuid::Uuid;
@@ -1414,6 +1415,46 @@ impl TaskStore {
             })
             .collect::<Result<Vec<_>, _>>()
             .map_err(TaskStoreError::from)
+    }
+
+    /// Workers with a wake queued or in flight, and since when.
+    ///
+    /// THE SILENCE THIS ENDS. Two tasks were routed to a sleeping Voice Bridge
+    /// worker at 20:40:57. The coordinator woke it at 20:45:28. In between,
+    /// four and a half minutes, nothing anywhere said a wake was coming — so
+    /// the operator watched a sleeping worker, concluded "the queen didn't wake
+    /// the worker", and filed that report FIFTEEN SECONDS after it woke.
+    ///
+    /// Queen had done nothing wrong and neither had they. The wake was sitting
+    /// in `coordinator_actions` as `wake_assigned_worker` the entire time, in
+    /// state queued and then running. The fact existed; nothing showed it.
+    ///
+    /// Reported as a FACT BESIDE the state rather than as a new attention
+    /// state, the way `background_work` is. A worker that is asleep really is
+    /// asleep, and rewriting what Sleeping means for every consumer to carry
+    /// one more piece of news is how the Resting collapse happened.
+    ///
+    /// # Errors
+    /// Returns persistence failures.
+    pub fn workers_being_woken(&self) -> Result<HashMap<WorkerId, i64>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT worker_id, MIN(created_at)
+             FROM coordinator_actions
+             WHERE kind = 'wake_assigned_worker' AND state IN ('queued', 'running')
+             GROUP BY worker_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let mut waking = HashMap::new();
+        for row in rows {
+            let (worker_id, since) = row?;
+            if let Ok(parsed) = worker_id.parse::<WorkerId>() {
+                waking.insert(parsed, since);
+            }
+        }
+        Ok(waking)
     }
 
     /// Claims at most one deterministic worker wake. A claimed action is never

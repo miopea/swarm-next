@@ -25,6 +25,18 @@ export function workerAttention(worker: Worker, now = Date.now()): WorkerAttenti
     ? "resting"
     : worker.attention_state;
   const shown = presentation[state];
+  // A WAKE IS COMING, AND SAYING SO IS THE WHOLE FIX. Two tasks were routed to
+  // a sleeping worker; the coordinator woke it four and a half minutes later.
+  // In between nothing said anything, so the operator concluded "the queen
+  // didn't wake the worker" and filed that report fifteen seconds after it
+  // woke. Queen had done nothing wrong and neither had they — the wake was
+  // sitting in coordinator_actions the entire time and no surface showed it.
+  //
+  // Only for a worker that is NOT running: a wake for one already awake is
+  // stale bookkeeping, not news.
+  if (!worker.running && worker.waking_since !== undefined) {
+    return { state, ...shown, label: "Waking…", compactLabel: "waking" };
+  }
   // Resting with something still running is not the same as resting with
   // nothing to do, and both used to read "Resting". The classifier is right to
   // call the turn over — treating the worker as busy stalled the whole Hive —
