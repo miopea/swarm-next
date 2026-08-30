@@ -12,6 +12,20 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.0.1
+
+**Workers keep running through this one**, whichever version you are coming
+from, and there is no schema change.
+
+### Fixes
+- What's New shows the release notes as they were written. 1.0.0 was the first
+  release whose notes used bold and inline code, and the panel printed the
+  asterisks and backticks instead of applying them
+- The What's New panel is much wider. It asked to be 760px and had been
+  overridden to 440px since the day it was written, so it has always been
+  narrower than intended — it is now up to 980px, and still fits a phone
+- Emphasis in that panel is now heavy enough to actually read as emphasis
+
 ## 1.0.0
 
 **Whether your workers survive this depends on where you are coming from.**
