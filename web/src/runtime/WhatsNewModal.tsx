@@ -1,5 +1,6 @@
 import type { ReleaseVersionNotes } from "../api";
 import { anyAwaitingWorkerEngine } from "./whatsNew";
+import { renderInline } from "./inlineMarkdown";
 
 /**
  * What arrived while the operator was away.
@@ -44,7 +45,9 @@ export default function WhatsNewModal({ releases, onDismiss, truncated = false }
                   <ul className="whats-new-notes">
                     {features.map((note, index) => (
                       <li key={`${release.version}-feature-${index}`}>
-                        <span className="whats-new-summary">{sentence(note.summary)}</span>
+                        <span className="whats-new-summary">
+                          {renderInline(note.summary, `${release.version}-feature-${index}`)}
+                        </span>
                         {note.needs_worker_engine_update && (
                           <span className="whats-new-pending"> · after the worker engine update</span>
                         )}
@@ -59,7 +62,9 @@ export default function WhatsNewModal({ releases, onDismiss, truncated = false }
                   <ul className="whats-new-notes">
                     {fixes.map((note, index) => (
                       <li key={`${release.version}-fix-${index}`}>
-                        <span className="whats-new-summary">{sentence(note.summary)}</span>
+                        <span className="whats-new-summary">
+                          {renderInline(note.summary, `${release.version}-fix-${index}`)}
+                        </span>
                         {note.needs_worker_engine_update && (
                           <span className="whats-new-pending"> · after the worker engine update</span>
                         )}
@@ -93,19 +98,4 @@ export default function WhatsNewModal({ releases, onDismiss, truncated = false }
       </div>
     </div>
   );
-}
-
-/**
- * A commit subject, read as a sentence.
- *
- * They are written lowercase to follow a verb — "fix: the shell window escapes
- * the container" — which reads correctly in a git log and reads like a fragment
- * anywhere else. The list is what the operator sees after an update, so it gets
- * a capital.
- *
- * Only the first character is touched. Rewording is the releaser's job; guessing
- * at it here would put words in their mouth.
- */
-function sentence(summary: string): string {
-  return summary.charAt(0).toUpperCase() + summary.slice(1);
 }

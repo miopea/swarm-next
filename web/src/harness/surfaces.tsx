@@ -14,6 +14,7 @@ import ConnectionsSettings from "../settings/ConnectionsSettings";
 import MachinePressureBadge from "../runtime/MachinePressureBadge";
 import StaleBundleNotice from "../StaleBundleNotice";
 import WorkerContextBar from "../workers/WorkerContextBar";
+import WhatsNewModal from "../runtime/WhatsNewModal";
 import { machinePressureNotice, type MachineResourceState } from "../runtime/machinePressure";
 
 /**
@@ -200,6 +201,29 @@ const asyncNoop = async () => undefined;
 export type Surface = { id: string; title: string; why: string; render: () => ReactNode };
 
 export const SURFACES: Surface[] = [
+  {
+    id: "whats-new",
+    title: "What's New, at the width it actually renders",
+    why: "1.0.0 printed its bullets' `**bold**` as literal asterisks, and the 760px width rule had been dead since it was written -- .dialog is defined later in the stylesheet and won on order",
+    render: () => (
+      <WhatsNewModal
+        onDismiss={() => {}}
+        releases={[{
+          version: "1.0.0",
+          notes: [
+            // Bold at the START of a bullet: this is the shape 1.0.0 shipped,
+            // and the shape that also has to survive the sentence capital.
+            { summary: "**Feedback goes to GitHub.** The feedback dialog now files a real issue on the repository, and tells you where it went — including when it could not get there, instead of silently keeping it local", kind: "feat", needs_worker_engine_update: false },
+            { summary: "**From 0.8.x — every worker session ends.** You are on the older terminal protocol, and the app and the worker engine have to be swapped together. The command is the same; there is nothing extra to run", kind: "feat", needs_worker_engine_update: false },
+            // Code, and an identifier an italic rule would have eaten.
+            { summary: "Check which you are on with `cat ~/.local/lib/swarm/current/VERSION` before installing", kind: "feat", needs_worker_engine_update: true },
+            { summary: "A store failure is reported as what it was — the blanket \"temporarily unavailable\" that swallowed every underlying error in email_reply_deliveries now records the actual cause", kind: "fix", needs_worker_engine_update: false },
+            { summary: "**A page load stops replaying the whole event history.** Opening the control room on a phone read thousands of entries to show the newest sixteen", kind: "fix", needs_worker_engine_update: false },
+          ],
+        }]}
+      />
+    ),
+  },
   {
     id: "worker-row",
     title: "The worker row at phone width",

@@ -359,3 +359,40 @@ test("the Needs-you count clears a small-text bar in both themes, not merely AA"
   // AA in both and was still twice as legible in one as in the other.
   expect(Math.min(light, dark) / Math.max(light, dark)).toBeGreaterThan(0.6);
 });
+
+// THE WIDTH RULE HAS TO WIN, NOT MERELY EXIST. `.whats-new { width: min(760px,
+// 100%) }` sat above `.dialog { width: min(440px, 100%) }` with the same
+// specificity, so the later rule won and the panel rendered at 440px for its
+// whole life. Nothing failed: the rule was present, correct, and dead.
+test("gives the What's New panel a width that outranks the base dialog", () => {
+  const widthOf = (selector: string) =>
+    stylesheet
+      .split("\n")
+      .find((line: string) => line.trimStart().startsWith(`${selector} {`))
+      ?.match(/width:\s*([^;]+);/)?.[1]
+      ?.trim();
+
+  const base = widthOf(".dialog");
+  const panel = widthOf(".dialog.whats-new");
+  expect(base).toBeDefined();
+  expect(panel).toBeDefined();
+
+  // Qualified with .dialog, so it does not depend on where it sits in the file.
+  // The bare single-class form is what lost; if it returns, so does the bug.
+  expect(stylesheet).not.toMatch(/^\.whats-new\s*\{[^}]*width:/m);
+
+  const pixels = (rule: string) => Number(rule.match(/(\d+)px/)?.[1]);
+  expect(pixels(panel as string)).toBeGreaterThan(pixels(base as string));
+});
+
+// <strong> WAS NOT ENOUGH. 1.0.0's bullets rendered real <strong> elements that
+// looked exactly like body text, because the global reset sets strong to 500
+// against a 400 body. A test asserting the TAG passes while the screen is
+// unchanged -- this asserts the weight that makes it visible.
+test("makes emphasis in What's New heavier than the global strong reset", () => {
+  const globalStrong = stylesheet.match(/^h1, h2, h3, h4, strong, button \{[^}]*font-weight:\s*(\d+)/m)?.[1];
+  const panelStrong = stylesheet.match(/^\.dialog\.whats-new strong \{[^}]*font-weight:\s*(\d+)/m)?.[1];
+  expect(globalStrong).toBeDefined();
+  expect(panelStrong).toBeDefined();
+  expect(Number(panelStrong)).toBeGreaterThan(Number(globalStrong));
+});
