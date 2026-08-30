@@ -1568,6 +1568,21 @@ impl AppState {
         }
     }
 
+    /// EVERY open issue, and that is a ruling rather than an oversight.
+    ///
+    /// Asked on 2026-08-30 whether this should take only reports filed through
+    /// Swarm — the alternative being a match on the "_Filed from Swarm._"
+    /// footer — the operator chose everything. The reasoning is the one that
+    /// started this whole feature: an issue somebody opens on GitHub by hand is
+    /// exactly the report most likely to be missed, and a filter would drop it
+    /// silently, with nothing anywhere saying it had been skipped.
+    ///
+    /// This is why an architecture approval and a dogfood report arrive side by
+    /// side on the board. Both are open issues on a repository this Hive has
+    /// opted in to triaging, and the opt-in is what scopes it — see
+    /// `SWARM_GITHUB_ISSUE_INTAKE`. Do not add a filter here without a ruling
+    /// that replaces this one.
+    ///
     /// Brings open GitHub issues down as DRAFT tasks for Queen to triage.
     ///
     /// The operator's shape, from the ruling that authorised this: "the issues
