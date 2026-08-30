@@ -75,6 +75,13 @@ pub(super) async fn github_readiness(
         Json(serde_json::json!({
             "configured": repository.is_some(),
             "repository": repository,
+            // REPORTED SEPARATELY, because they are separate decisions. Filing
+            // feedback is what every Swarm user does; receiving a repository's
+            // whole issue list is what its maintainer does. A single flag for
+            // both is how "I have a token" came to stand for "I triage this
+            // repo", and a reader could not tell which they had.
+            "issue_intake": state.github_issue_intake_repository().is_some(),
+            "issue_intake_repository": state.github_issue_intake_repository(),
         })),
     )
         .into_response())

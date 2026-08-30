@@ -219,6 +219,16 @@ pub struct AppState {
     provider_activity: Arc<RwLock<HashMap<WorkerSessionId, provider_activity::ProviderSignals>>>,
     coordinator_start_admission: Arc<AtomicU8>,
     github_feedback: Option<github_feedback::GithubFeedback>,
+    /// The repository whose open issues become draft tasks here, if any.
+    ///
+    /// SEPARATE FROM `github_feedback` BECAUSE THEY ARE DIFFERENT ROLES.
+    /// Filing feedback is something every Swarm user does; pulling a
+    /// repository's whole issue list onto a task board is something its
+    /// MAINTAINER does. Both used to key off the same credential, so "I have a
+    /// GitHub token" was silently doing the job of "I triage this repo" — and
+    /// the only thing keeping one operator's backlog off everybody else's board
+    /// was that nobody else had set the variable.
+    github_issue_intake: Option<github_feedback::GithubFeedback>,
     github_issue_workspace: String,
     /// The device code of an authorisation somebody is midway through.
     ///
@@ -311,6 +321,7 @@ impl AppState {
             worker_recovery_attempts: Arc::new(RwLock::new(HashMap::new())),
             provider_activity: Arc::new(RwLock::new(HashMap::new())),
             github_feedback: None,
+            github_issue_intake: None,
             github_issue_workspace: String::new(),
             pending_github_device: std::sync::Arc::new(std::sync::Mutex::new(None)),
             github_client_id: std::env::var("SWARM_GITHUB_APP_CLIENT_ID")
@@ -532,6 +543,34 @@ impl AppState {
         // The same shape the email intake uses for its own arrivals: a marker
         // rather than a checkout, because an issue has no repository on this
         // machine until Queen routes it to a worker that does.
+        "github://issues".clone_into(&mut self.github_issue_workspace);
+        Ok(self)
+    }
+
+    /// The repository whose issues arrive here as draft tasks, when one does.
+    pub(crate) fn github_issue_intake_repository(&self) -> Option<&str> {
+        self.github_issue_intake
+            .as_ref()
+            .map(github_feedback::GithubFeedback::repository)
+    }
+
+    /// Opts this Hive in to turning a repository's open issues into draft tasks.
+    ///
+    /// DEFAULT OFF, and deliberately a second decision rather than a
+    /// consequence of the first. A Hive that files feedback is a reporter; a
+    /// Hive that takes delivery of every open issue is a maintainer, and
+    /// conflating them means the moment a colleague's install gains a
+    /// credential their board fills with somebody else's bugs and their Queen
+    /// starts routing them.
+    ///
+    /// # Errors
+    /// Returns a message when the repository is not `owner/name`.
+    pub fn with_github_issue_intake(
+        mut self,
+        repository: &str,
+        token: &str,
+    ) -> Result<Self, String> {
+        self.github_issue_intake = Some(github_feedback::GithubFeedback::new(repository, token)?);
         "github://issues".clone_into(&mut self.github_issue_workspace);
         Ok(self)
     }
@@ -1541,7 +1580,9 @@ impl AppState {
     /// with no GitHub configured has nothing to poll and should not say so
     /// every minute.
     pub async fn intake_github_issues(&self) {
-        let Some(github) = self.github_feedback.as_ref() else {
+        // The INTAKE client, never the filing one. A Hive that can file must
+        // not thereby receive.
+        let Some(github) = self.github_issue_intake.as_ref() else {
             return;
         };
         let Ok(store) = task_store(self) else { return };
@@ -8518,6 +8559,44 @@ fn require_valid_size(rows: u16, columns: u16) -> Result<(), ApiError> {
 
 #[cfg(test)]
 mod tests {
+    /// Filing feedback must never turn a Hive into a recipient of somebody
+    /// else's issue backlog.
+    ///
+    /// THE DEFECT THIS FENCES. Both directions used to read the same
+    /// credential, so the only thing keeping one operator's issues off every
+    /// other Swarm user's task board was that nobody else had set
+    /// `SWARM_GITHUB_REPOSITORY`. That is configuration standing in for design,
+    /// and it was about to get worse: the GitHub App is installable by any
+    /// account, so colleagues will hold credentials as a matter of course.
+    ///
+    /// A colleague's Hive that files feedback would have started pulling down
+    /// every open issue on the maintainer's repository, filing each as a draft
+    /// task, and their Queen would have begun routing another project's bugs to
+    /// their workers.
+    #[test]
+    fn a_hive_that_can_file_feedback_does_not_thereby_receive_issues() {
+        let filing_only = super::AppState::default()
+            .with_github_feedback("miopea/swarm-next", "token")
+            .expect("a valid repository");
+
+        // It can file.
+        assert!(filing_only.github_feedback.is_some());
+        // And it takes delivery of nothing. This is the ordinary case for
+        // everyone who is not maintaining the repository.
+        assert!(filing_only.github_issue_intake.is_none());
+        assert!(filing_only.github_issue_intake_repository().is_none());
+
+        // Opting in is a SECOND decision, and it can name a different
+        // repository than the one feedback is filed into.
+        let maintainer = filing_only
+            .with_github_issue_intake("miopea/swarm-next", "token")
+            .expect("a valid repository");
+        assert_eq!(
+            maintainer.github_issue_intake_repository(),
+            Some("miopea/swarm-next")
+        );
+    }
+
     use std::{
         env,
         path::PathBuf,

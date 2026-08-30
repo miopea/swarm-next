@@ -36,6 +36,42 @@ fn configure_github_feedback(state: AppState) -> AppState {
     }
 }
 
+/// Opts this Hive in to receiving a repository's open issues as draft tasks.
+///
+/// A SECOND, EXPLICIT DECISION. Filing feedback is what every Swarm user does;
+/// taking delivery of a repository's whole issue list is what its maintainer
+/// does. Before this existed both keyed off `SWARM_GITHUB_TOKEN`, so the only
+/// thing keeping one operator's backlog off everybody else's task board was
+/// that nobody else had set the variable — configuration standing in for
+/// design, and about to get worse as more people connect accounts.
+///
+/// The repository is named here rather than inherited from
+/// `SWARM_GITHUB_REPOSITORY` so that a maintainer can triage a repository they do
+/// not file feedback into, and so that reading this file tells you which repo
+/// arrives on this board.
+fn configure_github_issue_intake(state: AppState) -> AppState {
+    match (
+        env::var("SWARM_GITHUB_ISSUE_INTAKE").ok(),
+        env::var("SWARM_GITHUB_TOKEN").ok(),
+    ) {
+        (Some(repository), Some(token)) => {
+            match state.clone().with_github_issue_intake(&repository, &token) {
+                Ok(configured) => configured,
+                Err(error) => state.with_degraded_subsystem("GitHub issue intake", error),
+            }
+        }
+        // Naming a repository with no credential to read it is a mistake worth
+        // reporting, not a silent no-op.
+        (Some(_), None) => state.with_degraded_subsystem(
+            "GitHub issue intake",
+            "SWARM_GITHUB_ISSUE_INTAKE needs SWARM_GITHUB_TOKEN as well".to_owned(),
+        ),
+        // A token without the opt-in is the ORDINARY case for anyone who is not
+        // maintaining the repository, and must stay silent.
+        (None, _) => state,
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -123,6 +159,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
     }
     state = configure_github_feedback(state);
+    state = configure_github_issue_intake(state);
     state = state.with_email_oauth_paths(
         email_configuration_path(&database_path),
         email_token_path(&database_path),
