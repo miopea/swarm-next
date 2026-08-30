@@ -947,6 +947,66 @@ mod completion_evidence_tests {
         );
     }
 
+    /// Work that owes somebody a reply is not closed automatically.
+    ///
+    /// THE OPERATOR'S RULE: "there should always be a reply included if a reply
+    /// is needed." Before this, the coordinator settled any reviewed task with a
+    /// recorded deployment — correctly by the rule it had — and an email task
+    /// whose worker had not written the reply went straight to completed. The
+    /// operator then found a card offering them a blank box and a "Write the
+    /// reply" button, on work that was finished and deployed.
+    ///
+    /// It happened on 01a04f90 minutes after the gate that made drafting
+    /// possible at Review was shipped, by the worker that shipped it — which is
+    /// the argument for a rule in the query rather than a habit in a worker.
+    ///
+    /// SKIPPED, NOT REFUSED: the task stays in Review, where the Hive already
+    /// surfaces it, and the next tick closes it once a reply exists. Refusing
+    /// would stall every other completion behind one unanswered thread.
+    #[test]
+    fn work_that_owes_a_reply_is_left_in_review_rather_than_closed() {
+        let store = TaskStore::in_memory().unwrap();
+        let plain = task(&store);
+        let emailed = task(&store);
+        // The email link is what makes somebody the audience for this work.
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "INSERT INTO email_message_links (
+                     task_id, integration_id, message_id, conversation_id,
+                     internet_message_id, sender_name, sender_address, received_at, web_url
+                 ) VALUES (?1, 'outlook', 'm-1', 'c-1', '<m1@test>', 'Bradford', 'b@test', 1, 'https://example.test')",
+                [emailed.to_string()],
+            )
+            .unwrap();
+        for id in [plain, emailed] {
+            store
+                .record_task_deployment(id, "production", "release 42", 1_000)
+                .unwrap();
+        }
+
+        let closed = store.complete_reviewed_work_with_deployment().unwrap();
+
+        // The ordinary task closes on its evidence, exactly as before.
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].task_id, plain);
+        assert_eq!(store.get_task(plain).unwrap().state, TaskState::Completed);
+        // The emailed one waits for its reply, with the same evidence.
+        assert_eq!(store.get_task(emailed).unwrap().state, TaskState::Review);
+
+        // AND IT IS NOT STUCK. Once the reply exists the next tick closes it —
+        // a rule that could only be satisfied by never using email would be a
+        // worse defect than the one it replaced.
+        store
+            .prepare_email_reply(emailed, "Fixed, and running on your Hive.")
+            .unwrap();
+        let closed_now = store.complete_reviewed_work_with_deployment().unwrap();
+        assert_eq!(closed_now.len(), 1);
+        assert_eq!(closed_now[0].task_id, emailed);
+        assert_eq!(store.get_task(emailed).unwrap().state, TaskState::Completed);
+    }
+
     /// Work with nothing to show, and work whose exemption nobody approved,
     /// both stay in review. The second is the case that matters: a worker
     /// cannot approve its own claim by leaving it lying there.
@@ -1118,6 +1178,29 @@ impl TaskStore {
                        WHERE newest.task_id = task.id
                        ORDER BY newest.deployed_at DESC, newest.recorded_at DESC, newest.id DESC
                        LIMIT 1
+                   )
+                   -- WORK THAT OWES SOMEBODY A REPLY IS NOT WELL-FORMED, so the
+                   -- coordinator leaves it in review rather than closing it.
+                   --
+                   -- This is the path that actually closed 01a04f90: a worker
+                   -- recorded its deployment, handed off, and the coordinator
+                   -- settled it seconds later — correctly, by the rule it had.
+                   -- The operator then found a card offering them a blank box
+                   -- and a Write the reply button, on work that was finished and
+                   -- deployed. Their words: \"there should always be a reply
+                   -- included if a reply is needed.\"
+                   --
+                   -- SKIPPED, NOT REFUSED. Erroring here would stall every other
+                   -- completion behind one unanswered thread; leaving it in
+                   -- review is already a state the Hive surfaces, and a worker
+                   -- can write the reply and let the next tick close it.
+                   AND NOT EXISTS (
+                       SELECT 1 FROM email_message_links link
+                       WHERE link.task_id = task.id
+                         AND NOT EXISTS (
+                             SELECT 1 FROM email_reply_deliveries reply
+                             WHERE reply.task_id = task.id
+                         )
                    )
                  ORDER BY task.updated_at",
             )?;
