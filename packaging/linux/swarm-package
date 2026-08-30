@@ -776,6 +776,20 @@ disable_development() {
   printf 'Development reload disabled; the current release remains active.\n'
 }
 
+# A cheap signature of everything a development build will read.
+#
+# `status --porcelain` covers added, deleted and untracked files and respects
+# .gitignore, so build output under target/, dist/ and node_modules/ does not
+# register as a change. `diff HEAD` covers edits to tracked files, which is the
+# case that actually bit: a file rewritten in place has the same name, the same
+# mode and often the same length.
+dev_source_fingerprint() {
+  {
+    git -C "$1" status --porcelain
+    git -C "$1" diff HEAD
+  } 2>/dev/null | sha256sum | cut -d' ' -f1
+}
+
 reload_development() {
   [ -f "$dev_config" ] || die "development mode is not configured"
   dev_checkout=$(sed -n 's/^SWARM_DEV_CHECKOUT=//p' "$dev_config")
@@ -832,6 +846,20 @@ Build and migrate instead, which swaps the API and the host together. It STOPS E
   # only way to learn otherwise was journalctl. The operator: "it is taking a
   # lot of work to find errors."
   dev_log="$state_root/development-reload.log"
+  # WHAT THE TREE LOOKED LIKE WHEN THE BUILD STARTED.
+  #
+  # The revision above is `git rev-parse HEAD`, but the build reads the WORKING
+  # TREE — so the stamp names a commit while the bundle contains whatever is on
+  # disk. That is usually the point of a development reload and is fine while
+  # the disk holds still.
+  #
+  # It did not hold still on 2026-08-30. A file was edited during a five-minute
+  # build, vite read it mid-edit, and the operator's control room came up
+  # showing "Swarm hit a problem drawing this view" on every load — a temporal
+  # dead zone throw from a half-applied change. The status said
+  # revision=42f5f7b5470a, the author's disk typechecked clean, and the running
+  # bundle matched neither. Nothing anywhere could have told them apart.
+  dev_source_before=$(dev_source_fingerprint "$dev_checkout")
   fail_step=build
   if ! bundle_path=$("$dev_checkout/packaging/linux/build-development-release.sh" "$dev_build_root" 2>"$dev_log"); then
     fail_detail=$(last_error "$dev_log")
@@ -840,6 +868,18 @@ Build and migrate instead, which swaps the API and the host together. It STOPS E
   fi
   cat "$dev_log" >&2 || true
   [ -d "$bundle_path" ] || die "development builder did not return a release directory"
+  # AND WHETHER IT HELD STILL. Checked before INSTALL rather than before the
+  # build, because a bundle of unknown provenance is only harmful once it is
+  # serving people.
+  dev_source_after=$(dev_source_fingerprint "$dev_checkout")
+  if [ "$dev_source_before" != "$dev_source_after" ]; then
+    fail_step=source-moved
+    fail_changed=nothing
+    fail_next="reload again"
+    die "the working copy changed while this build was running, so the bundle matches neither the revision it is stamped with nor the files on disk now.
+
+Nothing was installed. Reload again once the checkout has stopped moving."
+  fi
   fail_step=install
   if ! "$bundle_path/swarm-package" update "$bundle_path" 2>"$dev_log"; then
     fail_detail=$(last_error "$dev_log")
