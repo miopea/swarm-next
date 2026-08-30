@@ -378,8 +378,17 @@ export class TerminalController {
             }
             return this.#applyRestoredFocus(restoreFocus);
           }
-          const fitted = await this.#surface.fit();
-          this.#connection.resize(fitted.rows, fitted.columns, "echo");
+          // THROUGH THE ONE PLACE THAT KNOWS THE RULE, even though this branch
+          // has already established that this device owns the geometry and
+          // could mutate safely. The invariant survived being stated at four
+          // call sites exactly as well as it survived being stated at one: it
+          // was taught to the one the bug report arrived through. A second
+          // caller that happens to be correct today is a second caller that
+          // will not be told when the rule changes.
+          const fitted = await this.#measureForResize();
+          if (fitted) {
+            this.#connection.resize(fitted.rows, fitted.columns, "echo");
+          }
         } catch {
           // Responsive PWA transitions can briefly leave the mounted surface
           // without measurable font metrics. The canonical snapshot is already

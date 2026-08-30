@@ -94,3 +94,4 @@ Current decision records:
 36. [Failure records — one shape for every failure](37-failure-records.md)
 37. [Looking at the interface](38-looking-at-the-interface.md)
 38. [Connecting an outside tool](39-connecting-an-outside-tool.md)
+39. [Checks that measure the wrong thing](40-checks-that-measure-the-wrong-thing.md)
