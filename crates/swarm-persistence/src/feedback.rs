@@ -1,3 +1,4 @@
+use rusqlite::OptionalExtension;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -6,6 +7,21 @@ use swarm_domain::{Task, TaskId};
 
 use super::{TaskStore, TaskStoreError};
 use crate::events::insert_control_room_event;
+
+/// The GitHub account this Hive files feedback as.
+///
+/// `access_token` is in here because the filing path needs it; it is never
+/// serialised to a client. What the UI is told is the login and whether the
+/// connection is still good.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GithubConnection {
+    pub login: String,
+    pub access_token: String,
+    pub access_expires_at: Option<i64>,
+    pub refresh_token: Option<String>,
+    pub refresh_expires_at: Option<i64>,
+    pub connected_at: i64,
+}
 
 const MAX_FEEDBACK_NOTE_BYTES: usize = 8_000;
 const MAX_FEEDBACK_BUNDLE_BYTES: usize = 128 * 1024;
@@ -138,6 +154,80 @@ impl TaskStore {
         Ok(Some(self.get_task(task_id)?))
     }
 
+    /// Remembers the GitHub account this Hive files feedback as.
+    ///
+    /// Replaces rather than accumulates: connecting a second account means the
+    /// first is no longer the answer, and keeping both would leave the filing
+    /// path picking one.
+    ///
+    /// # Errors
+    /// Returns validation or persistence failures.
+    pub fn save_github_connection(
+        &self,
+        login: &str,
+        access_token: &str,
+        access_expires_at: Option<i64>,
+        refresh_token: Option<&str>,
+        refresh_expires_at: Option<i64>,
+    ) -> Result<GithubConnection, TaskStoreError> {
+        let login = login.trim();
+        if login.is_empty() || login.len() > 128 || access_token.trim().is_empty() {
+            return Err(TaskStoreError::InvalidDogfoodReport);
+        }
+        let connection = self.connection()?;
+        connection.execute(
+            "INSERT INTO github_user_connection (
+                 singleton, login, access_token, access_expires_at, refresh_token, refresh_expires_at
+             ) VALUES (1, ?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT (singleton) DO UPDATE SET
+                 login = excluded.login,
+                 access_token = excluded.access_token,
+                 access_expires_at = excluded.access_expires_at,
+                 refresh_token = excluded.refresh_token,
+                 refresh_expires_at = excluded.refresh_expires_at,
+                 connected_at = unixepoch()",
+            params![login, access_token, access_expires_at, refresh_token, refresh_expires_at],
+        )?;
+        drop(connection);
+        self.github_connection()?.ok_or(TaskStoreError::NotFound)
+    }
+
+    /// The connected GitHub account, if there is one.
+    ///
+    /// # Errors
+    /// Returns persistence failures.
+    pub fn github_connection(&self) -> Result<Option<GithubConnection>, TaskStoreError> {
+        let connection = self.connection()?;
+        let found = connection
+            .query_row(
+                "SELECT login, access_token, access_expires_at, refresh_token, refresh_expires_at, connected_at
+                 FROM github_user_connection WHERE singleton = 1",
+                [],
+                |row| {
+                    Ok(GithubConnection {
+                        login: row.get(0)?,
+                        access_token: row.get(1)?,
+                        access_expires_at: row.get(2)?,
+                        refresh_token: row.get(3)?,
+                        refresh_expires_at: row.get(4)?,
+                        connected_at: row.get(5)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(found)
+    }
+
+    /// Forgets the connected account, so filing falls back to anonymous.
+    ///
+    /// # Errors
+    /// Returns persistence failures.
+    pub fn forget_github_connection(&self) -> Result<(), TaskStoreError> {
+        let connection = self.connection()?;
+        connection.execute("DELETE FROM github_user_connection WHERE singleton = 1", [])?;
+        Ok(())
+    }
+
     /// Records where a report was filed, so a person can tell afterwards.
     ///
     /// # Errors
@@ -250,6 +340,34 @@ fn map_report(row: &rusqlite::Row<'_>) -> rusqlite::Result<DogfoodReport> {
         github_issue_url: row.get(5)?,
         created_at: row.get(6)?,
     })
+}
+
+/// Stores the GitHub account this Hive files feedback as, when someone has
+/// connected one.
+///
+/// ONE ROW, because a Hive has one operator identity. Keyed on a singleton
+/// rather than an operator id so that reading it needs no join and cannot
+/// return two answers; if Hives ever carry several people this becomes a real
+/// key and the migration is obvious.
+///
+/// The tokens EXPIRE — the app was registered with "Expire user authorization
+/// tokens" on, which is the safer setting and the reason `refresh_token` is here
+/// rather than a permanent credential sitting in a table forever.
+pub(super) fn migrate_github_user_connection(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS github_user_connection (
+             singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+             login TEXT NOT NULL,
+             access_token TEXT NOT NULL,
+             access_expires_at INTEGER,
+             refresh_token TEXT,
+             refresh_expires_at INTEGER,
+             connected_at INTEGER NOT NULL DEFAULT (unixepoch())
+         );
+         PRAGMA user_version = 109;",
+    )
 }
 
 /// A title that fits the board, cut on a char boundary.

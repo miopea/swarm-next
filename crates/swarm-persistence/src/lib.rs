@@ -165,7 +165,9 @@ const FEEDBACK_ISSUE_SCHEMA_VERSION: i64 = 106;
 const GITHUB_ISSUE_INTAKE_SCHEMA_VERSION: i64 = 107;
 /// The evidence rule moves off the draft and onto the send.
 const REPLY_EVIDENCE_GUARDS_THE_SEND_SCHEMA_VERSION: i64 = 108;
-const CURRENT_SCHEMA_VERSION: i64 = REPLY_EVIDENCE_GUARDS_THE_SEND_SCHEMA_VERSION;
+/// A person's own GitHub account, so their feedback is filed as them.
+const GITHUB_USER_CONNECTION_SCHEMA_VERSION: i64 = 109;
+const CURRENT_SCHEMA_VERSION: i64 = GITHUB_USER_CONNECTION_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -3397,6 +3399,9 @@ fn migrate_newest_schema_steps(
     }
     if schema_version < REPLY_EVIDENCE_GUARDS_THE_SEND_SCHEMA_VERSION {
         email::migrate_reply_evidence_guards_the_send(transaction)?;
+    }
+    if schema_version < GITHUB_USER_CONNECTION_SCHEMA_VERSION {
+        feedback::migrate_github_user_connection(transaction)?;
     }
     Ok(())
 }

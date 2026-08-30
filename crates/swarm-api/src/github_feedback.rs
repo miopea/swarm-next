@@ -83,15 +83,31 @@ impl GithubFeedback {
     }
 
     /// Opens the issue and returns its public URL.
-    pub(super) async fn file(&self, report: &DogfoodReport) -> Result<String, GithubError> {
+    /// Files the report, as the connected account when there is one.
+    ///
+    /// `as_user` is a user-to-server token from the device flow. When it is
+    /// present the issue is authored by that person, which is the entire point:
+    /// GitHub then notifies THEM when it is closed, and the operator stops
+    /// being a relay for their own tracker.
+    pub(super) async fn file(
+        &self,
+        report: &DogfoodReport,
+        as_user: Option<&str>,
+    ) -> Result<String, GithubError> {
         let title = issue_title(report);
-        let body = issue_body(report);
+        let body = issue_body(report, as_user.is_none());
         let response = reqwest::Client::new()
             .post(format!(
                 "https://api.github.com/repos/{}/issues",
                 self.repository
             ))
-            .header("authorization", format!("Bearer {}", self.token))
+            // The person's own credential when they have connected one, this
+            // Hive's otherwise. Which one is used decides who GitHub shows as
+            // the author, and therefore who hears back.
+            .header(
+                "authorization",
+                format!("Bearer {}", as_user.unwrap_or(&self.token)),
+            )
             .header("accept", "application/vnd.github+json")
             .header("user-agent", "swarm-next")
             .json(&serde_json::json!({ "title": title, "body": body }))
@@ -173,7 +189,7 @@ fn issue_title(report: &DogfoodReport) -> String {
     title
 }
 
-fn issue_body(report: &DogfoodReport) -> String {
+fn issue_body(report: &DogfoodReport, anonymous: bool) -> String {
     let mut body = String::new();
     if !report.expectation.trim().is_empty() {
         body.push_str("**Expected**\n\n");
@@ -206,9 +222,16 @@ fn issue_body(report: &DogfoodReport) -> String {
     // credential, not by the person who hit the button, so closing it with
     // "fixed!" reaches nobody. A maintainer who does not know that is being
     // quietly misled by their own issue tracker.
-    body.push_str(
-        "_Filed from Swarm by an anonymous reporter, using this Hive's credential rather than their own account. Replies here will not reach them._",
-    );
+    if anonymous {
+        body.push_str(
+            "_Filed from Swarm by an anonymous reporter, using this Hive's credential rather than their own account. Replies here will not reach them._",
+        );
+    } else {
+        // AUTHORED BY THEM, so the warning would be false. GitHub already shows
+        // who opened it and already notifies them; saying more here would only
+        // repeat what the issue header states better.
+        body.push_str("_Filed from Swarm._");
+    }
     body
 }
 
@@ -254,7 +277,7 @@ mod tests {
 
     #[test]
     fn the_body_says_a_screenshot_exists_without_sending_it() {
-        let body = issue_body(&report("It saves", "It vanished", Some("shot.png")));
+        let body = issue_body(&report("It saves", "It vanished", Some("shot.png")), true);
         assert!(body.contains("Expected"));
         assert!(body.contains("It vanished"));
         assert!(
@@ -319,7 +342,7 @@ mod tests {
             created_at: 0,
         };
 
-        let body = issue_body(&report);
+        let body = issue_body(&report, true);
 
         // The reporter's own words survive.
         assert!(body.contains("It jumps back on every scroll"), "{body}");

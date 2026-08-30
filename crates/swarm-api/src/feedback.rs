@@ -80,6 +80,152 @@ pub(super) async fn github_readiness(
         .into_response())
 }
 
+/// Starts connecting a person's own GitHub account, and returns the code to type.
+///
+/// FRICTIONLESS IS THE REQUIREMENT, and this is the least-friction shape that
+/// still ends with a real account: no password, no token to paste, no app for
+/// the operator to register, and it behaves the same on a phone. Nothing here
+/// blocks filing — a person who never finishes this still files anonymously.
+pub(super) async fn github_connect_start(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let invitation = crate::github_device::invite(state.github_client_id())
+        .await
+        .map_err(device_error)?;
+    // The device code is the secret half and stays on the server. Sending it to
+    // the browser would put a credential in a place it is not needed.
+    state.remember_pending_github_device(&invitation.device_code);
+    Ok((
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({
+            "user_code": invitation.user_code,
+            "verification_uri": invitation.verification_uri,
+            "expires_in": invitation.expires_in,
+            "interval": invitation.interval,
+        })),
+    )
+        .into_response())
+}
+
+/// Asks once whether they have finished authorising, and stores the result.
+///
+/// Answers "waiting" rather than failing while they are still typing: GitHub
+/// reports that as an error field on a 200, and a client that treats it as one
+/// abandons an authorisation the person is halfway through.
+pub(super) async fn github_connect_claim(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let Some(device_code) = state.pending_github_device() else {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "github_connect_not_started",
+            "no GitHub connection is in progress on this Hive",
+        ));
+    };
+    let outcome = crate::github_device::claim(state.github_client_id(), &device_code)
+        .await
+        .map_err(device_error)?;
+    let body = match outcome {
+        crate::github_device::DeviceOutcome::Pending => {
+            serde_json::json!({ "state": "waiting" })
+        }
+        crate::github_device::DeviceOutcome::SlowDown { interval } => {
+            serde_json::json!({ "state": "waiting", "interval": interval })
+        }
+        crate::github_device::DeviceOutcome::Denied => {
+            state.forget_pending_github_device();
+            serde_json::json!({ "state": "declined" })
+        }
+        crate::github_device::DeviceOutcome::Expired => {
+            state.forget_pending_github_device();
+            serde_json::json!({ "state": "expired" })
+        }
+        crate::github_device::DeviceOutcome::Granted(tokens) => {
+            let login = crate::github_device::whoami(&tokens.access_token)
+                .await
+                .map_err(device_error)?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| i64::try_from(since.as_secs()).unwrap_or(0));
+            let store = task_store(&state)?;
+            store
+                .save_github_connection(
+                    &login,
+                    &tokens.access_token,
+                    tokens.expires_in.map(|seconds| now + seconds),
+                    tokens.refresh_token.as_deref(),
+                    tokens.refresh_token_expires_in.map(|seconds| now + seconds),
+                )
+                .map_err(|error| task_store_error(&error))?;
+            state.forget_pending_github_device();
+            serde_json::json!({ "state": "connected", "login": login })
+        }
+    };
+    Ok((
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(body),
+    )
+        .into_response())
+}
+
+/// Which account this Hive files as, if any. The token never leaves the server.
+pub(super) async fn github_connection(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let store = task_store(&state)?;
+    let held = store
+        .github_connection()
+        .map_err(|error| task_store_error(&error))?;
+    Ok((
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({
+            "connected": held.is_some(),
+            // The login and nothing else. A token in a response body is a token
+            // in a browser's memory, a proxy log and a screenshot.
+            "login": held.map(|connection| connection.login),
+        })),
+    )
+        .into_response())
+}
+
+/// Disconnects, so filing falls back to anonymous.
+pub(super) async fn github_disconnect(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let store = task_store(&state)?;
+    store
+        .forget_github_connection()
+        .map_err(|error| task_store_error(&error))?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// GitHub's own words, kept, because the two failures a person can cause here —
+/// declining, and letting the code expire — are not the same as an app that was
+/// registered without device flow, and only GitHub can tell them apart.
+fn device_error(error: crate::github_device::DeviceError) -> ApiError {
+    match error {
+        crate::github_device::DeviceError::Unreachable => ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "github_unreachable",
+            "GitHub could not be reached",
+        ),
+        crate::github_device::DeviceError::Refused(message) => {
+            ApiError::new(StatusCode::BAD_GATEWAY, "github_refused", message)
+        }
+    }
+}
+
 /// Files a saved report as a GitHub issue and records where it went.
 ///
 /// SEPARATE FROM SAVING, deliberately. The report is written to this Hive
@@ -124,16 +270,29 @@ pub(super) async fn file_on_github(
         )
             .into_response());
     }
-    let issue_url = github.file(&report).await.map_err(|error| match error {
-        crate::github_feedback::GithubError::Refused(message) => {
-            ApiError::new(StatusCode::BAD_GATEWAY, "github_refused", message)
-        }
-        crate::github_feedback::GithubError::Unreachable => ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            "github_unreachable",
-            "GitHub could not be reached; the report is still saved on this Hive",
-        ),
-    })?;
+    // WHOSE CREDENTIAL FILES THIS decides who hears back when it is closed, so
+    // it is read here rather than defaulted. A connected account authors its own
+    // issue and GitHub notifies them; without one the report is filed
+    // anonymously on this Hive's credential and says so in its own body.
+    let connection = store
+        .github_connection()
+        .map_err(|error| task_store_error(&error))?;
+    let issue_url = github
+        .file(
+            &report,
+            connection.as_ref().map(|held| held.access_token.as_str()),
+        )
+        .await
+        .map_err(|error| match error {
+            crate::github_feedback::GithubError::Refused(message) => {
+                ApiError::new(StatusCode::BAD_GATEWAY, "github_refused", message)
+            }
+            crate::github_feedback::GithubError::Unreachable => ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "github_unreachable",
+                "GitHub could not be reached; the report is still saved on this Hive",
+            ),
+        })?;
     let recorded = store
         .record_dogfood_report_issue(&report_id, &issue_url)
         .map_err(|error| task_store_error(&error))?;

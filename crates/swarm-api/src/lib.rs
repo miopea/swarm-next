@@ -14,6 +14,7 @@ mod email_attachments;
 mod email_reply_ai;
 pub mod federation_http;
 mod feedback;
+mod github_device;
 mod github_feedback;
 mod jira;
 mod jira_oauth;
@@ -219,6 +220,16 @@ pub struct AppState {
     coordinator_start_admission: Arc<AtomicU8>,
     github_feedback: Option<github_feedback::GithubFeedback>,
     github_issue_workspace: String,
+    /// The device code of an authorisation somebody is midway through.
+    ///
+    /// IN MEMORY AND NOT IN THE DATABASE, on purpose. It is a short-lived
+    /// credential that is worthless fifteen minutes after it is issued, and a
+    /// Hive that restarts mid-connect should ask again rather than resume with
+    /// a code the person has forgotten about.
+    /// `Arc`, not a bare `Mutex`: `AppState` is cloned per request handler, and a
+    /// copied lock would let one clone start a connection the next cannot see.
+    pending_github_device: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    github_client_id: String,
     /// Subsystems that failed to configure at startup and were left off.
     ///
     /// Fixed at startup rather than mutable: these come from configuration
@@ -301,6 +312,9 @@ impl AppState {
             provider_activity: Arc::new(RwLock::new(HashMap::new())),
             github_feedback: None,
             github_issue_workspace: String::new(),
+            pending_github_device: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            github_client_id: std::env::var("SWARM_GITHUB_APP_CLIENT_ID")
+                .unwrap_or_else(|_| github_device::DEFAULT_CLIENT_ID.to_owned()),
             coordinator_start_admission: Arc::new(AtomicU8::new(
                 runtime::CoordinatorStartAdmission::DeferredUnavailable.code(),
             )),
@@ -1480,6 +1494,38 @@ impl AppState {
                     tracing::warn!(action_id = %action.action_id, message = %error, "coordinator action outcome could not be persisted");
                 }
             }
+        }
+    }
+
+    /// The GitHub App every Hive authenticates people against.
+    ///
+    /// A constant with an environment override rather than required
+    /// configuration: the operator's requirement was that connecting be easy
+    /// for the person doing it, and an install that cannot connect until
+    /// somebody sets a variable fails that before it starts. A client id is
+    /// public in every OAuth request that carries it, so there is nothing here
+    /// to protect.
+    pub(crate) fn github_client_id(&self) -> &str {
+        self.github_client_id.as_str()
+    }
+
+    /// Holds the device code for an authorisation in progress.
+    pub(crate) fn remember_pending_github_device(&self, device_code: &str) {
+        if let Ok(mut pending) = self.pending_github_device.lock() {
+            *pending = Some(device_code.to_owned());
+        }
+    }
+
+    pub(crate) fn pending_github_device(&self) -> Option<String> {
+        self.pending_github_device
+            .lock()
+            .ok()
+            .and_then(|pending| pending.clone())
+    }
+
+    pub(crate) fn forget_pending_github_device(&self) {
+        if let Ok(mut pending) = self.pending_github_device.lock() {
+            *pending = None;
         }
     }
 
@@ -3376,6 +3422,18 @@ fn api_router(state: AppState) -> Router {
             get(feedback::list_reports).post(feedback::create_report),
         )
         .route("/api/v1/feedback/github", get(feedback::github_readiness))
+        .route(
+            "/api/v1/integrations/github/connect",
+            post(feedback::github_connect_start),
+        )
+        .route(
+            "/api/v1/integrations/github/connect/claim",
+            post(feedback::github_connect_claim),
+        )
+        .route(
+            "/api/v1/integrations/github/connection",
+            get(feedback::github_connection).delete(feedback::github_disconnect),
+        )
         .route(
             "/api/v1/feedback/reports/{report_id}/github",
             post(feedback::file_on_github),
