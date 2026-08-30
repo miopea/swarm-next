@@ -12,6 +12,18 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.0.2
+
+**Workers keep running through this one**, and there is no schema change.
+
+### New features
+- What's New can show you the releases before the one you just took. An
+  **Earlier releases** button under the new notes opens the rest of the history
+  your Hive already carries, each labelled with its version
+- **Settings → Updates → Release notes** opens that same panel whenever you
+  want it. Until now What's New appeared once after an update and was gone for
+  good the moment you dismissed it
+
 ## 1.0.1
 
 **Workers keep running through this one**, whichever version you are coming
