@@ -209,11 +209,27 @@ export const SURFACES: Surface[] = [
       // product puts them in, so the mobile rules under test actually apply.
       <div className="workspace-header">
         <div><p className="eyebrow">Persistent terminal</p><div className="workspace-heading"><h2>BFG Watchfaces</h2></div></div>
+        {/* BOTH BRANCHES OF THE TRIGGER, because it renders one OR the other and
+            measuring one of them is a check that cannot fail for the other.
+            That is exactly how a specificity loss shipped: the task line was
+            hidden, the apiary indicator was not, and the fixture only ever
+            rendered the task line. */}
         <button className="mobile-worker-switcher-trigger" type="button" aria-haspopup="dialog" aria-label="Switch worker, current BFG Watchfaces">
           <span className="worker-avatar" />
           <span>
             <span className="mobile-worker-task">Build the catalog service: anonymous submit, moderation queue</span>
             <strong>BFG Watchfaces</strong>
+          </span>
+          <span aria-hidden="true">⌄</span>
+        </button>
+        <button className="mobile-worker-switcher-trigger" type="button" aria-haspopup="dialog" aria-label="Switch worker, current BudgetBug">
+          <span className="worker-avatar" />
+          <span>
+            <span className="hive-context-indicator compact">
+              <span className="hive-context-name">Grand Garden</span>
+              <span className="hive-context-role keeper">KEEPER</span>
+            </span>
+            <strong>BudgetBug</strong>
           </span>
           <span aria-hidden="true">⌄</span>
         </button>
