@@ -1679,6 +1679,58 @@ export async function fetchGithubFeedbackReadiness(
   return response.json() as Promise<{ configured: boolean; repository: string | null }>;
 }
 
+/** Which GitHub account this Hive files as, if a person has connected one. */
+export async function fetchGithubConnection(
+  operatorToken: string,
+): Promise<{ connected: boolean; login: string | null }> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/github/connection");
+  return response.json() as Promise<{ connected: boolean; login: string | null }>;
+}
+
+/**
+ * Starts connecting a GitHub account and returns the code to type.
+ *
+ * The device code itself stays on the server. What comes back is only what a
+ * person needs to see.
+ */
+export async function startGithubConnection(
+  operatorToken: string,
+): Promise<{ user_code: string; verification_uri: string; expires_in: number; interval: number }> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/github/connect", {
+    method: "POST",
+  });
+  return response.json() as Promise<{
+    user_code: string; verification_uri: string; expires_in: number; interval: number;
+  }>;
+}
+
+/**
+ * Asks once whether they have finished authorising.
+ *
+ * "waiting" is the ordinary answer for as long as somebody is typing, and is
+ * not an error — GitHub reports it as one and a caller that believes it gives
+ * up on an authorisation that is still live.
+ */
+export async function claimGithubConnection(
+  operatorToken: string,
+): Promise<{ state: "waiting" | "connected" | "declined" | "expired"; login?: string; interval?: number }> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    "/api/v1/integrations/github/connect/claim",
+    { method: "POST" },
+  );
+  return response.json() as Promise<{
+    state: "waiting" | "connected" | "declined" | "expired"; login?: string; interval?: number;
+  }>;
+}
+
+/** Disconnects, so reports go back to being filed anonymously. */
+export async function disconnectGithub(operatorToken: string): Promise<void> {
+  await authenticatedFetch(operatorToken, "/api/v1/integrations/github/connection", {
+    method: "DELETE",
+  });
+}
+
 /** Files a saved report as a GitHub issue and returns where it went. */
 export async function fileDogfoodReportOnGithub(
   operatorToken: string,

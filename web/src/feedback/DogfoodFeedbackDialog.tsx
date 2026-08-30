@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
+import GithubConnectPanel from "./GithubConnectPanel";
 
 import {
+  fetchGithubConnection,
   fetchGithubFeedbackReadiness,
   fetchHistoryDiagnostics,
   fileDogfoodReportOnGithub,
@@ -45,6 +47,9 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
   // Whether this Hive can file anywhere. Undefined until asked, so the dialog
   // never flashes a promise it may not be able to keep.
   const [github, setGithub] = useState<{ configured: boolean; repository: string | null }>();
+  // Which account a submission will be filed as. Undefined until asked, so the
+  // dialog never claims anonymity or attribution before it knows.
+  const [connection, setConnection] = useState<{ connected: boolean; login: string | null }>();
   const [issueUrl, setIssueUrl] = useState<string>();
   const [filingError, setFilingError] = useState<string>();
   const [screenshot, setScreenshot] = useState<File>();
@@ -67,6 +72,9 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
     setSaveState("idle");
     setIssueUrl(undefined);
     setFilingError(undefined);
+    void fetchGithubConnection(operatorToken)
+      .then(setConnection)
+      .catch(() => setConnection({ connected: false, login: null }));
     void fetchGithubFeedbackReadiness(operatorToken)
       .then(setGithub)
       // A Hive that cannot answer is treated as one that cannot file. Better a
@@ -224,6 +232,24 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
           <button type="button" className="primary-action" disabled={!runtime.loaded} onClick={() => void copyBundle()}>{copyState === "copied" ? "Copied" : "Copy notes & diagnostics"}</button>
           <button type="button" className="primary-action" disabled={!runtime.loaded || (!expectation.trim() && !observation.trim()) || saveState === "saving" || saveState === "saved"} onClick={() => void saveToHive()}>{saveState === "saving" ? (github?.configured ? "Sending…" : "Saving…") : saveState === "saved" ? (github?.configured ? "Sent" : "Saved to Hive") : github?.configured ? "Send to GitHub" : "Save to this Hive"}</button>
         </div>}
+        {/* WHICH OF THE TWO PATHS THIS SUBMISSION TAKES, said before it is taken
+            rather than discovered afterwards. Only when the Hive can file at
+            all: on a Hive with no GitHub the report stays local and offering to
+            connect an account would promise something it cannot do.
+
+            Deliberately below the buttons and never in front of them —
+            submitting must not wait on connecting. */}
+        {github?.configured && saveState !== "saved" ? (
+          <GithubConnectPanel
+            operatorToken={operatorToken}
+            connection={connection}
+            onChanged={() => {
+              void fetchGithubConnection(operatorToken)
+                .then(setConnection)
+                .catch(() => setConnection({ connected: false, login: null }));
+            }}
+          />
+        ) : null}
         {copyState === "unavailable" ? <p role="status">Clipboard access is unavailable. Select the preview and copy it manually.</p> : null}
         {saveState === "saved" ? (
           issueUrl ? (

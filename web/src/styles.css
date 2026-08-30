@@ -2652,3 +2652,10 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .worker-mark-choice:hover { border-color: var(--line-strong); }
 .worker-mark-choice.selected { border-color: var(--accent-strong); outline: 2px solid var(--accent); outline-offset: 1px; }
 .worker-mark-choice:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* The connect offer sits under the feedback actions: an upgrade beside the
+   button, never a gate in front of it. */
+.feedback-github-connection { margin: 8px 0 0; color: var(--text-muted); font-size: .76rem; line-height: 1.45; }
+.feedback-github-connection strong { color: var(--text); }
+.feedback-github-code { padding: 1px 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-raised); font-family: "Atkinson Hyperlegible Mono Variable", Consolas, monospace; font-size: .9rem; letter-spacing: .08em; }
+.feedback-github-problem { color: var(--warn-strong); }
