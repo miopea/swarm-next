@@ -40,10 +40,10 @@ interface MobileTerminalComposerProps {
   onAttachment?: (file: File) => Promise<void>;
   attachmentState?: "idle" | "uploading" | "ready" | "error";
   /** Rebuilds this screen's view of the session. Sends the worker nothing. */
-  onRedraw?: () => void;
+  onRefresh?: () => void;
 }
 
-export function MobileTerminalComposer({ connectionState, onInput, keysExpanded: controlledKeysExpanded, onKeysExpandedChange, onAttachment, attachmentState = "idle", onRedraw }: MobileTerminalComposerProps) {
+export function MobileTerminalComposer({ connectionState, onInput, keysExpanded: controlledKeysExpanded, onKeysExpandedChange, onAttachment, attachmentState = "idle", onRefresh }: MobileTerminalComposerProps) {
   const [draft, setDraft] = useState("");
   const [localKeysExpanded, setLocalKeysExpanded] = useState(initialMobileKeysVisibility);
   const keysExpanded = controlledKeysExpanded ?? localKeysExpanded;
@@ -116,8 +116,8 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
               another tap on that same broken screen. Operator's request,
               emailed 2026-08-28. It rebuilds this screen's view and changes
               nothing in the worker. */}
-          {onRedraw ? (
-            <button type="button" className="terminal-redraw-button" onClick={onRedraw}>Redraw</button>
+          {onRefresh ? (
+            <button type="button" className="terminal-refresh-button" onClick={onRefresh}>Refresh</button>
           ) : null}
           <button type="button" className="terminal-image-button" disabled={!connected || !onAttachment || attachmentState === "uploading"} onClick={() => attachmentInput.current?.click()}>{attachmentState === "uploading" ? "Adding…" : "Add file"}</button>
           <button type="button" className="terminal-keys-toggle" aria-expanded={keysExpanded} onClick={toggleKeys}>{keysExpanded ? "Hide keys" : "Show keys"}</button>

@@ -125,48 +125,48 @@ test("offers a way to rebuild a terminal that has gone wrong", () => {
   // most likely to end up wrong, and where there is no other way to reach it —
   // had nothing. It repairs this screen's view and sends the worker nothing,
   // which is why it sits apart from the keys that do.
-  const onRedraw = vi.fn();
+  const onRefresh = vi.fn();
   const onInput = vi.fn();
   render(
     <MobileTerminalComposer
       connectionState="connected"
       onInput={onInput}
       keysExpanded
-      onRedraw={onRedraw}
+      onRefresh={onRefresh}
     />,
   );
 
-  fireEvent.click(screen.getByRole("button", { name: "Redraw" }));
+  fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
 
-  expect(onRedraw).toHaveBeenCalledOnce();
+  expect(onRefresh).toHaveBeenCalledOnce();
   expect(onInput).not.toHaveBeenCalled();
 });
 
-test("says nothing about redrawing when there is no way to do it", () => {
+test("says nothing about refreshing when there is no way to do it", () => {
   render(<MobileTerminalComposer connectionState="connected" onInput={vi.fn()} keysExpanded />);
 
-  expect(screen.queryByRole("button", { name: "Redraw" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
 });
 
 test("Redraw survives with the keys panel closed", () => {
   // It used to live INSIDE the keys panel, so the one control that rescues a
   // broken view vanished whenever that panel was shut — on the same broken
   // screen. The operator asked for it beside Add file.
-  const onRedraw = vi.fn();
+  const onRefresh = vi.fn();
   render(
     <MobileTerminalComposer
       connectionState="connected"
       onInput={vi.fn()}
-      onRedraw={onRedraw}
+      onRefresh={onRefresh}
     />,
   );
 
-  // Shut the keys panel; the keys go, Redraw stays.
+  // Shut the keys panel; the keys go, Refresh stays.
   fireEvent.click(screen.getByRole("button", { name: "Hide keys" }));
   expect(screen.queryByRole("button", { name: "Enter" })).toBeNull();
 
-  const redraw = screen.getByRole("button", { name: "Redraw" });
-  expect(redraw.closest(".terminal-key-actions")).toBeNull();
-  fireEvent.click(redraw);
-  expect(onRedraw).toHaveBeenCalledTimes(1);
+  const refresh = screen.getByRole("button", { name: "Refresh" });
+  expect(refresh.closest(".terminal-key-actions")).toBeNull();
+  fireEvent.click(refresh);
+  expect(onRefresh).toHaveBeenCalledTimes(1);
 });

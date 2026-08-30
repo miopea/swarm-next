@@ -2292,7 +2292,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .mobile-terminal-key-heading button { min-height: 44px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); background: var(--panel-raised); }
   /* Distinct from the keys beside it: those send something to the worker, this
      one repairs the screen and sends nothing. */
-  .terminal-redraw-button { border-color: var(--accent-strong) !important; background: var(--accent-soft) !important; }
+  .terminal-refresh-button { border-color: var(--accent-strong) !important; background: var(--accent-soft) !important; }
   .mobile-terminal-keys { display: flex; align-items: end; justify-content: space-between; gap: 10px; }
   .mobile-terminal-keys button { min-width: 44px; min-height: 44px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--text); background: var(--panel-raised); }
   .terminal-dpad { display: grid; grid-template-areas: '. up .' 'left down right'; grid-template-columns: repeat(3, 42px); gap: 4px; }

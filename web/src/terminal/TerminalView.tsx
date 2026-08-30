@@ -17,7 +17,7 @@ export interface TerminalViewProps {
   canStop?: boolean;
   mobileKeysVisible?: boolean;
   /** Rebuilds this screen's view of the session, for when it has gone wrong. */
-  onRedraw?: () => void;
+  onRefresh?: () => void;
   onMobileKeysVisibleChange?: (visible: boolean) => void;
   queenAutomation?: QueenAutomationStatus;
   queenAutonomy?: QueenAutonomyLevel;
@@ -25,7 +25,7 @@ export interface TerminalViewProps {
   onConnectionStateChange?: (state: TerminalConnectionState) => void;
 }
 
-export default function TerminalView({ session, operatorToken, busy, canStop = true, mobileKeysVisible, onMobileKeysVisibleChange, onRedraw, queenAutomation, queenAutonomy, onOpenQueenSettings, onConnectionStateChange }: TerminalViewProps) {
+export default function TerminalView({ session, operatorToken, busy, canStop = true, mobileKeysVisible, onMobileKeysVisibleChange, onRefresh, queenAutomation, queenAutonomy, onOpenQueenSettings, onConnectionStateChange }: TerminalViewProps) {
   const mount = useRef<HTMLDivElement>(null);
   const controller = useMemo<TerminalController>(() => {
     terminalWorkspace.authenticate(operatorToken);
@@ -257,7 +257,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
         <div className="terminal-mount" ref={mount} />
         {!atBottom ? <button type="button" className="terminal-jump-latest" onClick={() => controller.scrollToBottom()}>Jump to latest ↓</button> : null}
       </div>
-      <MobileTerminalComposer connectionState={connectionState} onInput={(text) => { controller.sendInput(text); if (text.includes("\r")) dismissAttachmentNotice(); }} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onAttachment={addAttachment} attachmentState={attachmentState} onRedraw={onRedraw} />
+      <MobileTerminalComposer connectionState={connectionState} onInput={(text) => { controller.sendInput(text); if (text.includes("\r")) dismissAttachmentNotice(); }} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onAttachment={addAttachment} attachmentState={attachmentState} onRefresh={onRefresh} />
     </div>
   );
 }
