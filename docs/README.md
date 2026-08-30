@@ -95,3 +95,4 @@ Current decision records:
 37. [Looking at the interface](38-looking-at-the-interface.md)
 38. [Connecting an outside tool](39-connecting-an-outside-tool.md)
 39. [Checks that measure the wrong thing](40-checks-that-measure-the-wrong-thing.md)
+40. [Verification without clicking](41-verification-without-clicking.md)
