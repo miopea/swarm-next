@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { expect, test, vi } from "vitest";
+import { describe, expect, it, test, vi } from "vitest";
 
 import WhatsNewModal from "./WhatsNewModal";
 
@@ -96,4 +96,60 @@ test("reads each line as a sentence", () => {
     />,
   );
   expect(screen.getByText("A shell opens from the menu")).toBeInTheDocument();
+});
+
+describe("earlier releases", () => {
+  const release = (version: string, summary: string) => ({
+    version,
+    notes: [{ summary, kind: "fix" as const, needs_worker_engine_update: false }],
+  });
+
+  it("does not show the history until it is asked for", () => {
+    render(
+      <WhatsNewModal
+        releases={[release("1.0.1", "the panel is wider")]}
+        earlier={[release("1.0.0", "feedback reaches GitHub"), release("0.9.2", "an update confirms the stop")]}
+        onDismiss={() => {}}
+      />,
+    );
+    // The reason this is not a changelog still holds: someone who just updated
+    // wants what changed, not everything that ever changed.
+    expect(screen.queryByText(/Feedback reaches GitHub/)).toBeNull();
+    expect(screen.getByRole("button", { name: /Earlier releases \(2\)/ })).toBeTruthy();
+  });
+
+  it("opens the history in the same panel", async () => {
+    render(
+      <WhatsNewModal
+        releases={[release("1.0.1", "the panel is wider")]}
+        earlier={[release("1.0.0", "feedback reaches GitHub"), release("0.9.2", "an update confirms the stop")]}
+        onDismiss={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Earlier releases/ }));
+    expect(screen.getByText(/Feedback reaches GitHub/)).toBeTruthy();
+    expect(screen.getByText(/An update confirms the stop/)).toBeTruthy();
+    // Each earlier block is labelled, because out there the version is the only
+    // thing telling one from the next.
+    expect(screen.getByText("1.0.0")).toBeTruthy();
+    expect(screen.getByText("0.9.2")).toBeTruthy();
+  });
+
+  it("offers nothing to open when the artifact carries no older releases", () => {
+    render(<WhatsNewModal releases={[release("1.0.1", "the panel is wider")]} earlier={[]} onDismiss={() => {}} />);
+    expect(screen.queryByRole("button", { name: /Earlier releases/ })).toBeNull();
+  });
+
+  it("reads as a deliberate visit when opened from settings", () => {
+    render(
+      <WhatsNewModal
+        releases={[release("1.0.1", "the panel is wider")]}
+        heading="Release notes"
+        onDismiss={() => {}}
+      />,
+    );
+    expect(screen.getByRole("heading", { name: "Release notes" })).toBeTruthy();
+    // "Got it" is an acknowledgement of news; this was not news.
+    expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
+  });
 });

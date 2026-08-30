@@ -255,6 +255,7 @@ export function App() {
   const { runtimeUpdates, developmentMode, refreshRuntimeUpdate } = useRuntimeUpdate(operatorToken || undefined);
   const [whatsNew, setWhatsNew] = useState<ReleaseVersionNotes[]>([]);
   const [whatsNewTruncated, setWhatsNewTruncated] = useState(false);
+  const [whatsNewEarlier, setWhatsNewEarlier] = useState<ReleaseVersionNotes[]>([]);
   // Asked for ONCE per session rather than polled: the notes only change when
   // the build under the operator changes, and that already reloads the page.
   useEffect(() => {
@@ -264,7 +265,7 @@ export function App() {
       try {
         const notes = await fetchReleaseNotes(operatorToken);
         if (cancelled) return;
-        const { show, recordAs, truncated } = whatsNewFor(
+        const { show, recordAs, truncated, earlier } = whatsNewFor(
           notes.releases,
           notes.running_version,
           readSeenVersion(),
@@ -273,6 +274,7 @@ export function App() {
         if (recordAs) storeSeenVersion(recordAs);
         setWhatsNew(show);
         setWhatsNewTruncated(truncated);
+        setWhatsNewEarlier(earlier);
       } catch {
         // A change list nobody can fetch is not worth telling the operator
         // about; the Hive works either way and a development build has none.
@@ -2089,6 +2091,7 @@ export function App() {
           <WhatsNewModal
             releases={whatsNew}
             truncated={whatsNewTruncated}
+            earlier={whatsNewEarlier}
             onDismiss={() => setWhatsNew([])}
           />
         ) : null}

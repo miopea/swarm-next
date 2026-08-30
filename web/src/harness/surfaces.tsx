@@ -221,6 +221,10 @@ export const SURFACES: Surface[] = [
             { summary: "**A page load stops replaying the whole event history.** Opening the control room on a phone read thousands of entries to show the newest sixteen", kind: "fix", needs_worker_engine_update: false },
           ],
         }]}
+        earlier={[
+          { version: "1.0.0", notes: [{ summary: "**Feedback goes to GitHub.** The dialog files a real issue", kind: "feat", needs_worker_engine_update: false }] },
+          { version: "0.9.2", notes: [{ summary: "An update confirms Swarm has actually stopped before replacing it", kind: "fix", needs_worker_engine_update: false }] },
+        ]}
       />
     ),
   },

@@ -7,8 +7,12 @@ import {
   downloadRelease,
   fetchReleaseStatus,
   setReleaseCheckMode,
+  fetchReleaseNotes,
   type ReleaseStatus,
+  type ReleaseVersionNotes,
 } from "../api";
+import WhatsNewModal from "../runtime/WhatsNewModal";
+import { olderThan } from "../runtime/whatsNew";
 
 /**
  * What the install unit's refusal codes mean.
@@ -111,6 +115,10 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
   const [error, setError] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [installed, setInstalled] = useState(false);
+  // THE HISTORY WAS ALREADY IN THE BUNDLE, with nowhere to read it. What's New
+  // opens itself once after an update and never again, so every release note
+  // this Hive carries became unreachable the moment it was dismissed.
+  const [notes, setNotes] = useState<ReleaseVersionNotes[] | null>(null);
   /** The version the operator asked for, so arriving on it is recognisable. */
   const [installing, setInstalling] = useState<string | null>(null);
   /** Whether the API answered the last poll. Losing it is the expected middle
@@ -188,6 +196,19 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
       setWorking(false);
     }
   }, []);
+
+  // Separate from `run`, which exists to fold a ReleaseStatus back into state.
+  // Reading the notes changes nothing about the release; it only opens a panel.
+  const openNotes = useCallback(async () => {
+    setError("");
+    try {
+      const fetched = await fetchReleaseNotes(operatorToken);
+      // Reused so the ordering is the one the panel is already tested against.
+      setNotes(olderThan(fetched.releases, []));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The release notes could not be read.");
+    }
+  }, [operatorToken]);
 
   if (!status?.available) return null;
   const installInFlight = installed && status.apply_state !== "failed" && status.apply_state !== "refused";
@@ -375,9 +396,13 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
         <span className="settings-actions">
           <button className="secondary-button" disabled={disabled} onClick={() => void run(() => checkForRelease(operatorToken), "The check could not be completed.")}>{working ? "Checking…" : "Check now"}</button>
           <button className="secondary-button" disabled={disabled} onClick={() => void run(() => setReleaseCheckMode(operatorToken, status.mode === "daily" ? "off" : "daily"), "The preference could not be saved.")}>{status.mode === "daily" ? "Stop checking" : "Check daily"}</button>
+          <button className="secondary-button" disabled={disabled} onClick={() => void openNotes()}>Release notes</button>
         </span>
       </footer>
       {error && <p className="form-error" role="alert">{error}</p>}
+      {notes && notes.length > 0 && (
+        <WhatsNewModal releases={notes} heading="Release notes" onDismiss={() => setNotes(null)} />
+      )}
     </article>
   );
 }

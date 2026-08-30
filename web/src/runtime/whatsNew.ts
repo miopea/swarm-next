@@ -87,17 +87,38 @@ export function whatsNewFor(
   runningVersion: string,
   seen: string | null,
   previous?: string | null,
-): { show: ReleaseVersionNotes[]; recordAs: string | null; truncated: boolean } {
+): { show: ReleaseVersionNotes[]; recordAs: string | null; truncated: boolean; earlier: ReleaseVersionNotes[] } {
   const floor = olderOf(seen, previous ?? null);
   if (floor === null) {
-    return { show: [], recordAs: runningVersion, truncated: false };
+    // A FIRST RUN STILL GETS THE HISTORY, it just is not shown one. Nothing
+    // opens on its own here; `earlier` is what the operator can ask to read.
+    return { show: [], recordAs: runningVersion, truncated: false, earlier: newestFirst(releases) };
   }
   const show = releasesNewerThan(releases, floor);
   return {
     show,
     recordAs: show.length > 0 ? runningVersion : null,
     truncated: reachesPastTheNotes(releases, floor),
+    earlier: olderThan(releases, show),
   };
+}
+
+/**
+ * Everything the artifact carries that this panel is not already showing.
+ *
+ * The whole history has always been in the bundle and the panel only ever
+ * rendered the slice since the operator's last version, so the rest was
+ * present and unreachable. This is what the panel offers to open.
+ */
+export function olderThan(releases: ReleaseVersionNotes[], shown: ReleaseVersionNotes[]): ReleaseVersionNotes[] {
+  const already = new Set(shown.map((entry) => entry.version));
+  return newestFirst(releases.filter((entry) => !already.has(entry.version)));
+}
+
+function newestFirst(releases: ReleaseVersionNotes[]): ReleaseVersionNotes[] {
+  return releases
+    .filter((entry) => parseVersion(entry.version) !== null)
+    .sort((left, right) => compareVersions(parseVersion(right.version)!, parseVersion(left.version)!));
 }
 
 /**

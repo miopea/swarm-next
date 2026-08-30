@@ -1757,6 +1757,9 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
    1.0.0's bold leads rendered as <strong> and still looked like plain text.
    Emphasis that opens a bullet has to be visible as emphasis. */
 .dialog.whats-new strong { color: var(--text); font-weight: 700; }
+.whats-new-earlier-toggle { justify-self: start; min-height: var(--pill-touch-height); margin-top: 4px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); background: var(--panel-soft); font-size: .76rem; }
+.whats-new-earlier-toggle:hover { border-color: var(--line-strong); }
+.whats-new-earlier-heading { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--line); color: var(--quiet); font-size: .69rem; font-weight: 500; letter-spacing: .09em; text-transform: uppercase; }
 .dialog.whats-new code { padding: 0 4px; border-radius: 4px; background: var(--panel-soft); font-size: .95em; }
 .whats-new-release { display: grid; gap: 5px; }
 .whats-new-group { margin: 9px 0 1px; color: var(--ink); font-size: .78rem; font-weight: 600; }
