@@ -14,9 +14,17 @@ not in effect until the worker engine swaps.
 
 ## 1.0.0
 
-**Your workers keep running through this one.** The terminal protocol did not
-move, so this installs with `update` and leaves live sessions alone — unlike
-0.9.0 through 0.9.2, which all had to stop the worker engine.
+**Whether your workers survive this depends on where you are coming from.**
+Check which you are on:
+
+    cat ~/.local/lib/swarm/current/VERSION
+
+- **From 0.9.x — your workers keep running.** The terminal protocol did not move
+  since 0.9.0, so live sessions are left alone.
+- **From 0.8.x — every worker session ends.** You are on the older terminal
+  protocol, and the app and the worker engine have to be swapped together. The
+  command is the same; there is nothing extra to run. Workers set to start
+  automatically come back on their own, and the rest need waking from the roster.
 
 **Copy your database first.** This carries schema migrations 104 through 109 —
 six of them, the largest jump any release has asked for. A tarball install
