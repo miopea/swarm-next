@@ -1,10 +1,15 @@
-import { useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 
 import { TERMINAL_ATTACHMENT_ACCEPT } from "./TerminalAttachments";
 import type { TerminalConnectionState } from "./TerminalConnection";
 
 export const MAX_TERMINAL_DRAFT_LENGTH = 16_384;
 export const MOBILE_SUBMIT_KEY_DELAY_MS = 75;
+/**
+ * How long to wait, after the page is visible again, before deciding a pick
+ * produced nothing. Long enough that a `change` event still in flight wins.
+ */
+export const PICKER_RETURN_GRACE_MS = 1_500;
 
 export const MOBILE_TERMINAL_KEYS = {
   up: "\u001b[A",
@@ -50,6 +55,17 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
   const keysExpanded = controlledKeysExpanded ?? localKeysExpanded;
   const textarea = useRef<HTMLTextAreaElement>(null);
   const attachmentInput = useRef<HTMLInputElement>(null);
+  // WHETHER A PICK IS IN FLIGHT, so that a picker which comes back with nothing
+  // is distinguishable from one that was never opened.
+  //
+  // The operator reported attaching working "about half the time" and, after
+  // two fixes, still saw NOTHING AT ALL on the failures — no notice, no error.
+  // Every path that reaches the handler now reports something, so silence means
+  // the handler is not being reached: `change` fired with an empty list, or it
+  // never fired because the page did not survive the round trip. Neither is
+  // visible from inside without asking the question before leaving.
+  const awaitingPick = useRef(false);
+  const [pickerReturnedNothing, setPickerReturnedNothing] = useState(false);
   const connected = connectionState === "connected";
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -89,9 +105,43 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
     // "works about half the time" -- because opening a phone's file picker
     // BACKGROUNDS this tab, the socket drops, and whether the reconnect beat
     // their thumb decided whether the file survived. Nothing said so.
-    if (!file || !onAttachment) return;
+    awaitingPick.current = false;
+    if (!onAttachment) return;
+    if (!file) {
+      // THE LAST SILENT BRANCH, and it is no longer silent. A change event
+      // carrying no file is unusual -- cancelling a picker fires nothing on
+      // most platforms -- so saying so is information rather than noise.
+      setPickerReturnedNothing(true);
+      return;
+    }
+    setPickerReturnedNothing(false);
     await onAttachment(file);
   }
+
+  function openPicker() {
+    setPickerReturnedNothing(false);
+    awaitingPick.current = true;
+    attachmentInput.current?.click();
+  }
+
+  // A PICK THAT NEVER COMES BACK AT ALL. If the page is evicted while the
+  // system picker is open -- which a phone does under memory pressure -- the
+  // input that held the selection is gone and `change` can never fire. Nothing
+  // in this component runs at that point, so the only way to notice is to find
+  // the flag still set when the page is next visible.
+  useEffect(() => {
+    const check = () => {
+      if (document.visibilityState !== "visible" || !awaitingPick.current) return;
+      const settle = window.setTimeout(() => {
+        if (!awaitingPick.current) return;
+        awaitingPick.current = false;
+        setPickerReturnedNothing(true);
+      }, PICKER_RETURN_GRACE_MS);
+      return () => window.clearTimeout(settle);
+    };
+    document.addEventListener("visibilitychange", check);
+    return () => document.removeEventListener("visibilitychange", check);
+  }, []);
 
   return (
     <section className="mobile-terminal-composer" aria-label="Mobile terminal controls">
@@ -131,9 +181,19 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
           {onRefresh ? (
             <button type="button" className="terminal-refresh-button" onClick={onRefresh}>Refresh</button>
           ) : null}
-          <button type="button" className="terminal-image-button" disabled={!onAttachment || attachmentState === "uploading"} onClick={() => attachmentInput.current?.click()}>{attachmentState === "uploading" ? "Adding…" : attachmentState === "waiting" ? "Waiting…" : "Add file"}</button>
+          <button type="button" className="terminal-image-button" disabled={!onAttachment || attachmentState === "uploading"} onClick={openPicker}>{attachmentState === "uploading" ? "Adding…" : attachmentState === "waiting" ? "Waiting…" : "Add file"}</button>
           <button type="button" className="terminal-keys-toggle" aria-expanded={keysExpanded} onClick={toggleKeys}>{keysExpanded ? "Hide keys" : "Show keys"}</button>
         </div>
+        {pickerReturnedNothing && (
+          // SAYS THE THING THAT WAS SILENT. It does not diagnose, because from
+          // in here the two causes are indistinguishable -- an empty change
+          // event and a page that did not survive the picker look identical.
+          // It reports what is true and what to do, which is all the operator
+          // needs and more than they had.
+          <small className="attachment-state attachment-error" role="status">
+            No file arrived from the picker. If you chose one, try again — it did not reach this page.
+          </small>
+        )}
       </div>
       {keysExpanded && <div className="mobile-terminal-keys" aria-label="Terminal keys">
         <div className="terminal-dpad">

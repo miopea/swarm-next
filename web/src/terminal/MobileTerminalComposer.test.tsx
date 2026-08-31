@@ -210,3 +210,43 @@ test("Redraw survives with the keys panel closed", () => {
   fireEvent.click(refresh);
   expect(onRefresh).toHaveBeenCalledTimes(1);
 });
+
+/**
+ * THE LAST SILENT BRANCH.
+ *
+ * After two fixes the operator still reported "nothing at all" on the failures:
+ * no notice, no error, no change. Every path that reaches the handler with a
+ * file now reports something, so silence meant the handler was reached WITHOUT
+ * one — a change event carrying an empty list — or was never reached at all.
+ * Both produced exactly nothing, which is unusable as a report.
+ */
+test("a picker that comes back with no file says so instead of nothing", () => {
+  const onAttachment = vi.fn();
+  const { container } = render(
+    <MobileTerminalComposer connectionState="connected" onInput={vi.fn()} onAttachment={onAttachment} />,
+  );
+
+  fireEvent.change(container.querySelector<HTMLInputElement>('input[type="file"]')!, {
+    target: { files: [] },
+  });
+
+  expect(screen.getByText(/No file arrived from the picker/)).toBeTruthy();
+  expect(onAttachment).not.toHaveBeenCalled();
+});
+
+test("the notice clears when a file does arrive", async () => {
+  const onAttachment = vi.fn().mockResolvedValue(undefined);
+  const { container } = render(
+    <MobileTerminalComposer connectionState="connected" onInput={vi.fn()} onAttachment={onAttachment} />,
+  );
+  const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+
+  fireEvent.change(input, { target: { files: [] } });
+  expect(screen.getByText(/No file arrived/)).toBeTruthy();
+
+  const image = new File([new Uint8Array([1, 2, 3])], "screen.png", { type: "image/png" });
+  fireEvent.change(input, { target: { files: [image] } });
+
+  await vi.waitFor(() => expect(onAttachment).toHaveBeenCalledWith(image));
+  expect(screen.queryByText(/No file arrived/)).toBeNull();
+});
