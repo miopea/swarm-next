@@ -217,6 +217,20 @@ the check go red, restore it. A check that has never failed has told you
 nothing — and this is where the fifth instance came from: an ablation that
 passed against a fixture covering one branch.
 
+**For a mapping, test the round trip rather than the individual arms.** A round
+trip cannot encode a colliding wrong answer, because the collision breaks the
+return leg. Three media types were mapped onto one extension and a per-arm test
+asserted each of them happily; `DOCX → "xlsx" → XLSX` does not come back to
+`DOCX`, so the round trip fails without anyone re-deriving an expectation, and
+it fails pointing at the collision rather than at a symptom. Reasoning in *a
+check taught the wrong answer* above.
+
+**If an expected value could have been produced by running the code, it
+probably was.** That is the mechanism by which a check gets taught the wrong
+answer: a test written by observing output encodes the behaviour, not the
+intent, and then defends it. It applies well beyond mappings, and it is the
+question to ask of any assertion whose value nobody can source.
+
 ## What this does not claim
 
 There is no mechanism here that catches the class. There are two that catch two
