@@ -2835,7 +2835,7 @@ fn transition_task_tool() -> Tool {
             "properties": {
                 "task_id": { "type": "string", "format": "uuid" },
                 "state": { "type": "string", "enum": ["draft", "ready", "active", "blocked", "review", "completed", "abandoned"] },
-                "note": { "type": "string", "maxLength": 4000, "description": "Concise blocker reason, review handoff, or completion verification evidence. Required for Completed." }
+                "note": { "type": "string", "maxLength": 4000, "description": "Concise blocker reason, review handoff, or completion verification evidence. Required for Completed. THIS GOES TO THE RECORD, NOT TO A WORKER: it lands in the task history and is never part of the brief a worker is handed, so an instruction written here reaches nobody unless they call swarm_read_task_history. To steer the worker that picks this up, correct the task with swarm_amend_task_facts — an amendment travels beside the task and is delivered by swarm_list_tasks. If the work itself needs to change rather than a fact about it, say so in a new task or ask the operator; nothing an agent can write redirects work that is already described." }
             },
             "required": ["task_id", "state"],
             "additionalProperties": false
@@ -3467,6 +3467,39 @@ mod tests {
     /// with "403 Forbidden: Host header is not allowed" — after OAuth had
     /// succeeded, so the client reported "couldn't connect to the server" while
     /// holding a perfectly good token.
+    /// A TRANSITION NOTE IS NOT A CHANNEL TO A WORKER, and the tool has to say so.
+    ///
+    /// Queen wrote steering into transition notes all day — what was already
+    /// settled, what not to build, which repo decides a shared question — and
+    /// two workers on two tasks independently reported receiving an assignment
+    /// with a byte-identical description and nothing else. They were right:
+    /// `TaskDispatch` carries no note field, and `task_dispatch_message`
+    /// assembles the brief from title, `operator_instruction`, operator rulings
+    /// and the email requester. A note is never in it.
+    ///
+    /// That is the design, not a delivery bug. The defect was that the
+    /// parameter said "review handoff" and nothing about where a handoff goes,
+    /// so a caller could reasonably expect it to reach whoever picks the task
+    /// up. `swarm_record_task_note` already carried that sentence; this one did
+    /// not.
+    ///
+    /// Asserted on the SERVED schema rather than the source, because the schema
+    /// is what an agent actually reads.
+    #[test]
+    fn the_transition_note_parameter_says_it_does_not_reach_a_worker() {
+        let tool = transition_task_tool();
+        let schema = serde_json::to_string(&tool.input_schema).expect("schema serialises");
+
+        assert!(
+            schema.contains("NOT TO A WORKER"),
+            "the note parameter must say where it goes: {schema}"
+        );
+        assert!(
+            schema.contains("swarm_amend_task_facts"),
+            "and must name the channel that does travel: {schema}"
+        );
+    }
+
     #[test]
     fn the_mcp_endpoint_answers_to_its_published_address_and_nothing_else() {
         let published = crate::AppState::default()
