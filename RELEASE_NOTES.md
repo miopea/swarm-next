@@ -12,6 +12,36 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.1.1
+
+**An easy one: no schema change, no protocol change, and your workers keep
+running.** Everything here is the phone and the feedback dialog.
+
+### Fixes
+
+- **Attaching a file on a phone stops failing silently.** Opening the picker
+  puts this page in the background, which drops the terminal connection — and
+  the attachment was then discarded without a word, so it worked or it did not
+  and nothing said which. Uploading never needed that connection: the file now
+  uploads regardless and is added the moment the terminal is back
+- **A file too large to send says so before uploading it**, naming the file and
+  the limit, instead of running the upload to the end and failing with nothing
+  legible. This is what a phone video usually does — one minute is commonly ten
+  times the limit
+- **The phone stops offering to attach a video.** It never could use one, and
+  the picker was simply not saying what it takes. Photos, logs, CSVs, PDFs and
+  the rest are unchanged
+- **A picker that comes back with nothing now says so.** Occasionally a phone
+  discards the page while its file picker is open, and nothing arrives; that
+  used to look identical to a working app doing nothing
+- **The feedback dialog stops changing its own button.** It could read "Save to
+  this Hive" and then become "Send to GitHub" a moment later, while the dialog
+  worked out whether a GitHub account was connected. Those are different
+  destinations and it should never have claimed one before knowing. It now says
+  it is still checking
+- **One button in that dialog is clearly the main one.** Two of the three were
+  competing for it
+
 ## 1.1.0
 
 **Your workers keep running through this one.** The terminal protocol did not
