@@ -1,5 +1,6 @@
 import { useRef, useState, type ChangeEvent, type FormEvent } from "react";
 
+import { TERMINAL_ATTACHMENT_ACCEPT } from "./TerminalAttachments";
 import type { TerminalConnectionState } from "./TerminalConnection";
 
 export const MAX_TERMINAL_DRAFT_LENGTH = 16_384;
@@ -115,7 +116,10 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
       <div className="mobile-terminal-key-heading">
         <span>Terminal tools</span>
         <div>
-          <input ref={attachmentInput} hidden type="file" onChange={(event) => void chooseAttachment(event)} />
+          {/* ACCEPT NAMES WHAT IS IN, because `accept` cannot express what is
+              out. A bare file input offers the whole photo library and Take
+              Video, and the operator asked what a video was even for. */}
+          <input ref={attachmentInput} hidden type="file" accept={TERMINAL_ATTACHMENT_ACCEPT} onChange={(event) => void chooseAttachment(event)} />
           {/* BESIDE Add file, not inside the keys panel it used to live in.
               This is the way out when the VIEW itself has gone wrong — a
               terminal that will not scroll, or is drawn at the wrong size — and

@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 
-import { clipboardAttachment, configureTerminalImageLimit, dragCarriesFiles, maxTerminalAttachmentBytes, terminalAttachmentPaste, terminalTextPaste, transferredAttachment, uploadTerminalAttachment } from "./TerminalAttachments";
+import { TERMINAL_ATTACHMENT_ACCEPT, chosenAttachment, clipboardAttachment, configureTerminalImageLimit, dragCarriesFiles, maxTerminalAttachmentBytes, terminalAttachmentPaste, terminalTextPaste, transferredAttachment, uploadTerminalAttachment } from "./TerminalAttachments";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -321,4 +321,42 @@ test("a file the browser could not type at all is sent as octet-stream", () => {
 
   expect(result.kind).toBe("file");
   if (result.kind === "file") expect(result.file.type).toBe("application/octet-stream");
+});
+
+/**
+ * THE TWO PATHS MUST AGREE, and they did not.
+ *
+ * A dropped file was size-checked and refused by name; a file picked from a
+ * phone went straight to the upload, so an oversized one ran until the
+ * server's transport limit killed it. Same product, same question, two
+ * answers — and the operator met the second one as a video that seemed to
+ * upload and then failed with nothing legible.
+ */
+test("a picked file is judged exactly as a dropped one is", () => {
+  const oversized = new File([new Uint8Array(1)], "clip.mov", { type: "video/quicktime" });
+  Object.defineProperty(oversized, "size", { value: maxTerminalAttachmentBytes() + 1 });
+
+  const picked = chosenAttachment(oversized);
+  expect(picked.kind).toBe("too-large");
+  // Names the file and the limit, not a generic failure.
+  expect(picked.kind === "too-large" && picked.description).toContain("clip.mov");
+  expect(picked.kind === "too-large" && picked.description).toContain("the limit is");
+});
+
+test("video is not a special case: a small one is accepted like any other file", () => {
+  // The settled policy is MOST FILE TYPES (v0.8.19). Video is caught by size,
+  // which is what actually makes it unusable — not by a type rule nobody wrote.
+  const small = new File([new Uint8Array([1, 2, 3])], "clip.mov", { type: "video/quicktime" });
+  const picked = chosenAttachment(small);
+  expect(picked.kind).toBe("file");
+});
+
+test("the picker asks for the families this product carries, and not video", () => {
+  // `accept` has no negation, so the only way to leave video out is to name
+  // what is in. This must keep the families the drop path was widened to take.
+  expect(TERMINAL_ATTACHMENT_ACCEPT).toContain("image/*");
+  expect(TERMINAL_ATTACHMENT_ACCEPT).toContain("text/*");
+  expect(TERMINAL_ATTACHMENT_ACCEPT).toContain("application/*");
+  expect(TERMINAL_ATTACHMENT_ACCEPT).not.toContain("video/");
+  expect(TERMINAL_ATTACHMENT_ACCEPT).not.toContain("*/*");
 });

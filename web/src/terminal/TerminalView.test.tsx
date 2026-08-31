@@ -36,7 +36,16 @@ vi.mock("./TerminalWorkspace", () => ({
 }));
 vi.mock("./XtermSurface", () => ({ XtermSurface: class {} }));
 vi.mock("./TerminalConnection", () => ({ TerminalConnection: class {} }));
-vi.mock("./MobileTerminalComposer", () => ({ MobileTerminalComposer: () => null }));
+// The composer renders nothing, but its PROPS are the seam this view is wired
+// through — without capturing them, onAttachment is unreachable and the
+// picker's path is untested while every test still passes.
+const composerProps = vi.hoisted(() => ({ current: undefined as undefined | { onAttachment?: (file: File) => Promise<void> } }));
+vi.mock("./MobileTerminalComposer", () => ({
+  MobileTerminalComposer: (props: { onAttachment?: (file: File) => Promise<void> }) => {
+    composerProps.current = props;
+    return null;
+  },
+}));
 const upload = vi.hoisted(() => vi.fn());
 vi.mock("./TerminalAttachments", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./TerminalAttachments")>()),
@@ -214,4 +223,28 @@ test("an attachment uploaded while disconnected waits, then lands when the socke
 
   await screen.findByText(/File added/i);
   expect(controller.sendInput).toHaveBeenCalledWith(expect.stringContaining("/tmp/attachments/screen.png"));
+});
+
+
+/**
+ * The picker path is judged by the same rule a drop is.
+ *
+ * It was not. A dropped file was size-checked and refused by name; a file
+ * picked from a phone went straight to the upload and ran until the server's
+ * transport limit killed it, producing the bare failure `refuseSize` exists to
+ * prevent. A phone video is the ordinary way to meet that.
+ */
+test("a file picked from the phone that is too large is refused before any upload", async () => {
+  upload.mockClear();
+  render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
+
+  const huge = new File([new Uint8Array([1])], "clip.mov", { type: "video/quicktime" });
+  Object.defineProperty(huge, "size", { value: 400 * 1024 * 1024 });
+  await act(async () => {
+    await composerProps.current?.onAttachment?.(huge);
+  });
+
+  expect(await screen.findByText(/clip\.mov/)).toBeTruthy();
+  expect(screen.getByText(/the limit is/)).toBeTruthy();
+  expect(upload).not.toHaveBeenCalled();
 });

@@ -5,7 +5,7 @@ import { TerminalConnection, type TerminalConnectionState } from "./TerminalConn
 import type { TerminalController } from "./TerminalController";
 import { terminalWorkspace } from "./TerminalWorkspace";
 import { XtermSurface } from "./XtermSurface";
-import { dragCarriesFiles, terminalAttachmentPaste, terminalTextPaste, transferredAttachment, uploadTerminalAttachment } from "./TerminalAttachments";
+import { chosenAttachment, dragCarriesFiles, terminalAttachmentPaste, terminalTextPaste, transferredAttachment, uploadTerminalAttachment } from "./TerminalAttachments";
 import type { QueenAutonomyLevel, QueenAutomationStatus } from "../api";
 import { queenAutonomyDetail, queenAutonomyLabel } from "../orchestration/queenAutonomyPresentation";
 import { queenAutomationCompactLabel, queenAutomationStateDetail, queenAutomationStateTone } from "../orchestration/queenAutomationPresentation";
@@ -141,6 +141,23 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   }
 
   /** Says why, rather than doing nothing and looking broken. */
+
+  /**
+   * A file the operator picked, judged by the rules a dropped one is judged by.
+   *
+   * The picker used to hand its file straight to the upload, so an oversized
+   * one ran until the server's transport limit killed it — the opaque failure
+   * `refuseSize` exists to prevent, reached by the one path that skipped it.
+   * A phone video is the ordinary way to meet that, at 150-350 MB a minute.
+   */
+  async function acceptChosenFile(file: File) {
+    const judged = chosenAttachment(file);
+    if (judged.kind === "too-large") {
+      refuseSize(judged.description);
+      return;
+    }
+    if (judged.kind === "file") await addAttachment(judged.file);
+  }
 
   async function addAttachment(file: File) {
     setAttachmentState("uploading");
@@ -288,7 +305,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
         <div className="terminal-mount" ref={mount} />
         {!atBottom ? <button type="button" className="terminal-jump-latest" onClick={() => controller.scrollToBottom()}>Jump to latest ↓</button> : null}
       </div>
-      <MobileTerminalComposer connectionState={connectionState} onInput={(text) => { controller.sendInput(text); if (text.includes("\r")) dismissAttachmentNotice(); }} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onAttachment={addAttachment} attachmentState={attachmentState} onRefresh={onRefresh} />
+      <MobileTerminalComposer connectionState={connectionState} onInput={(text) => { controller.sendInput(text); if (text.includes("\r")) dismissAttachmentNotice(); }} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onAttachment={acceptChosenFile} attachmentState={attachmentState} onRefresh={onRefresh} />
     </div>
   );
 }

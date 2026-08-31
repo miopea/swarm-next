@@ -116,6 +116,49 @@ function attachmentTypeOf(file: File): string {
   return (extension && ATTACHMENT_EXTENSIONS.get(extension)) || "application/octet-stream";
 }
 
+/**
+ * What the phone's picker offers, expressed as the families this product takes.
+ *
+ * `accept` HAS NO NEGATION, so the only way to leave video out is to name what
+ * is in. These three families cover everything the drop path was widened to
+ * carry in v0.8.19 — images, logs and CSV, JSON and PDFs and spreadsheets —
+ * and exclude video/* and audio/*, which is where "Take Video" and the movie
+ * half of the photo library come from.
+ *
+ * A HINT, NOT A GUARD. Every platform honours `accept` differently and most
+ * still offer a way past it, so nothing may depend on this: `chosenAttachment`
+ * re-decides in code. This exists to stop the phone SUGGESTING a two hundred
+ * megabyte video, not to enforce anything.
+ */
+export const TERMINAL_ATTACHMENT_ACCEPT = "image/*,text/*,application/*";
+
+/**
+ * One file the operator picked, judged by the same rules a dropped one is.
+ *
+ * THE TWO PATHS HAD DIFFERENT POLICIES, and only one of them was written down.
+ * A drop was size-checked here and refused with the file's name and the limit;
+ * a pick from the phone went straight to the upload, so an oversized file ran
+ * until the server's transport limit killed it and produced the bare failure
+ * `refuseSize` was written to prevent. Same product, same question, two
+ * answers.
+ *
+ * Type is deliberately NOT restricted, because that was settled the other way:
+ * the operator asked to be able to attach most file types, so anything
+ * unrecognised is typed `application/octet-stream` and stored opaquely rather
+ * than refused. Video is not a special case here — it is a large file, and the
+ * size rule is what catches it.
+ */
+export function chosenAttachment(file: File): TransferredAttachment {
+  if (file.size > maxTerminalAttachmentBytes()) {
+    return {
+      kind: "too-large",
+      description: `${file.name} is ${describeBytes(file.size)}; the limit is ${describeBytes(maxTerminalAttachmentBytes())}`,
+    };
+  }
+  const type = attachmentTypeOf(file);
+  return { kind: "file", file: type === file.type ? file : new File([file], file.name, { type }) };
+}
+
 export function transferredAttachment(transfer: DataTransfer): TransferredAttachment {
   // `files` first, because this is the only source a drop can be relied on to
   // populate. Reading `items` alone worked for paste and silently found nothing
@@ -124,16 +167,11 @@ export function transferredAttachment(transfer: DataTransfer): TransferredAttach
   // Defensive: a text paste carries no files, and not every source populates
   // the field at all. Throwing here would take the text paste down with it.
   for (const file of Array.from(transfer.files ?? [])) {
-    if (file.size > maxTerminalAttachmentBytes()) {
-      return {
-        kind: "too-large",
-        description: `${file.name} is ${describeBytes(file.size)}; the limit is ${describeBytes(maxTerminalAttachmentBytes())}`,
-      };
-    }
-    // Re-typing is safe: the server re-checks any format that HAS a signature
-    // and refuses a mislabel, and stores the rest opaquely.
-    const type = attachmentTypeOf(file);
-    return { kind: "file", file: type === file.type ? file : new File([file], file.name, { type }) };
+    // Through the same function a picked file goes through, so the two paths
+    // cannot drift apart again. Re-typing inside it is safe: the server
+    // re-checks any format that HAS a signature and refuses a mislabel, and
+    // stores the rest opaquely.
+    return chosenAttachment(file);
   }
   const pasted = clipboardAttachment(transfer);
   if (pasted) {
