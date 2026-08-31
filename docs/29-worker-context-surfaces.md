@@ -198,7 +198,7 @@ restart mid-delivery reproduces it whether or not the submission bug exists.
 The operator chose this order knowing the submission defect is live. It is
 recorded here so the second item is not lost.
 
-## Open: what a phone should show
+## What a phone should show — settled 2026-08-31
 
 The desktop bar is deliberately absent from the phone, except for one part.
 
@@ -226,6 +226,12 @@ The trade is the Hive line on this one surface. It is on every other surface's
 header, and what the worker is carrying was not visible anywhere on the phone,
 so the line is worth more to the task than to the Hive. Reversing it is one
 conditional if the operator disagrees.
+
+**Ratified 2026-08-31.** Asked directly and offered a dedicated row, folding it
+into the trigger, or leaving it alone, the operator chose the trigger — the
+thing already shipped. The heading above still read "Open" until now, which is
+the only thing that was actually wrong here: a question answered in code and
+left open in the document reads to the next person as work outstanding.
 
 ## Delivered
 

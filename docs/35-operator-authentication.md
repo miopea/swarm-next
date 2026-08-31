@@ -57,14 +57,27 @@ the public domain, and localhost never asks. Settings lists registered passkeys
 so the operator can see what exists and remove one, because a credential you
 cannot enumerate is one you cannot revoke.
 
-## Open, and worth settling before the passkey half
+## Settled, 2026-08-31
 
-- **Where the credential lives.** A new table, or the existing operator record.
-- **What recovery looks like when the token has been rotated and the passkey
-  device is lost.** Today the answer is editing `swarm.env` and restarting,
-  which is the thing this work exists to remove. It cannot be the answer.
-- **Whether a passkey replaces the session cookie or mints one.** Minting the
-  existing cookie is less new machinery and keeps one session model.
+**Recovery is a `swarmctl` command on the box itself.** The operator chose this
+over a one-time code and over keeping the token as a permanent fallback, and the
+argument that decided it is that it grants nothing new: the Hive runs on the
+operator's own machine, and anyone with shell access can already read
+`swarm.sqlite3` outright. A local recovery command is a better door to a room
+they already own — which is the same test `secrets.md` applies to impersonation,
+reached from the opposite direction.
+
+It also invents no new secret. A recovery code has to be stored somewhere safe,
+and the event it guards against — losing a device — is the event most likely to
+lose the note it was written on.
+
+Still open, and deliberately smaller than they look:
+
+- **Where the credential lives.** A new table, or the operator record. No
+  consequence outside persistence; decide it while writing the migration.
+- **Whether a passkey replaces the session cookie or mints one.** Minting keeps
+  one session model and less new machinery, which is the standing preference
+  unless something argues otherwise.
 
 ## Not in scope
 

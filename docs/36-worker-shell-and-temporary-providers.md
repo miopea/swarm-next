@@ -190,17 +190,63 @@ land **before** the first adoptable alpha provider rather than after.
   documentation
 - An ablation shows each assertion fails when its mechanism is removed
 
-## Open questions
+## Settled, 2026-08-31
 
-1. **Wake-the-parent timeout.** How long does Swarm wait for the handoff note, and
-   what happens then — proceed with brief only and say so, or fail the spawn? The
-   stuck-parent case is the motivating one, so this is not a corner.
-2. **Shell lifetime across an API restart.** Assumed not to survive, since it holds
-   no durable record. Not confirmed.
-3. **Temporary worker naming before adoption.** Auto-generated, and from what.
-4. **Whether a temporary worker may itself spawn temporary workers.**
-5. **Unknown-provider degradation on rollback** — placeholder or hard failure. See
-   the rollback hazard above; this one blocks adopting an alpha provider.
+All five were put to the operator together. Answers, with the reasoning that
+produced them:
+
+1. **A stuck parent proceeds on the brief alone, and the record says so.** A
+   parent that never sends its handoff note must not be able to block the
+   escape hatch reached for because it is stuck — that is the case the feature
+   exists for. The spawn succeeds, the temporary worker starts with less
+   context, and the absent handoff is recorded rather than papered over. The
+   timeout itself is not yet chosen; anything in the tens of seconds is
+   defensible and it is reversible, so it should not hold the work up.
+
+2. **A shell DOES survive an API restart, and the assumption here was wrong.**
+   Established by reading rather than asking: `open_worker_shell` issues
+   `HostRequest::StartShell`, so a shell is a terminal-host session, and the
+   host is a separate service that deliberately survives an API reload — the
+   comment at `crates/swarm-api/src/worker_runtime.rs:380` says so in as many
+   words.
+
+   What does not survive is the API's KNOWLEDGE of it. There is no shell table
+   and no durable record, so after a restart the process is still running, still
+   holding a workspace, and no longer reachable from the UI. That is an orphaned
+   PTY per API restart, not a shell that died — a leak rather than a loss, and
+   the opposite failure from the one assumed.
+
+3. **Naming is auto-generated and not yet specified.** Deliberately left: it is
+   reversible, invisible until the first temporary worker exists, and nothing
+   else waits on it.
+
+4. **A temporary worker MAY spawn temporary workers, two levels deep.** The
+   operator chose this over a flat one-level rule: a spike that needs its own
+   spike is real. Two levels bounds the worst case to four processes on a
+   four-core box, which is the constraint that actually bites here.
+
+   **Handback follows the chain and release cascades.** Each temporary worker
+   is adopted by the worker that made it — the only party holding its context,
+   which is what makes a handback note mean anything. Releasing a parent
+   releases everything beneath it, so no temporary worker can outlive the
+   reason it exists. That is how a temporary worker becomes permanent by
+   accident.
+
+5. **An unknown value degrades to a readable placeholder, and it lands BEFORE
+   the first use.** See the hazard above; the operator confirmed both the
+   remedy and the timing.
+
+   **AND IT IS NO LONGER ONLY ABOUT PROVIDER.** Schema 110 widened the CHECK on
+   `tasks.state` to admit `abandoned`, which arms exactly the same hazard for
+   task state: `crates/swarm-persistence/src/lib.rs:5062` raises
+   `FromSqlConversionFailure` on an unparseable state, and task listings collect
+   into `Result<Vec<_>>` — so one row a rolled-back build cannot read fails the
+   WHOLE listing, not just that row. Rollback is routine: the release tooling
+   restores the previous API automatically on a failed health check.
+
+   Nothing is abandoned today, so the hazard is latent and the first use arms
+   it. That is why the timing answer was "before anything is abandoned" rather
+   than "with the first alpha provider".
 
 ## Related
 

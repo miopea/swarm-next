@@ -102,18 +102,23 @@ already works this way and the habit exists; Jira posting directly is
 defensible because the audience is internal, and public comment is not the same
 act.
 
-## Open, and worth settling before building
+## Settled, 2026-08-31
 
-**Whether the state mapping itself is shared across sources.** GitHub is open
-and closed; Jira is a configurable workflow. Now that a held write no longer
-freezes anything, the pressure to unify them is lower — a shared mapping table
-would be fitting two unlike models into one shape for its own sake. Worth
-deciding deliberately rather than by momentum.
+**The state mappings stay separate.** GitHub is open and closed; Jira is a
+configurable workflow. A shared table would be fitting two unlike models into
+one shape for its own sake, and the pressure to unify dropped once a held write
+stopped freezing anything. Decided deliberately rather than by momentum, which
+was the whole point of writing it down.
 
-**Where the reviewed GitHub comment is reviewed.** Email replies appear in Needs
-you with the words in front of the operator. A GitHub comment could reuse that
-exactly, or sit on the task. Reusing it means one queue and one habit, which is
-the product's whole thesis, but it puts more into Needs you.
+A third source is the thing that would reopen this. It should reopen it on
+purpose, not arrive as pressure to unify in a hurry.
+
+**A GitHub comment is reviewed in Needs you, exactly like an email reply.** One
+queue and one habit is the product's thesis, and email already proved the shape
+works. The cost is real — Needs you gets busier, and it now also carries the
+unsettled-work count — but the alternative is a second place to check, and a
+second place to check is precisely how nineteen stale exemption claims went
+unseen for weeks.
 
 ## Charm, and its one rule
 
