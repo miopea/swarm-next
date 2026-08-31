@@ -18,10 +18,82 @@ gap was between the thing asserted and the thing claimed:
 | the fix is live | a working tree that was not the one that shipped |
 | the refusal is accurate | a predicate, not the sentence it prints |
 | 49 tasks are unverified | a join admitting rows the claim excluded |
+| exactly one control in the dialog is primary | one row of the dialog, not the dialog |
 
 Asserting harder closes none of them. That is the useful thing to notice: the
 instinct after a miss like this is *more tests*, and more tests of the same
 subject would have passed too.
+
+## The other shape: a check that could not have returned the other answer
+
+The six above are all NARROWER than their claim — one call site, one branch,
+one predicate, one working tree, one join, one row of a dialog. Each measures
+something real, just less than was said. They are widened.
+
+A second shape is worse and is not in that table. The check carries no
+information about the claim at all: it would have printed the same thing in
+either world. There is nothing to widen, because nothing was measured. It has
+to be discarded and replaced.
+
+**The test that separates them.** Ask what the check would have printed if the
+opposite were true. If the answer is "the same thing", it is this shape.
+
+### The worked example, because nothing about it looks careless
+
+On 2026-08-31 Queen was asked whether this Hive was serving a fixed dialog. She
+read the uptimes of its `swarm-terminal-host` processes — 1.7 to 17.7 hours at
+that moment, all comfortably older than the release carrying the fix — and
+reported that the Hive was still serving the old one. Confidently, to the
+operator.
+
+(Those figures are a record of one reading, not a standing fact: the same
+command a few hours later returns 1.4 hours to 3.6 days. Do not check them.
+They were never the point, which is rather the argument.)
+
+The terminal host serves PTYs. It does not serve the web bundle; the API does.
+And host uptime is long **by design**, because the host deliberately survives an
+API reload so worker terminals are not killed. So the number is large whether or
+not the fix is being served, and the probe could not have said otherwise.
+
+What settles it is the served artefact:
+
+    GET :8766 -> /assets/index-*.js   contains "Checking where this goes"
+
+Read from the live endpoint rather than the tarball. It was there; the Hive was
+serving the fix.
+
+The reasoning around that probe was careful, the check was reasonable, and it
+was reported as evidence. That is why it is the example. Her own words for it
+are better than "measured the wrong thing": *a check whose output was fixed in
+advance*.
+
+### The document already sorted them and never said so
+
+Every entry in the historical list above is this shape, not the table's. The
+colourised `grep` matched nothing whether or not errors existed. The
+line-addressed `sed` changed nothing whether or not a bump was needed. The
+reconcile compared a symlink against itself, which is equal in every world. The
+schema tests ran against empty databases, where no row can violate a
+constraint. `systemctl show` on a unit that does not exist returns empty
+defaults rather than an error.
+
+Six in the table, narrower than the claim. Five in the paragraph, incapable of
+failing. The difference was visible in the document before it was named.
+
+### The rest of 2026-08-31
+
+Four more, all in the same day and all found by ablation or by a person looking
+at a screen rather than by another test:
+
+| The check | Why it could not have failed |
+| --- | --- |
+| an ablation filtered to a test name that did not exist | zero tests matched, so it printed `ok` whether or not the guard was removed |
+| `expect(tagName).toBe("STRONG")` | the element is `STRONG` whether or not it renders bold, which was the claim |
+| "blocks controls while disconnected", asserting a button disabled | that render supplied no handler, so the button was disabled for an unrelated reason |
+| a find-and-replace whose `\d+` could not match `1_000` | zero substitutions, exit zero — identical to nothing needing changing |
+
+The last is already in this document as *an edit that matches nothing reports
+success*, written before the category had a name. It belongs to both.
 
 ## Why this repository keeps producing it
 
