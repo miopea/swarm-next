@@ -12,6 +12,48 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.1.0
+
+**Your workers keep running through this one.** The terminal protocol did not
+move, so this installs with `update` and leaves live sessions alone.
+
+**Copy your database first.** This carries schema migrations **110, 111 and
+112**, and two of them rebuild a table rather than adding one — including
+`tasks`, which forty-three other tables point at. A tarball install migrates
+without taking its own backup:
+
+    cp ~/.local/state/swarm/swarm.sqlite3 ~/swarm-database-backup.sqlite3
+
+The upgrade has been run on a real database with real work in it — 409 tasks
+and 3102 activity records came through unchanged — but yours is not that one,
+so take the copy.
+
+### New features
+
+- **Work you gave up on can be closed as abandoned.** Until now the only way to
+  close anything was to complete it, which asked what evidence showed the work
+  was running — a question that has no answer for work nobody finished, and one
+  you were answering by hand. Abandoned never asks it
+- **Finished work that had nothing to deploy now closes itself.** An
+  investigation that produced no commits, or a change that only touched
+  documentation, is settled by Swarm on the facts rather than waiting for you to
+  confirm it
+- **A worker records which commits its task produced**, and Swarm checks them
+  against your repository — whether each one exists, whether anything still
+  reaches it, and what it touched. That is what makes "there was nothing to
+  deploy" something Swarm can establish rather than something it is told
+- **Needs you now says how much finished work is waiting on you**, and why each
+  piece waits: it built code and recorded no deployment, nobody reported what it
+  produced, or somebody claimed nothing shipped and no one has agreed
+- **A claim that nothing was deployed is refused when the commits disagree**,
+  and the refusal says what to do instead
+
+### Fixes
+
+- A worker whose terminal could not be read is no longer reported as a worker
+  with nothing running. Those are different things, and saying the second when
+  the first is true sent people to check on workers that were perfectly fine
+
 ## 1.0.2
 
 **Workers keep running through this one**, and there is no schema change.
