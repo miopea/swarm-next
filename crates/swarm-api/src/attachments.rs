@@ -139,7 +139,12 @@ fn media_type_for_name(name: &str) -> Option<&'static str> {
         "pdf" => Some("application/pdf"),
         "zip" => Some("application/zip"),
         "xlsx" => Some(XLSX),
+        "docx" => Some(DOCX),
+        "pptx" => Some(PPTX),
         "xls" => Some(XLS),
+        "mp4" => Some("video/mp4"),
+        "gz" => Some("application/gzip"),
+        "tar" => Some("application/x-tar"),
         "bin" => Some("application/octet-stream"),
         _ => None,
     }
@@ -194,14 +199,40 @@ fn validated_extension(media_type: &str, bytes: &[u8]) -> Result<&'static str, A
         }
         "application/pdf" if bytes.starts_with(b"%PDF-") => "pdf",
         "application/zip" if bytes.starts_with(b"PK") => "zip",
-        value if OPEN_XML.contains(&value) && bytes.starts_with(b"PK") => "xlsx",
+        // EACH OOXML TYPE KEEPS ITS OWN NAME. All three used to return "xlsx",
+        // so a Word document and a PowerPoint deck arrived claiming to be a
+        // spreadsheet. That is worse than the .bin fallback: .bin says nothing,
+        // .xlsx says something false, and anything dispatching on extension
+        // opens it wrong and fails as though the file were corrupt.
+        //
+        // The PK check still only proves the container is a zip, exactly as the
+        // comment above says. What changed is that the RESULT no longer names a
+        // workbook regardless of what was declared.
+        XLSX if bytes.starts_with(b"PK") => "xlsx",
+        DOCX if bytes.starts_with(b"PK") => "docx",
+        PPTX if bytes.starts_with(b"PK") => "pptx",
         XLS if bytes.starts_with(&OLE2) => "xls",
+        // ARCHIVES AND MEDIA, so what arrives can be told apart from anything
+        // else. These were reaching a worker as `<digest>.bin` — no name, no
+        // extension, no hint — which is indistinguishable from the drop having
+        // failed. The operator reported exactly that about an mp4.
+        //
+        // Naming them does not make a worker able to READ them: an agent still
+        // cannot process video. It makes the file identifiable instead of
+        // anonymous, which is the difference between a failure someone can
+        // reason about and one that looks like a broken feature.
+        "video/mp4" if bytes.len() >= 8 && &bytes[4..8] == b"ftyp" => "mp4",
+        "application/gzip" | "application/x-gzip" if bytes.starts_with(&[0x1f, 0x8b]) => "gz",
+        // `ustar` sits at offset 257 of the first header block, which is why a
+        // tar is not recognisable from its first bytes like everything else.
+        "application/x-tar" if bytes.len() >= 262 && &bytes[257..262] == b"ustar" => "tar",
         "text/csv" => "csv",
         "text/markdown" => "md",
         "text/plain" => "txt",
         "application/json" => "json",
         "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "application/pdf"
-        | "application/zip" | XLS => return signed_but_wrong(),
+        | "application/zip" | XLS | "video/mp4" | "application/gzip" | "application/x-gzip"
+        | "application/x-tar" => return signed_but_wrong(),
         value if OPEN_XML.contains(&value) => return signed_but_wrong(),
         _ => "bin",
     })
@@ -344,9 +375,17 @@ mod tests {
             extension_of(store.save(XLSX, b"PK\x03\x04workbook").await.unwrap()),
             "xlsx"
         );
+        // THIS LINE USED TO EXPECT "xlsx", which is why the defect was invisible:
+        // the behaviour was wrong and the test agreed with it, so nothing could
+        // ever report it. A Word document stored as a spreadsheet fails later
+        // as a corrupt file rather than a mislabelled one.
         assert_eq!(
             extension_of(store.save(DOCX, b"PK\x03\x04document").await.unwrap()),
-            "xlsx"
+            "docx"
+        );
+        assert_eq!(
+            extension_of(store.save(PPTX, b"PK\x03\x04deck").await.unwrap()),
+            "pptx"
         );
         assert_eq!(
             extension_of(
@@ -566,5 +605,120 @@ mod tests {
             .unwrap();
 
         assert!(tokio::fs::try_exists(&kept).await.unwrap());
+    }
+
+    /// THE ARM THAT SAID SOMETHING FALSE. All three OOXML types returned
+    /// `xlsx`, so a Word document and a `PowerPoint` deck arrived claiming to
+    /// be a spreadsheet — worse than the `bin` fallback, because `bin` says
+    /// nothing and `xlsx` says something untrue.
+    #[tokio::test]
+    async fn a_word_document_and_a_deck_are_not_stored_as_spreadsheets() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(directory.path().join("attachments"));
+        // Any zip: the PK check only ever proved the container, which is what
+        // the comment on validated_extension has always said.
+        let container = b"PK\x03\x04 pretend this is an office document";
+
+        let word = store.save(DOCX, container).await.unwrap();
+        let deck = store.save(PPTX, container).await.unwrap();
+        let sheet = store.save(XLSX, container).await.unwrap();
+
+        assert!(word.to_string_lossy().ends_with(".docx"));
+        assert!(deck.to_string_lossy().ends_with(".pptx"));
+        assert!(sheet.to_string_lossy().ends_with(".xlsx"));
+    }
+
+    /// The operator: "doesn't seem I can send a mp4 via drag/drop", and later
+    /// "I need to be able to upload the mp4 or other binaries like zip/tar".
+    ///
+    /// The upload always worked. What arrived was `<digest>.bin` — no name, no
+    /// extension, nothing to tell it from any other opaque blob — which is
+    /// indistinguishable from the drop having failed.
+    #[tokio::test]
+    async fn an_archive_or_a_video_arrives_named_as_what_it_is() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(directory.path().join("attachments"));
+
+        let mut mp4 = vec![0u8; 4];
+        mp4.extend_from_slice(b"ftypisom");
+        let video = store.save("video/mp4", &mp4).await.unwrap();
+        assert!(video.to_string_lossy().ends_with(".mp4"));
+
+        let gzip = store
+            .save("application/gzip", &[0x1f, 0x8b, 0x08, 0x00, 0x00])
+            .await
+            .unwrap();
+        assert!(gzip.to_string_lossy().ends_with(".gz"));
+
+        // `ustar` lives at offset 257, not in the first bytes.
+        let mut tar = vec![0u8; 257];
+        tar.extend_from_slice(b"ustar\0");
+        let archive = store.save("application/x-tar", &tar).await.unwrap();
+        assert!(archive.to_string_lossy().ends_with(".tar"));
+
+        let zip = store
+            .save("application/zip", b"PK\x03\x04zip")
+            .await
+            .unwrap();
+        assert!(zip.to_string_lossy().ends_with(".zip"));
+    }
+
+    /// EVERY NAME THIS STORE WRITES MUST READ BACK. `read` resolves a media
+    /// type from the filename and refuses one it does not know, so adding an
+    /// extension to the write path without the read path stores files that can
+    /// never be fetched — a silent one-way door.
+    #[tokio::test]
+    async fn every_extension_the_store_writes_can_be_read_back() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(directory.path().join("attachments"));
+        let mut mp4 = vec![0u8; 4];
+        mp4.extend_from_slice(b"ftypisom");
+        let mut tar = vec![0u8; 257];
+        tar.extend_from_slice(b"ustar\0");
+
+        let written: Vec<(&str, Vec<u8>)> = vec![
+            ("image/png", PNG.to_vec()),
+            ("application/pdf", b"%PDF-1.7 body".to_vec()),
+            ("application/zip", b"PK\x03\x04zip".to_vec()),
+            (XLSX, b"PK\x03\x04sheet".to_vec()),
+            (DOCX, b"PK\x03\x04word".to_vec()),
+            (PPTX, b"PK\x03\x04deck".to_vec()),
+            ("text/plain", b"notes".to_vec()),
+            ("application/json", b"{}".to_vec()),
+            ("video/mp4", mp4),
+            ("application/gzip", vec![0x1f, 0x8b, 0x08, 0x00, 0x00]),
+            ("application/x-tar", tar),
+            // The opaque fallback still round-trips.
+            ("application/octet-stream", b"anything at all".to_vec()),
+        ];
+
+        for (media_type, bytes) in written {
+            let path = store.save(media_type, &bytes).await.unwrap();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let (read_back, _) = store.read(&name).await.unwrap_or_else(|_| {
+                panic!("{media_type} was stored as {name} and could not be read back")
+            });
+            assert_eq!(
+                read_back, bytes,
+                "{media_type} round-tripped different bytes"
+            );
+        }
+    }
+
+    /// A file that DECLARES a format and does not match it is still refused.
+    /// The new types must not become a hole in that rule.
+    #[tokio::test]
+    async fn a_declared_format_that_does_not_match_its_bytes_is_still_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(directory.path().join("attachments"));
+        for media_type in ["video/mp4", "application/gzip", "application/x-tar"] {
+            assert!(
+                store
+                    .save(media_type, b"not that format at all")
+                    .await
+                    .is_err(),
+                "{media_type} accepted bytes that are not one"
+            );
+        }
     }
 }
