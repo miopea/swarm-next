@@ -75,6 +75,10 @@
   --warning: var(--warn);
   --bad: #9b6967;
   --danger: var(--bad);
+  /* Danger text on --bad-soft. --bad itself measures 3.34:1 there, under the
+     4.5:1 this app targets, so the -strong pair exists for the same reason
+     --warn-strong does. Measured, not chosen by eye: this is 5.61:1. */
+  --bad-strong: #7d4340;
   --bad-soft: #eed8d4;
   --blocked: #84739c;
   --blocked-soft: #e5deec;
@@ -121,6 +125,8 @@
   --warn-strong: #dfaa40;
   --bad: #d58e89;
   --bad-soft: #4a302e;
+  /* 4.60:1 on --bad-soft; the dark hue is already strong enough. */
+  --bad-strong: #d58e89;
   --blocked: #b4a1c8;
   --blocked-soft: #373044;
   --focus: #c6d6b6;
@@ -1789,11 +1795,35 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
    thing on the same surface, and two attention cards that look different
    without meaning different is noise the operator has to decode. */
 .unsettled-review-card { align-items: start; }
-.unsettled-review-list { display: grid; gap: 4px; margin: 7px 0 9px; padding: 0; list-style: none; }
-.unsettled-review-list li { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 14px; }
-.unsettled-review-title { flex: 1 1 260px; min-width: 0; padding: 0; border: 0; background: none; color: var(--ink); font-size: .82rem; line-height: 1.4; text-align: left; }
+/* GROUPED BY WORKER, because "no clear which worker" was the operator's first
+   complaint about eleven rows that named none. */
+.unsettled-review-group { margin: 9px 0 0; }
+.unsettled-review-group h4 { display: flex; align-items: center; gap: 7px; margin: 0 0 3px; color: var(--text); font-size: .68rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.unsettled-review-group-count { padding: 1px 6px; border-radius: 999px; background: var(--surface-soft); color: var(--text); font-size: .64rem; font-variant-numeric: tabular-nums; letter-spacing: 0; }
+.unsettled-review-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+/* GRID, NOT WRAPPING FLEX. The previous rule was `flex-wrap: wrap` with
+   `justify-content: space-between` over two variable-width children, so a long
+   title pushed the reason onto its own line. Measured on eleven real-shaped
+   rows: at 390px the old rule produced FIVE distinct row heights (62/73/76/87/92)
+   and at 900px eight of eleven rows wrapped. Two columns that cannot wrap give
+   every row one height at every width, which is the whole fix. */
+.unsettled-review-list li { display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: center; gap: 10px; }
+.unsettled-review-title { min-width: 0; overflow: hidden; padding: 0; border: 0; background: none; color: var(--ink); font-size: .82rem; line-height: 1.55; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .unsettled-review-title:hover { color: var(--link); text-decoration: underline; }
-.unsettled-review-meta { color: var(--muted); font-size: .74rem; }
+/* Three channels like .machine-pressure — a hue, a border and the text itself —
+   because this app targets WCAG 2.1 AA and the state must survive with the
+   stylesheet gone. Text colours are the -strong pairs: --warn measures 1.93:1
+   on --warn-soft. */
+.unsettled-review-kind { padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); background: var(--surface-soft); font-size: .64rem; font-weight: 700; letter-spacing: .03em; white-space: nowrap; }
+.unsettled-review-kind.kind-claim_unapproved { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); color: var(--warn-strong); background: var(--warn-soft); }
+.unsettled-review-kind.kind-code_no_deployment { border-color: color-mix(in srgb, var(--danger) 50%, var(--line)); color: var(--bad-strong); background: var(--bad-soft); }
+.unsettled-review-kind.kind-nothing_reported { border-color: var(--line); color: var(--text); background: var(--soft); border-style: dashed; }
+/* The sentence, said ONCE. Seven of eleven rows repeated the same forty-eight
+   characters, which is what buried the titles. */
+.unsettled-review-legend { display: grid; gap: 3px; margin: 11px 0 0; padding: 9px 0 0; border-top: 1px solid var(--line); }
+.unsettled-review-legend > div { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: baseline; gap: 8px; }
+.unsettled-review-legend dd { margin: 0; color: var(--text); font-size: .72rem; line-height: 1.45; }
+.unsettled-review-footnote { margin: 7px 0 0 !important; color: var(--muted) !important; font-size: .68rem !important; line-height: 1.45; }
 .blocked-escalation-meta { flex: 0 0 auto; color: var(--muted); font-size: .72rem; font-variant-numeric: tabular-nums; }
 .dialog { display: grid; width: min(440px, 100%); gap: 9px; padding: 18px; border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--panel-raised); box-shadow: var(--shadow); }
 .dialog h3 { margin: 0; font-size: 1.05rem; }
