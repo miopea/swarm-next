@@ -149,9 +149,14 @@ test("names the destination once it is known, and only then", () => {
  */
 test("exactly one action in the row reads as the primary one", () => {
   const { container } = render(<DogfoodFeedbackDialog activeSessionId={undefined} health={{ status: "ok", version: "0.1.0" }} hiveIdentity={undefined} liveFeedState="connected" onClose={vi.fn()} operatorToken="token" recentEvents={[]} sessions={[]} surface="workers" workers={[]} />);
+  // THE WHOLE DIALOG, not just the action row. The claim is that one control
+  // reads as primary; scoping the query to the row would leave a second primary
+  // anywhere else in the dialog — including the connect panel it renders —
+  // passing a test whose sentence says otherwise.
+  expect(container.querySelectorAll(".primary-action")).toHaveLength(1);
+  // And it is the one that finishes the job, not one of the two that precede it.
+  expect(container.querySelector(".primary-action")!.textContent).toMatch(/Hive|GitHub|Checking/);
   const row = container.querySelector(".diagnostic-actions");
   expect(row).not.toBeNull();
-  expect(row!.querySelectorAll(".primary-action")).toHaveLength(1);
-  // And it is the one that finishes the job, not one of the two that precede it.
-  expect(row!.querySelector(".primary-action")!.textContent).toMatch(/Hive|GitHub|Checking/);
+  expect(row!.contains(container.querySelector(".primary-action"))).toBe(true);
 });
