@@ -37,6 +37,34 @@ type Props = {
   workers: Worker[];
 };
 
+/**
+ * What the committing button says, including while it does not yet know.
+ *
+ * IT MUST NOT NAME A DESTINATION IT HAS NOT ESTABLISHED. `github` is fetched
+ * asynchronously and starts undefined, so `github?.configured` reads falsy
+ * during the fetch — which used to render "Save to this Hive" and then swap
+ * itself to "Send to GitHub" when the response landed. The operator watched
+ * that happen while typing and reasonably concluded the typing had caused it.
+ *
+ * The two labels are not two wordings for one act. One keeps the words on this
+ * machine; the other publishes them to a public issue tracker under the
+ * operator's own account. Claiming the first while about to do the second is a
+ * false statement about where what they wrote is going — the same class as the
+ * "File added" notice that reported a paste which never happened.
+ *
+ * So the unknown state is stated rather than guessed at, exactly as the
+ * neighbouring button already says "Gathering evidence…".
+ */
+export function destinationLabel(
+  github: { configured: boolean } | undefined,
+  saveState: "idle" | "saving" | "saved" | "error",
+): string {
+  if (github === undefined) return "Checking where this goes…";
+  if (saveState === "saving") return github.configured ? "Sending…" : "Saving…";
+  if (saveState === "saved") return github.configured ? "Sent" : "Saved to Hive";
+  return github.configured ? "Send to GitHub" : "Save to this Hive";
+}
+
 export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIdentity, liveFeedState, onClose, onSaved, operatorToken, recentEvents, sessions, surface, workers }: Props) {
   const [expectation, setExpectation] = useState("");
   const [observation, setObservation] = useState("");
@@ -228,9 +256,14 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
         </div>
         <small className="privacy-note">Your note is included exactly as entered. Automatic evidence never includes terminal output, task text, paths, credentials, worker names, or raw errors.</small>
         {closeConfirm ? <UnsavedChangesPrompt label="Discard this feedback?" description="Your notes and attached screenshot have not been saved to the Hive." discardLabel="Discard feedback" onDiscard={onClose} onKeep={() => setCloseConfirm(false)} /> : <div className="diagnostic-actions">
-          <button type="button" disabled={!runtime.loaded} onClick={buildPreview}>{runtime.loaded ? "Preview bundle" : "Gathering evidence…"}</button>
-          <button type="button" className="primary-action" disabled={!runtime.loaded} onClick={() => void copyBundle()}>{copyState === "copied" ? "Copied" : "Copy notes & diagnostics"}</button>
-          <button type="button" className="primary-action" disabled={!runtime.loaded || (!expectation.trim() && !observation.trim()) || saveState === "saving" || saveState === "saved"} onClick={() => void saveToHive()}>{saveState === "saving" ? (github?.configured ? "Sending…" : "Saving…") : saveState === "saved" ? (github?.configured ? "Sent" : "Saved to Hive") : github?.configured ? "Send to GitHub" : "Save to this Hive"}</button>
+          {/* ONE PRIMARY. Preview and Copy are things you do BEFORE committing;
+              only the button on the right finishes the job. Two of these three
+              used to claim `primary-action`, so the dialog nominated two
+              winners and the operator reported it as "three buttons and none
+              are clear". */}
+          <button type="button" className="secondary-button" disabled={!runtime.loaded} onClick={buildPreview}>{runtime.loaded ? "Preview bundle" : "Gathering evidence…"}</button>
+          <button type="button" className="secondary-button" disabled={!runtime.loaded} onClick={() => void copyBundle()}>{copyState === "copied" ? "Copied" : "Copy notes & diagnostics"}</button>
+          <button type="button" className="primary-action" disabled={!runtime.loaded || github === undefined || (!expectation.trim() && !observation.trim()) || saveState === "saving" || saveState === "saved"} onClick={() => void saveToHive()}>{destinationLabel(github, saveState)}</button>
         </div>}
         {/* WHICH OF THE TWO PATHS THIS SUBMISSION TAKES, said before it is taken
             rather than discovered afterwards. Only when the Hive can file at

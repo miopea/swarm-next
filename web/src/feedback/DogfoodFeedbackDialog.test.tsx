@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
-import DogfoodFeedbackDialog from "./DogfoodFeedbackDialog";
+import DogfoodFeedbackDialog, { destinationLabel } from "./DogfoodFeedbackDialog";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -117,3 +117,41 @@ test("saves reviewed notes and an optional screenshot privately to the Hive", as
 function ok(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 }
+
+/**
+ * THE COMMITTING BUTTON MUST NOT NAME A DESTINATION IT HAS NOT ESTABLISHED.
+ *
+ * `github` is fetched asynchronously and starts undefined, so `github?.configured`
+ * read falsy during the fetch and the button rendered "Save to this Hive" — then
+ * swapped itself to "Send to GitHub" when the response landed. The operator
+ * watched that happen while typing and reasonably concluded the typing caused it.
+ *
+ * The two labels are not two wordings for one act. One keeps the words on this
+ * machine; the other publishes them to a public issue tracker under the
+ * operator's own account.
+ */
+test("says it is still checking rather than claiming a destination it does not know", () => {
+  expect(destinationLabel(undefined, "idle")).toBe("Checking where this goes…");
+  expect(destinationLabel(undefined, "idle")).not.toMatch(/Hive|GitHub/);
+});
+
+test("names the destination once it is known, and only then", () => {
+  expect(destinationLabel({ configured: false }, "idle")).toBe("Save to this Hive");
+  expect(destinationLabel({ configured: true }, "idle")).toBe("Send to GitHub");
+  expect(destinationLabel({ configured: true }, "saving")).toBe("Sending…");
+  expect(destinationLabel({ configured: false }, "saved")).toBe("Saved to Hive");
+});
+
+/**
+ * ONE PRIMARY. The operator's words were "three buttons and none are clear",
+ * and that was literally true of the markup: two of the three carried
+ * `primary-action`, so the dialog nominated two winners.
+ */
+test("exactly one action in the row reads as the primary one", () => {
+  const { container } = render(<DogfoodFeedbackDialog activeSessionId={undefined} health={{ status: "ok", version: "0.1.0" }} hiveIdentity={undefined} liveFeedState="connected" onClose={vi.fn()} operatorToken="token" recentEvents={[]} sessions={[]} surface="workers" workers={[]} />);
+  const row = container.querySelector(".diagnostic-actions");
+  expect(row).not.toBeNull();
+  expect(row!.querySelectorAll(".primary-action")).toHaveLength(1);
+  // And it is the one that finishes the job, not one of the two that precede it.
+  expect(row!.querySelector(".primary-action")!.textContent).toMatch(/Hive|GitHub|Checking/);
+});
