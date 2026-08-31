@@ -38,7 +38,7 @@ interface MobileTerminalComposerProps {
   keysExpanded?: boolean;
   onKeysExpandedChange?: (expanded: boolean) => void;
   onAttachment?: (file: File) => Promise<void>;
-  attachmentState?: "idle" | "uploading" | "ready" | "error";
+  attachmentState?: "idle" | "uploading" | "waiting" | "ready" | "error";
   /** Rebuilds this screen's view of the session. Sends the worker nothing. */
   onRefresh?: () => void;
 }
@@ -80,7 +80,15 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
   async function chooseAttachment(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
-    if (!connected || !file || !onAttachment) return;
+    // NO `connected` CHECK, and its absence is the fix. Uploading is plain
+    // HTTP and never needed the socket; only pasting the path down the
+    // terminal does, and that is handled where the paste happens.
+    //
+    // The old guard refused here, silently, and the operator reported it as
+    // "works about half the time" -- because opening a phone's file picker
+    // BACKGROUNDS this tab, the socket drops, and whether the reconnect beat
+    // their thumb decided whether the file survived. Nothing said so.
+    if (!file || !onAttachment) return;
     await onAttachment(file);
   }
 
@@ -119,7 +127,7 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
           {onRefresh ? (
             <button type="button" className="terminal-refresh-button" onClick={onRefresh}>Refresh</button>
           ) : null}
-          <button type="button" className="terminal-image-button" disabled={!connected || !onAttachment || attachmentState === "uploading"} onClick={() => attachmentInput.current?.click()}>{attachmentState === "uploading" ? "Adding…" : "Add file"}</button>
+          <button type="button" className="terminal-image-button" disabled={!onAttachment || attachmentState === "uploading"} onClick={() => attachmentInput.current?.click()}>{attachmentState === "uploading" ? "Adding…" : attachmentState === "waiting" ? "Waiting…" : "Add file"}</button>
           <button type="button" className="terminal-keys-toggle" aria-expanded={keysExpanded} onClick={toggleKeys}>{keysExpanded ? "Hide keys" : "Show keys"}</button>
         </div>
       </div>

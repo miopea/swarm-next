@@ -37,7 +37,15 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   }, [operatorToken, session.session_id]);
   const [connectionState, setConnectionState] = useState<TerminalConnectionState>("connecting");
   const [detail, setDetail] = useState<string>();
-  const [attachmentState, setAttachmentState] = useState<"idle" | "uploading" | "ready" | "error">("idle");
+  const [attachmentState, setAttachmentState] = useState<
+    "idle" | "uploading" | "waiting" | "ready" | "error"
+  >("idle");
+  // THE UPLOADED PATH, HELD UNTIL THERE IS A SOCKET TO PASTE IT DOWN.
+  // Uploading is plain HTTP and never needed the connection; only this
+  // last step does. Without somewhere to keep the path, a file that
+  // uploaded perfectly while the socket was down was reported "ready"
+  // and pasted nowhere.
+  const [pendingPaste, setPendingPaste] = useState<string>();
   // Why it failed, not just that it did. "Image could not be added" on its own
   // left an operator with nothing to act on and nothing to report.
   const [attachmentError, setAttachmentError] = useState<string>();
@@ -139,13 +147,36 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
     setAttachmentError(undefined);
     try {
       const path = await uploadTerminalAttachment(operatorToken, session.session_id, file);
-      controller.sendInput(terminalAttachmentPaste(path));
-      setAttachmentState("ready");
+      // READ THE CONNECTION AT THE MOMENT OF PASTING, not before uploading. A
+      // phone backgrounds this tab to open its file picker and the socket
+      // drops, so the state that mattered when the operator tapped is not the
+      // state that matters now -- and an upload of any size gives the
+      // reconnect time to finish, or not.
+      if (connectionState === "connected") {
+        controller.sendInput(terminalAttachmentPaste(path));
+        setAttachmentState("ready");
+        return;
+      }
+      // TerminalConnection#send DISCARDS ANYTHING SENT WHILE THE SOCKET IS
+      // CLOSED, silently and by design. Calling it here would report success
+      // for a paste that never happened, which is worse than the silence this
+      // change exists to remove: the operator would be told the file arrived.
+      setPendingPaste(path);
+      setAttachmentState("waiting");
     } catch (error) {
       setAttachmentError(error instanceof Error ? error.message : undefined);
       setAttachmentState("error");
     }
   }
+
+  // Delivered when the connection returns, which is what the operator wanted
+  // when they picked the file. Nothing about an uploaded path expires.
+  useEffect(() => {
+    if (connectionState !== "connected" || pendingPaste === undefined) return;
+    controller.sendInput(terminalAttachmentPaste(pendingPaste));
+    setPendingPaste(undefined);
+    setAttachmentState("ready");
+  }, [connectionState, pendingPaste, controller]);
 
   async function copySessionId() {
     try {
@@ -206,7 +237,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
           {detail && <small>{detail}</small>}
           {attachmentState !== "idle" && (
             <small className={`attachment-state attachment-${attachmentState}`} role="status">
-              {attachmentState === "uploading" ? "Adding file…" : attachmentState === "ready" ? "File added · press Enter when ready" : attachmentError ? `File could not be added — ${attachmentError}. Try again.` : "File could not be added. Try again."}
+              {attachmentState === "uploading" ? "Adding file…" : attachmentState === "waiting" ? "File uploaded · waiting for the connection to add it" : attachmentState === "ready" ? "File added · press Enter when ready" : attachmentError ? `File could not be added — ${attachmentError}. Try again.` : "File could not be added. Try again."}
             </small>
           )}
         </div>

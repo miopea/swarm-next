@@ -102,7 +102,47 @@ test("retains the draft and blocks controls while disconnected", () => {
   expect(onInput).not.toHaveBeenCalled();
   expect(screen.getByLabelText(/Message worker/)).toHaveValue("keep me");
   expect(screen.getByRole("button", { name: "Cycle mode" })).toBeDisabled();
+  // ADD FILE IS NOT ONE OF THE BLOCKED CONTROLS, and this assertion used to
+  // claim it was — passing only because this render supplies no onAttachment,
+  // so the button was disabled for a reason that has nothing to do with the
+  // connection. The claim and the cause were different things.
   expect(screen.getByRole("button", { name: "Add file" })).toBeDisabled();
+});
+
+/**
+ * Uploading never needed the socket, and refusing to try is what the operator
+ * felt as "works about half the time".
+ *
+ * Opening a phone's file picker BACKGROUNDS this tab, which drops the terminal
+ * socket by design. The old guard then discarded the chosen file in silence, so
+ * whether an attachment survived depended on whether the reconnect beat the
+ * operator's thumb.
+ */
+test("a file chosen while the socket is down is still handed on, not dropped", async () => {
+  const onAttachment = vi.fn().mockResolvedValue(undefined);
+  const { container } = render(
+    <MobileTerminalComposer connectionState="disconnected" onInput={vi.fn()} onAttachment={onAttachment} />,
+  );
+  const image = new File([new Uint8Array([1, 2, 3])], "screen.png", { type: "image/png" });
+
+  expect(screen.getByRole("button", { name: "Add file" })).toBeEnabled();
+  fireEvent.change(container.querySelector<HTMLInputElement>('input[type="file"]')!, {
+    target: { files: [image] },
+  });
+
+  await vi.waitFor(() => expect(onAttachment).toHaveBeenCalledWith(image));
+});
+
+test("the button says the file is waiting on the connection rather than nothing", () => {
+  render(
+    <MobileTerminalComposer
+      connectionState="disconnected"
+      onInput={vi.fn()}
+      onAttachment={vi.fn()}
+      attachmentState="waiting"
+    />,
+  );
+  expect(screen.getByRole("button", { name: "Waiting…" })).toBeTruthy();
 });
 
 test("offers a first-class mobile image picker without submitting the draft", async () => {

@@ -5,8 +5,11 @@ const controller = vi.hoisted(() => ({
   attach: vi.fn(),
   detach: vi.fn(),
   sendInput: vi.fn(),
+  stateListener: undefined as ((state: string) => void) | undefined,
+  initialState: "connected",
   subscribe: vi.fn((listener: (state: string) => void) => {
-    listener("connected");
+    controller.stateListener = listener;
+    listener(controller.initialState);
     return { dispose: vi.fn() };
   }),
   scrollListener: undefined as ((atBottom: boolean) => void) | undefined,
@@ -34,6 +37,11 @@ vi.mock("./TerminalWorkspace", () => ({
 vi.mock("./XtermSurface", () => ({ XtermSurface: class {} }));
 vi.mock("./TerminalConnection", () => ({ TerminalConnection: class {} }));
 vi.mock("./MobileTerminalComposer", () => ({ MobileTerminalComposer: () => null }));
+const upload = vi.hoisted(() => vi.fn());
+vi.mock("./TerminalAttachments", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./TerminalAttachments")>()),
+  uploadTerminalAttachment: upload,
+}));
 
 import TerminalView from "./TerminalView";
 
@@ -41,6 +49,8 @@ afterEach(() => {
   cleanup();
   controller.sendInput.mockClear();
   controller.scrollToBottom.mockClear();
+  controller.initialState = "connected";
+  controller.stateListener = undefined;
   vi.unstubAllGlobals();
 });
 
@@ -170,4 +180,38 @@ test("keeps the destructive sleep control off the terminal bar", () => {
   render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
 
   expect(screen.queryByRole("button", { name: "Put worker to sleep" })).not.toBeInTheDocument();
+});
+
+
+/**
+ * A FILE UPLOADED WHILE THE SOCKET IS DOWN IS DELIVERED, NOT LOST AND NOT LIED
+ * ABOUT.
+ *
+ * Two silent drops met here. Uploading is plain HTTP and never needed the
+ * socket, but the mobile picker refused to start without one — the operator
+ * reported that as "works about half the time", because opening a phone's file
+ * picker backgrounds the tab and drops the connection. And underneath,
+ * `TerminalConnection#send` discards anything sent while the socket is closed,
+ * silently and by design, so pasting anyway would have reported success for a
+ * paste that never happened. That is worse than the silence: it is a false
+ * "File added".
+ */
+test("an attachment uploaded while disconnected waits, then lands when the socket returns", async () => {
+  upload.mockResolvedValue("/tmp/attachments/screen.png");
+  controller.initialState = "disconnected";
+  const { container } = render(
+    <TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />,
+  );
+
+  const file = new File([new Uint8Array([1, 2, 3])], "screen.png", { type: "image/png" });
+  const surface = container.querySelector(".terminal-surface") ?? container.firstElementChild!;
+  fireEvent.drop(surface, { dataTransfer: { files: [file], items: [{ kind: "file", type: "image/png" }], types: ["Files"] } });
+
+  await screen.findByText(/waiting for the connection/i);
+  expect(controller.sendInput).not.toHaveBeenCalled();
+
+  act(() => controller.stateListener?.("connected"));
+
+  await screen.findByText(/File added/i);
+  expect(controller.sendInput).toHaveBeenCalledWith(expect.stringContaining("/tmp/attachments/screen.png"));
 });
