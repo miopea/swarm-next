@@ -1553,7 +1553,12 @@ mod tests {
             .pop()
             .unwrap();
         store
-            .record_stale_owned_work_attention(&candidate, 1_000, 600, false)
+            .record_stale_owned_work_attention(
+                &candidate,
+                1_000,
+                600,
+                crate::BackgroundWorkReading::NoneVisible,
+            )
             .unwrap();
 
         let status = store.set_queen_automation_enabled(true, 1_001).unwrap();

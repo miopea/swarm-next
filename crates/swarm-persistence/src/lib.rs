@@ -21,11 +21,11 @@ mod apiary;
 mod attention;
 mod coordinator;
 pub use coordinator::{
-    AUTOMATIC_WAKE_BATCH_LIMIT, AssignedReadyWorkNotStartedCandidate, CoordinatorAttention,
-    CoordinatorRefusal, CoordinatorStatus, CoordinatorWorkerWake, ExitedWorkerOwnedWorkCandidate,
-    OverdueDecisionCandidate, REFUSAL_DELIVERY_HELD, REFUSAL_DELIVERY_HELD_UNSENT_TEXT,
-    REFUSAL_WAKE_NOT_ADMITTED, REFUSAL_WAKE_UNCERTAIN, StaleOwnedWorkCandidate,
-    UnreachableAssignment,
+    AUTOMATIC_WAKE_BATCH_LIMIT, AssignedReadyWorkNotStartedCandidate, BackgroundWorkReading,
+    CoordinatorAttention, CoordinatorRefusal, CoordinatorStatus, CoordinatorWorkerWake,
+    ExitedWorkerOwnedWorkCandidate, OverdueDecisionCandidate, REFUSAL_DELIVERY_HELD,
+    REFUSAL_DELIVERY_HELD_UNSENT_TEXT, REFUSAL_WAKE_NOT_ADMITTED, REFUSAL_WAKE_UNCERTAIN,
+    StaleOwnedWorkCandidate, UnreachableAssignment,
 };
 pub use passkeys::RegisteredPasskey;
 pub use task_dispatches::{DispatchHold, HeldTaskDispatch};

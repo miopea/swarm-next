@@ -104,9 +104,10 @@ use swarm_domain::{
 #[cfg(test)]
 use swarm_persistence::PushSubscriptionInput;
 use swarm_persistence::{
-    CoordinatorStatus, DecisionDeliveryFailure, FederationHandoffIntentPhase,
-    FederationJiraClaimPhase, JiraIssueSnapshot, JiraProjectBindingInput, JiraTransitionFailure,
-    QueenAutomationFailure, TaskDispatchFailure, TaskOutcomeFailure, TaskStore, TaskStoreError,
+    BackgroundWorkReading, CoordinatorStatus, DecisionDeliveryFailure,
+    FederationHandoffIntentPhase, FederationJiraClaimPhase, JiraIssueSnapshot,
+    JiraProjectBindingInput, JiraTransitionFailure, QueenAutomationFailure, TaskDispatchFailure,
+    TaskOutcomeFailure, TaskStore, TaskStoreError,
 };
 use swarm_persistence::{
     REFUSAL_DELIVERY_HELD, REFUSAL_DELIVERY_HELD_UNSENT_TEXT, REFUSAL_WAKE_UNCERTAIN,
@@ -1682,9 +1683,8 @@ impl AppState {
             // ended. `background_work` is the signal that was built to tell the
             // two apart, and this flag never consulted it.
             //
-            // Absent from the map means no evidence either way, and the honest
-            // default is the plain reason rather than an excuse invented for a
-            // worker nothing could be read from.
+            // Absent from the map means no evidence either way, and it now says
+            // so rather than defaulting to a negative it never measured.
             let background_work = candidate_background_work(signals);
             match store.record_stale_owned_work_attention(
                 &candidate,
@@ -2883,25 +2883,32 @@ fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
 /// never fired for, and before their clocks read task activity that population
 /// would have produced exactly the false positives this flag family has already
 /// cost Queen a night of hand-verification over.
-/// Whether something this candidate's worker started is still running.
+/// What could be established about work this candidate's worker left running.
 ///
-/// A named function rather than an inline `is_some_and` so the ABSENT case is
-/// stated and tested. Queen could not tell, from the flags alone, whether the
-/// false positives came from the screen classifying as Resting or from the
-/// session missing from the activity map entirely -- and those have different
-/// fixes, so the difference had to be settled rather than assumed.
+/// THE PREVIOUS VERSION RETURNED A BOOL, and that was the defect. It reasoned —
+/// correctly — that absent means the worker could not be read, and that no
+/// evidence of background work is not evidence of it. Then it returned `false`
+/// for that case, which the reason rendered as "nothing it started is still
+/// running": a confident negative assembled from nothing measured.
 ///
-/// It is settled: a session is in the map whenever it is a profile's active
-/// session, the host lists it live, and a read comes back running. All three
-/// held for the workers that were flagged, and the classifier tests in
-/// `provider_activity` show that screen resting with background work true.
+/// It cost two rounds of investigation on a healthy worker in one night. On
+/// 2026-08-31 a row said exactly that beside a `cargo test --workspace` that had
+/// been running for two and a half minutes.
 ///
-/// Absent therefore means the worker could not be read at all, and no evidence
-/// of background work is not evidence of it. False is the honest answer: it
-/// gives the plain reason rather than inventing an excuse for a worker nothing
-/// could be observed from.
-fn candidate_background_work(signals: Option<&provider_activity::ProviderSignals>) -> bool {
-    signals.is_some_and(|signals| signals.background_work)
+/// AND THE MIDDLE CASE IS NOT "NOTHING IS RUNNING" EITHER. The signal greps the
+/// terminal screen for the provider's own banner ("2 shells still running" and
+/// its siblings), so a process the provider never announced — anything a
+/// harness backgrounded rather than the model — leaves no trace on it. False
+/// here means the screen is quiet, which is a smaller claim than the sentence
+/// used to make.
+fn candidate_background_work(
+    signals: Option<&provider_activity::ProviderSignals>,
+) -> BackgroundWorkReading {
+    match signals {
+        None => BackgroundWorkReading::Unreadable,
+        Some(signals) if signals.background_work => BackgroundWorkReading::Running,
+        Some(_) => BackgroundWorkReading::NoneVisible,
+    }
 }
 
 fn worker_is_mid_turn(activity: Option<&ProviderActivity>) -> bool {
@@ -12519,25 +12526,122 @@ mod tests {
     ///
     /// The absent case, which is the half Queen could not settle from outside.
     #[test]
-    fn a_worker_nothing_could_be_read_from_claims_no_background_work() {
-        assert!(candidate_background_work(Some(
-            &provider_activity::ProviderSignals {
+    fn a_worker_nothing_could_be_read_from_reads_as_unreadable_not_as_quiet() {
+        assert_eq!(
+            candidate_background_work(Some(&provider_activity::ProviderSignals {
                 activity: ProviderActivity::Resting,
                 background_work: true,
-            }
-        )));
-        assert!(!candidate_background_work(Some(
-            &provider_activity::ProviderSignals {
+            })),
+            BackgroundWorkReading::Running
+        );
+        assert_eq!(
+            candidate_background_work(Some(&provider_activity::ProviderSignals {
                 activity: ProviderActivity::Resting,
                 background_work: false,
-            }
-        )));
-        assert!(
-            !candidate_background_work(None),
-            "a session absent from the activity map is no evidence of background work, \
-             and inventing an excuse for a worker nothing could be read from would silence \
-             the flag for exactly the workers least able to speak for themselves"
+            })),
+            BackgroundWorkReading::NoneVisible
         );
+        // THE CASE THAT USED TO COLLAPSE. A session absent from the activity map
+        // is no evidence of background work — and it is equally no evidence
+        // AGAINST it. Returning the same answer as a screen that was read and
+        // found quiet is what let a row assert "nothing it started is still
+        // running" beside a build that had been going for two and a half
+        // minutes. Still not an excuse invented for an unreadable worker: it
+        // says the terminal could not be read, which is what happened.
+        assert_eq!(
+            candidate_background_work(None),
+            BackgroundWorkReading::Unreadable,
+            "an unreadable worker must not answer the same as a quiet one"
+        );
+    }
+
+    /// A WORKER NOBODY COULD READ MUST NOT BE REPORTED AS QUIET.
+    ///
+    /// This is the third case, and it used to be indistinguishable from the
+    /// second. `candidate_background_work` returned a bool, so "the screen was
+    /// read and showed no banner" and "the screen could not be read at all"
+    /// both arrived here as false and selected the same sentence -- one that
+    /// asserted nothing was running.
+    ///
+    /// It fired on this very worker on 2026-08-31 beside a `cargo test
+    /// --workspace` two and a half minutes in, and cost a coordinator two
+    /// rounds of investigation on a healthy worker in one night. The sentence
+    /// was not a wording slip: it was a confident negative assembled from
+    /// nothing measured.
+    #[tokio::test]
+    async fn a_worker_that_could_not_be_read_says_so_rather_than_reporting_nothing_running() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store
+            .create_task("Waiting on something", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::operator())
+            .unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+
+        let later = unix_timestamp() + 4_000;
+        let candidate = store
+            .stale_owned_work_candidates(later, STALE_OWNED_WORK_SECONDS)
+            .unwrap()
+            .into_iter()
+            .find(|candidate| candidate.task_id == task.id)
+            .expect("work nobody has touched is a candidate");
+        assert!(
+            store
+                .record_stale_owned_work_attention(
+                    &candidate,
+                    later,
+                    STALE_OWNED_WORK_SECONDS,
+                    // Exactly what an absent session produces.
+                    BackgroundWorkReading::Unreadable,
+                )
+                .unwrap()
+        );
+
+        let reason = store
+            .current_coordinator_attention(later)
+            .unwrap()
+            .into_iter()
+            .find(|row| row.worker_name == "Petal")
+            .expect("the worker was flagged")
+            .reason;
+
+        assert!(
+            !reason.contains("nothing it started is still running"),
+            "no evidence must never render as a confident negative: {reason}"
+        );
+        assert!(
+            !reason.contains("terminal shows nothing running"),
+            "and must not borrow the answer given by a screen that WAS read: {reason}"
+        );
+        assert!(
+            reason.contains("could not be read"),
+            "it must say what actually happened: {reason}"
+        );
+    }
+
+    /// A screen reading, as the coordinator derives one from present signals.
+    ///
+    /// Never `Unreadable`: that case is the absence of signals entirely, and a
+    /// screen this test HAS read cannot produce it.
+    fn reading_for(background_work: bool) -> BackgroundWorkReading {
+        if background_work {
+            BackgroundWorkReading::Running
+        } else {
+            BackgroundWorkReading::NoneVisible
+        }
     }
 
     /// Two workers whose screens differ by ONE LINE must not get the same
@@ -12590,7 +12694,13 @@ mod tests {
 
         let store = TaskStore::in_memory().unwrap();
         let mut recorded = Vec::new();
-        for (name, background) in [("Sculpt", waiting_background), ("Clover", idle_background)] {
+        // The readings are DERIVED from the screens above, never written down
+        // beside them: a fixture hard-coding the reading would still pass if the
+        // screen stopped producing it.
+        for (name, background) in [
+            ("Sculpt", reading_for(waiting_background)),
+            ("Clover", reading_for(idle_background)),
+        ] {
             let worker = store
                 .create_worker(
                     name,
@@ -12657,9 +12767,16 @@ mod tests {
             waiting_reason.contains("still running"),
             "the waiting worker's row must say something it started is still going: {waiting_reason}"
         );
+        // SCOPED TO WHAT WAS MEASURED. This used to assert the row said
+        // "nothing it started is still running", and that sentence is a claim
+        // about processes made by something that only ever read a screen. The
+        // distinction still has to be one-sided-free, so the row must say the
+        // terminal is quiet -- and must NOT say nothing is running.
         assert!(
-            idle_reason.contains("nothing it started is still running"),
-            "and the idle worker's row must say the opposite, or the distinction is one-sided: {idle_reason}"
+            idle_reason.contains("terminal shows nothing running")
+                && !idle_reason.contains("nothing it started is still running"),
+            "the idle row must report what was SEEN and never claim about processes \
+             what it read from a screen: {idle_reason}"
         );
     }
 

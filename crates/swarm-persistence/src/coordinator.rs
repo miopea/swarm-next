@@ -431,6 +431,30 @@ pub(crate) fn enqueue_queen_worker_wake(
     Ok(changed)
 }
 
+/// What could be established about work the provider left running.
+///
+/// THREE ANSWERS, BECAUSE THERE ARE THREE. The detector greps the worker's
+/// TERMINAL SCREEN for the provider's own banner -- "2 shells still running"
+/// and its siblings. It cannot observe a process, so the strongest true
+/// statement it can ever make is about what the terminal shows.
+///
+/// Collapsing the last two into `false` is what produced a row reading "nothing
+/// it started is still running" beside a `cargo test` that had been going for
+/// two and a half minutes. The flag was not wrong about what it measured; the
+/// SENTENCE was wrong about what the flag meant, and a coordinator reading it
+/// spent a real round of investigation on a healthy worker. Twice.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BackgroundWorkReading {
+    /// The terminal shows the provider's background-work banner.
+    Running,
+    /// The terminal was read and shows no such banner. NOT "nothing is
+    /// running": a process the provider never announced is invisible here.
+    NoneVisible,
+    /// The terminal could not be read. Nothing was measured, so nothing is
+    /// claimed -- the case that used to render as a confident negative.
+    Unreadable,
+}
+
 impl TaskStore {
     /// Returns bounded durable candidates whose worker process ended while it
     /// still owned Active work. The newest ended session is the exact process
@@ -1229,7 +1253,7 @@ impl TaskStore {
         candidate: &StaleOwnedWorkCandidate,
         now: i64,
         minimum_age_seconds: i64,
-        background_work: bool,
+        background_work: BackgroundWorkReading,
     ) -> Result<bool, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
@@ -1302,7 +1326,7 @@ impl TaskStore {
                 "This worker was never given this brief — the delivery was never confirmed, so it has nothing to act on. Re-assign the task to send it again rather than steering the worker.",
                 "owned-work-never-briefed",
             )
-        } else if background_work {
+        } else if background_work == BackgroundWorkReading::Running {
             (
                 "stale_owned_work_attention",
                 "Active work is unchanged while its loaded worker rests, but something the worker started is still running — a build, a run watch, or a measurement. Waiting may be the work. Read the terminal before steering.",
@@ -1311,7 +1335,14 @@ impl TaskStore {
         } else {
             (
                 "stale_owned_work_attention",
-                "Active work is unchanged while its loaded worker is resting, and nothing it started is still running",
+                // SAYS WHAT WAS MEASURED, and no more. The old sentence read
+                // "nothing it started is still running", which is a claim about
+                // processes made by something that only ever looked at a screen.
+                if background_work == BackgroundWorkReading::NoneVisible {
+                    "Active work is unchanged while its loaded worker is resting, and its terminal shows nothing running. A process the provider never announced would not appear here."
+                } else {
+                    "Active work is unchanged while its loaded worker is resting, and its terminal could not be read — whether anything it started is still running is unknown."
+                },
                 "stale-owned-work",
             )
         };
@@ -4137,7 +4168,12 @@ mod tests {
             .unwrap();
         assert!(
             store
-                .record_stale_owned_work_attention(&candidate, 1_000, 600, false)
+                .record_stale_owned_work_attention(
+                    &candidate,
+                    1_000,
+                    600,
+                    BackgroundWorkReading::NoneVisible
+                )
                 .unwrap()
         );
         let attention = store.current_coordinator_attention(0).unwrap();
@@ -4300,7 +4336,12 @@ mod tests {
             .unwrap();
         assert!(
             store
-                .record_stale_owned_work_attention(&candidate, 1_000, 600, false)
+                .record_stale_owned_work_attention(
+                    &candidate,
+                    1_000,
+                    600,
+                    BackgroundWorkReading::NoneVisible
+                )
                 .unwrap()
         );
 
@@ -4363,12 +4404,22 @@ mod tests {
 
         assert!(
             store
-                .record_stale_owned_work_attention(&candidate, 1_000, 600, false)
+                .record_stale_owned_work_attention(
+                    &candidate,
+                    1_000,
+                    600,
+                    BackgroundWorkReading::NoneVisible
+                )
                 .unwrap()
         );
         assert!(
             !store
-                .record_stale_owned_work_attention(&candidate, 1_001, 600, false)
+                .record_stale_owned_work_attention(
+                    &candidate,
+                    1_001,
+                    600,
+                    BackgroundWorkReading::NoneVisible
+                )
                 .unwrap()
         );
         let attention = store.current_coordinator_attention(0).unwrap();
@@ -4407,7 +4458,12 @@ mod tests {
 
         assert!(
             !store
-                .record_stale_owned_work_attention(&candidate, 1_000, 600, false)
+                .record_stale_owned_work_attention(
+                    &candidate,
+                    1_000,
+                    600,
+                    BackgroundWorkReading::NoneVisible
+                )
                 .unwrap()
         );
         assert!(store.current_coordinator_attention(0).unwrap().is_empty());
