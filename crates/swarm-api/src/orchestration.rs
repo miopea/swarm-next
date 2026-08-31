@@ -53,6 +53,7 @@ pub(super) struct CoordinatorStatusResponse {
     /// beside the other attention cards — the place workers already ask instead
     /// of interrupting a terminal.
     blocked_escalations: Vec<BlockedEscalationResponse>,
+    unsettled_review: Vec<UnsettledReviewResponse>,
     /// Briefings queued and not moving, and what each is waiting on.
     ///
     /// A held delivery was attempted and refused. A briefing the dispatcher
@@ -105,6 +106,80 @@ pub(super) struct BlockedEscalationResponse {
     worker_name: String,
     workspace: String,
     blocked_for_seconds: i64,
+}
+
+/// One piece of finished work that nothing has settled, and why.
+///
+/// THE TYPE NAMES ITS SUBJECT, because the last count in this area did not. The
+/// figure this whole design began from — "49 of 355 completed tasks carry
+/// nothing anyone verified" — was really 31, because the query counted
+/// unapproved exemption claims without excluding tasks that ALSO held a
+/// deployment. A number was produced about something adjacent to the claim, and
+/// then relayed to the operator as the sharpest evidence in the complaint.
+///
+/// So: this is REVIEWED WORK NOTHING HAS SETTLED. Not "unverified tasks", which
+/// could mean four different populations. Work in review, not removed, carrying
+/// neither a deployment nor an approved exemption — the exact set
+/// `reviewed_work_awaiting_judgment` returns, and it is reused rather than
+/// re-expressed so the number and the list cannot drift apart.
+#[derive(Debug, Serialize)]
+pub(super) struct UnsettledReviewResponse {
+    task_id: String,
+    title: String,
+    workspace: String,
+    /// Why a person is needed, derived from what the task recorded.
+    reason: &'static str,
+}
+
+/// Reviewed work the deterministic passes could not settle.
+///
+/// Everything the coordinator CAN settle is already gone by the time this runs:
+/// work carrying a deployment closes itself, and so does work whose recorded
+/// commits show there was nothing to deploy. What is left genuinely needs a
+/// person, which is what earns it a place on Needs you.
+fn unsettled_review(state: &Arc<AppState>) -> Result<Vec<UnsettledReviewResponse>, ApiError> {
+    let store = crate::task_store(state)?;
+    let waiting = store
+        .reviewed_work_awaiting_judgment()
+        .map_err(|error| task_store_error(&error))?;
+    Ok(waiting
+        .into_iter()
+        .filter_map(|task_id| {
+            let task = store.get_task(task_id).ok()?;
+            let report = store.task_commit_report(task_id).ok()?;
+            let claimed = matches!(
+                store.completion_evidence(task_id).ok()?,
+                swarm_persistence::CompletionEvidence::ExemptionClaimed
+            );
+            // ORDER MATTERS AND IS DELIBERATE. A claim nobody approved is the
+            // most specific thing true of a task, so it is said first; the
+            // commit settlement is what is left to say when there is no claim.
+            let reason = if claimed {
+                "a claim that nothing was deployed, which nobody has approved"
+            } else {
+                match swarm_domain::commit_settlement(report.as_ref()) {
+                    swarm_domain::CommitSettlement::BuiltCode => {
+                        "it recorded commits that touch code, and no deployment"
+                    }
+                    swarm_domain::CommitSettlement::Unknown => {
+                        "nobody reported what this work produced"
+                    }
+                    // Settleable, so the sweep will take it on its next pass.
+                    // Present here only in the seconds between the two.
+                    swarm_domain::CommitSettlement::NothingBuilt
+                    | swarm_domain::CommitSettlement::DocumentationOnly => {
+                        "waiting for the coordinator to settle it"
+                    }
+                }
+            };
+            Some(UnsettledReviewResponse {
+                task_id: task_id.to_string(),
+                title: task.title,
+                workspace: task.workspace,
+                reason,
+            })
+        })
+        .collect())
 }
 
 /// Blocks past the operator's twelve-hour threshold.
@@ -223,6 +298,7 @@ pub(super) async fn coordinator_status(
             held: held_deliveries(&state)?,
             held_briefings: held_briefings(&state)?,
             blocked_escalations: blocked_escalations(&state)?,
+            unsettled_review: unsettled_review(&state)?,
         }),
     )
         .into_response())

@@ -289,6 +289,16 @@ export type CoordinatorStatus = {
   /** Blocks past the twelve hours the operator asked to hear about directly. */
   blocked_escalations?: BlockedEscalation[];
   /**
+   * Finished work that nothing has settled, and why each one waits.
+   *
+   * NAMED FOR ITS SUBJECT rather than called "unverified", because that word
+   * covers four different populations and picking the wrong one is how this
+   * design started: a count of 49 that was really 31. This is work in review
+   * carrying neither a deployment nor an approved exemption — everything the
+   * coordinator can settle is already gone before this is computed.
+   */
+  unsettled_review?: UnsettledReview[];
+  /**
    * Briefings queued and not yet handed over, with what each waits on.
    *
    * NOT AN ATTENTION ITEM, and that is measured rather than assumed. Every hold
@@ -305,6 +315,14 @@ export type CoordinatorStatus = {
    */
   held_briefings?: HeldBriefing[];
 };
+export type UnsettledReview = {
+  task_id: string;
+  title: string;
+  workspace: string;
+  /** Why a person is needed, derived from what the task recorded. */
+  reason: string;
+};
+
 export type HeldBriefing = {
   task_id: string;
   title: string;

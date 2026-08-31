@@ -15,6 +15,7 @@ import MachinePressureBadge from "../runtime/MachinePressureBadge";
 import StaleBundleNotice from "../StaleBundleNotice";
 import WorkerContextBar from "../workers/WorkerContextBar";
 import WhatsNewModal from "../runtime/WhatsNewModal";
+import UnsettledReviewCard from "../decisions/UnsettledReviewCard";
 import { machinePressureNotice, type MachineResourceState } from "../runtime/machinePressure";
 
 /**
@@ -201,6 +202,21 @@ const asyncNoop = async () => undefined;
 export type Surface = { id: string; title: string; why: string; render: () => ReactNode };
 
 export const SURFACES: Surface[] = [
+  {
+    id: "unsettled-review",
+    title: "Finished work nothing has settled",
+    why: "the operator asked to see how much unverified work exists without clicking into anything; the heading has to carry the number AND name its subject, because the count this replaced said 49 and meant 31",
+    render: () => (
+      <UnsettledReviewCard
+        onOpenTask={() => {}}
+        waiting={[
+          { task_id: "a", title: "Repair the collapsed picker second line", workspace: "/workspace/petal", reason: "it recorded commits that touch code, and no deployment" },
+          { task_id: "b", title: "Work out why the terminal drops on a phone", workspace: "/workspace/petal", reason: "nobody reported what this work produced" },
+          { task_id: "c", title: "Import the legacy board", workspace: "/workspace/thistle", reason: "a claim that nothing was deployed, which nobody has approved" },
+        ]}
+      />
+    ),
+  },
   {
     id: "whats-new",
     title: "What's New, at the width it actually renders",

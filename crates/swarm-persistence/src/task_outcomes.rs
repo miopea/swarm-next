@@ -1347,6 +1347,96 @@ pub(super) fn migrate_review_holds(
 }
 
 #[cfg(test)]
+mod awaiting_judgment_subject_tests {
+    use super::*;
+    use crate::TaskStore;
+
+    fn reviewed(store: &TaskStore, title: &str) -> TaskId {
+        let task = store.create_task(title, "/workspace/petal").unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        task.id
+    }
+
+    /// THE EXACT DEFECT THAT PRODUCED 49 WHERE THE ANSWER WAS 31.
+    ///
+    /// The original query counted unapproved exemption claims without excluding
+    /// tasks that ALSO carried a deployment record. Nineteen properly closed,
+    /// fully evidenced tasks were counted as unverified because a rotted claim
+    /// sat beside real evidence — and the wrong number was then relayed to the
+    /// operator as the sharpest fact in the complaint.
+    ///
+    /// This fails if the population ever admits that row again.
+    #[test]
+    fn a_stale_claim_beside_a_real_deployment_is_not_waiting_on_anyone() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = reviewed(&store, "Shipped, and carries a rotted claim");
+        store
+            .claim_completion_exemption(task, "Thought there was nothing to deploy", None, 1_000)
+            .unwrap();
+        store
+            .record_task_deployment(task, "production", "sha abc123", 1_100)
+            .unwrap();
+
+        assert!(
+            !store
+                .reviewed_work_awaiting_judgment()
+                .unwrap()
+                .contains(&task),
+            "a deployment settles the task; the unapproved claim beside it is untidy, not unsettled"
+        );
+    }
+
+    #[test]
+    fn work_the_coordinator_settled_is_not_waiting_on_anyone() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = reviewed(&store, "Investigation the sweep closed");
+        store
+            .claim_completion_exemption(task, "Nothing was built", None, 1_000)
+            .unwrap();
+        store
+            .approve_completion_exemption(task, "coordinator", 1_100)
+            .unwrap();
+
+        assert!(
+            !store
+                .reviewed_work_awaiting_judgment()
+                .unwrap()
+                .contains(&task),
+            "an approved exemption settles it, whoever approved"
+        );
+    }
+
+    /// And the population is not empty of the thing it IS about, which is the
+    /// other way a count can be wrong while every exclusion is correct.
+    #[test]
+    fn work_carrying_nothing_is_waiting_on_someone() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = reviewed(&store, "Nobody has settled this");
+        assert!(
+            store
+                .reviewed_work_awaiting_judgment()
+                .unwrap()
+                .contains(&task)
+        );
+
+        // An unapproved claim on its own does NOT settle it, which is the
+        // distinction the whole evidence model rests on.
+        store
+            .claim_completion_exemption(task, "Nothing to deploy", None, 1_000)
+            .unwrap();
+        assert!(
+            store
+                .reviewed_work_awaiting_judgment()
+                .unwrap()
+                .contains(&task),
+            "a claim nobody approved leaves the work waiting"
+        );
+    }
+}
+
+#[cfg(test)]
 mod settlement_tests {
     use super::*;
     use crate::TaskStore;

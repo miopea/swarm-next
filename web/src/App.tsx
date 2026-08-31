@@ -95,7 +95,7 @@ import {
   type TunnelStatus,
   recordAttentionSeen,
 } from "./api";
-import type { BlockedEscalation, ReleaseVersionNotes } from "./api";
+import type { BlockedEscalation, ReleaseVersionNotes, UnsettledReview } from "./api";
 import { bundleIsStale } from "./staleBundle";
 import BeeMascot from "./brand/BeeMascot";
 import ApiaryAttentionCard from "./apiary/ApiaryAttentionCard";
@@ -113,6 +113,7 @@ import CommandPalette, { type CommandChoice } from "./navigation/CommandPalette"
 import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
 import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
 import BlockedEscalationCard from "./decisions/BlockedEscalationCard";
+import UnsettledReviewCard from "./decisions/UnsettledReviewCard";
 import MachinePressureBadge from "./runtime/MachinePressureBadge";
 import { machinePressureNotice, type MachineResourceState } from "./runtime/machinePressure";
 import RuntimeUpdateConfirm from "./runtime/RuntimeUpdateConfirm";
@@ -418,6 +419,7 @@ export function App() {
   /** What the coordinator is holding behind an unanswered terminal prompt. */
   const [heldDeliveries, setHeldDeliveries] = useState<HeldDelivery[]>([]);
   const [blockedEscalations, setBlockedEscalations] = useState<BlockedEscalation[]>([]);
+  const [unsettledReview, setUnsettledReview] = useState<UnsettledReview[]>([]);
   // NOT fed into attentionCount, on purpose. See HeldBriefingList for why a
   // self-resolving state must not badge.
   const [heldBriefings, setHeldBriefings] = useState<HeldBriefing[]>([]);
@@ -522,6 +524,7 @@ export function App() {
     if (!operatorToken) {
       setHeldDeliveries([]);
       setBlockedEscalations([]);
+      setUnsettledReview([]);
       setHeldBriefings([]);
       return undefined;
     }
@@ -531,8 +534,8 @@ export function App() {
         // Defaulted rather than assumed: during an update the page can briefly
         // be newer than the API answering it, and a missing field should not
         // take the control room down.
-        .then((status) => { if (!cancelled) { setHeldDeliveries(status.held ?? []); setBlockedEscalations(status.blocked_escalations ?? []); setHeldBriefings(status.held_briefings ?? []); } })
-        .catch(() => { if (!cancelled) { setHeldDeliveries([]); setHeldBriefings([]); } });
+        .then((status) => { if (!cancelled) { setHeldDeliveries(status.held ?? []); setBlockedEscalations(status.blocked_escalations ?? []); setUnsettledReview(status.unsettled_review ?? []); setHeldBriefings(status.held_briefings ?? []); } })
+        .catch(() => { if (!cancelled) { setHeldDeliveries([]); setUnsettledReview([]); setHeldBriefings([]); } });
     };
     load();
     const interval = window.setInterval(load, HELD_DELIVERY_POLL_MS);
@@ -1424,6 +1427,10 @@ export function App() {
   // operator to stop believing the badge, which is the one thing it has to do.
   const heldDeliveryAttentionCount = heldDeliveries.length > 0 ? 1 : 0;
   const blockedEscalationAttentionCount = blockedEscalations.length > 0 ? 1 : 0;
+  // ONE CARD, ONE COUNT, like held deliveries and blocked escalations above.
+  // The card carries the number itself, so the operator sees how much without
+  // opening anything; the badge counts things to deal with, not rows.
+  const unsettledReviewAttentionCount = unsettledReview.length > 0 ? 1 : 0;
   // blockedEscalationAttentionCount BELONGS HERE and was missing, which is the
   // same defect the paragraph above describes and fixes for held deliveries.
   // It was computed, passed to the inbox as additionalPendingCount, and left
@@ -1431,7 +1438,8 @@ export function App() {
   // card on the page while "Needs you" read 0. It also silenced the push for
   // it, because the watermark below only quiets sources the count knows about.
   const attentionCount = pendingDecisionCount + pendingAssistCount + queenAutomationAttentionCount
-    + heldDeliveryAttentionCount + blockedEscalationAttentionCount + awaitingReply.length;
+    + heldDeliveryAttentionCount + blockedEscalationAttentionCount + unsettledReviewAttentionCount
+    + awaitingReply.length;
   // WHEN THEY ACTUALLY LOOKED. The watermark this advances is the only thing
   // keeping push quiet now that every Needs-you source is eligible, so it is
   // recorded from the surface being open and visible — never from a poll.
@@ -2180,6 +2188,7 @@ export function App() {
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
                 <BlockedEscalationCard escalations={blockedEscalations} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
+                <UnsettledReviewCard waiting={unsettledReview} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <HeldDeliveryAttentionCard
                   held={heldDeliveries}
                   workerIsAwake={(name) => Boolean(workers.find((candidate) => candidate.name === name)?.active_session_id)}

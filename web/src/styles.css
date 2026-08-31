@@ -1785,6 +1785,15 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .blocked-escalation-list li { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 14px; }
 .blocked-escalation-title { flex: 1 1 260px; min-width: 0; padding: 0; border: 0; background: none; color: var(--ink); font-size: .82rem; line-height: 1.4; text-align: left; }
 .blocked-escalation-title:hover { color: var(--link); text-decoration: underline; }
+/* The same shape as the block escalation card above: it is the same kind of
+   thing on the same surface, and two attention cards that look different
+   without meaning different is noise the operator has to decode. */
+.unsettled-review-card { align-items: start; }
+.unsettled-review-list { display: grid; gap: 4px; margin: 7px 0 9px; padding: 0; list-style: none; }
+.unsettled-review-list li { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 14px; }
+.unsettled-review-title { flex: 1 1 260px; min-width: 0; padding: 0; border: 0; background: none; color: var(--ink); font-size: .82rem; line-height: 1.4; text-align: left; }
+.unsettled-review-title:hover { color: var(--link); text-decoration: underline; }
+.unsettled-review-meta { color: var(--muted); font-size: .74rem; }
 .blocked-escalation-meta { flex: 0 0 auto; color: var(--muted); font-size: .72rem; font-variant-numeric: tabular-nums; }
 .dialog { display: grid; width: min(440px, 100%); gap: 9px; padding: 18px; border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--panel-raised); box-shadow: var(--shadow); }
 .dialog h3 { margin: 0; font-size: 1.05rem; }
