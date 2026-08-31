@@ -168,7 +168,8 @@ const REPLY_EVIDENCE_GUARDS_THE_SEND_SCHEMA_VERSION: i64 = 108;
 /// A person's own GitHub account, so their feedback is filed as them.
 const GITHUB_USER_CONNECTION_SCHEMA_VERSION: i64 = 109;
 const ABANDONED_STATE_SCHEMA_VERSION: i64 = 110;
-const CURRENT_SCHEMA_VERSION: i64 = ABANDONED_STATE_SCHEMA_VERSION;
+const TASK_COMMIT_REPORT_SCHEMA_VERSION: i64 = 111;
+const CURRENT_SCHEMA_VERSION: i64 = TASK_COMMIT_REPORT_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -3422,6 +3423,9 @@ fn migrate_newest_schema_steps(
     if schema_version < ABANDONED_STATE_SCHEMA_VERSION {
         migrate_abandoned_state(transaction)?;
     }
+    if schema_version < TASK_COMMIT_REPORT_SCHEMA_VERSION {
+        migrate_task_commit_reports(transaction)?;
+    }
     Ok(())
 }
 
@@ -3524,6 +3528,42 @@ fn migrate_abandoned_state(transaction: &rusqlite::Transaction<'_>) -> rusqlite:
     }
     federation_tasks::migrate_abandoned_apiary_task_state(transaction)?;
     transaction.pragma_update(None, "user_version", ABANDONED_STATE_SCHEMA_VERSION)
+}
+
+/// A task records the commits it produced, and what checking them found.
+///
+/// TWO TABLES BECAUSE THERE ARE TWO FACTS. The report says a worker answered
+/// the question and whether the repository could be read at all; the rows say
+/// what it answered. A task with no report row has been asked nothing, which is
+/// NOT the same as a worker reporting that nothing was built -- and the whole
+/// value of this record is that the next step can tell those apart. Collapsing
+/// them would let unreported work read as an investigation that produced
+/// nothing, and close automatically on a question never asked.
+fn migrate_task_commit_reports(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS task_commit_reports (
+             task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+             workspace TEXT NOT NULL,
+             repository_state TEXT NOT NULL
+                 CHECK (repository_state IN ('read','not_a_repository')),
+             reported_at INTEGER NOT NULL DEFAULT (unixepoch())
+         );
+         CREATE TABLE IF NOT EXISTS task_commits (
+             task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+             sha TEXT NOT NULL,
+             verdict TEXT NOT NULL
+                 CHECK (verdict IN ('present','unreachable','missing','unchecked')),
+             subject TEXT NOT NULL DEFAULT '',
+             -- Newline separated, and stored as fact. Which paths count as
+             -- documentation is a policy applied later, not a judgement baked
+             -- in here where it could never be revisited.
+             changed_paths TEXT NOT NULL DEFAULT '',
+             recorded_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             PRIMARY KEY (task_id, sha)
+         );
+         CREATE INDEX IF NOT EXISTS task_commits_by_task ON task_commits(task_id);",
+    )?;
+    transaction.pragma_update(None, "user_version", TASK_COMMIT_REPORT_SCHEMA_VERSION)
 }
 
 /// The bee an operator chose for a worker.
@@ -7366,6 +7406,18 @@ mod tests {
                  PRAGMA legacy_alter_table = OFF;",
             probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
                  WHERE type = 'table' AND name = 'tasks' AND sql LIKE '%abandoned%')",
+        },
+        // TWO TABLES IN ONE STEP, so the defaults cannot express it: the
+        // generated undo drops a single named table and would leave the other
+        // standing, which migrates forward into a half-applied step that still
+        // probes green.
+        SchemaStep {
+            table: "task_commit_reports",
+            artifact: "",
+            undo_sql: "DROP TABLE IF EXISTS task_commits;
+                 DROP TABLE IF EXISTS task_commit_reports;",
+            probe_sql: "SELECT (SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name IN ('task_commit_reports','task_commits')) = 2",
         },
     ];
 

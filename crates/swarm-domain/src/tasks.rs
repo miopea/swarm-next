@@ -561,3 +561,108 @@ pub struct Task {
     pub created_at: i64,
     pub updated_at: i64,
 }
+
+/// What a single reported commit turned out to be, checked once when reported.
+///
+/// A SNAPSHOT, never a live query. This repository squash-merges and rebases as
+/// a matter of routine, which destroys reported SHAs — re-checking later would
+/// turn green evidence red weeks after the fact for work that was perfectly
+/// correct, and a check that fails on correct input teaches its reader to
+/// ignore it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommitVerdict {
+    /// The object is a commit and at least one ref reaches it.
+    Present,
+    /// The object is a commit that no ref reaches — dangling after a rebase.
+    Unreachable,
+    /// No such object in this repository.
+    Missing,
+    /// Nothing was asked, because the workspace could not be read as a
+    /// repository. Distinct from `Missing`, which is an answer.
+    Unchecked,
+}
+
+impl fmt::Display for CommitVerdict {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Present => "present",
+            Self::Unreachable => "unreachable",
+            Self::Missing => "missing",
+            Self::Unchecked => "unchecked",
+        })
+    }
+}
+
+impl FromStr for CommitVerdict {
+    type Err = ParseTaskStateError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "present" => Ok(Self::Present),
+            "unreachable" => Ok(Self::Unreachable),
+            "missing" => Ok(Self::Missing),
+            "unchecked" => Ok(Self::Unchecked),
+            _ => Err(ParseTaskStateError),
+        }
+    }
+}
+
+/// Whether the workspace could be read as a repository at all.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommitRepositoryState {
+    Read,
+    /// The path exists but is not a Git checkout. NOT an error: work in a
+    /// workspace nobody put under version control still has to be able to close.
+    NotARepository,
+}
+
+impl fmt::Display for CommitRepositoryState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Read => "read",
+            Self::NotARepository => "not_a_repository",
+        })
+    }
+}
+
+impl FromStr for CommitRepositoryState {
+    type Err = ParseTaskStateError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "read" => Ok(Self::Read),
+            "not_a_repository" => Ok(Self::NotARepository),
+            _ => Err(ParseTaskStateError),
+        }
+    }
+}
+
+/// One commit a worker attributed to its task, and what checking it found.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TaskCommit {
+    pub sha: String,
+    pub verdict: CommitVerdict,
+    pub subject: String,
+    /// The paths this commit touches. Stored as FACT, so that the question of
+    /// which paths count as documentation stays a policy someone else applies
+    /// rather than a judgement baked into the record.
+    pub changed_paths: Vec<String>,
+}
+
+/// What a task's worker said it produced, and what the repository said back.
+///
+/// THE ROW EXISTING IS ITSELF THE FACT. An empty `commits` is a worker saying
+/// "nothing was built"; NO REPORT AT ALL is nobody having said anything. Those
+/// are different, and collapsing them would let unreported work read as an
+/// investigation that produced nothing — closing it automatically on the
+/// strength of a question never asked.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TaskCommitReport {
+    pub task_id: TaskId,
+    pub workspace: String,
+    pub repository_state: CommitRepositoryState,
+    pub reported_at: i64,
+    pub commits: Vec<TaskCommit>,
+}

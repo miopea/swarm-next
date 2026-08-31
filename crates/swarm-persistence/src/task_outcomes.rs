@@ -2,7 +2,8 @@ use std::str::FromStr;
 
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
-    ControlRoomEventKind, TaskActivityActor, TaskId, TaskState, WorkerId, WorkerSessionId,
+    CommitRepositoryState, CommitVerdict, ControlRoomEventKind, TaskActivityActor, TaskCommit,
+    TaskCommitReport, TaskId, TaskState, WorkerId, WorkerSessionId,
 };
 
 use super::{TaskStore, TaskStoreError, insert_control_room_event};
@@ -1320,4 +1321,330 @@ pub(super) fn migrate_review_holds(
          );
          PRAGMA user_version = 91;",
     )
+}
+
+#[cfg(test)]
+mod commit_report_tests {
+    use super::*;
+    use crate::TaskStore;
+
+    fn commit(sha: &str, verdict: CommitVerdict, paths: &[&str]) -> TaskCommit {
+        TaskCommit {
+            sha: sha.to_owned(),
+            verdict,
+            subject: "feat: something".to_owned(),
+            changed_paths: paths.iter().map(|path| (*path).to_owned()).collect(),
+        }
+    }
+
+    /// The distinction the whole record exists to preserve.
+    ///
+    /// "The worker says nothing was built" and "nobody has said anything" are
+    /// different answers. If they collapse, unreported work reads as an
+    /// investigation that produced nothing -- and the next step in this design
+    /// closes that automatically, on a question never asked.
+    #[test]
+    fn reporting_nothing_is_an_answer_and_never_reporting_is_not() {
+        let store = TaskStore::in_memory().unwrap();
+        let unreported = store
+            .create_task("Never asked", "/workspace/petal")
+            .unwrap();
+        let reported = store
+            .create_task("Asked and answered", "/workspace/petal")
+            .unwrap();
+
+        assert!(
+            store.task_commit_report(unreported.id).unwrap().is_none(),
+            "a task nobody reported must have no report at all"
+        );
+
+        let report = store
+            .record_task_commits(
+                reported.id,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                1_000,
+            )
+            .unwrap();
+        assert!(report.commits.is_empty());
+        assert!(
+            store.task_commit_report(reported.id).unwrap().is_some(),
+            "reporting nothing must leave a record that the question was answered"
+        );
+    }
+
+    #[test]
+    fn the_verdict_and_the_paths_survive_the_round_trip() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store
+            .create_task("Built something", "/workspace/petal")
+            .unwrap();
+        store
+            .record_task_commits(
+                task.id,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[
+                    commit(
+                        "aaa1111",
+                        CommitVerdict::Present,
+                        &["docs/one.md", "docs/two.md"],
+                    ),
+                    commit("bbb2222", CommitVerdict::Missing, &[]),
+                ],
+                1_000,
+            )
+            .unwrap();
+
+        let report = store.task_commit_report(task.id).unwrap().unwrap();
+        assert_eq!(report.repository_state, CommitRepositoryState::Read);
+        assert_eq!(report.commits.len(), 2);
+        assert_eq!(report.commits[0].verdict, CommitVerdict::Present);
+        assert_eq!(
+            report.commits[0].changed_paths,
+            vec!["docs/one.md".to_owned(), "docs/two.md".to_owned()]
+        );
+        assert_eq!(report.commits[1].verdict, CommitVerdict::Missing);
+        assert!(report.commits[1].changed_paths.is_empty());
+    }
+
+    /// A later report ADDS; it does not erase what was reported before.
+    ///
+    /// A worker may report as it goes, and a second call naming two commits
+    /// must not discard the one it named an hour ago.
+    #[test]
+    fn a_second_report_appends_rather_than_replacing() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store
+            .create_task("Built in stages", "/workspace/petal")
+            .unwrap();
+        store
+            .record_task_commits(
+                task.id,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[commit("aaa1111", CommitVerdict::Present, &["src/a.rs"])],
+                1_000,
+            )
+            .unwrap();
+        let report = store
+            .record_task_commits(
+                task.id,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[commit("bbb2222", CommitVerdict::Present, &["src/b.rs"])],
+                2_000,
+            )
+            .unwrap();
+
+        let shas: Vec<_> = report.commits.iter().map(|c| c.sha.as_str()).collect();
+        assert_eq!(shas, vec!["aaa1111", "bbb2222"]);
+    }
+
+    /// THE SNAPSHOT PROPERTY, which is the reason this is stored rather than
+    /// computed. Nothing recomputes a verdict, so a squash or rebase weeks
+    /// later cannot turn correct work red. The only thing that rewrites a
+    /// verdict is the worker reporting that SHA again.
+    #[test]
+    fn a_stored_verdict_is_never_recomputed_only_re_reported() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store
+            .create_task("Squashed later", "/workspace/petal")
+            .unwrap();
+        store
+            .record_task_commits(
+                task.id,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[commit("aaa1111", CommitVerdict::Present, &["src/a.rs"])],
+                1_000,
+            )
+            .unwrap();
+
+        // Read it back many times: no read path may consult git or change it.
+        for _ in 0..3 {
+            let report = store.task_commit_report(task.id).unwrap().unwrap();
+            assert_eq!(report.commits[0].verdict, CommitVerdict::Present);
+        }
+
+        // Re-reporting the same SHA is the ONE way the verdict moves, and it is
+        // the case that matters: reported before it was pushed, reported again
+        // once a ref reached it.
+        let report = store
+            .record_task_commits(
+                task.id,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[commit("aaa1111", CommitVerdict::Unreachable, &["src/a.rs"])],
+                3_000,
+            )
+            .unwrap();
+        assert_eq!(report.commits.len(), 1, "re-reporting must not duplicate");
+        assert_eq!(report.commits[0].verdict, CommitVerdict::Unreachable);
+    }
+
+    #[test]
+    fn a_workspace_without_a_repository_still_records_a_report() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store
+            .create_task("No checkout here", "/workspace/plain")
+            .unwrap();
+        let report = store
+            .record_task_commits(
+                task.id,
+                "/workspace/plain",
+                CommitRepositoryState::NotARepository,
+                &[commit("aaa1111", CommitVerdict::Unchecked, &[])],
+                1_000,
+            )
+            .unwrap();
+        assert_eq!(
+            report.repository_state,
+            CommitRepositoryState::NotARepository
+        );
+        assert_eq!(report.commits[0].verdict, CommitVerdict::Unchecked);
+    }
+}
+
+impl TaskStore {
+    /// Records what a worker says its task produced, with the verdicts already
+    /// reached, and returns the report as stored.
+    ///
+    /// APPEND, NOT REPLACE. A worker may report as it goes, and a later call
+    /// adding two commits must not erase the three it reported an hour ago.
+    /// Re-reporting the same SHA overwrites that row's verdict, which is what
+    /// you want when a commit was reported before it was pushed and reachable.
+    ///
+    /// AN EMPTY LIST IS AN ANSWER. It writes the report row and no commit rows,
+    /// which is a worker saying "nothing was built". A task with no report row
+    /// at all has been asked nothing. Anything reading this record has to keep
+    /// those apart, so this never invents a row for a task nobody reported.
+    ///
+    /// # Errors
+    /// Returns an error when the task does not exist or persistence is
+    /// unavailable.
+    pub fn record_task_commits(
+        &self,
+        task_id: TaskId,
+        workspace: &str,
+        repository_state: CommitRepositoryState,
+        commits: &[TaskCommit],
+        now: i64,
+    ) -> Result<TaskCommitReport, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE id = ?1)",
+            [task_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(TaskStoreError::NotFound);
+        }
+        transaction.execute(
+            "INSERT INTO task_commit_reports (task_id, workspace, repository_state, reported_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(task_id) DO UPDATE SET
+                 workspace = excluded.workspace,
+                 repository_state = excluded.repository_state,
+                 reported_at = excluded.reported_at",
+            params![
+                task_id.to_string(),
+                workspace,
+                repository_state.to_string(),
+                now
+            ],
+        )?;
+        for commit in commits {
+            transaction.execute(
+                "INSERT INTO task_commits (task_id, sha, verdict, subject, changed_paths, recorded_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(task_id, sha) DO UPDATE SET
+                     verdict = excluded.verdict,
+                     subject = excluded.subject,
+                     changed_paths = excluded.changed_paths,
+                     recorded_at = excluded.recorded_at",
+                params![
+                    task_id.to_string(),
+                    commit.sha,
+                    commit.verdict.to_string(),
+                    commit.subject,
+                    commit.changed_paths.join("\n"),
+                    now
+                ],
+            )?;
+        }
+        transaction.commit()?;
+        // RELEASED BEFORE READING BACK. `connection()` hands out a MutexGuard
+        // over a single connection and the mutex is not reentrant, so calling
+        // the reader while this guard is alive deadlocks the caller against
+        // itself -- a futex wait with no error, no timeout and no output, which
+        // reads from outside exactly like a slow test suite.
+        drop(connection);
+        self.task_commit_report(task_id)?
+            .ok_or(TaskStoreError::NotFound)
+    }
+
+    /// What this task's worker reported, or `None` if nobody has reported.
+    ///
+    /// `None` and a report holding no commits are DIFFERENT ANSWERS and the
+    /// caller must treat them so — see `record_task_commits`.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn task_commit_report(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<TaskCommitReport>, TaskStoreError> {
+        let connection = self.connection()?;
+        let header = connection
+            .query_row(
+                "SELECT workspace, repository_state, reported_at
+                 FROM task_commit_reports WHERE task_id = ?1",
+                [task_id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((workspace, repository_state, reported_at)) = header else {
+            return Ok(None);
+        };
+        let mut statement = connection.prepare(
+            "SELECT sha, verdict, subject, changed_paths
+             FROM task_commits WHERE task_id = ?1 ORDER BY recorded_at, sha",
+        )?;
+        let commits = statement
+            .query_map([task_id.to_string()], |row| {
+                let paths: String = row.get(3)?;
+                Ok(TaskCommit {
+                    sha: row.get(0)?,
+                    verdict: row
+                        .get::<_, String>(1)?
+                        .parse()
+                        .unwrap_or(CommitVerdict::Unchecked),
+                    subject: row.get(2)?,
+                    changed_paths: paths
+                        .lines()
+                        .filter(|line| !line.trim().is_empty())
+                        .map(str::to_owned)
+                        .collect(),
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Some(TaskCommitReport {
+            task_id,
+            workspace,
+            repository_state: repository_state
+                .parse()
+                .unwrap_or(CommitRepositoryState::NotARepository),
+            reported_at,
+            commits,
+        }))
+    }
 }

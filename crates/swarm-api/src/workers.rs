@@ -12,7 +12,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
-use swarm_domain::{PresenceDeviceId, ProviderKind, WorkerId, WorkerProfile};
+use swarm_domain::{
+    CommitRepositoryState, CommitVerdict, PresenceDeviceId, ProviderKind, TaskCommit, WorkerId,
+    WorkerProfile,
+};
 use swarm_terminal::{HostRequest, ProviderActivity, TerminalSize};
 
 use super::{
@@ -1099,6 +1102,113 @@ async fn repository_status(workspace: &str) -> Option<String> {
         .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// Checks reported SHAs against the repository, ONCE, and says what it found.
+///
+/// The verdict is a snapshot taken now. It is never recomputed: this repository
+/// squash-merges and rebases as a matter of routine, so a SHA that was real when
+/// reported routinely stops existing later. Re-checking would turn green
+/// evidence red weeks after the fact for work that was perfectly correct, and a
+/// check that fails on correct input teaches its reader to ignore it.
+///
+/// A WORKSPACE THAT IS NOT A CHECKOUT IS NOT AN ERROR. Work in a directory
+/// nobody put under version control still has to be able to close, so that
+/// reports `NotARepository` with every commit `Unchecked` — which is a
+/// different answer from `Missing`, and deliberately so.
+pub(super) async fn verify_reported_commits(
+    workspace: &str,
+    shas: &[String],
+) -> (CommitRepositoryState, Vec<TaskCommit>) {
+    if git(workspace, &["rev-parse", "--git-dir"]).await.is_none() {
+        let unchecked = shas
+            .iter()
+            .map(|sha| TaskCommit {
+                sha: sha.clone(),
+                verdict: CommitVerdict::Unchecked,
+                subject: String::new(),
+                changed_paths: Vec::new(),
+            })
+            .collect();
+        return (CommitRepositoryState::NotARepository, unchecked);
+    }
+    let mut verified = Vec::with_capacity(shas.len());
+    for sha in shas {
+        verified.push(verify_one(workspace, sha).await);
+    }
+    (CommitRepositoryState::Read, verified)
+}
+
+async fn verify_one(workspace: &str, sha: &str) -> TaskCommit {
+    // THE TYPE IS ASKED FOR, not just existence. A tag or a tree whose name a
+    // worker pasted is not a commit, and reporting it as present would put a
+    // non-commit into a record the next step reads as one.
+    let kind = git(workspace, &["cat-file", "-t", sha]).await;
+    if kind.as_deref().map(str::trim) != Some("commit") {
+        return TaskCommit {
+            sha: sha.to_owned(),
+            verdict: CommitVerdict::Missing,
+            subject: String::new(),
+            changed_paths: Vec::new(),
+        };
+    }
+    let subject = git(workspace, &["show", "--no-patch", "--format=%s", sha])
+        .await
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    let changed_paths = git(workspace, &["show", "--pretty=format:", "--name-only", sha])
+        .await
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(str::to_owned)
+        .collect();
+    // REACHABLE, not merely present. `cat-file` still finds a commit that a
+    // rebase orphaned, right up until it is collected — so a dangling SHA would
+    // otherwise read exactly like a live one.
+    let reached = git(
+        workspace,
+        &[
+            "for-each-ref",
+            "--count=1",
+            "--format=%(refname)",
+            "--contains",
+            sha,
+        ],
+    )
+    .await
+    .is_some_and(|refs| !refs.trim().is_empty());
+    TaskCommit {
+        sha: sha.to_owned(),
+        verdict: if reached {
+            CommitVerdict::Present
+        } else {
+            CommitVerdict::Unreachable
+        },
+        subject,
+        changed_paths,
+    }
+}
+
+/// One bounded git invocation. Anything that fails, is not a checkout, or takes
+/// too long answers `None` rather than failing the report that asked.
+async fn git(workspace: &str, args: &[&str]) -> Option<String> {
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::process::Command::new("git")
+            .arg("-C")
+            .arg(workspace)
+            .args(args)
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 /// What `git status --porcelain --branch` says about a worker's repository.
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub(super) struct RepositoryState {
@@ -1254,4 +1364,118 @@ pub(super) async fn claim_worker(
         .map_err(|error| task_store_error(&error))?;
     state.control_room_notify.notify_waiters();
     Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// Verification tests that drive a REAL repository.
+///
+/// A mocked git would let every one of these pass while the command strings are
+/// wrong, which is the whole failure this repository keeps writing down. These
+/// build a checkout in a temp directory and ask the same binary production asks.
+#[cfg(test)]
+mod commit_verification_tests {
+    use super::*;
+    use std::process::Command;
+
+    fn git_in(dir: &std::path::Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .expect("git runs");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    fn repository_with_one_commit() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path();
+        git_in(path, &["init", "--quiet", "--initial-branch=main"]);
+        git_in(path, &["config", "user.email", "worker@example.test"]);
+        git_in(path, &["config", "user.name", "Worker"]);
+        std::fs::create_dir_all(path.join("docs")).expect("docs dir");
+        std::fs::write(path.join("docs/note.md"), "a note\n").expect("write");
+        git_in(path, &["add", "docs/note.md"]);
+        git_in(path, &["commit", "--quiet", "-m", "docs: write a note"]);
+        let sha = git_in(path, &["rev-parse", "HEAD"]);
+        (dir, sha)
+    }
+
+    #[tokio::test]
+    async fn a_real_commit_is_present_and_carries_the_paths_it_touched() {
+        let (dir, sha) = repository_with_one_commit();
+        let (state, commits) =
+            verify_reported_commits(dir.path().to_str().unwrap(), std::slice::from_ref(&sha)).await;
+
+        assert_eq!(state, CommitRepositoryState::Read);
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].verdict, CommitVerdict::Present);
+        assert_eq!(commits[0].sha, sha);
+        assert_eq!(commits[0].subject, "docs: write a note");
+        // The paths are the point: they are what makes "docs-only" derivable
+        // later instead of asserted.
+        assert_eq!(commits[0].changed_paths, vec!["docs/note.md".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn a_sha_that_does_not_exist_is_missing() {
+        let (dir, _) = repository_with_one_commit();
+        let invented = "0123456789abcdef0123456789abcdef01234567";
+        let (state, commits) =
+            verify_reported_commits(dir.path().to_str().unwrap(), &[invented.to_owned()]).await;
+
+        assert_eq!(state, CommitRepositoryState::Read);
+        assert_eq!(commits[0].verdict, CommitVerdict::Missing);
+        assert!(commits[0].changed_paths.is_empty());
+    }
+
+    /// A rebase orphans a commit and `cat-file` still finds it.
+    ///
+    /// This is the case existence alone gets wrong: the object survives until
+    /// it is collected, so a dangling SHA reads exactly like a live one unless
+    /// something asks whether a ref still reaches it.
+    #[tokio::test]
+    async fn an_orphaned_commit_is_unreachable_rather_than_present() {
+        let (dir, first) = repository_with_one_commit();
+        let path = dir.path();
+        std::fs::write(path.join("docs/second.md"), "another\n").expect("write");
+        git_in(path, &["add", "docs/second.md"]);
+        git_in(path, &["commit", "--quiet", "-m", "docs: and another"]);
+        let orphaned = git_in(path, &["rev-parse", "HEAD"]);
+        git_in(path, &["reset", "--hard", "--quiet", &first]);
+
+        let (_, commits) =
+            verify_reported_commits(path.to_str().unwrap(), std::slice::from_ref(&orphaned)).await;
+
+        assert_eq!(
+            commits[0].verdict,
+            CommitVerdict::Unreachable,
+            "an orphaned commit still exists as an object; it must not read as present"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_workspace_that_is_not_a_repository_is_unchecked_rather_than_missing() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (state, commits) =
+            verify_reported_commits(dir.path().to_str().unwrap(), &["abc1234".to_owned()]).await;
+
+        assert_eq!(state, CommitRepositoryState::NotARepository);
+        // Unchecked, NOT Missing. Missing is an answer about the repository;
+        // this is the absence of a repository to answer. Work in a directory
+        // nobody version-controlled still has to be able to close.
+        assert_eq!(commits[0].verdict, CommitVerdict::Unchecked);
+    }
+
+    #[tokio::test]
+    async fn reporting_nothing_reads_the_repository_and_records_no_commits() {
+        let (dir, _) = repository_with_one_commit();
+        let (state, commits) = verify_reported_commits(dir.path().to_str().unwrap(), &[]).await;
+        assert_eq!(state, CommitRepositoryState::Read);
+        assert!(commits.is_empty());
+    }
 }

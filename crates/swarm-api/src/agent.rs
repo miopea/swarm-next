@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-const AGENT_TOOL_SURFACE_REVISION: u32 = 5;
+const AGENT_TOOL_SURFACE_REVISION: u32 = 6;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -401,9 +401,9 @@ const AGENT_TOOL_SURFACE_REVISION: u32 = 5;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 5. Update this and the revision together.
+/// The served surface as of revision 6. Update this and the revision together.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "c012f90f72b8fcb9fdbae13866cd1dfd1c8373538e68326cfeeeffd6de20ee99";
+    "55ee195ee9d5760c3278f04c14c58ddf9bbb4d9f4b26985871bbe7cd7bfe2099";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -581,6 +581,7 @@ impl ServerHandler for AgentMcp {
             list_jira_comments_tool(),
             comment_jira_task_tool(),
             record_deployment_tool(),
+            record_task_commits_tool(),
             correct_task_record_tool(),
             amend_task_facts_tool(),
             record_task_note_tool(),
@@ -683,6 +684,7 @@ impl ServerHandler for AgentMcp {
             "swarm_list_jira_comments" => self.list_jira_comments(arguments).await,
             "swarm_comment_jira_task" => self.comment_jira_task(arguments),
             "swarm_record_deployment" => self.record_deployment(arguments),
+            "swarm_record_task_commits" => self.record_task_commits(arguments).await,
             "swarm_record_no_deployment" => self.record_no_deployment(arguments),
             "swarm_draft_email_reply" => self.draft_email_reply(arguments),
             "swarm_list_workers" => self
@@ -1594,6 +1596,33 @@ impl AgentMcp {
     /// reference. Asking the operator for it afterwards makes the one person
     /// who cannot check it responsible for asserting it, and leaves the board
     /// showing a completion nobody has shown to be live.
+    /// Records the commits a task produced, verified against the workspace.
+    ///
+    /// The workspace read is the TASK'S, not the worker's current directory:
+    /// the task names where its work belongs, and a worker that had wandered
+    /// elsewhere would otherwise have its commits checked against the wrong
+    /// repository and reported missing.
+    async fn record_task_commits(
+        &self,
+        arguments: Value,
+    ) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<RecordTaskCommitsInput>(arguments)?;
+        let task_id = self.task_evidence_may_reach(&input.task_id)?;
+        let workspace = self.tasks.store().get_task(task_id)?.workspace;
+        let (repository_state, commits) =
+            crate::workers::verify_reported_commits(&workspace, &input.commits).await;
+        let report = self.tasks.store().record_task_commits(
+            task_id,
+            &workspace,
+            repository_state,
+            &commits,
+            crate::unix_timestamp(),
+        )?;
+        structured(serde_json::to_value(report).map_err(|error| {
+            ApplicationError::Store(TaskStoreError::IntegrityFailure(error.to_string()))
+        })?)
+    }
+
     fn record_deployment(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
         let input = parse::<RecordDeploymentInput>(arguments)?;
         let task_id = self.task_evidence_may_reach(&input.task_id)?;
@@ -2258,6 +2287,16 @@ struct RetitleTaskInput {
 }
 
 #[derive(Deserialize)]
+struct RecordTaskCommitsInput {
+    task_id: String,
+    /// AN EMPTY LIST IS AN ANSWER, not a missing field: it says nothing was
+    /// built. A task nobody reported at all is a different thing entirely, and
+    /// the record keeps them apart.
+    #[serde(default)]
+    commits: Vec<String>,
+}
+
+#[derive(Deserialize)]
 struct RecordDeploymentInput {
     task_id: String,
     environment: String,
@@ -2893,6 +2932,28 @@ fn record_task_note_tool() -> Tool {
                 }
             },
             "required": ["task_id", "note"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
+fn record_task_commits_tool() -> Tool {
+    tool(
+        "swarm_record_task_commits",
+        "Record which commits your task produced, so that what it built is a checked fact rather than something you assert. Swarm reads your workspace and stores what it finds: whether each commit exists, whether any ref still reaches it, and which paths it touches. Checked ONCE, now, and never recomputed — a squash or rebase later does not rewrite what was true when you reported. Report an EMPTY list to say the task built nothing; that is an answer, and it is different from never reporting at all.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string", "format": "uuid" },
+                "commits": {
+                    "type": "array",
+                    "maxItems": 200,
+                    "items": { "type": "string", "minLength": 4, "maxLength": 64 },
+                    "description": "The commit SHAs this task produced, full or abbreviated. Empty means the task built nothing."
+                }
+            },
+            "required": ["task_id", "commits"],
             "additionalProperties": false
         }),
         false,
@@ -3931,6 +3992,11 @@ mod tests {
                 // running, the reply to whoever asked, and the follow-up it
                 // found. Sending and routing stay above it.
                 "swarm_record_deployment",
+                // Which commits the work produced is the worker's to report and
+                // nobody else's: it is the only party that knows which of the
+                // session's commits belong to this task rather than the one it
+                // interleaved with.
+                "swarm_record_task_commits",
                 // Correcting your own handoff is worker work: the worker is the
                 // one whose note went stale, and it must not cost a trip out of
                 // Review to say so.
