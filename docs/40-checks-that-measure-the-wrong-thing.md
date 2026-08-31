@@ -6,7 +6,7 @@ mistake *while writing the task about the first four*.
 
 Every one had a test. Every test ran. Every test passed.
 
-## The shape
+## The first shape: narrower than the claim
 
 None of these was a wrong assertion. In all five the assertion was **true**. The
 gap was between the thing asserted and the thing claimed:
@@ -24,7 +24,7 @@ Asserting harder closes none of them. That is the useful thing to notice: the
 instinct after a miss like this is *more tests*, and more tests of the same
 subject would have passed too.
 
-## The other shape: a check that could not have returned the other answer
+## The second shape: a check that could not have returned the other answer
 
 The six above are all NARROWER than their claim — one call site, one branch,
 one predicate, one working tree, one join, one row of a dialog. Each measures
@@ -95,6 +95,136 @@ at a screen rather than by another test:
 The last is already in this document as *an edit that matches nothing reports
 success*, written before the category had a name. It belongs to both.
 
+## The third shape: a check taught the wrong answer
+
+The two shapes above are found by the same question — *what would make this go
+red?* One answers "less than I claimed"; the other answers "nothing".
+
+This one answers the question perfectly well and is still wrong.
+
+```rust
+assert_eq!(extension_of(store.save(DOCX, b"PK\x03\x04document").await.unwrap()), "xlsx");
+```
+
+A Word document was being stored as `.xlsx`, and the test asserted that it was.
+The mapping was wrong, the test agreed with it, and the suite was green while
+every Word document on every Hive was written under a false extension. Nothing
+could report it, because the only thing that would have reported it had been
+taught to expect the defect.
+
+**Its sign is inverted rather than its output constant.** It has a clear red
+condition — it goes red the moment the code becomes correct, which is exactly
+what happened when the arm was fixed. It is not narrower than its claim and it
+is not incapable of failing. It is a capable check pointed at the wrong value.
+
+So the question that catches the other two does not catch this one. *What would
+make this red?* has a crisp answer: storing a `.docx` as `docx`. That answer
+sounds like a passing grade and is the defect.
+
+### The heuristic that actually works, because "re-derive it" will not be run
+
+The honest general rule is *check that the asserted value is the DESIRED value,
+not merely the OBSERVED one* — a test written by running the code and recording
+what came out encodes behaviour, not intent. True, and nobody re-derives an
+expectation once a test is green, so it is not a check anyone will actually run.
+
+Something sharper is available whenever the subject is a **mapping**:
+
+> **Test the round trip, not the individual arms.** A round trip cannot encode a
+> colliding wrong answer, because the collision breaks the return leg.
+
+Here the write side mapped three distinct media types — XLSX, DOCX, PPTX — onto
+one extension. A per-arm test can assert each of those three individually and
+be green. A round trip cannot: `DOCX → "xlsx" → XLSX` does not come back to
+`DOCX`, so the test fails without anyone re-deriving anything, and it fails
+pointing straight at the collision.
+
+That is mechanical rather than a discipline, and it generalises past this bug.
+`attachments.rs` now carries *every extension the store writes can be read
+back*, which is the same idea one level up: a write arm with no read arm stores
+files that can never be fetched, and a suite complete on one side of a round
+trip is not complete.
+
+Two cheaper reading habits fall out of the same observation:
+
+- **A collision in a mapping deserves a sentence.** Three inputs to one output
+  is either deliberate or a bug, and if no comment says which, assume nobody
+  decided.
+- **Ask where an expected value came from.** If it could have been produced by
+  running the code, it probably was.
+
+### The cousin: a comment right about its premise, blind to its conclusion
+
+The same function carried an honest doc comment. It said the signature check
+"proves the file is a zip and not that it is a workbook" — which is exactly
+true, and is the strongest claim the format allows.
+
+The next line then named a workbook regardless.
+
+The comment was not wrong. It described the check's limitation accurately and
+did not notice that the code immediately exceeded it. This is the same failure
+as the test, viewed from the other side: the test encoded the wrong
+expectation, and the comment documented the right limitation without applying
+it. Both were written by someone paying attention; neither closed the loop
+between what was measured and what was then said.
+
+## The fourth shape: an instrument that cannot see the input
+
+The first three are about what a check **asserts**. This one is about what a
+check can **see**.
+
+Cutting 1.1.2 — the release carrying this document — the question was whether
+the shipped binary contained the credential the release exists to ship.
+
+```sh
+grep -qF -- "$TOKEN" "$bundle/bin/swarm-api"   # no match
+```
+
+Reported to the operator as **"CREDENTIAL IS ABSENT — this release would file
+nowhere"**. It was there. `strings binary | grep -cF -- "$TOKEN"` returns `1`.
+
+Nothing about the reasoning was wrong. The subject was the artefact rather than
+the working tree, which is what this document asks for. The expectation was
+correct. The value was never printed. **The instrument was blind to that class
+of input**: `grep` treats a file with NUL bytes as binary and does not report
+matches the way it does for text, so it answered confidently about a file it
+was not really reading.
+
+**The other three shapes let a defect through. This one manufactures a defect
+that is not there** — and a false negative about a credential is exactly the
+direction that gets acted on immediately. Two more steps and a correct,
+signed, verified release would have been withdrawn on it.
+
+**The question that catches it is a different question.** Not *what would make
+this red?* — that has a fine answer here — but:
+
+> **What would make this instrument blind?**
+
+Binary content, encoding, locale, a colour escape before every line, a size
+threshold past which a tool changes strategy. The colourised `grep` already in
+this document is the same shape wearing different clothes: there the escape
+codes defeated the pattern, here the NUL bytes defeated the reader. Both times
+the tool was capable, the expectation was right, and the input was of a class
+the tool quietly handles differently.
+
+When a check reports a **negative**, the cheap defence is to prove the
+instrument can see a positive. Run it against something you know matches. Had
+the credential check been run once against a file known to contain the value,
+it would have failed there and the blindness would have been visible before the
+answer was believed.
+
+### Not the same lesson as reading a pipeline's exit code
+
+The same release produced a second miss that looks related and is not. A build
+was run as `sh build-release.sh | grep -v … | tail`, and reported success while
+`cargo` was not on `PATH` at all — the exit status belonged to `tail`.
+
+That is not blindness. The instrument saw perfectly; it was simply a different
+instrument than the one being asked about, which makes it the *first* shape —
+narrower than the claim, measuring `tail` while claiming the build. It has been
+added to *What actually helps* as a habit rather than given a section, because
+the fix is mechanical and the lesson is already in the table.
+
 ## Why this repository keeps producing it
 
 It has produced it for as long as anyone has kept records — the colourised
@@ -143,6 +273,32 @@ went wrong were the ones that skipped it.
 the check go red, restore it. A check that has never failed has told you
 nothing — and this is where the fifth instance came from: an ablation that
 passed against a fixture covering one branch.
+
+**For a mapping, test the round trip rather than the individual arms.** A round
+trip cannot encode a colliding wrong answer, because the collision breaks the
+return leg. Three media types were mapped onto one extension and a per-arm test
+asserted each of them happily; `DOCX → "xlsx" → XLSX` does not come back to
+`DOCX`, so the round trip fails without anyone re-deriving an expectation, and
+it fails pointing at the collision rather than at a symptom. Reasoning in *a
+check taught the wrong answer* above.
+
+**Prove the instrument can see a positive before believing a negative.** A
+check that reports "not found" is only worth as much as its ability to find. Run
+it once against something you know matches — that is what would have caught
+`grep -F` returning nothing from a binary that did contain the value, and it is
+seconds of work at the moment the negative arrives.
+
+**Read the exit code of the thing you ran, not of the pipeline you ran it
+through.** `sh build.sh | grep … | tail` reports `tail`'s status, so a build
+that never found `cargo` was reported as succeeding. Capture the status
+directly, or use `PIPESTATUS`; redirect to a file and read it afterwards rather
+than filtering in-line.
+
+**If an expected value could have been produced by running the code, it
+probably was.** That is the mechanism by which a check gets taught the wrong
+answer: a test written by observing output encodes the behaviour, not the
+intent, and then defends it. It applies well beyond mappings, and it is the
+question to ask of any assertion whose value nobody can source.
 
 ## What this does not claim
 
