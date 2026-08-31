@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
@@ -127,8 +128,32 @@ pub(super) struct UnsettledReviewResponse {
     task_id: String,
     title: String,
     workspace: String,
+    /// Whose work this is.
+    ///
+    /// The operator's first question about waiting work is whose it is, and
+    /// eleven rows shipped in v1.1.0 unable to answer it: "no clear which
+    /// worker". Every row on this Hive has an assigned worker, so the fallback
+    /// is for a task whose worker was archived, not for a normal case.
+    worker_name: String,
+    /// Which of the three states this is, as a stable label rather than prose.
+    ///
+    /// The sentence in `reason` is unchanged and still correct; it just cannot
+    /// be said eleven times. Seven of eleven rows carried a byte-identical
+    /// forty-eight character sentence, so the majority of the card's ink was
+    /// three strings repeated and the titles — the only part that differed —
+    /// competed with them for the same line. The UI shows this as a short chip
+    /// and says the sentence once.
+    kind: &'static str,
     /// Why a person is needed, derived from what the task recorded.
     reason: &'static str,
+    /// When the work was filed, which is the only field carrying its age.
+    ///
+    /// NOT `updated_at`, which the list used to be ordered by. On this Hive
+    /// eleven unsettled rows have eleven distinct `created_at` values and TWO
+    /// distinct `updated_at` values — a bulk pass touched ten of them in the
+    /// same second — so ordering by it is not merely uninformative, it is
+    /// very nearly constant and the resulting order is arbitrary.
+    created_at: i64,
 }
 
 /// Reviewed work the deterministic passes could not settle.
@@ -142,7 +167,10 @@ fn unsettled_review(state: &Arc<AppState>) -> Result<Vec<UnsettledReviewResponse
     let waiting = store
         .reviewed_work_awaiting_judgment()
         .map_err(|error| task_store_error(&error))?;
-    Ok(waiting
+    // One lookup per DISTINCT worker, not per row. Three of this Hive's eleven
+    // rows belong to the same worker.
+    let mut names: HashMap<swarm_domain::WorkerId, String> = HashMap::new();
+    let mut rows: Vec<UnsettledReviewResponse> = waiting
         .into_iter()
         .filter_map(|task_id| {
             let task = store.get_task(task_id).ok()?;
@@ -154,33 +182,74 @@ fn unsettled_review(state: &Arc<AppState>) -> Result<Vec<UnsettledReviewResponse
             // ORDER MATTERS AND IS DELIBERATE. A claim nobody approved is the
             // most specific thing true of a task, so it is said first; the
             // commit settlement is what is left to say when there is no claim.
-            let reason = if claimed {
-                "a claim that nothing was deployed, which nobody has approved"
+            //
+            // The label and the sentence are chosen together, in one place, so
+            // a row cannot be chipped as one state and explained as another.
+            let (kind, reason) = if claimed {
+                (
+                    "claim_unapproved",
+                    "a claim that nothing was deployed, which nobody has approved",
+                )
             } else {
                 match swarm_domain::commit_settlement(report.as_ref()) {
-                    swarm_domain::CommitSettlement::BuiltCode => {
-                        "it recorded commits that touch code, and no deployment"
-                    }
-                    swarm_domain::CommitSettlement::Unknown => {
-                        "nobody reported what this work produced"
-                    }
+                    swarm_domain::CommitSettlement::BuiltCode => (
+                        "code_no_deployment",
+                        "it recorded commits that touch code, and no deployment",
+                    ),
+                    swarm_domain::CommitSettlement::Unknown => (
+                        "nothing_reported",
+                        "nobody reported what this work produced",
+                    ),
                     // Settleable, so the sweep will take it on its next pass.
                     // Present here only in the seconds between the two.
                     swarm_domain::CommitSettlement::NothingBuilt
                     | swarm_domain::CommitSettlement::DocumentationOnly => {
-                        "waiting for the coordinator to settle it"
+                        ("settling", "waiting for the coordinator to settle it")
                     }
                 }
             };
+            let worker_name = task.assigned_worker_id.map_or_else(
+                || UNASSIGNED_WORKER_NAME.to_owned(),
+                |worker_id| {
+                    names
+                        .entry(worker_id)
+                        .or_insert_with(|| {
+                            store.get_worker_profile(worker_id).map_or_else(
+                                |_| UNASSIGNED_WORKER_NAME.to_owned(),
+                                |profile| profile.name,
+                            )
+                        })
+                        .clone()
+                },
+            );
             Some(UnsettledReviewResponse {
                 task_id: task_id.to_string(),
                 title: task.title,
                 workspace: task.workspace,
+                worker_name,
+                kind,
                 reason,
+                created_at: task.created_at,
             })
         })
-        .collect())
+        .collect();
+    // Sorted here so the list arrives in the order it is read: worker first,
+    // because that is the question asked of it, then oldest first inside a
+    // worker, because age is the only thing that says which has been waiting.
+    rows.sort_by(|left, right| {
+        left.worker_name
+            .cmp(&right.worker_name)
+            .then(left.created_at.cmp(&right.created_at))
+    });
+    Ok(rows)
 }
+
+/// What a row says when its worker cannot be named.
+///
+/// Reached when a task has no assigned worker, or when the worker it names has
+/// since been archived — `get_worker_profile` filters those out. Neither is the
+/// normal case: all eleven rows on this Hive resolve to a live worker.
+const UNASSIGNED_WORKER_NAME: &str = "Unassigned";
 
 /// Blocks past the operator's twelve-hour threshold.
 ///

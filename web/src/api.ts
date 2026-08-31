@@ -319,8 +319,24 @@ export type UnsettledReview = {
   task_id: string;
   title: string;
   workspace: string;
+  /**
+   * Whose work this is — the operator's first question about waiting work.
+   *
+   * "Unassigned" when the task names no worker, or names one since archived.
+   */
+  worker_name: string;
+  /**
+   * Which state this row is in, as a stable label rather than prose:
+   * "claim_unapproved", "code_no_deployment", "nothing_reported" or "settling".
+   *
+   * The card chips this and says `reason` once, because seven of eleven rows
+   * carried the same forty-eight character sentence and it drowned the titles.
+   */
+  kind: string;
   /** Why a person is needed, derived from what the task recorded. */
   reason: string;
+  /** When the work was filed. The only field on this row that carries age. */
+  created_at: number;
 };
 
 export type HeldBriefing = {

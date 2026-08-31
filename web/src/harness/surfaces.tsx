@@ -201,18 +201,46 @@ const asyncNoop = async () => undefined;
 
 export type Surface = { id: string; title: string; why: string; render: () => ReactNode };
 
+/** Filed times for the unsettled fixture, spread the way the real rows are. */
+const FILED = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
+
 export const SURFACES: Surface[] = [
   {
     id: "unsettled-review",
     title: "Finished work nothing has settled",
-    why: "the operator asked to see how much unverified work exists without clicking into anything; the heading has to carry the number AND name its subject, because the count this replaced said 49 and meant 31",
+    why: "eleven real rows, the count and title lengths the operator was actually looking at when they said 'no clear which worker ... I cannot scan it to know what i needed'. The three-row fixture this replaces had short titles and could not have produced any of the three faults",
     render: () => (
       <UnsettledReviewCard
         onOpenTask={() => {}}
+        /*
+         * THE SHAPE IS TRANSCRIBED FROM THE FAILING CASE; THE WORDS ARE NOT.
+         *
+         * Everything that produces the symptom is copied from the eleven rows
+         * on the operator's Hive: eleven rows, six workers distributed 3/2/2/2/1/1,
+         * reasons repeating 7/2/2, and title lengths that dominate the real ones
+         * rank for rank — the longest is the real 172 characters. So this cannot
+         * be a fixture chosen to pass: every dimension that made the card fail is
+         * present at full strength.
+         *
+         * The TEXT is invented, and that is not squeamishness. This repository is
+         * public. The real titles name client projects, an unreleased migration,
+         * and one unfixed auth-redirect defect in a named production app — docs/38
+         * lists "client and project names" among the things a published capture
+         * must not carry, and a harness capture is meant to be safe by
+         * construction rather than by inspection. Git makes that permanent.
+         */
         waiting={[
-          { task_id: "a", title: "Repair the collapsed picker second line", workspace: "/workspace/petal", reason: "it recorded commits that touch code, and no deployment" },
-          { task_id: "b", title: "Work out why the terminal drops on a phone", workspace: "/workspace/petal", reason: "nobody reported what this work produced" },
-          { task_id: "c", title: "Import the legacy board", workspace: "/workspace/thistle", reason: "a claim that nothing was deployed, which nobody has approved" },
+          { task_id: "u1", title: "C2: app shell — no basePath, assetPrefix, app/[area] with the area validated as bud|leaf", workspace: "/workspace/orchard", worker_name: "Field Notes", kind: "code_no_deployment", reason: "it recorded commits that touch code, and no deployment", created_at: FILED + 0 },
+          { task_id: "u2", title: "C3: middleware normalization — a status mismatch redirects, never 404s", workspace: "/workspace/orchard", worker_name: "Field Notes", kind: "code_no_deployment", reason: "it recorded commits that touch code, and no deployment", created_at: FILED + 14 },
+          { task_id: "u3", title: "A2b: orchard-web — one mobile menu control, not two (split from A2, which fixed Meadow only)", workspace: "/workspace/orchard", worker_name: "Hedgerow", kind: "claim_unapproved", reason: "a claim that nothing was deployed, which nobody has approved", created_at: FILED + 1679 },
+          { task_id: "u4", title: "A10c: orchard-web — five bare redirect('/login') calls; the client path is already correct", workspace: "/workspace/orchard", worker_name: "Hedgerow", kind: "claim_unapproved", reason: "a claim that nothing was deployed, which nobody has approved", created_at: FILED + 2231 },
+          { task_id: "u5", title: "A10d: Meadow — save controls send ?next= but the sign-in screen only reads ?redirect=, so the return path is silently discarded", workspace: "/workspace/orchard", worker_name: "Meadow", kind: "nothing_reported", reason: "nobody reported what this work produced", created_at: FILED + 2250 },
+          { task_id: "u6", title: "A13: retire the legacy tblNavigation sync — 83 dead rows that actively mislead", workspace: "/workspace/orchard", worker_name: "Orchard API", kind: "claim_unapproved", reason: "a claim that nothing was deployed, which nobody has approved", created_at: FILED - 56 },
+          { task_id: "u7", title: "B6: nav catalog rows for the target IA, with role security entries", workspace: "/workspace/orchard", worker_name: "Orchard API", kind: "claim_unapproved", reason: "a claim that nothing was deployed, which nobody has approved", created_at: FILED + 0 },
+          { task_id: "u8", title: "Reserve a native user id range so POST /api/users stops drawing from the mirrored legacy sequence — migration, orchard-data owns it", workspace: "/workspace/orchard", worker_name: "Orchard API", kind: "claim_unapproved", reason: "a claim that nothing was deployed, which nobody has approved", created_at: FILED + 5300 },
+          { task_id: "u9", title: "C4: gateway route prefixes for /bud and /leaf", workspace: "/workspace/orchard", worker_name: "Orchard Web", kind: "claim_unapproved", reason: "a claim that nothing was deployed, which nobody has approved", created_at: FILED + 28 },
+          { task_id: "u10", title: "A5c: orchard-web — a media-progress producer the original A5 brief missed entirely", workspace: "/workspace/orchard", worker_name: "Orchard Web", kind: "claim_unapproved", reason: "a claim that nothing was deployed, which nobody has approved", created_at: FILED + 2340 },
+          { task_id: "u11", title: "A transition note reaches task history but not the worker's briefing — two workers confirmed it independently, and an undelivered instruction is indistinguishable from none", workspace: "/workspace/orchard", worker_name: "Windfall", kind: "nothing_reported", reason: "nobody reported what this work produced", created_at: FILED + 7521 },
         ]}
       />
     ),
