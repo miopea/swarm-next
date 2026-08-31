@@ -168,6 +168,63 @@ expectation, and the comment documented the right limitation without applying
 it. Both were written by someone paying attention; neither closed the loop
 between what was measured and what was then said.
 
+## The fourth shape: an instrument that cannot see the input
+
+The first three are about what a check **asserts**. This one is about what a
+check can **see**.
+
+Cutting 1.1.2 — the release carrying this document — the question was whether
+the shipped binary contained the credential the release exists to ship.
+
+```sh
+grep -qF -- "$TOKEN" "$bundle/bin/swarm-api"   # no match
+```
+
+Reported to the operator as **"CREDENTIAL IS ABSENT — this release would file
+nowhere"**. It was there. `strings binary | grep -cF -- "$TOKEN"` returns `1`.
+
+Nothing about the reasoning was wrong. The subject was the artefact rather than
+the working tree, which is what this document asks for. The expectation was
+correct. The value was never printed. **The instrument was blind to that class
+of input**: `grep` treats a file with NUL bytes as binary and does not report
+matches the way it does for text, so it answered confidently about a file it
+was not really reading.
+
+**The other three shapes let a defect through. This one manufactures a defect
+that is not there** — and a false negative about a credential is exactly the
+direction that gets acted on immediately. Two more steps and a correct,
+signed, verified release would have been withdrawn on it.
+
+**The question that catches it is a different question.** Not *what would make
+this red?* — that has a fine answer here — but:
+
+> **What would make this instrument blind?**
+
+Binary content, encoding, locale, a colour escape before every line, a size
+threshold past which a tool changes strategy. The colourised `grep` already in
+this document is the same shape wearing different clothes: there the escape
+codes defeated the pattern, here the NUL bytes defeated the reader. Both times
+the tool was capable, the expectation was right, and the input was of a class
+the tool quietly handles differently.
+
+When a check reports a **negative**, the cheap defence is to prove the
+instrument can see a positive. Run it against something you know matches. Had
+the credential check been run once against a file known to contain the value,
+it would have failed there and the blindness would have been visible before the
+answer was believed.
+
+### Not the same lesson as reading a pipeline's exit code
+
+The same release produced a second miss that looks related and is not. A build
+was run as `sh build-release.sh | grep -v … | tail`, and reported success while
+`cargo` was not on `PATH` at all — the exit status belonged to `tail`.
+
+That is not blindness. The instrument saw perfectly; it was simply a different
+instrument than the one being asked about, which makes it the *first* shape —
+narrower than the claim, measuring `tail` while claiming the build. It has been
+added to *What actually helps* as a habit rather than given a section, because
+the fix is mechanical and the lesson is already in the table.
+
 ## Why this repository keeps producing it
 
 It has produced it for as long as anyone has kept records — the colourised
@@ -224,6 +281,18 @@ asserted each of them happily; `DOCX → "xlsx" → XLSX` does not come back to
 `DOCX`, so the round trip fails without anyone re-deriving an expectation, and
 it fails pointing at the collision rather than at a symptom. Reasoning in *a
 check taught the wrong answer* above.
+
+**Prove the instrument can see a positive before believing a negative.** A
+check that reports "not found" is only worth as much as its ability to find. Run
+it once against something you know matches — that is what would have caught
+`grep -F` returning nothing from a binary that did contain the value, and it is
+seconds of work at the moment the negative arrives.
+
+**Read the exit code of the thing you ran, not of the pipeline you ran it
+through.** `sh build.sh | grep … | tail` reports `tail`'s status, so a build
+that never found `cargo` was reported as succeeding. Capture the status
+directly, or use `PIPESTATUS`; redirect to a file and read it afterwards rather
+than filtering in-line.
 
 **If an expected value could have been produced by running the code, it
 probably was.** That is the mechanism by which a check gets taught the wrong
