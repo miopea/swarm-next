@@ -12,6 +12,42 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.1.2
+
+**No schema change, no protocol change, and your workers keep running.**
+
+### New features
+
+- **Reporting a bug about Swarm no longer needs any setup.** Filing feedback
+  used to work only if whoever installed Swarm had gone and got a GitHub token
+  of their own — and until they did, the dialog quietly offered only "Save to
+  this Hive", which looks like a choice rather than an install that cannot
+  reach the project. A release now carries its own credential for the Swarm
+  repository, so a fresh install can file straight away. Setting
+  `SWARM_GITHUB_REPOSITORY` and `SWARM_GITHUB_TOKEN` still wins if you want
+  your own destination, and reports from your Hive stop going out under
+  whoever's token happened to be configured
+- **A Swarm that genuinely cannot file now says so**, in the dialog, before you
+  write the report rather than after
+
+### Fixes
+
+- **Attaching a file tells you it worked, and which file.** The confirmation
+  existed but had no styling at all, so it rendered as grey text in a busy
+  toolbar — a file that attached correctly looked exactly like one that had
+  done nothing. It now reads as "Added yourfile.mp4 · press Enter to send"
+- **A dropped video, tar or gzip arrives as what it is.** Anything Swarm did
+  not recognise was stored with a `.bin` name, so a worker was handed a file
+  with no hint what it held. This does not let a worker watch a video — it
+  stops the file arriving anonymous
+- **A Word document or PowerPoint deck is no longer stored as a spreadsheet.**
+  All three Office formats were being written with an `.xlsx` name, which fails
+  later looking like a corrupt file rather than a mislabelled one
+- **The "waiting on you" card on Needs you can be read.** It now says whose work
+  each item is, groups by worker, and puts the reason in a short label instead
+  of repeating the same sentence down the list. Eleven items used to wrap into
+  a ragged column with nothing to scan
+
 ## 1.1.1
 
 **An easy one: no schema change, no protocol change, and your workers keep
