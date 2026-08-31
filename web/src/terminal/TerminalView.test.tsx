@@ -204,6 +204,12 @@ test("keeps the destructive sleep control off the terminal bar", () => {
  * silently and by design, so pasting anyway would have reported success for a
  * paste that never happened. That is worse than the silence: it is a false
  * "File added".
+ *
+ * The confirmation NAMES THE FILE. "File added" beside a terminal someone just
+ * dropped something into is nearly contentless, and the element carrying it had
+ * no CSS rule at all — it rendered as unstyled small text in a busy toolbar, so
+ * an attachment that worked looked identical to one that did nothing. The
+ * operator, on dropping an mp4: "Just any sort of confirmation would be good."
  */
 test("an attachment uploaded while disconnected waits, then lands when the socket returns", async () => {
   upload.mockResolvedValue("/tmp/attachments/screen.png");
@@ -221,7 +227,7 @@ test("an attachment uploaded while disconnected waits, then lands when the socke
 
   act(() => controller.stateListener?.("connected"));
 
-  await screen.findByText(/File added/i);
+  await screen.findByText(/Added screen\.png/i);
   expect(controller.sendInput).toHaveBeenCalledWith(expect.stringContaining("/tmp/attachments/screen.png"));
 });
 

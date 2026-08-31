@@ -1794,6 +1794,19 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 /* The same shape as the block escalation card above: it is the same kind of
    thing on the same surface, and two attention cards that look different
    without meaning different is noise the operator has to decode. */
+/* THE ATTACHMENT CONFIRMATION, which had NO RULE AT ALL and therefore no
+   presence. The element rendered the whole time — an unstyled <small> in a
+   toolbar beside the connection state — so a file that attached correctly
+   looked exactly like a file that had done nothing. The operator, on dropping
+   an mp4: "Just any sort of confirmation would be good."
+
+   Three channels rather than colour alone, like .machine-pressure: a hue, a
+   border, and text that names the file. */
+.attachment-state { display: inline-flex; align-items: center; max-width: 100%; padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); background: var(--surface-soft); font-size: .7rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-state.attachment-ready { border-color: color-mix(in srgb, var(--good) 55%, var(--line)); color: var(--text); background: var(--good-soft); }
+.attachment-state.attachment-uploading,
+.attachment-state.attachment-waiting { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); color: var(--warn-strong); background: var(--warn-soft); }
+.attachment-state.attachment-error { border-color: color-mix(in srgb, var(--danger) 50%, var(--line)); color: var(--bad-strong); background: var(--bad-soft); }
 .unsettled-review-card { align-items: start; }
 /* GROUPED BY WORKER, because "no clear which worker" was the operator's first
    complaint about eleven rows that named none. */

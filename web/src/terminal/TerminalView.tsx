@@ -46,6 +46,10 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   // uploaded perfectly while the socket was down was reported "ready"
   // and pasted nowhere.
   const [pendingPaste, setPendingPaste] = useState<string>();
+  // NAMED IN THE CONFIRMATION. "File added" over a terminal the operator just
+  // dropped something into is nearly contentless; the name is what tells them
+  // the right file landed.
+  const [attachmentName, setAttachmentName] = useState<string>();
   // Why it failed, not just that it did. "Image could not be added" on its own
   // left an operator with nothing to act on and nothing to report.
   const [attachmentError, setAttachmentError] = useState<string>();
@@ -162,6 +166,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   async function addAttachment(file: File) {
     setAttachmentState("uploading");
     setAttachmentError(undefined);
+    setAttachmentName(file.name);
     try {
       const path = await uploadTerminalAttachment(operatorToken, session.session_id, file);
       // READ THE CONNECTION AT THE MOMENT OF PASTING, not before uploading. A
@@ -254,7 +259,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
           {detail && <small>{detail}</small>}
           {attachmentState !== "idle" && (
             <small className={`attachment-state attachment-${attachmentState}`} role="status">
-              {attachmentState === "uploading" ? "Adding file…" : attachmentState === "waiting" ? "File uploaded · waiting for the connection to add it" : attachmentState === "ready" ? "File added · press Enter when ready" : attachmentError ? `File could not be added — ${attachmentError}. Try again.` : "File could not be added. Try again."}
+              {attachmentState === "uploading" ? `Adding ${attachmentName ?? "file"}…` : attachmentState === "waiting" ? `${attachmentName ?? "File"} uploaded · waiting for the connection to add it` : attachmentState === "ready" ? `Added ${attachmentName ?? "file"} · press Enter to send` : attachmentError ? `Could not add ${attachmentName ?? "file"} — ${attachmentError}. Try again.` : `Could not add ${attachmentName ?? "file"}. Try again.`}
             </small>
           )}
         </div>
