@@ -6,7 +6,7 @@ mistake *while writing the task about the first four*.
 
 Every one had a test. Every test ran. Every test passed.
 
-## The shape
+## The first shape: narrower than the claim
 
 None of these was a wrong assertion. In all five the assertion was **true**. The
 gap was between the thing asserted and the thing claimed:
@@ -24,7 +24,7 @@ Asserting harder closes none of them. That is the useful thing to notice: the
 instinct after a miss like this is *more tests*, and more tests of the same
 subject would have passed too.
 
-## The other shape: a check that could not have returned the other answer
+## The second shape: a check that could not have returned the other answer
 
 The six above are all NARROWER than their claim — one call site, one branch,
 one predicate, one working tree, one join, one row of a dialog. Each measures
@@ -94,6 +94,79 @@ at a screen rather than by another test:
 
 The last is already in this document as *an edit that matches nothing reports
 success*, written before the category had a name. It belongs to both.
+
+## The third shape: a check taught the wrong answer
+
+The two shapes above are found by the same question — *what would make this go
+red?* One answers "less than I claimed"; the other answers "nothing".
+
+This one answers the question perfectly well and is still wrong.
+
+```rust
+assert_eq!(extension_of(store.save(DOCX, b"PK\x03\x04document").await.unwrap()), "xlsx");
+```
+
+A Word document was being stored as `.xlsx`, and the test asserted that it was.
+The mapping was wrong, the test agreed with it, and the suite was green while
+every Word document on every Hive was written under a false extension. Nothing
+could report it, because the only thing that would have reported it had been
+taught to expect the defect.
+
+**Its sign is inverted rather than its output constant.** It has a clear red
+condition — it goes red the moment the code becomes correct, which is exactly
+what happened when the arm was fixed. It is not narrower than its claim and it
+is not incapable of failing. It is a capable check pointed at the wrong value.
+
+So the question that catches the other two does not catch this one. *What would
+make this red?* has a crisp answer: storing a `.docx` as `docx`. That answer
+sounds like a passing grade and is the defect.
+
+### The heuristic that actually works, because "re-derive it" will not be run
+
+The honest general rule is *check that the asserted value is the DESIRED value,
+not merely the OBSERVED one* — a test written by running the code and recording
+what came out encodes behaviour, not intent. True, and nobody re-derives an
+expectation once a test is green, so it is not a check anyone will actually run.
+
+Something sharper is available whenever the subject is a **mapping**:
+
+> **Test the round trip, not the individual arms.** A round trip cannot encode a
+> colliding wrong answer, because the collision breaks the return leg.
+
+Here the write side mapped three distinct media types — XLSX, DOCX, PPTX — onto
+one extension. A per-arm test can assert each of those three individually and
+be green. A round trip cannot: `DOCX → "xlsx" → XLSX` does not come back to
+`DOCX`, so the test fails without anyone re-deriving anything, and it fails
+pointing straight at the collision.
+
+That is mechanical rather than a discipline, and it generalises past this bug.
+`attachments.rs` now carries *every extension the store writes can be read
+back*, which is the same idea one level up: a write arm with no read arm stores
+files that can never be fetched, and a suite complete on one side of a round
+trip is not complete.
+
+Two cheaper reading habits fall out of the same observation:
+
+- **A collision in a mapping deserves a sentence.** Three inputs to one output
+  is either deliberate or a bug, and if no comment says which, assume nobody
+  decided.
+- **Ask where an expected value came from.** If it could have been produced by
+  running the code, it probably was.
+
+### The cousin: a comment right about its premise, blind to its conclusion
+
+The same function carried an honest doc comment. It said the signature check
+"proves the file is a zip and not that it is a workbook" — which is exactly
+true, and is the strongest claim the format allows.
+
+The next line then named a workbook regardless.
+
+The comment was not wrong. It described the check's limitation accurately and
+did not notice that the code immediately exceeded it. This is the same failure
+as the test, viewed from the other side: the test encoded the wrong
+expectation, and the comment documented the right limitation without applying
+it. Both were written by someone paying attention; neither closed the loop
+between what was measured and what was then said.
 
 ## Why this repository keeps producing it
 
