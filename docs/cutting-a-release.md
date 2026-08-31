@@ -47,6 +47,56 @@ diff <(op read --account my "op://BFG/Swarm release signing key/credential" | tr
 
 A key nobody read back is a key nobody has stored.
 
+## The feedback credential
+
+A second, unrelated secret rides along in the build, for a different reason and
+with a very different risk. The signing key's private half **never** leaves
+1Password. This one is deliberately **shipped inside the artefact**, so that
+someone installing Swarm can report a bug about Swarm without first obtaining a
+GitHub token of their own. See
+[ADR 0059](decisions/0059-the-credential-swarm-ships.md) for the reasoning and
+the operator's ruling.
+
+It is stored as **Swarm feedback token** in the `BFG` vault, in a concealed
+`credential` field, matching the signing key's shape. Override the location for
+a different vault with `SWARM_FEEDBACK_TOKEN_REFERENCE`.
+
+**The scope is the whole basis of this being acceptable.** Create it as a
+**fine-grained personal access token**, with:
+
+- **Repository access:** only `miopea/swarm-next`.
+- **Permissions:** `Issues: Read and write`. Nothing else. No `Contents`, no
+  `Pull requests`, no `Metadata` beyond what GitHub forces.
+
+Anyone holding a release holds this token. What that buys them must stay
+"they can open issues on the Swarm repo".
+
+`build-release.sh` reads it and passes it to `cargo` as
+`SWARM_BUNDLED_FEEDBACK_TOKEN`. It prints the credential's **length** and never
+any part of its value, and **do not run the script under `set -x`**, which would
+print every expansion including this one.
+
+Building without it is legitimate and loud rather than silent — a local package
+for testing has no business carrying the project's credential:
+
+```
+swarm-package: 'op' is not on PATH; building without a bundled feedback token
+swarm-package: bundling a feedback token (93 characters)
+```
+
+Read that line. A release that prints the first message files nowhere for anyone
+who installs it, and the Hive will say so in its feedback dialog rather than
+quietly offering to save locally.
+
+To rotate: revoke at GitHub, create a replacement with the same scope, update
+the 1Password item, and cut a release. Cargo recompiles when the value changes,
+so the new token really does reach the artefact — that is checked rather than
+assumed, and there is a test for the embedding path:
+
+```
+SWARM_BUNDLED_FEEDBACK_TOKEN=placeholder cargo test -p swarm-api bundled_feedback
+```
+
 ## Building the release
 
 `build-release.sh` refuses an untagged commit, deliberately: a release version

@@ -160,3 +160,51 @@ test("exactly one action in the row reads as the primary one", () => {
   expect(row).not.toBeNull();
   expect(row!.contains(container.querySelector(".primary-action"))).toBe(true);
 });
+
+/** Answers every call the dialog makes on open, with a chosen readiness. */
+function stubDialogFetch(github: { configured: boolean; repository: string | null }) {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("feedback/github/connection")) return ok({ connected: false, lapsed: false, login: null });
+    if (url.includes("feedback/github")) return ok(github);
+    if (url.includes("terminal-host")) return ok({ type: "host_status", status: { protocol_version: 7, host_version: "0.1.0", draining: false, running_sessions: 0, retained_sessions: 0 } });
+    if (url.includes("runtime/resources")) return ok({
+      sampled_at: 1,
+      policy: { mode: "observe_only", advisory_bytes: 268_435_456, critical_bytes: 536_870_912 },
+      api: { resident_memory_bytes: 1, pressure: "normal" },
+      terminal_host: { resident_memory_bytes: null, pressure: "unavailable" },
+    });
+    return ok({ type: "history_diagnostics", diagnostics: { retained_bytes: 0, session_count: 0, segment_count: 0, dropped_records: 0, dropped_bytes: 0, recovered_truncated_bytes: 0, recovered_corrupt_segments: 0 } });
+  }));
+}
+
+function renderDialog() {
+  return render(<DogfoodFeedbackDialog activeSessionId={undefined} health={{ status: "ok", version: "0.1.0" }} hiveIdentity={undefined} liveFeedState="connected" onClose={vi.fn()} operatorToken="token" recentEvents={[]} sessions={[]} surface="workers" workers={[]} />);
+}
+
+/**
+ * THE SILENT DEGRADATION, WHICH IS A SEPARATE DEFECT FROM WHERE THE CREDENTIAL
+ * COMES FROM.
+ *
+ * "Save to this Hive" is a true description of what happens and reads as a
+ * CHOICE — an install deliberately keeping reports local. An install that
+ * cannot reach the project at all shows exactly the same words, and the two are
+ * indistinguishable on screen. That is why this survived a release: a fresh
+ * Hive looked configured-for-local rather than unable-to-file.
+ */
+test("a Hive that cannot file says so, rather than only offering to save locally", async () => {
+  stubDialogFetch({ configured: false, repository: null });
+  renderDialog();
+  await waitFor(() => expect(screen.getByText(/cannot file to GitHub/)).toBeTruthy());
+  // And it says what follows from that, in the reporter's terms: their words
+  // stop here and nobody upstream sees them.
+  expect(screen.getByText(/maintainers will not see it/)).toBeTruthy();
+});
+
+/** The notice is about inability, so a Hive that CAN file must not show it. */
+test("a Hive that can file shows no cannot-file notice", async () => {
+  stubDialogFetch({ configured: true, repository: "miopea/swarm-next" });
+  renderDialog();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Send to GitHub" })).toBeTruthy());
+  expect(screen.queryByText(/cannot file to GitHub/)).toBeNull();
+});

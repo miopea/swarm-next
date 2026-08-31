@@ -111,6 +111,22 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
       .catch(() => setGithub({ configured: false, repository: null }));
   }
 
+  // ASKED ON OPEN, NOT ON THE FIRST KEYSTROKE. Readiness used to be fetched
+  // only from `markChanged`, so a Hive that cannot file said nothing until the
+  // reporter had already started writing — and told them where their words were
+  // going only after they had written them. Whether this report can reach the
+  // project is the first thing they need, not the second.
+  useEffect(() => {
+    let cancelled = false;
+    void fetchGithubFeedbackReadiness(operatorToken)
+      .then((readiness) => { if (!cancelled) setGithub(readiness); })
+      // A Hive that cannot answer is treated as one that cannot file. Better a
+      // dialog that says reports stay here than one offering a button that
+      // fails when pressed.
+      .catch(() => { if (!cancelled) setGithub({ configured: false, repository: null }); });
+    return () => { cancelled = true; };
+  }, [operatorToken]);
+
   useEffect(() => {
     let cancelled = false;
     void Promise.allSettled([
@@ -282,6 +298,20 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
                 .catch(() => setConnection({ connected: false, lapsed: false, login: null }));
             }}
           />
+        ) : null}
+        {/* CANNOT FILE, SAID BEFORE THE BUTTON IS PRESSED rather than after.
+            "Save to this Hive" is a true description of what happens and it
+            reads as a CHOICE — an install configured to keep things local. It
+            is not: it is an install that cannot reach the project at all, and
+            the two are indistinguishable on screen. That is why this stayed
+            invisible for a release, and it is a separate defect from where the
+            credential comes from.
+
+            Rare now that a release ships its own credential, so this is mostly
+            a developer's `cargo build` — which is exactly the reader who needs
+            to be told why their report went nowhere. */}
+        {github !== undefined && !github.configured && saveState !== "saved" ? (
+          <p role="status">This Swarm cannot file to GitHub, so your report will stay on this Hive and the Swarm maintainers will not see it. A packaged release files without any setup; a build from source needs <code>SWARM_GITHUB_REPOSITORY</code> and <code>SWARM_GITHUB_TOKEN</code>.</p>
         ) : null}
         {copyState === "unavailable" ? <p role="status">Clipboard access is unavailable. Select the preview and copy it manually.</p> : null}
         {saveState === "saved" ? (
