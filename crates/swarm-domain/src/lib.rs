@@ -1289,3 +1289,120 @@ mod abandoned_state_tests {
         assert_eq!(TaskState::Abandoned.to_string(), "abandoned");
     }
 }
+
+#[cfg(test)]
+mod commit_settlement_tests {
+    use crate::tasks::{
+        CommitRepositoryState, CommitSettlement, CommitVerdict, TaskCommit, TaskCommitReport,
+        TaskId, commit_settlement, documentation_path,
+    };
+
+    fn report(commits: Vec<TaskCommit>) -> TaskCommitReport {
+        TaskCommitReport {
+            task_id: TaskId::new(),
+            workspace: "/workspace/petal".to_owned(),
+            repository_state: CommitRepositoryState::Read,
+            reported_at: 1_000,
+            commits,
+        }
+    }
+
+    fn commit(verdict: CommitVerdict, paths: &[&str]) -> TaskCommit {
+        TaskCommit {
+            sha: "aaa1111".to_owned(),
+            verdict,
+            subject: "something".to_owned(),
+            changed_paths: paths.iter().map(|p| (*p).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn nobody_reporting_is_not_the_same_as_reporting_nothing() {
+        // The distinction the previous task exists to preserve. If these ever
+        // agree, work whose worker simply forgot closes itself.
+        assert_eq!(commit_settlement(None), CommitSettlement::Unknown);
+        assert_eq!(
+            commit_settlement(Some(&report(vec![]))),
+            CommitSettlement::NothingBuilt
+        );
+    }
+
+    #[test]
+    fn documentation_is_recognised_where_this_project_keeps_it() {
+        for path in [
+            "docs/41-verification.md",
+            "README.md",
+            "crates/swarm-api/docs/notes.md",
+            "NOTICE",
+            "CHANGELOG.md",
+            "some/deep/path/notes.txt",
+        ] {
+            assert!(documentation_path(path), "{path} should be documentation");
+        }
+    }
+
+    #[test]
+    fn anything_unrecognised_is_code_because_that_error_is_the_cheap_one() {
+        for path in [
+            "crates/swarm-api/src/lib.rs",
+            "web/src/App.tsx",
+            "Cargo.toml",
+            "packaging/linux/swarm-package",
+            "docsomething/file.rs",
+            ".github/workflows/ci.yml",
+        ] {
+            assert!(!documentation_path(path), "{path} must not read as docs");
+        }
+    }
+
+    #[test]
+    fn a_documentation_only_report_settles_and_a_mixed_one_does_not() {
+        assert_eq!(
+            commit_settlement(Some(&report(vec![
+                commit(CommitVerdict::Present, &["docs/a.md"]),
+                commit(CommitVerdict::Present, &["README.md", "docs/b.md"]),
+            ]))),
+            CommitSettlement::DocumentationOnly
+        );
+        assert_eq!(
+            commit_settlement(Some(&report(vec![commit(
+                CommitVerdict::Present,
+                &["docs/a.md", "crates/swarm-api/src/lib.rs"],
+            )]))),
+            CommitSettlement::BuiltCode
+        );
+    }
+
+    #[test]
+    fn one_commit_nobody_could_check_leaves_the_whole_report_unsettled() {
+        // A report is read as a set. One commit nobody looked at means the set
+        // has not been established, whatever the others say.
+        for unchecked in [
+            CommitVerdict::Missing,
+            CommitVerdict::Unreachable,
+            CommitVerdict::Unchecked,
+        ] {
+            assert_eq!(
+                commit_settlement(Some(&report(vec![
+                    commit(CommitVerdict::Present, &["docs/a.md"]),
+                    commit(unchecked, &["docs/b.md"]),
+                ]))),
+                CommitSettlement::Unknown,
+                "{unchecked} must not settle"
+            );
+        }
+    }
+
+    /// THE MERGE COMMIT, which is the case vacuous truth gets wrong.
+    ///
+    /// `git show --name-only` summarises a merge as no paths at all, so "every
+    /// path is documentation" is trivially true of a commit that may carry an
+    /// entire release. Settling on that would close shipped work automatically.
+    #[test]
+    fn a_commit_reporting_no_paths_is_unknown_rather_than_documentation() {
+        assert_eq!(
+            commit_settlement(Some(&report(vec![commit(CommitVerdict::Present, &[])]))),
+            CommitSettlement::Unknown
+        );
+    }
+}

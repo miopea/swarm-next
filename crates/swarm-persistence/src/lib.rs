@@ -169,7 +169,8 @@ const REPLY_EVIDENCE_GUARDS_THE_SEND_SCHEMA_VERSION: i64 = 108;
 const GITHUB_USER_CONNECTION_SCHEMA_VERSION: i64 = 109;
 const ABANDONED_STATE_SCHEMA_VERSION: i64 = 110;
 const TASK_COMMIT_REPORT_SCHEMA_VERSION: i64 = 111;
-const CURRENT_SCHEMA_VERSION: i64 = TASK_COMMIT_REPORT_SCHEMA_VERSION;
+const COORDINATOR_SETTLEMENT_SCHEMA_VERSION: i64 = 112;
+const CURRENT_SCHEMA_VERSION: i64 = COORDINATOR_SETTLEMENT_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -360,6 +361,21 @@ pub enum TaskStoreError {
     InvalidTaskActivityNote,
     #[error("completed work requires concise verification evidence")]
     CompletionEvidenceRequired,
+    // NAMES THE CONTRADICTION, not the rule. A worker reading "not authorized"
+    // or "evidence required" would go looking at permissions or at what it
+    // wrote; the thing to look at is the commits it reported.
+    // NAMES THE WAY FORWARD, not only the objection. A refusal whose remedy
+    // nobody can find from the message is barely better than no route at all --
+    // the protocol-migration refusal cost this Hive three hours by describing a
+    // migration without naming the command that performed it.
+    //
+    // The routes named are the ones that stay open: the claim is refused, so
+    // there is no exemption row for anyone to approve, and saying "ask Queen to
+    // approve" would send a worker after a record that does not exist.
+    #[error(
+        "the commits recorded for this task touch code, which contradicts a claim that nothing was deployed. Record where it is running with a deployment, or ask the operator to write it off as unverifiable, or close it as abandoned if it was superseded"
+    )]
+    CommitsContradictNoDeployment,
     #[error("this Hive already has the maximum number of pending Queen handoffs")]
     TaskOutcomeQueueFull,
     #[error("Jira comment content is invalid")]
@@ -3426,6 +3442,9 @@ fn migrate_newest_schema_steps(
     if schema_version < TASK_COMMIT_REPORT_SCHEMA_VERSION {
         migrate_task_commit_reports(transaction)?;
     }
+    if schema_version < COORDINATOR_SETTLEMENT_SCHEMA_VERSION {
+        migrate_coordinator_approves_settlements(transaction)?;
+    }
     Ok(())
 }
 
@@ -3564,6 +3583,66 @@ fn migrate_task_commit_reports(transaction: &rusqlite::Transaction<'_>) -> rusql
          CREATE INDEX IF NOT EXISTS task_commits_by_task ON task_commits(task_id);",
     )?;
     transaction.pragma_update(None, "user_version", TASK_COMMIT_REPORT_SCHEMA_VERSION)
+}
+
+/// The coordinator may approve what it settled, and is named as itself.
+///
+/// A REBUILD, because the vocabulary was enforced in two places and only one of
+/// them is Rust. Relaxing the guard in `approve_completion_exemption` left this
+/// CHECK standing, and the database refused the write — correctly. Writing
+/// "queen" instead would have passed both and been a lie: the sweep would be
+/// claiming a person looked at it.
+///
+/// No table holds a foreign key into this one and it carries no index or
+/// trigger, so the rebuild is the plain twelve-step form.
+fn migrate_coordinator_approves_settlements(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let table_exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+         WHERE type = 'table' AND name = 'task_completion_exemptions')",
+        [],
+        |row| row.get(0),
+    )?;
+    let already: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+         WHERE type = 'table' AND name = 'task_completion_exemptions'
+           AND sql LIKE '%coordinator%')",
+        [],
+        |row| row.get(0),
+    )?;
+    let targets_exist: bool = transaction.query_row(
+        "SELECT (SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name IN ('tasks','worker_profiles')) = 2",
+        [],
+        |row| row.get(0),
+    )?;
+    if table_exists && targets_exist && !already {
+        transaction.execute_batch(
+            "PRAGMA legacy_alter_table = ON;
+             ALTER TABLE task_completion_exemptions RENAME TO task_completion_exemptions_v111;
+             CREATE TABLE task_completion_exemptions (
+                 task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+                 reason TEXT NOT NULL,
+                 claimed_by_worker_id TEXT REFERENCES worker_profiles(id) ON DELETE SET NULL,
+                 claimed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                 approved_at INTEGER,
+                 approved_by TEXT
+                     CHECK (approved_by IS NULL
+                            OR approved_by IN ('queen','operator','coordinator')),
+                 superseded_at INTEGER
+             );
+             INSERT INTO task_completion_exemptions
+                 (task_id, reason, claimed_by_worker_id, claimed_at,
+                  approved_at, approved_by, superseded_at)
+             SELECT task_id, reason, claimed_by_worker_id, claimed_at,
+                    approved_at, approved_by, superseded_at
+               FROM task_completion_exemptions_v111;
+             DROP TABLE task_completion_exemptions_v111;
+             PRAGMA legacy_alter_table = OFF;",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", COORDINATOR_SETTLEMENT_SCHEMA_VERSION)
 }
 
 /// The bee an operator chose for a worker.
@@ -7418,6 +7497,36 @@ mod tests {
                  DROP TABLE IF EXISTS task_commit_reports;",
             probe_sql: "SELECT (SELECT COUNT(*) FROM sqlite_master
                  WHERE type = 'table' AND name IN ('task_commit_reports','task_commits')) = 2",
+        },
+        // A CHECK again, so again its own undo: the artifact is a value the
+        // column accepts, which no generated ALTER or DROP can model.
+        SchemaStep {
+            table: "task_completion_exemptions",
+            artifact: "",
+            undo_sql: "PRAGMA legacy_alter_table = ON;
+                 ALTER TABLE task_completion_exemptions RENAME TO task_completion_exemptions_undo;
+                 CREATE TABLE task_completion_exemptions (
+                     task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+                     reason TEXT NOT NULL,
+                     claimed_by_worker_id TEXT REFERENCES worker_profiles(id) ON DELETE SET NULL,
+                     claimed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                     approved_at INTEGER,
+                     approved_by TEXT
+                         CHECK (approved_by IS NULL OR approved_by IN ('queen','operator')),
+                     superseded_at INTEGER
+                 );
+                 INSERT INTO task_completion_exemptions
+                     (task_id, reason, claimed_by_worker_id, claimed_at,
+                      approved_at, approved_by, superseded_at)
+                 SELECT task_id, reason, claimed_by_worker_id, claimed_at,
+                        approved_at, approved_by, superseded_at
+                   FROM task_completion_exemptions_undo
+                  WHERE approved_by IS NULL OR approved_by <> 'coordinator';
+                 DROP TABLE task_completion_exemptions_undo;
+                 PRAGMA legacy_alter_table = OFF;",
+            probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'task_completion_exemptions'
+                   AND sql LIKE '%coordinator%')",
         },
     ];
 

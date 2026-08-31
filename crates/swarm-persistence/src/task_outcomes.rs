@@ -2,8 +2,9 @@ use std::str::FromStr;
 
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
-    CommitRepositoryState, CommitVerdict, ControlRoomEventKind, TaskActivityActor, TaskCommit,
-    TaskCommitReport, TaskId, TaskState, WorkerId, WorkerSessionId,
+    CommitRepositoryState, CommitSettlement, CommitVerdict, ControlRoomEventKind,
+    TaskActivityActor, TaskCommit, TaskCommitReport, TaskId, TaskState, WorkerId, WorkerSessionId,
+    commit_settlement,
 };
 
 use super::{TaskStore, TaskStoreError, insert_control_room_event};
@@ -573,6 +574,24 @@ impl TaskStore {
         if reason.is_empty() {
             return Err(TaskStoreError::CompletionEvidenceRequired);
         }
+        // THE FACTS AND THE CLAIM MUST NOT DISAGREE. A worker saying its task
+        // had nothing to deploy, over commits that reached a ref and touched
+        // code, is the one case where a person genuinely adds something --
+        // refusing it here is what earns the automation everywhere else.
+        //
+        // ONLY ON `BuiltCode`. `Unknown` is not a contradiction: nobody
+        // reported, or something could not be checked, and refusing on a
+        // question never asked would block every worker in a workspace that is
+        // not a checkout. The refusal is narrow on purpose.
+        //
+        // The operator is not stranded by this. `approve_completion_exemption`
+        // and `record_task_unverifiable` are both still open to them, which is
+        // what makes this a route to a person rather than a dead end.
+        if commit_settlement(self.task_commit_report(task_id)?.as_ref())
+            == CommitSettlement::BuiltCode
+        {
+            return Err(TaskStoreError::CommitsContradictNoDeployment);
+        }
         let connection = self.connection()?;
         let approved: bool = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM task_completion_exemptions
@@ -635,7 +654,11 @@ impl TaskStore {
         approver: &str,
         now: i64,
     ) -> Result<CompletionEvidence, TaskStoreError> {
-        if !matches!(approver, "queen" | "operator") {
+        // "coordinator" IS NAMED RATHER THAN BORROWED. The deterministic pass
+        // approves what it settled on facts in tables, and the record says so
+        // -- writing "queen" would be the sweep claiming a person looked, which
+        // is the vocabulary this design is not allowed to weaken.
+        if !matches!(approver, "queen" | "operator" | "coordinator") {
             return Err(TaskStoreError::IntegrityFailure(format!(
                 "{approver} cannot approve a completion exemption"
             )));
@@ -1324,6 +1347,231 @@ pub(super) fn migrate_review_holds(
 }
 
 #[cfg(test)]
+mod settlement_tests {
+    use super::*;
+    use crate::TaskStore;
+
+    fn reviewed_task(store: &TaskStore, title: &str) -> TaskId {
+        let task = store.create_task(title, "/workspace/petal").unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        task.id
+    }
+
+    fn commit(paths: &[&str]) -> TaskCommit {
+        TaskCommit {
+            sha: format!("sha{}", paths.len()),
+            verdict: CommitVerdict::Present,
+            subject: "did a thing".to_owned(),
+            changed_paths: paths.iter().map(|p| (*p).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn work_that_built_nothing_closes_without_a_human() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = reviewed_task(&store, "Investigate a report");
+        store
+            .record_task_commits(
+                task,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                1_000,
+            )
+            .unwrap();
+
+        let settled = store
+            .settle_reviewed_work_without_deployment(2_000)
+            .unwrap();
+
+        assert_eq!(settled, vec![task]);
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Completed);
+        // AND IT RECORDS WHY IT WAS ENTITLED TO. Without this the task closes
+        // carrying nothing, which is the shape the board asks somebody to
+        // chase -- the clicking would come back one layer up.
+        assert_eq!(
+            store.completion_evidence(task).unwrap(),
+            CompletionEvidence::ExemptionApproved
+        );
+    }
+
+    #[test]
+    fn documentation_only_work_closes_without_a_human() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = reviewed_task(&store, "Write the design up");
+        store
+            .record_task_commits(
+                task,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[commit(&["docs/41-verification.md"])],
+                1_000,
+            )
+            .unwrap();
+
+        assert_eq!(
+            store
+                .settle_reviewed_work_without_deployment(2_000)
+                .unwrap(),
+            vec![task]
+        );
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Completed);
+    }
+
+    /// The dangerous default, asserted directly.
+    ///
+    /// A task nobody reported must NOT settle. If it did, work whose worker
+    /// simply forgot to report would close itself as an investigation that
+    /// produced nothing -- on a question never asked.
+    #[test]
+    fn work_nobody_reported_is_left_alone() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = reviewed_task(&store, "Nobody said anything about this");
+
+        assert!(
+            store
+                .settle_reviewed_work_without_deployment(2_000)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Review);
+        assert!(
+            store
+                .reviewed_work_awaiting_judgment()
+                .unwrap()
+                .contains(&task),
+            "it must still reach a person"
+        );
+    }
+
+    #[test]
+    fn work_that_built_code_is_left_for_a_person() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = reviewed_task(&store, "Shipped a fix");
+        store
+            .record_task_commits(
+                task,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[commit(&["crates/swarm-api/src/lib.rs"])],
+                1_000,
+            )
+            .unwrap();
+
+        assert!(
+            store
+                .settle_reviewed_work_without_deployment(2_000)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Review);
+    }
+
+    /// THE REFUSAL. A worker saying "nothing to deploy" over commits that
+    /// touched code is the one case a person genuinely improves.
+    #[test]
+    fn a_claim_the_commits_contradict_is_refused() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = reviewed_task(&store, "Claimed nothing shipped");
+        store
+            .record_task_commits(
+                task,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[commit(&["crates/swarm-api/src/lib.rs"])],
+                1_000,
+            )
+            .unwrap();
+
+        assert!(matches!(
+            store.claim_completion_exemption(task, "Nothing to deploy", None, 2_000),
+            Err(TaskStoreError::CommitsContradictNoDeployment)
+        ));
+        assert_eq!(
+            store.completion_evidence(task).unwrap(),
+            CompletionEvidence::None,
+            "a refused claim must leave no record behind"
+        );
+    }
+
+    /// The refusal is NARROW, and this is the case that makes it so.
+    ///
+    /// `Unknown` is not a contradiction: nobody reported, or the workspace was
+    /// not a checkout. Refusing on it would block every worker whose workspace
+    /// is not under version control from ever recording an outcome.
+    #[test]
+    fn a_claim_is_not_refused_when_nothing_was_established() {
+        let store = TaskStore::in_memory().unwrap();
+        let unreported = reviewed_task(&store, "Nobody reported commits");
+        store
+            .claim_completion_exemption(unreported, "Investigation only", None, 2_000)
+            .expect("an unreported task may still claim");
+
+        let unreadable = reviewed_task(&store, "Not a git checkout");
+        store
+            .record_task_commits(
+                unreadable,
+                "/workspace/plain",
+                CommitRepositoryState::NotARepository,
+                &[TaskCommit {
+                    sha: "aaa1111".to_owned(),
+                    verdict: CommitVerdict::Unchecked,
+                    subject: String::new(),
+                    changed_paths: Vec::new(),
+                }],
+                1_000,
+            )
+            .unwrap();
+        store
+            .claim_completion_exemption(unreadable, "Nothing to deploy", None, 2_000)
+            .expect("a workspace with no repository must not be refused");
+    }
+
+    /// A STATE THE PRODUCT DELIBERATELY REPORTS, kept reachable.
+    ///
+    /// Email work owing a reply is SKIPPED by this sweep, exactly as the
+    /// deployment sweep skips it. The previous attempt at a rule in this area
+    /// was backed out within the hour for making such a state unreachable.
+    #[test]
+    fn work_owing_a_reply_is_skipped_rather_than_settled() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = reviewed_task(&store, "Answer the question that came in");
+        store
+            .record_task_commits(
+                task,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                1_000,
+            )
+            .unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "INSERT INTO email_message_links
+                     (id, task_id, integration_id, message_id, conversation_id,
+                      sender_name, sender_address, received_at, web_url)
+                 VALUES ('link-1', ?1, 'integration-1', 'message-1', 'conversation-1',
+                         'Someone', 'someone@example.test', 1000, 'https://example.test/1')",
+                [task.to_string()],
+            )
+            .unwrap();
+
+        assert!(
+            store
+                .settle_reviewed_work_without_deployment(2_000)
+                .unwrap()
+                .is_empty(),
+            "work owing a reply must stay in review"
+        );
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Review);
+    }
+}
+
+#[cfg(test)]
 mod commit_report_tests {
     use super::*;
     use crate::TaskStore;
@@ -1504,6 +1752,100 @@ mod commit_report_tests {
             CommitRepositoryState::NotARepository
         );
         assert_eq!(report.commits[0].verdict, CommitVerdict::Unchecked);
+    }
+}
+
+impl TaskStore {
+    /// Closes reviewed work that never needed deployment evidence.
+    ///
+    /// The companion to `complete_reviewed_work_with_deployment`, for the other
+    /// well-formed case: work whose commits show there was nothing to deploy.
+    /// Both exist for the same reason — the operator's complaint was EFFORT,
+    /// and a case a rule can settle on facts already in tables should not cost
+    /// a person a decision.
+    ///
+    /// IT RECORDS WHY IT WAS ENTITLED TO CLOSE. Closing silently would leave
+    /// these tasks carrying no evidence at all, which is precisely the shape
+    /// the board asks somebody to chase — the clicking would come back one
+    /// layer up, with the coordinator generating it. So the exemption is
+    /// claimed and approved as `coordinator`, naming the derived facts, and
+    /// anyone can later ask who approved this and get a true answer.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn settle_reviewed_work_without_deployment(
+        &self,
+        now: i64,
+    ) -> Result<Vec<TaskId>, TaskStoreError> {
+        let candidates = {
+            let connection = self.connection()?;
+            let mut statement = connection.prepare(
+                "SELECT task.id FROM tasks task
+                 WHERE task.state = ?1
+                   AND task.removed_at IS NULL
+                   -- Work carrying a deployment is the OTHER sweep's business.
+                   AND NOT EXISTS (
+                       SELECT 1 FROM task_deployments d WHERE d.task_id = task.id
+                   )
+                   -- Already settled one way or another; nothing to decide.
+                   AND NOT EXISTS (
+                       SELECT 1 FROM task_completion_exemptions e
+                       WHERE e.task_id = task.id AND e.approved_at IS NOT NULL
+                   )
+                   -- SKIPPED, NOT REFUSED, exactly as the deployment sweep
+                   -- treats it: work owing somebody a reply is not well-formed,
+                   -- and stalling every other completion behind one unanswered
+                   -- thread would be worse than leaving this one in review.
+                   AND NOT EXISTS (
+                       SELECT 1 FROM email_message_links link
+                       WHERE link.task_id = task.id
+                         AND NOT EXISTS (
+                             SELECT 1 FROM email_reply_deliveries reply
+                             WHERE reply.task_id = task.id
+                         )
+                   )
+                 ORDER BY task.updated_at",
+            )?;
+            let rows = statement.query_map([TaskState::Review.to_string()], |row| {
+                row.get::<_, String>(0)
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+
+        let mut closed = Vec::new();
+        for id in candidates {
+            let Ok(task_id) = TaskId::from_str(&id) else {
+                continue;
+            };
+            let settlement = commit_settlement(self.task_commit_report(task_id)?.as_ref());
+            // ONLY THESE TWO. `Unknown` is left alone -- it is the state of a
+            // task nobody reported, and closing on it would be closing on a
+            // question never asked. `BuiltCode` is left alone too: work that
+            // built something and recorded no deployment is exactly what a
+            // person should look at.
+            let reason = match settlement {
+                CommitSettlement::NothingBuilt => {
+                    "Settled automatically: the worker reported that this task produced no commits, so there is nothing to deploy."
+                }
+                CommitSettlement::DocumentationOnly => {
+                    "Settled automatically: every commit recorded for this task touches documentation only, so there is nothing to deploy."
+                }
+                CommitSettlement::BuiltCode | CommitSettlement::Unknown => continue,
+            };
+            self.claim_completion_exemption(task_id, reason, None, now)?;
+            self.approve_completion_exemption(task_id, "coordinator", now)?;
+            match self.transition_task_with_note_as(
+                task_id,
+                TaskState::Completed,
+                reason,
+                &TaskActivityActor::system(),
+            ) {
+                Ok(_) => closed.push(task_id),
+                Err(TaskStoreError::NotFound | TaskStoreError::InvalidTransition { .. }) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(closed)
     }
 }
 

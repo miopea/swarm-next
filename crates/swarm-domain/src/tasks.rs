@@ -666,3 +666,103 @@ pub struct TaskCommitReport {
     pub reported_at: i64,
     pub commits: Vec<TaskCommit>,
 }
+
+/// What a task's commit report entitles a deterministic pass to conclude.
+///
+/// A POLICY, kept pure and in one place so it can be read and argued with.
+/// Everything that acts on it — the coordinator that closes work, the refusal
+/// that catches a contradicted claim — reads the same function, so the two can
+/// never disagree about the same task.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommitSettlement {
+    /// The worker reported, and reported nothing. There is nothing to deploy.
+    NothingBuilt,
+    /// Everything reported is documentation, checked and reachable.
+    DocumentationOnly,
+    /// At least one reachable commit touches something that is not
+    /// documentation. A claim of "nothing to deploy" contradicts this.
+    BuiltCode,
+    /// Not established. Nobody reported, or something reported could not be
+    /// checked. NOT a synonym for `NothingBuilt`: no automatic close may rest
+    /// on it, and no refusal may either.
+    Unknown,
+}
+
+/// Whether one path is documentation.
+///
+/// Deliberately narrow, and it fails toward asking a person. A path this does
+/// not recognise is treated as code, which costs one human decision; the
+/// opposite error closes real shipped work without anyone seeing it.
+#[must_use]
+pub fn documentation_path(path: &str) -> bool {
+    let path = path.trim();
+    if path.is_empty() {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase();
+    if lower.starts_with("docs/") || lower.contains("/docs/") {
+        return true;
+    }
+    // Through `Path` rather than a suffix match: the string form is
+    // case-sensitive and a path is not a string, which is the distinction
+    // clippy's lint is about. `lower` is already folded, so this only has to be
+    // right about where the extension ends.
+    let extension = std::path::Path::new(&lower)
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or_default();
+    if matches!(extension, "md" | "txt") {
+        return true;
+    }
+    let basename = lower.rsplit('/').next().unwrap_or(&lower);
+    let stem = basename.split('.').next().unwrap_or(basename);
+    matches!(
+        stem,
+        "readme" | "license" | "licence" | "changelog" | "notice"
+    )
+}
+
+/// Reads a report as a settlement, or `Unknown` when it does not establish one.
+///
+/// THE EMPTY-PATH CASE IS `Unknown`, NOT DOCUMENTATION. A commit that reports no
+/// paths at all is most often a MERGE, which `--name-only` summarises as
+/// nothing — so "every path is documentation" is vacuously true of a commit
+/// that may carry the entire release. Vacuous truth is exactly how a check ends
+/// up confidently answering a question it never asked.
+#[must_use]
+pub fn commit_settlement(report: Option<&TaskCommitReport>) -> CommitSettlement {
+    let Some(report) = report else {
+        return CommitSettlement::Unknown;
+    };
+    if report.commits.is_empty() {
+        return CommitSettlement::NothingBuilt;
+    }
+    // Anything not checked leaves the whole report unsettled: a report is read
+    // as a set, and one commit nobody could look at is enough to mean the set
+    // has not been established.
+    if report
+        .commits
+        .iter()
+        .any(|commit| commit.verdict != CommitVerdict::Present)
+    {
+        return CommitSettlement::Unknown;
+    }
+    if report
+        .commits
+        .iter()
+        .any(|commit| commit.changed_paths.is_empty())
+    {
+        return CommitSettlement::Unknown;
+    }
+    if report
+        .commits
+        .iter()
+        .flat_map(|commit| commit.changed_paths.iter())
+        .all(|path| documentation_path(path))
+    {
+        CommitSettlement::DocumentationOnly
+    } else {
+        CommitSettlement::BuiltCode
+    }
+}

@@ -1351,6 +1351,32 @@ impl AppState {
                 "deterministic coordinator could not close reviewed work"
             ),
         }
+        // THE OTHER WELL-FORMED CASE, and it runs in the same pass for the same
+        // reason: a decision a rule can settle on facts already in tables
+        // should not cost the operator a click. This one closes work whose
+        // recorded commits show there was nothing to deploy.
+        //
+        // Separately from the sweep above rather than folded into it: the two
+        // select disjoint sets -- that one requires a deployment, this one
+        // requires the absence of one -- and a single query answering both
+        // would be a query about neither.
+        match store.settle_reviewed_work_without_deployment(unix_timestamp()) {
+            Ok(settled) => {
+                for task_id in &settled {
+                    tracing::info!(
+                        task = %task_id,
+                        "deterministic coordinator settled reviewed work that had nothing to deploy"
+                    );
+                }
+                if !settled.is_empty() {
+                    self.control_room_notify.notify_waiters();
+                }
+            }
+            Err(error) => tracing::warn!(
+                message = %error,
+                "deterministic coordinator could not settle work without a deployment"
+            ),
+        }
     }
 
     /// Tells Queen when a decision has gone unanswered past its deadline.
@@ -8267,6 +8293,15 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         | TaskStoreError::CompletionEvidenceRequired => {
             ApiError::new(StatusCode::BAD_REQUEST, "invalid_task", error.to_string())
         }
+        // ITS OWN CODE, because it is not a malformed request and the caller is
+        // not at fault for asking. The claim was refused because the recorded
+        // commits disagree with it, and a client that can tell this apart can
+        // say so rather than reporting the task as invalid.
+        TaskStoreError::CommitsContradictNoDeployment => ApiError::new(
+            StatusCode::CONFLICT,
+            "commits_contradict_no_deployment",
+            error.to_string(),
+        ),
         // Its own code, not lumped in with the transition rejections below.
         // The whole point of this variant is that it is NOT a rule violation to
         // go and investigate — the work is closed and nothing is wrong — so a
