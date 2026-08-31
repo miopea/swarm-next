@@ -54,7 +54,50 @@ bundle="$output/swarm-$version-linux-x86_64"
 rm -rf -- "$bundle"
 mkdir -p "$bundle/bin" "$bundle/web" "$bundle/systemd-user"
 
-(cd "$repo_root" && SWARM_BUILD_VERSION="$version" SWARM_BUILD_SOURCE_REVISION="$source_revision" SWARM_WORKER_ENGINE_BUILD_ID="$worker_engine_build_id" SWARM_RELEASE_VERIFYING_KEY="$release_verifying_key" cargo build --release --locked --workspace)
+# THE FEEDBACK CREDENTIAL THIS ARTEFACT WILL CARRY.
+#
+# Held in a shell variable and handed to cargo, never written to a file and
+# never echoed. This script must not be run under `set -x`, which would print
+# every expansion including this one.
+#
+# ABSENT IS A LEGITIMATE BUILD, not an error: a local package built for testing
+# has no business carrying the project's credential. It is announced loudly on
+# stderr, because an artefact that silently cannot file is precisely the failure
+# this change exists to end.
+#
+# Rotation: revoke at GitHub, put the new value in the same 1Password item,
+# build again. Nothing else in this tree holds a copy. Cargo re-runs the compile
+# when the variable's value changes — measured, not assumed: same value 0
+# recompiles, changed value 1.
+#
+# The REFERENCE is not a secret — it is an item name — so it lives in the tree
+# where a reader can see which item a release draws from, and is overridable for
+# anyone packaging from a different vault.
+: "${SWARM_FEEDBACK_TOKEN_REFERENCE:=op://BFG/Swarm feedback token/credential}"
+bundled_feedback_token=""
+if [ "${SWARM_SKIP_BUNDLED_FEEDBACK_TOKEN:-0}" = "1" ]; then
+  echo "swarm-package: building WITHOUT a bundled feedback token (asked to skip)" >&2
+elif command -v op >/dev/null 2>&1; then
+  # The exit status is checked and the value asserted non-empty before it is
+  # believed. Discarding either is how an empty credential becomes a downstream
+  # mystery: it fails later as a permission or network problem, and the
+  # investigation goes to the wrong system.
+  if bundled_feedback_token=$(op read "$SWARM_FEEDBACK_TOKEN_REFERENCE"); then
+    if [ -z "$bundled_feedback_token" ]; then
+      echo "swarm-package: the feedback token reference resolved EMPTY; building without it" >&2
+    else
+      # Its LENGTH, never any part of its value.
+      echo "swarm-package: bundling a feedback token (${#bundled_feedback_token} characters)" >&2
+    fi
+  else
+    echo "swarm-package: could not read the feedback token; building without it" >&2
+    bundled_feedback_token=""
+  fi
+else
+  echo "swarm-package: 'op' is not on PATH; building without a bundled feedback token" >&2
+fi
+
+(cd "$repo_root" && SWARM_BUILD_VERSION="$version" SWARM_BUILD_SOURCE_REVISION="$source_revision" SWARM_WORKER_ENGINE_BUILD_ID="$worker_engine_build_id" SWARM_RELEASE_VERIFYING_KEY="$release_verifying_key" SWARM_BUNDLED_FEEDBACK_TOKEN="$bundled_feedback_token" cargo build --release --locked --workspace)
 if [ "${SWARM_SKIP_WEB_BUILD:-0}" != "1" ]; then
   (cd "$repo_root" && VITE_SWARM_BUILD_VERSION="$version" "${SWARM_PNPM_BIN:-pnpm}" --dir web build)
 fi

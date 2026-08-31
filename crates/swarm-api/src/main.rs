@@ -3,36 +3,71 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
 };
+use swarm_api::bundled_feedback::{FeedbackDestination, feedback_destination};
 use swarm_api::{AppState, router, router_with_asset_root, router_with_web_root};
 use swarm_persistence::TaskStore;
 use swarm_terminal::{HostClient, default_terminal_socket_path};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-/// GitHub feedback is OPTIONAL and its absence is the ordinary case.
+/// Where this Hive files feedback, in order of precedence.
 ///
-/// Without a credential the product says reports stay on this Hive, which is
-/// the truth and always was the behaviour; the defect was a UI that implied
-/// otherwise. A bad value DEGRADES rather than refusing to boot, for the reason
-/// the public base URL records: nothing here is needed to serve a request, and
-/// a Hive that will not start helps nobody.
+/// A bad value DEGRADES rather than refusing to boot, for the reason the public
+/// base URL records: nothing here is needed to serve a request, and a Hive that
+/// will not start helps nobody.
+///
+/// THREE CASES, AND THE THIRD IS NEW. An operator who names their own
+/// repository and token files there — a Hive whose owner triages their own
+/// issues, which is what the environment variables were built for. Half a
+/// credential stays a named mistake. What changed is the ordinary case: a fresh
+/// install with neither variable set now files into the Swarm repository on the
+/// credential this build ships, so reporting a bug about Swarm needs no
+/// install-time setup at all and no stranger's report goes out under the
+/// operator's own account.
+///
+/// The shipped credential is NEVER paired with an operator's repository. It is
+/// scoped to `issues: write` on one repository, so it is only ever used with
+/// the one it names — see `bundled_feedback`. An operator who wants a different
+/// destination supplies their own token with it.
+///
+/// The precedence itself lives in `bundled_feedback::feedback_destination`, a
+/// pure function with tests. This reads the environment and applies the result;
+/// it does not decide, so the rule and its assertions cannot drift apart.
 fn configure_github_feedback(state: AppState) -> AppState {
-    match (
+    match feedback_destination(
         env::var("SWARM_GITHUB_REPOSITORY").ok(),
         env::var("SWARM_GITHUB_TOKEN").ok(),
     ) {
-        (Some(repository), Some(token)) => {
+        FeedbackDestination::Operator { repository, token } => {
             match state.clone().with_github_feedback(&repository, &token) {
                 Ok(configured) => configured,
                 Err(error) => state.with_degraded_subsystem("GitHub feedback", error),
             }
         }
+        FeedbackDestination::Bundled { repository, token } => {
+            match state.clone().with_github_feedback(repository, token) {
+                Ok(configured) => configured,
+                // The shipped credential being unusable is a fault in the BUILD,
+                // not in anything the operator did, so it is named rather than
+                // swallowed — otherwise a release packaged without a working
+                // token is indistinguishable from one that simply files locally.
+                Err(error) => state.with_degraded_subsystem(
+                    "GitHub feedback",
+                    format!("the credential this build ships was refused: {error}"),
+                ),
+            }
+        }
         // Half a credential is a mistake worth naming rather than ignoring.
-        (Some(_), None) | (None, Some(_)) => state.with_degraded_subsystem(
+        FeedbackDestination::HalfCredential => state.with_degraded_subsystem(
             "GitHub feedback",
             "set both SWARM_GITHUB_REPOSITORY and SWARM_GITHUB_TOKEN, or neither".to_owned(),
         ),
-        (None, None) => state,
+        // NO CREDENTIAL IS STILL A LEGITIMATE CONFIGURATION, and stays silent
+        // here: a build carrying no bundled token — every `cargo build` — keeps
+        // reports local. That is now rare rather than ordinary, and the dialog
+        // says so at the point of use instead of quietly offering only "Save to
+        // this Hive".
+        FeedbackDestination::Nowhere => state,
     }
 }
 

@@ -3,6 +3,7 @@ mod attach;
 mod attachments;
 mod auth;
 mod backups;
+pub mod bundled_feedback;
 mod control_room;
 mod coordination_delivery;
 use coordination_delivery::{
