@@ -1409,6 +1409,12 @@ export function App() {
   const activeSession = sessions.find((session) => session.session_id === activeSessionId);
   const activeWorker = workers.find((worker) => worker.active_session_id === activeSessionId);
   const openTaskCount = tasks.filter((task) => isOpenTaskState(task.state)).length;
+  // Open work somebody or something owes a move on. Deliberately excludes a
+  // task whose owner the server did not state: an older API must not be able
+  // to manufacture a queue, and the tab must agree with what the view shows.
+  const queuedTaskCount = tasks.filter(
+    (task) => isOpenTaskState(task.state) && task.next_move_owner !== undefined && task.next_move_owner !== "nobody",
+  ).length;
   const pendingDecisionCount = decisions.filter((decision) => decision.state === "pending").length;
   const pendingAssistCount = stewardAssists?.incoming?.filter((request) => request.state === "pending").length ?? 0;
   const queenWorkerId = workers.find((worker) => worker.role === "queen")?.id;
@@ -1706,7 +1712,7 @@ export function App() {
                 </small>
               </button>{operatorToken && !detached ? <button type="button" className="surface-nav-popout" aria-label={`Open ${surfaceLabel("decisions")} in a new window`} title={`Open ${surfaceLabel("decisions")} in a new window. Workers keep running; a window only views them.`} onClick={() => setPopoutBlocked(!openSurfaceWindow("decisions", (url, name, features) => window.open(url, name, features)))}><PopoutIcon /></button> : null}</span>
               <span className="surface-nav-item"><button className={surface === "queues" ? "selected" : ""} aria-current={surface === "queues" ? "page" : undefined} data-detached={surfaceIsDetached("queues") || undefined} onClick={() => showSurface("queues")}>
-                <QueuesIcon /> Queues
+                <span><QueuesIcon /> Queues</span><small>{queuedTaskCount}</small>
               </button>{operatorToken && !detached ? <button type="button" className="surface-nav-popout" aria-label={`Open ${surfaceLabel("queues")} in a new window`} title={`Open ${surfaceLabel("queues")} in a new window. Workers keep running; a window only views them.`} onClick={() => setPopoutBlocked(!openSurfaceWindow("queues", (url, name, features) => window.open(url, name, features)))}><PopoutIcon /></button> : null}</span>
               <span className="surface-nav-item"><button className={surface === "tasks" ? "selected" : ""} aria-current={surface === "tasks" ? "page" : undefined} data-detached={surfaceIsDetached("tasks") || undefined} onClick={() => showSurface("tasks")}>
                 <span><TaskIcon /> Tasks</span><small>{openTaskCount}</small>

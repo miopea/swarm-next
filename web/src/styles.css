@@ -2744,21 +2744,36 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 /* QUEUES — one screen per owner of the next move.
    Ordered by who is holding work up rather than by which mechanism queued it,
    so a growing pile is attributable at a glance. */
-.queues { display: grid; gap: 1.25rem; padding: 1rem; }
+.queues { display: grid; gap: 1.25rem; padding: 1rem; min-width: 0; }
 .queues-empty { color: var(--muted); }
-.queue-group { border: 1px solid var(--line); border-radius: 10px; padding: 0.85rem 1rem; background: var(--panel); }
+.queue-group { border: 1px solid var(--line); border-radius: 10px; padding: 0.85rem 1rem; background: var(--panel); min-width: 0; }
 .queue-group > header { display: grid; gap: 0.15rem; margin-bottom: 0.6rem; }
 .queue-group h2 { font-size: 0.95rem; margin: 0; display: flex; align-items: baseline; gap: 0.5rem; }
 .queue-count { font-variant-numeric: tabular-nums; font-size: 1.35rem; font-weight: 600; }
 .queue-meaning, .queue-oldest { margin: 0; font-size: 0.8rem; color: var(--muted); }
-.queue-group ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.25rem; }
+.queue-group ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.25rem; min-width: 0; }
+.queue-group li { min-width: 0; }
 .queue-group li button {
   width: 100%; text-align: left; display: flex; justify-content: space-between; gap: 1rem;
   background: none; border: 1px solid transparent; border-radius: 6px; padding: 0.35rem 0.5rem; cursor: pointer;
 }
 .queue-group li button:hover, .queue-group li button:focus-visible { border-color: var(--line); }
-.queue-task-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.queue-task-meta { color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
+/* min-width:0 ON EVERY ITEM IN THE CHAIN, not just the leaf.
+
+   A flex OR grid item defaults to min-width:auto, so it refuses to shrink below
+   its content. One un-shrinkable ancestor is enough to defeat the ellipsis at
+   the bottom, and the page then scrolls sideways instead. Measured in a browser
+   against the built stylesheet: with it only on .queues and the title, the
+   title still laid out at 1095px inside a 640px body. A flex item will not shrink below its content
+   width without it, so the ellipsis never engages and a long title clips at the
+   panel edge instead — which is what shipped first.
+
+   NOT -webkit-line-clamp over two lines, tempting as it is for titles this
+   descriptive: Chromium blockifies a button and its descendants to flow-root,
+   so the clamp silently does nothing inside one. That has already cost this
+   repo a card rebuild. */
+.queue-task-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queue-task-meta { flex: 0 0 auto; color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
 /* Blocked is not a slow queue, it is a different kind of thing: nothing here
    can move it. Marked so it does not read as somebody failing to act. */
 .queue-group[data-owner="blocked"] { border-style: dashed; }
