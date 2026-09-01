@@ -171,7 +171,7 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
              JOIN tasks task ON task.id = action.task_id
              JOIN worker_profiles worker ON worker.id = action.worker_id
              JOIN worker_sessions session ON session.session_id = action.session_id
-             WHERE action.kind IN ('stale_owned_work_attention','owned_work_never_briefed_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention','reviewed_work_without_evidence_attention','blocked_work_unattended_attention')
+             WHERE action.kind IN ('stale_owned_work_attention','owned_work_never_briefed_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention','reviewed_work_without_evidence_attention','blocked_work_unattended_attention','evidenced_work_not_closed_attention')
                AND action.state = 'completed'
                AND task.updated_at = action.evidence_revision
                AND session.worker_id = action.worker_id
@@ -223,6 +223,21 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
                            WHERE exemption.task_id = task.id
                              AND exemption.approved_at IS NOT NULL
                        ))
+                   -- Clears itself by the task being CLOSED, which is the
+                   -- only act that answers it. Approving the evidence is what
+                   -- created this record, so re-checking the evidence here
+                   -- would make it permanently true and permanently unactioned.
+                   OR (action.kind = 'evidenced_work_not_closed_attention'
+                       AND task.state = 'review'
+                       AND (EXISTS (
+                               SELECT 1 FROM task_deployments deployment
+                               WHERE deployment.task_id = task.id
+                           )
+                           OR EXISTS (
+                               SELECT 1 FROM task_completion_exemptions exemption
+                               WHERE exemption.task_id = task.id
+                                 AND exemption.approved_at IS NOT NULL
+                           )))
                    OR (action.kind = 'stale_owned_work_attention'
                        AND task.assigned_worker_id = action.worker_id
                        AND task.state = 'active' AND session.ended_at IS NULL)
@@ -331,6 +346,28 @@ pub struct ExitedWorkerOwnedWorkCandidate {
     pub task_id: TaskId,
     pub task_revision: i64,
     pub age_seconds: i64,
+}
+
+/// Work whose evidence is settled and which nobody then closed.
+///
+/// The gap this fills is narrow and was invisible for nine hours on a real
+/// board. `reviewed_work_without_evidence_attention` chases work in review
+/// with no APPROVED evidence, and it deliberately stops the moment an
+/// exemption is approved — approving is the answer to that question. But
+/// approval only records evidence; it does not close the task, by design,
+/// because Queen still has to judge the work and not merely its paperwork.
+///
+/// So between "approved" and "closed" there was no watcher at all, and a task
+/// sitting there reads as settled from every angle: it has evidence, so the
+/// evidence detector skips it, and it is not completed, so nothing counts it
+/// as done.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EvidencedWorkNotClosedCandidate {
+    pub worker_id: WorkerId,
+    pub task_id: TaskId,
+    pub task_revision: i64,
+    pub age_seconds: i64,
+    pub session_id: WorkerSessionId,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -745,6 +782,109 @@ impl TaskStore {
             )?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(candidates)
+    }
+
+    /// Work in review whose evidence is settled and which was never closed.
+    ///
+    /// Keyed on the same disjunction `closed_on_evidence` is derived from, so
+    /// this asks exactly the question the board's own flag answers — with the
+    /// state it does NOT check bolted on: still in review.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn evidenced_work_not_closed_candidates(
+        &self,
+        now: i64,
+        minimum_age_seconds: i64,
+    ) -> Result<Vec<EvidencedWorkNotClosedCandidate>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT task.assigned_worker_id, task.id, task.updated_at,
+                    MAX(0, ?1 - task.updated_at), session.session_id
+             FROM tasks task
+             JOIN worker_profiles worker
+               ON worker.id = task.assigned_worker_id AND worker.archived_at IS NULL
+             JOIN (SELECT worker_id, session_id,
+                          ROW_NUMBER() OVER (PARTITION BY worker_id
+                                             ORDER BY started_at DESC) AS recency
+                   FROM worker_sessions) session
+               ON session.worker_id = worker.id AND session.recency = 1
+             WHERE task.state = 'review' AND task.removed_at IS NULL
+               AND task.updated_at + ?2 <= ?1
+               AND (EXISTS (
+                       SELECT 1 FROM task_deployments deployment
+                       WHERE deployment.task_id = task.id
+                   )
+                   OR EXISTS (
+                       SELECT 1 FROM task_completion_exemptions exemption
+                       WHERE exemption.task_id = task.id
+                         AND exemption.approved_at IS NOT NULL
+                   ))
+               AND NOT EXISTS (
+                   SELECT 1 FROM coordinator_actions action
+                   WHERE action.kind = 'evidenced_work_not_closed_attention'
+                     AND action.task_id = task.id AND action.worker_id = worker.id
+                     AND action.evidence_revision = task.updated_at
+               )
+             ORDER BY task.updated_at, task.id LIMIT ?3",
+        )?;
+        let candidates = statement
+            .query_map(
+                params![now, minimum_age_seconds, MAX_UNSTARTED_WORK_CANDIDATES],
+                |row| {
+                    Ok(EvidencedWorkNotClosedCandidate {
+                        worker_id: WorkerId::from_str(&row.get::<_, String>(0)?)
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                        task_id: TaskId::from_str(&row.get::<_, String>(1)?)
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                        task_revision: row.get(2)?,
+                        age_seconds: row.get(3)?,
+                        session_id: WorkerSessionId::from_str(&row.get::<_, String>(4)?)
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    })
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(candidates)
+    }
+
+    /// Records one settled-but-unclosed observation.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn record_evidenced_work_not_closed_attention(
+        &self,
+        candidate: &EvidencedWorkNotClosedCandidate,
+        now: i64,
+    ) -> Result<bool, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let idempotency_key = format!(
+            "evidenced-work-not-closed:{}:{}:{}",
+            candidate.task_id, candidate.worker_id, candidate.task_revision
+        );
+        let changed = transaction.execute(
+            "INSERT OR IGNORE INTO coordinator_actions
+                 (id, idempotency_key, kind, worker_id, task_id, session_id,
+                  evidence_revision, observed_age_seconds, state, reason,
+                  finished_at, updated_at)
+             VALUES (?1, ?2, 'evidenced_work_not_closed_attention', ?3, ?4, ?5, ?6, ?7,
+                     'completed',
+                     'Finished work has approved evidence and was never closed',
+                     ?8, ?8)",
+            params![
+                Uuid::now_v7().to_string(),
+                idempotency_key,
+                candidate.worker_id.to_string(),
+                candidate.task_id.to_string(),
+                candidate.session_id.to_string(),
+                candidate.task_revision,
+                candidate.age_seconds,
+                now,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(changed == 1)
     }
 
     /// A blocked task nobody has come back to, and how long it has waited.
@@ -2104,6 +2244,71 @@ pub(super) fn migrate_undelivered_brief_attention(
 /// It does not let anyone unblock anything. Queen remains the only actor that
 /// moves a task out of Blocked, which is the line the operator drew: "we don't
 /// want to lose our design of the queen being an arbitrator."
+/// Adds the settled-but-unclosed attention kind.
+///
+/// Same rebuild the previous kinds used, because `SQLite` cannot widen a CHECK
+/// in place. `coordinator_actions` is safe to rebuild: its foreign keys point
+/// outward at tasks and workers and nothing holds a key into it.
+pub(super) fn migrate_evidenced_work_not_closed_attention(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+         WHERE type = 'table' AND name = 'coordinator_actions'
+           AND sql LIKE '%evidenced_work_not_closed_attention%')",
+        [],
+        |row| row.get(0),
+    )?;
+    let ready: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+         WHERE type = 'table' AND name = 'coordinator_actions'
+           AND sql LIKE '%blocked_work_unattended_attention%')",
+        [],
+        |row| row.get(0),
+    )?;
+    if ready && !present {
+        transaction.execute_batch(
+            "DROP INDEX IF EXISTS coordinator_actions_queue;
+             PRAGMA legacy_alter_table = ON;
+             ALTER TABLE coordinator_actions RENAME TO coordinator_actions_v112;
+             CREATE TABLE coordinator_actions (
+                 id TEXT PRIMARY KEY,
+                 idempotency_key TEXT NOT NULL UNIQUE,
+                 kind TEXT NOT NULL CHECK (kind IN ('wake_assigned_worker','stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention','owned_work_never_briefed_attention','reviewed_work_without_evidence_attention','blocked_work_unattended_attention','evidenced_work_not_closed_attention')),
+                 worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+                 task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                 session_id TEXT,
+                 evidence_revision INTEGER,
+                 observed_age_seconds INTEGER,
+                 state TEXT NOT NULL CHECK (state IN ('queued','running','completed','uncertain','cancelled')),
+                 reason TEXT NOT NULL,
+                 attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 1),
+                 attempted_at INTEGER,
+                 finished_at INTEGER,
+                 created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                 updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+             );
+             INSERT INTO coordinator_actions (
+                 id, idempotency_key, kind, worker_id, task_id, session_id,
+                 evidence_revision, observed_age_seconds, state, reason, attempts,
+                 attempted_at, finished_at, created_at, updated_at
+             ) SELECT id, idempotency_key, kind, worker_id, task_id, session_id,
+                      evidence_revision, observed_age_seconds, state, reason, attempts,
+                      attempted_at, finished_at, created_at, updated_at
+               FROM coordinator_actions_v112;
+             DROP TABLE coordinator_actions_v112;
+             CREATE INDEX coordinator_actions_queue
+                 ON coordinator_actions(state, created_at, id);
+             PRAGMA legacy_alter_table = OFF;",
+        )?;
+    }
+    transaction.pragma_update(
+        None,
+        "user_version",
+        crate::EVIDENCED_WORK_NOT_CLOSED_SCHEMA_VERSION,
+    )
+}
+
 pub(super) fn migrate_unattended_block_attention(
     transaction: &rusqlite::Transaction<'_>,
 ) -> rusqlite::Result<()> {
@@ -2242,6 +2447,176 @@ mod unattended_block_tests {
     /// Queen moving the task is what clears this, which is the design the
     /// operator asked to keep: she remains the only actor that takes work out of
     /// Blocked, and nothing here changes that.
+    /// Approved evidence with no closure, which nothing watched for nine hours.
+    ///
+    /// Found on the real board as one row in 481: state `review`,
+    /// `closed_on_evidence` true, claimed 02:25 and approved by Queen 04:25,
+    /// still open at 13:27. It was invisible from both directions — the
+    /// evidence detector skips it BECAUSE the exemption is approved, and
+    /// nothing counts it as done because it is not completed.
+    ///
+    /// The negative half is the point: this must stay quiet for work that is
+    /// merely claimed (that is the other detector's job, and firing here too
+    /// would double-report every honest handoff) and for work that closed.
+    #[test]
+    fn evidence_approved_but_never_closed_is_surfaced_and_clears_when_queen_closes_it() {
+        let store = TaskStore::in_memory().unwrap();
+        store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker(
+                "Public Web",
+                ProviderKind::ClaudeCode,
+                "/workspace/public-web",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store
+            .create_task("A spike with nothing to ship", "/workspace/public-web")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(
+                task.id,
+                worker.id,
+                &swarm_domain::TaskActivityActor::operator(),
+            )
+            .unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+
+        let now: i64 = store
+            .connection()
+            .unwrap()
+            .query_row("SELECT unixepoch()", [], |row| row.get(0))
+            .unwrap();
+        let an_hour = 3_600;
+
+        store
+            .claim_completion_exemption(task.id, "An investigation with no code.", None, now)
+            .unwrap();
+
+        // A CLAIM ALONE MUST SAY NOTHING HERE. Getting it approved is the other
+        // detector's question, and answering it twice would report every honest
+        // handoff as a problem the moment it was filed.
+        assert!(
+            store
+                .evidenced_work_not_closed_candidates(now + an_hour, 60)
+                .unwrap()
+                .is_empty(),
+            "an unapproved claim is not settled evidence"
+        );
+
+        store
+            .approve_completion_exemption(task.id, "queen", now)
+            .unwrap();
+
+        // Still fresh: approving and closing are two acts and the second is
+        // allowed to take a moment.
+        assert!(
+            store
+                .evidenced_work_not_closed_candidates(now, an_hour)
+                .unwrap()
+                .is_empty(),
+            "an approval seconds old is not yet an abandoned task"
+        );
+
+        let candidates = store
+            .evidenced_work_not_closed_candidates(now + an_hour + 60, an_hour)
+            .unwrap();
+        assert_eq!(
+            candidates.len(),
+            1,
+            "settled evidence that never closed has to reach someone"
+        );
+        assert_eq!(candidates[0].task_id, task.id);
+
+        // AND IT CLEARS BY THE ONLY ACT THAT ANSWERS IT.
+        store
+            .transition_task(task.id, TaskState::Completed)
+            .unwrap();
+        assert!(
+            store
+                .evidenced_work_not_closed_candidates(now + an_hour + 120, an_hour)
+                .unwrap()
+                .is_empty(),
+            "closing the task is what settles this, and nothing else has to"
+        );
+    }
+
+    /// The check has to be silent on a board with nothing wrong with it.
+    ///
+    /// A detector that only ever fires is indistinguishable from a working one
+    /// when the board it is first run against genuinely has an anomaly in it —
+    /// which is exactly how this one was found.
+    #[test]
+    fn a_board_with_no_stranded_evidence_surfaces_nothing() {
+        let store = TaskStore::in_memory().unwrap();
+        store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker(
+                "Public Web",
+                ProviderKind::ClaudeCode,
+                "/workspace/public-web",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let now: i64 = store
+            .connection()
+            .unwrap()
+            .query_row("SELECT unixepoch()", [], |row| row.get(0))
+            .unwrap();
+        let an_hour = 3_600;
+
+        let make = |title: &str| {
+            let task = store.create_task(title, "/workspace/public-web").unwrap();
+            store.transition_task(task.id, TaskState::Ready).unwrap();
+            store
+                .assign_task_to_worker_as(
+                    task.id,
+                    worker.id,
+                    &swarm_domain::TaskActivityActor::operator(),
+                )
+                .unwrap();
+            store.transition_task(task.id, TaskState::Active).unwrap();
+            task
+        };
+
+        // Reviewed with no evidence at all: the OTHER detector's business.
+        let bare = make("Reviewed, nothing claimed");
+        store.transition_task(bare.id, TaskState::Review).unwrap();
+
+        // Properly closed on an approved exemption.
+        let closed = make("Closed on an approved exemption");
+        store.transition_task(closed.id, TaskState::Review).unwrap();
+        store
+            .claim_completion_exemption(closed.id, "A document.", None, now)
+            .unwrap();
+        store
+            .approve_completion_exemption(closed.id, "queen", now)
+            .unwrap();
+        store
+            .transition_task(closed.id, TaskState::Completed)
+            .unwrap();
+
+        // Still being worked on.
+        let active = make("Still in progress");
+
+        assert!(
+            store
+                .evidenced_work_not_closed_candidates(now + an_hour + 60, an_hour)
+                .unwrap()
+                .is_empty(),
+            "nothing on this board is stranded, so nothing should be reported"
+        );
+        let _ = (bare, closed, active);
+    }
+
     #[test]
     fn blocked_work_nobody_returned_to_is_surfaced_and_clears_when_queen_moves_it() {
         let store = TaskStore::in_memory().unwrap();

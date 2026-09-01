@@ -173,7 +173,8 @@ const GITHUB_USER_CONNECTION_SCHEMA_VERSION: i64 = 109;
 const ABANDONED_STATE_SCHEMA_VERSION: i64 = 110;
 const TASK_COMMIT_REPORT_SCHEMA_VERSION: i64 = 111;
 const COORDINATOR_SETTLEMENT_SCHEMA_VERSION: i64 = 112;
-const CURRENT_SCHEMA_VERSION: i64 = COORDINATOR_SETTLEMENT_SCHEMA_VERSION;
+const EVIDENCED_WORK_NOT_CLOSED_SCHEMA_VERSION: i64 = 113;
+const CURRENT_SCHEMA_VERSION: i64 = EVIDENCED_WORK_NOT_CLOSED_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -3447,6 +3448,12 @@ fn migrate_newest_schema_steps(
     }
     if schema_version < COORDINATOR_SETTLEMENT_SCHEMA_VERSION {
         migrate_coordinator_approves_settlements(transaction)?;
+    }
+    // LAST, because it stamps the ceiling. A migration that sets user_version
+    // runs its pragma unconditionally, so one placed mid-chain has its stamp
+    // overwritten by every lower-numbered migration that follows it.
+    if schema_version < EVIDENCED_WORK_NOT_CLOSED_SCHEMA_VERSION {
+        coordinator::migrate_evidenced_work_not_closed_attention(transaction)?;
     }
     Ok(())
 }
@@ -7530,6 +7537,40 @@ mod tests {
             probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
                  WHERE type = 'table' AND name = 'task_completion_exemptions'
                    AND sql LIKE '%coordinator%')",
+        },
+        // 113. A value inside a CHECK again, so the undo rebuilds the table at
+        // the shape before this step — every kind through
+        // blocked_work_unattended_attention and not the one this adds.
+        SchemaStep {
+            table: "coordinator_actions",
+            artifact: "",
+            undo_sql: "DROP INDEX IF EXISTS coordinator_actions_queue;
+                 PRAGMA legacy_alter_table = ON;
+                 ALTER TABLE coordinator_actions RENAME TO coordinator_actions_undo;
+                 CREATE TABLE coordinator_actions (
+                     id TEXT PRIMARY KEY,
+                     idempotency_key TEXT NOT NULL UNIQUE,
+                     kind TEXT NOT NULL CHECK (kind IN ('wake_assigned_worker','stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention','owned_work_never_briefed_attention','reviewed_work_without_evidence_attention','blocked_work_unattended_attention')),
+                     worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+                     task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                     session_id TEXT,
+                     evidence_revision INTEGER,
+                     observed_age_seconds INTEGER,
+                     state TEXT NOT NULL CHECK (state IN ('queued','running','completed','uncertain','cancelled')),
+                     reason TEXT NOT NULL,
+                     attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 1),
+                     attempted_at INTEGER,
+                     finished_at INTEGER,
+                     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                     updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+                 );
+                 DROP TABLE coordinator_actions_undo;
+                 CREATE INDEX coordinator_actions_queue
+                     ON coordinator_actions(state, created_at, id);
+                 PRAGMA legacy_alter_table = OFF",
+            probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'coordinator_actions'
+                   AND sql LIKE '%evidenced_work_not_closed_attention%')",
         },
     ];
 
