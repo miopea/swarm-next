@@ -1601,6 +1601,11 @@ impl AgentMcp {
         // unreproducible, so this reports what the evidence tables already hold
         // and records written long before it existed read correctly too.
         let evidence = self.tasks.read_task_evidence(self.principal, task_id)?;
+        // THE EXCHANGE, because the tool that sends one says it is readable
+        // here. It was not: messages live in their own table and this returned
+        // events and evidence only, so a documented property of the channel was
+        // false from the moment it shipped.
+        let messages = self.tasks.read_task_messages(self.principal, task_id)?;
         structured(json!({
             "task_id": input.task_id,
             "events": page.events,
@@ -1609,6 +1614,8 @@ impl AgentMcp {
             // fix one level up.
             "truncated": page.truncated,
             "evidence": evidence,
+            "messages": messages,
+            "messages_note": "The Queen-worker exchange on this task, oldest first. Not in `events`: a message is not a state change. A message with no delivered_at has been recorded and has NOT yet reached its recipient's terminal — it waits for a resting prompt rather than interrupting a turn.",
             "evidence_note": "Evidence does not appear in `events` and never has: \
         a claim, its approval and a deployment write their own records, not activity rows. \
         An empty `evidence` here means none was recorded, NOT that the log is silent about it.",
@@ -2733,7 +2740,7 @@ fn approve_no_deployment_tool() -> Tool {
 fn read_task_history_tool() -> Tool {
     tool(
         "swarm_read_task_history",
-        "Read one task's activity log AND its completion evidence. `events` is every state change and the complete note written with it, including a worker's handoff — outcome notifications carry only an excerpt, so this is where the whole report is. `evidence` is separate and is NOT in the log: a no-deployment claim, its approval, and any recorded deployment each write their own record and no activity row, so a task whose `events` show no evidence may still be fully evidenced. Read both before accepting or rejecting finished work, and treat an empty `evidence` as \"none recorded\" rather than \"the log did not mention it\".",
+        "Read one task's activity log, its completion evidence, AND the Queen-worker exchange on it. `events` is every state change and the complete note written with it, including a worker's handoff — outcome notifications carry only an excerpt, so this is where the whole report is. `evidence` is separate and is NOT in the log: a no-deployment claim, its approval, and any recorded deployment each write their own record and no activity row, so a task whose `events` show no evidence may still be fully evidenced. `messages` is the exchange, also separate from the log, and a message with no delivered_at has been recorded but has not yet reached its recipient. Read all three before accepting or rejecting finished work, and treat an empty `evidence` as \"none recorded\" rather than \"the log did not mention it\".",
         &json!({
             "type": "object",
             "properties": {

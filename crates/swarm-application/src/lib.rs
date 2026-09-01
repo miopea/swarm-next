@@ -2227,6 +2227,30 @@ impl TaskService {
         Ok(self.store.list_task_activity(task_id, limit)?)
     }
 
+    /// Reads the Queen-worker exchange recorded on a task.
+    ///
+    /// Same visibility rule as the history it accompanies. Separate from
+    /// `events` for the same reason evidence is: a message is not a state
+    /// change, and folding it into the activity log would make an exchange
+    /// read as something that moved the work.
+    ///
+    /// # Errors
+    /// Denies a task the caller cannot see, and returns persistence failures.
+    pub fn read_task_messages(
+        &self,
+        principal: AgentPrincipal,
+        task_id: TaskId,
+    ) -> Result<Vec<swarm_persistence::TaskMessage>, ApplicationError> {
+        let visible = self
+            .list_visible_tasks(principal)?
+            .into_iter()
+            .any(|task| task.id == task_id);
+        if !visible {
+            return Err(ApplicationError::NotAuthorized);
+        }
+        Ok(self.store.task_messages(task_id)?)
+    }
+
     /// Reads the completion evidence that sits BESIDE a task's activity log.
     ///
     /// Same visibility rule as the history it accompanies. Separate because it

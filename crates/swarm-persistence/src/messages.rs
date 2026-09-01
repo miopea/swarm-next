@@ -275,14 +275,26 @@ impl TaskStore {
         use std::str::FromStr;
         let connection = self.connection()?;
         let mut statement = connection.prepare(
+            // BOTH DIRECTIONS. This filtered `m.recipient = 'worker'`, so every
+            // worker-to-Queen message was recorded and never delivered — the
+            // channel was one-way while its tool told the worker "Queen sees it
+            // on her next run". Silence is the single failure this channel
+            // exists to remove, and it had it in the reply direction.
+            //
+            // Queen is resolved by ROLE rather than by an id on the row,
+            // because a message to Queen is addressed to the office: the
+            // recipient_worker_id is null and whoever holds the role reads it.
             "SELECT m.id, m.task_id, task.title, session.session_id, m.sender,
                     COALESCE(sender.name, 'Queen'), m.body
              FROM task_messages m
              JOIN tasks task ON task.id = m.task_id AND task.removed_at IS NULL
-             JOIN worker_sessions session ON session.worker_id = m.recipient_worker_id
+             JOIN worker_profiles recipient
+                  ON (m.recipient = 'worker' AND recipient.id = m.recipient_worker_id)
+                  OR (m.recipient = 'queen' AND recipient.role = 'queen')
+             JOIN worker_sessions session ON session.worker_id = recipient.id
                   AND session.ended_at IS NULL
              LEFT JOIN worker_profiles sender ON sender.id = m.sender_worker_id
-             WHERE m.delivered_at IS NULL AND m.recipient = 'worker'
+             WHERE m.delivered_at IS NULL
              ORDER BY m.created_at, m.id",
         )?;
         let dispatches = statement
@@ -337,7 +349,7 @@ fn message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskMessage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swarm_domain::{ProviderKind, TaskState};
+    use swarm_domain::{ProviderKind, TaskState, WorkerSessionId};
 
     fn hive() -> (TaskStore, TaskId, WorkerId) {
         let store = TaskStore::in_memory().unwrap();
@@ -444,6 +456,63 @@ mod tests {
         assert!(
             store.undelivered_task_messages(worker).unwrap().is_empty(),
             "delivered once, not on every pass"
+        );
+    }
+
+    /// A REPLY MUST BE DELIVERABLE TOO, and it was not.
+    ///
+    /// The dispatch query filtered `recipient = 'worker'`, so every
+    /// worker-to-Queen message was recorded and never delivered while the tool
+    /// that sent it said "Queen sees it on her next run". Two sat unread for
+    /// nearly an hour. Silence is the one failure this channel exists to
+    /// remove and it had it in the reply direction, which is the direction
+    /// nobody thinks to check.
+    ///
+    /// Queen is resolved by ROLE: a message to her is addressed to the office,
+    /// so the row carries no recipient worker id and whoever holds the role
+    /// reads it.
+    #[test]
+    fn a_message_to_queen_is_dispatched_as_readily_as_one_to_a_worker() {
+        let (store, task, worker) = hive();
+        // BOTH ends need a live terminal, because a message waits for one
+        // rather than being dropped. Binding only Queen's would have proved
+        // half of what this test claims.
+        store
+            .bind_worker_session(worker, WorkerSessionId::new())
+            .unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+
+        store
+            .send_task_message(
+                task,
+                MessageEnd::queen(),
+                MessageEnd::worker(worker),
+                "Which SHA did this ship as?",
+                1_000,
+            )
+            .unwrap();
+        store
+            .send_task_message(
+                task,
+                MessageEnd::worker(worker),
+                MessageEnd::queen(),
+                "9ddfdd7, and CI was green on it.",
+                2_000,
+            )
+            .unwrap();
+
+        let pending = store.pending_task_message_dispatches().unwrap();
+        assert_eq!(
+            pending.len(),
+            2,
+            "both directions must reach a terminal, not just the outbound one"
+        );
+        assert!(
+            pending.iter().any(|d| d.sender == MessageParty::Worker),
+            "the REPLY is the one that was silently dropped: {pending:?}"
         );
     }
 
