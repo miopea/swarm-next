@@ -891,7 +891,7 @@ pub(super) async fn settle_uncertain_queen_review(state: &AppState) {
 
 pub(super) fn queen_automation_message(delivery: &QueenAutomationDelivery) -> Vec<u8> {
     format!(
-        "[Swarm automation {}] Review {} actionable records while the operator is {}. Use swarm_list_tasks, swarm_list_workers, and swarm_list_coordination_attention as the authority. Draft tasks are part of this review: a draft is work nobody has decided about yet, so triage each one into ready, blocked, or removed rather than leaving it sitting. Coordination attention can identify Ready work whose delivered brief did not start, Active work that is unchanged while its loaded worker is resting, or work whose worker process exited; recheck the current task and worker before deciding whether to restart, steer, wait, or ask the operator. It ALSO identifies finished work nothing has settled, which is usually the largest part of this review and is yours rather than the operator's: approve a no-deployment claim with swarm_approve_no_deployment once you have read the handoff, return work to Ready and reassign it when nobody recorded what it produced, and when commits touch code with no deployment assign a task to the owning worker to ship it — you cannot deploy during this run, but routing the deployment is coordination and is yours. Work parked on a SLEEPING worker is yours to move rather than yours to wait on: there is no wake tool, and assigning READY work with swarm_assign_task queues a guarded wake, so reassigning it to the same sleeping worker is how that worker is started. Only Ready work wakes anyone — work left Active or Blocked on a sleeping worker wakes nobody, so return it to Ready first (Active to Blocked to Ready) and then assign. Observe the live session before calling the work Active again. Respect worker repository ownership and the configured Queen autonomy ceiling. Do not perform Jira, Apiary, email, deployment, or other external side effects during this run. When operator judgment is needed, create one swarm_request_decision per concrete task. Link its task_id, make the suggested_action exactly one allowed_actions button, and never group unrelated tasks or a fleet review into one approval. When this exact review is finished, call swarm_finish_automation_run with run_id {} and outcome completed, needs_operator, or no_action.\r",
+        "[Swarm automation {}] Review {} actionable records while the operator is {}. Use swarm_list_tasks, swarm_list_workers, and swarm_list_coordination_attention as the authority. Draft tasks are part of this review: a draft is work nobody has decided about yet, so triage each one into ready, blocked, or removed rather than leaving it sitting. Coordination attention can identify Ready work whose delivered brief did not start, Active work that is unchanged while its loaded worker is resting, or work whose worker process exited; recheck the current task and worker before deciding whether to restart, steer, wait, or ask the operator. It ALSO identifies finished work nothing has settled, which is usually the largest part of this review and is yours rather than the operator's: approve a no-deployment claim with swarm_approve_no_deployment once you have read the handoff, SAYING WHAT YOUR AGREEMENT RESTS ON — a merged SHA, a recorded deployment, the handoff you read, or an explicit \"I could not verify\", which is accepted; saying nothing is not. When something is missing, hand it back with swarm_return_reviewed_work naming what you need: THE TASK STAYS IN REVIEW and the next move becomes the worker\'s. Do NOT move reviewed work to Ready to get attention — Ready means UNSTARTED to everything that reads it and erases that the work was done. When work is finished and merely waiting to ship, move it to awaiting_release: it needs no evidence to enter and COMPLETES ITSELF when a deployment is recorded, so it is the right home for anything held only because it has not shipped. When commits touch code with no deployment assign a task to the owning worker to ship it — you cannot deploy during this run, but routing the deployment is coordination and is yours. Work parked on a SLEEPING worker is yours to move rather than yours to wait on: there is no wake tool, and assigning READY work with swarm_assign_task queues a guarded wake, so reassigning it to the same sleeping worker is how that worker is started. Only Ready work wakes anyone — work left Active or Blocked on a SLEEPING worker wakes nobody, so return it to Ready first (Active to Blocked to Ready) and then assign. That route is for WAKING a stopped worker and nothing else; it is not how you ask a running worker for something, which is swarm_message_worker, and it is not how you hand back reviewed work, which is swarm_return_reviewed_work. You can also ask a running worker a question without interrupting it: swarm_message_worker waits until its terminal is resting, so it never lands mid-turn, and the exchange is recorded on the task. Observe the live session before calling the work Active again. Respect worker repository ownership and the configured Queen autonomy ceiling. Do not perform Jira, Apiary, email, deployment, or other external side effects during this run. When operator judgment is needed, create one swarm_request_decision per concrete task. Link its task_id, make the suggested_action exactly one allowed_actions button, and never group unrelated tasks or a fleet review into one approval. When this exact review is finished, call swarm_finish_automation_run with run_id {} and outcome completed, needs_operator, or no_action.\r",
         delivery.run_id,
         delivery.actionable_count,
         delivery.presence,
@@ -1525,7 +1525,31 @@ mod tests {
             "the class that woke her is unnamed: {message}"
         );
         assert!(message.contains("swarm_approve_no_deployment"), "{message}");
-        assert!(message.contains("return work to Ready"), "{message}");
+        // An approval must cite what it rests on, or the second pair of eyes
+        // is a click. A stamp under load is what approved a false claim.
+        assert!(
+            message.contains("RESTS ON"),
+            "approving without a basis is the failure this names: {message}"
+        );
+        // The move for work that is missing something, and it is NOT backwards.
+        assert!(
+            message.contains("swarm_return_reviewed_work"),
+            "the hand-back move must be named: {message}"
+        );
+        // The move for work that is finished and merely unshipped.
+        assert!(
+            message.contains("awaiting_release"),
+            "work held only because it has not shipped has its own state: {message}"
+        );
+        // AND THE OLD ADVICE MUST NOT COME BACK. This brief told her to return
+        // reviewed work to Ready to get a worker's attention, and Ready means
+        // UNSTARTED to everything that reads it — it invalidated a valid
+        // evidence claim on 2026-09-01. The phrase survives ONLY for waking a
+        // sleeping worker, which is a different act on different work.
+        assert!(
+            !message.contains("return work to Ready and reassign"),
+            "the brief still instructs the backward move it was corrected for: {message}"
+        );
         // The one she cannot do herself is still hers to route.
         assert!(
             message.contains("assign a task to the owning worker"),
