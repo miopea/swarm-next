@@ -1,4 +1,4 @@
-export type PoppableSurface = "decisions" | "tasks" | "workers" | "apiary" | "settings";
+export type PoppableSurface = "decisions" | "queues" | "tasks" | "workers" | "apiary" | "settings";
 
 /**
  * The address a detached surface opens at.

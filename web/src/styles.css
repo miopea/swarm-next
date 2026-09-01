@@ -2740,3 +2740,25 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .feedback-github-connection strong { color: var(--text); }
 .feedback-github-code { padding: 1px 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-raised); font-family: "Atkinson Hyperlegible Mono Variable", Consolas, monospace; font-size: .9rem; letter-spacing: .08em; }
 .feedback-github-problem { color: var(--warn-strong); }
+
+/* QUEUES — one screen per owner of the next move.
+   Ordered by who is holding work up rather than by which mechanism queued it,
+   so a growing pile is attributable at a glance. */
+.queues { display: grid; gap: 1.25rem; padding: 1rem; }
+.queues-empty { color: var(--muted); }
+.queue-group { border: 1px solid var(--line); border-radius: 10px; padding: 0.85rem 1rem; background: var(--panel); }
+.queue-group > header { display: grid; gap: 0.15rem; margin-bottom: 0.6rem; }
+.queue-group h2 { font-size: 0.95rem; margin: 0; display: flex; align-items: baseline; gap: 0.5rem; }
+.queue-count { font-variant-numeric: tabular-nums; font-size: 1.35rem; font-weight: 600; }
+.queue-meaning, .queue-oldest { margin: 0; font-size: 0.8rem; color: var(--muted); }
+.queue-group ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.25rem; }
+.queue-group li button {
+  width: 100%; text-align: left; display: flex; justify-content: space-between; gap: 1rem;
+  background: none; border: 1px solid transparent; border-radius: 6px; padding: 0.35rem 0.5rem; cursor: pointer;
+}
+.queue-group li button:hover, .queue-group li button:focus-visible { border-color: var(--line); }
+.queue-task-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queue-task-meta { color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
+/* Blocked is not a slow queue, it is a different kind of thing: nothing here
+   can move it. Marked so it does not read as somebody failing to act. */
+.queue-group[data-owner="blocked"] { border-style: dashed; }

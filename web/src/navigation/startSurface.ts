@@ -2,9 +2,9 @@ import { readSettingsSection } from "../settings/settingsNavigation";
 
 export const SURFACE_STORAGE_KEY = "swarm-next.surface.v1";
 
-export type Surface = "decisions" | "tasks" | "workers" | "apiary" | "settings";
+export type Surface = "decisions" | "queues" | "tasks" | "workers" | "apiary" | "settings";
 
-const SURFACES: readonly string[] = ["decisions", "tasks", "workers", "apiary", "settings"];
+const SURFACES: readonly string[] = ["decisions", "queues", "tasks", "workers", "apiary", "settings"];
 
 export function isSurface(value: unknown): value is Surface {
   return typeof value === "string" && SURFACES.includes(value);

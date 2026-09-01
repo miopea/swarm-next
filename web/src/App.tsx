@@ -151,6 +151,7 @@ import { workerEngineMatches } from "./runtime/workerEngine";
 
 const loadTerminalView = () => import("./terminal/TerminalView");
 const TerminalView = lazy(loadTerminalView);
+const QueuesView = lazy(() => import("./queues/QueuesView"));
 const TaskBoard = lazy(() => import("./tasks/TaskBoard"));
 const SettingsWorkspace = lazy(() => import("./settings/SettingsWorkspace"));
 const KeeperControlRoom = lazy(() => import("./apiary/KeeperControlRoom"));
@@ -1704,6 +1705,9 @@ export function App() {
                   {attentionCount > 0 ? <span className="visually-hidden"> waiting for you</span> : null}
                 </small>
               </button>{operatorToken && !detached ? <button type="button" className="surface-nav-popout" aria-label={`Open ${surfaceLabel("decisions")} in a new window`} title={`Open ${surfaceLabel("decisions")} in a new window. Workers keep running; a window only views them.`} onClick={() => setPopoutBlocked(!openSurfaceWindow("decisions", (url, name, features) => window.open(url, name, features)))}><PopoutIcon /></button> : null}</span>
+              <span className="surface-nav-item"><button className={surface === "queues" ? "selected" : ""} aria-current={surface === "queues" ? "page" : undefined} data-detached={surfaceIsDetached("queues") || undefined} onClick={() => showSurface("queues")}>
+                <QueuesIcon /> Queues
+              </button>{operatorToken && !detached ? <button type="button" className="surface-nav-popout" aria-label={`Open ${surfaceLabel("queues")} in a new window`} title={`Open ${surfaceLabel("queues")} in a new window. Workers keep running; a window only views them.`} onClick={() => setPopoutBlocked(!openSurfaceWindow("queues", (url, name, features) => window.open(url, name, features)))}><PopoutIcon /></button> : null}</span>
               <span className="surface-nav-item"><button className={surface === "tasks" ? "selected" : ""} aria-current={surface === "tasks" ? "page" : undefined} data-detached={surfaceIsDetached("tasks") || undefined} onClick={() => showSurface("tasks")}>
                 <span><TaskIcon /> Tasks</span><small>{openTaskCount}</small>
               </button>{operatorToken && !detached ? <button type="button" className="surface-nav-popout" aria-label={`Open ${surfaceLabel("tasks")} in a new window`} title={`Open ${surfaceLabel("tasks")} in a new window. Workers keep running; a window only views them.`} onClick={() => setPopoutBlocked(!openSurfaceWindow("tasks", (url, name, features) => window.open(url, name, features)))}><PopoutIcon /></button> : null}</span>
@@ -2224,6 +2228,14 @@ export function App() {
               onAnswer={answerInboxDecision}
             />
           </div>
+        ) : surface === "queues" ? (
+          <Suspense fallback={<WorkspaceLoading label="queues" />}>
+            <QueuesView
+              tasks={tasks}
+              workers={workers}
+              onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }}
+            />
+          </Suspense>
         ) : surface === "tasks" ? (
           <Suspense fallback={<WorkspaceLoading label="task board" />}>
             <TaskBoard tasks={tasks} jiraTaskLinks={jiraTaskLinks} operatorToken={operatorToken} hiveIdentity={hiveIdentity} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} query={taskQuery} filter={taskFilter} source={taskSource} sort={taskSort} project={taskProject} worker={taskWorker} projects={taskProjects} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSourceChange={(value) => { setTaskSource(value); if (value === "email" || value === "local") setTaskProject("all"); }} onSortChange={setTaskSort} onProjectChange={setTaskProject} onWorkerChange={setTaskWorkerFilter} onJiraSync={() => void syncJiraBoard()} onCreate={addTask} onUpdate={editTask} onRemove={removeTaskFromHive} onRestore={restoreTaskToHive} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); void refreshControlRoom(); }} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onFetchJiraComments={(taskId) => fetchJiraComments(operatorToken, taskId)} onAddJiraComment={(taskId, body) => addJiraComment(operatorToken, taskId, body)} onRetryJira={retryTaskJira} onJiraImported={refreshControlRoom} onEmailImported={refreshControlRoom} onReorder={reorderOpenTasks} />
@@ -2412,11 +2424,13 @@ function TerminalIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><pa
  */
 function surfaceLabel(surface: Surface): string {
   return surface === "decisions" ? "Needs you"
+    : surface === "queues" ? "Queues"
     : surface === "tasks" ? "Tasks"
     : surface === "workers" ? "Workers"
     : surface === "apiary" ? "Apiary"
     : "Settings";
 }
+function QueuesIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h6"/></svg>; }
 function PopoutIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4 11 13"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>; }
 function DiagnosticsIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2.5-6 4 12L16 12h5"/></svg>; }
 function RefreshIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M6.1 9a7 7 0 0 1 11.4-2.4L20 9M4 15l2.5 2.4A7 7 0 0 0 17.9 15" /></svg>; }

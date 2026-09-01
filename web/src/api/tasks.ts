@@ -35,6 +35,17 @@ export function isClosedTaskState(state: TaskState): boolean {
 export function isOpenTaskState(state: TaskState): boolean {
   return !isClosedTaskState(state);
 }
+/**
+ * Who owes the next move on a task.
+ *
+ * Derived by the server from state and assignment, never stored, so it cannot
+ * disagree with them. `blocked` is deliberately NOT `queen`: a hard block —
+ * work waiting on another task — is not a move anyone here is failing to make,
+ * and folding it into her queue would bury exactly the cases that need a
+ * different kind of attention.
+ */
+export type NextMoveOwner = "worker" | "queen" | "blocked" | "release" | "nobody";
+
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
 
 export type Task = {
@@ -65,6 +76,7 @@ export type Task = {
   priority: TaskPriority;
   workspace: string;
   state: TaskState;
+  next_move_owner?: NextMoveOwner;
   assigned_worker_id: string | null;
   assigned_session_id: string | null;
   dispatch_state?: "queued" | "dispatching" | "delivered" | "uncertain" | null;
