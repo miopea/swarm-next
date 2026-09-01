@@ -302,6 +302,92 @@ mod tests {
         assert!(reason.contains("PR #418 is open"), "{reason}");
     }
 
+    /// The whole spine: every waiting state says who owes the next move.
+    ///
+    /// Derived rather than stored, so it cannot drift from the state and the
+    /// assignment it describes. The one stored input is Queen handing reviewed
+    /// work back, because that is a decision somebody made rather than a
+    /// consequence of anything.
+    #[test]
+    fn every_waiting_state_names_who_owes_the_next_move() {
+        use swarm_domain::NextMoveOwner;
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("Some work", "/workspace").unwrap();
+
+        // Unassigned and unstarted: Queen routes it.
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        assert_eq!(
+            store.get_task(task.id).unwrap().next_move_owner,
+            NextMoveOwner::Queen
+        );
+
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        assert_eq!(
+            store.get_task(task.id).unwrap().next_move_owner,
+            NextMoveOwner::Worker
+        );
+
+        // NOT Queen. Blocked is the harder reason — a task waiting on another
+        // task — and naming Queen here would bury those in her queue.
+        store.transition_task(task.id, TaskState::Blocked).unwrap();
+        assert_eq!(
+            store.get_task(task.id).unwrap().next_move_owner,
+            NextMoveOwner::Blocked
+        );
+
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        assert_eq!(
+            store.get_task(task.id).unwrap().next_move_owner,
+            NextMoveOwner::Queen,
+            "finished work waits on Queen to judge it"
+        );
+
+        // THE SEND-BACK. The task does not move; the debt does.
+        store
+            .return_review_to_worker(task.id, "Say which SHA this shipped as.", 1_000)
+            .unwrap();
+        let returned = store.get_task(task.id).unwrap();
+        assert_eq!(
+            returned.state,
+            TaskState::Review,
+            "it must NOT move backwards"
+        );
+        assert_eq!(returned.next_move_owner, NextMoveOwner::Worker);
+
+        store.answer_returned_review(task.id, 2_000).unwrap();
+        assert_eq!(
+            store.get_task(task.id).unwrap().next_move_owner,
+            NextMoveOwner::Queen,
+            "answering hands the move back"
+        );
+
+        // Waiting on an event, not on a person.
+        store
+            .transition_task(task.id, TaskState::AwaitingRelease)
+            .unwrap();
+        assert_eq!(
+            store.get_task(task.id).unwrap().next_move_owner,
+            NextMoveOwner::Release
+        );
+    }
+
+    /// Work cannot be handed back before anyone has finished it.
+    #[test]
+    fn only_reviewed_work_can_be_returned_to_its_worker() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("Some work", "/workspace").unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+
+        assert!(
+            store
+                .return_review_to_worker(task.id, "Evidence please.", 1_000)
+                .is_err(),
+            "active work is already the worker's move; there is nothing to hand back"
+        );
+    }
+
     /// Evidence is readable for a task whose activity log shows none.
     ///
     /// The exact shape that misled a reader on the real board: an exemption
@@ -801,6 +887,66 @@ impl TaskStore {
             return Err(TaskStoreError::CompletionEvidenceRequired);
         }
         self.completion_evidence(task_id)
+    }
+
+    /// Hands reviewed work back to its worker with a named request.
+    ///
+    /// THE TASK DOES NOT MOVE. Returning it to Ready is what invalidated a
+    /// valid evidence claim on 2026-09-01, because Ready means UNSTARTED to
+    /// everything that reads it; returning it to Active makes finished work
+    /// look unfinished. What changes is who owes the next move.
+    ///
+    /// # Errors
+    /// Refuses work that is not in review, and returns persistence failures.
+    pub fn return_review_to_worker(
+        &self,
+        task_id: TaskId,
+        request: &str,
+        now: i64,
+    ) -> Result<(), TaskStoreError> {
+        let request = request.trim();
+        if request.is_empty() {
+            return Err(TaskStoreError::CompletionEvidenceRequired);
+        }
+        let connection = self.connection()?;
+        let state: String = connection
+            .query_row(
+                "SELECT state FROM tasks WHERE id = ?1 AND removed_at IS NULL",
+                [task_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::NotFound)?;
+        if state != TaskState::Review.to_string() {
+            return Err(TaskStoreError::InvalidTransition {
+                from: TaskState::from_str(&state).unwrap_or(TaskState::Draft),
+                to: TaskState::Review,
+            });
+        }
+        connection.execute(
+            "INSERT INTO task_returned_reviews (task_id, request, returned_at, answered_at)
+             VALUES (?1, ?2, ?3, NULL)
+             ON CONFLICT(task_id) DO UPDATE
+               SET request = excluded.request,
+                   returned_at = excluded.returned_at,
+                   answered_at = NULL",
+            params![task_id.to_string(), request, now],
+        )?;
+        Ok(())
+    }
+
+    /// Marks a returned review answered, so the next move is Queen's again.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn answer_returned_review(&self, task_id: TaskId, now: i64) -> Result<(), TaskStoreError> {
+        let connection = self.connection()?;
+        connection.execute(
+            "UPDATE task_returned_reviews SET answered_at = ?2
+             WHERE task_id = ?1 AND answered_at IS NULL",
+            params![task_id.to_string(), now],
+        )?;
+        Ok(())
     }
 
     /// Reads a task's completion evidence: the claim, its approval, and any

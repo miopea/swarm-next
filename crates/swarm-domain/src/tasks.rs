@@ -520,6 +520,37 @@ pub struct TaskAmendment {
     pub created_at: i64,
 }
 
+/// Who owes the next move on a task.
+///
+/// Every waiting state answers the same question — who is holding this up —
+/// and the board could not answer it. That is one gap behind three symptoms:
+/// a queue nobody could attribute, thirty blocked tasks reading as one
+/// undifferentiated pile, and the operator's attention surface filling with
+/// other actors' backlogs.
+///
+/// DERIVED, NOT STORED, except for the one case that is genuinely a decision:
+/// Queen handing reviewed work back to its worker. Everything else follows
+/// from the state and the assignment, and deriving it means it cannot drift
+/// away from them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NextMoveOwner {
+    /// The assigned worker. It is theirs to progress or to answer.
+    Worker,
+    /// Queen: unassigned work to route, or finished work to judge.
+    Queen,
+    /// Nothing in the Hive can move this — a hard block, by design.
+    ///
+    /// Distinct from Queen owing a move on blocked work. The operator drew the
+    /// line: blocked is "a harder reason than back and forth with worker or
+    /// queen", such as a task waiting on another task.
+    Blocked,
+    /// An event, not a person: the work is waiting to ship and settles itself.
+    Release,
+    /// Nobody. The work is closed.
+    Nobody,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[allow(
     clippy::struct_excessive_bools,
@@ -541,6 +572,12 @@ pub struct Task {
     /// not shown to be live — and calling that COMPLETED claims more than
     /// anyone has established, which is the same distinction between committed
     /// and deployed that this repo draws everywhere else.
+    /// Who owes the next move. See [`NextMoveOwner`].
+    ///
+    /// Computed on read like `deployment_recorded`, so it can never disagree
+    /// with the state and assignment it is derived from.
+    #[serde(default = "default_next_move_owner")]
+    pub next_move_owner: NextMoveOwner,
     #[serde(default)]
     pub deployment_recorded: bool,
     /// Whether this task has evidence that can close it: a recorded deployment,
@@ -796,5 +833,43 @@ pub fn commit_settlement(report: Option<&TaskCommitReport>) -> CommitSettlement 
         CommitSettlement::DocumentationOnly
     } else {
         CommitSettlement::BuiltCode
+    }
+}
+
+/// Older peers omit the field; unknown ownership reads as nobody's move rather
+/// than inventing an owner that a reader might act on.
+const fn default_next_move_owner() -> NextMoveOwner {
+    NextMoveOwner::Nobody
+}
+
+impl NextMoveOwner {
+    /// Derives who owes the next move from the facts already on the task.
+    ///
+    /// `review_returned` is the single stored input: Queen has handed reviewed
+    /// work back and named what is missing, so the worker owes an answer. It is
+    /// stored because it is a decision somebody made, not a consequence of the
+    /// state — everything else here follows from state and assignment, and
+    /// deriving those means they cannot drift apart.
+    #[must_use]
+    pub const fn derive(state: TaskState, assigned: bool, review_returned: bool) -> Self {
+        match state {
+            TaskState::Active => Self::Worker,
+            // Assigned work is the worker's to start, so "N tasks ready" was
+            // never the useful number: half of it was never waiting on Queen.
+            TaskState::Ready if assigned => Self::Worker,
+            // Queen has handed this back and named what is missing. The task
+            // did not move; the debt did.
+            TaskState::Review if review_returned => Self::Worker,
+            // NOT Queen. The operator drew this line: blocked is a harder
+            // reason than back-and-forth, such as a task waiting on another
+            // task. Naming Queen here would bury the hard cases in her queue.
+            TaskState::Blocked => Self::Blocked,
+            // An event, not a person. It settles itself when the work ships.
+            TaskState::AwaitingRelease => Self::Release,
+            TaskState::Completed | TaskState::Abandoned => Self::Nobody,
+            // Everything left is Queen's: unfiled work to ready, unassigned
+            // work to route, finished work to judge.
+            TaskState::Draft | TaskState::Ready | TaskState::Review => Self::Queen,
+        }
     }
 }

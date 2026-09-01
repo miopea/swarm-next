@@ -175,7 +175,8 @@ const TASK_COMMIT_REPORT_SCHEMA_VERSION: i64 = 111;
 const COORDINATOR_SETTLEMENT_SCHEMA_VERSION: i64 = 112;
 const EVIDENCED_WORK_NOT_CLOSED_SCHEMA_VERSION: i64 = 113;
 const AWAITING_RELEASE_SCHEMA_VERSION: i64 = 114;
-const CURRENT_SCHEMA_VERSION: i64 = AWAITING_RELEASE_SCHEMA_VERSION;
+const RETURNED_REVIEW_SCHEMA_VERSION: i64 = 115;
+const CURRENT_SCHEMA_VERSION: i64 = RETURNED_REVIEW_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1656,7 +1657,9 @@ impl TaskStore {
                                WHERE e.task_id = t.id AND e.approved_at IS NOT NULL),
                    EXISTS(SELECT 1 FROM task_activity worked
                           WHERE worked.task_id = t.id AND worked.actor_kind = 'worker'),
-                   EXISTS(SELECT 1 FROM task_unverifiable_closures u WHERE u.task_id = t.id)
+                   EXISTS(SELECT 1 FROM task_unverifiable_closures u WHERE u.task_id = t.id),
+                   EXISTS(SELECT 1 FROM task_returned_reviews r
+                          WHERE r.task_id = t.id AND r.answered_at IS NULL)
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
@@ -1697,7 +1700,9 @@ impl TaskStore {
                                WHERE e.task_id = t.id AND e.approved_at IS NOT NULL),
                    EXISTS(SELECT 1 FROM task_activity worked
                           WHERE worked.task_id = t.id AND worked.actor_kind = 'worker'),
-                   EXISTS(SELECT 1 FROM task_unverifiable_closures u WHERE u.task_id = t.id)
+                   EXISTS(SELECT 1 FROM task_unverifiable_closures u WHERE u.task_id = t.id),
+                   EXISTS(SELECT 1 FROM task_returned_reviews r
+                          WHERE r.task_id = t.id AND r.answered_at IS NULL)
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
@@ -1735,7 +1740,9 @@ impl TaskStore {
                                WHERE e.task_id = t.id AND e.approved_at IS NOT NULL),
                    EXISTS(SELECT 1 FROM task_activity worked
                           WHERE worked.task_id = t.id AND worked.actor_kind = 'worker'),
-                   EXISTS(SELECT 1 FROM task_unverifiable_closures u WHERE u.task_id = t.id)
+                   EXISTS(SELECT 1 FROM task_unverifiable_closures u WHERE u.task_id = t.id),
+                   EXISTS(SELECT 1 FROM task_returned_reviews r
+                          WHERE r.task_id = t.id AND r.answered_at IS NULL)
                 FROM tasks t
                 LEFT JOIN task_assignments a
                   ON a.task_id = t.id AND a.released_at IS NULL
@@ -3459,6 +3466,9 @@ fn migrate_newest_schema_steps(
     if schema_version < AWAITING_RELEASE_SCHEMA_VERSION {
         migrate_awaiting_release_state(transaction)?;
     }
+    if schema_version < RETURNED_REVIEW_SCHEMA_VERSION {
+        migrate_returned_reviews(transaction)?;
+    }
     Ok(())
 }
 
@@ -3561,6 +3571,32 @@ fn migrate_abandoned_state(transaction: &rusqlite::Transaction<'_>) -> rusqlite:
     }
     federation_tasks::migrate_abandoned_apiary_task_state(transaction)?;
     transaction.pragma_update(None, "user_version", ABANDONED_STATE_SCHEMA_VERSION)
+}
+
+/// Queen hands reviewed work back without moving it backwards.
+///
+/// A NEW TABLE RATHER THAN A COLUMN, because the request has a body: what is
+/// missing is the whole point, and a boolean would record that something was
+/// asked while losing what it was.
+///
+/// The work stays in Review. Returning it to Ready is what invalidated a valid
+/// evidence claim on 2026-09-01 — Ready means UNSTARTED to everything that
+/// reads it — and returning it to Active makes finished work look unfinished.
+/// Industry practice agrees: a pull request with changes requested stays open
+/// and gains a state, and Kanban guidance is explicit that backward column
+/// moves disguise rework as new work.
+fn migrate_returned_reviews(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS task_returned_reviews (
+             task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+             request TEXT NOT NULL,
+             returned_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             answered_at INTEGER
+         );
+         CREATE INDEX IF NOT EXISTS task_returned_reviews_open
+             ON task_returned_reviews(task_id) WHERE answered_at IS NULL;",
+    )?;
+    transaction.pragma_update(None, "user_version", crate::RETURNED_REVIEW_SCHEMA_VERSION)
 }
 
 /// Work that is finished and waiting only to ship gets its own resting state.
@@ -5133,6 +5169,7 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     let state: String = row.get(6)?;
     let assigned_worker_id: Option<String> = row.get(7)?;
     let assigned_session_id: Option<String> = row.get(8)?;
+    let has_assignee = assigned_worker_id.is_some();
     let dispatch_state: Option<String> = row.get(9)?;
     let outcome_delivery_state: Option<String> = row.get(10)?;
     Ok(Task {
@@ -5196,6 +5233,11 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         closed_on_evidence: row.get(16).unwrap_or(false),
         worked_here: row.get(17).unwrap_or(false),
         closed_unverifiable: row.get(18).unwrap_or(false),
+        next_move_owner: swarm_domain::NextMoveOwner::derive(
+            TaskState::from_str(&state).unwrap_or(TaskState::Draft),
+            has_assignee,
+            row.get(19).unwrap_or(false),
+        ),
         outcome_delivery_state: outcome_delivery_state
             .map(|value| TaskOutcomeDeliveryState::from_str(&value))
             .transpose()
@@ -7714,6 +7756,14 @@ mod tests {
             probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
                  WHERE type = 'table' AND name = 'tasks'
                    AND sql LIKE '%awaiting_release%')",
+        },
+        // 115. A whole table this time, so the undo simply removes it.
+        SchemaStep {
+            table: "task_returned_reviews",
+            artifact: "",
+            undo_sql: "DROP TABLE IF EXISTS task_returned_reviews",
+            probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'task_returned_reviews')",
         },
     ];
 
