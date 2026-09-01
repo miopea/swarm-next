@@ -76,4 +76,26 @@ holder_change=$(build_id)
   exit 1
 }
 
+# A BROKEN INPUT MUST REFUSE, NOT ANSWER. Both shapes were measured on the real
+# script before this guard existed, and both exited 0:
+#
+#   rustc absent        e3b0c44298fc — the sha256 of the empty string
+#   crate dir missing   d2acfc42375a — short, plausible, wrong, and stable
+#
+# The second is the one that matters. It has no tell, and because swarm-package
+# returns early when this id matches the running host's, a stable wrong value
+# reads as "the engine has not changed" and suppresses a restart forever.
+#
+# These run LAST because they damage the scratch checkout.
+if PATH=/usr/bin:/bin sh "$scratch/packaging/linux/worker-engine-build-id.sh" "$scratch" >/dev/null 2>&1; then
+  echo "a missing toolchain still produced a build id" >&2
+  exit 1
+fi
+
+rm -rf "$scratch/crates/swarm-terminal-host"
+if build_id >/dev/null 2>&1; then
+  echo "a missing engine crate still produced a build id" >&2
+  exit 1
+fi
+
 echo "worker engine build-id boundary passed"
