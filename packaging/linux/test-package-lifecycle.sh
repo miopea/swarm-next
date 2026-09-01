@@ -659,21 +659,32 @@ printf '%s' "$quiet_out" | grep -q 'now uses' \
 printf '%s' "$quiet_out" | grep -qi 'WARNING' \
   && { echo "a fully readable idle host warned about nothing: $quiet_out" >&2; exit 1; }
 
-# 3a. A PROVIDER THIS BUILD CANNOT READ: proceed, and NAME it.
+# 3a. A PROVIDER THIS BUILD CANNOT READ: DEFER, and name it. Not proceed —
+#     the worker engine card is the deliberate route, and it exists.
 restore_pending_engine_change
 printf '0\n' > "$HOME/busy-sessions"
 printf '2\n' > "$HOME/unreadable-sessions"
 unreadable_out=$("$package" reconcile-host-if-idle 2>&1)
-printf '%s' "$unreadable_out" | grep -q 'WARNING.*cannot read' \
-  || { echo "an unreadable provider proceeded without saying so: $unreadable_out" >&2; exit 1; }
+printf '%s' "$unreadable_out" | grep -q 'deferred.*cannot read' \
+  || { echo "an unreadable provider did not defer: $unreadable_out" >&2; exit 1; }
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "1.0.0" ] \
+  || { echo "an unreadable provider swapped the engine anyway" >&2; exit 1; }
 
-# 3b. A HOST TOO OLD TO ANSWER omits the keys. Absent is not zero, and the
-#     ruling on 01a05b83 is proceed-and-say-so rather than stop or assume.
+# 3b. A HOST TOO OLD TO ANSWER omits the keys entirely. THIS IS THE CASE THAT
+#     COST 12 LIVE SESSIONS: on the first release that adds the field, the
+#     running host is ALWAYS the old one, so this fires with certainty.
 restore_pending_engine_change
 : > "$HOME/host-cannot-report-busy"
 skew_out=$("$package" reconcile-host-if-idle 2>&1)
-printf '%s' "$skew_out" | grep -q 'WARNING.*cannot report which sessions are busy' \
+printf '%s' "$skew_out" | grep -q 'deferred.*cannot report which sessions are busy' \
   || { echo "an unanswerable host was treated as idle: $skew_out" >&2; exit 1; }
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "1.0.0" ] \
+  || { echo "an unanswerable host had its engine swapped underneath it" >&2; exit 1; }
+
+# 3c. AND THE OPERATOR'S DELIBERATE ROUTE STILL WORKS while it cannot check —
+#     otherwise deferring would strand the upgrade instead of scheduling it.
+"$package" reconcile-host >/dev/null 2>&1 \
+  && { echo "required-mode reconcile should refuse while unverifiable" >&2; exit 1; }
 rm -f "$HOME/host-cannot-report-busy"
 printf '0\n' > "$HOME/unreadable-sessions"
 # Each of the proceeding cases above CONSUMED the pending engine change, so put

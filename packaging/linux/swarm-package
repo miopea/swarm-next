@@ -1362,15 +1362,41 @@ reconcile_host() {
     die "terminal host update deferred; $busy sessions are mid-turn"
   fi
 
-  # Proceeding. Say what could not be established, every time it could not be,
-  # and say NOTHING when everything was readable -- a warning that is always
-  # printed carries no information on the day it matters.
+  # CANNOT CHECK MEANS WAIT FOR THE OPERATOR, NOT PROCEED.
+  #
+  # This proceeded-with-a-warning, and it cost 12 live sessions on 2026-09-01
+  # at 14:48:06. The reasoning was that the reconcile has no human route out,
+  # so proceeding was the only escape from a permanent deferral. THAT WAS
+  # WRONG: reconcile_host_requested (line ~1410) runs `reconcile_host` in
+  # REQUIRED mode when the worker engine card has written its request file, and
+  # that path proceeds regardless of who is busy. The card IS the route out.
+  #
+  # And "cannot check" is not a rare accident here. On the FIRST release that
+  # teaches the host to report busy sessions, the RUNNING host is by definition
+  # the older one that cannot answer -- so this arm fires with certainty on the
+  # one upgrade it most needs to be right about, on every Hive at once.
+  #
+  # So it defers and says why, and `worker_engine_update_required` already
+  # surfaces it in the card. The operator's own words are pinned in
+  # DevelopmentReloadAction.test.tsx: "if you have an update that needs the
+  # engine to restart, I should see that notification."
+  reconcile_blocked=
   if [ -z "$busy" ]; then
-    printf 'WARNING: this terminal host cannot report which sessions are busy, so it was NOT checked; proceeding over %s running sessions\n' \
-      "$running" >&2
+    reconcile_blocked="this terminal host cannot report which sessions are busy, so it was NOT checked"
   elif [ -n "$unreadable" ] && [ "$unreadable" -ne 0 ]; then
-    printf 'WARNING: %s of %s sessions run a provider this build cannot read, so they were NOT checked; proceeding\n' \
-      "$unreadable" "$running" >&2
+    reconcile_blocked="$unreadable of $running sessions run a provider this build cannot read"
+  fi
+  if [ -n "$reconcile_blocked" ]; then
+    if [ "$reconcile_mode" = "if-idle" ]; then
+      SWARM_TERMINAL_SOCKET=$(terminal_socket) \
+        "$host_release/bin/swarmctl" cancel-drain >/dev/null 2>&1 || true
+      drain_release=
+      printf 'Terminal host update deferred; %s. Apply it from the worker engine card, which ends every session deliberately.\n' \
+        "$reconcile_blocked"
+      note_deferral host-reconcile "the worker engine update" "$reconcile_blocked"
+      return
+    fi
+    die "terminal host update deferred; $reconcile_blocked"
   fi
   clear_deferrals host-reconcile
 
