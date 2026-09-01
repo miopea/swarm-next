@@ -34,7 +34,24 @@ export type Worker = {
   name: string;
   description?: string;
   role: WorkerRole;
-  system_role?: "scout";
+  /**
+   * A role the Hive assigns rather than the operator — `scout` today.
+   *
+   * A STRING, NOT A UNION OF KNOWN VALUES, because the server's column is
+   * `Option<&'static str>` and will emit whatever it is given. Typing it as
+   * `"scout"` asserted that scout is the ONLY possible value, which made
+   * `system_role !== "scout"` look like a correct exclusion of system workers
+   * when it only ever excluded one of them — the divergence that would have
+   * reproduced the reorder 409 the moment a second role was added.
+   *
+   * It also forced a cast to write a test for that case: expressing a state the
+   * server can produce required `"archivist" as unknown as "scout"`. A cast
+   * needed to describe reality is a type that is wrong.
+   *
+   * Nothing in the UI compares this to a literal. Both consumers ask only
+   * whether it is set, which is the question that survives new roles.
+   */
+  system_role?: string;
   provider: ProviderKind;
   workspace: string;
   autostart: boolean;

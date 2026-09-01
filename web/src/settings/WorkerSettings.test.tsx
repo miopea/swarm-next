@@ -380,7 +380,7 @@ test("shows the real Claude improvement failure instead of appearing inert", asy
  * written with "scout" passes under both predicates and proves nothing.
  */
 test("a system role other than scout is managed rather than reorderable", () => {
-  const archivist = { ...worker("archivist", "Archivist", "/projects/archive", 0), system_role: "archivist" as unknown as "scout" };
+  const archivist = { ...worker("archivist", "Archivist", "/projects/archive", 0), system_role: "archivist" };
   const onReorder = vi.fn();
   render(
     <WorkerSettings
@@ -406,7 +406,7 @@ test("a system role other than scout is managed rather than reorderable", () => 
 });
 
 test("pins managed Scout after Queen while keeping provider and routing settings editable", () => {
-  const scout = { ...worker("scout", "Scout", "/projects", 0), system_role: "scout" as const };
+  const scout = { ...worker("scout", "Scout", "/projects", 0), system_role: "scout" };
   render(
     <WorkerSettings
       workers={[queen, scout, budget]}
