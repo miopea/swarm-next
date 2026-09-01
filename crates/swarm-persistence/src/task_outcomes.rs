@@ -406,7 +406,7 @@ mod tests {
             .claim_completion_exemption(task.id, "An investigation with no code.", None, 1_000)
             .unwrap();
         store
-            .approve_completion_exemption(task.id, "queen", 1_500)
+            .approve_completion_exemption(task.id, "queen", "Read the handoff.", 1_500)
             .unwrap();
 
         // THE LOG STILL SAYS NOTHING, and that is deliberate: nothing was
@@ -495,7 +495,7 @@ mod tests {
             .claim_completion_exemption(task.id, "An investigation with no code.", None, 1_000)
             .unwrap();
         store
-            .approve_completion_exemption(task.id, "queen", 1_500)
+            .approve_completion_exemption(task.id, "queen", "Read the handoff.", 1_500)
             .unwrap();
 
         store
@@ -727,6 +727,9 @@ pub struct CompletionExemptionRecord {
     /// settled, and the attention asking for it to be judged stays up.
     pub approved_at: Option<i64>,
     pub approved_by: Option<String>,
+    /// What the approver said this rests on. `None` for approvals recorded
+    /// before citing one was required — absent, not empty.
+    pub approved_basis: Option<String>,
     pub superseded_at: Option<i64>,
 }
 
@@ -860,8 +863,17 @@ impl TaskStore {
         &self,
         task_id: TaskId,
         approver: &str,
+        basis: &str,
         now: i64,
     ) -> Result<CompletionEvidence, TaskStoreError> {
+        // AN APPROVAL THAT CITES NOTHING IS A CLICK. The rule says somebody
+        // other than the author checked; a basis is what makes that a claim
+        // anyone can later find wrong. "I could not verify" is a legitimate
+        // basis and is accepted; saying nothing is not.
+        let basis = basis.trim();
+        if basis.is_empty() {
+            return Err(TaskStoreError::CompletionEvidenceRequired);
+        }
         // "coordinator" IS NAMED RATHER THAN BORROWED. The deterministic pass
         // approves what it settled on facts in tables, and the record says so
         // -- writing "queen" would be the sweep claiming a person looked, which
@@ -874,9 +886,9 @@ impl TaskStore {
         let connection = self.connection()?;
         let updated = connection.execute(
             "UPDATE task_completion_exemptions
-             SET approved_at = ?2, approved_by = ?3
+             SET approved_at = ?2, approved_by = ?3, approved_basis = ?4
              WHERE task_id = ?1 AND approved_at IS NULL",
-            params![task_id.to_string(), now, approver],
+            params![task_id.to_string(), now, approver, basis],
         )?;
         drop(connection);
         if updated == 0 {
@@ -966,7 +978,7 @@ impl TaskStore {
             connection
                 .query_row(
                     "SELECT reason, claimed_by_worker_id, claimed_at, approved_at,
-                            approved_by, superseded_at
+                            approved_by, superseded_at, approved_basis
                      FROM task_completion_exemptions WHERE task_id = ?1",
                     [task_id.to_string()],
                     |row| {
@@ -977,6 +989,7 @@ impl TaskStore {
                             approved_at: row.get(3)?,
                             approved_by: row.get(4)?,
                             superseded_at: row.get(5)?,
+                            approved_basis: row.get(6)?,
                         })
                     },
                 )
@@ -1069,7 +1082,7 @@ mod completion_evidence_tests {
         assert!(!claimed.closes_a_task());
 
         let approved = store
-            .approve_completion_exemption(spike, "queen", 2_000)
+            .approve_completion_exemption(spike, "queen", "Read the handoff.", 2_000)
             .unwrap();
         assert_eq!(approved, CompletionEvidence::ExemptionApproved);
         assert!(approved.closes_a_task());
@@ -1103,7 +1116,7 @@ mod completion_evidence_tests {
             .claim_completion_exemption(spike, "A duplicate of an earlier task.", None, 1_000)
             .unwrap();
         store
-            .approve_completion_exemption(spike, "queen", 2_000)
+            .approve_completion_exemption(spike, "queen", "Read the handoff.", 2_000)
             .unwrap();
 
         assert!(
@@ -1135,7 +1148,7 @@ mod completion_evidence_tests {
         );
         assert!(
             store
-                .approve_completion_exemption(spike, "operator", 3_000)
+                .approve_completion_exemption(spike, "operator", "Read the handoff.", 3_000)
                 .is_ok()
         );
     }
@@ -1367,7 +1380,7 @@ mod completion_evidence_tests {
         // but the coordinator still does not close it, because there is no
         // deployment. Approving the exemption is the approval.
         store
-            .approve_completion_exemption(claimed, "queen", 2_000)
+            .approve_completion_exemption(claimed, "queen", "Read the handoff.", 2_000)
             .unwrap();
         assert!(
             !store
@@ -1383,12 +1396,12 @@ mod completion_evidence_tests {
         let unclaimed = task(&store);
         assert!(
             store
-                .approve_completion_exemption(unclaimed, "queen", 1_000)
+                .approve_completion_exemption(unclaimed, "queen", "Read the handoff.", 1_000)
                 .is_err()
         );
         assert!(
             store
-                .approve_completion_exemption(unclaimed, "the worker", 1_000)
+                .approve_completion_exemption(unclaimed, "the worker", "Read the handoff.", 1_000)
                 .is_err()
         );
     }
@@ -1703,7 +1716,7 @@ mod awaiting_judgment_subject_tests {
             .claim_completion_exemption(task, "Nothing was built", None, 1_000)
             .unwrap();
         store
-            .approve_completion_exemption(task, "coordinator", 1_100)
+            .approve_completion_exemption(task, "coordinator", "Read the handoff.", 1_100)
             .unwrap();
 
         assert!(
@@ -2230,7 +2243,20 @@ impl TaskStore {
                 CommitSettlement::BuiltCode | CommitSettlement::Unknown => continue,
             };
             self.claim_completion_exemption(task_id, reason, None, now)?;
-            self.approve_completion_exemption(task_id, "coordinator", now)?;
+            // THE BASIS WRITES ITSELF HERE, and this is the machine half of
+            // the rule rather than an exception to it. What was checked is a
+            // fact the pass just computed from the task's own commits, so the
+            // citation is not a formality — it is the derivation.
+            let basis = match settlement {
+                CommitSettlement::NothingBuilt => {
+                    "Derived: the task recorded no commits, so there is nothing that could have shipped."
+                }
+                CommitSettlement::DocumentationOnly => {
+                    "Derived: every recorded commit touches documentation only."
+                }
+                CommitSettlement::BuiltCode | CommitSettlement::Unknown => continue,
+            };
+            self.approve_completion_exemption(task_id, "coordinator", basis, now)?;
             match self.transition_task_with_note_as(
                 task_id,
                 TaskState::Completed,

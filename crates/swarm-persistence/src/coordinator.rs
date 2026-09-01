@@ -2510,7 +2510,7 @@ mod unattended_block_tests {
         );
 
         store
-            .approve_completion_exemption(task.id, "queen", now)
+            .approve_completion_exemption(task.id, "queen", "Read the handoff.", now)
             .unwrap();
 
         // Still fresh: approving and closing are two acts and the second is
@@ -2598,7 +2598,7 @@ mod unattended_block_tests {
             .claim_completion_exemption(closed.id, "A document.", None, now)
             .unwrap();
         store
-            .approve_completion_exemption(closed.id, "queen", now)
+            .approve_completion_exemption(closed.id, "queen", "Read the handoff.", now)
             .unwrap();
         store
             .transition_task(closed.id, TaskState::Completed)
@@ -2815,7 +2815,7 @@ mod reviewed_work_tests {
         // Queen answers, and only then does it clear -- still without anything
         // having to be dismissed by hand.
         store
-            .approve_completion_exemption(task.id, "queen", now)
+            .approve_completion_exemption(task.id, "queen", "Read the handoff.", now)
             .unwrap();
         assert!(
             !store
@@ -2880,7 +2880,7 @@ mod reviewed_work_tests {
         );
 
         store
-            .approve_completion_exemption(task.id, "queen", now)
+            .approve_completion_exemption(task.id, "queen", "Read the handoff.", now)
             .unwrap();
         assert!(
             store

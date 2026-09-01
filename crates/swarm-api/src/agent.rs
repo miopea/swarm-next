@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-const AGENT_TOOL_SURFACE_REVISION: u32 = 8;
+const AGENT_TOOL_SURFACE_REVISION: u32 = 9;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -403,7 +403,7 @@ const AGENT_TOOL_SURFACE_REVISION: u32 = 8;
 #[cfg(test)]
 /// The served surface as of revision 6. Update this and the revision together.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "37ff06ebf1b2dfedf430ea8cf10339375d75c9b33a7bc91c11b975badb7445eb";
+    "536f17fa56f805dc244848b04586100ba87027938ba3f8922fafa9759bf90f78";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -619,6 +619,7 @@ impl ServerHandler for AgentMcp {
                 refresh_jira_project_tool(),
                 finish_automation_run_tool(),
                 message_worker_tool(),
+                return_reviewed_work_tool(),
             ]);
         }
         // Recorded because THIS is the moment the session's surface is fixed.
@@ -672,6 +673,7 @@ impl ServerHandler for AgentMcp {
                 .and_then(|tasks| self.task_list_result(&tasks)),
             "swarm_read_task_history" => self.read_task_history(arguments),
             "swarm_message_worker" => self.message_worker(arguments),
+            "swarm_return_reviewed_work" => self.return_reviewed_work(arguments),
             "swarm_message_queen" => self.message_queen(arguments),
             "swarm_reload_app" => self.reload_app(arguments).await,
             "swarm_approve_no_deployment" => self.approve_no_deployment(arguments),
@@ -1374,9 +1376,9 @@ impl AgentMcp {
         let input = parse::<ApproveNoDeploymentInput>(arguments)?;
         let task_id = TaskId::from_str(&input.task_id)
             .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
-        let evidence = self
-            .tasks
-            .approve_completion_exemption(self.principal, task_id)?;
+        let evidence =
+            self.tasks
+                .approve_completion_exemption(self.principal, task_id, &input.basis)?;
         structured(json!({
             "task_id": input.task_id,
             "evidence": format!("{evidence:?}"),
@@ -1512,6 +1514,45 @@ impl AgentMcp {
             "task_id": input.task_id,
             "delivered": false,
             "next": "Recorded on the task and waiting. It reaches that worker when its terminal is next resting, so it will not interrupt a turn in progress.",
+        }))
+    }
+
+    /// Hands reviewed work back: one act, two records.
+    ///
+    /// The marker changes who owes the next move; the message is how the worker
+    /// finds out. Doing only the first would be a debt nobody was told about,
+    /// and doing only the second would leave the board saying the work still
+    /// waits on Queen.
+    fn return_reviewed_work(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        if self.principal.role != WorkerRole::Queen {
+            return Err(ApplicationError::NotAuthorized);
+        }
+        let input = parse::<ReturnReviewedWorkInput>(arguments)?;
+        let task_id = TaskId::from_str(&input.task_id)
+            .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
+        let store = self.tasks.store();
+        let task = store.get_task(task_id)?;
+        // The assignee is read rather than asked for. Queen naming a worker
+        // here could hand work back to somebody who does not hold it, and the
+        // board already knows who does.
+        let Some(worker_id) = task.assigned_worker_id else {
+            return Err(ApplicationError::NotAuthorized);
+        };
+        let now = now_seconds();
+        store.return_review_to_worker(task_id, &input.request, now)?;
+        store.send_task_message(
+            task_id,
+            swarm_persistence::MessageEnd::queen(),
+            swarm_persistence::MessageEnd::worker(worker_id),
+            &input.request,
+            now,
+        )?;
+        self.changed.notify_waiters();
+        structured(json!({
+            "task_id": input.task_id,
+            "state": task.state.to_string(),
+            "next_move_owner": "worker",
+            "next": "The task stays in Review and the next move is the worker's. They are told when their terminal is resting; answering hands the move back to you.",
         }))
     }
 
@@ -2311,6 +2352,7 @@ struct HoldReviewedWorkInput {
 #[serde(deny_unknown_fields)]
 struct ApproveNoDeploymentInput {
     task_id: String,
+    basis: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2327,6 +2369,12 @@ struct MessageWorkerInput {
     task_id: String,
     worker_id: String,
     body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReturnReviewedWorkInput {
+    task_id: String,
+    request: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2668,11 +2716,14 @@ fn retire_task_tool() -> Tool {
 fn approve_no_deployment_tool() -> Tool {
     tool(
         "swarm_approve_no_deployment",
-        "Queen only: agree that a task genuinely had nothing to deploy, so it can be completed. A worker records the claim with swarm_record_no_deployment and cannot approve its own; read the handoff first, and reject by leaving it in review with a note instead.",
+        "Queen only: agree that a task genuinely had nothing to deploy, so it can be completed. A worker records the claim with swarm_record_no_deployment and cannot approve its own. You must say what your agreement RESTS ON — the rule is that somebody other than the author checked, and a basis is what makes that a claim anyone can later find wrong rather than a click. \"I could not verify this\" is a legitimate basis and is accepted; saying nothing is not. If you cannot approve it, hand it back with swarm_return_reviewed_work naming what is missing rather than leaving it in review.",
         &json!({
             "type": "object",
-            "properties": { "task_id": { "type": "string" } },
-            "required": ["task_id"],
+            "properties": {
+                "task_id": { "type": "string" },
+                "basis": { "type": "string", "maxLength": 500, "description": "What you checked. A merged SHA, a recorded deployment, the handoff you read — or an explicit \"I could not verify\". Not a restatement of the worker's claim." }
+            },
+            "required": ["task_id", "basis"],
             "additionalProperties": false
         }),
         false,
@@ -2723,6 +2774,24 @@ fn message_worker_tool() -> Tool {
                 "body": { "type": "string", "maxLength": 4000, "description": "A question or a request for something missing. Not a second description: anything that changes what the work IS belongs in swarm_amend_task_facts or a new task." }
             },
             "required": ["task_id", "worker_id", "body"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
+/// Queen hands reviewed work back without moving it backwards.
+fn return_reviewed_work_tool() -> Tool {
+    tool(
+        "swarm_return_reviewed_work",
+        "Queen only: hand a task in Review back to its worker because something is missing, naming what. THE TASK DOES NOT MOVE — it stays in Review and the next move becomes the worker's, so finished work keeps looking finished and the queues view can tell work waiting on you from work waiting on them. Use this rather than transitioning the task to Ready or Active: Ready means UNSTARTED to everything that reads it and has already invalidated a valid evidence claim, and Active makes finished work look unfinished. The request is delivered to the worker when its terminal is resting and is recorded on the task. When they answer, the next move returns to you.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string" },
+                "request": { "type": "string", "maxLength": 4000, "description": "What is missing, specifically enough to act on. \"Evidence\" is not actionable; \"say which SHA this shipped as, or claim no-deployment with a reason\" is." }
+            },
+            "required": ["task_id", "request"],
             "additionalProperties": false
         }),
         false,

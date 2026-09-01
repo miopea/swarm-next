@@ -3278,7 +3278,7 @@ mod tests {
         );
 
         store
-            .approve_completion_exemption(imported.task.id, "queen", 1_100)
+            .approve_completion_exemption(imported.task.id, "queen", "Read the handoff.", 1_100)
             .unwrap();
 
         // And with the exemption approved, the same draft sends.

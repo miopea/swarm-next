@@ -2273,6 +2273,7 @@ impl TaskService {
         &self,
         principal: AgentPrincipal,
         task_id: TaskId,
+        basis: &str,
     ) -> Result<swarm_persistence::CompletionEvidence, ApplicationError> {
         if principal.role != WorkerRole::Queen {
             return Err(ApplicationError::NotAuthorized);
@@ -2287,6 +2288,7 @@ impl TaskService {
         Ok(self.store.approve_completion_exemption(
             task_id,
             "queen",
+            basis,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |elapsed| i64::try_from(elapsed.as_secs()).unwrap_or(0)),
@@ -3665,7 +3667,11 @@ mod tests {
             .unwrap();
 
         service
-            .approve_completion_exemption(AgentPrincipal::from(&queen), task.id)
+            .approve_completion_exemption(
+                AgentPrincipal::from(&queen),
+                task.id,
+                "Read the handoff.",
+            )
             .unwrap();
 
         // The gate is satisfied, so the work can finally be recorded as done.
@@ -3718,6 +3724,7 @@ mod tests {
                 active_session_id: Some(session),
             },
             task.id,
+            "Read the handoff.",
         );
 
         assert!(matches!(denied, Err(ApplicationError::NotAuthorized)));

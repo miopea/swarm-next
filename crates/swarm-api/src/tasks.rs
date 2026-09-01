@@ -204,6 +204,9 @@ pub(super) async fn approve_completion_exemption(
         .approve_completion_exemption(
             parse_task_id(&task_id)?,
             "operator",
+            // The operator approving on the board IS the basis. They read the
+            // task in front of them; there is no second party to cite.
+            "Approved by the operator from the board.",
             crate::unix_timestamp(),
         )
         .map_err(|error| crate::task_store_error(&error))?;

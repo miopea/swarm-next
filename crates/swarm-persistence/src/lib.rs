@@ -181,7 +181,8 @@ const EVIDENCED_WORK_NOT_CLOSED_SCHEMA_VERSION: i64 = 113;
 const AWAITING_RELEASE_SCHEMA_VERSION: i64 = 114;
 const RETURNED_REVIEW_SCHEMA_VERSION: i64 = 115;
 const TASK_MESSAGE_SCHEMA_VERSION: i64 = 116;
-const CURRENT_SCHEMA_VERSION: i64 = TASK_MESSAGE_SCHEMA_VERSION;
+const APPROVAL_BASIS_SCHEMA_VERSION: i64 = 117;
+const CURRENT_SCHEMA_VERSION: i64 = APPROVAL_BASIS_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -3487,6 +3488,9 @@ fn migrate_newest_schema_steps(
     if schema_version < TASK_MESSAGE_SCHEMA_VERSION {
         migrate_task_messages(transaction)?;
     }
+    if schema_version < APPROVAL_BASIS_SCHEMA_VERSION {
+        migrate_approval_basis(transaction)?;
+    }
     Ok(())
 }
 
@@ -3589,6 +3593,32 @@ fn migrate_abandoned_state(transaction: &rusqlite::Transaction<'_>) -> rusqlite:
     }
     federation_tasks::migrate_abandoned_apiary_task_state(transaction)?;
     transaction.pragma_update(None, "user_version", ABANDONED_STATE_SCHEMA_VERSION)
+}
+
+/// An approval records what it rests on, not merely that it happened.
+///
+/// The invariant's promise is that somebody OTHER THAN THE AUTHOR checked. On
+/// 2026-09-01 at 04:25 an exemption was approved whose work had an open pull
+/// request — the rule was satisfied while nobody checked anything. Under load a
+/// second pair of eyes degrades into a rubber stamp, and load is exactly when
+/// it is needed.
+///
+/// A cited basis turns a click into a claim somebody can later be wrong about,
+/// which is the only thing that makes a review real. "I could not verify" is a
+/// legitimate basis; leaving it unsaid is not.
+fn migrate_approval_basis(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('task_completion_exemptions')
+         WHERE name = 'approved_basis')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !present {
+        transaction.execute_batch(
+            "ALTER TABLE task_completion_exemptions ADD COLUMN approved_basis TEXT;",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", crate::APPROVAL_BASIS_SCHEMA_VERSION)
 }
 
 /// A governed channel between Queen and a worker, durable on the task.
@@ -7826,6 +7856,13 @@ mod tests {
             undo_sql: "DROP TABLE IF EXISTS task_messages",
             probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
                  WHERE type = 'table' AND name = 'task_messages')",
+        },
+        // 117. A plain added column, so the default undo drops it.
+        SchemaStep {
+            table: "task_completion_exemptions",
+            artifact: "approved_basis",
+            undo_sql: "",
+            probe_sql: "",
         },
     ];
 
