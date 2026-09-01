@@ -2333,6 +2333,38 @@ mod tests {
         );
     }
 
+    /// A body only the operator would call long must not strand the message.
+    ///
+    /// The subject path above clamps rather than refuse, precisely so a message
+    /// is never lost to its own length. The body path did the opposite: the
+    /// fetcher accepted up to its own ceiling, the store refused above a much
+    /// smaller one, and every message in between was fetched and then dropped
+    /// during a background sync where no operator ever saw the failure.
+    ///
+    /// Pinned as an invariant rather than a number, so raising either cap alone
+    /// fails here instead of silently reopening the gap.
+    #[test]
+    fn a_body_as_large_as_the_fetcher_accepts_still_imports() {
+        let store = TaskStore::in_memory().unwrap();
+        // Multi-byte, so a cap applied in the wrong unit shows up as a failure.
+        let long_body = "é".repeat(crate::MAX_TASK_DESCRIPTION_BYTES / 2);
+        assert!(
+            long_body.len() > 10_000,
+            "the body must exceed the cap this test exists to retire"
+        );
+        let mut snapshot = message(&[]);
+        snapshot.body_text = &long_body;
+
+        let imported = store
+            .import_email_message(&snapshot, TaskPriority::Normal)
+            .expect("a long email imports rather than being dropped mid-sync");
+
+        assert_eq!(
+            imported.task.description, long_body,
+            "and arrives whole, not truncated to fit"
+        );
+    }
+
     /// The other path, where the subject genuinely BECOMES the title.
     ///
     /// Nothing supplies a title there, so refusing would strand the message.

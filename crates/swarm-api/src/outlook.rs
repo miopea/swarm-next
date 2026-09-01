@@ -8,7 +8,10 @@ use crate::microsoft_oauth::{MicrosoftAccess, MicrosoftOAuthClient, OAuthError};
 const MAX_INBOX_MESSAGES: usize = 50;
 const MAX_ATTACHMENTS: usize = 16;
 const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
-const MAX_BODY_BYTES: usize = 100_000;
+/// An imported body becomes the task description verbatim, so fetching more
+/// than that can be stored means fetching mail we will then refuse to import.
+/// Tied to the storage cap rather than restated, so the two cannot drift.
+const MAX_BODY_BYTES: usize = swarm_persistence::MAX_TASK_DESCRIPTION_BYTES;
 const MAX_QUERY_BYTES: usize = 256;
 
 #[derive(Clone, Default)]

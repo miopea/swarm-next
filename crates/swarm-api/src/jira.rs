@@ -8,6 +8,7 @@ use futures_util::StreamExt;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use swarm_domain::{JiraConnectionState, TaskState};
+use swarm_persistence::MAX_TASK_DESCRIPTION_BYTES as MAX_ISSUE_DESCRIPTION_BYTES;
 
 use crate::jira_oauth::{JiraOAuthClient, OAuthError};
 
@@ -16,7 +17,6 @@ const MAX_PROJECTS: usize = 500;
 const MAX_PROJECT_STATUSES: usize = 128;
 const MAX_ISSUES: usize = 200;
 const MAX_TRANSITIONS: usize = 128;
-const MAX_ISSUE_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_COMMENTS: usize = 100;
 const MAX_ATTACHMENTS: usize = 40;
 const MAX_ATTACHMENT_BYTES: usize = 15 * 1024 * 1024;

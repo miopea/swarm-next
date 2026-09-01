@@ -111,7 +111,10 @@ use events::insert_control_room_event;
 use events::{MAX_CONTROL_ROOM_EVENT_PAGE, MAX_CONTROL_ROOM_EVENTS};
 pub use workers::{ActiveWorkerSession, ConnectionProfile, GeometryContention};
 pub(crate) const MAX_TASK_TITLE_BYTES: usize = 240;
-pub(crate) const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
+/// Matches the ceiling the Outlook fetcher accepts for a message body, because
+/// an imported email becomes a description verbatim. Anything smaller fetches
+/// the mail successfully and then fails to import it, which no operator sees.
+pub const MAX_TASK_DESCRIPTION_BYTES: usize = 100_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 /// One line of operator direction. Long enough for "interview me before acting"
