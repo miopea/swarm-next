@@ -127,6 +127,33 @@ stop_swarm_stack() {
     done
   done
 }
+# OPTION C: a deferral that never ends must eventually say so.
+#
+# Deferring is correct while a worker is mid-turn, and this runs every two
+# minutes, so a silent deferral is indistinguishable from a healthy pass. That
+# is exactly how the running_sessions deadlock went unnoticed for months: the
+# timer completed, printed a reassuring line, and nothing ever landed.
+#
+# The ceiling does not force the update through. It refuses to stay quiet.
+reconcile_deferral_file() { printf '%s/host-reconcile-deferrals\n' "$state_root"; }
+
+note_reconcile_deferral() {
+  busy_now=$1
+  file=$(reconcile_deferral_file)
+  count=0
+  [ -f "$file" ] && count=$(cat "$file" 2>/dev/null || echo 0)
+  case "$count" in *[!0-9]*|"") count=0;; esac
+  count=$((count + 1))
+  mkdir -p "$state_root" 2>/dev/null || true
+  printf '%s\n' "$count" > "$file" 2>/dev/null || true
+  if [ "$count" -ge "${SWARM_RECONCILE_DEFERRAL_CEILING:-30}" ]; then
+    printf 'WARNING: the worker engine update has been deferred %s times in a row and has never landed; %s sessions are still mid-turn\n' \
+      "$count" "$busy_now" >&2
+  fi
+}
+
+clear_reconcile_deferrals() { rm -f "$(reconcile_deferral_file)" 2>/dev/null || true; }
+
 terminal_socket() { printf '%s/swarm/terminal.sock\n' "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; }
 
 # The one line worth showing from ANY failed step, bounded and newline-free.
@@ -1293,16 +1320,45 @@ reconcile_host() {
   status=$(SWARM_TERMINAL_SOCKET=$(terminal_socket) "$host_release/bin/swarmctl" status)
   running=$(printf '%s\n' "$status" | sed -n 's/.*"running_sessions":[[:space:]]*\([0-9][0-9]*\).*/\1/p')
   case "$running" in *[!0-9]*|"") die "terminal host returned invalid status";; esac
-  if [ "$running" -ne 0 ]; then
+
+  # WHAT IS BUSY, NOT HOW MANY SESSIONS EXIST.
+  #
+  # This tested running_sessions, and autostart guarantees that never reaches
+  # zero -- so the deferral could not finish and requested maintenance never
+  # landed. A session count is a constant here, not a reading.
+  #
+  # Absent rather than zero is the case that matters: a host too old to answer
+  # omits these keys entirely, and reading "no key" as "nobody is busy" would
+  # upgrade over live work while believing it had checked. Operator ruling
+  # 01a05b83 settles what to do instead -- proceed, and say loudly that it
+  # could not check.
+  busy=$(printf '%s\n' "$status" | sed -n 's/.*"busy_sessions":[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+  unreadable=$(printf '%s\n' "$status" | sed -n 's/.*"unreadable_sessions":[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+
+  if [ -n "$busy" ] && [ "$busy" -ne 0 ]; then
     if [ "$reconcile_mode" = "if-idle" ]; then
       SWARM_TERMINAL_SOCKET=$(terminal_socket) \
         "$host_release/bin/swarmctl" cancel-drain >/dev/null 2>&1 || true
       drain_release=
-      printf 'Terminal host update remains deferred; %s sessions are active\n' "$running"
+      printf 'Terminal host update deferred; %s of %s sessions are mid-turn\n' \
+        "$busy" "$running"
+      note_reconcile_deferral "$busy"
       return
     fi
-    die "terminal host update deferred; $running sessions remain"
+    die "terminal host update deferred; $busy sessions are mid-turn"
   fi
+
+  # Proceeding. Say what could not be established, every time it could not be,
+  # and say NOTHING when everything was readable -- a warning that is always
+  # printed carries no information on the day it matters.
+  if [ -z "$busy" ]; then
+    printf 'WARNING: this terminal host cannot report which sessions are busy, so it was NOT checked; proceeding over %s running sessions\n' \
+      "$running" >&2
+  elif [ -n "$unreadable" ] && [ "$unreadable" -ne 0 ]; then
+    printf 'WARNING: %s of %s sessions run a provider this build cannot read, so they were NOT checked; proceeding\n' \
+      "$unreadable" "$running" >&2
+  fi
+  clear_reconcile_deferrals
 
   activate_host_link "$current"
   install_units "$current"

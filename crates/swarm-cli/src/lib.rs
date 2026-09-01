@@ -458,6 +458,8 @@ mod tests {
             draining: false,
             running_sessions: 0,
             retained_sessions: 0,
+            busy_sessions: None,
+            unreadable_sessions: None,
             resources: None,
             takeover_relay: false,
         })
@@ -474,6 +476,8 @@ mod tests {
             draining: true,
             running_sessions: 1,
             retained_sessions: 2,
+            busy_sessions: Some(0),
+            unreadable_sessions: Some(0),
             resources: None,
             takeover_relay: true,
         })

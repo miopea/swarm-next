@@ -201,7 +201,19 @@ if [ "$(basename "$0")" = "swarmctl" ]; then
   if [ "$command" = "status" ]; then
     running=0
     [ ! -f "$HOME/running-sessions" ] || running=$(cat "$HOME/running-sessions")
-    printf '{"protocol_version":5,"running_sessions":%s}\n' "$running"
+    # A host too old to classify OMITS these keys rather than reporting zero.
+    # Modelled as absence on purpose: reading a missing key as "nobody is busy"
+    # is the exact failure the three-way predicate exists to prevent.
+    if [ -f "$HOME/host-cannot-report-busy" ]; then
+      printf '{"protocol_version":5,"running_sessions":%s}\n' "$running"
+    else
+      busy=0
+      [ ! -f "$HOME/busy-sessions" ] || busy=$(cat "$HOME/busy-sessions")
+      unreadable=0
+      [ ! -f "$HOME/unreadable-sessions" ] || unreadable=$(cat "$HOME/unreadable-sessions")
+      printf '{"protocol_version":5,"running_sessions":%s,"busy_sessions":%s,"unreadable_sessions":%s}\n' \
+        "$running" "$busy" "$unreadable"
+    fi
   fi
 fi
 exit 0
@@ -463,6 +475,10 @@ fi
 
 # Compatible API/browser updates preserve an active sidecar and its sessions.
 printf '1\n' > "$HOME/running-sessions"
+# A session EXISTING is no longer what defers a reconcile — being mid-turn is.
+# The reconcile assertions below are about refusing to stop live work, so the
+# stub has to report live work rather than merely a session.
+printf '1\n' > "$HOME/busy-sessions"
 printf 'database-v1\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
 mkdir -p "$SWARM_STATE_ROOT/backups"
 old_backup=1
@@ -601,6 +617,69 @@ grep -q '^cancel-drain$' "$HOME/swarmctl.log"
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "1.0.0" ]
 grep -q '^drain$' "$HOME/swarmctl.log"
 grep -q '^cancel-drain$' "$HOME/swarmctl.log"
+# THE THREE-WAY PREDICATE, DEMONSTRATED IN ALL THREE DIRECTIONS.
+#
+# The old test was a session COUNT, which autostart keeps above zero forever —
+# so the deferral could never end and requested maintenance never landed.
+
+# Each case needs a REAL pending engine change to reach the predicate at all:
+# once host-current agrees with current there is nothing to reconcile and the
+# script returns long before the session check. A proceeding case consumes that
+# divergence, so it is restored before each one.
+diverged_host_link=$(readlink "$SWARM_INSTALL_ROOT/host-current")
+restore_pending_engine_change() {
+  ln -sfn "$diverged_host_link" "$SWARM_INSTALL_ROOT/host-current"
+}
+
+# 1. MID-TURN DEFERS. Sessions exist AND one is working.
+restore_pending_engine_change
+printf '3\n' > "$HOME/running-sessions"
+printf '1\n' > "$HOME/busy-sessions"
+printf '0\n' > "$HOME/unreadable-sessions"
+: > "$HOME/swarmctl.log"
+reconcile_out=$("$package" reconcile-host-if-idle 2>&1)
+printf '%s' "$reconcile_out" | grep -q 'mid-turn' \
+  || { echo "a mid-turn worker did not defer the reconcile: $reconcile_out" >&2; exit 1; }
+grep -q '^cancel-drain$' "$HOME/swarmctl.log" \
+  || { echo "a deferred reconcile left the host drained" >&2; exit 1; }
+
+# 2. RESTING SESSIONS PROCEED, SILENTLY. Three sessions, none working, all
+#    readable. This is the case the old predicate could never reach, and the
+#    silence is the assertion: a check that always warns says nothing on the
+#    day it matters.
+restore_pending_engine_change
+printf '3\n' > "$HOME/running-sessions"
+printf '0\n' > "$HOME/busy-sessions"
+printf '0\n' > "$HOME/unreadable-sessions"
+quiet_out=$("$package" reconcile-host-if-idle 2>&1)
+# BOTH halves, because silence alone does not distinguish "proceeded quietly"
+# from "deferred quietly" — and deferring quietly is the original bug.
+printf '%s' "$quiet_out" | grep -q 'now uses' \
+  || { echo "resting sessions did not let the engine update land: $quiet_out" >&2; exit 1; }
+printf '%s' "$quiet_out" | grep -qi 'WARNING' \
+  && { echo "a fully readable idle host warned about nothing: $quiet_out" >&2; exit 1; }
+
+# 3a. A PROVIDER THIS BUILD CANNOT READ: proceed, and NAME it.
+restore_pending_engine_change
+printf '0\n' > "$HOME/busy-sessions"
+printf '2\n' > "$HOME/unreadable-sessions"
+unreadable_out=$("$package" reconcile-host-if-idle 2>&1)
+printf '%s' "$unreadable_out" | grep -q 'WARNING.*cannot read' \
+  || { echo "an unreadable provider proceeded without saying so: $unreadable_out" >&2; exit 1; }
+
+# 3b. A HOST TOO OLD TO ANSWER omits the keys. Absent is not zero, and the
+#     ruling on 01a05b83 is proceed-and-say-so rather than stop or assume.
+restore_pending_engine_change
+: > "$HOME/host-cannot-report-busy"
+skew_out=$("$package" reconcile-host-if-idle 2>&1)
+printf '%s' "$skew_out" | grep -q 'WARNING.*cannot report which sessions are busy' \
+  || { echo "an unanswerable host was treated as idle: $skew_out" >&2; exit 1; }
+rm -f "$HOME/host-cannot-report-busy"
+printf '0\n' > "$HOME/unreadable-sessions"
+# Each of the proceeding cases above CONSUMED the pending engine change, so put
+# it back: what follows is the requested-maintenance test and it needs one.
+restore_pending_engine_change
+
 printf 'requested_at=%s\ntarget_version=2.0.0\n' "$(date +%s)" > "$SWARM_STATE_ROOT/worker-engine-maintenance.request"
 printf '0\n' > "$HOME/running-sessions"
 : > "$HOME/systemctl.log"

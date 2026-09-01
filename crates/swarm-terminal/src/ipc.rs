@@ -268,6 +268,20 @@ pub struct TerminalHostStatus {
     pub draining: bool,
     pub running_sessions: usize,
     pub retained_sessions: usize,
+    /// Live sessions that are mid-turn: active, or waiting on a person.
+    ///
+    /// `None` from a host too old to answer, which is NOT the same as zero and
+    /// must never be read as one. Operator ruling 01a05b83 settles what a
+    /// caller does with that: proceed, and say loudly that it could not check.
+    #[serde(default)]
+    pub busy_sessions: Option<usize>,
+    /// Live sessions whose provider this host cannot classify.
+    ///
+    /// Separate from `busy_sessions` because the honest answers differ: one is
+    /// "work is happening", the other is "I do not know". Collapsing them is
+    /// how a session count came to stand in for a reading.
+    #[serde(default)]
+    pub unreadable_sessions: Option<usize>,
     #[serde(default)]
     pub resources: Option<ProcessResourceSample>,
     #[serde(default)]
