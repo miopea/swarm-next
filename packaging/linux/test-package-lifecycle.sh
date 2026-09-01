@@ -201,7 +201,19 @@ if [ "$(basename "$0")" = "swarmctl" ]; then
   if [ "$command" = "status" ]; then
     running=0
     [ ! -f "$HOME/running-sessions" ] || running=$(cat "$HOME/running-sessions")
-    printf '{"protocol_version":5,"running_sessions":%s}\n' "$running"
+    # A host too old to classify OMITS these keys rather than reporting zero.
+    # Modelled as absence on purpose: reading a missing key as "nobody is busy"
+    # is the exact failure the three-way predicate exists to prevent.
+    if [ -f "$HOME/host-cannot-report-busy" ]; then
+      printf '{"protocol_version":5,"running_sessions":%s}\n' "$running"
+    else
+      busy=0
+      [ ! -f "$HOME/busy-sessions" ] || busy=$(cat "$HOME/busy-sessions")
+      unreadable=0
+      [ ! -f "$HOME/unreadable-sessions" ] || unreadable=$(cat "$HOME/unreadable-sessions")
+      printf '{"protocol_version":5,"running_sessions":%s,"busy_sessions":%s,"unreadable_sessions":%s}\n' \
+        "$running" "$busy" "$unreadable"
+    fi
   fi
 fi
 exit 0
@@ -463,6 +475,10 @@ fi
 
 # Compatible API/browser updates preserve an active sidecar and its sessions.
 printf '1\n' > "$HOME/running-sessions"
+# A session EXISTING is no longer what defers a reconcile — being mid-turn is.
+# The reconcile assertions below are about refusing to stop live work, so the
+# stub has to report live work rather than merely a session.
+printf '1\n' > "$HOME/busy-sessions"
 printf 'database-v1\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
 mkdir -p "$SWARM_STATE_ROOT/backups"
 old_backup=1
@@ -601,6 +617,80 @@ grep -q '^cancel-drain$' "$HOME/swarmctl.log"
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "1.0.0" ]
 grep -q '^drain$' "$HOME/swarmctl.log"
 grep -q '^cancel-drain$' "$HOME/swarmctl.log"
+# THE THREE-WAY PREDICATE, DEMONSTRATED IN ALL THREE DIRECTIONS.
+#
+# The old test was a session COUNT, which autostart keeps above zero forever —
+# so the deferral could never end and requested maintenance never landed.
+
+# Each case needs a REAL pending engine change to reach the predicate at all:
+# once host-current agrees with current there is nothing to reconcile and the
+# script returns long before the session check. A proceeding case consumes that
+# divergence, so it is restored before each one.
+diverged_host_link=$(readlink "$SWARM_INSTALL_ROOT/host-current")
+restore_pending_engine_change() {
+  ln -sfn "$diverged_host_link" "$SWARM_INSTALL_ROOT/host-current"
+}
+
+# 1. MID-TURN DEFERS. Sessions exist AND one is working.
+restore_pending_engine_change
+printf '3\n' > "$HOME/running-sessions"
+printf '1\n' > "$HOME/busy-sessions"
+printf '0\n' > "$HOME/unreadable-sessions"
+: > "$HOME/swarmctl.log"
+reconcile_out=$("$package" reconcile-host-if-idle 2>&1)
+printf '%s' "$reconcile_out" | grep -q 'mid-turn' \
+  || { echo "a mid-turn worker did not defer the reconcile: $reconcile_out" >&2; exit 1; }
+grep -q '^cancel-drain$' "$HOME/swarmctl.log" \
+  || { echo "a deferred reconcile left the host drained" >&2; exit 1; }
+
+# 2. RESTING SESSIONS PROCEED, SILENTLY. Three sessions, none working, all
+#    readable. This is the case the old predicate could never reach, and the
+#    silence is the assertion: a check that always warns says nothing on the
+#    day it matters.
+restore_pending_engine_change
+printf '3\n' > "$HOME/running-sessions"
+printf '0\n' > "$HOME/busy-sessions"
+printf '0\n' > "$HOME/unreadable-sessions"
+quiet_out=$("$package" reconcile-host-if-idle 2>&1)
+# BOTH halves, because silence alone does not distinguish "proceeded quietly"
+# from "deferred quietly" — and deferring quietly is the original bug.
+printf '%s' "$quiet_out" | grep -q 'now uses' \
+  || { echo "resting sessions did not let the engine update land: $quiet_out" >&2; exit 1; }
+printf '%s' "$quiet_out" | grep -qi 'WARNING' \
+  && { echo "a fully readable idle host warned about nothing: $quiet_out" >&2; exit 1; }
+
+# 3a. A PROVIDER THIS BUILD CANNOT READ: DEFER, and name it. Not proceed —
+#     the worker engine card is the deliberate route, and it exists.
+restore_pending_engine_change
+printf '0\n' > "$HOME/busy-sessions"
+printf '2\n' > "$HOME/unreadable-sessions"
+unreadable_out=$("$package" reconcile-host-if-idle 2>&1)
+printf '%s' "$unreadable_out" | grep -q 'deferred.*cannot read' \
+  || { echo "an unreadable provider did not defer: $unreadable_out" >&2; exit 1; }
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "1.0.0" ] \
+  || { echo "an unreadable provider swapped the engine anyway" >&2; exit 1; }
+
+# 3b. A HOST TOO OLD TO ANSWER omits the keys entirely. THIS IS THE CASE THAT
+#     COST 12 LIVE SESSIONS: on the first release that adds the field, the
+#     running host is ALWAYS the old one, so this fires with certainty.
+restore_pending_engine_change
+: > "$HOME/host-cannot-report-busy"
+skew_out=$("$package" reconcile-host-if-idle 2>&1)
+printf '%s' "$skew_out" | grep -q 'deferred.*cannot report which sessions are busy' \
+  || { echo "an unanswerable host was treated as idle: $skew_out" >&2; exit 1; }
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "1.0.0" ] \
+  || { echo "an unanswerable host had its engine swapped underneath it" >&2; exit 1; }
+
+# 3c. AND THE OPERATOR'S DELIBERATE ROUTE STILL WORKS while it cannot check —
+#     otherwise deferring would strand the upgrade instead of scheduling it.
+"$package" reconcile-host >/dev/null 2>&1 \
+  && { echo "required-mode reconcile should refuse while unverifiable" >&2; exit 1; }
+rm -f "$HOME/host-cannot-report-busy"
+printf '0\n' > "$HOME/unreadable-sessions"
+# Each of the proceeding cases above CONSUMED the pending engine change, so put
+# it back: what follows is the requested-maintenance test and it needs one.
+restore_pending_engine_change
+
 printf 'requested_at=%s\ntarget_version=2.0.0\n' "$(date +%s)" > "$SWARM_STATE_ROOT/worker-engine-maintenance.request"
 printf '0\n' > "$HOME/running-sessions"
 : > "$HOME/systemctl.log"
@@ -690,13 +780,60 @@ fi
 [ "$(cat "$SWARM_STATE_ROOT/swarm.sqlite3")" = "database-v7" ] \
   || { echo "a failed protocol update did not restore the database" >&2; exit 1; }
 
-# Explicit migrate-protocol still refuses active workers and still works.
-printf '1
-' > "$HOME/running-sessions"
-if "$package" migrate-protocol "$test_root/bundle-6.0.0"; then
-  echo "active protocol migration unexpectedly succeeded" >&2
-  exit 1
-fi
+# THE MIGRATION PREDICATE, ALL FOUR DIRECTIONS.
+#
+# This is the OPPOSITE arm to the reconcile on "unreadable": a protocol
+# migration ends every session and the card's force path is a human route out,
+# so deferring strands nothing while proceeding would guess. The reconcile has
+# no such route, which is why it proceeds instead.
+
+# bundle-4.0.0 (protocol 6) AGAINST AN INSTALLED PROTOCOL 7, deliberately.
+# This used to migrate toward bundle-6.0.0, which is ALSO protocol 7 — so the
+# refusal it asserted came from "protocol is unchanged" and the active-worker
+# check was never reached. The assertion passed for the wrong reason. Every
+# case below therefore also asserts WHY it refused.
+migration_bundle="$test_root/bundle-4.0.0"
+
+# Explicit migrate-protocol refuses a MID-TURN worker, and says so.
+printf '1\n' > "$HOME/running-sessions"
+printf '1\n' > "$HOME/busy-sessions"
+printf '0\n' > "$HOME/unreadable-sessions"
+migrate_busy=$("$package" migrate-protocol "$migration_bundle" 2>&1 || true)
+printf '%s' "$migrate_busy" | grep -q 'mid-turn' \
+  || { echo "a mid-turn worker did not defer the migration: $migrate_busy" >&2; exit 1; }
+
+# A PROVIDER THIS BUILD CANNOT READ DEFERS HERE — the OPPOSITE arm to the
+# reconcile, because the card's force path is a human route out.
+printf '3\n' > "$HOME/running-sessions"
+printf '0\n' > "$HOME/busy-sessions"
+printf '2\n' > "$HOME/unreadable-sessions"
+migrate_unreadable=$("$package" migrate-protocol "$migration_bundle" 2>&1 || true)
+printf '%s' "$migrate_unreadable" | grep -q 'cannot read' \
+  || { echo "an unreadable provider did not defer the migration: $migrate_unreadable" >&2; exit 1; }
+
+# A HOST THAT CANNOT ANSWER defers too. Absent is not zero.
+: > "$HOME/host-cannot-report-busy"
+migrate_skew=$("$package" migrate-protocol "$migration_bundle" 2>&1 || true)
+printf '%s' "$migrate_skew" | grep -q 'cannot report which sessions are busy' \
+  || { echo "an unanswerable host did not defer the migration: $migrate_skew" >&2; exit 1; }
+rm -f "$HOME/host-cannot-report-busy"
+
+# AND THE NEGATIVE: everything readable and resting MIGRATES, silently.
+# Asserting the migration HAPPENED rather than that nothing complained —
+# a deferral is also silent, so silence alone would pass against the bug.
+printf '3\n' > "$HOME/running-sessions"
+printf '0\n' > "$HOME/busy-sessions"
+printf '0\n' > "$HOME/unreadable-sessions"
+"$package" migrate-protocol "$migration_bundle" >/dev/null 2>&1 \
+  || { echo "a resting host refused a protocol migration" >&2; exit 1; }
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "4.0.0" ] \
+  || { echo "the migration reported success without moving the host" >&2; exit 1; }
+
+# Put the stack back where the next assertions expect it: they are about a
+# 7 -> 8 update and need protocol 7 installed. bundle-4.0.0 is protocol 6, so
+# this is the same 6 -> 7 hop the harness already exercises above.
+"$package" update "$test_root/bundle-7.0.0" >/dev/null 2>&1 \
+  || { echo "could not restore protocol 7 after the migration cases" >&2; exit 1; }
 [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "7.0.0" ]
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "7.0.0" ]
 printf '0

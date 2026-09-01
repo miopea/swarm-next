@@ -41,7 +41,9 @@ fn classify_visible_text(provider: ProviderKind, visible: &str) -> ProviderActiv
     if provider == ProviderKind::ClaudeCode
         && normalized.contains("esc to cancel")
         && (normalized.contains("enter to confirm")
-            || visible.lines().any(|line| is_choice_cursor(line.trim())))
+            || visible
+                .lines()
+                .any(|line| is_choice_cursor('❯', line.trim())))
     {
         return ProviderActivity::AwaitingOperator;
     }
@@ -56,8 +58,17 @@ fn classify_visible_text(provider: ProviderKind, visible: &str) -> ProviderActiv
         .take(10)
         .collect::<Vec<_>>();
 
-    if provider == ProviderKind::ClaudeCode
-        && recent.iter().any(|line| is_choice_cursor(line))
+    // A MENU, NOT A FOOTER. Codex renders at least three different prompts —
+    // a command approval, an edit approval and an update notice — and their
+    // wording does not agree: two end "Press enter to confirm or esc to
+    // cancel" and the third ends "Press enter to continue". Keying on that
+    // sentence would have matched the first two and silently missed the third.
+    //
+    // What every one of them shares is the SHAPE: a cursored numbered option
+    // with siblings. A resting composer has the same leading glyph and no
+    // numbered options at all, which is what keeps this from swallowing it.
+    if let Some(cursor) = choice_cursor(provider)
+        && recent.iter().any(|line| is_choice_cursor(cursor, line))
         && recent
             .iter()
             .filter(|line| is_numbered_choice(line))
@@ -195,8 +206,29 @@ fn idle_footer(provider: ProviderKind, line: &str) -> bool {
     }
 }
 
-fn is_choice_cursor(line: &str) -> bool {
-    line.strip_prefix('❯')
+/// The glyph a provider draws against the SELECTED item of a choice menu.
+///
+/// Returned per provider rather than matched globally because it is also the
+/// composer prompt for at least one of them: Codex draws `›` both in front of
+/// the input line and in front of the highlighted option. Only the second is a
+/// question, and telling them apart is what [`is_choice_cursor`] is for.
+///
+/// `None` for the alpha providers because nobody has watched one draw a menu.
+/// Their CLIs are not installed on this machine, so a glyph here would be a
+/// guess wearing the same shape as a measurement.
+fn choice_cursor(provider: ProviderKind) -> Option<char> {
+    match provider {
+        ProviderKind::ClaudeCode => Some('❯'),
+        ProviderKind::Codex => Some('›'),
+        ProviderKind::Gemini
+        | ProviderKind::Grok
+        | ProviderKind::OpenCode
+        | ProviderKind::Unsupported => None,
+    }
+}
+
+fn is_choice_cursor(cursor: char, line: &str) -> bool {
+    line.strip_prefix(cursor)
         .is_some_and(|tail| is_numbered_choice(tail.trim_start()))
 }
 
@@ -331,6 +363,140 @@ mod tests {
             ),
         );
         assert_eq!(activity, ProviderActivity::AwaitingOperator);
+    }
+
+    /// `AwaitingOperator` is Claude-only, and every other provider reads `Unknown`.
+    ///
+    /// This is not a complaint about the classifier — Unknown is the honest
+    /// answer, and guessing another provider's glyphs would be worse. It is
+    /// pinned because of what READS the answer: any predicate that treats
+    /// "not mid-turn" as "safe to stop" turns this honest Unknown into a
+    /// confident "idle", and would stop a worker sitting at a permission
+    /// prompt. Measured, so a later change to the arms shows up here rather
+    /// than inside a safety check.
+    /// Every one of these is transcribed from a live `codex` session captured
+    /// in a PTY on 2026-09-01 and replayed through this classifier.
+    ///
+    /// The three prompts do NOT share a footer — two say "Press enter to
+    /// confirm or esc to cancel" and the update notice says "Press enter to
+    /// continue". That is why the discriminator is the menu shape and not the
+    /// sentence: keying on the sentence would have passed the two approvals
+    /// and silently missed the third.
+    #[test]
+    fn a_real_codex_command_approval_awaits_the_operator() {
+        let screen = concat!(
+            "• Running mkdir -p /tmp/probe-dir-two\r\n",
+            "  Would you like to run the following command?\r\n",
+            "  Environment: local\r\n",
+            "  $ mkdir -p /tmp/probe-dir-two\r\n",
+            "› 1. Yes, proceed (y)\r\n",
+            "  2. Yes, and don't ask again for commands that start with `mkdir` (p)\r\n",
+            "  3. No, and tell Codex what to do differently (esc)\r\n",
+            "  Press enter to confirm or esc to cancel",
+        );
+        assert_eq!(
+            classify_provider_activity(ProviderKind::Codex, &snapshot(screen)),
+            ProviderActivity::AwaitingOperator
+        );
+    }
+
+    #[test]
+    fn a_real_codex_edit_approval_awaits_the_operator() {
+        let screen = concat!(
+            "• Added /tmp/probe-note.txt (+1 -0)\r\n",
+            "    1 +hello\r\n",
+            "  Would you like to make the following edits?\r\n",
+            "› 1. Yes, proceed (y)\r\n",
+            "  2. Yes, and don't ask again for these files (a)\r\n",
+            "  3. No, and tell Codex what to do differently (esc)\r\n",
+            "  Press enter to confirm or esc to cancel",
+        );
+        assert_eq!(
+            classify_provider_activity(ProviderKind::Codex, &snapshot(screen)),
+            ProviderActivity::AwaitingOperator
+        );
+    }
+
+    /// The prompt that proves the footer is not the discriminator.
+    #[test]
+    fn a_real_codex_update_notice_awaits_the_operator() {
+        let screen = concat!(
+            "  ✨ Update available! 0.147.0 -> 0.152.0\r\n",
+            "  Release notes: https://github.com/openai/codex/releases/latest\r\n",
+            "› 1. Update now (runs `npm install -g @openai/codex`)\r\n",
+            "  2. Skip\r\n",
+            "  3. Skip until next version\r\n",
+            "  Press enter to continue",
+        );
+        assert_eq!(
+            classify_provider_activity(ProviderKind::Codex, &snapshot(screen)),
+            ProviderActivity::AwaitingOperator,
+            "no confirm/cancel footer here — the menu shape is what identifies it"
+        );
+    }
+
+    /// THE NEGATIVE, AND IT IS THE ONE THAT MATTERS.
+    ///
+    /// Delivery submits to a worker only while it reads Resting, so a
+    /// discriminator that made any Codex screen non-Resting would stop work
+    /// reaching Codex workers entirely and silently — presenting as "nothing
+    /// is being assigned" rather than as a bug. A real composer carries the
+    /// same leading `›` as the menu cursor and must still rest.
+    #[test]
+    fn a_real_codex_composer_still_rests() {
+        let screen = concat!(
+            "  Tip: Use /skills to list available skills or ask Codex to use one.\r\n",
+            "• You have 1 usage limit reset available. Run /usage to use one.\r\n",
+            "› Summarize recent commits\r\n",
+            "  gpt-5.6-sol medium · ~/projects/personal/swarm-next",
+        );
+        assert_eq!(
+            classify_provider_activity(ProviderKind::Codex, &snapshot(screen)),
+            ProviderActivity::Resting,
+            "the composer glyph is the menu glyph; only the numbered options differ"
+        );
+    }
+
+    /// A menu is only recognised through the glyph its own provider draws.
+    ///
+    /// Claude's `❯` on a Codex screen means nothing, and vice versa, so the
+    /// same menu is Unknown to everyone who does not own that cursor. The
+    /// alpha providers own none, deliberately: their CLIs are not installed
+    /// here, nobody has watched one draw a menu, and Unknown is the honest
+    /// answer until somebody has.
+    ///
+    /// It is pinned because of what READS the answer. Unknown is uncertain and
+    /// consumers can route on it; the danger is a confident wrong answer, which
+    /// is exactly what Codex used to give here.
+    #[test]
+    fn a_menu_is_unknown_to_a_provider_that_does_not_draw_that_cursor() {
+        let claude_menu =
+            "Allow this command?\r\n❯ 1. Yes\r\n2. No\r\nEnter to confirm · Esc to cancel";
+
+        assert_eq!(
+            classify_provider_activity(ProviderKind::ClaudeCode, &snapshot(claude_menu)),
+            ProviderActivity::AwaitingOperator
+        );
+
+        for provider in [
+            ProviderKind::Codex,
+            ProviderKind::Gemini,
+            ProviderKind::Grok,
+            ProviderKind::OpenCode,
+        ] {
+            assert_eq!(
+                classify_provider_activity(provider, &snapshot(claude_menu)),
+                ProviderActivity::Unknown,
+                "{provider:?} does not draw ❯, so this menu is not its to read"
+            );
+        }
+
+        let codex_menu = "Would you like to run this?\r\n› 1. Yes\r\n2. No\r\nPress enter";
+        assert_eq!(
+            classify_provider_activity(ProviderKind::Gemini, &snapshot(codex_menu)),
+            ProviderActivity::Unknown,
+            "and an alpha provider stays Unknown on a Codex-shaped menu too"
+        );
     }
 
     #[test]

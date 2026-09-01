@@ -12,15 +12,16 @@ use std::{
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
-use swarm_domain::{FederationStewardTakeoverLeaseId, WorkerSessionId};
+use swarm_domain::{FederationStewardTakeoverLeaseId, ProviderKind, WorkerSessionId};
 use thiserror::Error;
 use tokio::sync::watch;
 use tracing::warn;
 
 use crate::{
     CanonicalTerminalState, HistoryAppendOutcome, HistoryCursor, HistoryDiagnostics, HistoryError,
-    HistoryPage, HistorySessionSummary, HistoryStore, JournalLimits, ProviderCommand, Resume,
-    TerminalTakeoverLease, TerminalWriteAuditEntry, TerminalWriteProvenance, TerminalWriteResult,
+    HistoryPage, HistorySessionSummary, HistoryStore, JournalLimits, ProviderActivity,
+    ProviderCommand, Resume, TerminalTakeoverLease, TerminalWriteAuditEntry,
+    TerminalWriteProvenance, TerminalWriteResult, classify_provider_activity,
 };
 
 pub const MAX_TERMINAL_ROWS: u16 = 200;
@@ -132,6 +133,13 @@ pub struct ProcessTerminalSession {
     /// every byte, so this is the one owner of how long a worker has been
     /// silent; nothing has to poll a terminal to find out.
     last_output_at: Arc<AtomicI64>,
+    /// Which provider this session is running, when that is known.
+    ///
+    /// `None` for a shell, which carries no agent and is deliberately excluded
+    /// from activity classification — see `HostRequest::StartShell`. The host
+    /// knows the provider from the request variant it handled, so this is
+    /// recorded rather than guessed from the executable name.
+    provider: Option<ProviderKind>,
 }
 
 impl std::fmt::Debug for ProcessTerminalSession {
@@ -160,7 +168,7 @@ impl ProcessTerminalSession {
         limits: JournalLimits,
         size: TerminalSize,
     ) -> Result<Self, SessionRegistryError> {
-        Self::spawn_with_history(id, command, limits, size, None)
+        Self::spawn_with_history(id, command, limits, size, None, None)
     }
 
     fn spawn_with_history(
@@ -169,6 +177,7 @@ impl ProcessTerminalSession {
         limits: JournalLimits,
         size: TerminalSize,
         history: Option<Arc<HistoryStore>>,
+        provider: Option<ProviderKind>,
     ) -> Result<Self, SessionRegistryError> {
         size.validate()?;
         let pair = native_pty_system()
@@ -272,6 +281,7 @@ impl ProcessTerminalSession {
             reader_thread: Mutex::new(Some(reader_thread)),
             history,
             last_output_at,
+            provider,
         })
     }
 
@@ -505,6 +515,27 @@ impl SessionRegistry {
         self.spawn_with_root_override(command, size, false)
     }
 
+    /// Spawns a session and RECORDS which provider it is, so the host can later
+    /// say whether that session is mid-turn.
+    ///
+    /// The host knows this from the request variant it handled — `StartClaude`,
+    /// `StartCodex`, `StartAlphaProvider` — so nothing here infers a provider
+    /// from an executable name. `None` is for a shell, which has no agent and
+    /// is excluded from classification by design.
+    ///
+    /// # Errors
+    ///
+    /// As [`SessionRegistry::spawn_with_root_override`].
+    pub fn spawn_provider_session(
+        &self,
+        command: &ProviderCommand,
+        size: TerminalSize,
+        allow_outside_roots: bool,
+        provider: Option<ProviderKind>,
+    ) -> Result<Arc<ProcessTerminalSession>, SessionRegistryError> {
+        self.spawn_inner(command, size, allow_outside_roots, provider)
+    }
+
     /// Spawns a command with an explicit trusted-caller exception to configured roots.
     ///
     /// # Errors
@@ -516,6 +547,16 @@ impl SessionRegistry {
         command: &ProviderCommand,
         size: TerminalSize,
         allow_outside_roots: bool,
+    ) -> Result<Arc<ProcessTerminalSession>, SessionRegistryError> {
+        self.spawn_inner(command, size, allow_outside_roots, None)
+    }
+
+    fn spawn_inner(
+        &self,
+        command: &ProviderCommand,
+        size: TerminalSize,
+        allow_outside_roots: bool,
+        provider: Option<ProviderKind>,
     ) -> Result<Arc<ProcessTerminalSession>, SessionRegistryError> {
         let canonical_workspace = command.working_directory.canonicalize().map_err(|_| {
             SessionRegistryError::WorkspaceUnavailable(command.working_directory.clone())
@@ -547,9 +588,20 @@ impl SessionRegistry {
             self.limits,
             size,
             self.history.as_ref().map(Arc::clone),
+            provider,
         )?);
         sessions.insert(id, Arc::clone(&session));
         Ok(session)
+    }
+
+    /// Counts live sessions that are mid-turn, and those that cannot be read.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a lock is poisoned or a child cannot be polled.
+    pub fn activity_census(&self) -> Result<SessionActivityCensus, SessionRegistryError> {
+        let sessions = lock(&self.sessions)?;
+        activity_census(&sessions)
     }
 
     /// Returns a session by immutable identity.
@@ -930,6 +982,47 @@ fn prune_write_audit(audit: &mut VecDeque<TerminalWriteAuditEntry>, now: i64) {
     {
         audit.pop_front();
     }
+}
+
+/// How many live sessions are mid-turn, and how many cannot be read.
+///
+/// THE COUNT OF SESSIONS WAS NEVER THE QUESTION. Autostart guarantees sessions
+/// exist, so `running_sessions` is a constant rather than a reading — which is
+/// why the reconcile deferred forever on it. This answers the question that was
+/// actually being asked: is anyone doing something losable.
+///
+/// Three outcomes rather than two, because "I cannot tell" is a real answer and
+/// collapsing it into either of the others is what makes a safety check lie.
+/// Shells are in neither count: they carry no agent, and classifying one would
+/// invent a busy worker out of a person's prompt.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SessionActivityCensus {
+    /// Active or awaiting an operator. Stopping one of these loses work.
+    pub busy: usize,
+    /// A provider whose screen this build cannot classify. Not safe to treat as
+    /// idle, and not a reason to defer forever either.
+    pub unreadable: usize,
+}
+
+fn activity_census(
+    sessions: &HashMap<WorkerSessionId, Arc<ProcessTerminalSession>>,
+) -> Result<SessionActivityCensus, SessionRegistryError> {
+    let mut census = SessionActivityCensus::default();
+    for session in sessions.values() {
+        if !session.is_running()? {
+            continue;
+        }
+        let Some(provider) = session.provider else {
+            continue;
+        };
+        let snapshot = lock(&session.terminal_state)?.snapshot();
+        match classify_provider_activity(provider, &snapshot) {
+            ProviderActivity::Active | ProviderActivity::AwaitingOperator => census.busy += 1,
+            ProviderActivity::Unknown => census.unreadable += 1,
+            ProviderActivity::Resting => {}
+        }
+    }
+    Ok(census)
 }
 
 fn running_sessions(

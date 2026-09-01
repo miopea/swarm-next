@@ -127,6 +127,48 @@ stop_swarm_stack() {
     done
   done
 }
+# OPTION C: a deferral that never ends must eventually say so.
+#
+# Deferring is correct while a worker is mid-turn, and this runs every two
+# minutes, so a silent deferral is indistinguishable from a healthy pass. That
+# is exactly how the running_sessions deadlock went unnoticed for months: the
+# timer completed, printed a reassuring line, and nothing ever landed.
+#
+# The ceiling does not force the update through. It refuses to stay quiet.
+# Counted per KIND, because an engine reconcile and a protocol migration defer
+# for different reasons and one clearing must not silence the other.
+deferral_file() { printf '%s/%s-deferrals\n' "$state_root" "$1"; }
+
+note_deferral() {
+  deferral_kind=$1
+  deferral_subject=$2
+  deferral_detail=$3
+  file=$(deferral_file "$deferral_kind")
+  count=0
+  [ -f "$file" ] && count=$(cat "$file" 2>/dev/null || echo 0)
+  case "$count" in *[!0-9]*|"") count=0;; esac
+  count=$((count + 1))
+  mkdir -p "$state_root" 2>/dev/null || true
+  printf '%s\n' "$count" > "$file" 2>/dev/null || true
+  if [ "$count" -ge "${SWARM_RECONCILE_DEFERRAL_CEILING:-30}" ]; then
+    printf 'WARNING: %s has been deferred %s times in a row and has never landed; %s\n' \
+      "$deferral_subject" "$count" "$deferral_detail" >&2
+  fi
+}
+
+clear_deferrals() { rm -f "$(deferral_file "$1")" 2>/dev/null || true; }
+
+# WHAT IS BUSY AND WHAT COULD NOT BE READ, from one status payload.
+#
+# Both values may come back EMPTY, and empty is not zero: a host too old to
+# classify omits the keys entirely. Every caller has to decide what to do about
+# that, and they do NOT all decide the same way -- see the two call sites.
+read_session_activity() {
+  activity_status=$1
+  busy=$(printf '%s\n' "$activity_status" | sed -n 's/.*"busy_sessions":[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+  unreadable=$(printf '%s\n' "$activity_status" | sed -n 's/.*"unreadable_sessions":[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+}
+
 terminal_socket() { printf '%s/swarm/terminal.sock\n' "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; }
 
 # The one line worth showing from ANY failed step, bounded and newline-free.
@@ -1293,16 +1335,70 @@ reconcile_host() {
   status=$(SWARM_TERMINAL_SOCKET=$(terminal_socket) "$host_release/bin/swarmctl" status)
   running=$(printf '%s\n' "$status" | sed -n 's/.*"running_sessions":[[:space:]]*\([0-9][0-9]*\).*/\1/p')
   case "$running" in *[!0-9]*|"") die "terminal host returned invalid status";; esac
-  if [ "$running" -ne 0 ]; then
+
+  # WHAT IS BUSY, NOT HOW MANY SESSIONS EXIST.
+  #
+  # This tested running_sessions, and autostart guarantees that never reaches
+  # zero -- so the deferral could not finish and requested maintenance never
+  # landed. A session count is a constant here, not a reading.
+  #
+  # Absent rather than zero is the case that matters: a host too old to answer
+  # omits these keys entirely, and reading "no key" as "nobody is busy" would
+  # upgrade over live work while believing it had checked. Operator ruling
+  # 01a05b83 settles what to do instead -- proceed, and say loudly that it
+  # could not check.
+  read_session_activity "$status"
+
+  if [ -n "$busy" ] && [ "$busy" -ne 0 ]; then
     if [ "$reconcile_mode" = "if-idle" ]; then
       SWARM_TERMINAL_SOCKET=$(terminal_socket) \
         "$host_release/bin/swarmctl" cancel-drain >/dev/null 2>&1 || true
       drain_release=
-      printf 'Terminal host update remains deferred; %s sessions are active\n' "$running"
+      printf 'Terminal host update deferred; %s of %s sessions are mid-turn\n' \
+        "$busy" "$running"
+      note_deferral host-reconcile "the worker engine update" "$busy sessions are still mid-turn"
       return
     fi
-    die "terminal host update deferred; $running sessions remain"
+    die "terminal host update deferred; $busy sessions are mid-turn"
   fi
+
+  # CANNOT CHECK MEANS WAIT FOR THE OPERATOR, NOT PROCEED.
+  #
+  # This proceeded-with-a-warning, and it cost 12 live sessions on 2026-09-01
+  # at 14:48:06. The reasoning was that the reconcile has no human route out,
+  # so proceeding was the only escape from a permanent deferral. THAT WAS
+  # WRONG: reconcile_host_requested (line ~1410) runs `reconcile_host` in
+  # REQUIRED mode when the worker engine card has written its request file, and
+  # that path proceeds regardless of who is busy. The card IS the route out.
+  #
+  # And "cannot check" is not a rare accident here. On the FIRST release that
+  # teaches the host to report busy sessions, the RUNNING host is by definition
+  # the older one that cannot answer -- so this arm fires with certainty on the
+  # one upgrade it most needs to be right about, on every Hive at once.
+  #
+  # So it defers and says why, and `worker_engine_update_required` already
+  # surfaces it in the card. The operator's own words are pinned in
+  # DevelopmentReloadAction.test.tsx: "if you have an update that needs the
+  # engine to restart, I should see that notification."
+  reconcile_blocked=
+  if [ -z "$busy" ]; then
+    reconcile_blocked="this terminal host cannot report which sessions are busy, so it was NOT checked"
+  elif [ -n "$unreadable" ] && [ "$unreadable" -ne 0 ]; then
+    reconcile_blocked="$unreadable of $running sessions run a provider this build cannot read"
+  fi
+  if [ -n "$reconcile_blocked" ]; then
+    if [ "$reconcile_mode" = "if-idle" ]; then
+      SWARM_TERMINAL_SOCKET=$(terminal_socket) \
+        "$host_release/bin/swarmctl" cancel-drain >/dev/null 2>&1 || true
+      drain_release=
+      printf 'Terminal host update deferred; %s. Apply it from the worker engine card, which ends every session deliberately.\n' \
+        "$reconcile_blocked"
+      note_deferral host-reconcile "the worker engine update" "$reconcile_blocked"
+      return
+    fi
+    die "terminal host update deferred; $reconcile_blocked"
+  fi
+  clear_deferrals host-reconcile
 
   activate_host_link "$current"
   install_units "$current"
@@ -1453,7 +1549,31 @@ migrate_protocol() {
   status=$(SWARM_TERMINAL_SOCKET=$(terminal_socket) "$host_release/bin/swarmctl" status)
   running=$(printf '%s\n' "$status" | sed -n 's/.*"running_sessions":[[:space:]]*\([0-9][0-9]*\).*/\1/p')
   case "$running" in *[!0-9]*|"") die "terminal host returned invalid status";; esac
-  if [ "$running" -ne 0 ]; then
+  read_session_activity "$status"
+
+  # DEFERRING ON "I CANNOT TELL" IS THE OPPOSITE ARM TO reconcile_host, AND THE
+  # DIFFERENCE IS AN ESCAPE HATCH RATHER THAN A BLAST RADIUS.
+  #
+  # The reconcile has no human route out: defer it wrongly and worker-engine
+  # maintenance never lands, with nobody watching. Proceeding is the only way
+  # out, so it proceeds and says what it could not read.
+  #
+  # A protocol migration HAS a route out. The worker engine card's force path
+  # calls complete_protocol_migration WITHOUT if-idle and stops the sessions
+  # itself. So deferring here strands nothing -- a person can force it
+  # deliberately -- while proceeding would end every live session on a guess.
+  #
+  # Proceed-on-unknown where there is no human route out; defer-on-unknown
+  # where there is.
+  migration_blocked=
+  if [ -z "$busy" ]; then
+    migration_blocked="this host cannot report which sessions are busy, so it was NOT checked"
+  elif [ "$busy" -ne 0 ]; then
+    migration_blocked="$busy of $running sessions are mid-turn"
+  elif [ -n "$unreadable" ] && [ "$unreadable" -ne 0 ]; then
+    migration_blocked="$unreadable of $running sessions run a provider this build cannot read"
+  fi
+  if [ -n "$migration_blocked" ]; then
     # DEFER, DO NOT FAIL. This used to die, and on a Hive with any worker
     # running that made a released protocol change UNINSTALLABLE: apply_release
     # deletes its request file before installing, and swarm-release-apply.path
@@ -1472,12 +1592,13 @@ migrate_protocol() {
       # download, and a Hive that defers overnight would have nothing to
       # activate from in the morning.
       printf '%s\n' "$new_release" > "$state_root/protocol-migration.pending"
-      printf 'Protocol migration to %s is prepared and deferred; %s sessions are active. It will apply itself when they are idle, or you can apply it now from the worker engine card.\n' \
-        "$version" "$running"
+      printf 'Protocol migration to %s is prepared and deferred; %s. It will apply itself when they are idle, or you can apply it now from the worker engine card.\n' \
+        "$version" "$migration_blocked"
       return
     fi
-    die "protocol migration deferred; $running sessions remain"
+    die "protocol migration deferred; $migration_blocked"
   fi
+  clear_deferrals protocol-migration
 
   activate_protocol_migration "$new_release"
 }
@@ -1498,16 +1619,35 @@ complete_protocol_migration() {
   status=$(SWARM_TERMINAL_SOCKET=$(terminal_socket) "$host_release/bin/swarmctl" status)
   running=$(printf '%s\n' "$status" | sed -n 's/.*"running_sessions":[[:space:]]*\([0-9][0-9]*\).*/\1/p')
   case "$running" in *[!0-9]*|"") die "terminal host returned invalid status";; esac
-  if [ "$running" -ne 0 ]; then
+  read_session_activity "$status"
+
+  # THE UNATTENDED HALF, and the one that decides whether the promise printed
+  # by migrate_protocol is ever kept. It runs from swarm-host-reconcile.timer,
+  # so "operator-initiated, therefore attended" is reasoning about the wrong
+  # half of this command. Same arms as migrate_protocol above.
+  completion_blocked=
+  if [ -z "$busy" ]; then
+    completion_blocked="this host cannot report which sessions are busy, so it was NOT checked"
+  elif [ "$busy" -ne 0 ]; then
+    completion_blocked="$busy of $running sessions are mid-turn"
+  elif [ -n "$unreadable" ] && [ "$unreadable" -ne 0 ]; then
+    completion_blocked="$unreadable of $running sessions run a provider this build cannot read"
+  fi
+  if [ -n "$completion_blocked" ]; then
     if [ "$complete_mode" = "if-idle" ]; then
       SWARM_TERMINAL_SOCKET=$(terminal_socket) \
         "$host_release/bin/swarmctl" cancel-drain >/dev/null 2>&1 || true
       drain_release=
-      printf 'Protocol migration remains deferred; %s sessions are active\n' "$running"
+      printf 'Protocol migration remains deferred; %s\n' "$completion_blocked"
+      # "It will apply itself when they are idle" is a PROMISE. A deferral that
+      # repeats forever quietly makes it false, which is precisely how the
+      # previous fix here turned a visible failure into an invisible one.
+      note_deferral protocol-migration "the prepared protocol migration" "$completion_blocked"
       return
     fi
-    die "protocol migration deferred; $running sessions remain"
+    die "protocol migration deferred; $completion_blocked"
   fi
+  clear_deferrals protocol-migration
   activate_protocol_migration "$pending"
 }
 

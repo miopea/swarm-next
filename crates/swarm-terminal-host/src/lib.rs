@@ -7,7 +7,7 @@ use std::{
 };
 
 use nix::unistd::Uid;
-use swarm_domain::WorkerSessionId;
+use swarm_domain::{ProviderKind, WorkerSessionId};
 use swarm_terminal::{
     AlphaProviderAdapter, ClaudeCodeAdapter, CodexAdapter, HostRequest, HostResponse,
     HostSessionSummary, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, PROTOCOL_VERSION, SessionRegistry,
@@ -350,7 +350,12 @@ fn dispatch_blocking(
             .map_err(|error| error.to_string())
             .and_then(|command| {
                 registry
-                    .spawn_with_root_override(&command, size, allow_outside_roots)
+                    .spawn_provider_session(
+                        &command,
+                        size,
+                        allow_outside_roots,
+                        Some(ProviderKind::ClaudeCode),
+                    )
                     .map_err(|error| error.to_string())
             })
             .map(|session| HostResponse::SessionStarted {
@@ -366,7 +371,12 @@ fn dispatch_blocking(
             .map_err(|error| error.to_string())
             .and_then(|command| {
                 registry
-                    .spawn_with_root_override(&command, size, allow_outside_roots)
+                    .spawn_provider_session(
+                        &command,
+                        size,
+                        allow_outside_roots,
+                        Some(ProviderKind::Codex),
+                    )
                     .map_err(|error| error.to_string())
             })
             .map(|session| HostResponse::SessionStarted {
@@ -396,7 +406,7 @@ fn dispatch_blocking(
             .map_err(|error| error.to_string())
             .and_then(|command| {
                 registry
-                    .spawn_with_root_override(&command, size, allow_outside_roots)
+                    .spawn_provider_session(&command, size, allow_outside_roots, Some(provider))
                     .map_err(|error| error.to_string())
             })
             .map(|session| HostResponse::SessionStarted {
@@ -516,6 +526,7 @@ fn terminal_host_status(
     host_version: &str,
     host_build_id: &str,
 ) -> Result<TerminalHostStatus, swarm_terminal::SessionRegistryError> {
+    let census = registry.activity_census()?;
     Ok(TerminalHostStatus {
         protocol_version: PROTOCOL_VERSION,
         host_version: host_version.into(),
@@ -523,6 +534,8 @@ fn terminal_host_status(
         draining: registry.is_draining(),
         running_sessions: registry.running_session_count()?,
         retained_sessions: registry.len()?,
+        busy_sessions: Some(census.busy),
+        unreadable_sessions: Some(census.unreadable),
         resources: Some(swarm_terminal::sample_current_process()),
         takeover_relay: true,
     })
