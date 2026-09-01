@@ -24,8 +24,19 @@ type Props = {
 };
 
 export default function WorkerSettings({ workers, workspaces, busy, providers, providerCapabilitiesUnavailable = false, onCreate, onUpdate, onChooseMark, onRemove, onDraftDescription, onImproveDescription, onReorder }: Props) {
-  const scout = workers.find((worker) => worker.system_role === "scout");
-  const roster = workers.filter((worker) => worker.role !== "queen" && worker.system_role !== "scout");
+  // THESE TWO FILTERS MUST AGREE WITH THE SERVER, which excludes a worker from
+  // reordering with `role != 'queen' AND system_role IS NULL` — ANY system
+  // role, not one named value. `roster` is both what is rendered as draggable
+  // AND the exact set sent to the reorder endpoint, and that endpoint refuses
+  // anything that is not a precise set match.
+  //
+  // Matching on `!== "scout"` therefore held only while `scout` was the only
+  // system role. A second one would render as an ordinary draggable row, be
+  // included in the payload, be excluded by the server, and every reorder would
+  // fail with InvalidWorkerOrder — the 409 the operator hit on 2026-09-01 for a
+  // different reason (connection-client workers), reproduced exactly.
+  const managedWorkers = workers.filter((worker) => worker.role !== "queen" && Boolean(worker.system_role));
+  const roster = workers.filter((worker) => worker.role !== "queen" && !worker.system_role);
   const available = workspaces.filter((workspace) => !workspace.configured_worker_id);
   const [name, setName] = useState("");
   const [workspace, setWorkspace] = useState("");
@@ -38,7 +49,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, p
   const filteredRoster = normalizedWorkerQuery
     ? roster.filter((worker) => workerMatches(worker, normalizedWorkerQuery))
     : roster;
-  const scoutMatches = !normalizedWorkerQuery || Boolean(scout && workerMatches(scout, normalizedWorkerQuery));
+  const matchingManaged = managedWorkers.filter((worker) => !normalizedWorkerQuery || workerMatches(worker, normalizedWorkerQuery));
   const workerReorder = useReorderDrag(roster.map((worker) => worker.id), (workerIds) => void onReorder(workerIds));
   const matchingWorkspaces = workspaceMatches(available, workspace).slice(0, 8);
   const customWorkspace = Boolean(workspace.trim()) && !workspaces.some((choice) => normalizePath(choice.path) === normalizePath(workspace.trim()));
@@ -94,7 +105,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, p
     <section id="settings-crew" className="settings-card worker-settings" aria-labelledby="worker-settings-heading">
       <div><p className="eyebrow">Worker roster</p><h3 id="worker-settings-heading">Your familiar crew</h3></div>
       <p>Workers remember their repository and provider conversation across stops, updates, and reboots. Reorder them to match how you work.</p>
-      <label className="worker-roster-search" htmlFor="worker-roster-search"><span>Find a worker</span><input id="worker-roster-search" type="search" aria-label="Find a worker" value={workerQuery} onChange={(event) => setWorkerQuery(event.target.value)} placeholder="Name, repository, provider, or description" /><small>{normalizedWorkerQuery ? `${filteredRoster.length + (scoutMatches && scout ? 1 : 0)} matching` : `${roster.length + (scout ? 1 : 0)} repository workers`}{normalizedWorkerQuery ? " · clear the search to reorder" : ""}</small></label>
+      <label className="worker-roster-search" htmlFor="worker-roster-search"><span>Find a worker</span><input id="worker-roster-search" type="search" aria-label="Find a worker" value={workerQuery} onChange={(event) => setWorkerQuery(event.target.value)} placeholder="Name, repository, provider, or description" /><small>{normalizedWorkerQuery ? `${filteredRoster.length + matchingManaged.length} matching` : `${roster.length + managedWorkers.length} repository workers`}{normalizedWorkerQuery ? " · clear the search to reorder" : ""}</small></label>
       <div className="configured-workers">
         {workers.find((worker) => worker.role === "queen") && (
           <div className="configured-worker queen-worker">
@@ -102,9 +113,10 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, p
             <span><strong>Queen</strong><small>Pinned · always active</small></span>
           </div>
         )}
-        {scout && scoutMatches && (
+        {matchingManaged.map((managedWorker) => (
           <WorkerPreferenceRow
-            worker={scout}
+            key={managedWorker.id}
+            worker={managedWorker}
             workspaces={workspaces}
             busy={busy}
             first
@@ -127,7 +139,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, p
             onDragLeave={() => undefined}
             onDrop={() => undefined}
           />
-        )}
+        ))}
         {filteredRoster.map((worker) => {
           const index = roster.findIndex((candidate) => candidate.id === worker.id);
           return (
@@ -159,7 +171,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, p
           );
         })}
         {roster.length === 0 && <p className="empty-worker-settings">No repository workers configured yet.</p>}
-        {roster.length > 0 && filteredRoster.length === 0 && !scoutMatches && <p className="empty-worker-settings">No workers match “{workerQuery.trim()}”.</p>}
+        {roster.length > 0 && filteredRoster.length === 0 && matchingManaged.length === 0 && <p className="empty-worker-settings">No workers match “{workerQuery.trim()}”.</p>}
       </div>
       <form className="configure-worker-form" onSubmit={(event) => void submit(event)}>
         {providerCapabilitiesUnavailable && <div className="integration-state is-error" role="alert"><strong>Coding providers could not be checked</strong><span>Existing workers are unchanged. Refresh Swarm before adding a worker or changing her provider.</span></div>}

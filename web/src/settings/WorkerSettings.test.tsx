@@ -362,6 +362,49 @@ test("shows the real Claude improvement failure instead of appearing inert", asy
   expect(await screen.findByRole("alert")).toHaveTextContent("Runtime request returned 503: Claude Code is not available");
 });
 
+/**
+ * THE SET SENT TO THE SERVER MUST NOT CONTAIN A WORKER THE SERVER EXCLUDES.
+ *
+ * `reorder_workers` refuses anything that is not an exact set match against
+ * `role != 'queen' AND system_role IS NULL` — ANY system role. The UI matched
+ * on `system_role !== "scout"`, one named value, so the two agreed only while
+ * scout was the only system role.
+ *
+ * A second one would render as an ordinary draggable row, be included in the
+ * reorder payload, be excluded by the server, and every reorder would fail with
+ * InvalidWorkerOrder. That is the 409 the operator hit on 2026-09-01 for a
+ * different reason — connection-client workers — reproduced exactly by a
+ * predicate disagreement rather than a hidden row.
+ *
+ * The test uses a system role that is deliberately NOT "scout", because a test
+ * written with "scout" passes under both predicates and proves nothing.
+ */
+test("a system role other than scout is managed rather than reorderable", () => {
+  const archivist = { ...worker("archivist", "Archivist", "/projects/archive", 0), system_role: "archivist" as unknown as "scout" };
+  const onReorder = vi.fn();
+  render(
+    <WorkerSettings
+      workers={[queen, archivist, budget]}
+      workspaces={[]}
+      busy={false}
+      providers={{ claude_code: true, codex: true }}
+      onCreate={vi.fn()}
+      onUpdate={vi.fn()} onChooseMark={vi.fn()}
+      onRemove={vi.fn()}
+      onDraftDescription={vi.fn()}
+      onImproveDescription={vi.fn()}
+      onReorder={onReorder}
+    />,
+  );
+
+  // It is still shown — excluding it from the roster must not hide it.
+  expect(screen.getByText("Archivist")).toBeTruthy();
+
+  // ...and it is not draggable, which is what keeps it out of the payload.
+  const row = screen.getByText("Archivist").closest("[draggable]");
+  expect(row?.getAttribute("draggable")).not.toBe("true");
+});
+
 test("pins managed Scout after Queen while keeping provider and routing settings editable", () => {
   const scout = { ...worker("scout", "Scout", "/projects", 0), system_role: "scout" as const };
   render(
