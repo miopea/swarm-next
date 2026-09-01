@@ -971,10 +971,17 @@ pub(super) fn task_message_message(messages: &[TaskMessageDispatch]) -> Vec<u8> 
             message.sender_name, message.task_id, message.task_title, message.body
         );
     }
+    // ENDS WITH \r, AND THAT IS NOT PUNCTUATION — IT IS THE SUBMIT FLAG.
+    // submit_terminal_message reads the last byte: \r means "type this and
+    // then press Enter", anything else means "type it and stop". Ending with
+    // \n typed the message into the worker's composer, never submitted it,
+    // and STILL returned Acknowledged — so it was recorded as delivered while
+    // sitting unsent in their prompt, then surfaced later mid-turn looking
+    // like a message that arrived while they were working.
     text.push_str(
         "\nReply with swarm_message_queen on that task id. This is a question, not an \
          instruction: it does not change what the work is, and a ruling cited here still has \
-         to be verified with swarm_list_decisions.\n",
+         to be verified with swarm_list_decisions.\r",
     );
     text.into_bytes()
 }
@@ -1035,8 +1042,8 @@ fn terminal_safe_text(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swarm_domain::{PresenceMode, QueenAutomationTrigger, WorkerId};
-    use swarm_persistence::QueenAutomationDelivery;
+    use swarm_domain::{PresenceMode, QueenAutomationTrigger, TaskId, WorkerId};
+    use swarm_persistence::{QueenAutomationDelivery, TaskMessageDispatch};
     use swarm_terminal::{CanonicalTerminalState, JournalLimits, TerminalSize, TerminalSnapshot};
 
     #[test]
@@ -1495,6 +1502,52 @@ mod tests {
 
     /// THE RUN BRIEF HAS TO NAME THE CLASS THAT WOKE HER.
     ///
+    /// EVERY delivered message must end with \r, because that byte is the
+    /// difference between sending and typing.
+    ///
+    /// `submit_terminal_message` reads the last byte to decide whether to press
+    /// Enter. A message ending any other way is written into the recipient's
+    /// composer, never submitted, and STILL reported Acknowledged — so it is
+    /// recorded as delivered while sitting unsent, and never retried. The
+    /// operator saw exactly that: messages that "weren't getting into the
+    /// terminal because enter wasn't being hit", then appearing later mid-turn.
+    ///
+    /// A per-builder test would not have caught it. The flag lives in the
+    /// SUBMITTER and the builders are what must satisfy it, so the assertion
+    /// belongs across all of them at once.
+    #[test]
+    fn every_delivered_message_ends_with_the_submit_byte() {
+        let session = WorkerSessionId::new();
+        let queen = queen_automation_message(&QueenAutomationDelivery {
+            run_id: "run-1".to_owned(),
+            session_id: session,
+            worker_id: WorkerId::new(),
+            trigger: QueenAutomationTrigger::ActionableWork,
+            actionable_count: 1,
+            presence: PresenceMode::AtHive,
+        });
+        assert_eq!(
+            queen.last(),
+            Some(&b'\r'),
+            "the automation brief must submit"
+        );
+
+        let message = task_message_message(&[TaskMessageDispatch {
+            message_id: "m1".to_owned(),
+            task_id: TaskId::new(),
+            task_title: "Some work".to_owned(),
+            session_id: session,
+            sender: swarm_persistence::MessageParty::Queen,
+            sender_name: "Queen".to_owned(),
+            body: "Which SHA did this ship as?".to_owned(),
+        }]);
+        assert_eq!(
+            message.last(),
+            Some(&b'\r'),
+            "a message that does not submit is typed into the prompt and reported delivered"
+        );
+    }
+
     /// `reviewed_work_without_evidence_attention` feeds `actionable_fingerprint`,
     /// so finished work waiting on judgment is part of what triggers a run. The
     /// brief then enumerated only worker-liveness cases — brief-did-not-start,
