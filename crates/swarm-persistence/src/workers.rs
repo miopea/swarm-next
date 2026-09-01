@@ -790,8 +790,22 @@ impl TaskStore {
         let transaction = connection.transaction()?;
         let expected = {
             let mut statement = transaction.prepare(
+                // THE SET MUST MATCH WHAT THE OPERATOR WAS SHOWN. This is
+                // validated against a list the caller built from
+                // `list_worker_profiles`, which hides connection-client
+                // workers — so omitting that filter here demanded ids the UI
+                // could not have sent, and every reorder was refused with
+                // InvalidWorkerOrder.
+                //
+                // Measured on the operator's Hive when they reported "I am no
+                // longer able to reorder workers": the list returned 32 and
+                // this query expected 37, the seven difference being
+                // connection-client workers they cannot see. Both dragging and
+                // the move buttons failed with 409, which is what a set
+                // comparison does when one side cannot supply the set.
                 "SELECT id FROM worker_profiles
                  WHERE role != 'queen' AND system_role IS NULL AND archived_at IS NULL
+                   AND connection_client_id IS NULL
                  ORDER BY position, created_at, id",
             )?;
             statement
@@ -2737,6 +2751,67 @@ mod tests {
             store.assign_provider_conversation(worker.id),
             Err(TaskStoreError::ProviderConversationUnavailable)
         ));
+    }
+
+    /// A WORKER THE OPERATOR CANNOT SEE MUST NOT BE REQUIRED IN THE ORDER THEY
+    /// SEND.
+    ///
+    /// `reorder_workers` validates the supplied ids against its own query, and
+    /// the caller builds that list from `list_worker_profiles`, which hides
+    /// connection-client workers. The two queries disagreed, so the store
+    /// demanded ids the UI could not have sent and refused every reorder.
+    ///
+    /// Measured on the operator's Hive when they reported "I am no longer able
+    /// to reorder workers": the list returned 32 while this query expected 37,
+    /// the seven difference being connection-client workers invisible to them.
+    /// Dragging and the move buttons both failed with 409 — one cause, and it
+    /// looked like two broken controls.
+    #[test]
+    fn a_connection_client_worker_is_not_demanded_in_an_order_the_operator_can_send() {
+        let store = TaskStore::in_memory().unwrap();
+        let visible_one = store
+            .create_worker("Aster", ProviderKind::ClaudeCode, "/workspace/a", false, 1)
+            .unwrap();
+        let visible_two = store
+            .create_worker("Briar", ProviderKind::ClaudeCode, "/workspace/b", false, 2)
+            .unwrap();
+        let hidden = store
+            .create_worker("Probe", ProviderKind::ClaudeCode, "/workspace/p", false, 3)
+            .unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE worker_profiles SET connection_client_id = 'client-1' WHERE id = ?1",
+                [hidden.id.to_string()],
+            )
+            .unwrap();
+
+        // What the operator can actually see, and therefore send.
+        let listed: Vec<_> = store
+            .list_worker_profiles()
+            .unwrap()
+            .into_iter()
+            .filter(|profile| profile.role != WorkerRole::Queen)
+            .map(|profile| profile.id)
+            .collect();
+        assert!(
+            !listed.contains(&hidden.id),
+            "the connection-client worker must stay hidden or this test proves nothing"
+        );
+
+        store
+            .reorder_workers(&[visible_two.id, visible_one.id])
+            .unwrap();
+
+        let order: Vec<_> = store
+            .list_worker_profiles()
+            .unwrap()
+            .into_iter()
+            .filter(|profile| profile.role != WorkerRole::Queen)
+            .map(|profile| profile.name)
+            .collect();
+        assert_eq!(order, vec!["Briar".to_owned(), "Aster".to_owned()]);
     }
 
     /// THE CASE `assign_provider_conversation` REFUSES IS THE CASE THAT NEEDS
