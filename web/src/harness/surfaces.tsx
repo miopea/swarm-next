@@ -6,6 +6,7 @@ import { SURFACE_STORAGE_KEY } from "../navigation/startSurface";
 import BlockedEscalationCard from "../decisions/BlockedEscalationCard";
 import TaskBoard from "../tasks/TaskBoard";
 import WorkerRosterItem from "../workers/WorkerRosterItem";
+import WorkerSettings from "../settings/WorkerSettings";
 import { demoBlocked, demoBriefings, demoDecision, demoTasks, demoWorkers } from "./productFixtures";
 import DecisionInbox from "../decisions/DecisionInbox";
 import HeldBriefingList from "../orchestration/HeldBriefingList";
@@ -482,6 +483,26 @@ export const SURFACES: Surface[] = [
         onAddJiraComment={async () => ({ state: "queued" })}
         onRetryJira={asyncNoop}
         onJiraImported={asyncNoop}
+        onReorder={asyncNoop}
+      />
+    ),
+  },
+  {
+    id: "worker-order",
+    title: "Worker order",
+    why: "the reorder list, which NOBODY BUT THE OPERATOR could see. Two of the three UI defects reported on 2026-09-01 were invisible to tests because the screen carrying them had no surface here; this is the third, and it is the screen where a 409 that refuses EVERY submission looks identical to a drag that did not register.",
+    render: () => (
+      <WorkerSettings
+        workers={demoWorkers}
+        workspaces={[]}
+        busy={false}
+        providers={{ claude_code: true, codex: true }}
+        onCreate={asyncNoop}
+        onUpdate={asyncNoop}
+        onChooseMark={asyncNoop}
+        onRemove={asyncNoop}
+        onDraftDescription={async () => "A drafted description."}
+        onImproveDescription={async () => "An improved description."}
         onReorder={asyncNoop}
       />
     ),
