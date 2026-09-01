@@ -16,6 +16,60 @@ test("defines every design token referenced by the application stylesheet", () =
   expect(missing).toEqual([]);
 });
 
+/**
+ * SECONDARY TEXT MUST CLEAR AA ON EVERY GROUND IT LANDS ON, NOT JUST THE ONE
+ * SOMEBODY CHECKED.
+ *
+ * `--muted` measured 4.98 on `--panel` and passed every casual inspection,
+ * while failing on the two softer grounds it is used over just as often: 4.41
+ * on `--panel-soft` and 4.49 on the attention card's honey wash. A value that
+ * is correct on the background you happen to test is the reason this survived.
+ *
+ * The wash is not a token — it is `color-mix(--accent-soft 45%, --panel)` — so
+ * it is recomputed here rather than read, which is also what makes this test
+ * fail if either ingredient moves.
+ */
+test("muted secondary text clears 4.5:1 on every light ground it is used over", () => {
+  const token = (name: string) => {
+    const match = stylesheet.match(new RegExp(`\\n  ${name}:\\s*(#[0-9a-f]{6})`, "i"));
+    if (!match) throw new Error(`${name} is not defined as a literal in :root`);
+    return match[1];
+  };
+  const channels = (hex: string) =>
+    [1, 3, 5].map((at) => Number.parseInt(hex.slice(at, at + 2), 16));
+  const luminance = (hex: string) => {
+    const [r, g, b] = channels(hex)
+      .map((value) => value / 255)
+      .map((value) => (value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contrast = (a: string, b: string) => {
+    const [x, y] = [luminance(a), luminance(b)];
+    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+  };
+  const mix = (a: string, b: string, share: number) =>
+    `#${channels(a)
+      .map((value, index) => Math.round(share * value + (1 - share) * channels(b)[index]))
+      .map((value) => value.toString(16).padStart(2, "0"))
+      .join("")}`;
+
+  const muted = token("--muted");
+  const panel = token("--panel");
+  const grounds = {
+    "--panel": panel,
+    "--panel-soft": token("--panel-soft"),
+    // The attention card's ground, as .apiary-attention-card composites it.
+    "honey wash": mix(token("--accent-soft"), panel, 0.45),
+  };
+
+  for (const [name, ground] of Object.entries(grounds)) {
+    expect(
+      contrast(muted, ground),
+      `--muted on ${name} must clear 4.5:1`,
+    ).toBeGreaterThanOrEqual(4.5);
+  }
+});
+
 test("adapts task rows to the board width left by the resizable worker rail", () => {
   expect(stylesheet).toContain("container-name: task-board");
   expect(stylesheet).toContain("@container task-board (max-width: 920px)");

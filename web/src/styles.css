@@ -20,7 +20,21 @@
   --line: #d5d1bd;
   --line-strong: #b9b9a7;
   --text: #293027;
-  --muted: #657064;
+  /* SECONDARY TEXT, AND IT HAS TO CLEAR 4.5:1 ON EVERY SURFACE IT LANDS ON.
+     It was #657064, which measured 4.98 on --panel and FAILED on the two softer
+     grounds it is used over just as often: 4.41 on --panel-soft (and its
+     aliases --soft and --surface-soft) and 4.49 on the attention card's honey
+     wash. Both under the 4.5 this app targets, and both invisible because the
+     value passes on the background people check it against.
+
+     #5f6a5e is 4.82 / 4.91 / 5.44 across those three. The minimum that passes
+     is #636e62 at 4.54, and it was not taken: a margin of 0.04 is one
+     background tweak away from failing again, and this defect has already
+     survived once by sitting just under the line. Six values per channel is
+     imperceptible as a colour and measurable as contrast.
+
+     DARK NEEDED NO CHANGE — it measures 7.08 to 8.27 on the same three. */
+  --muted: #5f6a5e;
   --text-muted: var(--muted);
   --quiet: #7d8377;
   --accent: #d69c28;
