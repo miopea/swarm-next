@@ -890,7 +890,7 @@ pub(super) async fn settle_uncertain_queen_review(state: &AppState) {
 
 pub(super) fn queen_automation_message(delivery: &QueenAutomationDelivery) -> Vec<u8> {
     format!(
-        "[Swarm automation {}] Review {} actionable records while the operator is {}. Use swarm_list_tasks, swarm_list_workers, and swarm_list_coordination_attention as the authority. Draft tasks are part of this review: a draft is work nobody has decided about yet, so triage each one into ready, blocked, or removed rather than leaving it sitting. Coordination attention can identify Ready work whose delivered brief did not start, Active work that is unchanged while its loaded worker is resting, or work whose worker process exited; recheck the current task and worker before deciding whether to restart, steer, wait, or ask the operator. Work parked on a SLEEPING worker is yours to move rather than yours to wait on: there is no wake tool, and assigning READY work with swarm_assign_task queues a guarded wake, so reassigning it to the same sleeping worker is how that worker is started. Only Ready work wakes anyone — work left Active or Blocked on a sleeping worker wakes nobody, so return it to Ready first (Active to Blocked to Ready) and then assign. Observe the live session before calling the work Active again. Respect worker repository ownership and the configured Queen autonomy ceiling. Do not perform Jira, Apiary, email, deployment, or other external side effects during this run. When operator judgment is needed, create one swarm_request_decision per concrete task. Link its task_id, make the suggested_action exactly one allowed_actions button, and never group unrelated tasks or a fleet review into one approval. When this exact review is finished, call swarm_finish_automation_run with run_id {} and outcome completed, needs_operator, or no_action.\r",
+        "[Swarm automation {}] Review {} actionable records while the operator is {}. Use swarm_list_tasks, swarm_list_workers, and swarm_list_coordination_attention as the authority. Draft tasks are part of this review: a draft is work nobody has decided about yet, so triage each one into ready, blocked, or removed rather than leaving it sitting. Coordination attention can identify Ready work whose delivered brief did not start, Active work that is unchanged while its loaded worker is resting, or work whose worker process exited; recheck the current task and worker before deciding whether to restart, steer, wait, or ask the operator. It ALSO identifies finished work nothing has settled, which is usually the largest part of this review and is yours rather than the operator's: approve a no-deployment claim with swarm_approve_no_deployment once you have read the handoff, return work to Ready and reassign it when nobody recorded what it produced, and when commits touch code with no deployment assign a task to the owning worker to ship it — you cannot deploy during this run, but routing the deployment is coordination and is yours. Work parked on a SLEEPING worker is yours to move rather than yours to wait on: there is no wake tool, and assigning READY work with swarm_assign_task queues a guarded wake, so reassigning it to the same sleeping worker is how that worker is started. Only Ready work wakes anyone — work left Active or Blocked on a sleeping worker wakes nobody, so return it to Ready first (Active to Blocked to Ready) and then assign. Observe the live session before calling the work Active again. Respect worker repository ownership and the configured Queen autonomy ceiling. Do not perform Jira, Apiary, email, deployment, or other external side effects during this run. When operator judgment is needed, create one swarm_request_decision per concrete task. Link its task_id, make the suggested_action exactly one allowed_actions button, and never group unrelated tasks or a fleet review into one approval. When this exact review is finished, call swarm_finish_automation_run with run_id {} and outcome completed, needs_operator, or no_action.\r",
         delivery.run_id,
         delivery.actionable_count,
         delivery.presence,
@@ -1006,6 +1006,8 @@ fn terminal_safe_text(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use swarm_domain::{PresenceMode, QueenAutomationTrigger, WorkerId};
+    use swarm_persistence::QueenAutomationDelivery;
     use swarm_terminal::{CanonicalTerminalState, JournalLimits, TerminalSize, TerminalSnapshot};
 
     #[test]
@@ -1460,5 +1462,45 @@ mod tests {
 
         assert!(message.starts_with("[Swarm worker outcome] Architecture moved task "));
         assert!(!message.contains("tasks reported"));
+    }
+
+    /// THE RUN BRIEF HAS TO NAME THE CLASS THAT WOKE HER.
+    ///
+    /// `reviewed_work_without_evidence_attention` feeds `actionable_fingerprint`,
+    /// so finished work waiting on judgment is part of what triggers a run. The
+    /// brief then enumerated only worker-liveness cases — brief-did-not-start,
+    /// worker-resting, worker-exited — and never mentioned it.
+    ///
+    /// A Hive that wakes Queen BECAUSE work is waiting and then briefs her about
+    /// stuck workers gets exactly what the operator saw: 92 tasks cleared in a
+    /// day, and a review pile that grew to sixteen while they asked why the
+    /// board was not moving.
+    ///
+    /// Naming it is not enough by itself. An item with no move attached is one
+    /// she parks, so the brief carries the move for each state — including the
+    /// deployment she may not perform during an unattended run but may route.
+    #[test]
+    fn the_run_brief_names_finished_work_and_the_move_for_each_state() {
+        let message = String::from_utf8(queen_automation_message(&QueenAutomationDelivery {
+            run_id: "run-1".to_owned(),
+            session_id: WorkerSessionId::new(),
+            worker_id: WorkerId::new(),
+            trigger: QueenAutomationTrigger::ActionableWork,
+            actionable_count: 16,
+            presence: PresenceMode::AtHive,
+        }))
+        .unwrap();
+
+        assert!(
+            message.contains("finished work nothing has settled"),
+            "the class that woke her is unnamed: {message}"
+        );
+        assert!(message.contains("swarm_approve_no_deployment"), "{message}");
+        assert!(message.contains("return work to Ready"), "{message}");
+        // The one she cannot do herself is still hers to route.
+        assert!(
+            message.contains("assign a task to the owning worker"),
+            "routing a deployment is coordination and must be named: {message}"
+        );
     }
 }
