@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-const AGENT_TOOL_SURFACE_REVISION: u32 = 9;
+const AGENT_TOOL_SURFACE_REVISION: u32 = 10;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -403,7 +403,7 @@ const AGENT_TOOL_SURFACE_REVISION: u32 = 9;
 #[cfg(test)]
 /// The served surface as of revision 6. Update this and the revision together.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "536f17fa56f805dc244848b04586100ba87027938ba3f8922fafa9759bf90f78";
+    "ac80b2e99e5b3650c453b5f412ddd7ccb5a2c5ae21f304c6245dc71544f538e8";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -3045,7 +3045,7 @@ fn transition_task_tool() -> Tool {
             "type": "object",
             "properties": {
                 "task_id": { "type": "string", "format": "uuid" },
-                "state": { "type": "string", "enum": ["draft", "ready", "active", "blocked", "review", "completed", "abandoned"] },
+                "state": { "type": "string", "enum": ["draft", "ready", "active", "blocked", "review", "awaiting_release", "completed", "abandoned"] },
                 "note": { "type": "string", "maxLength": 4000, "description": "Concise blocker reason, review handoff, or completion verification evidence. Required for Completed. THIS GOES TO THE RECORD, NOT TO A WORKER: it lands in the task history and is never part of the brief a worker is handed, so an instruction written here reaches nobody unless they call swarm_read_task_history. To steer the worker that picks this up, correct the task with swarm_amend_task_facts — an amendment travels beside the task and is delivered by swarm_list_tasks. If the work itself needs to change rather than a fact about it, say so in a new task or ask the operator; nothing an agent can write redirects work that is already described." }
             },
             "required": ["task_id", "state"],
