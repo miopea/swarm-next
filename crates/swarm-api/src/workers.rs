@@ -13,8 +13,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use swarm_domain::{
-    CommitRepositoryState, CommitVerdict, PresenceDeviceId, ProviderKind, TaskCommit, WorkerId,
-    WorkerProfile,
+    CommitRepositoryState, CommitVerdict, PresenceDeviceId, ProviderConversationId, ProviderKind,
+    TaskCommit, WorkerId, WorkerProfile,
 };
 use swarm_terminal::{HostRequest, ProviderActivity, TerminalSize};
 
@@ -361,6 +361,57 @@ pub(super) async fn reorder_workers(
         .map_err(|error| task_store_error(&error))?;
     state.control_room_notify.notify_waiters();
     Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// The conversation a worker will resume at its NEXT start.
+#[derive(Debug, Deserialize)]
+pub(super) struct RepointConversationRequest {
+    conversation_id: String,
+}
+
+/// Points a worker at a different provider conversation.
+///
+/// WHY THERE WAS NO ROUTE HERE BEFORE. The pin is assigned once, guarded on the
+/// worker never having had a session, and nothing in the API wrote it. So a
+/// worker on the wrong conversation could not be corrected through the product
+/// at all — the operator fixed the live terminal with `/resume`, and the next
+/// start resumed the pin and dragged the old thread back.
+///
+/// DOES NOT MOVE THE RUNNING TERMINAL, and the response says so rather than
+/// leaving the caller to assume. A live session keeps writing wherever it
+/// already is; this decides what the next start resumes. Refusing while the
+/// worker runs would block the exact repair this exists for, because the
+/// operator notices the wrong thread precisely by watching it run.
+pub(super) async fn repoint_worker_conversation(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(worker_id): AxumPath<String>,
+    Json(request): Json<RepointConversationRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let worker_id = parse_worker_id(&worker_id)?;
+    let conversation_id: ProviderConversationId =
+        request.conversation_id.trim().parse().map_err(|_| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "conversation_id_invalid",
+                "a provider conversation id must be a UUID",
+            )
+        })?;
+    task_store(&state)?
+        .repoint_provider_conversation(worker_id, &conversation_id)
+        .map_err(|error| task_store_error(&error))?;
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "conversation_id": conversation_id.to_string(),
+            // NAMED, because the caller cannot see it and the difference
+            // matters: the repair they just made does not touch the terminal
+            // they are looking at.
+            "applies": "next start",
+        })),
+    )
+        .into_response())
 }
 
 pub(super) async fn update_worker(

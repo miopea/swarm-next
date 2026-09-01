@@ -21,7 +21,7 @@ test("says how much is waiting, in the heading, without anything being opened", 
   render(<UnsettledReviewCard waiting={[waiting(), waiting({ task_id: "b", title: "Second" })]} />);
   // The number is the point: the operator asked to know how much exists
   // without clicking into anything.
-  expect(screen.getByRole("heading", { name: /2 pieces of finished work are waiting on you/ })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: /2 pieces of finished work are waiting on Queen/ })).toBeTruthy();
 });
 
 test("says WHY each one waits, because the reasons are not the same problem", () => {
@@ -51,9 +51,25 @@ test("says WHY each one waits, because the reasons are not the same problem", ()
  */
 test("the heading claims settlement, never verification", () => {
   render(<UnsettledReviewCard waiting={[waiting()]} />);
-  const heading = screen.getByRole("heading", { name: /waiting on you/ }).textContent ?? "";
+  const heading = screen.getByRole("heading", { name: /waiting on Queen/ }).textContent ?? "";
   expect(heading).not.toMatch(/unverified|verified/i);
   expect(screen.getByText(/Nothing has settled these/)).toBeTruthy();
+});
+
+/**
+ * THE HEADING NAMES WHO IT IS WAITING ON, AND IT IS NOT THE OPERATOR.
+ *
+ * It read "waiting on you" on their attention surface. The operator ruled that
+ * every state on this card is Queen's: "code, no deploy and nothing reported is
+ * the QUEEN'S job to find out why, keep the workers moving." Addressing them
+ * turned a management backlog into a personal to-do list, and named the wrong
+ * person as the reason it was not moving.
+ */
+test("the heading says the work waits on Queen, not on the operator", () => {
+  render(<UnsettledReviewCard waiting={[waiting()]} />);
+  const heading = screen.getByRole("heading", { name: /waiting on/ }).textContent ?? "";
+  expect(heading).toContain("waiting on Queen");
+  expect(heading).not.toMatch(/waiting on you/);
 });
 
 test("renders nothing at all when nothing is waiting", () => {
@@ -148,6 +164,6 @@ test("grouping gathers runs and does not reorder what the server sent", () => {
  */
 test("a kind this build does not know still renders a row", () => {
   render(<UnsettledReviewCard waiting={[waiting({ kind: "some_new_state" })]} />);
-  expect(screen.getByRole("heading", { name: /1 piece of finished work is waiting on you/ })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: /1 piece of finished work is waiting on Queen/ })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Ship the picker fix" })).toBeTruthy();
 });

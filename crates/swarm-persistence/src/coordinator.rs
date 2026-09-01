@@ -192,10 +192,26 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
                              AND request.deadline IS NOT NULL
                              AND request.deadline <= unixepoch()
                        ))
-                   -- Finished work nobody can close. Clears itself the
-                   -- moment either kind of evidence exists, or the task leaves
-                   -- review, so recording the claim is the whole fix and
-                   -- nothing has to be dismissed by hand.
+                   -- Finished work nobody can close. Clears itself the moment
+                   -- real evidence exists, or the task leaves review, so
+                   -- settling it is the whole fix and nothing has to be
+                   -- dismissed by hand.
+                   --
+                   -- AN UNAPPROVED CLAIM IS NOT EVIDENCE, and this guard used
+                   -- to treat it as though it were: it matched the exemption
+                   -- row's existence and ignored `approved_at`. So the instant
+                   -- a worker called `swarm_record_no_deployment` the task
+                   -- disappeared from Queen's attention -- silenced by the very
+                   -- act that created the thing needing her approval. She
+                   -- approves within minutes when she is still in the
+                   -- conversation at claim time and never afterwards, because
+                   -- afterwards nothing tells her. On 2026-08-31 that left
+                   -- eight claims invisible to her and visible only on the
+                   -- operator's card, which is not where they get settled.
+                   --
+                   -- `completion_evidence` already draws this line: a claim is
+                   -- `ExemptionClaimed`, which `closes_a_task` deliberately
+                   -- refuses. The detector now draws it in the same place.
                    OR (action.kind = 'reviewed_work_without_evidence_attention'
                        AND task.state = 'review'
                        AND NOT EXISTS (
@@ -205,6 +221,7 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
                        AND NOT EXISTS (
                            SELECT 1 FROM task_completion_exemptions exemption
                            WHERE exemption.task_id = task.id
+                             AND exemption.approved_at IS NOT NULL
                        ))
                    OR (action.kind = 'stale_owned_work_attention'
                        AND task.assigned_worker_id = action.worker_id
@@ -968,9 +985,13 @@ impl TaskStore {
                    SELECT 1 FROM task_deployments deployment
                    WHERE deployment.task_id = task.id
                )
+               -- Approved, not merely claimed. A worker cannot approve its own
+               -- exemption, so matching the row's existence let the claim
+               -- suppress the detector that exists to get the claim approved.
                AND NOT EXISTS (
                    SELECT 1 FROM task_completion_exemptions exemption
                    WHERE exemption.task_id = task.id
+                     AND exemption.approved_at IS NOT NULL
                )
                AND NOT EXISTS (
                    SELECT 1 FROM coordinator_actions action
@@ -1038,6 +1059,7 @@ impl TaskStore {
                    AND NOT EXISTS (
                        SELECT 1 FROM task_completion_exemptions exemption
                        WHERE exemption.task_id = task.id
+                         AND exemption.approved_at IS NOT NULL
                    )
              )",
             params![
@@ -2335,8 +2357,24 @@ mod reviewed_work_tests {
     /// work and abandoned work looked identical on the board. Three tasks sat
     /// stranded in a day because the only way to tell them apart was reading
     /// the handoff prose.
+    /// The claim is the ASK, not the answer, and this test used to say the
+    /// opposite.
+    ///
+    /// It asserted "the claim clears it without anything having to delete the
+    /// row", which is precisely the defect: a worker calling
+    /// `swarm_record_no_deployment` switched off the detector whose entire job
+    /// is to get that claim approved. A worker cannot approve its own
+    /// exemption, so the one signal that a person still owed something was
+    /// silenced by the act of asking. Queen approved 25 of 33 claims on
+    /// 2026-08-31 and every approval landed within eight minutes -- she is not
+    /// slow, she is only ever told once, while she still happens to be in the
+    /// conversation. The eight she was not in the conversation for reached the
+    /// operator's card instead, which is not a surface that settles anything.
+    ///
+    /// A green test asserting the wrong behaviour is why this survived. So the
+    /// assertion is inverted rather than deleted.
     #[test]
-    fn finished_work_with_no_evidence_is_surfaced_and_clears_when_the_claim_lands() {
+    fn finished_work_with_no_evidence_is_surfaced_and_an_unapproved_claim_does_not_clear_it() {
         let store = TaskStore::in_memory().unwrap();
         store.ensure_queen("/workspace/queen").unwrap();
         let worker = store
@@ -2384,9 +2422,25 @@ mod reviewed_work_tests {
             "Queen can see it"
         );
 
-        // Recording the claim is the whole fix: nothing is dismissed by hand.
+        // The worker asks. Asking is not being answered, so Queen keeps seeing
+        // it -- this is the assertion whose inverse let eight claims go
+        // invisible on 2026-08-31.
         store
             .claim_completion_exemption(task.id, "Read-only investigation", Some(worker.id), now)
+            .unwrap();
+        assert!(
+            store
+                .current_coordinator_attention(now)
+                .unwrap()
+                .iter()
+                .any(|attention| attention.kind == "reviewed_work_without_evidence_attention"),
+            "an unapproved claim is the request for judgment, so it must not silence the request"
+        );
+
+        // Queen answers, and only then does it clear -- still without anything
+        // having to be dismissed by hand.
+        store
+            .approve_completion_exemption(task.id, "queen", now)
             .unwrap();
         assert!(
             !store
@@ -2394,7 +2448,71 @@ mod reviewed_work_tests {
                 .unwrap()
                 .iter()
                 .any(|attention| attention.kind == "reviewed_work_without_evidence_attention"),
-            "the claim clears it without anything having to delete the row"
+            "the approval clears it without anything having to delete the row"
+        );
+    }
+
+    /// The candidate query and the live view must agree about what counts.
+    ///
+    /// They are separate SQL in separate places -- `LIVE_ATTENTION_SOURCE`, the
+    /// candidate selection, and the re-check inside
+    /// `record_reviewed_work_without_evidence_attention` -- and all three
+    /// carried the same wrong guard. Fixing two of three would leave the
+    /// detector raising work it then refused to record, so the agreement is
+    /// asserted rather than assumed.
+    #[test]
+    fn an_unapproved_claim_does_not_stop_the_work_being_a_candidate() {
+        let store = TaskStore::in_memory().unwrap();
+        store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store
+            .create_task("Claimed but unapproved", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task(task.id, session).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        let now = i64::MAX / 4;
+        let grace = 15 * 60;
+        store
+            .claim_completion_exemption(task.id, "nothing to deploy", Some(worker.id), now)
+            .unwrap();
+
+        let candidates = store
+            .reviewed_work_without_evidence_candidates(now, grace)
+            .unwrap();
+        assert_eq!(
+            candidates.len(),
+            1,
+            "a claim nobody approved still needs her"
+        );
+        assert_eq!(candidates[0].task_id, task.id);
+        assert!(
+            store
+                .record_reviewed_work_without_evidence_attention(&candidates[0], now, grace)
+                .unwrap(),
+            "the re-check inside recording must agree with the selection"
+        );
+
+        store
+            .approve_completion_exemption(task.id, "queen", now)
+            .unwrap();
+        assert!(
+            store
+                .reviewed_work_without_evidence_candidates(now, grace)
+                .unwrap()
+                .is_empty(),
+            "approved evidence is evidence"
         );
     }
 

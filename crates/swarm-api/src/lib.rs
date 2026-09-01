@@ -3717,6 +3717,10 @@ fn api_router(state: AppState) -> Router {
             get(workers::worker_repository),
         )
         .route(
+            "/api/v1/workers/{worker_id}/conversation",
+            put(workers::repoint_worker_conversation),
+        )
+        .route(
             "/api/v1/workers/{worker_id}/description-draft",
             post(workers::draft_worker_description),
         )
@@ -14518,6 +14522,88 @@ mod tests {
         let stored = store.list_worker_profiles().unwrap();
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].description, created["description"]);
+    }
+
+    /// THE REPAIR THE PRODUCT COULD NOT MAKE.
+    ///
+    /// The pin is assigned once and guarded on the worker never having had a
+    /// session, and nothing in the API wrote it — so a worker resuming the
+    /// wrong conversation could only be corrected by a direct UPDATE against
+    /// the operator's live database. On 2026-09-01 several came back from a
+    /// reboot in their first-ever thread and that was the only option.
+    ///
+    /// The response says `applies: next start` because the caller cannot see
+    /// it and the difference matters: the terminal they are watching does not
+    /// move, and telling them otherwise would be a false claim about a repair.
+    #[tokio::test]
+    async fn a_worker_conversation_can_be_repointed_after_it_has_already_run() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Bramble",
+                ProviderKind::ClaudeCode,
+                "/workspace/b",
+                false,
+                1,
+            )
+            .unwrap();
+        let original = worker.provider_conversation_id.unwrap();
+        // It has run, which is exactly when the write-once setter gives up.
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        store.release_worker_session(session).unwrap();
+
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone()),
+        );
+        let corrected = swarm_domain::ProviderConversationId::new();
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/workers/{}/conversation", worker.id))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"conversation_id":"{corrected}"}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["conversation_id"], corrected.to_string());
+        assert_eq!(
+            body["applies"], "next start",
+            "the running terminal does not move and the response must not imply it did"
+        );
+        let pinned = store
+            .get_worker_profile(worker.id)
+            .unwrap()
+            .provider_conversation_id;
+        assert_eq!(pinned, Some(corrected));
+        assert_ne!(pinned, Some(original));
+
+        // A value that is not a conversation id is refused rather than stored.
+        let refused = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/workers/{}/conversation", worker.id))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"conversation_id":"not-a-uuid"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

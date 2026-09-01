@@ -2624,7 +2624,7 @@ fn list_workers_tool() -> Tool {
 fn list_coordination_attention_tool() -> Tool {
     tool(
         "swarm_list_coordination_attention",
-        "Queen only: list current deterministic coordination attention, including Ready work whose delivered brief did not start, Active work that is durably unchanged while its loaded worker is resting, and Active work whose worker exited. Also reports work assigned to a worker that is not running at all, which has no briefing anywhere because there is no session to put one in — start that worker or move the work. And briefings that are queued and not being delivered, and what each is waiting on — an operator using that terminal, or the worker already having Active work. A briefing held for either reason is working as intended and is not a task to chase. One waiting its turn names the earlier task it is queued behind in blocked_by; if that task has been Ready for a long time it is the thing to steer, because the whole queue behind it is stopped. Recheck the task and worker before deciding whether to steer, wait, or ask the operator.",
+        "Queen only: list current deterministic coordination attention, including Ready work whose delivered brief did not start, Active work that is durably unchanged while its loaded worker is resting, and Active work whose worker exited. Also reports work assigned to a worker that is not running at all, which has no briefing anywhere because there is no session to put one in — start that worker or move the work. And briefings that are queued and not being delivered, and what each is waiting on — an operator using that terminal, or the worker already having Active work. A briefing held for either reason is working as intended and is not a task to chase. One waiting its turn names the earlier task it is queued behind in blocked_by; if that task has been Ready for a long time it is the thing to steer, because the whole queue behind it is stopped. Also lists FINISHED WORK NOTHING HAS SETTLED, which is the largest kind here and is yours to clear: a claim that nothing was deployed which nobody has approved — approve it with swarm_approve_no_deployment after reading the handoff; work whose commits touch code with no deployment — you cannot deploy, but you can create and assign a task to the owning worker to do it; and work where nobody reported what was produced — return it to Ready and reassign so the worker records it. Recheck the task and worker before deciding whether to steer, wait, or ask the operator.",
         &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         true,
     )
@@ -4927,6 +4927,45 @@ mod tests {
         // A refusal is the policy working, so she stops asking rather than retrying.
         assert!(brief.contains("refused during"), "{brief}");
         assert!(brief.contains("needs_operator"), "{brief}");
+    }
+
+    /// THE LARGEST CLASS OF ATTENTION MUST BE NAMED WHERE SHE READS.
+    ///
+    /// `reviewed_work_without_evidence_attention` is the biggest kind in
+    /// `coordinator_actions` — 164 records on the operator's Hive against 96
+    /// for the next largest — and it feeds `actionable_fingerprint`, so it is
+    /// part of what WAKES her. It was in neither the tool description nor the
+    /// run brief, both of which enumerated only worker-liveness cases.
+    ///
+    /// The result was a Hive that woke Queen because finished work was waiting
+    /// and then told her about stuck workers. She cleared those — 92 tasks in
+    /// one day — and the review pile grew to sixteen while the operator watched
+    /// it and asked why the board was not moving.
+    ///
+    /// Naming the class is not enough on its own: an item she cannot act on is
+    /// one she parks. So each state names the MOVE, including the one she is
+    /// forbidden to do herself — she may not deploy during an unattended run,
+    /// but routing a deployment to the worker that owns it is coordination.
+    #[test]
+    fn the_attention_tool_names_finished_work_and_what_to_do_about_it() {
+        let description = list_coordination_attention_tool()
+            .description
+            .expect("the attention tool has a description")
+            .to_string();
+        assert!(
+            description.contains("FINISHED WORK NOTHING HAS SETTLED"),
+            "the largest attention kind is unnamed: {description}"
+        );
+        // Each of the three states, and the move for it.
+        assert!(
+            description.contains("swarm_approve_no_deployment"),
+            "{description}"
+        );
+        assert!(description.contains("return it to Ready"), "{description}");
+        assert!(
+            description.contains("assign a task to the owning worker"),
+            "a deployment she may not perform is still hers to route: {description}"
+        );
     }
 
     /// The drafting tool says how LONG to write, not only what to say.

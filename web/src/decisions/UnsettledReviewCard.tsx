@@ -112,10 +112,23 @@ export default function UnsettledReviewCard({ waiting, onOpenTask }: {
           shipped with and documents. */}
       <div>
         <p className="eyebrow">Nothing has settled these</p>
+        {/* WAITING ON QUEEN, NOT ON YOU. The heading said "waiting on you" to
+            the operator, and the operator ruled otherwise: "code, no deploy and
+            nothing reported is the QUEEN'S job to find out why, keep the workers
+            moving. She is managing the workers and workers who didn't do their
+            job and are sitting idle is her job to find out why."
+
+            None of the three states is the operator's to clear. An unapproved
+            claim is approved with swarm_approve_no_deployment; work nobody
+            reported goes back to the worker; commits with no deployment get a
+            deploy task routed to the worker that owns the repository. All three
+            are Queen's, so addressing the operator turned her backlog into
+            their personal to-do list — and named the wrong person as the reason
+            it is not moving. */}
         <h3 id="unsettled-review-heading">
           {waiting.length === 1
-            ? "1 piece of finished work is waiting on you"
-            : `${waiting.length} pieces of finished work are waiting on you`}
+            ? "1 piece of finished work is waiting on Queen"
+            : `${waiting.length} pieces of finished work are waiting on Queen`}
         </h3>
         {groups.map((group) => (
           <section className="unsettled-review-group" key={group.worker}>
