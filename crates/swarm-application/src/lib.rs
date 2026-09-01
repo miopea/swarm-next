@@ -2400,7 +2400,9 @@ impl TaskService {
                 target,
                 TaskState::Active | TaskState::Blocked | TaskState::Review
             ) {
-                return Err(ApplicationError::NotAuthorized);
+                return Err(ApplicationError::TransitionNotPermitted(
+                    worker_transition_refusal(target),
+                ));
             }
             return self
                 .store
@@ -2628,6 +2630,26 @@ fn require_completion_evidence(
     Ok(())
 }
 
+/// Why a worker cannot make this move, and what to do instead.
+///
+/// NAMES THE REMEDY, not just the rule. A refusal that only states a
+/// prohibition leaves the reader to guess the permitted route, and guessing is
+/// how work ends up in the wrong state — returning finished work to Ready to
+/// get attention invalidated a valid evidence claim on the day this was
+/// written.
+fn worker_transition_refusal(target: TaskState) -> String {
+    match target {
+        TaskState::Ready => "Returning work to Ready is Queen's, not yours: Ready means UNSTARTED to everything that reads it, so moving finished work there erases that it was done. If you need it re-routed or picked up by somebody else, say so with swarm_message_queen. If you cannot continue, use Blocked with the reason.".to_owned(),
+        TaskState::Completed => "You cannot complete your own work — that is the one rule the whole evidence model rests on, and it is not about trust: it is that somebody OTHER than the author checked. Move it to Review with your handoff, record a deployment or a no-deployment claim, and Queen closes it.".to_owned(),
+        TaskState::AwaitingRelease => "Awaiting Release is for work Queen has ACCEPTED and that is merely unshipped, so it is hers to set. Move it to Review with your handoff; if it is finished and waiting on a merge, say that in the handoff and she can park it there.".to_owned(),
+        TaskState::Abandoned => "Abandoning work is Queen's. If you believe it is superseded or should not continue, move it to Review and say so in the handoff, or raise it with swarm_message_queen.".to_owned(),
+        TaskState::Draft => "Nothing goes back to Draft. Work does not become unfiled again; if it was filed wrongly, say so with swarm_message_queen.".to_owned(),
+        TaskState::Active | TaskState::Blocked | TaskState::Review => {
+            "You may report Active, Blocked or Review for your own assignment.".to_owned()
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ApplicationError {
     #[error("this agent is not authorized for that outcome")]
@@ -2641,6 +2663,18 @@ pub enum ApplicationError {
         "that is not a valid {0} — check the identifier you passed rather than your permissions"
     )]
     MalformedIdentifier(&'static str),
+    // A REFUSED TRANSITION SAYS WHICH RULE AND WHAT TO DO INSTEAD, for the same
+    // reason MalformedIdentifier exists above: "not authorized" sends the
+    // reader to check assignment, principal and routing when the answer is a
+    // lifecycle rule they are one sentence away from knowing.
+    //
+    // Queen spent hours on 2026-09-01 acting on a belief that Blocked work
+    // could not be assigned. It can — the store refuses only Completed — and
+    // her run brief already carried the correct procedure. So the words existed
+    // and did not land, which is why this is at the moment of the act rather
+    // than in more standing instruction.
+    #[error("{0}")]
+    TransitionNotPermitted(String),
     #[error("the target worker does not have an active session")]
     WorkerNotRunning,
     #[error("integration unavailable: {0}")]
@@ -3161,10 +3195,19 @@ mod tests {
             service.assign_task(worker_principal, task.id, worker.id),
             Err(ApplicationError::NotAuthorized)
         ));
-        assert!(matches!(
-            service.transition_task(worker_principal, task.id, TaskState::Completed, ""),
-            Err(ApplicationError::NotAuthorized)
-        ));
+        // STILL REFUSED, and now it says why and what to do instead. The
+        // refusal changing shape here is the point: a worker that reads
+        // "not authorized" goes looking at its assignment and its role, which
+        // is the wrong place — the answer is a lifecycle rule and the route
+        // that IS open to it.
+        let refused = service.transition_task(worker_principal, task.id, TaskState::Completed, "");
+        let Err(ApplicationError::TransitionNotPermitted(reason)) = refused else {
+            panic!("a worker must not be able to complete its own work: {refused:?}");
+        };
+        assert!(
+            reason.contains("OTHER than the author") && reason.contains("Review"),
+            "and the refusal has to name the rule and the remedy: {reason}"
+        );
     }
 
     #[test]
@@ -3699,6 +3742,45 @@ mod tests {
 
     /// The second pair of eyes is the whole point. A worker approving its own
     /// claim would make the gate a formality.
+    /// A refusal names the rule AND the route, because the rule alone is not
+    /// actionable.
+    ///
+    /// Queen lost hours on 2026-09-01 to a belief about the lifecycle that was
+    /// simply false, and her brief already carried the correct procedure — so
+    /// more standing instruction was the one fix with a proven failure record.
+    /// This is the same lesson `MalformedIdentifier` records: a refusal that says
+    /// nothing true sends the reader to check the wrong thing.
+    #[test]
+    fn a_refused_transition_says_which_rule_and_what_to_do_instead() {
+        let ready = worker_transition_refusal(TaskState::Ready);
+        assert!(
+            ready.contains("UNSTARTED"),
+            "it must say WHY, not just that it is refused: {ready}"
+        );
+        assert!(
+            ready.contains("swarm_message_queen") && ready.contains("Blocked"),
+            "and it must name the routes that ARE the worker's: {ready}"
+        );
+
+        let completed = worker_transition_refusal(TaskState::Completed);
+        assert!(
+            completed.contains("OTHER than the author"),
+            "the completion rule is about a second pair of eyes, not about trust: {completed}"
+        );
+        assert!(
+            completed.contains("Review"),
+            "and Review is the move that IS available: {completed}"
+        );
+
+        // The permitted ones must not read as refusals if they are ever shown.
+        for target in [TaskState::Active, TaskState::Blocked, TaskState::Review] {
+            assert!(
+                worker_transition_refusal(target).contains("may report"),
+                "a permitted move must never imply otherwise"
+            );
+        }
+    }
+
     #[test]
     fn a_worker_cannot_approve_its_own_no_deployment_claim() {
         let (service, _queen, worker) = setup();

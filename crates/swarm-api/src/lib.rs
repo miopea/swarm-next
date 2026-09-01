@@ -7112,6 +7112,14 @@ fn application_error(error: ApplicationError) -> ApiError {
             "malformed_identifier",
             error.to_string(),
         ),
+        // 403, and the code says which rule rather than which surface. The
+        // caller is permitted to act on this task; it is this MOVE that is
+        // somebody else's, and the message names the route that is theirs.
+        ApplicationError::TransitionNotPermitted(_) => ApiError::new(
+            StatusCode::FORBIDDEN,
+            "transition_not_permitted",
+            error.to_string(),
+        ),
         ApplicationError::WorkerNotRunning => ApiError::new(
             StatusCode::CONFLICT,
             "worker_session_not_active",
