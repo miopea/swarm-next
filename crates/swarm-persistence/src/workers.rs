@@ -1085,6 +1085,51 @@ impl TaskStore {
         Ok(())
     }
 
+    /// Points a worker at a different provider conversation.
+    ///
+    /// WHY THIS EXISTS AT ALL. `assign_provider_conversation` is write-once and
+    /// guarded on the worker never having had a session, and nothing else in
+    /// the product writes this column. So a worker pinned to the wrong
+    /// conversation was unrecoverable: the operator could fix the LIVE session
+    /// with `/resume`, and the next start would drag the old thread back,
+    /// because the pin is what a start resumes.
+    ///
+    /// That is how it was found. On 2026-09-01 several workers came back from a
+    /// reboot in their first-ever conversation — one in a `RustDesk` thread from
+    /// months of work earlier — and the only repair available was a direct
+    /// UPDATE against the operator's live database.
+    ///
+    /// TAKES EFFECT AT THE NEXT START, and deliberately does not refuse a
+    /// running worker. Refusing would block the exact repair this exists for:
+    /// the operator notices the wrong thread precisely because the worker is
+    /// running in it. A live session keeps writing wherever it already is; the
+    /// pin decides only what the NEXT start resumes. Callers must say so rather
+    /// than implying the running terminal moved.
+    ///
+    /// WHICH CONVERSATION IS RIGHT IS NOT DERIVABLE and this does not guess.
+    /// Recency and volume of human turns pointed at different threads for the
+    /// same worker, so the caller supplies the id and the operator chooses it.
+    ///
+    /// # Errors
+    /// Returns `WorkerNotFound` when the worker is unknown or archived.
+    pub fn repoint_provider_conversation(
+        &self,
+        worker_id: WorkerId,
+        conversation_id: &ProviderConversationId,
+    ) -> Result<(), TaskStoreError> {
+        let connection = self.connection()?;
+        let updated = connection.execute(
+            "UPDATE worker_profiles
+             SET provider_conversation_id = ?1, updated_at = unixepoch()
+             WHERE id = ?2 AND archived_at IS NULL",
+            params![conversation_id.to_string(), worker_id.to_string()],
+        )?;
+        if updated == 1 {
+            return Ok(());
+        }
+        Err(TaskStoreError::WorkerNotFound)
+    }
+
     /// Assigns a stable provider conversation to a profile that has never launched.
     ///
     /// # Errors
@@ -2691,6 +2736,64 @@ mod tests {
         assert!(matches!(
             store.assign_provider_conversation(worker.id),
             Err(TaskStoreError::ProviderConversationUnavailable)
+        ));
+    }
+
+    /// THE CASE `assign_provider_conversation` REFUSES IS THE CASE THAT NEEDS
+    /// REPOINTING.
+    ///
+    /// A worker only ends up on the wrong conversation after it has run, and
+    /// the setter is guarded on never having had a session — so the guard that
+    /// keeps the pin stable is exactly what made a wrong pin permanent. The
+    /// operator hit this after a reboot: workers came back in their first-ever
+    /// conversation and the only repair was a direct UPDATE on a live database.
+    #[test]
+    fn a_worker_that_has_already_run_can_still_be_repointed() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Poppy", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let first = store.get_worker_profile(worker.id).unwrap();
+        let pinned = first
+            .provider_conversation_id
+            .expect("a new profile is pinned on creation");
+
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        store.release_worker_session(session).unwrap();
+
+        // The write-once setter refuses now, which is the whole problem.
+        assert!(matches!(
+            store.assign_provider_conversation(worker.id),
+            Err(TaskStoreError::ProviderConversationUnavailable)
+        ));
+
+        let corrected = ProviderConversationId::new();
+        assert_ne!(corrected, pinned);
+        store
+            .repoint_provider_conversation(worker.id, &corrected)
+            .unwrap();
+
+        assert_eq!(
+            store
+                .get_worker_profile(worker.id)
+                .unwrap()
+                .provider_conversation_id,
+            Some(corrected),
+            "the next start must resume the conversation the operator chose"
+        );
+    }
+
+    /// Repointing an unknown or archived worker is an error rather than a
+    /// silent no-op. An UPDATE matching no rows reports success at the SQL
+    /// level, and a repair that reports success while changing nothing is the
+    /// failure this whole ticket is about, one level up.
+    #[test]
+    fn repointing_a_worker_that_does_not_exist_is_reported_rather_than_ignored() {
+        let store = TaskStore::in_memory().unwrap();
+        assert!(matches!(
+            store.repoint_provider_conversation(WorkerId::new(), &ProviderConversationId::new()),
+            Err(TaskStoreError::WorkerNotFound)
         ));
     }
 
