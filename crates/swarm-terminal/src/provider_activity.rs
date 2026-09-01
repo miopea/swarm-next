@@ -342,6 +342,57 @@ mod tests {
     /// confident "idle", and would stop a worker sitting at a permission
     /// prompt. Measured, so a later change to the arms shows up here rather
     /// than inside a safety check.
+    /// A REAL Codex approval prompt classifies Resting, and that is dangerous.
+    ///
+    /// Transcribed from a live `codex -a untrusted` session captured on
+    /// 2026-09-01 and replayed through this classifier, which returned
+    /// `Resting` for Codex and `AwaitingOperator` for Claude on the same
+    /// screen.
+    ///
+    /// THE MECHANISM: Codex uses `›` both as its composer prompt and as the
+    /// SELECTION CURSOR of a choice menu. `idle_prompt` matches any line
+    /// starting "› ", so the highlighted option "› 1. Yes, proceed (y)" reads
+    /// as a resting composer.
+    ///
+    /// Why it matters more than Unknown would: Unknown is honestly uncertain,
+    /// but Resting is TRUSTED — `coordination_delivery` only submits to a worker
+    /// whose activity IS Resting. So this is not merely a gap in a safety
+    /// check; it is a confident wrong answer, and the screen even carries the
+    /// evidence that would settle it ("Press enter to confirm or esc to
+    /// cancel") on an arm Codex cannot reach.
+    #[test]
+    fn a_real_codex_approval_prompt_is_misread_as_resting() {
+        let approval = concat!(
+            "• Running touch /tmp/probe-file.txt\r\n",
+            "\r\n",
+            "  Would you like to run the following command?\r\n",
+            "\r\n",
+            "  Environment: local\r\n",
+            "\r\n",
+            "  $ touch /tmp/probe-file.txt\r\n",
+            "\r\n",
+            "› 1. Yes, proceed (y)\r\n",
+            "  2. Yes, and don't ask again for commands that start with `touch`\r\n",
+            "  3. No, and tell Codex what to do differently (esc)\r\n",
+            "\r\n",
+            "  Press enter to confirm or esc to cancel",
+        );
+
+        assert_eq!(
+            classify_provider_activity(ProviderKind::Codex, &snapshot(approval)),
+            ProviderActivity::Resting,
+            "the selection cursor is the same glyph as the composer prompt, so \
+             a worker waiting on a human reads as idle"
+        );
+
+        assert_eq!(
+            classify_provider_activity(ProviderKind::ClaudeCode, &snapshot(approval)),
+            ProviderActivity::AwaitingOperator,
+            "the same screen IS recognisable — the confirm/cancel footer is \
+             provider-agnostic evidence sitting on a Claude-gated arm"
+        );
+    }
+
     #[test]
     fn only_claude_can_report_awaiting_operator() {
         let awaiting =
