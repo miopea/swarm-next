@@ -8025,6 +8025,19 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "connection_revoked",
             error.to_string(),
         ),
+        TaskStoreError::InvalidTaskMessage { .. } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_task_message",
+            error.to_string(),
+        ),
+        // 403 rather than 422: this is not a malformed request, it is one the
+        // product refuses on purpose, and the caller should not retry it in a
+        // different shape.
+        TaskStoreError::WorkerToWorkerMessageRefused => ApiError::new(
+            StatusCode::FORBIDDEN,
+            "worker_to_worker_message_refused",
+            error.to_string(),
+        ),
         TaskStoreError::InvalidDecisionSummary => ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_decision_summary",

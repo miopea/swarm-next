@@ -102,6 +102,8 @@ mod presentation;
 pub use presentation::{PresentationColorTheme, PresentationDeviceClass, PresentationPreferences};
 mod task_dispatches;
 pub use task_dispatches::{TaskDispatch, TaskDispatchFailure, TaskRuling};
+mod messages;
+pub use messages::{MAX_TASK_MESSAGE_BYTES, MessageEnd, MessageParty, TaskMessage};
 mod task_outcomes;
 pub use task_outcomes::{TaskOutcomeDispatch, TaskOutcomeFailure};
 mod workers;
@@ -176,7 +178,8 @@ const COORDINATOR_SETTLEMENT_SCHEMA_VERSION: i64 = 112;
 const EVIDENCED_WORK_NOT_CLOSED_SCHEMA_VERSION: i64 = 113;
 const AWAITING_RELEASE_SCHEMA_VERSION: i64 = 114;
 const RETURNED_REVIEW_SCHEMA_VERSION: i64 = 115;
-const CURRENT_SCHEMA_VERSION: i64 = RETURNED_REVIEW_SCHEMA_VERSION;
+const TASK_MESSAGE_SCHEMA_VERSION: i64 = 116;
+const CURRENT_SCHEMA_VERSION: i64 = TASK_MESSAGE_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -477,6 +480,16 @@ pub enum TaskStoreError {
     InvalidWorkerName,
     #[error("worker name already exists")]
     DuplicateWorkerName,
+    #[error("a task message must be 1 to {max} bytes and name a recipient")]
+    InvalidTaskMessage { max: usize },
+    /// Refused by rule, not by accident.
+    ///
+    /// A worker's claim about authority reaching another worker with no board
+    /// record turns "anything a sender can write, a sender can fabricate" from
+    /// a discipline into an attack surface. Queen relays instead, and the relay
+    /// is on the task.
+    #[error("workers cannot message each other; send it to Queen")]
+    WorkerToWorkerMessageRefused,
     #[error("worker description must not exceed 2000 bytes or contain control characters")]
     InvalidWorkerDescription,
     #[error("worker update must contain a name, description, provider, or startup preference")]
@@ -3469,6 +3482,9 @@ fn migrate_newest_schema_steps(
     if schema_version < RETURNED_REVIEW_SCHEMA_VERSION {
         migrate_returned_reviews(transaction)?;
     }
+    if schema_version < TASK_MESSAGE_SCHEMA_VERSION {
+        migrate_task_messages(transaction)?;
+    }
     Ok(())
 }
 
@@ -3571,6 +3587,42 @@ fn migrate_abandoned_state(transaction: &rusqlite::Transaction<'_>) -> rusqlite:
     }
     federation_tasks::migrate_abandoned_apiary_task_state(transaction)?;
     transaction.pragma_update(None, "user_version", ABANDONED_STATE_SCHEMA_VERSION)
+}
+
+/// A governed channel between Queen and a worker, durable on the task.
+///
+/// Queen was already asking workers questions — through Claude Code's own
+/// session channel, which Swarm did not build, cannot see, cannot record, and
+/// which one of the active workers cannot receive at all. The exchange existed
+/// only in two terminal scrollbacks, which contradicts the premise that what is
+/// not on the board did not happen.
+///
+/// NO WORKER-TO-WORKER LEG, enforced by a CHECK rather than by convention. A
+/// worker's claim about authority reaching another worker with no board record
+/// turns "anything a sender can write, a sender can fabricate" from a
+/// discipline into an attack surface. The operator's words: "No worker to
+/// worker communication, but queen<->worker communication is fine in both
+/// directions."
+fn migrate_task_messages(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS task_messages (
+             id TEXT PRIMARY KEY,
+             task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+             sender TEXT NOT NULL CHECK (sender IN ('queen','worker','operator')),
+             recipient TEXT NOT NULL CHECK (recipient IN ('queen','worker')),
+             sender_worker_id TEXT REFERENCES worker_profiles(id) ON DELETE SET NULL,
+             recipient_worker_id TEXT REFERENCES worker_profiles(id) ON DELETE SET NULL,
+             body TEXT NOT NULL,
+             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             delivered_at INTEGER,
+             CHECK (NOT (sender = 'worker' AND recipient = 'worker'))
+         );
+         CREATE INDEX IF NOT EXISTS task_messages_by_task
+             ON task_messages(task_id, created_at);
+         CREATE INDEX IF NOT EXISTS task_messages_undelivered
+             ON task_messages(recipient_worker_id) WHERE delivered_at IS NULL;",
+    )?;
+    transaction.pragma_update(None, "user_version", crate::TASK_MESSAGE_SCHEMA_VERSION)
 }
 
 /// Queen hands reviewed work back without moving it backwards.
@@ -7764,6 +7816,14 @@ mod tests {
             undo_sql: "DROP TABLE IF EXISTS task_returned_reviews",
             probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
                  WHERE type = 'table' AND name = 'task_returned_reviews')",
+        },
+        // 116. A whole table again, so the undo simply removes it.
+        SchemaStep {
+            table: "task_messages",
+            artifact: "",
+            undo_sql: "DROP TABLE IF EXISTS task_messages",
+            probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'task_messages')",
         },
     ];
 
