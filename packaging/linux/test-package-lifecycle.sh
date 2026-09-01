@@ -769,13 +769,60 @@ fi
 [ "$(cat "$SWARM_STATE_ROOT/swarm.sqlite3")" = "database-v7" ] \
   || { echo "a failed protocol update did not restore the database" >&2; exit 1; }
 
-# Explicit migrate-protocol still refuses active workers and still works.
-printf '1
-' > "$HOME/running-sessions"
-if "$package" migrate-protocol "$test_root/bundle-6.0.0"; then
-  echo "active protocol migration unexpectedly succeeded" >&2
-  exit 1
-fi
+# THE MIGRATION PREDICATE, ALL FOUR DIRECTIONS.
+#
+# This is the OPPOSITE arm to the reconcile on "unreadable": a protocol
+# migration ends every session and the card's force path is a human route out,
+# so deferring strands nothing while proceeding would guess. The reconcile has
+# no such route, which is why it proceeds instead.
+
+# bundle-4.0.0 (protocol 6) AGAINST AN INSTALLED PROTOCOL 7, deliberately.
+# This used to migrate toward bundle-6.0.0, which is ALSO protocol 7 — so the
+# refusal it asserted came from "protocol is unchanged" and the active-worker
+# check was never reached. The assertion passed for the wrong reason. Every
+# case below therefore also asserts WHY it refused.
+migration_bundle="$test_root/bundle-4.0.0"
+
+# Explicit migrate-protocol refuses a MID-TURN worker, and says so.
+printf '1\n' > "$HOME/running-sessions"
+printf '1\n' > "$HOME/busy-sessions"
+printf '0\n' > "$HOME/unreadable-sessions"
+migrate_busy=$("$package" migrate-protocol "$migration_bundle" 2>&1 || true)
+printf '%s' "$migrate_busy" | grep -q 'mid-turn' \
+  || { echo "a mid-turn worker did not defer the migration: $migrate_busy" >&2; exit 1; }
+
+# A PROVIDER THIS BUILD CANNOT READ DEFERS HERE — the OPPOSITE arm to the
+# reconcile, because the card's force path is a human route out.
+printf '3\n' > "$HOME/running-sessions"
+printf '0\n' > "$HOME/busy-sessions"
+printf '2\n' > "$HOME/unreadable-sessions"
+migrate_unreadable=$("$package" migrate-protocol "$migration_bundle" 2>&1 || true)
+printf '%s' "$migrate_unreadable" | grep -q 'cannot read' \
+  || { echo "an unreadable provider did not defer the migration: $migrate_unreadable" >&2; exit 1; }
+
+# A HOST THAT CANNOT ANSWER defers too. Absent is not zero.
+: > "$HOME/host-cannot-report-busy"
+migrate_skew=$("$package" migrate-protocol "$migration_bundle" 2>&1 || true)
+printf '%s' "$migrate_skew" | grep -q 'cannot report which sessions are busy' \
+  || { echo "an unanswerable host did not defer the migration: $migrate_skew" >&2; exit 1; }
+rm -f "$HOME/host-cannot-report-busy"
+
+# AND THE NEGATIVE: everything readable and resting MIGRATES, silently.
+# Asserting the migration HAPPENED rather than that nothing complained —
+# a deferral is also silent, so silence alone would pass against the bug.
+printf '3\n' > "$HOME/running-sessions"
+printf '0\n' > "$HOME/busy-sessions"
+printf '0\n' > "$HOME/unreadable-sessions"
+"$package" migrate-protocol "$migration_bundle" >/dev/null 2>&1 \
+  || { echo "a resting host refused a protocol migration" >&2; exit 1; }
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "4.0.0" ] \
+  || { echo "the migration reported success without moving the host" >&2; exit 1; }
+
+# Put the stack back where the next assertions expect it: they are about a
+# 7 -> 8 update and need protocol 7 installed. bundle-4.0.0 is protocol 6, so
+# this is the same 6 -> 7 hop the harness already exercises above.
+"$package" update "$test_root/bundle-7.0.0" >/dev/null 2>&1 \
+  || { echo "could not restore protocol 7 after the migration cases" >&2; exit 1; }
 [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "7.0.0" ]
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "7.0.0" ]
 printf '0
