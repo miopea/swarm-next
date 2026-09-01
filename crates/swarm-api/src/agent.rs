@@ -2845,7 +2845,7 @@ fn refresh_jira_project_tool() -> Tool {
 fn transition_task_tool() -> Tool {
     tool(
         "swarm_transition_task",
-        "Move a task through its explicit lifecycle. Workers may report only Active, Blocked, or Review for their own assignment. Queen must wake an assigned sleeping worker and observe its live session before moving Ready or Blocked work to Active. Include a concise Blocked reason or Review handoff note. Completed requires verification evidence, including release or handoff evidence when shipping was part of done. Abandoned closes work that was superseded or given up on and asks for no evidence, because nothing shipped and nothing is coming; it is Queen's to set, like Completed.",
+        "Move a task through its explicit lifecycle. Workers may report only Active, Blocked, or Review for their own assignment. Queen must wake an assigned sleeping worker and observe its live session before moving Ready or Blocked work to Active. Include a concise Blocked reason or Review handoff note. Completed requires verification evidence, including release or handoff evidence when shipping was part of done. Awaiting release is for work you have ACCEPTED that is finished and merely unshipped — it needs no evidence to enter, and it completes ITSELF when a deployment is recorded, so park work there rather than holding it in review or closing it on a nothing-to-deploy claim that is really ships-later. Abandoned closes work that was superseded or given up on and asks for no evidence, because nothing shipped and nothing is coming; it is Queen's to set, like Completed.",
         &json!({
             "type": "object",
             "properties": {

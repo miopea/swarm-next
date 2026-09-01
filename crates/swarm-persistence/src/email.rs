@@ -644,6 +644,7 @@ impl TaskStore {
         // exactly the moment it knows: finished, handed off, still on the task.
         if task_state != TaskState::Completed.to_string()
             && task_state != TaskState::Review.to_string()
+            && task_state != TaskState::AwaitingRelease.to_string()
         {
             // Says which rule was broken. "evidence is invalid" is what this
             // used to answer for a perfectly well-formed reference recorded a
@@ -669,6 +670,38 @@ impl TaskStore {
             params![task_id.to_string(), environment, reference],
             deployment_from_row,
         )?;
+        // AWAITING RELEASE SETTLES ITSELF HERE, and this is the whole point of
+        // the state. Work parked waiting to ship has already been accepted; the
+        // only open question was whether it shipped, and this call answers it.
+        //
+        // NOTHING WAITS ON A PERSON for a question a fact has just settled. The
+        // completion gate is satisfied by exactly this evidence, so asking
+        // somebody to click afterwards would be asking them to agree with a
+        // deployment record they are looking at.
+        //
+        // Only from AwaitingRelease. A deployment recorded against work still in
+        // Review does NOT close it: that work has not been accepted yet, and
+        // shipping something is not the same as somebody agreeing it is done.
+        if task_state == TaskState::AwaitingRelease.to_string() {
+            transaction.execute(
+                "UPDATE tasks SET state = ?2, updated_at = ?3 WHERE id = ?1",
+                params![
+                    task_id.to_string(),
+                    TaskState::Completed.to_string(),
+                    deployed_at
+                ],
+            )?;
+            transaction.execute(
+                "INSERT INTO task_activity (task_id, kind, from_state, to_state, note, actor_kind)
+                 VALUES (?1, 'state_changed', ?2, ?3, ?4, 'system')",
+                params![
+                    task_id.to_string(),
+                    TaskState::AwaitingRelease.to_string(),
+                    TaskState::Completed.to_string(),
+                    format!("Released to {environment} at {reference}."),
+                ],
+            )?;
+        }
         // A DEPLOYMENT CONTRADICTS AN UNAPPROVED CLAIM THAT NOTHING SHIPPED,
         // and the contradiction is knowable here rather than by someone
         // stumbling on it later.
@@ -2136,6 +2169,60 @@ mod tests {
     /// aborted the import with a SQL error, which the API reports as "task
     /// persistence is temporarily unavailable". The operator saw a database
     /// outage; the cause was a duplicated screenshot in one message.
+    /// Awaiting-release work settles itself the moment it ships.
+    ///
+    /// The state exists because "this ships nothing, ever" and "this ships
+    /// later" were being expressed by the same exemption, and the second closed
+    /// work on a claim that was false. Parking work is only worth doing if
+    /// nothing then has to remember to come back for it, so this is the
+    /// assertion the whole state stands on.
+    #[test]
+    fn awaiting_release_work_completes_itself_when_the_deployment_lands() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("Ship the thing", "/workspace").unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        store
+            .transition_task(task.id, TaskState::AwaitingRelease)
+            .unwrap();
+
+        store
+            .record_task_deployment(task.id, "production", "abc123", 2_000)
+            .unwrap();
+
+        assert_eq!(
+            store.get_task(task.id).unwrap().state,
+            TaskState::Completed,
+            "a recorded deployment is the evidence the completion gate asks for, \
+             so nobody should have to click to agree with it"
+        );
+    }
+
+    /// THE NEGATIVE: shipping something is not somebody agreeing it is done.
+    ///
+    /// Work still in Review has not been accepted. A deployment recorded there
+    /// is evidence, and evidence is not approval — closing on it would delete
+    /// the review rather than satisfy it.
+    #[test]
+    fn a_deployment_against_work_still_in_review_does_not_close_it() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("Ship the thing", "/workspace").unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+
+        store
+            .record_task_deployment(task.id, "production", "abc123", 2_000)
+            .unwrap();
+
+        assert_eq!(
+            store.get_task(task.id).unwrap().state,
+            TaskState::Review,
+            "review is still owed, and a deployment does not discharge it"
+        );
+    }
+
     #[test]
     fn one_email_carrying_the_same_file_twice_still_imports() {
         let store = TaskStore::in_memory().unwrap();

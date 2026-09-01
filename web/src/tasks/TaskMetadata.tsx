@@ -7,6 +7,7 @@ const stateLabels: Record<TaskState, string> = {
   active: "In progress",
   blocked: "Blocked",
   review: "Review",
+  awaiting_release: "Awaiting release",
   completed: "Completed",
   abandoned: "Abandoned",
 };

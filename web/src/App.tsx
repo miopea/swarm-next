@@ -2376,6 +2376,7 @@ function jiraProjectUrl(link: JiraTaskLink): string | undefined {
 function taskStateLabel(task: Task): string {
   if (task.state === "ready" && task.assigned_worker_id) return "Assigned";
   if (task.state === "active") return "In progress";
+  if (task.state === "awaiting_release") return "Awaiting release";
   return task.state[0].toUpperCase() + task.state.slice(1);
 }
 

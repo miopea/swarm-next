@@ -7,7 +7,7 @@ type ActivityFilter = "all" | "progress" | "assignments" | "changes";
 type ActorFilter = "all" | TaskActivityActorKind;
 
 const stateLabels: Record<TaskState, string> = {
-  draft: "Draft", ready: "Ready", active: "In progress", blocked: "Blocked", review: "Review", completed: "Completed", abandoned: "Abandoned",
+  draft: "Draft", ready: "Ready", active: "In progress", blocked: "Blocked", review: "Review", awaiting_release: "Awaiting release", completed: "Completed", abandoned: "Abandoned",
 };
 
 export default function WorkActivity({ activity, tasks, workers, loading, failed, onRetry, onOpenTask }: {

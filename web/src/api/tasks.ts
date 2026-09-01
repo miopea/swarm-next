@@ -6,6 +6,14 @@ export type TaskState =
   | "active"
   | "blocked"
   | "review"
+  /**
+   * Finished and accepted, waiting only to ship.
+   *
+   * OPEN, not closed. The work is not done until it lands, and a recorded
+   * deployment closes it without anybody clicking. Enrolling it in
+   * CLOSED_TASK_STATES would hide work that has not shipped.
+   */
+  | "awaiting_release"
   | "completed"
   /** Closed for a reason other than success, so the evidence question never applies. */
   | "abandoned";

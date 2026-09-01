@@ -174,7 +174,8 @@ const ABANDONED_STATE_SCHEMA_VERSION: i64 = 110;
 const TASK_COMMIT_REPORT_SCHEMA_VERSION: i64 = 111;
 const COORDINATOR_SETTLEMENT_SCHEMA_VERSION: i64 = 112;
 const EVIDENCED_WORK_NOT_CLOSED_SCHEMA_VERSION: i64 = 113;
-const CURRENT_SCHEMA_VERSION: i64 = EVIDENCED_WORK_NOT_CLOSED_SCHEMA_VERSION;
+const AWAITING_RELEASE_SCHEMA_VERSION: i64 = 114;
+const CURRENT_SCHEMA_VERSION: i64 = AWAITING_RELEASE_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -3455,6 +3456,9 @@ fn migrate_newest_schema_steps(
     if schema_version < EVIDENCED_WORK_NOT_CLOSED_SCHEMA_VERSION {
         coordinator::migrate_evidenced_work_not_closed_attention(transaction)?;
     }
+    if schema_version < AWAITING_RELEASE_SCHEMA_VERSION {
+        migrate_awaiting_release_state(transaction)?;
+    }
     Ok(())
 }
 
@@ -3557,6 +3561,87 @@ fn migrate_abandoned_state(transaction: &rusqlite::Transaction<'_>) -> rusqlite:
     }
     federation_tasks::migrate_abandoned_apiary_task_state(transaction)?;
     transaction.pragma_update(None, "user_version", ABANDONED_STATE_SCHEMA_VERSION)
+}
+
+/// Work that is finished and waiting only to ship gets its own resting state.
+///
+/// A REBUILD, because `SQLite` cannot alter a CHECK and `tasks` carries one
+/// enumerating every state it accepts. Same shape as the `abandoned` step at
+/// 110, including its two-questions-asked-separately guard: "not yet migrated"
+/// and "not there at all" are different answers, and collapsing them rebuilds a
+/// table that does not exist.
+fn migrate_awaiting_release_state(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let table_exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks')",
+        [],
+        |row| row.get(0),
+    )?;
+    let already: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+         WHERE type = 'table' AND name = 'tasks' AND sql LIKE '%awaiting_release%')",
+        [],
+        |row| row.get(0),
+    )?;
+    let targets_exist: bool = transaction.query_row(
+        "SELECT (SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name IN ('hives','worker_profiles')) = 2",
+        [],
+        |row| row.get(0),
+    )?;
+    if table_exists && targets_exist && !already {
+        transaction.execute_batch(
+            "DROP INDEX IF EXISTS tasks_by_hive;
+             DROP INDEX IF EXISTS tasks_by_hive_position;
+             DROP INDEX IF EXISTS task_owner_queue;
+             DROP INDEX IF EXISTS tasks_visible_queue;
+             DROP TRIGGER IF EXISTS tasks_require_hive_insert;
+             DROP TRIGGER IF EXISTS tasks_require_hive_update;
+             PRAGMA legacy_alter_table = ON;
+             ALTER TABLE tasks RENAME TO tasks_v113;
+             CREATE TABLE tasks (
+                 id TEXT PRIMARY KEY,
+                 title TEXT NOT NULL,
+                 workspace TEXT NOT NULL,
+                 state TEXT NOT NULL CHECK (state IN ('draft','ready','active','blocked','review','awaiting_release','completed','abandoned')),
+                 created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                 updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                 description TEXT NOT NULL DEFAULT '',
+                 priority TEXT NOT NULL DEFAULT 'normal'
+                     CHECK (priority IN ('low','normal','high','urgent')),
+                 hive_id TEXT REFERENCES hives(id),
+                 position INTEGER NOT NULL DEFAULT 0,
+                 assigned_worker_id TEXT REFERENCES worker_profiles(id),
+                 removed_at INTEGER,
+                 operator_instruction TEXT NOT NULL DEFAULT '',
+                 blocked_until INTEGER
+             );
+             INSERT INTO tasks
+                 (id, title, workspace, state, created_at, updated_at, description,
+                  priority, hive_id, position, assigned_worker_id, removed_at,
+                  operator_instruction, blocked_until)
+             SELECT id, title, workspace, state, created_at, updated_at, description,
+                    priority, hive_id, position, assigned_worker_id, removed_at,
+                    operator_instruction, blocked_until
+               FROM tasks_v113;
+             DROP TABLE tasks_v113;
+             CREATE INDEX tasks_by_hive ON tasks(hive_id);
+             CREATE INDEX tasks_by_hive_position ON tasks(hive_id, position);
+             CREATE INDEX task_owner_queue
+                 ON tasks(assigned_worker_id, state)
+                 WHERE assigned_worker_id IS NOT NULL
+                   AND state NOT IN ('completed','abandoned');
+             CREATE INDEX tasks_visible_queue
+                 ON tasks(hive_id, state) WHERE removed_at IS NULL;
+             CREATE TRIGGER tasks_require_hive_insert
+                 BEFORE INSERT ON tasks WHEN NEW.hive_id IS NULL
+                 BEGIN SELECT RAISE(ABORT, 'task hive_id is required'); END;
+             CREATE TRIGGER tasks_require_hive_update
+                 BEFORE UPDATE OF hive_id ON tasks WHEN NEW.hive_id IS NULL
+                 BEGIN SELECT RAISE(ABORT, 'task hive_id is required'); END;
+             PRAGMA legacy_alter_table = OFF;",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", crate::AWAITING_RELEASE_SCHEMA_VERSION)
 }
 
 /// A task records the commits it produced, and what checking them found.
@@ -7571,6 +7656,64 @@ mod tests {
             probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
                  WHERE type = 'table' AND name = 'coordinator_actions'
                    AND sql LIKE '%evidenced_work_not_closed_attention%')",
+        },
+        // 114. The tasks CHECK gains a state, so the undo rebuilds tasks at the
+        // shape before it — every state through 'abandoned' and not this one.
+        SchemaStep {
+            table: "tasks",
+            artifact: "",
+            undo_sql: "DROP INDEX IF EXISTS tasks_by_hive;
+                 DROP INDEX IF EXISTS tasks_by_hive_position;
+                 DROP INDEX IF EXISTS task_owner_queue;
+                 DROP INDEX IF EXISTS tasks_visible_queue;
+                 DROP TRIGGER IF EXISTS tasks_require_hive_insert;
+                 DROP TRIGGER IF EXISTS tasks_require_hive_update;
+                 PRAGMA legacy_alter_table = ON;
+                 ALTER TABLE tasks RENAME TO tasks_undo;
+                 CREATE TABLE tasks (
+                     id TEXT PRIMARY KEY,
+                     title TEXT NOT NULL,
+                     workspace TEXT NOT NULL,
+                     state TEXT NOT NULL CHECK (state IN ('draft','ready','active','blocked','review','completed','abandoned')),
+                     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                     updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                     description TEXT NOT NULL DEFAULT '',
+                     priority TEXT NOT NULL DEFAULT 'normal'
+                         CHECK (priority IN ('low','normal','high','urgent')),
+                     hive_id TEXT REFERENCES hives(id),
+                     position INTEGER NOT NULL DEFAULT 0,
+                     assigned_worker_id TEXT REFERENCES worker_profiles(id),
+                     removed_at INTEGER,
+                     operator_instruction TEXT NOT NULL DEFAULT '',
+                     blocked_until INTEGER
+                 );
+                 INSERT INTO tasks
+                     (id, title, workspace, state, created_at, updated_at, description,
+                      priority, hive_id, position, assigned_worker_id, removed_at,
+                      operator_instruction, blocked_until)
+                 SELECT id, title, workspace, state, created_at, updated_at, description,
+                        priority, hive_id, position, assigned_worker_id, removed_at,
+                        operator_instruction, blocked_until
+                   FROM tasks_undo;
+                 DROP TABLE tasks_undo;
+                 CREATE INDEX tasks_by_hive ON tasks(hive_id);
+                 CREATE INDEX tasks_by_hive_position ON tasks(hive_id, position);
+                 CREATE INDEX task_owner_queue
+                     ON tasks(assigned_worker_id, state)
+                     WHERE assigned_worker_id IS NOT NULL
+                       AND state NOT IN ('completed','abandoned');
+                 CREATE INDEX tasks_visible_queue
+                     ON tasks(hive_id, state) WHERE removed_at IS NULL;
+                 CREATE TRIGGER tasks_require_hive_insert
+                     BEFORE INSERT ON tasks WHEN NEW.hive_id IS NULL
+                     BEGIN SELECT RAISE(ABORT, 'task hive_id is required'); END;
+                 CREATE TRIGGER tasks_require_hive_update
+                     BEFORE UPDATE OF hive_id ON tasks WHEN NEW.hive_id IS NULL
+                     BEGIN SELECT RAISE(ABORT, 'task hive_id is required'); END;
+                 PRAGMA legacy_alter_table = OFF",
+            probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'tasks'
+                   AND sql LIKE '%awaiting_release%')",
         },
     ];
 

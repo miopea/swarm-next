@@ -1353,7 +1353,9 @@ fn next_lifecycle_transition(current: TaskState, desired: TaskState) -> Option<T
         )
         .then_some(TaskState::Active),
         TaskState::Blocked => (current == TaskState::Review).then_some(TaskState::Active),
-        TaskState::Review | TaskState::Completed => {
+        // Reached the same way Review is: a peer that wants work parked for a
+        // release still has to walk it through the states that precede one.
+        TaskState::AwaitingRelease | TaskState::Review | TaskState::Completed => {
             if matches!(current, TaskState::Ready | TaskState::Blocked) {
                 Some(TaskState::Active)
             } else if current == TaskState::Active {

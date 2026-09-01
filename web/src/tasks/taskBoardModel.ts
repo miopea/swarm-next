@@ -31,7 +31,7 @@ export type TaskBoardView = {
 };
 
 const priorityOrder: Record<TaskPriority, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
-const stateOrder: Record<TaskState, number> = { blocked: 0, review: 1, active: 2, ready: 3, draft: 4, completed: 5, abandoned: 6 };
+const stateOrder: Record<TaskState, number> = { blocked: 0, review: 1, awaiting_release: 2, active: 3, ready: 4, draft: 5, completed: 6, abandoned: 7 };
 
 function taskComparator(
   sort: TaskBoardSort,

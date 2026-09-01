@@ -90,6 +90,7 @@ const stateLabels: Record<TaskState, string> = {
   active: "In progress",
   blocked: "Blocked",
   review: "Review",
+  awaiting_release: "Awaiting release",
   completed: "Completed",
   abandoned: "Abandoned",
 };
@@ -108,6 +109,10 @@ const validTargets: Record<TaskState, TaskState[]> = {
   // Completion carries durable verification evidence and therefore uses the
   // explicit review form rather than an evidence-free drag shortcut.
   review: ["active"],
+  // Parking work for a release is a drag; CLOSING it is not. It settles itself
+  // when the deployment is recorded, so the only manual move offered here is
+  // back to Active for work a release proved unfinished.
+  awaiting_release: ["active"],
   completed: [],
   // Terminal, like completed. Reopening closed work is a correction, not a drag.
   abandoned: [],

@@ -42,6 +42,23 @@ pub enum TaskState {
     Active,
     Blocked,
     Review,
+    /// Finished and accepted, waiting only for the work to ship.
+    ///
+    /// A no-deployment exemption means "this ships nothing, EVER". An open pull
+    /// request means "this ships LATER". Conflating them is what closed work on
+    /// a false claim: the reason given was true about deployment and wrong as
+    /// grounds to close, because the work was not finished-with-nothing-to-ship,
+    /// it was finished-and-waiting.
+    ///
+    /// Like [`TaskState::Abandoned`], this removes a question rather than making
+    /// it cheaper. Completed asks what evidence shows the work is running, and
+    /// for work whose commits have not landed yet that question has no honest
+    /// answer — so it was being answered with an exemption somebody then had to
+    /// approve.
+    ///
+    /// It settles itself. Nothing waits on a person: when the commits reach a
+    /// ref and a deployment is recorded, the task completes on that evidence.
+    AwaitingRelease,
     Completed,
     /// Closed for a reason other than success.
     ///
@@ -62,7 +79,15 @@ impl TaskState {
                 | (Self::Ready, Self::Active | Self::Blocked)
                 | (Self::Active, Self::Blocked | Self::Review)
                 | (Self::Blocked, Self::Ready | Self::Active)
-                | (Self::Review, Self::Active | Self::Ready | Self::Completed)
+                | (
+                    Self::Review,
+                    Self::Active | Self::Ready | Self::AwaitingRelease | Self::Completed
+                )
+                // AWAITING RELEASE IS A RESTING STATE, NOT A TERMINAL ONE. It
+                // settles itself into Completed when the commits land, and it
+                // falls back to Active because a release can reveal the work was
+                // not finished after all.
+                | (Self::AwaitingRelease, Self::Active | Self::Completed)
                 // ABANDONED IS REACHABLE FROM EVERY UNFINISHED STATE, including
                 // Draft. Forcing a detour through Blocked to abandon something
                 // would be clicking, which is the thing this state exists to
@@ -71,7 +96,12 @@ impl TaskState {
                 // of mistakes and duplicates and destroys the record, which is
                 // a different act from declining work on purpose.
                 | (
-                    Self::Draft | Self::Ready | Self::Active | Self::Blocked | Self::Review,
+                    Self::Draft
+                        | Self::Ready
+                        | Self::Active
+                        | Self::Blocked
+                        | Self::Review
+                        | Self::AwaitingRelease,
                     Self::Abandoned,
                 )
         )
@@ -86,6 +116,7 @@ impl fmt::Display for TaskState {
             Self::Active => "active",
             Self::Blocked => "blocked",
             Self::Review => "review",
+            Self::AwaitingRelease => "awaiting_release",
             Self::Completed => "completed",
             Self::Abandoned => "abandoned",
         };
@@ -103,6 +134,7 @@ impl FromStr for TaskState {
             "active" => Ok(Self::Active),
             "blocked" => Ok(Self::Blocked),
             "review" => Ok(Self::Review),
+            "awaiting_release" => Ok(Self::AwaitingRelease),
             "completed" => Ok(Self::Completed),
             "abandoned" => Ok(Self::Abandoned),
             _ => Err(ParseTaskStateError),
