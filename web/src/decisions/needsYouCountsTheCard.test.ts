@@ -26,3 +26,21 @@ test("and the card is rendered, so the badge is not counting something invisible
   expect(appSource).toContain("<UnsettledReviewCard");
   expect(appSource).toContain("waiting={unsettledReview}");
 });
+
+/**
+ * THERE ARE TWO TOTALS, AND THE TEST ABOVE ONLY GUARDED ONE.
+ *
+ * `attentionCount` is the whole-app badge; `additionalPendingCount` is what the
+ * inbox's own "Needs you" tab renders beside the word. The first test asserted
+ * the first, so it stayed green on 2026-08-31 while the operator was looking at
+ * a tab reading "Needs you 0" directly above a card listing fourteen rows —
+ * this file's stated failure, reproduced through the counter it did not name.
+ *
+ * A guard that covers one of two paths is not a guard against the third
+ * occurrence of the same bug. Both are asserted now.
+ */
+test("the inbox tab's own count includes it too, not only the app badge", () => {
+  const passed = appSource.match(/additionalPendingCount=\{[^}]+\}/);
+  expect(passed, "additionalPendingCount must still be passed in one expression").not.toBeNull();
+  expect(passed?.[0]).toContain("unsettledReviewAttentionCount");
+});
