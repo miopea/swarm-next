@@ -1296,6 +1296,7 @@ impl AppState {
         self.deliver_decision_outcomes(store, client).await;
         self.deliver_task_briefs(store, client).await;
         self.deliver_task_outcomes(store, client).await;
+        self.deliver_task_messages(store, client).await;
         if let Err(error) = store.observe_queen_automation(unix_timestamp()) {
             tracing::warn!(message = %error, "Queen automation queue could not be observed");
         }
@@ -2014,6 +2015,89 @@ impl AppState {
             }
         }
     }
+    /// Writes waiting Queen-to-worker messages into resting terminals.
+    ///
+    /// THE DEFERRAL IS THE FEATURE. `submit_grouped_per_terminal` refuses a
+    /// session that is not resting, so a question cannot land mid-turn and take
+    /// the thread with it — which is exactly what has been happening through
+    /// the ungoverned channel this replaces. A deferred message stays queued
+    /// and arrives on a later pass; nothing is dropped and nothing is forced.
+    ///
+    /// One write per terminal rather than one per message, for the same reason
+    /// outcomes are grouped: several questions to the same reader are one
+    /// interruption, not several.
+    async fn deliver_task_messages(&self, store: &TaskStore, client: &HostClient) {
+        let pending = match store.pending_task_message_dispatches() {
+            Ok(pending) => pending,
+            Err(error) => {
+                tracing::warn!(message = %error, "task message queue could not be read");
+                return;
+            }
+        };
+        if pending.is_empty() {
+            return;
+        }
+        let settled = coordination_delivery::submit_grouped_per_terminal(
+            store,
+            client,
+            pending,
+            |dispatch| dispatch.session_id,
+            |group| {
+                (
+                    coordination_delivery::task_message_message(group),
+                    group
+                        .first()
+                        .map(|dispatch| delivery_marker(&dispatch.message_id))
+                        .unwrap_or_default(),
+                )
+            },
+        )
+        .await;
+        for (group, submission) in settled {
+            match submission {
+                Ok(TerminalSubmission::Acknowledged) => {
+                    for dispatch in group {
+                        if let Err(error) = store
+                            .mark_task_message_delivered(&dispatch.message_id, unix_timestamp())
+                        {
+                            tracing::warn!(message = %error, message_id = %dispatch.message_id, "a delivered message could not be recorded as delivered");
+                        }
+                    }
+                }
+                // NOT an error and NOT recorded as delivered. The worker is
+                // mid-turn, which is the case this whole path exists to
+                // respect; it stays queued for the next pass.
+                Ok(TerminalSubmission::Deferred(reason)) => {
+                    tracing::info!(
+                        ?reason,
+                        count = group.len(),
+                        "messages are held at this worker's prompt"
+                    );
+                }
+                Ok(TerminalSubmission::Rejected { code, message }) => {
+                    tracing::warn!(%code, %message, count = group.len(), "task messages were rejected by terminal host");
+                }
+                // NOT marked delivered, deliberately, so it is tried again.
+                //
+                // Uncertain means the write may or may not have landed. The two
+                // ways to be wrong are a duplicate question and a lost one, and
+                // they are not equally bad: a worker reading the same question
+                // twice is untidy, while silence is the one failure this
+                // channel exists to remove — an undelivered instruction is
+                // indistinguishable from none.
+                Ok(TerminalSubmission::Uncertain) => {
+                    tracing::info!(
+                        count = group.len(),
+                        "task message delivery is uncertain; it stays queued and may arrive twice"
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(message = %error, count = group.len(), "task messages could not be delivered");
+                }
+            }
+        }
+    }
+
     async fn deliver_task_outcomes(&self, store: &TaskStore, client: &HostClient) {
         let outcomes = match store.claim_task_outcomes(unix_timestamp()) {
             Ok(outcomes) => outcomes,

@@ -248,6 +248,69 @@ impl TaskStore {
     }
 }
 
+/// A message with a live terminal to write it into.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskMessageDispatch {
+    pub message_id: String,
+    pub task_id: TaskId,
+    pub task_title: String,
+    pub session_id: swarm_domain::WorkerSessionId,
+    pub sender: MessageParty,
+    pub sender_name: String,
+    pub body: String,
+}
+
+impl TaskStore {
+    /// Undelivered messages whose recipient has a session that is still open.
+    ///
+    /// A message for a worker that is asleep stays queued rather than being
+    /// dropped or counted as delivered — it arrives when that worker is next
+    /// running, which is the difference between a channel and a broadcast.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable or stored data is corrupt.
+    pub fn pending_task_message_dispatches(
+        &self,
+    ) -> Result<Vec<TaskMessageDispatch>, TaskStoreError> {
+        use std::str::FromStr;
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT m.id, m.task_id, task.title, session.session_id, m.sender,
+                    COALESCE(sender.name, 'Queen'), m.body
+             FROM task_messages m
+             JOIN tasks task ON task.id = m.task_id AND task.removed_at IS NULL
+             JOIN worker_sessions session ON session.worker_id = m.recipient_worker_id
+                  AND session.ended_at IS NULL
+             LEFT JOIN worker_profiles sender ON sender.id = m.sender_worker_id
+             WHERE m.delivered_at IS NULL AND m.recipient = 'worker'
+             ORDER BY m.created_at, m.id",
+        )?;
+        let dispatches = statement
+            .query_map([], |row| {
+                let task_id: String = row.get(1)?;
+                let session_id: String = row.get(3)?;
+                let sender: String = row.get(4)?;
+                Ok(TaskMessageDispatch {
+                    message_id: row.get(0)?,
+                    task_id: TaskId::from_str(&task_id)
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    task_title: row.get(2)?,
+                    session_id: swarm_domain::WorkerSessionId::from_str(&session_id)
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    sender: match sender.as_str() {
+                        "queen" => MessageParty::Queen,
+                        "operator" => MessageParty::Operator,
+                        _ => MessageParty::Worker,
+                    },
+                    sender_name: row.get(5)?,
+                    body: row.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(dispatches)
+    }
+}
+
 fn message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskMessage> {
     use std::str::FromStr;
     let task_id: String = row.get(1)?;
