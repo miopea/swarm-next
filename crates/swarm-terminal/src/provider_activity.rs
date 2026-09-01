@@ -333,6 +333,40 @@ mod tests {
         assert_eq!(activity, ProviderActivity::AwaitingOperator);
     }
 
+    /// `AwaitingOperator` is Claude-only, and every other provider reads `Unknown`.
+    ///
+    /// This is not a complaint about the classifier — Unknown is the honest
+    /// answer, and guessing another provider's glyphs would be worse. It is
+    /// pinned because of what READS the answer: any predicate that treats
+    /// "not mid-turn" as "safe to stop" turns this honest Unknown into a
+    /// confident "idle", and would stop a worker sitting at a permission
+    /// prompt. Measured, so a later change to the arms shows up here rather
+    /// than inside a safety check.
+    #[test]
+    fn only_claude_can_report_awaiting_operator() {
+        let awaiting =
+            "Allow this command?\r\n❯ 1. Yes\r\n2. No\r\nEnter to confirm · Esc to cancel";
+
+        assert_eq!(
+            classify_provider_activity(ProviderKind::ClaudeCode, &snapshot(awaiting)),
+            ProviderActivity::AwaitingOperator,
+            "Claude reads a confirmation prompt as awaiting the operator"
+        );
+
+        for provider in [
+            ProviderKind::Codex,
+            ProviderKind::Gemini,
+            ProviderKind::Grok,
+            ProviderKind::OpenCode,
+        ] {
+            assert_eq!(
+                classify_provider_activity(provider, &snapshot(awaiting)),
+                ProviderActivity::Unknown,
+                "{provider:?} cannot report AwaitingOperator, so the same screen is Unknown"
+            );
+        }
+    }
+
     #[test]
     fn codex_prompt_is_resting_and_unrecognized_output_is_unknown() {
         assert_eq!(
