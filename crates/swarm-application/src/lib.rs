@@ -2227,6 +2227,31 @@ impl TaskService {
         Ok(self.store.list_task_activity(task_id, limit)?)
     }
 
+    /// Reads the completion evidence that sits BESIDE a task's activity log.
+    ///
+    /// Same visibility rule as the history it accompanies. Separate because it
+    /// is not activity: claiming an exemption, approving one and recording a
+    /// deployment write their own tables and no event, so a caller reading only
+    /// the log sees an accurate list of transitions and concludes there is no
+    /// evidence. That inference cost a real misfiling.
+    ///
+    /// # Errors
+    /// Denies a task the caller cannot see, and returns persistence failures.
+    pub fn read_task_evidence(
+        &self,
+        principal: AgentPrincipal,
+        task_id: TaskId,
+    ) -> Result<swarm_persistence::TaskEvidenceRecord, ApplicationError> {
+        let visible = self
+            .list_visible_tasks(principal)?
+            .into_iter()
+            .any(|task| task.id == task_id);
+        if !visible {
+            return Err(ApplicationError::NotAuthorized);
+        }
+        Ok(self.store.task_evidence_record(task_id)?)
+    }
+
     /// Approves a worker's claim that a task had nothing to deploy.
     ///
     /// The completion gate exists so nothing is recorded as done without

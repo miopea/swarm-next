@@ -29,7 +29,7 @@ pub use coordinator::{
 };
 pub use passkeys::RegisteredPasskey;
 pub use task_dispatches::{DispatchHold, HeldTaskDispatch};
-pub use task_outcomes::CompletionEvidence;
+pub use task_outcomes::{CompletionEvidence, CompletionExemptionRecord, TaskEvidenceRecord};
 mod decisions;
 mod email;
 mod events;

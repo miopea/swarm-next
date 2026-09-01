@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-const AGENT_TOOL_SURFACE_REVISION: u32 = 6;
+const AGENT_TOOL_SURFACE_REVISION: u32 = 7;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -1488,6 +1488,18 @@ impl AgentMcp {
             task_id,
             input.limit.unwrap_or(50).clamp(1, 200),
         )?;
+        // EVIDENCE IS NOT ACTIVITY, and reading only the log is how an approval
+        // that existed got reported as missing. Claiming an exemption,
+        // approving one and recording a deployment each write their own table
+        // and no event, so a caller who saw an accurate list of transitions
+        // concluded there was no evidence and filed a defect against the flag
+        // that correctly reported it.
+        //
+        // Derived here rather than written as events: backfilling rows for past
+        // approvals would make every earlier reading of those records
+        // unreproducible, so this reports what the evidence tables already hold
+        // and records written long before it existed read correctly too.
+        let evidence = self.tasks.read_task_evidence(self.principal, task_id)?;
         structured(json!({
             "task_id": input.task_id,
             "events": page.events,
@@ -1495,6 +1507,10 @@ impl AgentMcp {
             // the whole history, which is the same failure this tool exists to
             // fix one level up.
             "truncated": page.truncated,
+            "evidence": evidence,
+            "evidence_note": "Evidence does not appear in `events` and never has: \
+        a claim, its approval and a deployment write their own records, not activity rows. \
+        An empty `evidence` here means none was recorded, NOT that the log is silent about it.",
         }))
     }
 
@@ -2593,7 +2609,7 @@ fn approve_no_deployment_tool() -> Tool {
 fn read_task_history_tool() -> Tool {
     tool(
         "swarm_read_task_history",
-        "Read one task's full history: every state change and the complete note written with it, including a worker's handoff. Outcome notifications carry only an excerpt of a handoff, so this is where the whole report is. Use it before accepting or rejecting finished work.",
+        "Read one task's activity log AND its completion evidence. `events` is every state change and the complete note written with it, including a worker's handoff — outcome notifications carry only an excerpt, so this is where the whole report is. `evidence` is separate and is NOT in the log: a no-deployment claim, its approval, and any recorded deployment each write their own record and no activity row, so a task whose `events` show no evidence may still be fully evidenced. Read both before accepting or rejecting finished work, and treat an empty `evidence` as \"none recorded\" rather than \"the log did not mention it\".",
         &json!({
             "type": "object",
             "properties": {

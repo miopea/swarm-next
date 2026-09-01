@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use rusqlite::{OptionalExtension, params};
+use serde::{Deserialize, Serialize};
 use swarm_domain::{
     CommitRepositoryState, CommitSettlement, CommitVerdict, ControlRoomEventKind,
     TaskActivityActor, TaskCommit, TaskCommitReport, TaskId, TaskState, WorkerId, WorkerSessionId,
@@ -301,6 +302,95 @@ mod tests {
         assert!(reason.contains("PR #418 is open"), "{reason}");
     }
 
+    /// Evidence is readable for a task whose activity log shows none.
+    ///
+    /// The exact shape that misled a reader on the real board: an exemption
+    /// claimed and approved, a task still in review, and an activity log
+    /// containing created/ready/assigned/active/review and nothing else. The
+    /// log was accurate; the conclusion drawn from it — that no evidence
+    /// existed — was not.
+    #[test]
+    fn evidence_is_readable_even_though_no_activity_event_records_it() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("A spike", "/workspace").unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        store
+            .claim_completion_exemption(task.id, "An investigation with no code.", None, 1_000)
+            .unwrap();
+        store
+            .approve_completion_exemption(task.id, "queen", 1_500)
+            .unwrap();
+
+        // THE LOG STILL SAYS NOTHING, and that is deliberate: nothing was
+        // backfilled, so every earlier reading of a record like this one stays
+        // reproducible.
+        let events = store.list_task_activity(task.id, 50).unwrap();
+        assert!(
+            !events.events.iter().any(|event| format!("{:?}", event.kind)
+                .to_lowercase()
+                .contains("exempt")),
+            "no exemption event should have been invented"
+        );
+
+        // The evidence is reported anyway, because it is read from where it
+        // actually lives.
+        let evidence = store.task_evidence_record(task.id).unwrap();
+        let exemption = evidence.exemption.expect("the claim is readable");
+        assert_eq!(exemption.claimed_at, 1_000);
+        assert_eq!(exemption.approved_at, Some(1_500));
+        assert_eq!(exemption.approved_by.as_deref(), Some("queen"));
+        assert!(evidence.deployments.is_empty());
+    }
+
+    /// And a task with no evidence does not grow a phantom claim.
+    ///
+    /// The negative half. A reader has to be able to tell "none recorded" from
+    /// "recorded somewhere this does not look", which is the whole defect.
+    #[test]
+    fn a_task_with_no_evidence_reports_none_rather_than_inventing_it() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("Ordinary work", "/workspace").unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+
+        let evidence = store.task_evidence_record(task.id).unwrap();
+        assert!(evidence.exemption.is_none());
+        assert!(evidence.deployments.is_empty());
+    }
+
+    /// An unapproved claim reads as standing, not settled.
+    ///
+    /// This is the distinction that cost another worker a wrong correction:
+    /// their claim WAS recorded, and the attention row still standing against
+    /// it is what an unapproved claim looks like rather than a missing one.
+    #[test]
+    fn a_claim_awaiting_approval_is_readable_as_unapproved() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store
+            .create_task("A documented spike", "/workspace")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        store
+            .claim_completion_exemption(task.id, "Nothing to deploy.", None, 2_000)
+            .unwrap();
+
+        let exemption = store
+            .task_evidence_record(task.id)
+            .unwrap()
+            .exemption
+            .expect("a claim with no approval is still a record");
+        assert_eq!(exemption.claimed_at, 2_000);
+        assert_eq!(
+            exemption.approved_at, None,
+            "standing, not settled — and the attention asking for it stays up"
+        );
+    }
+
     /// An APPROVED exemption is left alone.
     ///
     /// Queen accepted that argument. Quietly rewriting an accepted decision is
@@ -522,6 +612,38 @@ impl CompletionEvidence {
     }
 }
 
+/// Everything recorded about a task's completion evidence, for reading rather
+/// than deciding.
+///
+/// Evidence does not live in `task_activity`: claiming an exemption, approving
+/// one, and recording a deployment all write their own tables and no event. So
+/// a reader asking "what happened to this task" through the activity log sees
+/// an accurate list of transitions and no evidence at all, which is how an
+/// approval that existed came to be reported as missing.
+///
+/// DERIVED ON READ, NEVER WRITTEN. Backfilling events for past approvals would
+/// make every previous reading of those records unreproducible; this reports
+/// what the evidence tables already hold, so records written before it existed
+/// read correctly too.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TaskEvidenceRecord {
+    pub exemption: Option<CompletionExemptionRecord>,
+    pub deployments: Vec<crate::TaskDeploymentRecord>,
+}
+
+/// A no-deployment claim and whatever has since happened to it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CompletionExemptionRecord {
+    pub reason: String,
+    pub claimed_by_worker_id: Option<String>,
+    pub claimed_at: i64,
+    /// Set when a coordinator agreed. Until then the claim is standing, not
+    /// settled, and the attention asking for it to be judged stays up.
+    pub approved_at: Option<i64>,
+    pub approved_by: Option<String>,
+    pub superseded_at: Option<i64>,
+}
+
 impl TaskStore {
     /// What this task can show for itself.
     ///
@@ -679,6 +801,45 @@ impl TaskStore {
             return Err(TaskStoreError::CompletionEvidenceRequired);
         }
         self.completion_evidence(task_id)
+    }
+
+    /// Reads a task's completion evidence: the claim, its approval, and any
+    /// recorded deployments.
+    ///
+    /// Companion to the activity log rather than part of it. See
+    /// [`TaskEvidenceRecord`] for why this is derived rather than written.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable or stored data is corrupt.
+    pub fn task_evidence_record(
+        &self,
+        task_id: TaskId,
+    ) -> Result<TaskEvidenceRecord, TaskStoreError> {
+        let exemption = {
+            let connection = self.connection()?;
+            connection
+                .query_row(
+                    "SELECT reason, claimed_by_worker_id, claimed_at, approved_at,
+                            approved_by, superseded_at
+                     FROM task_completion_exemptions WHERE task_id = ?1",
+                    [task_id.to_string()],
+                    |row| {
+                        Ok(CompletionExemptionRecord {
+                            reason: row.get(0)?,
+                            claimed_by_worker_id: row.get(1)?,
+                            claimed_at: row.get(2)?,
+                            approved_at: row.get(3)?,
+                            approved_by: row.get(4)?,
+                            superseded_at: row.get(5)?,
+                        })
+                    },
+                )
+                .optional()?
+        };
+        Ok(TaskEvidenceRecord {
+            exemption,
+            deployments: self.task_deployments(task_id)?,
+        })
     }
 
     /// The reason a worker gave for a task having nothing to deploy.
