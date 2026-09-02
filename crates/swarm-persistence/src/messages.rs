@@ -108,6 +108,25 @@ pub struct TaskMessage {
 /// redirect work with no record of the work changing.
 pub const MAX_TASK_MESSAGE_BYTES: usize = 4_000;
 
+/// The join that finds a recipient's LIVE terminal, owned in one place.
+///
+/// This is the only thing the two dispatch queries share, and it is the thing
+/// they diverged on. Task messages joined by WORKER; the broadcast query, written
+/// beside it months later and 590 lines below, joined by SESSION — so a worker
+/// restart left every queued broadcast matching nothing. 14 queued, 0 delivered,
+/// silent in both directions.
+///
+/// The rest of the two queries differs legitimately — one resolves a Queen
+/// recipient by role and carries a task and a sender name, the other carries a
+/// body and a delivery window — so consolidating them WOULD BE WRONG. Only the
+/// shared idea is shared, and the `{recipient}` a caller substitutes is the
+/// column naming whose terminal to find.
+///
+/// A fragment is a weak abstraction and cannot stop a third query being written
+/// without it. That is what the per-path restart tests are for.
+const LIVE_RECIPIENT_SESSION_JOIN: &str = "JOIN worker_sessions session
+       ON session.worker_id = {recipient} AND session.ended_at IS NULL";
+
 impl TaskStore {
     /// Records a message from Queen to a worker, or from a worker to Queen.
     ///
@@ -280,16 +299,19 @@ impl TaskStore {
     ) -> Result<Vec<TaskMessageDispatch>, TaskStoreError> {
         use std::str::FromStr;
         let connection = self.connection()?;
-        let mut statement = connection.prepare(
-            // BOTH DIRECTIONS. This filtered `m.recipient = 'worker'`, so every
-            // worker-to-Queen message was recorded and never delivered — the
-            // channel was one-way while its tool told the worker "Queen sees it
-            // on her next run". Silence is the single failure this channel
-            // exists to remove, and it had it in the reply direction.
-            //
-            // Queen is resolved by ROLE rather than by an id on the row,
-            // because a message to Queen is addressed to the office: the
-            // recipient_worker_id is null and whoever holds the role reads it.
+        // BOTH DIRECTIONS. This filtered `m.recipient = 'worker'`, so every
+        // worker-to-Queen message was recorded and never delivered — the
+        // channel was one-way while its tool told the worker "Queen sees it on
+        // her next run". Silence is the single failure this channel exists to
+        // remove, and it had it in the reply direction.
+        //
+        // Queen is resolved by ROLE rather than by an id on the row, because a
+        // message to Queen is addressed to the office: the recipient_worker_id
+        // is null and whoever holds the role reads it.
+        //
+        // The live-session join is substituted from its one owner, so this
+        // query and the broadcast one cannot drift apart on it again.
+        let sql = format!(
             "SELECT m.id, m.task_id, task.title, session.session_id, m.sender,
                     COALESCE(sender.name, 'Queen'), m.body
              FROM task_messages m
@@ -297,12 +319,13 @@ impl TaskStore {
              JOIN worker_profiles recipient
                   ON (m.recipient = 'worker' AND recipient.id = m.recipient_worker_id)
                   OR (m.recipient = 'queen' AND recipient.role = 'queen')
-             JOIN worker_sessions session ON session.worker_id = recipient.id
-                  AND session.ended_at IS NULL
+             {live_session}
              LEFT JOIN worker_profiles sender ON sender.id = m.sender_worker_id
              WHERE m.delivered_at IS NULL
              ORDER BY m.created_at, m.id",
-        )?;
+            live_session = LIVE_RECIPIENT_SESSION_JOIN.replace("{recipient}", "recipient.id"),
+        );
+        let mut statement = connection.prepare(&sql)?;
         let dispatches = statement
             .query_map([], |row| {
                 let task_id: String = row.get(1)?;
@@ -537,6 +560,51 @@ mod tests {
         let pending = store.pending_operator_broadcast_dispatches(1_000).unwrap();
         assert_eq!(pending.len(), 1, "only reachable workers are queued");
         assert_eq!(pending[0].body, "reloading the engine in five minutes");
+    }
+
+    /// THE SAME PROPERTY, ASSERTED FOR THE OTHER PATH.
+    ///
+    /// Task messages already survived a worker restart — that is why Queen's
+    /// messages were delivered while every broadcast stranded. But nothing
+    /// TESTED it: the property held because of how the query happened to be
+    /// written, and the broadcast query was written differently right beside it.
+    ///
+    /// A shared SQL fragment stops these two drifting. It cannot stop a THIRD
+    /// dispatch query being written without it, so each path asserts the
+    /// behaviour itself. This is the assertion that did not exist.
+    #[test]
+    fn a_worker_restart_re_aims_a_task_message_too() {
+        let (store, task, worker) = hive();
+        let first = WorkerSessionId::new();
+        store.bind_worker_session(worker, first).unwrap();
+        store
+            .send_task_message(
+                task,
+                MessageEnd::queen(),
+                MessageEnd::worker(worker),
+                "which half shipped?",
+                1_000,
+            )
+            .unwrap();
+
+        store.release_worker_session(first).unwrap();
+        assert!(
+            store.pending_task_message_dispatches().unwrap().is_empty(),
+            "with no live terminal there is nothing to write into"
+        );
+
+        let second = WorkerSessionId::new();
+        store.bind_worker_session(worker, second).unwrap();
+        let pending = store.pending_task_message_dispatches().unwrap();
+        assert_eq!(
+            pending.len(),
+            1,
+            "the message follows the worker, not one session"
+        );
+        assert_eq!(
+            pending[0].session_id, second,
+            "and is aimed at the terminal that exists now"
+        );
     }
 
     /// A RESTART RE-AIMS A BROADCAST INSTEAD OF ORPHANING IT.
@@ -888,11 +956,10 @@ impl TaskStore {
             //
             // So it now finds the worker's CURRENT live session, and a restart
             // re-aims the delivery instead of orphaning it.
-            "SELECT delivery.broadcast_id, delivery.worker_id, session.session_id, broadcast.body
+            &format!("SELECT delivery.broadcast_id, delivery.worker_id, session.session_id, broadcast.body
              FROM operator_broadcast_deliveries delivery
              JOIN operator_broadcasts broadcast ON broadcast.id = delivery.broadcast_id
-             JOIN worker_sessions session
-               ON session.worker_id = delivery.worker_id AND session.ended_at IS NULL
+             {live_session}
              WHERE delivery.delivered_at IS NULL
                AND delivery.expired_at IS NULL
                -- TIME-BOXED, because a broadcast describes NOW. The operator's
@@ -902,6 +969,8 @@ impl TaskStore {
                -- does not, and is expired with a reason rather than silently.
                AND broadcast.created_at > ?1 - ?2
              ORDER BY broadcast.created_at, delivery.worker_id",
+            live_session = LIVE_RECIPIENT_SESSION_JOIN.replace("{recipient}", "delivery.worker_id"),
+            ),
         )?;
         let dispatches = statement
             .query_map(params![now, BROADCAST_DELIVERY_WINDOW_SECONDS], |row| {
