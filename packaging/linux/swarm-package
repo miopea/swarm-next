@@ -1389,12 +1389,15 @@ reconcile_host() {
 
   # CANNOT CHECK MEANS WAIT FOR THE OPERATOR, NOT PROCEED.
   #
-  # This proceeded-with-a-warning, and it cost 12 live sessions on 2026-09-01
-  # at 14:48:06. The reasoning was that the reconcile has no human route out,
-  # so proceeding was the only escape from a permanent deferral. THAT WAS
-  # WRONG: reconcile_host_requested (line ~1410) runs `reconcile_host` in
-  # REQUIRED mode when the worker engine card has written its request file, and
-  # that path proceeds regardless of who is busy. The card IS the route out.
+  # This proceeded-with-a-warning on a TIMER, and it cost 12 live sessions on
+  # 2026-09-01 at 14:48:06. An unattended sweep must not end live work on a
+  # guess, so the timer defers.
+  #
+  # The claim that used to sit here -- that reconcile_host_requested "proceeds
+  # regardless of who is busy, the card IS the route out" -- was FALSE when it
+  # was written, and it was written by the same commit that made this defer. It
+  # named an escape hatch nobody had opened. See the requested arm below, which
+  # is now actually one.
   #
   # And "cannot check" is not a rare accident here. On the FIRST release that
   # teaches the host to report busy sessions, the RUNNING host is by definition
@@ -1421,7 +1424,35 @@ reconcile_host() {
       note_deferral host-reconcile "the worker engine update" "$reconcile_blocked"
       return
     fi
-    die "terminal host update deferred; $reconcile_blocked"
+    # THE CARD IS THE ROUTE OUT, AND IT HAD TO BE MADE ONE.
+    #
+    # The comment above USED TO CLAIM this path "proceeds regardless of who is
+    # busy. The card IS the route out." It did not. It fell through to the die
+    # below, on the same condition that made the timer defer — so a Hive whose
+    # running host is too old to report busy sessions could not update by ANY
+    # route: the timer deferred, and the card died.
+    #
+    # That is not a rare case. It is the FIRST upgrade to a build that reports
+    # busy sessions, because the host running at that moment is by definition
+    # the older one. Measured 2026-09-02 on the operator's WSL Hive: app and API
+    # took 1.2.0, the engine stayed on 1.1.1, and the card spun and reverted
+    # with nothing said. I wrote both the false comment and the die.
+    #
+    # Proceeding here is also what the operator RULED, in 01a05b83 resolved
+    # 2026-09-01: "Proceed with a loud warning that says it could not check."
+    # That ruling landed four hours AFTER the commit that made this defer, and
+    # the code was never reconciled with it.
+    #
+    # And the risk it was guarding is already gone by the time this runs: the
+    # card stops every running session itself and only then writes the request
+    # file, which is the same thing the protocol branch of
+    # reconcile_host_requested says about its own force path.
+    if [ "$reconcile_mode" = "requested" ]; then
+      printf 'WARNING: %s; proceeding because the worker engine card asked for this and stopped every session first.\n' \
+        "$reconcile_blocked" >&2
+    else
+      die "terminal host update deferred; $reconcile_blocked"
+    fi
   fi
   clear_deferrals host-reconcile
 
@@ -1469,7 +1500,7 @@ reconcile_host_requested() {
     reconcile_host if-idle
     return
   fi
-  reconcile_host
+  reconcile_host requested
   rm -f "$request_path"
 }
 

@@ -12,6 +12,17 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.2.1
+
+**Fixes a 1.2.0 defect that leaves the worker engine stuck.** No schema change,
+no protocol change. If your engine card says "Update ready · restart required"
+and pressing the button spins and then reverts, this is the release that fixes
+it.
+
+### Fixes
+
+- The worker engine update works when your running engine is too old to report which sessions are busy — which is exactly the case on the first upgrade to a build that reports them. The timer deferred and the card refused, so the engine could not update by any route, and nothing said why. The card now proceeds, saying loudly what it could not verify, which is what it always claimed to do.
+
 ## 1.2.0
 
 **This one migrates your database (schema 113 to 119) and needs your workers to

@@ -691,6 +691,30 @@ printf '0\n' > "$HOME/unreadable-sessions"
 # it back: what follows is the requested-maintenance test and it needs one.
 restore_pending_engine_change
 
+# THE CARD MUST BE A ROUTE OUT WHEN THE HOST CANNOT REPORT BUSY SESSIONS.
+#
+# Nothing covered this pair, and that is why it shipped. The suite asserted
+# required-mode refusal (above) and requested-mode success with a host that CAN
+# report (below), and the operator's real case was the cell in between: a host
+# too old to answer plus the card asking. The timer deferred and the card died,
+# so the engine could not update by any route.
+#
+# It is the FIRST upgrade to a build that reports busy sessions, because the
+# host running at that moment is by definition the older one. Measured on the
+# operator's WSL Hive 2026-09-02: app and API on 1.2.0, engine stuck on 1.1.1.
+restore_pending_engine_change
+: > "$HOME/host-cannot-report-busy"
+printf 'requested_at=%s\ntarget_version=2.0.0\n' "$(date +%s)" > "$SWARM_STATE_ROOT/worker-engine-maintenance.request"
+printf '0\n' > "$HOME/running-sessions"
+"$package" reconcile-host-requested 2>"$HOME/requested-unverifiable.log" \
+  || { echo "the card must proceed when the host cannot report busy sessions" >&2; exit 1; }
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "2.0.0" ] \
+  || { echo "the engine did not actually swap on the card's request" >&2; exit 1; }
+grep -q "cannot report which sessions are busy" "$HOME/requested-unverifiable.log" \
+  || { echo "proceeding silently is the failure the operator ruled against" >&2; exit 1; }
+rm -f "$HOME/host-cannot-report-busy"
+
+restore_pending_engine_change
 printf 'requested_at=%s\ntarget_version=2.0.0\n' "$(date +%s)" > "$SWARM_STATE_ROOT/worker-engine-maintenance.request"
 printf '0\n' > "$HOME/running-sessions"
 : > "$HOME/systemctl.log"
