@@ -850,3 +850,26 @@ test("a task's age is readable without opening it", async () => {
   // that is the same on every Swarm-native row.
   expect(within(swarmDetails).queryByText("Swarm")).not.toBeInTheDocument();
 });
+
+test("collapsed completed work is not rendered until the panel is opened", async () => {
+  // Completed work is most of a long-lived Hive: 462 of 560 tasks on the
+  // operator's board sat inside this collapsed panel. Collapsed costs no layout
+  // and no paint, so building those cards anyway was invisible — but React
+  // reconciled every one on every board render, and each card runs a find()
+  // over the Jira links and a filter() over the email sources as it goes.
+  // Measured on that board shape: 13,073 DOM nodes before, 2,891 after.
+  const settled = {
+    ...task, id: "task-settled", title: "Settled work nobody is looking at",
+    state: "completed", closed_on_evidence: true,
+  } as unknown as Task;
+  renderBoard({ tasks: [task, settled] });
+
+  expect(screen.queryByText("Settled work nobody is looking at")).toBeNull();
+
+  const panel = screen.getByText("Completed work");
+  fireEvent.click(panel);
+
+  await waitFor(() => {
+    expect(screen.getByText("Settled work nobody is looking at")).toBeTruthy();
+  });
+});
