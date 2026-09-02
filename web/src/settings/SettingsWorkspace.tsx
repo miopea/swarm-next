@@ -467,7 +467,19 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
           <div className="runtime-subsystem-grid">
             <article className={`runtime-subsystem-card runtime-subsystem-${workerEngineState}`} aria-label="Worker engine status">
               <header><div><span className="runtime-component-name">Worker engine</span><strong>{workerEngineLabel(health, terminalHostStatus, terminalHostLoaded)}</strong></div><span className={`runtime-status-badge ${workerEngineState}`}>{workerEngineState === "restart" ? "Restart required" : workerEngineState === "unavailable" ? "Unavailable" : workerEngineState === "checking" ? "Checking" : "Current"}</span></header>
-              <p className="runtime-version"><strong>Installed</strong> {runtimeVersionIdentity(terminalHostStatus?.host_version)}</p>
+              {/* RUNNING, NOT INSTALLED, and the difference is not pedantry.
+                  host_version is what the host PROCESS reports, and it can
+                  differ from what host-current points at: a reload moves the
+                  symlink, and the reconcile correctly declines to restart when
+                  the engine is unchanged. Measured on 2026-09-01 the host was
+                  executing 0a2f75c while host-current read d3bd9d9 — and the
+                  card called the first one "Installed", which is the one word
+                  it certainly was not. Anybody checking which build the engine
+                  is on had to read /proc to find out. */}
+              <p className="runtime-version"><strong>Running</strong> {runtimeVersionIdentity(terminalHostStatus?.host_version)}</p>
+              {health?.version && terminalHostStatus?.host_version && health.version !== terminalHostStatus.host_version ? (
+                <p className="runtime-version"><strong>Installed</strong> {runtimeVersionIdentity(health.version)}</p>
+              ) : null}
               {workerEngineState === "checking" ? <p>Checking the separate worker engine without interrupting any terminal.</p> : workerEngineState === "unavailable" ? <>
                 <p>Swarm could not confirm the worker engine’s health or installed version. Existing worker processes may still be running.</p>
                 <small>No restart or update has been attempted.</small>

@@ -535,6 +535,31 @@ clear_managed_directory() {
   done
 }
 
+# IT CAN DELETE A DIRECTORY A RUNNING PROCESS IS EXECUTING, AND THAT IS SAFE.
+# The reason is written here rather than left to be rediscovered from /proc.
+#
+# This keeps three: current, previous and host-current. A running terminal host
+# can be on a FOURTH, because a reload moves host-current while the reconcile
+# correctly declines to restart an unchanged engine — so the process keeps
+# executing a directory no symlink names any more, and the next prune removes
+# it. Measured on 2026-09-01: the host was running 0a2f75c while host-current
+# read d3bd9d9, and 0a2f75c was gone from disk.
+#
+# WHY IT DOES NOT BREAK ANYTHING, checked rather than assumed:
+#
+#   Nothing is read from the directory at runtime. The host holds no open file
+#   descriptor under releases/ and its only mapping there is its own
+#   executable, which Linux keeps alive on the open inode.
+#
+#   Nothing needs the directory to come back. systemd restarts the host from
+#   ExecStart=.../host-current/bin/swarm-terminal-host, and a new mcp-proxy is
+#   spawned by BARE NAME through PATH to ~/.local/bin -> host-current. Both
+#   resolve through symlinks that always exist.
+#
+# WHAT IT DOES COST is inspectability: the build a process is executing cannot
+# be examined once its directory is gone. The Hive still reports WHICH build
+# that is — swarmctl status carries host_version from the process itself, and
+# the worker engine card shows it as "Running" beside the installed version.
 prune_superseded_releases() {
   releases_root="$install_root/releases"
   [ -d "$releases_root" ] || return 0
