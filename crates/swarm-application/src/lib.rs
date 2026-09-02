@@ -3550,6 +3550,23 @@ mod tests {
     #[test]
     fn queen_filing_her_own_draft_tells_no_one() {
         let (service, queen, worker) = setup();
+        // THE SESSION IS THE WHOLE TEST. The rule reads
+        // `role != Queen && let Some(session_id) = active_session_id`, and
+        // setup() leaves Queen with no session — so this short-circuited on the
+        // SESSION and never reached the role check. Deleting the Queen
+        // exemption entirely left this test green, which is the definition of a
+        // test that cannot fail. With a session bound it goes red, so the check
+        // is real and was merely out of reach.
+        //
+        // Found 2026-09-02 by the stratified sweep in 01a0635f, not by anyone
+        // depending on it — the first instance of this class caught on purpose
+        // rather than as collateral inside another fix.
+        let queen_session = WorkerSessionId::new();
+        service
+            .store()
+            .bind_worker_session(queen.id, queen_session)
+            .unwrap();
+        let queen = service.store().get_worker_profile(queen.id).unwrap();
         service
             .create_task(
                 AgentPrincipal::from(&queen),
