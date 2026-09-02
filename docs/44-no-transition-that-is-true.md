@@ -117,6 +117,29 @@ rather than describing it. It is not superseded by this document, and on this
 evidence it is the highest-value item here — three of eight instances would not
 have been written at all if the table had existed.
 
+## Do the cheap half first, and it is already paid for
+
+**The largest item here is built, on main, and currently reaches nobody.**
+
+`01a0635e` shipped this afternoon in `e2c3adb`: the exit table is generated from
+`can_transition_to`, and a test compares it against the lifecycle on all 64
+ordered pairs. Three of the eight instances would not have been written if that
+paragraph had existed.
+
+It is inert. **The tool surface caches at MCP connect, not at API restart**, so
+every worker and every Queen run between now and reconnect is reading the old
+string — the one with no exit column, the one that produced instances 1, 7 and 8.
+
+So the first move is not to build anything in this document. It is to get a
+finished fix in front of the people it was written for, and that gap is
+scheduling rather than engineering. **A correct fix that reaches nobody is
+indistinguishable from no fix, right up until somebody makes instance 9** — and
+whoever makes it will do so with a better description sitting unread on main,
+exactly as instance 1 was made this afternoon with the old one on screen.
+
+Read the rest of this document as the residue after that lands, not as the
+first move.
+
 ## The proposal
 
 ### 1. Store the addressee. Keep the derivation as its default.
@@ -254,7 +277,35 @@ disagreeing with.
 - If the time-to-delivery distribution turns out to be short, item 4 shrinks to
   a wording change on one tool reply.
 - If instances of "no transition that is true" stop appearing once `01a0635e`
-  ships, then three of the eight were the false-belief failure and the addressee
-  mechanism is solving a smaller problem than this document claims. **Eight
-  instances in two days is a lower bound found by accident with an unknown
-  denominator** — the same shape as `01a0635f`, and it is not a rate.
+  reaches agents, then three of the eight were the false-belief failure and the
+  addressee mechanism is solving a smaller problem than this document claims.
+  **Eight instances in two days is a lower bound found by accident with an
+  unknown denominator** — the same shape as `01a0635f`, and it is not a rate.
+
+## The principle, which is larger than the list
+
+Everything above is about states and transitions, because that is where the
+eight instances landed. The family is wider, and the wider statement is the one
+worth keeping if the list dates:
+
+> **A commitment with nowhere durable to live is not a commitment.**
+
+The lifecycle version is this document: the state is durable, the reason is not,
+so the reason is supplied by the next reader and is confidently wrong.
+
+The version outside the lifecycle is the one that keeps being produced without
+anyone noticing it is the same thing — **a control that lives in an agent rather
+than on the board**. Queen's own example, from a different ticket the same
+evening: she ranked a piece of work as *"tell me by the 8th and I file it"*, and
+RCG Networks answered that a control depending on a session surviving six days
+had already failed four times that evening — their session died, a Queen session
+died, their `/tmp` was wiped. She filed the record with the date instead.
+
+*"Tell me when X"* is a transition with no state behind it. It is the same
+defect as a durable state beside a lost reason, arriving from the other
+direction: one has a place to live and nothing written in it, the other has
+something written and no place to live.
+
+This is not instance 10 — it is not a lifecycle defect and it should not be
+counted as one. It is the reason the eight are worth reading as a family rather
+than as a queue of eight fixes.
