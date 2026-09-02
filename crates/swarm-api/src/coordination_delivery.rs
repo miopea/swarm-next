@@ -309,6 +309,23 @@ enum Baseline {
         sequence: u64,
         paste_placeholder: Option<Vec<u8>>,
     },
+    /// The prompt holds unsent text and that text is DEMONSTRABLY THIS MESSAGE:
+    /// our own marker is on the screen. Nothing needs writing — it only needs
+    /// submitting.
+    ///
+    /// This is the residue of an Uncertain submission. The write landed, the
+    /// three Enter attempts could not be confirmed, and the message has been
+    /// sitting in the composer ever since. Measured 2026-09-02 on the first
+    /// real broadcast: 24 of them, and the operator pressed Enter by hand.
+    ///
+    /// Retrying is safe HERE and only here. The general worry about retrying an
+    /// uncertain submit is that the message may already have gone and a retry
+    /// duplicates it — but a marker still visible in an unsent prompt is proof
+    /// it did NOT go. The ambiguity that made retry unsafe is resolved by
+    /// evidence rather than assumed away.
+    HoldsOurUnsentMessage {
+        sequence: u64,
+    },
     Refused(TerminalSubmission),
 }
 
@@ -326,6 +343,7 @@ async fn delivery_baseline(
     client: &HostClient,
     session_id: WorkerSessionId,
     provider: ProviderKind,
+    marker: &[u8],
 ) -> Result<Baseline, swarm_terminal::IpcError> {
     Ok(
         match client
@@ -347,6 +365,22 @@ async fn delivery_baseline(
                     )));
                 }
                 if provider_activity::has_open_provider_input(provider, &snapshot) {
+                    // OURS, OR SOMEBODY ELSE'S? The refusal below protects the
+                    // worker's own typing and stays. But when the unsent text
+                    // carries THIS delivery's marker it is our own stranded
+                    // message, and appending is not what it needs — Enter is.
+                    let visible =
+                        snapshot_plain_text(&snapshot.bytes, snapshot.rows, snapshot.columns);
+                    let ours = !marker.is_empty()
+                        && visible
+                            .as_bytes()
+                            .windows(marker.len())
+                            .any(|part| part == marker);
+                    if ours {
+                        return Ok(Baseline::HoldsOurUnsentMessage {
+                            sequence: snapshot.sequence,
+                        });
+                    }
                     return Ok(Baseline::Refused(TerminalSubmission::Deferred(
                         DeferralReason::PromptHoldsUnsentText,
                     )));
@@ -384,11 +418,27 @@ async fn submit_terminal_message(
         bytes.pop();
     }
     let (baseline, baseline_paste_placeholder) =
-        match delivery_baseline(client, session_id, provider).await? {
+        match delivery_baseline(client, session_id, provider, marker).await? {
             Baseline::Ready {
                 sequence,
                 paste_placeholder,
             } => (sequence, paste_placeholder),
+            // ALREADY WRITTEN, NEVER SUBMITTED. Skip straight to Enter rather
+            // than writing the message a second time underneath itself — the
+            // text is on screen and only the submit is missing.
+            Baseline::HoldsOurUnsentMessage { sequence } => {
+                if !submit {
+                    return Ok(TerminalSubmission::Acknowledged);
+                }
+                tracing::info!(
+                    "a previous delivery left this message unsent in the prompt; submitting it \
+                     rather than writing it again"
+                );
+                return submit_rendered_message(
+                    client, session_id, provider, marker, sequence, None,
+                )
+                .await;
+            }
             Baseline::Refused(outcome) => return Ok(outcome),
         };
     let response = client
@@ -445,6 +495,32 @@ async fn submit_terminal_message(
     // render before retrying; a host acknowledgement alone is not proof that
     // the provider accepted the prompt. Three bounded Enter attempts cover the
     // observed placeholder behavior without creating an unowned retry loop.
+    submit_rendered_message(
+        client,
+        session_id,
+        provider,
+        marker,
+        rendered_sequence,
+        rendered_paste_placeholder.as_deref(),
+    )
+    .await
+}
+
+/// Presses Enter on a message already rendered in the prompt, and confirms it.
+///
+/// ONE IMPLEMENTATION, CALLED TWICE. The ordinary path renders the message then
+/// submits it; the recovery path finds a message an earlier attempt already
+/// rendered and submits that. Writing a second Enter loop beside this one is
+/// how the broadcast dispatch query diverged from the task-message one earlier
+/// today, and that divergence only showed as an empty result.
+async fn submit_rendered_message(
+    client: &HostClient,
+    session_id: WorkerSessionId,
+    provider: ProviderKind,
+    marker: &[u8],
+    rendered_sequence: u64,
+    rendered_paste_placeholder: Option<&[u8]>,
+) -> Result<TerminalSubmission, swarm_terminal::IpcError> {
     let mut observed_sequence = rendered_sequence;
     for attempt in 0..3 {
         let submit_response = client
@@ -463,7 +539,7 @@ async fn submit_terminal_message(
             session_id,
             provider,
             marker,
-            rendered_paste_placeholder.as_deref(),
+            rendered_paste_placeholder,
             observed_sequence,
         )
         .await?
@@ -1321,6 +1397,45 @@ mod tests {
         assert_eq!(
             groups[0].iter().map(|(_, n)| *n).collect::<Vec<_>>(),
             [1, 2, 3]
+        );
+    }
+
+    /// A PROMPT HOLDING OUR OWN UNSENT MESSAGE IS NOT THE SAME AS ONE HOLDING
+    /// THE WORKER'S TYPING, and telling them apart is what makes a retry safe.
+    ///
+    /// 24 broadcast submissions came back Uncertain on 2026-09-02: the write
+    /// landed, three Enter attempts went unconfirmed, and the text sat in the
+    /// composer until the operator pressed Enter by hand. Retrying an uncertain
+    /// submit is normally unsafe because the message may already have gone and
+    /// a retry would duplicate it. A marker still visible in an UNSENT prompt is
+    /// proof it did not go, so the ambiguity is resolved by evidence rather than
+    /// assumed away — which is the condition the ticket set for choosing retry.
+    ///
+    /// The refusal still stands for text that is not ours: that guard protects
+    /// the worker's own typing and merging two instructions into one Enter is a
+    /// worse failure than not delivering.
+    #[test]
+    fn our_own_unsent_message_is_submitted_and_a_workers_typing_is_still_refused() {
+        let marker = b"swarm-delivery-abc123";
+        let ours = "some scrollback\nswarm-delivery-abc123 the message body\n";
+        let theirs = "some scrollback\nwhat the worker was halfway through typing\n";
+
+        let carries_marker = |screen: &str| {
+            screen
+                .as_bytes()
+                .windows(marker.len())
+                .any(|part| part == marker)
+        };
+
+        assert!(
+            carries_marker(ours),
+            "an unsent prompt carrying this delivery's marker is our own message, and it needs \
+             Enter rather than another copy of itself"
+        );
+        assert!(
+            !carries_marker(theirs),
+            "and a prompt holding the worker's own text must still defer, because appending or \
+             submitting it would merge two instructions into one Enter"
         );
     }
 
