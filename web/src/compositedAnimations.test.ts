@@ -1,6 +1,13 @@
+// Vitest runs this file in Node even though the web TypeScript project does not
+// otherwise expose Node types. Same shape as styles.test.ts, which reads the
+// stylesheet the same way — copied deliberately rather than reinvented, because
+// my first attempt used node:path and __dirname, passed vitest, and failed the
+// production build's `tsc -b`.
+// @ts-expect-error Node's test-only filesystem module is intentionally untyped here.
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { expect, test } from "vitest";
+
+declare const process: { cwd(): string };
 
 /**
  * A LOOPING ANIMATION MAY ONLY MOVE WHAT THE COMPOSITOR CAN MOVE.
@@ -22,7 +29,7 @@ import { expect, test } from "vitest";
 const COMPOSITED = new Set(["transform", "opacity"]);
 
 test("no looping animation repaints on every frame", () => {
-  const css = readFileSync(join(__dirname, "styles.css"), "utf8");
+  const css = readFileSync(`${process.cwd()}/src/styles.css`, "utf8");
 
   const looping = new Set(
     [...css.matchAll(/animation:[^;]*?([\w-]+)\s+[^;]*infinite/g)].map((m) => m[1]),
