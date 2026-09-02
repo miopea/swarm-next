@@ -12,6 +12,33 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.2.0
+
+**This one migrates your database (schema 113 to 119) and needs your workers to
+reconnect. Copy `swarm.sqlite3` before installing — the automatic pre-update
+backup covers a reload from a checkout, not a tarball install.** The protocol is
+unchanged, so the install itself leaves running workers alone.
+
+### New features
+
+- Finished work that has shipped nothing yet rests in **Awaiting Release** instead of sitting in Review pretending to need a decision. It closes itself when a deployment is recorded, with nobody clicking.
+- Queen and a worker can now message each other about a task, and the exchange is kept on the task rather than lost in a terminal. A worker can raise something unprompted, not only answer.
+- **Tell every worker** in the header says one thing to every running worker at once. It waits until each terminal is resting, and it reports how many it reached and how many had no live session — so you are never told everyone heard you when they did not.
+- **Queues** groups open work by who owes the next move, so a growing pile is attributable instead of anonymous.
+- **Force worker reload** on the worker engine card reconnects every worker. Needed after an update that changes an agent tool, which the engine status cannot show you.
+- The worker engine card now warns when live sessions are holding an older tool list than this build serves, including when it cannot confirm what they hold.
+- Recording a deployment can say it delivered only PART of a task, so shipping half of something no longer closes the whole ticket.
+
+### Fixes
+
+- Messages from Queen actually submit. They were being typed into the worker's prompt and left there unsent, while the board recorded them as delivered.
+- A worker's reply to Queen is delivered at all. The channel was one-way, so replies sat unread for up to 76 minutes.
+- The busy-worker refusal names which task is holding the slot instead of leaving you to guess from the board.
+- The worker engine card says which build is **Running** rather than labelling it "Installed", which is the one thing it certainly was not.
+- The board no longer re-sends every task on every change. It carried 1.7 MB per refresh and now carries 188 KB, and completed work is no longer rebuilt behind a collapsed panel.
+- Dropping a docx, an mp4 or any other non-image file leaves a visible reference in the prompt instead of a bare space that looked like nothing had happened.
+- The worker engine fingerprint notices changes in the shared crates the engine actually links, so an engine update is no longer missed. Expect one engine restart on this release for that reason alone.
+
 ## 1.1.2
 
 **No schema change, no protocol change, and your workers keep running.**
