@@ -12,6 +12,40 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.3.0
+
+**Broadcasts and worker messages now actually send themselves.** Carries three
+schema migrations (120, 121, 122) — **copy your `swarm.sqlite3` before
+installing.** No protocol change, so this is an ordinary `update` and your
+workers keep running.
+
+### New features
+- A terminal is left alone for five minutes after Swarm writes to it. Messages,
+  briefings and outcomes that arrive during that window are saved up and
+  delivered together, so a busy worker is interrupted once instead of at every
+  pause it produces. Operator broadcasts still go straight through.
+- The lifecycle tool description now lists which moves each state allows, and
+  which are refused. It is generated from the rules rather than written beside
+  them, so it cannot drift. (Agents read it when their session next reconnects.)
+
+### Fixes
+- An operator broadcast now presses its own Enter. It was being typed into every
+  worker's prompt and left sitting there unsent, so the operator had to go to
+  each terminal and press Enter by hand.
+- A broadcast follows a worker that restarts instead of being aimed at the
+  session that existed when you sent it, and one that cannot be delivered
+  expires with a reason instead of waiting silently forever.
+- A worker message that could not be confirmed is now submitted rather than
+  typed a second time underneath itself.
+- A delivered message records which session took it, so a message read by a
+  session that has since exited can be told apart from one the worker acted on.
+- The worker card counts work that is finished and waiting to ship, and stops
+  presenting it as what that worker is currently doing. A worker with 25
+  unshipped tasks was showing one of them as its current task while its actual
+  review and blocked work sat behind a "+31".
+- The worker engine card explains a version gap that is not really a gap,
+  instead of offering an update that changes nothing.
+
 ## 1.2.1
 
 **Fixes a 1.2.0 defect that leaves the worker engine stuck.** No schema change,
