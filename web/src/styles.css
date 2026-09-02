@@ -2807,3 +2807,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
    that is the only thing that fixes it — a reload does not, and it is not an
    engine update, which is exactly how it was misread the day it was found. */
 .tool-surface-warning { margin: 0 0 8px; padding: 8px 10px; border-left: 3px solid var(--warn, #b06a00); border-radius: 4px; background: var(--warn-soft, rgba(176, 106, 0, .08)); color: var(--text); font-size: .72rem; line-height: 1.45; }
+
+/* Why two version numbers can differ while the engine is unchanged. Shown only
+   when the build ids match, because that is the case that reads as a problem. */
+.engine-same-build { margin: 0; color: var(--muted); font-size: .72rem; line-height: 1.45; }
+.engine-same-build code { font-size: .95em; }

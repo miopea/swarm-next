@@ -668,3 +668,41 @@ test("offers a forced worker reload even when the worker engine is current", asy
   fireEvent.click(screen.getByRole("button", { name: "Restart every worker" }));
   expect(onForceWorkerReload).toHaveBeenCalledOnce();
 });
+
+/**
+ * Two version numbers and a Current badge reads as "you are behind" when the
+ * engine has not changed at all. host_version is the version of the release the
+ * running host process was LAUNCHED from; the engine is identified by its build
+ * id, and when those match there is nothing to apply.
+ *
+ * Measured 2026-09-02: Running 1.1.2 beside Installed 1.2.1, badge Current, no
+ * upgrade offered — all correct, because both releases carried engine
+ * dc6beb7c6604 and no file changed under the engine crates between them. The
+ * operator asked three times why no upgrade was listed.
+ */
+test("explains a version gap the engine build id says is not a gap", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("terminal-host")) {
+      return ok({ type: "host_status", status: {
+        protocol_version: 10, host_version: "1.1.2", host_build_id: "dc6beb7c6604aaaa",
+        draining: false, running_sessions: 13, retained_sessions: 13,
+      } });
+    }
+    return ok({});
+  }));
+
+  render(<SettingsWorkspace
+    {...minimalProps()}
+    section="settings-updates"
+    health={{ status: "ok", version: "1.2.1", worker_engine_build_id: "dc6beb7c6604aaaa" } as never}
+  />);
+
+  // The sentence is split across elements by the inline code span, so match on
+  // the rendered text of the paragraph rather than a single text node.
+  const explained = await screen.findByText(
+    (_text, element) => element?.className === "engine-same-build",
+  );
+  expect(explained.textContent).toContain("dc6beb7c6604");
+  expect(explained.textContent).toContain("nothing to upgrade");
+});

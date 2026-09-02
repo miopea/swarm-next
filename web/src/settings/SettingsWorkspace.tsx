@@ -526,7 +526,37 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
                     <button className="primary-action" disabled={busy} onClick={() => { setConfirmMaintenance(false); void onUpdateWorkerEngine(); }}>Stop workers and update</button>
                   </div>
                 </div>
-              )}</> : <><p>The installed worker engine is compatible with this App/API release. Running workers do not need to restart.</p><small>Claude and Codex processes remain attached to this engine across ordinary app and API reloads.</small></>}
+              )}</> : <>
+                <p>The installed worker engine is compatible with this App/API release. Running workers do not need to restart.</p>
+                {/* THE VERSIONS DIFFER AND THE ENGINE DOES NOT, which reads as
+                    "you are behind" and is not. host_version is the version of
+                    the release the running host process was LAUNCHED from; the
+                    engine itself is identified by its build id, and when those
+                    ids match there is genuinely nothing to apply.
+
+                    Measured 2026-09-02: Running 1.1.2 next to Installed 1.2.1,
+                    badge Current, no upgrade offered — all correct, because
+                    both releases carry engine dc6beb7c6604 and not one file
+                    changed under swarm-domain, swarm-terminal or
+                    swarm-terminal-host between them. The operator asked three
+                    times why no upgrade was listed. The card was answering a
+                    question it never showed. */}
+                {health?.version && terminalHostStatus?.host_version
+                  && health.version !== terminalHostStatus.host_version
+                  && health.worker_engine_build_id && terminalHostStatus.host_build_id
+                  && health.worker_engine_build_id === terminalHostStatus.host_build_id ? (
+                  <p className="engine-same-build">
+                    The version numbers differ because this host process was started from{" "}
+                    {runtimeVersionIdentity(terminalHostStatus.host_version)} and has not needed to
+                    restart since. The engine itself is byte-identical to the one in{" "}
+                    {runtimeVersionIdentity(health.version)} — same build{" "}
+                    <code>{health.worker_engine_build_id.slice(0, 12)}</code> — so there is nothing
+                    to upgrade. A Hive whose engine DID change restarts it and then reports the new
+                    version.
+                  </p>
+                ) : null}
+                <small>Claude and Codex processes remain attached to this engine across ordinary app and API reloads.</small>
+              </>}
               {/* ALWAYS AVAILABLE, INCLUDING WHEN THE ENGINE IS CURRENT — that
                   is the whole reason it exists. A worker caches its MCP tool
                   list when it connects, so a change to the agent tool surface
