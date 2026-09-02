@@ -1,4 +1,5 @@
 import { isClosedTaskState, isOpenTaskState } from "./api/tasks";
+import BroadcastToWorkers from "./workers/BroadcastToWorkers";
 import PublicAddressWarning from "./PublicAddressWarning";
 import StaleBundleNotice from "./StaleBundleNotice";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
@@ -40,6 +41,7 @@ import {
   fetchPresentationPreferences,
   fetchTaskActivity,
   fetchSettledTasks,
+  broadcastToWorkers,
   fetchRecentTaskActivity,
   fetchJiraComments,
   addJiraComment,
@@ -1815,6 +1817,9 @@ export function App() {
                     </div>
                   ) : null}
                 </div>
+                {surface === "workers" && operatorToken ? (
+                  <BroadcastToWorkers onBroadcast={(body) => broadcastToWorkers(operatorToken, body)} />
+                ) : null}
                 {surface === "workers" && workers.length > 0 ? (
                   <div className="worker-search">
                     <label className="sr-only" htmlFor="worker-search">Find a worker by name, repository, or path</label>

@@ -499,6 +499,70 @@ mod tests {
         );
     }
 
+    /// A BROADCAST MUST SAY WHO IT DID NOT REACH.
+    ///
+    /// The dispatch join requires a live session, so a worker without one is
+    /// excluded from delivery rather than queued for it. Measured on the
+    /// operator's Hive when this was built: 13 of 45 workers had a session. A
+    /// broadcast that answered "sent" would let them believe 45 people were
+    /// told, which is worse than telling 13 by hand — that way they would know
+    /// they had stopped.
+    #[test]
+    fn a_broadcast_reports_the_workers_it_could_not_reach() {
+        let (store, _task, worker) = hive();
+        let asleep = store
+            .create_worker(
+                "Asleep",
+                ProviderKind::ClaudeCode,
+                "/workspace/two",
+                false,
+                2,
+            )
+            .unwrap();
+        store
+            .bind_worker_session(worker, WorkerSessionId::new())
+            .unwrap();
+
+        let broadcast = store
+            .broadcast_to_workers("reloading the engine in five minutes", 1_000)
+            .unwrap();
+
+        assert_eq!(broadcast.reached, 1, "only the worker with a live session");
+        assert!(
+            broadcast.skipped >= 1,
+            "and the one with no session is reported, not silently dropped: {broadcast:?}"
+        );
+        let _ = asleep;
+
+        let pending = store.pending_operator_broadcast_dispatches().unwrap();
+        assert_eq!(pending.len(), 1, "only reachable workers are queued");
+        assert_eq!(pending[0].body, "reloading the engine in five minutes");
+    }
+
+    /// A delivered broadcast is not delivered twice.
+    #[test]
+    fn a_delivered_broadcast_leaves_the_queue() {
+        let (store, _task, worker) = hive();
+        store
+            .bind_worker_session(worker, WorkerSessionId::new())
+            .unwrap();
+        let broadcast = store.broadcast_to_workers("heads up", 1_000).unwrap();
+        let pending = store.pending_operator_broadcast_dispatches().unwrap();
+        assert_eq!(pending.len(), 1);
+
+        store
+            .mark_operator_broadcast_delivered(&broadcast.id, &worker.to_string(), 2_000)
+            .unwrap();
+
+        assert!(
+            store
+                .pending_operator_broadcast_dispatches()
+                .unwrap()
+                .is_empty(),
+            "a delivered broadcast that stays queued arrives again every pass"
+        );
+    }
+
     /// Both directions between Queen and a worker, recorded on the task.
     #[test]
     fn queen_and_a_worker_can_both_start_an_exchange() {
@@ -646,5 +710,132 @@ mod tests {
             refused,
             Err(TaskStoreError::InvalidTaskMessage { .. })
         ));
+    }
+}
+
+/// One operator broadcast and, crucially, who it could actually reach.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OperatorBroadcast {
+    pub id: String,
+    pub body: String,
+    /// Workers with a live session, which is the only place a message can land.
+    pub reached: usize,
+    /// Workers with NO live session. Not slow — excluded.
+    pub skipped: usize,
+}
+
+/// One broadcast waiting to reach one terminal.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OperatorBroadcastDispatch {
+    pub broadcast_id: String,
+    pub worker_id: String,
+    pub session_id: swarm_domain::WorkerSessionId,
+    pub body: String,
+}
+
+impl TaskStore {
+    /// Records a broadcast and queues it for every worker with a live session.
+    ///
+    /// THE COUNTS ARE THE FEATURE. Measured when this was built: 13 of 45
+    /// workers had an open session. A broadcast that reports success without
+    /// saying so lets the operator believe 45 people were told, which is worse
+    /// than telling 13 by hand — they would at least know they had stopped.
+    ///
+    /// # Errors
+    /// Refuses an empty or oversized body; returns an error when persistence
+    /// is unavailable.
+    pub fn broadcast_to_workers(
+        &self,
+        body: &str,
+        now: i64,
+    ) -> Result<OperatorBroadcast, TaskStoreError> {
+        let body = body.trim();
+        if body.is_empty() || body.len() > MAX_TASK_MESSAGE_BYTES {
+            return Err(TaskStoreError::InvalidTaskMessage {
+                max: MAX_TASK_MESSAGE_BYTES,
+            });
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let id = Uuid::now_v7().to_string();
+        transaction.execute(
+            "INSERT INTO operator_broadcasts (id, body, created_at) VALUES (?1, ?2, ?3)",
+            params![id, body, now],
+        )?;
+        // A live session is what the dispatch join requires, so this is the
+        // same reachability the delivery pass will see rather than a second
+        // opinion about it.
+        let reached = transaction.execute(
+            "INSERT INTO operator_broadcast_deliveries (broadcast_id, worker_id, session_id)
+             SELECT ?1, worker.id, session.session_id
+             FROM worker_profiles worker
+             JOIN worker_sessions session
+               ON session.worker_id = worker.id AND session.ended_at IS NULL",
+            params![id],
+        )?;
+        let total: i64 =
+            transaction.query_row("SELECT COUNT(*) FROM worker_profiles", [], |row| row.get(0))?;
+        transaction.commit()?;
+        Ok(OperatorBroadcast {
+            id,
+            body: body.to_owned(),
+            reached,
+            skipped: usize::try_from(total).unwrap_or(0).saturating_sub(reached),
+        })
+    }
+
+    /// Broadcasts still waiting for a terminal to be resting.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable or stored data is corrupt.
+    pub fn pending_operator_broadcast_dispatches(
+        &self,
+    ) -> Result<Vec<OperatorBroadcastDispatch>, TaskStoreError> {
+        use std::str::FromStr;
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT delivery.broadcast_id, delivery.worker_id, delivery.session_id, broadcast.body
+             FROM operator_broadcast_deliveries delivery
+             JOIN operator_broadcasts broadcast ON broadcast.id = delivery.broadcast_id
+             -- The session must still be the live one. A worker restarted since
+             -- the broadcast was written has a different session, and writing
+             -- into the old one reaches a terminal nobody is watching.
+             JOIN worker_sessions session
+               ON session.session_id = delivery.session_id AND session.ended_at IS NULL
+             WHERE delivery.delivered_at IS NULL
+             ORDER BY broadcast.created_at, delivery.worker_id",
+        )?;
+        let dispatches = statement
+            .query_map([], |row| {
+                let session_id: String = row.get(2)?;
+                Ok(OperatorBroadcastDispatch {
+                    broadcast_id: row.get(0)?,
+                    worker_id: row.get(1)?,
+                    session_id: swarm_domain::WorkerSessionId::from_str(&session_id)
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    body: row.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(dispatches)
+    }
+
+    /// Marks one worker's copy of a broadcast as delivered.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn mark_operator_broadcast_delivered(
+        &self,
+        broadcast_id: &str,
+        worker_id: &str,
+        now: i64,
+    ) -> Result<(), TaskStoreError> {
+        let connection = self.connection()?;
+        connection.execute(
+            "UPDATE operator_broadcast_deliveries SET delivered_at = ?3
+             WHERE broadcast_id = ?1 AND worker_id = ?2 AND delivered_at IS NULL",
+            params![broadcast_id, worker_id, now],
+        )?;
+        Ok(())
     }
 }

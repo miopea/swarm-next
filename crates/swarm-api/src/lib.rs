@@ -1297,6 +1297,7 @@ impl AppState {
         self.deliver_task_briefs(store, client).await;
         self.deliver_task_outcomes(store, client).await;
         self.deliver_task_messages(store, client).await;
+        self.deliver_operator_broadcasts(store, client).await;
         if let Err(error) = store.observe_queen_automation(unix_timestamp()) {
             tracing::warn!(message = %error, "Queen automation queue could not be observed");
         }
@@ -2026,6 +2027,85 @@ impl AppState {
     /// One write per terminal rather than one per message, for the same reason
     /// outcomes are grouped: several questions to the same reader are one
     /// interruption, not several.
+    /// Operator broadcasts, delivered on the same polite path as everything else.
+    ///
+    /// Grouped per terminal like task messages, so a worker carrying two
+    /// broadcasts is written to once, and deferred while it is mid-turn rather
+    /// than interrupting it — the operator chose a message rather than a stop.
+    async fn deliver_operator_broadcasts(&self, store: &TaskStore, client: &HostClient) {
+        let pending = match store.pending_operator_broadcast_dispatches() {
+            Ok(pending) => pending,
+            Err(error) => {
+                tracing::warn!(message = %error, "broadcast queue could not be read");
+                return;
+            }
+        };
+        if pending.is_empty() {
+            return;
+        }
+        let settled = coordination_delivery::submit_grouped_per_terminal(
+            store,
+            client,
+            pending,
+            |dispatch| dispatch.session_id,
+            |group| {
+                let body = group
+                    .iter()
+                    .map(|dispatch| dispatch.body.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                (
+                    coordination_delivery::operator_broadcast_message(&body),
+                    group
+                        .first()
+                        .map(|dispatch| delivery_marker(&dispatch.broadcast_id))
+                        .unwrap_or_default(),
+                )
+            },
+        )
+        .await;
+        for (group, submission) in settled {
+            match submission {
+                Ok(TerminalSubmission::Acknowledged) => {
+                    for dispatch in group {
+                        if let Err(error) = store.mark_operator_broadcast_delivered(
+                            &dispatch.broadcast_id,
+                            &dispatch.worker_id,
+                            unix_timestamp(),
+                        ) {
+                            tracing::warn!(message = %error, "a delivered broadcast could not be recorded as delivered");
+                        }
+                    }
+                }
+                // Mid-turn. Stays queued for the next pass rather than taking
+                // the worker's thread, which is the whole point of choosing a
+                // message over a stop.
+                Ok(TerminalSubmission::Deferred(reason)) => {
+                    tracing::info!(
+                        ?reason,
+                        count = group.len(),
+                        "a broadcast is held at this worker's prompt"
+                    );
+                }
+                Ok(TerminalSubmission::Rejected { code, message }) => {
+                    tracing::warn!(%code, %message, count = group.len(), "a broadcast was rejected by terminal host");
+                }
+                // Left queued on purpose, exactly as task messages are: a
+                // broadcast arriving twice is untidy, one that silently never
+                // arrived is the failure the reach count exists to prevent.
+                Ok(TerminalSubmission::Uncertain) => {
+                    tracing::info!(
+                        count = group.len(),
+                        "broadcast delivery is uncertain; it stays queued and may arrive twice"
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(message = %error, count = group.len(), "a broadcast could not be delivered");
+                }
+            }
+        }
+    }
+
     async fn deliver_task_messages(&self, store: &TaskStore, client: &HostClient) {
         let pending = match store.pending_task_message_dispatches() {
             Ok(pending) => pending,
@@ -3669,6 +3749,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/workers",
             get(workers::list_workers).post(workers::create_worker),
+        )
+        .route(
+            "/api/v1/workers/broadcast",
+            post(workers::broadcast_to_workers),
         )
         .route("/api/v1/providers", get(provider_activity::capabilities))
         .route("/api/v1/integrations/jira/readiness", get(jira_readiness))

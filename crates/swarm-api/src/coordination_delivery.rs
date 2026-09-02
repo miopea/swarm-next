@@ -986,6 +986,23 @@ pub(super) fn task_message_message(messages: &[TaskMessageDispatch]) -> Vec<u8> 
     text.into_bytes()
 }
 
+/// What an operator broadcast looks like in a worker's terminal.
+///
+/// Says it went to everyone, because a worker that cannot tell a broadcast from
+/// a message addressed to it will answer as though it were asked personally,
+/// and thirty-nine workers each replying to one announcement is its own outage.
+pub(super) fn operator_broadcast_message(body: &str) -> Vec<u8> {
+    // Ends with \r for the reason spelled out in task_message_message: that
+    // byte is the submit flag, and \n leaves this typed into the composer,
+    // unsent, while the delivery pass records it as delivered.
+    format!(
+        "[Broadcast from the operator to every running worker]\n{body}\n\nThis went to all \
+         workers at once. It is not addressed to you personally and wants no reply unless it \
+         asks for one.\r"
+    )
+    .into_bytes()
+}
+
 pub(super) fn task_outcome_message(outcomes: &[TaskOutcomeDispatch]) -> Vec<u8> {
     let Some((first, rest)) = outcomes.split_first() else {
         return Vec::new();
@@ -1530,6 +1547,11 @@ mod tests {
             queen.last(),
             Some(&b'\r'),
             "the automation brief must submit"
+        );
+        assert_eq!(
+            operator_broadcast_message("reloading in five minutes").last(),
+            Some(&b'\r'),
+            "a broadcast that does not submit reaches every worker's composer and nobody's turn"
         );
 
         let message = task_message_message(&[TaskMessageDispatch {

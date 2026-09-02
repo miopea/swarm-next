@@ -313,3 +313,22 @@ export async function fetchReleaseNotes(operatorToken: string): Promise<ReleaseN
   const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/release/notes");
   return response.json() as Promise<ReleaseNotesResponse>;
 }
+
+/**
+ * Says one thing to every worker with a live session.
+ *
+ * Returns who it reached AND who it could not: a worker with no session is
+ * excluded from delivery rather than queued, so a caller that ignores `skipped`
+ * will report a broadcast as having reached people it never touched.
+ */
+export async function broadcastToWorkers(
+  operatorToken: string,
+  body: string,
+): Promise<{ broadcast_id: string; reached: number; skipped: number }> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/workers/broadcast", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ body }),
+  });
+  return response.json() as Promise<{ broadcast_id: string; reached: number; skipped: number }>;
+}

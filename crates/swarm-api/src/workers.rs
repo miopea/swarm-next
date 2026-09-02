@@ -303,6 +303,41 @@ pub(super) async fn resolve_workspace_path(
     ))
 }
 
+#[derive(Deserialize)]
+pub(super) struct BroadcastRequest {
+    body: String,
+}
+
+/// The operator says one thing to every running worker.
+///
+/// Asked for on 2026-09-02, when doing it one terminal at a time was the only
+/// option. It is a MESSAGE and not a stop: it defers while a worker is mid-turn
+/// and arrives when the terminal is resting, so it cannot take a thread with it.
+///
+/// THE RESPONSE SAYS WHO IT COULD NOT REACH, and that is the part that matters.
+/// Measured when this was built, 13 of 45 workers had a live session; the rest
+/// are excluded from delivery rather than queued for it. A broadcast that
+/// answered "sent" would let the operator believe 45 people were told, which is
+/// worse than telling 13 by hand — that way they would at least know.
+pub(super) async fn broadcast_to_workers(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<BroadcastRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let broadcast = task_store(&state)?
+        .broadcast_to_workers(&request.body, crate::unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    // Wakes the delivery loop rather than waiting for its next tick.
+    state.control_room_notify.notify_waiters();
+    Ok(Json(serde_json::json!({
+        "broadcast_id": broadcast.id,
+        "reached": broadcast.reached,
+        "skipped": broadcast.skipped,
+    }))
+    .into_response())
+}
+
 pub(super) async fn create_worker(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

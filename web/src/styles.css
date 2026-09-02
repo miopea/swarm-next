@@ -2777,3 +2777,12 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 /* Blocked is not a slow queue, it is a different kind of thing: nothing here
    can move it. Marked so it does not read as somebody failing to act. */
 .queue-group[data-owner="blocked"] { border-style: dashed; }
+
+/* Broadcast to every worker. Quiet by default — it is a rare, wide action, and
+   a permanently open textarea in the rail would read as somewhere to type. */
+.broadcast-open { width: 100%; margin-top: 8px; }
+.broadcast { display: grid; gap: 8px; margin-top: 8px; }
+.broadcast textarea { width: 100%; min-width: 0; resize: vertical; font: inherit; }
+.broadcast-actions { display: flex; gap: 8px; }
+.broadcast-result { margin: 0; color: var(--muted); font-size: .72rem; line-height: 1.4; }
+.broadcast-error { margin: 0; color: var(--bad); font-size: .72rem; line-height: 1.4; }

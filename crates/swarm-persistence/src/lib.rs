@@ -183,7 +183,8 @@ const RETURNED_REVIEW_SCHEMA_VERSION: i64 = 115;
 const TASK_MESSAGE_SCHEMA_VERSION: i64 = 116;
 const APPROVAL_BASIS_SCHEMA_VERSION: i64 = 117;
 const PARTIAL_DEPLOYMENT_SCHEMA_VERSION: i64 = 118;
-const CURRENT_SCHEMA_VERSION: i64 = PARTIAL_DEPLOYMENT_SCHEMA_VERSION;
+const OPERATOR_BROADCAST_SCHEMA_VERSION: i64 = 119;
+const CURRENT_SCHEMA_VERSION: i64 = OPERATOR_BROADCAST_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -3573,6 +3574,9 @@ fn migrate_newest_schema_steps(
     if schema_version < PARTIAL_DEPLOYMENT_SCHEMA_VERSION {
         migrate_partial_deployments(transaction)?;
     }
+    if schema_version < OPERATOR_BROADCAST_SCHEMA_VERSION {
+        migrate_operator_broadcasts(transaction)?;
+    }
     Ok(())
 }
 
@@ -3756,6 +3760,43 @@ fn migrate_partial_deployments(transaction: &rusqlite::Transaction<'_>) -> rusql
 /// discipline into an attack surface. The operator's words: "No worker to
 /// worker communication, but queen<->worker communication is fine in both
 /// directions."
+/// The operator says one thing to every worker at once.
+///
+/// Asked for on 2026-09-02: "Is there a way I can as operator broadcast
+/// something to all workers? For instance I need pause workers to do a worker
+/// reload, and I have to do it one by one."
+///
+/// TWO TABLES, NOT ONE, AND THE SECOND IS THE POINT. A broadcast is one message
+/// with many outcomes, and the outcomes differ: measured when this was built,
+/// 13 of 45 workers had an open session. The other 32 are not slow, they are
+/// unreachable — the dispatch join requires a live session, so a message to a
+/// worker without one is excluded outright rather than queued. Recording one
+/// row per recipient is what lets the operator be told "13 of 45" instead of
+/// being allowed to believe it reached everyone.
+fn migrate_operator_broadcasts(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS operator_broadcasts (
+             id TEXT PRIMARY KEY,
+             body TEXT NOT NULL,
+             created_at INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS operator_broadcast_deliveries (
+             broadcast_id TEXT NOT NULL REFERENCES operator_broadcasts(id) ON DELETE CASCADE,
+             worker_id TEXT NOT NULL REFERENCES worker_profiles(id) ON DELETE CASCADE,
+             session_id TEXT NOT NULL,
+             delivered_at INTEGER,
+             PRIMARY KEY (broadcast_id, worker_id)
+         );
+         CREATE INDEX IF NOT EXISTS operator_broadcast_deliveries_pending
+             ON operator_broadcast_deliveries(broadcast_id) WHERE delivered_at IS NULL;",
+    )?;
+    transaction.pragma_update(
+        None,
+        "user_version",
+        crate::OPERATOR_BROADCAST_SCHEMA_VERSION,
+    )
+}
+
 fn migrate_task_messages(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
     transaction.execute_batch(
         "CREATE TABLE IF NOT EXISTS task_messages (
@@ -8163,6 +8204,15 @@ mod tests {
             artifact: "delivers_whole_task",
             undo_sql: "",
             probe_sql: "",
+        },
+        // 119. New tables, so the undo drops them.
+        SchemaStep {
+            table: "operator_broadcasts",
+            artifact: "",
+            undo_sql: "DROP TABLE IF EXISTS operator_broadcast_deliveries;
+                       DROP TABLE IF EXISTS operator_broadcasts",
+            probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'operator_broadcasts')",
         },
     ];
 
