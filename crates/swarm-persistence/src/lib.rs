@@ -473,8 +473,24 @@ pub enum TaskStoreError {
     CompletedTask,
     #[error("work in progress must be stopped or completed before it can be removed")]
     ActiveTaskCannotBeRemoved,
-    #[error("this worker already has work in progress; leave additional assigned work Ready")]
-    WorkerAlreadyHasActiveTask,
+    // NAMES THE TASK, because the refusal already has it and withholding it
+    // cost two agents half an hour on 2026-09-01. The worker was told a slot
+    // was occupied and not by what, guessed from its own board -- which had
+    // several tickets in Review -- and concluded that Review gates Active. It
+    // does not; the gate is `state = 'active'` alone. That guess was relayed as
+    // a first-hand account and believed, and a second worker was told its queue
+    // was blocked when it was not.
+    //
+    // The id was one column away in the query that produced this error, so the
+    // fix is to say what is already in hand rather than to look anything up.
+    #[error(
+        "this worker already has work in progress: {holding_task} ({holding_title}); \
+         finish or move that one, or leave additional assigned work Ready"
+    )]
+    WorkerAlreadyHasActiveTask {
+        holding_task: String,
+        holding_title: String,
+    },
     #[error("Jira work must be restored from Jira so its remote state remains authoritative")]
     JiraTaskCannotBeRestored,
     #[error("worker was not found")]
@@ -5146,6 +5162,19 @@ fn migrate_notifications(transaction: &rusqlite::Transaction<'_>) -> rusqlite::R
          PRAGMA user_version = 15;",
     )
 }
+/// Keeps a refusal to one line when a task title is a paragraph.
+fn truncate_for_refusal(title: &str) -> String {
+    const MAX: usize = 60;
+    let title = title.trim();
+    if title.chars().count() <= MAX {
+        return title.to_owned();
+    }
+    // By CHARACTERS, not bytes: titles carry em dashes and this would otherwise
+    // panic on a multi-byte boundary.
+    let kept: String = title.chars().take(MAX).collect();
+    format!("{}...", kept.trim_end())
+}
+
 fn ensure_worker_has_no_other_active_task(
     transaction: &rusqlite::Transaction<'_>,
     task_id: TaskId,
@@ -5161,21 +5190,26 @@ fn ensure_worker_has_no_other_active_task(
     let Some(worker_id) = assigned_worker_id else {
         return Ok(());
     };
-    let another_active_task = transaction
+    let holder = transaction
         .query_row(
-            "SELECT 1 FROM tasks
+            "SELECT id, title FROM tasks
              WHERE assigned_worker_id = ?1
                AND id != ?2
                AND state = 'active'
                AND removed_at IS NULL
              LIMIT 1",
             params![worker_id, task_id.to_string()],
-            |_| Ok(()),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
-        .optional()?
-        .is_some();
-    if another_active_task {
-        return Err(TaskStoreError::WorkerAlreadyHasActiveTask);
+        .optional()?;
+    if let Some((holding_task, title)) = holder {
+        return Err(TaskStoreError::WorkerAlreadyHasActiveTask {
+            holding_task,
+            // Trimmed on purpose. The point is to identify the ticket, not to
+            // reproduce it -- a refusal that grows into a report is a different
+            // kind of unreadable.
+            holding_title: truncate_for_refusal(&title),
+        });
     }
     Ok(())
 }
@@ -5419,6 +5453,86 @@ mod tests {
         assert_eq!(activity.events[5].to_state, Some(TaskState::Completed));
     }
 
+    /// THE REFUSAL MUST NAME THE TASK HOLDING THE SLOT.
+    ///
+    /// It used to say only that the worker "already has work in progress". On
+    /// 2026-09-01 a worker read that against its own board, saw a ticket in
+    /// Review, and concluded Review gates Active. It does not — the gate is
+    /// `state = 'active'` alone. That guess was relayed as a first-hand account
+    /// of a refusal, believed, and passed to a second worker as a fact about
+    /// its own queue. Half an hour went into a rule that did not exist.
+    ///
+    /// Naming the holder is what makes that guess unnecessary, and the id was
+    /// always one column away in the query that raises this.
+    #[test]
+    fn the_busy_refusal_names_the_task_holding_the_slot() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Daisy",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace",
+                false,
+                1,
+            )
+            .unwrap();
+        let session_id = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session_id).unwrap();
+        let holder = store
+            .create_task("Reconcile the syslog forwarder", "/workspace")
+            .unwrap();
+        let next = store.create_task("Queued work", "/workspace").unwrap();
+        for task in [holder.id, next.id] {
+            store.transition_task(task, TaskState::Ready).unwrap();
+            store.assign_task_to_worker(task, worker.id).unwrap();
+        }
+        store
+            .transition_worker_task(holder.id, TaskState::Active, "Starting", session_id)
+            .unwrap();
+
+        let refused = store
+            .transition_worker_task(next.id, TaskState::Active, "Starting", session_id)
+            .expect_err("a second active task is refused");
+        let message = refused.to_string();
+
+        assert!(
+            message.contains(&holder.id.to_string()),
+            "the refusal must identify the holder, or the reader guesses: {message}"
+        );
+        assert!(
+            message.contains("Reconcile the syslog forwarder"),
+            "and its title, so the id does not have to be looked up: {message}"
+        );
+        assert_eq!(
+            message.lines().count(),
+            1,
+            "but it stays one line — a refusal that becomes a report is unread: {message}"
+        );
+    }
+
+    /// A title long enough to bury the identifier is trimmed rather than
+    /// printed whole, and trimmed by CHARACTERS: real titles carry em dashes,
+    /// and slicing those by byte panics.
+    #[test]
+    fn a_long_title_is_trimmed_rather_than_printed_whole() {
+        let long = "SOA Phase A5b — remove the two dead Connect Sync OU exclusions \
+                    that the replication check has been waiting on since August";
+        let trimmed = truncate_for_refusal(long);
+        assert!(
+            trimmed.chars().count() <= 63,
+            "a refusal must not grow into a report: {trimmed}"
+        );
+        assert!(
+            trimmed.ends_with("..."),
+            "and it says it was cut: {trimmed}"
+        );
+        assert_eq!(
+            truncate_for_refusal("Short title"),
+            "Short title",
+            "a title that already fits is left alone rather than decorated"
+        );
+    }
+
     #[test]
     fn one_worker_cannot_start_two_assigned_tasks() {
         let store = TaskStore::in_memory().unwrap();
@@ -5445,7 +5559,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             store.transition_worker_task(next.id, TaskState::Active, "Starting", session_id),
-            Err(TaskStoreError::WorkerAlreadyHasActiveTask)
+            Err(TaskStoreError::WorkerAlreadyHasActiveTask { .. })
         ));
         assert_eq!(store.get_task(next.id).unwrap().state, TaskState::Ready);
     }
