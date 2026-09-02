@@ -2123,9 +2123,17 @@ impl AppState {
             match submission {
                 Ok(TerminalSubmission::Acknowledged) => {
                     for dispatch in group {
-                        if let Err(error) = store
-                            .mark_task_message_delivered(&dispatch.message_id, unix_timestamp())
-                        {
+                        // THE SESSION IT WENT TO, not just when. A delivery
+                        // that records only a timestamp cannot be told apart
+                        // from one written into a session that has since
+                        // exited, which is what left a sender believing a
+                        // request had landed when nothing running had been
+                        // told.
+                        if let Err(error) = store.mark_task_message_delivered(
+                            &dispatch.message_id,
+                            dispatch.session_id,
+                            unix_timestamp(),
+                        ) {
                             tracing::warn!(message = %error, message_id = %dispatch.message_id, "a delivered message could not be recorded as delivered");
                         }
                     }

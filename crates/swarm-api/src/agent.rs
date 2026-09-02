@@ -1645,7 +1645,7 @@ impl AgentMcp {
             "truncated": page.truncated,
             "evidence": evidence,
             "messages": messages,
-            "messages_note": "The Queen-worker exchange on this task, oldest first. Not in `events`: a message is not a state change. A message with no delivered_at has been recorded and has NOT yet reached its recipient's terminal — it waits for a resting prompt rather than interrupting a turn.",
+            "messages_note": "The Queen-worker exchange on this task, oldest first. Not in `events`: a message is not a state change. A message with no delivered_at has been recorded and has NOT yet reached its recipient's terminal — it waits for a resting prompt rather than interrupting a turn. READ delivered_at TOGETHER WITH reached_the_current_session, because delivered_at alone does not mean anyone still running was told: false there on a delivered message means it was typed into a session that has since exited, so the recipient you can talk to now has never seen it and re-sending is the only way it lands. True means the session it went to is still open. Do not read false as a failure to deliver — the bytes were written — and do not read it on an undelivered message, where it is false because nothing has gone anywhere yet. delivered_session_id names the session, and is null for deliveries recorded before Swarm began keeping it rather than meaning it went nowhere.",
             "evidence_note": "Evidence does not appear in `events` and never has: \
         a claim, its approval and a deployment write their own records, not activity rows. \
         An empty `evidence` here means none was recorded, NOT that the log is silent about it.",

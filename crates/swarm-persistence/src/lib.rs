@@ -188,7 +188,8 @@ const APPROVAL_BASIS_SCHEMA_VERSION: i64 = 117;
 const PARTIAL_DEPLOYMENT_SCHEMA_VERSION: i64 = 118;
 const OPERATOR_BROADCAST_SCHEMA_VERSION: i64 = 119;
 const BROADCAST_EXPIRY_SCHEMA_VERSION: i64 = 120;
-const CURRENT_SCHEMA_VERSION: i64 = BROADCAST_EXPIRY_SCHEMA_VERSION;
+const MESSAGE_DELIVERY_SESSION_SCHEMA_VERSION: i64 = 121;
+const CURRENT_SCHEMA_VERSION: i64 = MESSAGE_DELIVERY_SESSION_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -3584,6 +3585,14 @@ fn migrate_newest_schema_steps(
     if schema_version < BROADCAST_EXPIRY_SCHEMA_VERSION {
         migrate_broadcast_expiry(transaction)?;
     }
+    // LAST, and it has to stay last. Every migration sets user_version to its
+    // OWN number as its final act, so one running after this one winds the
+    // recorded version backwards. Adding this above migrate_broadcast_expiry
+    // left a fully migrated database reporting 120, and twelve ceiling tests
+    // said so at once. Fifth time that family of tests has caught a step here.
+    if schema_version < MESSAGE_DELIVERY_SESSION_SCHEMA_VERSION {
+        migrate_message_delivery_session(transaction)?;
+    }
     Ok(())
 }
 
@@ -3845,6 +3854,47 @@ fn migrate_broadcast_expiry(transaction: &rusqlite::Transaction<'_>) -> rusqlite
         }
     }
     transaction.pragma_update(None, "user_version", crate::BROADCAST_EXPIRY_SCHEMA_VERSION)
+}
+
+/// A delivered message records WHERE it went, not only when.
+///
+/// `delivered_at` alone made a message written into a session that then exited
+/// indistinguishable from one the running worker read and acted on. The sender
+/// saw "delivered" for both, so it stopped chasing the one nobody living had
+/// been told about. Queen caught the case that prompted this only by reading a
+/// delivery timestamp against the session id from swarm_list_workers BY HAND.
+///
+/// THE BROADCAST PATH ALREADY DID THIS. operator_broadcast_deliveries has
+/// carried session_id since schema 119, and task_messages did not — the same
+/// feature area at two levels of record-keeping, which nobody decided.
+///
+/// Existing rows keep NULL, and NULL means "delivered before this column
+/// existed" rather than "delivered nowhere". Backfilling a session id onto
+/// history would be inventing one: nothing in the record says which session
+/// took a message that predates the column, and a guessed answer here is worse
+/// than an absent one because it reads exactly like a measured answer.
+fn migrate_message_delivery_session(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    // Guarded on its own presence, for the reason spelled out in
+    // migrate_broadcast_expiry: the undo drops only the column the schema step
+    // names, so a guard keyed to anything else fails the re-migration with a
+    // duplicate column.
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('task_messages')
+         WHERE name = 'delivered_session_id')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !present {
+        transaction
+            .execute_batch("ALTER TABLE task_messages ADD COLUMN delivered_session_id TEXT")?;
+    }
+    transaction.pragma_update(
+        None,
+        "user_version",
+        crate::MESSAGE_DELIVERY_SESSION_SCHEMA_VERSION,
+    )
 }
 
 fn migrate_task_messages(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
@@ -8272,6 +8322,13 @@ mod tests {
             artifact: "expired_at",
             undo_sql: "ALTER TABLE operator_broadcast_deliveries DROP COLUMN expiry_reason;
                        ALTER TABLE operator_broadcast_deliveries DROP COLUMN expired_at",
+            probe_sql: "",
+        },
+        // 121. A plain added column, so the default undo drops it.
+        SchemaStep {
+            table: "task_messages",
+            artifact: "delivered_session_id",
+            undo_sql: "",
             probe_sql: "",
         },
     ];

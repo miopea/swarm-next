@@ -99,6 +99,35 @@ pub struct TaskMessage {
     /// is what stops a question arriving mid-turn and taking the thread with
     /// it.
     pub delivered_at: Option<i64>,
+    /// WHICH SESSION took it, alongside when.
+    ///
+    /// `delivered_at` on its own made a message written into a session that
+    /// then exited indistinguishable from one the running worker read and
+    /// acted on. Both read as delivered, so the sender stopped chasing the one
+    /// nobody living had been told about.
+    ///
+    /// `None` on an undelivered message means it has not gone anywhere. `None`
+    /// on a DELIVERED one means it predates schema 121 — not that it went
+    /// nowhere. Nothing in the record says which session took those, and
+    /// inventing one would read exactly like a measured answer.
+    pub delivered_session_id: Option<swarm_domain::WorkerSessionId>,
+    /// Whether the session it was written into IS STILL OPEN.
+    ///
+    /// This is the question Queen was answering by hand, comparing a delivery
+    /// timestamp against the session id from swarm_list_workers. False on a
+    /// delivered message means it was written into a terminal that no longer
+    /// exists: the bytes were typed, and nothing running was ever told.
+    ///
+    /// A worker has at most one open session at a time — that is the property
+    /// `LIVE_RECIPIENT_SESSION_JOIN` already relies on — so "still open" and
+    /// "the one running now" are the same session here. Stated as still-open
+    /// because that is what is measured.
+    ///
+    /// False for a message that has not been delivered at all, and false for
+    /// one delivered before schema 121, because in neither case is there a
+    /// live session it demonstrably reached. Read it with `delivered_at`, not
+    /// instead of it.
+    pub reached_the_current_session: bool,
 }
 
 /// The largest message the channel accepts.
@@ -126,6 +155,20 @@ pub const MAX_TASK_MESSAGE_BYTES: usize = 4_000;
 /// without it. That is what the per-path restart tests are for.
 const LIVE_RECIPIENT_SESSION_JOIN: &str = "JOIN worker_sessions session
        ON session.worker_id = {recipient} AND session.ended_at IS NULL";
+
+/// The columns every read of a message must carry, so no reader can be handed
+/// a delivery record that says when without saying where.
+///
+/// Written as one string for the same reason as `LIVE_RECIPIENT_SESSION_JOIN`:
+/// there are three queries reading this table and they had already drifted
+/// once. `message_from_row` reads these by position, so a query that selects a
+/// different list fails loudly rather than quietly returning the wrong column.
+const MESSAGE_COLUMNS: &str = "m.id, m.task_id, m.sender, m.recipient, m.sender_worker_id,
+            m.recipient_worker_id, m.body, m.created_at, m.delivered_at,
+            m.delivered_session_id,
+            EXISTS(SELECT 1 FROM worker_sessions live
+                   WHERE live.session_id = m.delivered_session_id
+                     AND live.ended_at IS NULL)";
 
 impl TaskStore {
     /// Records a message from Queen to a worker, or from a worker to Queen.
@@ -199,6 +242,8 @@ impl TaskStore {
             body: body.to_owned(),
             created_at: now,
             delivered_at: None,
+            delivered_session_id: None,
+            reached_the_current_session: false,
         })
     }
 
@@ -208,12 +253,12 @@ impl TaskStore {
     /// Returns an error when persistence is unavailable or stored data is corrupt.
     pub fn task_messages(&self, task_id: TaskId) -> Result<Vec<TaskMessage>, TaskStoreError> {
         let connection = self.connection()?;
-        let mut statement = connection.prepare(
-            "SELECT id, task_id, sender, recipient, sender_worker_id, recipient_worker_id,
-                    body, created_at, delivered_at
-             FROM task_messages WHERE task_id = ?1
-             ORDER BY created_at, id",
-        )?;
+        let sql = format!(
+            "SELECT {MESSAGE_COLUMNS}
+             FROM task_messages m WHERE m.task_id = ?1
+             ORDER BY m.created_at, m.id"
+        );
+        let mut statement = connection.prepare(&sql)?;
         let messages = statement
             .query_map([task_id.to_string()], message_from_row)?
             .collect::<Result<Vec<_>, _>>()?;
@@ -229,28 +274,39 @@ impl TaskStore {
         worker_id: WorkerId,
     ) -> Result<Vec<TaskMessage>, TaskStoreError> {
         let connection = self.connection()?;
-        let mut statement = connection.prepare(
-            "SELECT id, task_id, sender, recipient, sender_worker_id, recipient_worker_id,
-                    body, created_at, delivered_at
-             FROM task_messages
-             WHERE recipient_worker_id = ?1 AND delivered_at IS NULL
-             ORDER BY created_at, id",
-        )?;
+        let sql = format!(
+            "SELECT {MESSAGE_COLUMNS}
+             FROM task_messages m
+             WHERE m.recipient_worker_id = ?1 AND m.delivered_at IS NULL
+             ORDER BY m.created_at, m.id"
+        );
+        let mut statement = connection.prepare(&sql)?;
         let messages = statement
             .query_map([worker_id.to_string()], message_from_row)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(messages)
     }
 
-    /// Marks one message as having reached its recipient's terminal.
+    /// Marks one message as having reached a terminal, AND NAMES WHICH ONE.
+    ///
+    /// The session is not optional. A delivery that records only a timestamp
+    /// cannot be told apart from one written into a session that has since
+    /// exited, and that is the whole defect this parameter exists to close —
+    /// the broadcast path has recorded its session since schema 119.
     ///
     /// # Errors
     /// Returns an error when persistence is unavailable.
-    pub fn mark_task_message_delivered(&self, id: &str, now: i64) -> Result<(), TaskStoreError> {
+    pub fn mark_task_message_delivered(
+        &self,
+        id: &str,
+        session_id: swarm_domain::WorkerSessionId,
+        now: i64,
+    ) -> Result<(), TaskStoreError> {
         let connection = self.connection()?;
         connection.execute(
-            "UPDATE task_messages SET delivered_at = ?2 WHERE id = ?1 AND delivered_at IS NULL",
-            params![id, now],
+            "UPDATE task_messages SET delivered_at = ?2, delivered_session_id = ?3
+             WHERE id = ?1 AND delivered_at IS NULL",
+            params![id, now, session_id.to_string()],
         )?;
         Ok(())
     }
@@ -412,6 +468,13 @@ fn message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskMessage> {
         body: row.get(6)?,
         created_at: row.get(7)?,
         delivered_at: row.get(8)?,
+        delivered_session_id: row
+            .get::<_, Option<String>>(9)?
+            .as_deref()
+            .map(swarm_domain::WorkerSessionId::from_str)
+            .transpose()
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        reached_the_current_session: row.get(10)?,
     })
 }
 
@@ -429,6 +492,157 @@ mod tests {
         let task = store.create_task("Some work", "/workspace").unwrap();
         store.transition_task(task.id, TaskState::Ready).unwrap();
         (store, task.id, worker.id)
+    }
+
+    /// QUEEN'S FALSIFIER, RUN DETERMINISTICALLY RATHER THAN ON A LIVE WORKER.
+    ///
+    /// She wrote it as: send a message, exit the session, restart, and see
+    /// whether anything says the two are different. Doing that live means
+    /// killing a real worker's session, so it is done here instead — the
+    /// sequence is the same and it is repeatable.
+    ///
+    /// TWO MESSAGES, IDENTICAL RECORDS, DIFFERENT TRUTHS. One is delivered into
+    /// a session that then exits; the other into the session that is running
+    /// now. Both come back with a delivered_at and nothing else, so the sender
+    /// sees "delivered" for a message no living session was ever told about and
+    /// stops chasing it.
+    ///
+    /// Queen only caught the case that prompted this by reading a delivery
+    /// timestamp against the session id from swarm_list_workers BY HAND. That
+    /// hand comparison is the thing this must remove.
+    ///
+    /// THE BROADCAST PATH IN THIS SAME FILE ALREADY RECORDS THE SESSION.
+    /// operator_broadcast_deliveries carries session_id; task_messages does
+    /// not. Nobody decided that — it is divergence by authorship, the same
+    /// shape as the two dispatch queries that disagreed about following a
+    /// worker or a session.
+    #[test]
+    fn a_message_taken_by_a_session_that_exited_is_told_apart_from_one_the_live_session_took() {
+        let (store, task, worker) = hive();
+
+        let departed = WorkerSessionId::new();
+        store.bind_worker_session(worker, departed).unwrap();
+        let stranded = store
+            .send_task_message(
+                task,
+                MessageEnd::queen(),
+                MessageEnd::worker(worker),
+                "which half shipped?",
+                1_000,
+            )
+            .unwrap();
+        store
+            .mark_task_message_delivered(&stranded.id, departed, 1_001)
+            .unwrap();
+        store.release_worker_session(departed).unwrap();
+
+        let current = WorkerSessionId::new();
+        store.bind_worker_session(worker, current).unwrap();
+        let read = store
+            .send_task_message(
+                task,
+                MessageEnd::queen(),
+                MessageEnd::worker(worker),
+                "and the second half?",
+                2_000,
+            )
+            .unwrap();
+        store
+            .mark_task_message_delivered(&read.id, current, 2_001)
+            .unwrap();
+
+        let messages = store.task_messages(task).unwrap();
+        let stranded = messages
+            .iter()
+            .find(|message| message.id == stranded.id)
+            .expect("the stranded message is on the task");
+        let read = messages
+            .iter()
+            .find(|message| message.id == read.id)
+            .expect("the read message is on the task");
+
+        assert!(
+            stranded.delivered_at.is_some() && read.delivered_at.is_some(),
+            "both were written into a terminal, which is all delivered_at has ever meant"
+        );
+        assert_eq!(
+            stranded.delivered_session_id,
+            Some(departed),
+            "a delivery records WHERE it went, not only when"
+        );
+        assert_eq!(read.delivered_session_id, Some(current));
+        assert!(
+            !stranded.reached_the_current_session,
+            "this one was written into a session that no longer exists, and the sender \
+             must be able to see that without comparing timestamps to swarm_list_workers"
+        );
+        assert!(
+            read.reached_the_current_session,
+            "and this one was not, so the two must not read alike"
+        );
+    }
+
+    /// DECIDED, NOT INHERITED: a delivered message is NOT re-delivered when the
+    /// session that took it exits. This test is the decision.
+    ///
+    /// 01a06340 required this to be answered explicitly, on the grounds that
+    /// re-delivery is not obviously right. It is not, and the answer is no.
+    ///
+    /// THE BYTES WERE WRITTEN INTO A TERMINAL. A session that received a
+    /// question may well have read it and acted on it — which is exactly what
+    /// happened in the case that prompted the ticket. Queen concluded a request
+    /// had been lost to an exited session; it had not, the worker had acted,
+    /// and both halves of what it asked for shipped. Re-delivering would have
+    /// presented finished work as a new request, and for anything with a side
+    /// effect that is a worse failure than a visible gap.
+    ///
+    /// IT IS ALSO THE SAME RULE BROADCASTS ALREADY FOLLOW, not a different one.
+    /// 01a062f4 answered "follows the worker or expires" for a broadcast that
+    /// was never written anywhere — an UNDELIVERED one. Undelivered task
+    /// messages already re-aim the same way, which
+    /// `a_worker_restart_re_aims_a_task_message_too` pins. Neither path
+    /// re-delivers something already typed into a terminal. The rule is about
+    /// undelivered work in both cases, and this makes that explicit rather than
+    /// letting the two look like they disagree.
+    ///
+    /// THE GAP IS CLOSED BY MAKING IT VISIBLE, NOT BY RESENDING. The sender can
+    /// see `reached_the_current_session` is false and re-send deliberately.
+    /// That turns a silent loss into somebody's decision, which is the whole
+    /// difference this ticket was filed about.
+    #[test]
+    fn a_message_already_written_into_a_terminal_is_not_delivered_again_after_a_restart() {
+        let (store, task, worker) = hive();
+        let departed = WorkerSessionId::new();
+        store.bind_worker_session(worker, departed).unwrap();
+        let message = store
+            .send_task_message(
+                task,
+                MessageEnd::queen(),
+                MessageEnd::worker(worker),
+                "which half shipped?",
+                1_000,
+            )
+            .unwrap();
+        store
+            .mark_task_message_delivered(&message.id, departed, 1_001)
+            .unwrap();
+        store.release_worker_session(departed).unwrap();
+
+        let current = WorkerSessionId::new();
+        store.bind_worker_session(worker, current).unwrap();
+
+        assert!(
+            store.pending_task_message_dispatches().unwrap().is_empty(),
+            "a message already typed into a terminal is not typed again — the previous \
+             session may have acted on it, and re-sending would present finished work as new"
+        );
+        let seen = store.task_messages(task).unwrap();
+        let seen = seen.first().expect("the message is still on the task");
+        assert!(
+            seen.delivered_at.is_some() && !seen.reached_the_current_session,
+            "and the gap is closed by being VISIBLE: the sender can see nothing running was \
+             told, and re-send on purpose"
+        );
     }
 
     /// The operator's requirement, and the one that must not be a convention:
@@ -764,7 +978,7 @@ mod tests {
         assert_eq!(waiting.len(), 1);
 
         store
-            .mark_task_message_delivered(&waiting[0].id, 2_000)
+            .mark_task_message_delivered(&waiting[0].id, WorkerSessionId::new(), 2_000)
             .unwrap();
         assert!(
             store.undelivered_task_messages(worker).unwrap().is_empty(),
