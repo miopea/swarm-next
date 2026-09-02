@@ -28,8 +28,22 @@ test("inserts a private image path without submitting the terminal prompt", () =
  * composer, because the provider swallows a bare pasted path it cannot attach
  * and the trailing space is all that survives. A space reads as nothing having
  * happened, while the file is in fact attached.
+ *
+ * ⚠️ THE FIRST FIX ADDED AN `@` PREFIX AND SHIPPED, AND IT DID NOT WORK. This
+ * test asserted `ESC[200~@<path>ESC[201~ ` and passed, because it checked the
+ * bytes we send rather than what the provider does with them. The operator
+ * tested the shipped build with an mp4, a zip and a spreadsheet: "just one extra
+ * space was shown" — the identical symptom.
+ *
+ * The space is OUTSIDE the markers, so one space and nothing else proves the
+ * provider discarded everything BETWEEN them. The prefix never mattered; the
+ * BRACKETED PASTE did. A non-image reference is now typed, through the ordinary
+ * input path rather than the paste handler.
+ *
+ * This test still cannot prove the fix works — it asserts what we send, and only
+ * a drop on a live terminal shows what the provider does. 01a06238 holds that.
  */
-test("references a non-image attachment so it is visible rather than swallowed", () => {
+test("types a non-image reference instead of pasting it", () => {
   for (const path of [
     "/state/attachments/report.docx",
     "/state/attachments/clip.mp4",
@@ -37,11 +51,23 @@ test("references a non-image attachment so it is visible rather than swallowed",
     "/state/attachments/opaque.bin",
   ]) {
     const input = terminalAttachmentPaste(path);
-    expect(input).toBe(`\u001b[200~@${path}\u001b[201~ `);
+    expect(input).toBe(`@${path} `);
+    // NOT a bracketed paste: that wrapper is the thing the provider ate.
+    expect(input).not.toContain("\u001b[200~");
     expect(input).not.toContain("\r");
     // The whole point: something other than whitespace reaches the composer.
-    expect(input.replace(/\u001b\[20[01]~/g, "").trim()).not.toBe("");
+    expect(input.trim()).not.toBe("");
   }
+});
+
+/**
+ * Images are untouched. They render as a chip today, which is the one case that
+ * was never broken — and changing it to fix a different case is how a working
+ * path becomes collateral.
+ */
+test("an image keeps the bracketed paste it already works with", () => {
+  expect(terminalAttachmentPaste("/state/attachments/capture.jpg"))
+    .toBe("\u001b[200~/state/attachments/capture.jpg\u001b[201~ ");
 });
 
 test("intercepts text as one bracketed terminal paste", () => {

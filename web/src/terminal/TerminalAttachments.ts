@@ -212,27 +212,34 @@ const PROVIDER_RENDERS_A_CHIP = new Set(["png", "jpg", "jpeg", "gif", "webp"]);
 /**
  * What to type into the terminal so an attachment is both VISIBLE and readable.
  *
- * A bare path used to be pasted for everything. That works for images, which
- * the provider recognises and renders as a chip, and it fails silently for
- * everything else: the provider consumes the pasted path, renders nothing for a
- * type it cannot attach, and the only thing left in the composer is the trailing
- * space this function adds after the paste markers. The operator's report was
- * exactly that — "I never see anything besides a space in the prompt... the only
- * one that shows up properly are images" — for docx, mp4 and every other binary.
+ * A bare path used to be pasted for everything. That works for images, which the
+ * provider recognises and renders as a chip, and it fails silently for everything
+ * else: the provider consumes the pasted path, renders nothing for a type it
+ * cannot attach, and the only thing left in the composer is the trailing space
+ * this function adds after the paste markers. The operator: "I never see anything
+ * besides a space in the prompt... the only one that shows up properly are images."
  *
- * A space is indistinguishable from a failed drop, and the file HAS uploaded, so
- * the failure runs in the direction that loses work: the turn is sent believing
- * an attachment is attached.
+ * ⚠️ THE FIRST FIX ASSUMED THE `@` PREFIX WAS THE ANSWER AND IT WAS NOT. It sent
+ * `ESC[200~@<path>ESC[201~ ` and the comment here claimed the provider "renders
+ * it as text rather than swallowing". That was reasoning, never observation, and
+ * the operator tested it on 2026-09-02 with an mp4, a zip and a spreadsheet:
+ * "just one extra space was shown" — the identical symptom the fix was for.
  *
- * So a non-image is referenced with `@<path>`, which the provider renders as
- * text rather than swallowing, and which it reads as a file reference. Images
- * keep the bare path they already work with — this fixes the broken case without
- * touching the one that is not broken.
+ * The space is OUTSIDE the paste markers, so seeing exactly one space and nothing
+ * else proves the provider discarded everything BETWEEN them. The prefix was
+ * never the problem: THE BRACKETED PASTE IS. Whatever the provider does with a
+ * pasted path, it does before it ever looks at what the path says.
+ *
+ * So a non-image reference is now TYPED rather than pasted — the same bytes a
+ * person produces at the keyboard, through the composer's ordinary input path
+ * instead of its paste handler. Images keep the bare bracketed paste they
+ * already work with; that case was never broken and is not being touched to fix
+ * a different one.
  */
 export function terminalAttachmentPaste(path: string): string {
   const extension = path.split(".").pop()?.toLowerCase() ?? "";
-  const reference = PROVIDER_RENDERS_A_CHIP.has(extension) ? path : `@${path}`;
-  return `\u001b[200~${reference}\u001b[201~ `;
+  if (PROVIDER_RENDERS_A_CHIP.has(extension)) return `\u001b[200~${path}\u001b[201~ `;
+  return `@${path} `;
 }
 
 export function terminalTextPaste(text: string): string {
