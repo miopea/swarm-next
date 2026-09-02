@@ -2041,7 +2041,18 @@ impl AppState {
     /// broadcasts is written to once, and deferred while it is mid-turn rather
     /// than interrupting it — the operator chose a message rather than a stop.
     async fn deliver_operator_broadcasts(&self, store: &TaskStore, client: &HostClient) {
-        let pending = match store.pending_operator_broadcast_dispatches() {
+        // Closed BEFORE reading the queue, so a delivery that ran out of its
+        // window is expired with a reason rather than sitting undeliverable and
+        // uncounted. That silence is the defect this pass exists to end.
+        match store.expire_stale_broadcasts(unix_timestamp()) {
+            Ok(0) => {}
+            Ok(expired) => tracing::info!(
+                expired,
+                "broadcast deliveries passed their window and were expired rather than stranded"
+            ),
+            Err(error) => tracing::warn!(message = %error, "stale broadcasts could not be expired"),
+        }
+        let pending = match store.pending_operator_broadcast_dispatches(unix_timestamp()) {
             Ok(pending) => pending,
             Err(error) => {
                 tracing::warn!(message = %error, "broadcast queue could not be read");

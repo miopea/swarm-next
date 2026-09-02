@@ -186,7 +186,8 @@ const TASK_MESSAGE_SCHEMA_VERSION: i64 = 116;
 const APPROVAL_BASIS_SCHEMA_VERSION: i64 = 117;
 const PARTIAL_DEPLOYMENT_SCHEMA_VERSION: i64 = 118;
 const OPERATOR_BROADCAST_SCHEMA_VERSION: i64 = 119;
-const CURRENT_SCHEMA_VERSION: i64 = OPERATOR_BROADCAST_SCHEMA_VERSION;
+const BROADCAST_EXPIRY_SCHEMA_VERSION: i64 = 120;
+const CURRENT_SCHEMA_VERSION: i64 = BROADCAST_EXPIRY_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -3579,6 +3580,9 @@ fn migrate_newest_schema_steps(
     if schema_version < OPERATOR_BROADCAST_SCHEMA_VERSION {
         migrate_operator_broadcasts(transaction)?;
     }
+    if schema_version < BROADCAST_EXPIRY_SCHEMA_VERSION {
+        migrate_broadcast_expiry(transaction)?;
+    }
     Ok(())
 }
 
@@ -3797,6 +3801,49 @@ fn migrate_operator_broadcasts(transaction: &rusqlite::Transaction<'_>) -> rusql
         "user_version",
         crate::OPERATOR_BROADCAST_SCHEMA_VERSION,
     )
+}
+
+/// A broadcast that missed its window is expired, not stranded.
+///
+/// Deliveries were pinned to the session that existed when the broadcast was
+/// written, so a worker restart left them matching nothing: never delivered,
+/// never retried, never expired, never reported. Measured on the first real
+/// broadcast, 2026-09-02 — 14 queued, 0 delivered, all 14 pointing at sessions
+/// a force reload had ended.
+///
+/// The delivery now follows the WORKER, and this column records the ones that
+/// ran out of time on the way. The operator ruled the window: deliver to a
+/// worker that comes back within ten minutes, expire it after that, because a
+/// broadcast describes now and "pause work so I can reload" arriving after the
+/// reload is worse than not arriving.
+fn migrate_broadcast_expiry(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    // EACH COLUMN GUARDED SEPARATELY, because the undo drops only the artifact
+    // the schema step NAMES. Guarding both on the presence of `expired_at`
+    // meant that after an undo removed just that one, re-running tried to add
+    // `expiry_reason` again and failed with "duplicate column name" — caught by
+    // the migration ceiling test, which is the fourth time that test has caught
+    // a step of mine.
+    for (column, definition) in [
+        (
+            "expired_at",
+            "ALTER TABLE operator_broadcast_deliveries ADD COLUMN expired_at INTEGER",
+        ),
+        (
+            "expiry_reason",
+            "ALTER TABLE operator_broadcast_deliveries ADD COLUMN expiry_reason TEXT",
+        ),
+    ] {
+        let present: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('operator_broadcast_deliveries')
+             WHERE name = ?1)",
+            [column],
+            |row| row.get(0),
+        )?;
+        if !present {
+            transaction.execute_batch(definition)?;
+        }
+    }
+    transaction.pragma_update(None, "user_version", crate::BROADCAST_EXPIRY_SCHEMA_VERSION)
 }
 
 fn migrate_task_messages(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
@@ -8215,6 +8262,16 @@ mod tests {
                        DROP TABLE IF EXISTS operator_broadcasts",
             probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
                  WHERE type = 'table' AND name = 'operator_broadcasts')",
+        },
+        // 120. TWO columns, so the undo names both. The default undo drops
+        // only the artifact, which left expiry_reason behind and made the
+        // re-migration fail on a duplicate column.
+        SchemaStep {
+            table: "operator_broadcast_deliveries",
+            artifact: "expired_at",
+            undo_sql: "ALTER TABLE operator_broadcast_deliveries DROP COLUMN expiry_reason;
+                       ALTER TABLE operator_broadcast_deliveries DROP COLUMN expired_at",
+            probe_sql: "",
         },
     ];
 

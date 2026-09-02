@@ -534,9 +534,81 @@ mod tests {
         );
         let _ = asleep;
 
-        let pending = store.pending_operator_broadcast_dispatches().unwrap();
+        let pending = store.pending_operator_broadcast_dispatches(1_000).unwrap();
         assert_eq!(pending.len(), 1, "only reachable workers are queued");
         assert_eq!(pending[0].body, "reloading the engine in five minutes");
+    }
+
+    /// A RESTART RE-AIMS A BROADCAST INSTEAD OF ORPHANING IT.
+    ///
+    /// This is the defect that shipped. Deliveries were pinned to the session
+    /// that existed when the broadcast was written, so when the operator
+    /// pressed Force worker reload three minutes after broadcasting, all 14
+    /// deliveries pointed at dead sessions: never delivered, never retried,
+    /// never expired, never reported. Measured 2026-09-02, 14 queued and 0
+    /// delivered.
+    #[test]
+    fn a_worker_restart_re_aims_a_broadcast_rather_than_stranding_it() {
+        let (store, _task, worker) = hive();
+        let first = WorkerSessionId::new();
+        store.bind_worker_session(worker, first).unwrap();
+        let broadcast = store.broadcast_to_workers("pause please", 1_000).unwrap();
+        assert_eq!(broadcast.reached, 1);
+
+        // The session the broadcast was queued against ends, exactly as a force
+        // worker reload ends it.
+        store.release_worker_session(first).unwrap();
+        assert!(
+            store
+                .pending_operator_broadcast_dispatches(1_000)
+                .unwrap()
+                .is_empty(),
+            "with no live terminal there is nothing to write into"
+        );
+
+        // The worker comes back. The delivery must find it.
+        let second = WorkerSessionId::new();
+        store.bind_worker_session(worker, second).unwrap();
+        let pending = store.pending_operator_broadcast_dispatches(1_060).unwrap();
+        assert_eq!(
+            pending.len(),
+            1,
+            "the broadcast follows the worker, not one session"
+        );
+        assert_eq!(
+            pending[0].session_id, second,
+            "and it is aimed at the terminal that exists now, not the one that is gone"
+        );
+    }
+
+    /// AND IT DOES NOT ARRIVE LATE. The operator ruled the window: a broadcast
+    /// describes now, and "pause work so I can reload" delivered after the
+    /// reload is worse than never delivered.
+    #[test]
+    fn a_broadcast_past_its_window_expires_with_a_reason_rather_than_waiting() {
+        let (store, _task, worker) = hive();
+        store
+            .bind_worker_session(worker, WorkerSessionId::new())
+            .unwrap();
+        let broadcast = store.broadcast_to_workers("pause please", 1_000).unwrap();
+
+        let past = 1_000 + BROADCAST_DELIVERY_WINDOW_SECONDS + 1;
+        assert!(
+            store
+                .pending_operator_broadcast_dispatches(past)
+                .unwrap()
+                .is_empty(),
+            "a stale broadcast is not delivered"
+        );
+        assert_eq!(
+            store.expire_stale_broadcasts(past).unwrap(),
+            1,
+            "and it is closed rather than left pending forever"
+        );
+
+        let (delivered, expired, waiting) =
+            store.operator_broadcast_outcome(&broadcast.id).unwrap();
+        assert_eq!((delivered, expired, waiting), (0, 1, 0));
     }
 
     /// A delivered broadcast is not delivered twice.
@@ -547,7 +619,7 @@ mod tests {
             .bind_worker_session(worker, WorkerSessionId::new())
             .unwrap();
         let broadcast = store.broadcast_to_workers("heads up", 1_000).unwrap();
-        let pending = store.pending_operator_broadcast_dispatches().unwrap();
+        let pending = store.pending_operator_broadcast_dispatches(1_000).unwrap();
         assert_eq!(pending.len(), 1);
 
         store
@@ -556,7 +628,7 @@ mod tests {
 
         assert!(
             store
-                .pending_operator_broadcast_dispatches()
+                .pending_operator_broadcast_dispatches(1_000)
                 .unwrap()
                 .is_empty(),
             "a delivered broadcast that stays queued arrives again every pass"
@@ -713,6 +785,15 @@ mod tests {
     }
 }
 
+/// How long a broadcast is worth delivering after it was written.
+///
+/// A broadcast describes NOW — the first real one was "Please pause work so I
+/// can reload" — so arriving late is worse than not arriving. Ten minutes is
+/// long enough for a worker restarted by that very reload to come back and
+/// receive it, and short enough that nothing wakes tomorrow to an instruction
+/// about yesterday.
+pub const BROADCAST_DELIVERY_WINDOW_SECONDS: i64 = 600;
+
 /// One operator broadcast and, crucially, who it could actually reach.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OperatorBroadcast {
@@ -790,23 +871,40 @@ impl TaskStore {
     /// Returns an error when persistence is unavailable or stored data is corrupt.
     pub fn pending_operator_broadcast_dispatches(
         &self,
+        now: i64,
     ) -> Result<Vec<OperatorBroadcastDispatch>, TaskStoreError> {
         use std::str::FromStr;
         let connection = self.connection()?;
         let mut statement = connection.prepare(
-            "SELECT delivery.broadcast_id, delivery.worker_id, delivery.session_id, broadcast.body
+            // AIMED AT THE WORKER, NOT AT ONE SESSION OF IT.
+            //
+            // This joined on delivery.session_id, so a delivery was pinned to
+            // the session that existed when the broadcast was written. Not
+            // writing into a dead terminal was right; STRANDING the message
+            // when that session ended was not. Measured 2026-09-02 on the first
+            // real broadcast: 14 queued, 0 delivered, and after a force worker
+            // reload all 14 pointed at dead sessions — never delivered, never
+            // retried, never expired, never reported.
+            //
+            // So it now finds the worker's CURRENT live session, and a restart
+            // re-aims the delivery instead of orphaning it.
+            "SELECT delivery.broadcast_id, delivery.worker_id, session.session_id, broadcast.body
              FROM operator_broadcast_deliveries delivery
              JOIN operator_broadcasts broadcast ON broadcast.id = delivery.broadcast_id
-             -- The session must still be the live one. A worker restarted since
-             -- the broadcast was written has a different session, and writing
-             -- into the old one reaches a terminal nobody is watching.
              JOIN worker_sessions session
-               ON session.session_id = delivery.session_id AND session.ended_at IS NULL
+               ON session.worker_id = delivery.worker_id AND session.ended_at IS NULL
              WHERE delivery.delivered_at IS NULL
+               AND delivery.expired_at IS NULL
+               -- TIME-BOXED, because a broadcast describes NOW. The operator's
+               -- own case was \"pause work so I can reload\": delivering that
+               -- after the reload is worse than not delivering it. A worker
+               -- back within the window still gets it; one returning tomorrow
+               -- does not, and is expired with a reason rather than silently.
+               AND broadcast.created_at > ?1 - ?2
              ORDER BY broadcast.created_at, delivery.worker_id",
         )?;
         let dispatches = statement
-            .query_map([], |row| {
+            .query_map(params![now, BROADCAST_DELIVERY_WINDOW_SECONDS], |row| {
                 let session_id: String = row.get(2)?;
                 Ok(OperatorBroadcastDispatch {
                     broadcast_id: row.get(0)?,
@@ -818,6 +916,64 @@ impl TaskStore {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(dispatches)
+    }
+
+    /// Expires deliveries that ran out of their window, with a reason.
+    ///
+    /// THE ONE OUTCOME THAT MUST NOT REMAIN IS SILENCE. Before this, a delivery
+    /// whose session ended simply stopped matching anything: not delivered, not
+    /// retried, not expired, not reported. Returns how many it closed so a
+    /// caller can say so rather than discover it later.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn expire_stale_broadcasts(&self, now: i64) -> Result<usize, TaskStoreError> {
+        let connection = self.connection()?;
+        let expired = connection.execute(
+            "UPDATE operator_broadcast_deliveries
+             SET expired_at = ?1,
+                 expiry_reason = 'the worker did not have a live terminal within the delivery window'
+             WHERE delivered_at IS NULL AND expired_at IS NULL
+               AND broadcast_id IN (
+                   SELECT id FROM operator_broadcasts WHERE created_at <= ?1 - ?2
+               )",
+            params![now, BROADCAST_DELIVERY_WINDOW_SECONDS],
+        )?;
+        Ok(expired)
+    }
+
+    /// What actually became of one broadcast.
+    ///
+    /// The send response could only report who it QUEUED for, which read as
+    /// reach and was not: the first real broadcast reported 14 and delivered 0.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn operator_broadcast_outcome(
+        &self,
+        broadcast_id: &str,
+    ) -> Result<(usize, usize, usize), TaskStoreError> {
+        let connection = self.connection()?;
+        let row = connection.query_row(
+            "SELECT
+                 SUM(delivered_at IS NOT NULL),
+                 SUM(expired_at IS NOT NULL),
+                 SUM(delivered_at IS NULL AND expired_at IS NULL)
+             FROM operator_broadcast_deliveries WHERE broadcast_id = ?1",
+            [broadcast_id],
+            |row| {
+                Ok((
+                    row.get::<_, Option<i64>>(0)?.unwrap_or(0),
+                    row.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                    row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                ))
+            },
+        )?;
+        Ok((
+            usize::try_from(row.0).unwrap_or(0),
+            usize::try_from(row.1).unwrap_or(0),
+            usize::try_from(row.2).unwrap_or(0),
+        ))
     }
 
     /// Marks one worker's copy of a broadcast as delivered.
