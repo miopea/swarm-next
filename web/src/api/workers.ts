@@ -332,3 +332,17 @@ export async function broadcastToWorkers(
   });
   return response.json() as Promise<{ broadcast_id: string; reached: number; skipped: number }>;
 }
+
+/**
+ * Which workers would resume a conversation that is no longer the newest, and
+ * which ones Swarm could not check at all.
+ *
+ * Both are returned. An unknown reported as healthy is the failure this exists
+ * to prevent.
+ */
+export async function fetchWorkerConversations(
+  operatorToken: string,
+): Promise<{ workers: { worker_id: string; name: string; freshness: { state: string; [key: string]: unknown } }[] }> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/workers/conversations");
+  return response.json() as Promise<{ workers: { worker_id: string; name: string; freshness: { state: string; [key: string]: unknown } }[] }>;
+}

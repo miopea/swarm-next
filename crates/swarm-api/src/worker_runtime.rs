@@ -309,6 +309,141 @@ fn expand_home_against(workspace: &str, home: &Path) -> String {
     }
 }
 
+/// Whether the conversation Swarm would resume is still the newest one.
+///
+/// SWARM PINS A CONVERSATION ID AND NEVER LEARNS WHEN THE REAL ONE MOVES.
+/// `assign_provider_conversation` sets it once, and `repoint_provider_conversation`
+/// is only ever called by an operator. So when somebody resumes a different
+/// conversation inside the session — which is exactly what an operator does to
+/// recover a thread — Swarm does not find out, and the next start drops the
+/// worker back into the older one. That silently regresses a worker's state.
+///
+/// Measured across this Hive on 2026-09-02: of 39 Claude workers, 3 were
+/// pinned to a conversation that was no longer the newest for their workspace.
+/// The worst was 6 hours 34 minutes behind.
+///
+/// NOT USED TO SWITCH AUTOMATICALLY. The operator declined that: picking the
+/// newest on their behalf is a guess about which thread they wanted, and a
+/// wrong guess is the same regression from the other direction. This only
+/// reports, including reporting that it cannot tell — "we need a way to notify
+/// if we don't know" were their words, and an unknown that reads as fine is the
+/// failure this whole Hive keeps rediscovering.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub(crate) enum ConversationFreshness {
+    /// The pinned conversation is the newest for this workspace.
+    Current,
+    /// A newer conversation exists, so a start would resume an older thread.
+    Stale {
+        newest_conversation: String,
+        pinned_last_entry: Option<String>,
+        newest_last_entry: String,
+    },
+    /// Swarm cannot establish which is newest. Reported, never assumed fine.
+    Unknown { reason: String },
+}
+
+/// The last entry timestamp in a transcript, read from its tail.
+///
+/// Tail-read rather than parsed whole: these run to megabytes and there are
+/// dozens. Modification time is NOT usable as the recency signal — Claude
+/// rewrites cost-state into old transcripts at startup, so two conversations
+/// that last spoke hours apart can share an mtime to the second. Measured on
+/// 2026-09-02: Scout's pinned and newest transcripts both showed 11:57 while
+/// their last real entries were 00:57 and 02:13.
+fn last_entry_timestamp(path: &Path) -> Option<String> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    const TAIL: u64 = 256 * 1024;
+    let mut file = std::fs::File::open(path).ok()?;
+    let length = file.metadata().ok()?.len();
+    let start = length.saturating_sub(TAIL);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut tail = String::new();
+    file.take(TAIL).read_to_string(&mut tail).ok()?;
+    // The last well-formed timestamp wins. A partial first line from seeking
+    // mid-file is simply skipped rather than guessed at.
+    tail.lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter_map(|entry| {
+            entry
+                .get("timestamp")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .next_back()
+}
+
+pub(crate) fn conversation_freshness(
+    profile: &WorkerProfile,
+    projects_root: &Path,
+    home: &Path,
+) -> ConversationFreshness {
+    if profile.provider != ProviderKind::ClaudeCode {
+        return ConversationFreshness::Current;
+    }
+    let Some(pinned) = profile.provider_conversation_id else {
+        // No pin means `--continue`, which takes the newest by definition.
+        return ConversationFreshness::Current;
+    };
+    let workspace = expand_home_against(&profile.workspace, home);
+    // The same encoding the resume-history lookup uses, including the older
+    // slash-only form, so this reads the directory Claude actually writes.
+    let candidates = [
+        workspace.replace(['/', '.'], "-"),
+        workspace.replace('/', "-"),
+    ];
+    let Some(directory) = candidates
+        .iter()
+        .map(|slug| projects_root.join(slug))
+        .find(|path| path.is_dir())
+    else {
+        return ConversationFreshness::Unknown {
+            reason: "no Claude project directory exists for this workspace".to_owned(),
+        };
+    };
+    let Ok(entries) = std::fs::read_dir(&directory) else {
+        return ConversationFreshness::Unknown {
+            reason: "the Claude project directory could not be read".to_owned(),
+        };
+    };
+    let mut newest: Option<(String, String)> = None;
+    let mut pinned_last: Option<String> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let Some(timestamp) = last_entry_timestamp(&path) else {
+            continue;
+        };
+        if id == pinned.to_string() {
+            pinned_last = Some(timestamp.clone());
+        }
+        if newest
+            .as_ref()
+            .is_none_or(|(_, best)| timestamp.as_str() > best.as_str())
+        {
+            newest = Some((id.to_owned(), timestamp));
+        }
+    }
+    let Some((newest_id, newest_timestamp)) = newest else {
+        return ConversationFreshness::Unknown {
+            reason: "no conversation in this workspace carries a readable entry".to_owned(),
+        };
+    };
+    if newest_id == pinned.to_string() {
+        return ConversationFreshness::Current;
+    }
+    ConversationFreshness::Stale {
+        newest_conversation: newest_id,
+        pinned_last_entry: pinned_last,
+        newest_last_entry: newest_timestamp,
+    }
+}
+
 fn ensure_claude_resume_history_between(
     workspace: &str,
     conversation_id: &str,
@@ -652,6 +787,118 @@ mod tests {
                 .join(workspace.replace(['/', '.'], "-"))
                 .join(format!("{conversation}.jsonl"))
                 .is_file()
+        );
+    }
+
+    /// Writes a transcript whose LAST entry carries `last`, and whose mtime is
+    /// deliberately touched afterwards so a check keying on modification time
+    /// would get the wrong answer.
+    fn transcript(directory: &Path, id: &str, last: &str) {
+        std::fs::create_dir_all(directory).unwrap();
+        let body = format!(
+            "{{\"type\":\"user\",\"timestamp\":\"2026-01-01T00:00:00.000Z\"}}\n\
+             {{\"type\":\"assistant\",\"timestamp\":\"{last}\"}}\n\
+             {{\"type\":\"cost-state\",\"sessionId\":\"{id}\"}}\n"
+        );
+        std::fs::write(directory.join(format!("{id}.jsonl")), body).unwrap();
+    }
+
+    /// THE PINNED CONVERSATION GOING STALE IS THE DEFECT, and it regresses a
+    /// worker's state silently: Swarm resumes an older thread and nothing says
+    /// so. Measured on the operator's Hive 2026-09-02, 3 of 39 Claude workers
+    /// were in this position, the worst 6h34m behind.
+    #[test]
+    fn a_pinned_conversation_that_is_not_the_newest_is_reported_stale() {
+        let home = tempfile::tempdir().unwrap();
+        let workspace = home.path().join("projects/scout");
+        let projects = home.path().join(".claude/projects");
+        let slug = workspace.to_string_lossy().replace(['/', '.'], "-");
+        transcript(
+            &projects.join(&slug),
+            "11111111-1111-4111-8111-111111111111",
+            "2026-09-02T00:57:40.565Z",
+        );
+        transcript(
+            &projects.join(&slug),
+            "22222222-2222-4222-8222-222222222222",
+            "2026-09-02T02:13:26.742Z",
+        );
+
+        let profile = worker_profile(
+            &workspace,
+            Some("11111111-1111-4111-8111-111111111111"),
+            true,
+        );
+        let freshness = conversation_freshness(&profile, &projects, home.path());
+
+        match freshness {
+            ConversationFreshness::Stale {
+                newest_conversation,
+                newest_last_entry,
+                pinned_last_entry,
+            } => {
+                assert_eq!(newest_conversation, "22222222-2222-4222-8222-222222222222");
+                assert_eq!(newest_last_entry, "2026-09-02T02:13:26.742Z");
+                assert_eq!(
+                    pinned_last_entry.as_deref(),
+                    Some("2026-09-02T00:57:40.565Z"),
+                    "the pinned thread's own last entry is reported, so the gap is legible"
+                );
+            }
+            other => panic!("expected stale, got {other:?}"),
+        }
+    }
+
+    /// And the newest being the pinned one is not reported as a problem.
+    #[test]
+    fn a_pinned_conversation_that_is_the_newest_is_current() {
+        let home = tempfile::tempdir().unwrap();
+        let workspace = home.path().join("projects/scout");
+        let projects = home.path().join(".claude/projects");
+        let slug = workspace.to_string_lossy().replace(['/', '.'], "-");
+        transcript(
+            &projects.join(&slug),
+            "11111111-1111-4111-8111-111111111111",
+            "2026-09-02T09:00:00.000Z",
+        );
+        transcript(
+            &projects.join(&slug),
+            "22222222-2222-4222-8222-222222222222",
+            "2026-09-02T02:13:26.742Z",
+        );
+
+        let profile = worker_profile(
+            &workspace,
+            Some("11111111-1111-4111-8111-111111111111"),
+            true,
+        );
+        assert_eq!(
+            conversation_freshness(&profile, &projects, home.path()),
+            ConversationFreshness::Current
+        );
+    }
+
+    /// NOT KNOWING MUST NOT READ AS FINE. The operator's own requirement: "We
+    /// need a way to notify if we don't know." A worker whose transcripts are
+    /// missing is exactly the case where Swarm would otherwise resume something
+    /// and say nothing.
+    #[test]
+    fn a_workspace_with_no_transcripts_is_reported_unknown_rather_than_current() {
+        let home = tempfile::tempdir().unwrap();
+        let workspace = home.path().join("projects/never-ran");
+        let projects = home.path().join(".claude/projects");
+        std::fs::create_dir_all(&projects).unwrap();
+
+        let profile = worker_profile(
+            &workspace,
+            Some("11111111-1111-4111-8111-111111111111"),
+            true,
+        );
+        let freshness = conversation_freshness(&profile, &projects, home.path());
+
+        assert!(
+            matches!(freshness, ConversationFreshness::Unknown { .. }),
+            "an unknown reported as Current is the failure this exists to prevent: {freshness:?}"
         );
     }
 

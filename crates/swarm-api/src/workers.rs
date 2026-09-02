@@ -338,6 +338,45 @@ pub(super) async fn broadcast_to_workers(
     .into_response())
 }
 
+/// Which workers would resume a conversation that is no longer the newest, and
+/// which ones Swarm cannot tell about.
+///
+/// Both are reported. An unknown that reads as healthy is the failure this Hive
+/// keeps rediscovering, and the operator asked for it explicitly: "We need a
+/// way to notify if we don't know."
+pub(super) async fn conversation_freshness(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let profiles = task_store(&state)?
+        .list_worker_profiles()
+        .map_err(|error| task_store_error(&error))?;
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return Err(ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "home_not_set",
+            "HOME is not set, so Claude's transcripts cannot be located",
+        ));
+    };
+    let projects = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map_or_else(|| home.join(".claude"), PathBuf::from)
+        .join("projects");
+    let workers = profiles
+        .iter()
+        .map(|profile| {
+            serde_json::json!({
+                "worker_id": profile.id.to_string(),
+                "name": profile.name,
+                "freshness": crate::worker_runtime::conversation_freshness(
+                    profile, &projects, &home,
+                ),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(serde_json::json!({ "workers": workers })).into_response())
+}
+
 pub(super) async fn create_worker(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

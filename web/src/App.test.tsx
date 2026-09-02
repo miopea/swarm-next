@@ -880,6 +880,12 @@ test("creates a persisted task draft from the task board", async () => {
     if (String(url).includes("/api/v1/tasks/settled")) {
       return Promise.resolve(ok([]));
     }
+    // Conversation freshness reads Claude's transcripts, outside the control
+    // room snapshot. Named for the same reason as the routes above: the queue
+    // is consumed in call order.
+    if (String(url).includes("/api/v1/workers/conversations")) {
+      return Promise.resolve(ok({ workers: [] }));
+    }
     const response = responses.shift();
     if (!response) throw new Error(`Unexpected request: ${String(url)}`);
     return Promise.resolve(response);

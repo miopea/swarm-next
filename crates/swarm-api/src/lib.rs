@@ -3758,6 +3758,10 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/workers/broadcast",
             post(workers::broadcast_to_workers),
         )
+        .route(
+            "/api/v1/workers/conversations",
+            get(workers::conversation_freshness),
+        )
         .route("/api/v1/providers", get(provider_activity::capabilities))
         .route("/api/v1/integrations/jira/readiness", get(jira_readiness))
         .route(

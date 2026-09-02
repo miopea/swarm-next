@@ -1,5 +1,6 @@
 import { isClosedTaskState, isOpenTaskState } from "./api/tasks";
 import BroadcastToWorkers from "./workers/BroadcastToWorkers";
+import ConversationDriftCard, { type WorkerConversation } from "./workers/ConversationDriftCard";
 import PublicAddressWarning from "./PublicAddressWarning";
 import StaleBundleNotice from "./StaleBundleNotice";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
@@ -43,6 +44,7 @@ import {
   fetchTaskActivity,
   fetchSettledTasks,
   broadcastToWorkers,
+  fetchWorkerConversations,
   fetchRecentTaskActivity,
   fetchJiraComments,
   addJiraComment,
@@ -413,6 +415,26 @@ export function App() {
   const workerRail = useWorkerRailWidth();
   const [decisionFocus, setDecisionFocus] = useState<{ id: string; request: number }>();
   const [showBroadcast, setShowBroadcast] = useState(false);
+  /**
+   * Whether each worker's pinned conversation is still the newest one.
+   *
+   * Checked from the filesystem rather than the board, because the drift is a
+   * fact about Claude's transcripts that Swarm never observes: it pins an id at
+   * creation and only an operator ever repoints it.
+   */
+  const [workerConversations, setWorkerConversations] = useState<WorkerConversation[]>([]);
+  useEffect(() => {
+    if (!operatorToken) { setWorkerConversations([]); return; }
+    let current = true;
+    const load = () => void fetchWorkerConversations(operatorToken)
+      .then((page) => { if (current && Array.isArray(page.workers)) setWorkerConversations(page.workers as WorkerConversation[]); })
+      .catch(() => undefined);
+    load();
+    // Reading transcripts is filesystem work, so this is deliberately slow:
+    // conversations drift when somebody resumes one by hand, not by the second.
+    const interval = window.setInterval(load, 120_000);
+    return () => { current = false; window.clearInterval(interval); };
+  }, [operatorToken, workers.length]);
   const [operationError, setOperationError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState<string>();
@@ -2253,6 +2275,7 @@ export function App() {
               attentionCards={<>
                 <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onReviseReply={reviseAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
+                <ConversationDriftCard workers={workerConversations} onOpenWorker={openWorker} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
                 <BlockedEscalationCard escalations={blockedEscalations} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <UnsettledReviewCard waiting={unsettledReview} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />

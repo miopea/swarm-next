@@ -31,6 +31,7 @@ export {
   draftWorkerDescription,
   fetchWorkerRepository,
   fetchWorkers,
+  fetchWorkerConversations,
   broadcastToWorkers,
   fetchWorkspaces,
   adoptWorker,

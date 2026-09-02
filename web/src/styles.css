@@ -2793,3 +2793,12 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
    changed tool surface is yes while the engine status says no. */
 .force-worker-reload { display: grid; gap: 6px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .force-worker-reload small { color: var(--muted); font-size: .7rem; line-height: 1.4; }
+
+/* Worker conversation drift. Two lists in one card: threads Swarm would resume
+   that are not the newest, and workers it could not check at all. The second is
+   there because an unknown that reads as healthy is the failure it prevents. */
+.conversation-drift ul { display: grid; gap: 8px; margin: 8px 0 0; padding: 0; list-style: none; }
+.conversation-drift li { display: grid; gap: 2px; }
+.conversation-drift li button { justify-self: start; padding: 0; border: 0; background: none; color: var(--accent); font: inherit; font-weight: 650; cursor: pointer; }
+.conversation-drift li small { color: var(--muted); font-size: .7rem; line-height: 1.4; }
+.conversation-drift-unknown { margin-top: 12px; }
