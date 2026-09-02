@@ -1501,19 +1501,37 @@ impl AgentMcp {
             .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
         let worker_id = WorkerId::from_str(&input.worker_id)
             .map_err(|_| ApplicationError::MalformedIdentifier("worker id"))?;
+        let recipient = swarm_persistence::MessageEnd::worker(worker_id);
         let message = self.tasks.store().send_task_message(
             task_id,
             swarm_persistence::MessageEnd::queen(),
-            swarm_persistence::MessageEnd::worker(worker_id),
+            recipient,
             &input.body,
             now_seconds(),
         )?;
         self.changed.notify_waiters();
+        // THIS USED TO RETURN A HARDCODED `delivered: false`.
+        //
+        // It reads as a live status and is a constant — it is false for every
+        // message, including one delivered a second later, and it never changes
+        // because the response is built once and never revisited. Queen relied
+        // on it and reported three messages as having "sat undelivered for
+        // 20-45 minutes"; two of the three had in fact been delivered within
+        // one second, twenty minutes before she filed. A field whose only job
+        // is to be trusted must not fail to a constant.
+        //
+        // So the response says what it actually knows — that the message is
+        // queued — and names the one place the answer is live.
+        let reachable = self.tasks.store().recipient_has_open_session(recipient)?;
         structured(json!({
             "message_id": message.id,
             "task_id": input.task_id,
-            "delivered": false,
-            "next": "Recorded on the task and waiting. It reaches that worker when its terminal is next resting, so it will not interrupt a turn in progress.",
+            "status": if reachable { "queued" } else { "queued_but_unreachable" },
+            "next": if reachable {
+                "Queued, NOT delivered — this returns before delivery, so it is never delivered at this point. It reaches that worker when its terminal is next resting, rather than interrupting a turn. To find out whether it landed, read swarm_read_task_history: the message carries a delivered_at once it arrives, and that is the only live answer."
+            } else {
+                "Recorded, and NOTHING CAN DELIVER IT. That worker has no open session, so it is excluded from delivery outright rather than waiting in a queue — it will not arrive late, it will not arrive at all until a session starts. Start that worker, or reach them another way."
+            },
         }))
     }
 
@@ -1573,10 +1591,22 @@ impl AgentMcp {
             now_seconds(),
         )?;
         self.changed.notify_waiters();
+        // The reply direction has the same silent-exclusion case as the
+        // outbound one: no open Queen session means the dispatch query never
+        // sees this message, and it waits rather than arriving late.
+        let reachable = self
+            .tasks
+            .store()
+            .recipient_has_open_session(swarm_persistence::MessageEnd::queen())?;
         structured(json!({
             "message_id": message.id,
             "task_id": input.task_id,
-            "next": "Recorded on the task. Queen sees it on her next run; it does not interrupt her.",
+            "status": if reachable { "queued" } else { "queued_but_unreachable" },
+            "next": if reachable {
+                "Queued, NOT delivered — this returns before delivery. Queen sees it when her terminal is next resting; it does not interrupt her. Delivery shows up as a delivered_at on the message in swarm_read_task_history."
+            } else {
+                "Recorded, and NOTHING CAN DELIVER IT: no Queen session is open, so it is excluded from delivery rather than queued behind a busy terminal. It waits until one starts."
+            },
         }))
     }
 
@@ -2772,7 +2802,7 @@ fn now_seconds() -> i64 {
 fn message_worker_tool() -> Tool {
     tool(
         "swarm_message_worker",
-        "Queen only: ask a worker a question about a task, or tell it what is missing, WITHOUT interrupting it. The message waits until that worker's terminal is resting and then arrives there, so it cannot land mid-turn and take the thread with it. The exchange is recorded on the task and readable with swarm_read_task_history, so a later reader can see why the work changed direction. Use it instead of moving a task backwards to get a worker's attention: returning reviewed work to Ready means UNSTARTED to everything that reads it. Workers cannot message each other and this cannot be used to relay an instruction between them.",
+        "Queen only: ask a worker a question about a task, or tell it what is missing, WITHOUT interrupting it. The message waits until that worker's terminal is resting and then arrives there, so it cannot land mid-turn and take the thread with it. The exchange is recorded on the task AT THE MOMENT YOU SEND IT, and readable with swarm_read_task_history straight away, so a later reader can see why the work changed direction — it appears under `messages`, NOT under `events`, because a message is not a state change, and no amount of reading `events` will ever show one. The reply this call returns is a snapshot taken before delivery: it reports the message as queued because it always is at that instant, and it never updates. Delivery shows as a `delivered_at` on the message in swarm_read_task_history, which is the only live answer. Use it instead of moving a task backwards to get a worker's attention: returning reviewed work to Ready means UNSTARTED to everything that reads it. Workers cannot message each other and this cannot be used to relay an instruction between them.",
         &json!({
             "type": "object",
             "properties": {

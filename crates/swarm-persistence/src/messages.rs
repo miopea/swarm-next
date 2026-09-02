@@ -74,6 +74,12 @@ impl MessageEnd {
             worker_id: Some(worker_id),
         }
     }
+
+    /// The worker this end names, or `None` when it is the Queen office.
+    #[must_use]
+    pub const fn worker_id(self) -> Option<WorkerId> {
+        self.worker_id
+    }
 }
 
 /// One message in a task's exchange.
@@ -321,6 +327,46 @@ impl TaskStore {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(dispatches)
     }
+
+    /// Whether anything could deliver a message to this recipient right now.
+    ///
+    /// `pending_task_message_dispatches` joins `worker_sessions` on
+    /// `ended_at IS NULL`, so a message to a recipient with no open session is
+    /// not merely slow — it is excluded from the dispatch query outright and
+    /// waits for a session that may never start. Nothing surfaces that: the
+    /// message sits with `delivered_at` null, which looks identical to one
+    /// queued behind a busy terminal.
+    ///
+    /// So the sender is told at the moment of sending, which is the only point
+    /// where they can still choose another route.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TaskStoreError`] if the database cannot be read.
+    pub fn recipient_has_open_session(
+        &self,
+        recipient: MessageEnd,
+    ) -> Result<bool, TaskStoreError> {
+        let connection = self.connection()?;
+        // Queen is matched by ROLE for the same reason the dispatch query does
+        // it: a message to Queen is addressed to the office, not to an id.
+        let open: i64 = match recipient.worker_id() {
+            Some(worker) => connection.query_row(
+                "SELECT COUNT(*) FROM worker_sessions
+                 WHERE worker_id = ?1 AND ended_at IS NULL",
+                [worker.to_string()],
+                |row| row.get(0),
+            )?,
+            None => connection.query_row(
+                "SELECT COUNT(*) FROM worker_sessions session
+                 JOIN worker_profiles worker ON worker.id = session.worker_id
+                 WHERE worker.role = 'queen' AND session.ended_at IS NULL",
+                [],
+                |row| row.get(0),
+            )?,
+        };
+        Ok(open > 0)
+    }
 }
 
 fn message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskMessage> {
@@ -387,6 +433,69 @@ mod tests {
         assert!(
             store.task_messages(task).unwrap().is_empty(),
             "and nothing is recorded, so a refusal cannot be read later as an exchange"
+        );
+    }
+
+    /// THE SENDER'S STATUS MUST NOT BE A CONSTANT.
+    ///
+    /// `swarm_message_worker` used to answer with a hardcoded `delivered:
+    /// false`. It reads as a live status and was the same value for every
+    /// message ever sent, including ones delivered a second later. Queen relied
+    /// on it and reported three messages as having sat undelivered for 20-45
+    /// minutes; two had been delivered within one second, twenty minutes before
+    /// she filed the report.
+    ///
+    /// The distinction the sender actually needs is not delivered-or-not — the
+    /// answer to that is always "not" at send time — but whether anything CAN
+    /// deliver it. A recipient with no open session is excluded from
+    /// `pending_task_message_dispatches` outright, so its message does not
+    /// arrive late, it does not arrive at all.
+    #[test]
+    fn a_recipient_with_no_session_is_distinguishable_from_a_busy_one() {
+        let (store, _task, worker) = hive();
+
+        assert!(
+            !store
+                .recipient_has_open_session(MessageEnd::worker(worker))
+                .unwrap(),
+            "a worker with no session cannot be delivered to, and saying `queued` would be a lie"
+        );
+
+        store
+            .bind_worker_session(worker, WorkerSessionId::new())
+            .unwrap();
+
+        assert!(
+            store
+                .recipient_has_open_session(MessageEnd::worker(worker))
+                .unwrap(),
+            "and once a session exists the same call must say so, or it is a constant again"
+        );
+    }
+
+    /// Queen is reachable by ROLE, not by an id, exactly as delivery resolves
+    /// her — otherwise the reply direction would report unreachable forever.
+    #[test]
+    fn queen_is_reachable_through_whoever_holds_the_role() {
+        let (store, _task, _worker) = hive();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+
+        assert!(
+            !store
+                .recipient_has_open_session(MessageEnd::queen())
+                .unwrap(),
+            "no queen session means a worker's reply cannot be delivered"
+        );
+
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+
+        assert!(
+            store
+                .recipient_has_open_session(MessageEnd::queen())
+                .unwrap(),
+            "a message to Queen is addressed to the office, so any queen session makes it reachable"
         );
     }
 
