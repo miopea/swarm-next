@@ -97,3 +97,5 @@ Current decision records:
 39. [Checks that measure the wrong thing](40-checks-that-measure-the-wrong-thing.md)
 40. [Verification without clicking](41-verification-without-clicking.md)
 41. [Steering a task already described](42-steering-a-task-already-described.md)
+42. [Making the Queen work](43-making-the-queen-work.md)
+43. [No transition that is true](44-no-transition-that-is-true.md)
