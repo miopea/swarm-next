@@ -186,11 +186,19 @@ test("reads worker state as a scale rather than a palette", () => {
 });
 
 test("moves only the worker state that is actually doing something", () => {
-  expect(stylesheet).toContain(
-    ".worker-row.worker-state-buzzing .presence { animation: worker-buzz 1.8s ease-in-out infinite; }",
-  );
+  // ON A PSEUDO-ELEMENT SINCE 2026-09-02, and that is the point rather than a
+  // detail. The rule animated `box-shadow` on the dot itself, which is not a
+  // composited property, so every buzzing row repainted sixty times a second for
+  // as long as the tab was open — measured by the operator at 15% CPU in Edge.
+  // The ring is now its own element moved by transform and opacity, which the
+  // compositor handles without painting. compositedAnimations.test.ts enforces
+  // that for every looping animation; this asserts the pulse still exists.
+  expect(stylesheet).toContain(".worker-row.worker-state-buzzing .presence::after {");
+  expect(stylesheet).toContain("animation: worker-buzz 1.8s ease-in-out infinite;");
   // Motion is never the only signal, and never forced on someone who asked for less.
-  expect(stylesheet).toContain(".worker-row.worker-state-buzzing .presence { animation: none; }");
+  expect(stylesheet).toContain(
+    ".worker-row.worker-state-buzzing .presence::after { animation: none; }",
+  );
 });
 
 test("separates a working worker from a resting one by more than a shade", () => {

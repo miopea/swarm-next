@@ -409,10 +409,25 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
    read by someone who does not distinguish the two. */
 .worker-row.worker-state-sleeping .presence { background: transparent; box-shadow: inset 0 0 0 2px var(--worker-state); }
 /* Only the state that is actually doing something moves. */
-.worker-row.worker-state-buzzing .presence { animation: worker-buzz 1.8s ease-in-out infinite; }
+.worker-row.worker-state-buzzing .presence { position: relative; }
+.worker-row.worker-state-buzzing .presence::after {
+  content: ""; position: absolute; inset: -3px; border-radius: 50%;
+  background: color-mix(in srgb, var(--worker-state) 26%, transparent);
+  animation: worker-buzz 1.8s ease-in-out infinite;
+  will-change: transform, opacity; pointer-events: none;
+}
+/* THE RING IS DRAWN ONCE AND SCALED, NOT REPAINTED EVERY FRAME.
+   This animated `box-shadow` until 2026-09-02. box-shadow is not a composited
+   property, so each of the 60 frames a second forced a repaint of the row — on
+   every buzzing worker at once, on the default view, for as long as the tab was
+   open. The operator measured the result: "typically running 15% CPU in Edge,
+   which no website ever does."
+   transform and opacity are handled by the compositor, so the same pulse now
+   costs no paint at all. The ring lives on a pseudo-element because the dot
+   itself carries a static box-shadow that should not move. */
 @keyframes worker-buzz {
-  0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--worker-state) 14%, transparent); }
-  50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--worker-state) 26%, transparent); }
+  0%, 100% { opacity: .45; transform: scale(1); }
+  50% { opacity: .85; transform: scale(1.9); }
 }
 /* Waiting on the operator is the one state the roster should be able to find at
    a glance, so it carries weight as well as hue. */
@@ -2623,7 +2638,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .maintenance-progress span { color: var(--muted); font-size: .75rem; line-height: 1.45; }
 .maintenance-spinner { width: .9rem; height: .9rem; flex: 0 0 auto; margin-top: .12rem; border: 2px solid color-mix(in srgb, var(--honey) 30%, transparent); border-top-color: var(--honey-deep); border-radius: 50%; animation: maintenance-spin .8s linear infinite; }
 @keyframes maintenance-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .maintenance-spinner { animation: none; border-top-color: var(--honey-deep); } .runtime-update-spinner { animation: none; border-top-color: var(--accent-strong); } .worker-row.worker-state-buzzing .presence { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .maintenance-spinner { animation: none; border-top-color: var(--honey-deep); } .runtime-update-spinner { animation: none; border-top-color: var(--accent-strong); } .worker-row.worker-state-buzzing .presence::after { animation: none; } }
 
 /* The command a decision would allow.
    Set apart and monospaced because it is the thing being authorised, not
