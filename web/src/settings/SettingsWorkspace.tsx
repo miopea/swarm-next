@@ -80,12 +80,13 @@ type Props = {
   onReorderWorkers: (workerIds: string[]) => Promise<void>;
   onRestartProviders: () => Promise<void>;
   onUpdateWorkerEngine: () => Promise<void>;
+  onForceWorkerReload: () => Promise<void>;
   onReloadDevelopment: () => Promise<void>;
   onHiveIdentityChange: (identity: HiveIdentity) => void;
 };
 
 export default function SettingsWorkspace({ section, query = "", busy, workerEngineProgress, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, publicAddress, onPublicAddressChange, presence, startSurface, onStartSurfaceChange, onLock, providers, providerCapabilitiesUnavailable = false, lockDetectionState, notificationSettings, queenPolicy, pendingQueenDecisionCount = 0, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onOpenQueenDecisions, onOpenTasks, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker,
-  onChooseWorkerMark, onRemoveWorker, onReorderWorkers, onRestartProviders, onUpdateWorkerEngine, onReloadDevelopment, onHiveIdentityChange }: Props) {
+  onChooseWorkerMark, onRemoveWorker, onReorderWorkers, onRestartProviders, onUpdateWorkerEngine, onForceWorkerReload, onReloadDevelopment, onHiveIdentityChange }: Props) {
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
   const [terminalHostLoaded, setTerminalHostLoaded] = useState(false);
@@ -105,6 +106,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
   const [queenAutomationError, setQueenAutomationError] = useState<string>();
   const [coordinatorStatus, setCoordinatorStatus] = useState<CoordinatorStatus>();
   const [confirmMaintenance, setConfirmMaintenance] = useState(false);
+  const [confirmForceReload, setConfirmForceReload] = useState(false);
   const workspaceRef = useRef<HTMLDivElement>(null);
   // Choosing a section puts you at the top of it.
   //
@@ -506,6 +508,42 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
                   </div>
                 </div>
               )}</> : <><p>The installed worker engine is compatible with this App/API release. Running workers do not need to restart.</p><small>Claude and Codex processes remain attached to this engine across ordinary app and API reloads.</small></>}
+              {/* ALWAYS AVAILABLE, INCLUDING WHEN THE ENGINE IS CURRENT — that
+                  is the whole reason it exists. A worker caches its MCP tool
+                  list when it connects, so a change to the agent tool surface
+                  reaches nobody until the session reconnects, and nothing
+                  announces it: the card above correctly says the engine is
+                  current, because it is. On 2026-09-02 the API served tool
+                  surface revision 11 while all 13 live sessions still held
+                  revision 10, and the Hive looked entirely healthy.
+
+                  Deliberately NOT automatic. Ending every session is the act
+                  the operator has held repeatedly; a button is how they choose
+                  the moment. */}
+              <div className="force-worker-reload">
+                {confirmForceReload ? (
+                  <div className="maintenance-confirmation" role="group" aria-label="Confirm forced worker reload">
+                    <strong>Restart {activeWorkerCount} worker{activeWorkerCount === 1 ? "" : "s"} now?</strong>
+                    <span>Every live session ends and reconnects, which is what picks up a changed tool surface. Loaded workers come back from their saved conversations; identities, tasks and history are durable.</span>
+                    <div className="settings-actions">
+                      <button className="secondary-button" disabled={busy} onClick={() => setConfirmForceReload(false)}>Not now</button>
+                      <button className="primary-action" disabled={busy} onClick={() => { setConfirmForceReload(false); void onForceWorkerReload(); }}>Restart every worker</button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {/* NOT disabled on activeWorkerCount === 0. That count is
+                        terminalHostStatus.running_sessions, which is UNDEFINED
+                        until the host answers and falls to 0 — so disabling on
+                        it treats "I cannot tell yet" as "there is nothing to
+                        restart", which is the same shape as every other
+                        cannot-check-read-as-an-answer defect this Hive has
+                        chased. The confirmation states the count instead. */}
+                    <button className="secondary-button" disabled={busy} onClick={() => setConfirmForceReload(true)}>Force worker reload</button>
+                    <small>Reconnects every worker so a changed agent tool surface reaches them. Needed after an API update that adds or changes a tool, which the engine status above cannot show.</small>
+                  </>
+                )}
+              </div>
             </article>
             <DevelopmentReloadAction busy={busy} runtime={developmentRuntime} reachable={developmentReachable} healthVersion={health?.version} onReload={onReloadDevelopment} />
             <ReleaseUpdateAction busy={busy} operatorToken={operatorToken} />

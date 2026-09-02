@@ -110,6 +110,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
     onReorderWorkers: vi.fn().mockResolvedValue(undefined),
     onRestartProviders: vi.fn(),
     onUpdateWorkerEngine: onUpdateWorkerEngine,
+    onForceWorkerReload: vi.fn().mockResolvedValue(undefined),
     onReloadDevelopment: vi.fn().mockResolvedValue(undefined),
     onHiveIdentityChange: vi.fn(),
   };
@@ -587,7 +588,7 @@ function minimalProps() {
     hiveIdentity: { operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: null } },
     onThemeChange: vi.fn(), onPresenceChange: vi.fn(), onEnableLockDetection: vi.fn(), onNotificationPolicyChange: vi.fn(),
     onQueenPolicyChange: vi.fn(), onEnableNotifications: vi.fn(), onDisableNotifications: vi.fn(), onTestNotification: vi.fn(), onCreateWorker: vi.fn(), onUpdateWorker: vi.fn(),
-    onChooseWorkerMark: vi.fn(), onRemoveWorker: vi.fn(), onReorderWorkers: vi.fn(), onRestartProviders: vi.fn(), onUpdateWorkerEngine: vi.fn(), onReloadDevelopment: vi.fn(), onHiveIdentityChange: vi.fn(),
+    onChooseWorkerMark: vi.fn(), onRemoveWorker: vi.fn(), onReorderWorkers: vi.fn(), onRestartProviders: vi.fn(), onUpdateWorkerEngine: vi.fn(), onForceWorkerReload: vi.fn(), onReloadDevelopment: vi.fn(), onHiveIdentityChange: vi.fn(),
   startSurface: "tasks",
   onStartSurfaceChange: vi.fn(),
   onLock: vi.fn(),
@@ -643,4 +644,27 @@ test("keeps locking reachable without giving it a place in every header", () => 
   fireEvent.click(screen.getByRole("button", { name: "Lock" }));
 
   expect(onLock).toHaveBeenCalledOnce();
+});
+
+/**
+ * The engine card can be entirely correct and the workers still stale.
+ *
+ * A worker caches its MCP tool list at connect, so a changed agent tool surface
+ * reaches nobody until the session reconnects — and nothing announces it. On
+ * 2026-09-02 the API served tool surface revision 11 while all 13 live sessions
+ * held revision 10, the engine card said Current (truthfully), and the operator
+ * reasonably reported seeing no worker cycle pending. This control is the lever
+ * for that, so it must be present when the engine is current.
+ */
+test("offers a forced worker reload even when the worker engine is current", async () => {
+  const onForceWorkerReload = vi.fn().mockResolvedValue(undefined);
+  render(<SettingsWorkspace {...minimalProps()} section="settings-updates" onForceWorkerReload={onForceWorkerReload} />);
+
+  const open = await screen.findByRole("button", { name: "Force worker reload" });
+  fireEvent.click(open);
+
+  // It ends every live session, so it asks first rather than firing on a click.
+  expect(onForceWorkerReload).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Restart every worker" }));
+  expect(onForceWorkerReload).toHaveBeenCalledOnce();
 });

@@ -1841,6 +1841,22 @@ export async function requestDevelopmentReload(operatorToken: string): Promise<v
   await authenticatedFetch(operatorToken, "/api/v1/runtime/development/reload", { method: "POST" });
 }
 
+/**
+ * Restarts EVERY live worker session, whatever provider release it is on.
+ *
+ * The lever for staleness nothing announces: a worker caches its MCP tool list
+ * at connect, so a change to the agent tool surface reaches nobody until the
+ * session reconnects — while the engine card correctly reports the engine as
+ * current, because it is. restartSupersededWorkers cannot do this; it only
+ * touches sessions whose provider release has moved on.
+ *
+ * This ends every live session. It is never automatic.
+ */
+export async function restartAllWorkers(operatorToken: string): Promise<{ restarted_workers: number }> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/workers/restart", { method: "POST" });
+  return response.json() as Promise<{ restarted_workers: number }>;
+}
+
 export async function restartSupersededWorkers(operatorToken: string): Promise<{ restarted_workers: number }> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/providers/restart", { method: "POST" });
   return response.json() as Promise<{ restarted_workers: number }>;

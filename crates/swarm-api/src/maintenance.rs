@@ -153,6 +153,71 @@ pub(super) async fn restart_superseded_workers(
     Ok(Json(RestartWorkersResponse { restarted_workers }).into_response())
 }
 
+/// Restarts EVERY live worker session, whatever provider release it is on.
+///
+/// The operator's own lever, and it exists because one kind of staleness is
+/// invisible. A worker caches its MCP tool list when it connects, so a change
+/// to the agent tool surface reaches nobody until the session reconnects — and
+/// unlike a stale worker engine, nothing announces it: the engine card
+/// correctly says the engine is current, because it is. On 2026-09-02 the API
+/// began serving tool surface revision 11 while all 13 live sessions still held
+/// revision 10, and the Hive looked entirely healthy.
+///
+/// `restart_superseded_workers` cannot do this: it deliberately restarts only
+/// sessions whose PROVIDER release has moved on, so it does nothing when the
+/// providers are current and only the tool surface has changed.
+///
+/// This ENDS every live session on purpose. It is not offered automatically and
+/// never fires on its own — the operator has held that act repeatedly, and the
+/// point of a button is that they choose the moment.
+pub(super) async fn restart_all_workers(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let guard = state.worker_lifecycle.lock().await;
+    let store = task_store(&state)?;
+    let workers = store
+        .active_worker_sessions()
+        .map_err(|error| task_store_error(&error))?
+        .into_iter()
+        .map(|session| session.worker_id)
+        .collect::<Vec<_>>();
+    if workers.is_empty() {
+        return Ok(Json(RestartWorkersResponse {
+            restarted_workers: 0,
+        })
+        .into_response());
+    }
+    // Same order as the superseded path: intents first, so a worker that was
+    // loaded from a conversation comes back to it rather than starting cold.
+    store
+        .record_worker_revival_intents(&workers, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    for worker_id in &workers {
+        let Ok(profile) = store.get_worker_profile(*worker_id) else {
+            continue;
+        };
+        let Some(session_id) = profile.active_session_id else {
+            continue;
+        };
+        request_host(&state, HostRequest::Stop { session_id }).await?;
+        store
+            .release_worker_session(session_id)
+            .map_err(|error| task_store_error(&error))?;
+        store
+            .release_session_assignments(session_id)
+            .map_err(|error| task_store_error(&error))?;
+    }
+    state.control_room_notify.notify_waiters();
+    // Released before reviving: starting a worker takes this same mutex, and it
+    // is not reentrant.
+    drop(guard);
+    let restarted_workers = revive_loaded_workers(&state, &workers).await;
+    state.control_room_notify.notify_waiters();
+    Ok(Json(RestartWorkersResponse { restarted_workers }).into_response())
+}
+
 pub(super) async fn request_development_reload(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

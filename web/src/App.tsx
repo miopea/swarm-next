@@ -23,6 +23,7 @@ import {
   prepareEmailReply,
   updateEmailReplyDraft,
   restartSupersededWorkers,
+  restartAllWorkers,
   runQueenAutomation,
   type UnansweredEmailTask,
   type DecisionSurface,
@@ -411,6 +412,7 @@ export function App() {
   const [taskWorker, setTaskWorkerFilter] = useState("all");
   const workerRail = useWorkerRailWidth();
   const [decisionFocus, setDecisionFocus] = useState<{ id: string; request: number }>();
+  const [showBroadcast, setShowBroadcast] = useState(false);
   const [operationError, setOperationError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState<string>();
@@ -1210,6 +1212,23 @@ export function App() {
     await perform(async () => setStartSurface(await setStartSurfaceRequest(operatorToken, next)));
   }
 
+  /**
+   * Ends and reconnects every live worker session.
+   *
+   * The operator's lever for staleness nothing announces: a worker caches its
+   * MCP tool list at connect, so a changed agent tool surface reaches nobody
+   * until the session reconnects — while the engine card correctly reports the
+   * engine as current. restartProviders cannot do this; it only touches
+   * sessions whose provider release has moved on.
+   */
+  async function forceWorkerReload() {
+    if (!operatorToken) return;
+    await perform(async () => {
+      await restartAllWorkers(operatorToken);
+      await refreshControlRoom(true);
+    }, "Reconnecting every worker…");
+  }
+
   async function restartProviders() {
     if (!operatorToken) return;
     await perform(async () => {
@@ -1817,9 +1836,7 @@ export function App() {
                     </div>
                   ) : null}
                 </div>
-                {surface === "workers" && operatorToken ? (
-                  <BroadcastToWorkers onBroadcast={(body) => broadcastToWorkers(operatorToken, body)} />
-                ) : null}
+
                 {surface === "workers" && workers.length > 0 ? (
                   <div className="worker-search">
                     <label className="sr-only" htmlFor="worker-search">Find a worker by name, repository, or path</label>
@@ -2023,6 +2040,7 @@ export function App() {
                 state has to be carried by the label rather than by the text. */}
             {operatorToken && presence && <span className={`operator-presence-chip ${presence.mode}`} role="status" aria-label={`Operator presence: ${presenceModeLabel(presence.mode)}`} title={`Operator presence: ${presenceModeLabel(presence.mode)}`}><span className="state-dot" /><span>{presenceModeLabel(presence.mode)}</span></span>}
             {popoutBlocked && <span className="saving-state" role="alert">Your browser blocked the new window</span>}
+            {operatorToken && <button className="icon-button broadcast-button" aria-label="Tell every worker" title="Say one thing to every running worker" onClick={() => setShowBroadcast(true)}><BroadcastIcon /></button>}
             {operatorToken && <button className="icon-button feedback-button" aria-label="Report a problem" onClick={() => setShowFeedback(true)}><FeedbackIcon /></button>}
             {operatorToken && <button className="icon-button command-button" aria-label="Open quick navigation" onClick={() => setShowCommands(true)}><CommandIcon /></button>}
             <button className="icon-button theme-button" aria-label={`Switch to ${colorTheme === "light" ? "dark" : "light"} theme`} onClick={() => changeColorTheme(colorTheme === "light" ? "dark" : "light")}><ThemeIcon theme={colorTheme} /></button>
@@ -2173,6 +2191,13 @@ export function App() {
           </ShellModal>
         ) : null}
         {operatorToken && showCommands ? <CommandPalette choices={commandChoices} onClose={() => setShowCommands(false)} /> : null}
+        {operatorToken ? (
+          <BroadcastToWorkers
+            open={showBroadcast}
+            onClose={() => setShowBroadcast(false)}
+            onBroadcast={(body) => broadcastToWorkers(operatorToken, body)}
+          />
+        ) : null}
         {operatorToken && showFeedback ? (
           <DogfoodFeedbackDialog
             activeSessionId={activeSessionId}
@@ -2336,7 +2361,7 @@ export function App() {
               onChooseWorkerMark={chooseWorkerMark}
               onRemoveWorker={removeWorkerProfile}
               onReorderWorkers={reorderWorkerProfiles}
-              onRestartProviders={restartProviders}
+              onRestartProviders={restartProviders} onForceWorkerReload={forceWorkerReload}
               onUpdateWorkerEngine={maintainWorkerEngine}
               onReloadDevelopment={reloadDevelopmentBuild}
               onHiveIdentityChange={setHiveIdentity}
@@ -2404,6 +2429,7 @@ function rememberWorkerVisibility(visibility: WorkerVisibility) {
 
 function DecisionIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a7 7 0 0 0-7 7v3l-2 3h18l-2-3v-3a7 7 0 0 0-7-7ZM9 20h6"/></svg>; }
 function FeedbackIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4V5Z"/><path d="M12 8v4M12 14h.01"/></svg>; }
+function BroadcastIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l6 4V5L8 9H4Z"/><path d="M17.5 8.5a5 5 0 0 1 0 7"/></svg>; }
 function CommandIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4M8 11h6M11 8v6"/></svg>; }
 function requireActiveSession(worker: Worker): string {
   if (!worker.active_session_id) throw new Error(`${worker.name} did not receive a terminal session`);

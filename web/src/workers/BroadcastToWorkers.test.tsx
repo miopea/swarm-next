@@ -13,9 +13,8 @@ afterEach(cleanup);
  */
 test("says how many workers it could not reach", async () => {
   const onBroadcast = vi.fn().mockResolvedValue({ reached: 13, skipped: 32 });
-  render(<BroadcastToWorkers onBroadcast={onBroadcast} />);
+  render(<BroadcastToWorkers open onClose={vi.fn()} onBroadcast={onBroadcast} />);
 
-  fireEvent.click(screen.getByRole("button", { name: "Tell every worker" }));
   fireEvent.change(screen.getByLabelText("What to tell every running worker"), {
     target: { value: "reloading in five minutes" },
   });
@@ -31,8 +30,7 @@ test("says how many workers it could not reach", async () => {
 
 test("does not send an empty broadcast", () => {
   const onBroadcast = vi.fn();
-  render(<BroadcastToWorkers onBroadcast={onBroadcast} />);
-  fireEvent.click(screen.getByRole("button", { name: "Tell every worker" }));
+  render(<BroadcastToWorkers open onClose={vi.fn()} onBroadcast={onBroadcast} />);
   const send = screen.getByRole("button", { name: "Send to every worker" });
   expect(send).toBeDisabled();
   fireEvent.click(send);

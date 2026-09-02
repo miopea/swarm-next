@@ -2778,11 +2778,18 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
    can move it. Marked so it does not read as somebody failing to act. */
 .queue-group[data-owner="blocked"] { border-style: dashed; }
 
-/* Broadcast to every worker. Quiet by default — it is a rare, wide action, and
-   a permanently open textarea in the rail would read as somewhere to type. */
-.broadcast-open { width: 100%; margin-top: 8px; }
-.broadcast { display: grid; gap: 8px; margin-top: 8px; }
-.broadcast textarea { width: 100%; min-width: 0; resize: vertical; font: inherit; }
-.broadcast-actions { display: flex; gap: 8px; }
-.broadcast-result { margin: 0; color: var(--muted); font-size: .72rem; line-height: 1.4; }
-.broadcast-error { margin: 0; color: var(--bad); font-size: .72rem; line-height: 1.4; }
+/* Broadcast to every worker. A header icon and a modal, NOT a panel in the
+   rail: the first version put a full-width primary button above the worker
+   search and the operator's verdict was "This is a waste of the UI". Rare,
+   deliberate actions earn an icon, not permanent vertical space in a list. */
+.broadcast-modal { display: grid; gap: 12px; max-width: 520px; }
+.broadcast-modal textarea { width: 100%; min-width: 0; resize: vertical; font: inherit; }
+.broadcast-explainer { margin: 0; color: var(--muted); font-size: .78rem; line-height: 1.45; }
+.broadcast-result { margin: 0; color: var(--muted); font-size: .74rem; line-height: 1.45; }
+.broadcast-error { margin: 0; color: var(--bad); font-size: .74rem; line-height: 1.45; }
+
+/* Force worker reload. Sits under the engine status because that is where the
+   operator looks for "do my workers need restarting", and the answer for a
+   changed tool surface is yes while the engine status says no. */
+.force-worker-reload { display: grid; gap: 6px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.force-worker-reload small { color: var(--muted); font-size: .7rem; line-height: 1.4; }
