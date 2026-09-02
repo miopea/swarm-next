@@ -2802,3 +2802,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .conversation-drift li button { justify-self: start; padding: 0; border: 0; background: none; color: var(--accent); font: inherit; font-weight: 650; cursor: pointer; }
 .conversation-drift li small { color: var(--muted); font-size: .7rem; line-height: 1.4; }
 .conversation-drift-unknown { margin-top: 12px; }
+
+/* Stale or unconfirmed tool surface. Sits with the force-reload lever because
+   that is the only thing that fixes it — a reload does not, and it is not an
+   engine update, which is exactly how it was misread the day it was found. */
+.tool-surface-warning { margin: 0 0 8px; padding: 8px 10px; border-left: 3px solid var(--warn, #b06a00); border-radius: 4px; background: var(--warn-soft, rgba(176, 106, 0, .08)); color: var(--text); font-size: .72rem; line-height: 1.45; }

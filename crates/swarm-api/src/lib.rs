@@ -214,8 +214,16 @@ pub struct AppState {
     /// shipped an hour earlier and it was not there either. Anything keyed to
     /// "the worker's session" would miss half the population.
     ///
-    /// Not persisted: a session that ends takes its staleness with it, and a
-    /// restart of the API ends every session anyway.
+    /// Not persisted, and the second half of that sentence USED TO BE WRONG:
+    /// "a restart of the API ends every session anyway" is false, and it is
+    /// what made stale surfaces invisible. Terminal sessions live in a separate
+    /// host precisely so they survive an API restart — measured 2026-09-02, the
+    /// API restarted at 11:19 and 13 sessions started at 02:18 were still live.
+    ///
+    /// So after a restart this map is EMPTY while those sessions carry whatever
+    /// tool list the previous build served. A session missing from here is
+    /// therefore UNKNOWN, not current, and `tool_surface_status` reports it that
+    /// way rather than counting it as fine.
     agent_tool_surfaces: Arc<RwLock<HashMap<String, u32>>>,
     worker_recovery_attempts: Arc<RwLock<HashMap<WorkerId, i64>>>,
     provider_activity: Arc<RwLock<HashMap<WorkerSessionId, provider_activity::ProviderSignals>>>,
@@ -3641,6 +3649,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/runtime/providers/restart",
             post(maintenance::restart_superseded_workers),
+        )
+        .route(
+            "/api/v1/runtime/tool-surface",
+            get(maintenance::tool_surface_status),
         )
         .route(
             "/api/v1/runtime/workers/restart",

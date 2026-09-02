@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { SETTINGS_CARDS, filterSettingsCards, type SettingsSection } from "./settingsNavigation";
 
-import { downloadDatabaseBackup, draftWorkerDescription, fetchCoordinatorStatus, fetchEmailReadiness, fetchJiraReadiness, fetchQueenAutomationStatus, fetchTerminalHostStatus, improveWorkerDescription, runQueenAutomation, setQueenAutomationEnabled, type ControlRoomEvent, type CoordinatorStatus, type EmailReadiness, type Health, type HiveIdentity, type JiraReadiness, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type ProviderCapabilities, type ProviderKind, type QueenAutomationStatus, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type TerminalHostStatus, type Worker, type WorkspaceChoice } from "../api";
+import { downloadDatabaseBackup, draftWorkerDescription, fetchCoordinatorStatus, fetchEmailReadiness, fetchJiraReadiness, fetchQueenAutomationStatus, fetchTerminalHostStatus, fetchToolSurfaceStatus, improveWorkerDescription, runQueenAutomation, setQueenAutomationEnabled, type ControlRoomEvent, type CoordinatorStatus, type EmailReadiness, type Health, type HiveIdentity, type JiraReadiness, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type ProviderCapabilities, type ProviderKind, type QueenAutomationStatus, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type TerminalHostStatus, type Worker, type WorkspaceChoice } from "../api";
 import { downloadBlob } from "../shared/download";
 import type { ColorTheme } from "../brand/theme";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
@@ -107,6 +107,25 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
   const [coordinatorStatus, setCoordinatorStatus] = useState<CoordinatorStatus>();
   const [confirmMaintenance, setConfirmMaintenance] = useState(false);
   const [confirmForceReload, setConfirmForceReload] = useState(false);
+  /**
+   * Whether live sessions can call what this build serves.
+   *
+   * Read here rather than derived from anything on the board: a session caches
+   * its MCP tool list at connect and never asks again, so this is knowable only
+   * from what the API has been asked for since it started.
+   */
+  const [toolSurface, setToolSurface] = useState<{ serving_revision: number; live_sessions: number; current: number; stale: number; unknown: number }>();
+  useEffect(() => {
+    if (!operatorToken) return;
+    let current = true;
+    const load = () => void fetchToolSurfaceStatus(operatorToken)
+      .then((status) => { if (current) setToolSurface(status); })
+      .catch(() => undefined);
+    load();
+    const timer = window.setInterval(load, 30_000);
+    return () => { current = false; window.clearInterval(timer); };
+  }, [operatorToken]);
+  const surfaceUnreachable = (toolSurface?.stale ?? 0) + (toolSurface?.unknown ?? 0);
   const workspaceRef = useRef<HTMLDivElement>(null);
   // Choosing a section puts you at the top of it.
   //
@@ -521,6 +540,22 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
                   the operator has held repeatedly; a button is how they choose
                   the moment. */}
               <div className="force-worker-reload">
+                {/* STALE AND UNKNOWN ARE BOTH REPORTED, and unknown is not
+                    folded into healthy. A session that has not asked THIS build
+                    for its tools is not known to be fine — the record is in
+                    memory and an API restart empties it while the sessions
+                    survive. Saying "13 could not be confirmed" is the whole
+                    point; saying nothing is what happened before. */}
+                {surfaceUnreachable > 0 ? (
+                  <p className="tool-surface-warning" role="status">
+                    {toolSurface?.stale ? `${toolSurface.stale} session${toolSurface.stale === 1 ? "" : "s"} hold an older tool list` : null}
+                    {toolSurface?.stale && toolSurface?.unknown ? ", and " : null}
+                    {toolSurface?.unknown ? `${toolSurface.unknown} could not be confirmed` : null}
+                    {" "}against revision {toolSurface?.serving_revision}. They cannot use a tool
+                    added since they connected. Only a session restart fixes this — a reload does
+                    not, and it is not a worker engine update.
+                  </p>
+                ) : null}
                 {confirmForceReload ? (
                   <div className="maintenance-confirmation" role="group" aria-label="Confirm forced worker reload">
                     <strong>Restart {activeWorkerCount} worker{activeWorkerCount === 1 ? "" : "s"} now?</strong>

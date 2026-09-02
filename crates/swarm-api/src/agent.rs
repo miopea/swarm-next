@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-const AGENT_TOOL_SURFACE_REVISION: u32 = 11;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 11;
 
 /// The tool-surface revision has to move with the surface itself.
 ///

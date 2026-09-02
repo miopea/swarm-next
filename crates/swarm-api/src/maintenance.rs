@@ -153,6 +153,122 @@ pub(super) async fn restart_superseded_workers(
     Ok(Json(RestartWorkersResponse { restarted_workers }).into_response())
 }
 
+/// How many live sessions can actually call what this build serves.
+///
+/// THREE ANSWERS, NOT TWO, and the third is the one that was missing. A session
+/// caches its tool list when its MCP client connects and never asks again, so a
+/// changed tool surface reaches nobody until the session reconnects. The count
+/// that existed only compared RECORDED revisions — and the record is in memory,
+/// so an API restart empties it and every surviving session became invisible
+/// rather than unknown.
+///
+/// Measured 2026-09-02: the API restarted at 11:19 serving revision 11, 13
+/// sessions started at 02:18 were still live, and the stale count read zero.
+/// None of those sessions could pass `delivers_whole_task`, the field that had
+/// just shipped to stop a partial delivery closing a whole ticket.
+///
+/// The unconfirmed count is therefore reported separately and never folded into
+/// the current one.
+/// The operator's requirement was exactly this: "We need a way to notify if we
+/// don't know."
+pub(super) async fn tool_surface_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let sessions = task_store(&state)?
+        .active_worker_sessions()
+        .map_err(|error| task_store_error(&error))?;
+    let store = task_store(&state)?;
+    let recorded = state.agent_tool_surfaces.read().await;
+    let serving = crate::agent::AGENT_TOOL_SURFACE_REVISION;
+    let (mut matching, mut behind, mut unconfirmed) = (0_usize, 0_usize, 0_usize);
+    for session in &sessions {
+        // Keyed the way the agent surface records it: by SESSION, falling back
+        // to the worker id when a session is not yet bound.
+        let key = store
+            .get_worker_profile(session.worker_id)
+            .ok()
+            .and_then(|profile| profile.active_session_id)
+            .map_or_else(
+                || session.worker_id.to_string(),
+                |session_id| session_id.to_string(),
+            );
+        match classify_tool_surface(recorded.get(&key).copied(), serving) {
+            SessionToolSurface::Current => matching += 1,
+            SessionToolSurface::Stale => behind += 1,
+            // Never asked this build for its tools, so what it holds is not
+            // knowable from here. Counted as its own thing.
+            SessionToolSurface::Unknown => unconfirmed += 1,
+        }
+    }
+    Ok(Json(serde_json::json!({
+        "serving_revision": serving,
+        "live_sessions": sessions.len(),
+        "current": matching,
+        "stale": behind,
+        "unknown": unconfirmed,
+    }))
+    .into_response())
+}
+
+/// What one live session's cached tool list is, relative to what is served.
+///
+/// Three answers, and the third is the one that was missing. `None` recorded
+/// means this build has never served that session its tools, which is NOT the
+/// same as serving it the current ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionToolSurface {
+    Current,
+    Stale,
+    Unknown,
+}
+
+pub(crate) const fn classify_tool_surface(
+    recorded: Option<u32>,
+    serving: u32,
+) -> SessionToolSurface {
+    match recorded {
+        Some(revision) if revision == serving => SessionToolSurface::Current,
+        Some(_) => SessionToolSurface::Stale,
+        None => SessionToolSurface::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod tool_surface_tests {
+    use super::*;
+
+    /// A LIVE SESSION THIS BUILD HAS NEVER SERVED IS UNKNOWN, NOT CURRENT.
+    ///
+    /// The record is in memory, and the premise that justified that — "a restart
+    /// of the API ends every session anyway" — is false: terminal sessions live
+    /// in a separate host so they survive it. Measured 2026-09-02, the API
+    /// restarted at 11:19 and 13 sessions from 02:18 were still live holding the
+    /// previous tool list, while the stale count read zero.
+    ///
+    /// Counting those as current is the failure. The operator's requirement was
+    /// "We need a way to notify if we don't know."
+    #[test]
+    fn a_session_with_no_recorded_surface_is_unknown_rather_than_current() {
+        let serving = 11;
+        assert_eq!(
+            classify_tool_surface(Some(11), serving),
+            SessionToolSurface::Current
+        );
+        assert_eq!(
+            classify_tool_surface(Some(10), serving),
+            SessionToolSurface::Stale
+        );
+        assert_eq!(
+            classify_tool_surface(None, serving),
+            SessionToolSurface::Unknown,
+            "a session this build has never served is not known to be fine, and counting it as \
+             current is what made 13 stale sessions read as zero"
+        );
+    }
+}
+
 /// Restarts EVERY live worker session, whatever provider release it is on.
 ///
 /// The operator's own lever, and it exists because one kind of staleness is

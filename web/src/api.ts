@@ -1853,6 +1853,27 @@ export async function requestDevelopmentReload(operatorToken: string): Promise<v
  *
  * This ends every live session. It is never automatic.
  */
+/**
+ * How many live sessions can call what this build serves.
+ *
+ * `unknown` is its own number and must never be folded into `current`: a
+ * session that has not asked THIS build for its tools is not known to be fine,
+ * and the in-memory record is emptied by an API restart while the sessions
+ * themselves survive it.
+ */
+export async function fetchToolSurfaceStatus(operatorToken: string): Promise<{
+  serving_revision: number;
+  live_sessions: number;
+  current: number;
+  stale: number;
+  unknown: number;
+}> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/tool-surface");
+  return response.json() as Promise<{
+    serving_revision: number; live_sessions: number; current: number; stale: number; unknown: number;
+  }>;
+}
+
 export async function restartAllWorkers(operatorToken: string): Promise<{ restarted_workers: number }> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/workers/restart", { method: "POST" });
   return response.json() as Promise<{ restarted_workers: number }>;
