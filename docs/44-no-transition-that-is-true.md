@@ -52,13 +52,51 @@ instance 8* — and both were made by people fluent in this lifecycle.
 | # | Instance | Verdict after reading the code |
 | --- | --- | --- |
 | 1 | `awaiting_release` refuses Blocked and Review | **Partly a false belief.** `awaiting_release -> active` exists (`tasks.rs:90`) and always has |
-| 2 | Review refuses Blocked; nothing was true | Real, and the missing thing is an addressee, not a state |
+| 2 | Review refuses Blocked; nothing was true | Real, and **sharper than filed**: a worker in Review has exactly ONE legal move |
 | 3 | A no-deployment claim cannot be withdrawn | Real. `superseded_at` is only ever set by a deployment (`task_outcomes.rs:836`) |
 | 4 | The lifecycle description has no exit column | Real, **already fixed** in `e2c3adb` (`01a0635e`) |
 | 5 | A delivered message could not say which session took it | Real, **already fixed** in `9690c33`, schema 121 |
 | 6 | An undelivered message reads as no message | Real, and the fixable half is the sender's, not the recipient's |
-| 7 | A worker cannot undo its own pickup | Real. `Active -> Ready` is Queen's edge |
+| 7 | A worker cannot undo its own pickup | Real, **but not for the stated reason.** `Active -> Ready` exists for nobody |
 | 8 | Queen believed Blocked work could not be assigned | **False belief.** `assign_task` refuses only Completed (`lib.rs:2583`) |
+
+### The audit Queen asked for, after instance 1
+
+Queen flagged that she is the common author of the list, that instance 1 was an
+inference from two refused calls rather than a measurement, and that she did not
+know the rest were clean. She was right to, and **a third entry did not survive
+it — one this document had already repeated.**
+
+**Instance 7 says `Active -> Ready` "is Queen's edge". There is no such edge.**
+`can_transition_to` gives `Active -> Blocked | Review | Abandoned`
+(`tasks.rs:80`), and nothing anywhere maps `Active -> Ready`. The real route is
+`Active -> Blocked -> Ready`, and only the second hop is Queen's — because a
+worker may target `Active | Blocked | Review` and nothing else, not because the
+first hop is permission-gated.
+
+That is instance 1's failure inverted: there, a missing edge was inferred from
+two refusals; here, a **missing edge was described as a permission-gated one**.
+Both mistake a fact about the graph for a fact about authority, in opposite
+directions. It does not change what that worker needed and it does change the
+sentence this document used to justify the remedy, which is why it is corrected
+rather than absorbed.
+
+**Instance 2 survived and got sharper.** Review's exits are
+`Active | Ready | AwaitingRelease | Completed | Abandoned`. Intersect that with
+what a worker may target — `Active | Blocked | Review` — and **a worker sitting
+in Review has exactly one legal move, and it is `Active`.** The filing said no
+reachable state was true, which reads as five options all false. It was one
+option, and it was false. That is a stronger statement of the same defect.
+
+**Instance 3 survived, measured.** `superseded_at` is written in exactly one
+place, `let superseded_at = deployed.then_some(now)` (`task_outcomes.rs:836`).
+There is no withdrawal route for anyone, including the claim's author.
+
+**Instances 5 and 8 were already checked against the code**, and 6 is stated
+below as a position rather than a finding precisely because nobody has measured
+it. So the count stands at eight, and the tally of how they were established is:
+**four measured against code, two fixed and verified, one unmeasured and flagged
+as such, and three that carried a false premise** — 1, 7, and 8. Three of eight.
 
 Instance 1's correction is worth stating plainly because a real acceptance is
 standing on it: **`01a06316` was recoverable the whole time.** Queen tried
@@ -68,11 +106,16 @@ follow-up repeated that in writing — *"the one-way door stays"* — without
 opening the file. `awaiting_release -> active -> review` was available at every
 moment.
 
-So three of the eight are the same failure wearing different clothes: **an edge
-that exists, believed absent, by someone who had every reason to know.** That is
-what `01a0635e` fixes by generating the exit table from `can_transition_to`
-rather than describing it. It is not superseded by this document and it should
-land whatever happens to the rest.
+So three of the eight carried a false premise about the graph, in two
+directions: **1 and 8 are an edge that exists, believed absent; 7 is an edge
+that does not exist, believed present and permission-gated.** Every one was
+written by someone fluent in this lifecycle, and none of the three needed
+anything harder than opening `can_transition_to`.
+
+That is what `01a0635e` fixes, by generating the exit table from that function
+rather than describing it. It is not superseded by this document, and on this
+evidence it is the highest-value item here — three of eight instances would not
+have been written at all if the table had existed.
 
 ## The proposal
 
@@ -155,8 +198,11 @@ decides this item and it does not exist.
 - **Instance 5** — the delivery session. Already shipped in `9690c33`.
 - **Instance 7's underlying edge.** The addressee mechanism lets a worker say
   *"I picked this up in error, this is Queen's"* without moving the task, which
-  is what that worker needed. It does **not** give workers `Active -> Ready`.
-  That edge is Queen's deliberately, and nothing here argues it should not be.
+  is what that worker needed. It does **not** add `Active -> Ready`, which
+  exists for nobody today. Nothing here argues it should — the existing route is
+  `Active -> Blocked -> Ready`, and the worker's complaint was never that the
+  route was missing. It was that Blocked overstates the obstacle, which is a
+  complaint about what the state SAYS rather than about where it leads.
 - **Re-delivery of a message whose session has gone.** `01a06340` decided that
   NO, deliberately, recorded before the code, with a falsifier: how often senders
   re-send a stranded message by hand anyway. **This spec does not reopen it**,
