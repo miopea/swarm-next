@@ -1508,15 +1508,35 @@ export function App() {
   // The card carries the number itself, so the operator sees how much without
   // opening anything; the badge counts things to deal with, not rows.
   const unsettledReviewAttentionCount = unsettledReview.length > 0 ? 1 : 0;
+  // A WORKER ABOUT TO RESUME THE WRONG THREAD IS THE OPERATOR'S, AND ONLY
+  // THEIRS. ConversationDriftCard says so itself — "Swarm does not switch for
+  // you: which thread is the right one is a judgement about your work. Open the
+  // worker and resume the one you want." It rendered on Needs You and counted
+  // nothing, which is the same badge-disagrees-with-page defect fixed twice
+  // above for held deliveries and blocked escalations. Third instance.
+  const conversationDriftAttentionCount =
+    workerConversations.some((worker) => worker.freshness.state !== "current") ? 1 : 0;
   // blockedEscalationAttentionCount BELONGS HERE and was missing, which is the
   // same defect the paragraph above describes and fixes for held deliveries.
   // It was computed, passed to the inbox as additionalPendingCount, and left
   // out of the badge — so a blocked task old enough to escalate rendered its
   // card on the page while "Needs you" read 0. It also silenced the push for
   // it, because the watermark below only quiets sources the count knows about.
+  // ⚠️ unsettledReviewAttentionCount IS DELIBERATELY ABSENT, and so is its card.
+  // QueuesView's own docstring names it as the anti-pattern: "a card there
+  // reading 'N pieces of finished work are waiting on Queen' is Queen's backlog
+  // rendered in the operator's attention area, and it trains them to ignore the
+  // screen that matters." That surface exists and groups by who owes the next
+  // move, so the work is not hidden — it is filed under Waiting on Queen, which
+  // is what it is. The operator: "some of this is queue items not needs you
+  // items."
+  //
+  // blockedEscalationAttentionCount STAYS despite being Queen's to move, because
+  // the operator ruled on exactly that: decision 01a0418f, "Reach me after 12
+  // hours", verified at source. A stall that old is theirs by their own choice.
   const attentionCount = pendingDecisionCount + pendingAssistCount + queenAutomationAttentionCount
-    + heldDeliveryAttentionCount + blockedEscalationAttentionCount + unsettledReviewAttentionCount
-    + awaitingReply.length;
+    + heldDeliveryAttentionCount + blockedEscalationAttentionCount
+    + conversationDriftAttentionCount + awaitingReply.length;
   // WHEN THEY ACTUALLY LOOKED. The watermark this advances is the only thing
   // keeping push quiet now that every Needs-you source is eligible, so it is
   // recorded from the surface being open and visible — never from a poll.
@@ -2271,14 +2291,13 @@ export function App() {
               busy={busy}
               focusDecisionId={decisionFocus?.id}
               focusRequest={decisionFocus?.request}
-              additionalPendingCount={pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + blockedEscalationAttentionCount + unsettledReviewAttentionCount + awaitingReply.length}
+              additionalPendingCount={pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + blockedEscalationAttentionCount + conversationDriftAttentionCount + awaitingReply.length}
               attentionCards={<>
                 <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onReviseReply={reviseAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
                 <ConversationDriftCard workers={workerConversations} onOpenWorker={openWorker} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
                 <BlockedEscalationCard escalations={blockedEscalations} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
-                <UnsettledReviewCard waiting={unsettledReview} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <HeldDeliveryAttentionCard
                   held={heldDeliveries}
                   workerIsAwake={(name) => Boolean(workers.find((candidate) => candidate.name === name)?.active_session_id)}
@@ -2307,7 +2326,6 @@ export function App() {
               /* BELOW THE REQUESTS, not above them. Queued briefings say of
                  themselves that nothing is wrong; they were rendering ahead of
                  questions the operator has to answer before work continues. */
-              trailingCards={<HeldBriefingList briefings={heldBriefings} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />}
               onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }}
               onFetchActivity={() => fetchRecentTaskActivity(operatorToken)}
               onResolve={resolveInboxDecision}
@@ -2319,6 +2337,7 @@ export function App() {
             <QueuesView
               tasks={tasks}
               workers={workers}
+              heldBriefings={heldBriefings}
               onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }}
             />
           </Suspense>

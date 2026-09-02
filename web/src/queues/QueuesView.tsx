@@ -1,4 +1,6 @@
 import { useMemo } from "react";
+import HeldBriefingList from "../orchestration/HeldBriefingList";
+import type { HeldBriefing } from "../api";
 import type { NextMoveOwner, Task } from "../api/tasks";
 import { isOpenTaskState } from "../api/tasks";
 import type { Worker } from "../api/workers";
@@ -68,11 +70,23 @@ export default function QueuesView({
   tasks,
   workers,
   onOpenTask,
+  heldBriefings = [],
   now = Date.now(),
 }: {
   tasks: Task[];
   workers: Worker[];
   onOpenTask: (taskId: string) => void;
+  /**
+   * Briefings Swarm is holding until their worker is free.
+   *
+   * HERE RATHER THAN ON NEEDS YOU, which is this file's whole stated purpose.
+   * The card's own text is "Nothing is wrong with these — Swarm is holding them
+   * until the worker is free", and that sentence was being printed under a
+   * heading promising things that need the operator. It is a queue, so it is on
+   * the queues page. Not deleted: nothing else under web/src reads this, and
+   * losing it would trade one defect for a blind spot.
+   */
+  heldBriefings?: HeldBriefing[];
   now?: number;
 }) {
   const workerNames = useMemo(
@@ -99,6 +113,7 @@ export default function QueuesView({
     return (
       <section className="queues" aria-label="Queues">
         <p className="queues-empty">Nothing is waiting on anyone.</p>
+        <HeldBriefingList briefings={heldBriefings} onOpenTask={onOpenTask} />
       </section>
     );
   }
@@ -135,6 +150,7 @@ export default function QueuesView({
           </article>
         );
       })}
+      <HeldBriefingList briefings={heldBriefings} onOpenTask={onOpenTask} />
     </section>
   );
 }

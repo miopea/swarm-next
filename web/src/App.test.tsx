@@ -1253,10 +1253,21 @@ test("a queued briefing is shown but does not inflate the Needs you count", asyn
 
   render(<App />);
 
-  // Discoverable, which it was not before: nothing under web/src read this.
-  expect(await screen.findByText("One briefing is queued")).toBeInTheDocument();
-  // And the badge is unmoved.
+  // NOT ON NEEDS YOU. The card's own text is "Nothing is wrong with these —
+  // Swarm is holding them until the worker is free", printed under a heading
+  // promising things that need the operator. Their words on seeing it: "some of
+  // this is queue items not needs you items."
+  await screen.findByRole("button", { name: /^Needs you/ });
+  expect(screen.queryByText("One briefing is queued")).not.toBeInTheDocument();
+  // The badge is unmoved, which was this test's original claim and still holds.
   expect(screen.getByRole("button", { name: /^Needs you/ })).toHaveTextContent("0");
+
+  // STILL DISCOVERABLE, on the surface whose docstring says it exists to hold
+  // exactly this. Deleting it would trade one defect for a blind spot: nothing
+  // else under web/src reads held briefings.
+  // The nav button, not its pop-out sibling, which shares the word.
+  fireEvent.click(screen.getAllByRole("button", { name: /Queues/ })[0]);
+  expect(await screen.findByText("One briefing is queued")).toBeInTheDocument();
 });
 
 /**
