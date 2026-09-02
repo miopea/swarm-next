@@ -230,8 +230,7 @@ fn stage_legacy_conversations_between(
             continue;
         };
         let workspace = expand_home(&worker.workspace, home);
-        let encoded = workspace.replace(['/', '.'], "-");
-        let older_encoded = workspace.replace('/', "-");
+        let [encoded, older_encoded] = swarm_persistence::claude_project_slugs(&workspace);
         let source = [encoded.as_str(), older_encoded.as_str()]
             .into_iter()
             .map(|directory| {

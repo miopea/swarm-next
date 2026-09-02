@@ -145,6 +145,46 @@ fn expand_workspace_home(workspace: &str, home: &Path) -> String {
     )
 }
 
+/// The directory names Claude may have stored a workspace's transcripts under,
+/// current encoding first.
+///
+/// ONE OWNER, BECAUSE A WRONG COPY OF THIS FAILS AS AN EMPTY RESULT. Claude
+/// encodes the absolute workspace path by replacing '/' AND '.' with '-'; an
+/// older form replaced only '/', and both exist on disk, so every lookup has to
+/// try the current form and fall back.
+///
+/// This was reimplemented four separate times across three files. That is worse
+/// than ordinary duplication because a copy that forgets the '.' does not throw
+/// — it returns an empty directory listing, and every caller reads that as "this
+/// workspace has no transcripts", which is a legitimate state. No exception, no
+/// mismatch, no log line.
+///
+/// It bit exactly that way on 2026-09-02: a fleet sweep slugged with '/' only
+/// and reported thirteen workers as having no transcripts while the directories
+/// were sitting there. A path with no dot works fine under the wrong encoding,
+/// so a bad copy passes every test it is likely to be given until it meets a
+/// dotted one.
+#[must_use]
+pub fn claude_project_slugs(workspace: &str) -> [String; 2] {
+    [
+        workspace.replace(['/', '.'], "-"),
+        workspace.replace('/', "-"),
+    ]
+}
+
+/// The directory Claude actually stored this workspace's transcripts in, if any.
+///
+/// Returns `None` only when NEITHER encoding names an existing directory, which
+/// is what lets a caller tell "no such workspace" from "no transcripts yet" —
+/// the ambiguity that made the wrong slug look like a finding rather than a bug.
+#[must_use]
+pub fn claude_project_directory(root: &Path, workspace: &str) -> Option<std::path::PathBuf> {
+    claude_project_slugs(workspace)
+        .into_iter()
+        .map(|slug| root.join(slug))
+        .find(|path| path.is_dir())
+}
+
 fn discover_claude_conversation(workspace: &str) -> Option<String> {
     let root = std::env::var_os("HOME")
         .map(std::path::PathBuf::from)?
@@ -154,10 +194,8 @@ fn discover_claude_conversation(workspace: &str) -> Option<String> {
 }
 
 fn discover_claude_conversation_in(root: &Path, workspace: &str) -> Option<String> {
-    let encoded_current = workspace.replace(['/', '.'], "-");
-    let encoded_older = workspace.replace('/', "-");
     let mut candidates = Vec::new();
-    for encoded in [encoded_current, encoded_older] {
+    for encoded in claude_project_slugs(workspace) {
         let directory = root.join(encoded);
         let Ok(entries) = std::fs::read_dir(directory) else {
             continue;
@@ -327,6 +365,55 @@ fn unix_timestamp() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    /// THE '.' IS THE CHARACTER A REIMPLEMENTATION FORGETS, and a copy that
+    /// forgets it works until it meets a dotted path.
+    ///
+    /// /home/x/projects/personal/aria has no dot, so the wrong encoding returns
+    /// the right answer for it and for most workspaces anyone would test with.
+    /// The failure only appears against a path like /home/x/.config — and it
+    /// appears as an EMPTY LISTING, which every caller reads as "this workspace
+    /// has no transcripts". That is a legitimate state, so nothing looks wrong.
+    ///
+    /// Measured 2026-09-02: a fleet sweep slugged with '/' only and reported
+    /// thirteen workers as having no transcripts while their directories
+    /// existed.
+    #[test]
+    fn the_project_slug_replaces_dots_as_well_as_slashes() {
+        assert_eq!(
+            claude_project_slugs("/home/x/.config/thing")[0],
+            "-home-x--config-thing",
+            "a slug that keeps the dot addresses a directory Claude never wrote"
+        );
+        assert_eq!(
+            claude_project_slugs("/home/x/.config/thing")[1],
+            "-home-x-.config-thing",
+            "and the legacy form is kept, because both exist on disk"
+        );
+        // A dotless path is identical under both encodings, which is exactly
+        // why a wrong copy passes the tests it is likely to be given.
+        let dotless = claude_project_slugs("/home/x/projects/aria");
+        assert_eq!(dotless[0], dotless[1]);
+        assert_eq!(dotless[0], "-home-x-projects-aria");
+    }
+
+    /// "No such workspace" and "no transcripts yet" were indistinguishable, and
+    /// that ambiguity is what let a wrong string read as a finding.
+    #[test]
+    fn a_workspace_with_no_directory_under_either_encoding_is_none() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("projects");
+        std::fs::create_dir_all(root.join("-home-x--config-thing")).unwrap();
+
+        assert!(
+            claude_project_directory(&root, "/home/x/.config/thing").is_some(),
+            "the current encoding resolves"
+        );
+        assert!(
+            claude_project_directory(&root, "/home/x/nowhere").is_none(),
+            "and a workspace with no directory under EITHER encoding says so"
+        );
+    }
+
     use super::*;
 
     #[test]

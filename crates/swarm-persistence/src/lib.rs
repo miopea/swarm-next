@@ -71,7 +71,9 @@ pub use jira::{
     JiraCommentDispatch, JiraIssueSnapshot, JiraProjectBindingInput, JiraTransitionDispatch,
     JiraTransitionFailure,
 };
-pub use legacy_source::{LegacySourceError, read_legacy_migration_bundle};
+pub use legacy_source::{
+    LegacySourceError, claude_project_directory, claude_project_slugs, read_legacy_migration_bundle,
+};
 pub use migration::{
     LEGACY_MIGRATION_FORMAT, LEGACY_MIGRATION_VERSION, LegacyImportDisposition,
     LegacyMigrationBundle, LegacyMigrationCommit, LegacyMigrationPreview, LegacyMigrationReceipt,

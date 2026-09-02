@@ -386,16 +386,10 @@ pub(crate) fn conversation_freshness(
         return ConversationFreshness::Current;
     };
     let workspace = expand_home_against(&profile.workspace, home);
-    // The same encoding the resume-history lookup uses, including the older
-    // slash-only form, so this reads the directory Claude actually writes.
-    let candidates = [
-        workspace.replace(['/', '.'], "-"),
-        workspace.replace('/', "-"),
-    ];
-    let Some(directory) = candidates
-        .iter()
-        .map(|slug| projects_root.join(slug))
-        .find(|path| path.is_dir())
+    // ONE OWNER for the encoding, in swarm-persistence. A copy that forgets the
+    // '.' returns an empty listing rather than failing, and every caller reads
+    // that as "no transcripts".
+    let Some(directory) = swarm_persistence::claude_project_directory(projects_root, &workspace)
     else {
         return ConversationFreshness::Unknown {
             reason: "no Claude project directory exists for this workspace".to_owned(),
@@ -452,13 +446,12 @@ fn ensure_claude_resume_history_between(
     home: &Path,
 ) -> Result<(), std::io::Error> {
     let workspace = expand_home_against(workspace, home);
-    let encoded = workspace.replace(['/', '.'], "-");
+    let [encoded, older_encoded] = swarm_persistence::claude_project_slugs(&workspace);
     let destination_directory = target_root.join(&encoded);
     let destination = destination_directory.join(format!("{conversation_id}.jsonl"));
     if destination.is_file() {
         return Ok(());
     }
-    let older_encoded = workspace.replace('/', "-");
     let source = [encoded.as_str(), older_encoded.as_str()]
         .into_iter()
         .map(|directory| {
