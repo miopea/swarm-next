@@ -206,8 +206,33 @@ export async function uploadTerminalAttachment(
   return ((await response.json()) as { path: string }).path;
 }
 
+/** Types the provider turns into a visible chip when a bare path is pasted. */
+const PROVIDER_RENDERS_A_CHIP = new Set(["png", "jpg", "jpeg", "gif", "webp"]);
+
+/**
+ * What to type into the terminal so an attachment is both VISIBLE and readable.
+ *
+ * A bare path used to be pasted for everything. That works for images, which
+ * the provider recognises and renders as a chip, and it fails silently for
+ * everything else: the provider consumes the pasted path, renders nothing for a
+ * type it cannot attach, and the only thing left in the composer is the trailing
+ * space this function adds after the paste markers. The operator's report was
+ * exactly that — "I never see anything besides a space in the prompt... the only
+ * one that shows up properly are images" — for docx, mp4 and every other binary.
+ *
+ * A space is indistinguishable from a failed drop, and the file HAS uploaded, so
+ * the failure runs in the direction that loses work: the turn is sent believing
+ * an attachment is attached.
+ *
+ * So a non-image is referenced with `@<path>`, which the provider renders as
+ * text rather than swallowing, and which it reads as a file reference. Images
+ * keep the bare path they already work with — this fixes the broken case without
+ * touching the one that is not broken.
+ */
 export function terminalAttachmentPaste(path: string): string {
-  return `\u001b[200~${path}\u001b[201~ `;
+  const extension = path.split(".").pop()?.toLowerCase() ?? "";
+  const reference = PROVIDER_RENDERS_A_CHIP.has(extension) ? path : `@${path}`;
+  return `\u001b[200~${reference}\u001b[201~ `;
 }
 
 export function terminalTextPaste(text: string): string {

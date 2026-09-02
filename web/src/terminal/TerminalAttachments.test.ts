@@ -23,6 +23,27 @@ test("inserts a private image path without submitting the terminal prompt", () =
   expect(input).not.toContain("\r");
 });
 
+/**
+ * The defect: a docx or an mp4 uploaded fine and left ONLY a space in the
+ * composer, because the provider swallows a bare pasted path it cannot attach
+ * and the trailing space is all that survives. A space reads as nothing having
+ * happened, while the file is in fact attached.
+ */
+test("references a non-image attachment so it is visible rather than swallowed", () => {
+  for (const path of [
+    "/state/attachments/report.docx",
+    "/state/attachments/clip.mp4",
+    "/state/attachments/archive.zip",
+    "/state/attachments/opaque.bin",
+  ]) {
+    const input = terminalAttachmentPaste(path);
+    expect(input).toBe(`\u001b[200~@${path}\u001b[201~ `);
+    expect(input).not.toContain("\r");
+    // The whole point: something other than whitespace reaches the composer.
+    expect(input.replace(/\u001b\[20[01]~/g, "").trim()).not.toBe("");
+  }
+});
+
 test("intercepts text as one bracketed terminal paste", () => {
   expect(terminalTextPaste("first\r\nsecond\rthird"))
     .toBe("\u001b[200~first\nsecond\nthird\u001b[201~");
