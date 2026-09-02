@@ -430,7 +430,16 @@ async fn submit_terminal_message(
                 if !submit {
                     return Ok(TerminalSubmission::Acknowledged);
                 }
+                // NAMES THE DELIVERY, NOT A COUNT. If the marker search never
+                // matches a real prompt this recovery does nothing and reports
+                // nothing, which looks exactly like a working recovery on a
+                // quiet week — and operator_broadcast_outcome cannot separate
+                // them either, because still-waiting=0 is also what "no
+                // uncertain submissions happened" looks like. One named line
+                // the first time it fires is what makes the difference legible.
                 tracing::info!(
+                    marker = %String::from_utf8_lossy(marker),
+                    %session_id,
                     "a previous delivery left this message unsent in the prompt; submitting it \
                      rather than writing it again"
                 );
@@ -1397,6 +1406,47 @@ mod tests {
         assert_eq!(
             groups[0].iter().map(|(_, n)| *n).collect::<Vec<_>>(),
             [1, 2, 3]
+        );
+    }
+
+    /// THE SEAM THE MARKER SEARCH RESTS ON, MEASURED THROUGH THE REAL RENDERER.
+    ///
+    /// The fleet rule is that a passing mocked test is not evidence about an OS
+    /// surface, and a terminal is one. The search runs over
+    /// `snapshot_plain_text`, which replays the byte stream through vt100 and
+    /// returns `screen.contents()`. A hand-built snapshot skips exactly that, so
+    /// it cannot say whether a marker survives the grid.
+    ///
+    /// MEASURED, NOT ASSUMED: it does. A logical line longer than the terminal
+    /// is returned CONTIGUOUSLY — the grid does not insert a newline where it
+    /// wraps — so a marker is findable wherever it lands on a row. I checked
+    /// this by rendering a line wider than the screen and reading the output,
+    /// after a first version of this test passed even with a marker too long to
+    /// fit, which is what exposed that wrapping was never a hazard.
+    ///
+    /// So this asserts the CONTIGUITY the search depends on, rather than
+    /// pretending to probe wrap offsets that cannot break it. It fails if
+    /// `snapshot_plain_text` ever starts breaking lines at the grid edge, which
+    /// would silently stop every marker search matching.
+    #[test]
+    fn the_renderer_returns_a_wrapped_line_contiguously() {
+        let marker = b"01a062ed";
+        let mut bytes = b"x".repeat(74);
+        bytes.extend_from_slice(marker);
+        bytes.extend_from_slice(b" the message body\r\n");
+
+        let visible = swarm_terminal::snapshot_plain_text(&bytes, 24, 20);
+        assert!(
+            visible
+                .as_bytes()
+                .windows(marker.len())
+                .any(|part| part == marker),
+            "a marker that straddles the grid edge must still be findable, or the recovery \
+             silently never fires: {visible:?}"
+        );
+        assert!(
+            visible.contains("the message body"),
+            "and so must text after it on the same wrapped line"
         );
     }
 
