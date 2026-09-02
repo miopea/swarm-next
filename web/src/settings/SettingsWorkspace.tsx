@@ -197,6 +197,24 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
     }
   }
   const workerEngineNeedsUpdate = workerEngineUpdateRequired(health, terminalHostStatus);
+  /**
+   * The App/API version and the host's version differ, and the ENGINE between
+   * them is byte-identical — so there is nothing to apply.
+   *
+   * host_version is the release the running host process was LAUNCHED from; the
+   * engine is identified by its build id. Two releases can carry the same
+   * engine, and this Hive's do. The card used to print both numbers as headings
+   * and explain the gap underneath, which reads as "you are behind" for as long
+   * as it takes to reach the third paragraph.
+   */
+  const engineSameBuild = Boolean(
+    health?.version
+      && terminalHostStatus?.host_version
+      && health.version !== terminalHostStatus.host_version
+      && health.worker_engine_build_id
+      && terminalHostStatus.host_build_id
+      && health.worker_engine_build_id === terminalHostStatus.host_build_id,
+  );
   const workerEngineState = !terminalHostLoaded ? "checking" : !terminalHostStatus ? "unavailable" : workerEngineNeedsUpdate ? "restart" : "current";
   const activeWorkerCount = terminalHostStatus?.running_sessions ?? 0;
   // Two different questions, answered by whichever source actually knows. The
@@ -486,6 +504,11 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
             <div><dt>Retained sessions</dt><dd>{sessions.length}</dd></div>
           </dl>
           <div className="runtime-subsystem-grid">
+            {/* THE VERSIONS DIFFER AND THE ENGINE DOES NOT. Named once and used
+                twice, because the card has to make two decisions from it and
+                making them separately is how it came to show an alarming
+                "Installed 1.3.0" beside "Running 1.2.1" and then spend three
+                paragraphs explaining that nothing was wrong. */}
             <article className={`runtime-subsystem-card runtime-subsystem-${workerEngineState}`} aria-label="Worker engine status">
               <header><div><span className="runtime-component-name">Worker engine</span><strong>{workerEngineLabel(health, terminalHostStatus, terminalHostLoaded)}</strong></div><span className={`runtime-status-badge ${workerEngineState}`}>{workerEngineState === "restart" ? "Restart required" : workerEngineState === "unavailable" ? "Unavailable" : workerEngineState === "checking" ? "Checking" : "Current"}</span></header>
               {/* RUNNING, NOT INSTALLED, and the difference is not pedantry.
@@ -498,7 +521,15 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
                   it certainly was not. Anybody checking which build the engine
                   is on had to read /proc to find out. */}
               <p className="runtime-version"><strong>Running</strong> {runtimeVersionIdentity(terminalHostStatus?.host_version)}</p>
-              {health?.version && terminalHostStatus?.host_version && health.version !== terminalHostStatus.host_version ? (
+              {/* ONLY WHEN THERE IS SOMETHING TO APPLY. Two different version
+                  numbers stacked on top of each other read as "you are behind"
+                  before anybody reaches the paragraph saying they are not — the
+                  operator: "If a worker engine update isn't needed this should
+                  say so." When the build ids match, the version that would be
+                  installed belongs in the explanation, not in a heading slot. */}
+              {health?.version && terminalHostStatus?.host_version
+                && health.version !== terminalHostStatus.host_version
+                && !engineSameBuild ? (
                 <p className="runtime-version"><strong>Installed</strong> {runtimeVersionIdentity(health.version)}</p>
               ) : null}
               {workerEngineState === "checking" ? <p>Checking the separate worker engine without interrupting any terminal.</p> : workerEngineState === "unavailable" ? <>
@@ -527,7 +558,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
                   </div>
                 </div>
               )}</> : <>
-                <p>The installed worker engine is compatible with this App/API release. Running workers do not need to restart.</p>
+                <p className="engine-verdict"><strong>No worker engine update is needed.</strong> Running workers do not need to restart.</p>
                 {/* THE VERSIONS DIFFER AND THE ENGINE DOES NOT, which reads as
                     "you are behind" and is not. host_version is the version of
                     the release the running host process was LAUNCHED from; the
@@ -541,16 +572,13 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
                     swarm-terminal-host between them. The operator asked three
                     times why no upgrade was listed. The card was answering a
                     question it never showed. */}
-                {health?.version && terminalHostStatus?.host_version
-                  && health.version !== terminalHostStatus.host_version
-                  && health.worker_engine_build_id && terminalHostStatus.host_build_id
-                  && health.worker_engine_build_id === terminalHostStatus.host_build_id ? (
+                {engineSameBuild ? (
                   <p className="engine-same-build">
                     The version numbers differ because this host process was started from{" "}
-                    {runtimeVersionIdentity(terminalHostStatus.host_version)} and has not needed to
-                    restart since. The engine itself is byte-identical to the one in{" "}
-                    {runtimeVersionIdentity(health.version)} — same build{" "}
-                    <code>{health.worker_engine_build_id.slice(0, 12)}</code> — so there is nothing
+                    {runtimeVersionIdentity(terminalHostStatus?.host_version)} and has not needed
+                    to restart since. The engine itself is byte-identical to the one in{" "}
+                    {runtimeVersionIdentity(health?.version)} — same build{" "}
+                    <code>{health?.worker_engine_build_id?.slice(0, 12)}</code> — so there is nothing
                     to upgrade. A Hive whose engine DID change restarts it and then reports the new
                     version.
                   </p>
@@ -570,6 +598,15 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
                   the operator has held repeatedly; a button is how they choose
                   the moment. */}
               <div className="force-worker-reload">
+                {/* ITS OWN HEADING, BECAUSE IT IS ITS OWN SUBSYSTEM. This control
+                    sat unlabelled at the bottom of the worker-engine card, and
+                    the only thing distinguishing it was a sentence UNDER the
+                    button. The operator: "The force worker reload section should
+                    be clear that isn't related. the UI is confusing." */}
+                <div className="force-worker-reload-heading">
+                  <strong>Agent tool surface</strong>
+                  <small>Not the worker engine. Separate thing, separate reason to restart.</small>
+                </div>
                 {/* STALE AND UNKNOWN ARE BOTH REPORTED, and unknown is not
                     folded into healthy. A session that has not asked THIS build
                     for its tools is not known to be fine — the record is in

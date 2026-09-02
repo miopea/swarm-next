@@ -705,4 +705,33 @@ test("explains a version gap the engine build id says is not a gap", async () =>
   );
   expect(explained.textContent).toContain("dc6beb7c6604");
   expect(explained.textContent).toContain("nothing to upgrade");
+
+  // ⚠️ AND THE VERDICT COMES FIRST. The explanation was correct and it was the
+  // third paragraph; above it sat "Running 1.1.2" and "Installed 1.2.1" as
+  // headings, which reads as being behind. The operator, looking at exactly
+  // this state: "If a worker engine update isn't needed this should say so."
+  expect(screen.getByText(/No worker engine update is needed/)).toBeInTheDocument();
+
+  // The version that would be installed is NOT printed as a second heading when
+  // there is nothing to install — it belongs in the explanation, which names it.
+  expect(screen.queryByText("Installed")).not.toBeInTheDocument();
+});
+
+/**
+ * The tool-surface control is not part of the worker engine and must say so.
+ *
+ * It sat unlabelled at the bottom of the engine card, distinguished only by a
+ * sentence UNDER its own button. The operator: "The force worker reload section
+ * should be clear that isn't related. the UI is confusing."
+ */
+test("separates the agent tool surface from the worker engine", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => ok({})));
+
+  render(<SettingsWorkspace {...minimalProps()} section="settings-updates" />);
+
+  const heading = await screen.findByText("Agent tool surface");
+  expect(heading).toBeInTheDocument();
+  expect(heading.parentElement?.textContent).toContain("Not the worker engine");
+  // The control it labels is still there and still reachable.
+  expect(screen.getByRole("button", { name: "Force worker reload" })).toBeInTheDocument();
 });
