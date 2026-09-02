@@ -5,7 +5,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use axum::{
@@ -3093,10 +3093,63 @@ fn refresh_jira_project_tool() -> Tool {
     )
 }
 
+/// Every state and the moves out of it, RENDERED FROM THE LIFECYCLE ITSELF.
+///
+/// Written by hand, this paragraph would be a second copy of the rules and
+/// would drift from them — which is the defect it exists to fix. On 2026-09-02
+/// Queen tried awaiting_release -> blocked and awaiting_release -> review,
+/// was refused both times, and concluded the state could not be left at all.
+/// The worker who filed the ticket repeated that in writing without checking.
+/// BOTH WERE WRONG: awaiting_release -> active exists and always has, and the
+/// lifecycle says so in a comment nobody had read. A description confidently
+/// stating the wrong refusals is worse than one stating none, so this one is
+/// not stated by anybody — it is generated.
+///
+/// `TaskState::can_transition_to` is the only authority, and it is consulted
+/// here rather than remembered.
+fn lifecycle_moves() -> &'static str {
+    static MOVES: OnceLock<String> = OnceLock::new();
+    MOVES.get_or_init(|| {
+        const EVERY_STATE: [TaskState; 8] = [
+            TaskState::Draft,
+            TaskState::Ready,
+            TaskState::Active,
+            TaskState::Blocked,
+            TaskState::Review,
+            TaskState::AwaitingRelease,
+            TaskState::Completed,
+            TaskState::Abandoned,
+        ];
+        let mut rendered = String::new();
+        for from in EVERY_STATE {
+            let targets = EVERY_STATE
+                .into_iter()
+                .filter(|to| from.can_transition_to(*to))
+                .map(|to| to.to_string())
+                .collect::<Vec<_>>();
+            let _ = write!(
+                rendered,
+                "{}{from} -> {}",
+                if rendered.is_empty() { "" } else { "; " },
+                if targets.is_empty() {
+                    "nothing, it is final".to_owned()
+                } else {
+                    targets.join(", ")
+                },
+            );
+        }
+        rendered
+    })
+}
+
 fn transition_task_tool() -> Tool {
+    static DESCRIPTION: OnceLock<String> = OnceLock::new();
     tool(
         "swarm_transition_task",
-        "Move a task through its explicit lifecycle. Workers may report only Active, Blocked, or Review for their own assignment. Queen must wake an assigned sleeping worker and observe its live session before moving Ready or Blocked work to Active. Include a concise Blocked reason or Review handoff note. Completed requires verification evidence, including release or handoff evidence when shipping was part of done. Awaiting release is for work you have ACCEPTED that is finished and merely unshipped — it needs no evidence to enter, and it completes ITSELF when a deployment is recorded, so park work there rather than holding it in review or closing it on a nothing-to-deploy claim that is really ships-later. Abandoned closes work that was superseded or given up on and asks for no evidence, because nothing shipped and nothing is coming; it is Queen's to set, like Completed.",
+        DESCRIPTION.get_or_init(|| format!(
+            "Move a task through its explicit lifecycle. Workers may report only Active, Blocked, or Review for their own assignment. Queen must wake an assigned sleeping worker and observe its live session before moving Ready or Blocked work to Active. Include a concise Blocked reason or Review handoff note. Completed requires verification evidence, including release or handoff evidence when shipping was part of done. Awaiting release is for work you have ACCEPTED that is finished and merely unshipped — it needs no evidence to enter, and it completes ITSELF when a deployment is recorded, so send work there rather than holding it in review or closing it on a nothing-to-deploy claim that is really ships-later; it is a resting state and not a trap, and work that turns out unfinished returns through Active. Abandoned closes work that was superseded or given up on and asks for no evidence, because nothing shipped and nothing is coming; it is Queen's to set, like Completed. THE MOVES THAT EXIST, and every move not listed here is refused with \"task cannot move from X to Y\": {}. Read that as the exits, not only the entries: a state's meaning does not tell you what you can do next, and reading only entry conditions is how a task got parked behind a door somebody then could not find the handle for. Completed and Abandoned are the only genuinely final states. Refusal is about the SHAPE of the move and never about your authority — being told a move does not exist is different from being told it is not yours to make, and the second says so.",
+            lifecycle_moves(),
+        )).as_str(),
         &json!({
             "type": "object",
             "properties": {
@@ -3406,6 +3459,74 @@ mod tests {
     use swarm_domain::{JiraProjectScope, JiraStatusMapping, ProviderKind, SharedWorkBackend};
     use swarm_persistence::JiraProjectBindingInput;
     use tempfile::tempdir;
+
+    /// THE DESCRIPTION AND THE LIFECYCLE AGREE ON ALL 64 PAIRS, checked rather
+    /// than trusted.
+    ///
+    /// Rendering the moves from `can_transition_to` makes them correct by
+    /// construction, so this is not testing the table's contents — it is
+    /// testing the RENDERING, which is hand-written and can lose a row, join
+    /// two states into one unreadable run, or print a name that does not match
+    /// the one an error message uses.
+    ///
+    /// Every pair, both directions, because the failure this guards is a
+    /// SILENT omission: a description missing one move reads perfectly.
+    #[test]
+    fn the_transition_description_names_exactly_the_moves_the_lifecycle_allows() {
+        let described = transition_task_tool().description.expect("a description");
+        const EVERY_STATE: [TaskState; 8] = [
+            TaskState::Draft,
+            TaskState::Ready,
+            TaskState::Active,
+            TaskState::Blocked,
+            TaskState::Review,
+            TaskState::AwaitingRelease,
+            TaskState::Completed,
+            TaskState::Abandoned,
+        ];
+        for from in EVERY_STATE {
+            let listed = described
+                .split(&format!("{from} -> "))
+                .nth(1)
+                .map(|rest| rest.split(';').next().unwrap_or_default().to_owned())
+                .unwrap_or_else(|| panic!("{from} is not described at all"));
+            for to in EVERY_STATE {
+                let named = listed
+                    .split(", ")
+                    .any(|target| target.trim_end_matches(&['.', ' '][..]) == to.to_string());
+                assert_eq!(
+                    named,
+                    from.can_transition_to(to),
+                    "the description and the lifecycle disagree about {from} -> {to}; \
+                     described exits were {listed:?}"
+                );
+            }
+        }
+    }
+
+    /// THE FACT TWO PEOPLE GOT WRONG IN WRITING, pinned so a third does not.
+    ///
+    /// Queen tried awaiting_release -> blocked and awaiting_release -> review,
+    /// was refused both times, and reported that the state could not be left.
+    /// I filed a ticket repeating it and wrote "the one-way door stays" into
+    /// the scope. Neither of us tried the exit that exists.
+    ///
+    /// It is not a door that locks. Work that a release reveals was not
+    /// finished goes back through Active, which is what the lifecycle comment
+    /// beside the rule has said the whole time.
+    #[test]
+    fn awaiting_release_is_a_resting_state_and_returns_through_active() {
+        assert!(
+            TaskState::AwaitingRelease.can_transition_to(TaskState::Active),
+            "this is the exit Queen and I both reported did not exist"
+        );
+        assert!(TaskState::AwaitingRelease.can_transition_to(TaskState::Completed));
+        assert!(TaskState::AwaitingRelease.can_transition_to(TaskState::Abandoned));
+        // The two she actually tried. They are refused, and that is correct —
+        // the description now says so instead of leaving it to be discovered.
+        assert!(!TaskState::AwaitingRelease.can_transition_to(TaskState::Blocked));
+        assert!(!TaskState::AwaitingRelease.can_transition_to(TaskState::Review));
+    }
 
     /// Tools Queen holds and a worker must never see. Recording work is not on
     /// this list: a worker files drafts, and only Queen routes them.
