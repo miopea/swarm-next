@@ -106,7 +106,8 @@ mod task_dispatches;
 pub use task_dispatches::{TaskDispatch, TaskDispatchFailure, TaskRuling};
 mod messages;
 pub use messages::{
-    MAX_TASK_MESSAGE_BYTES, MessageEnd, MessageParty, TaskMessage, TaskMessageDispatch,
+    MAX_TASK_MESSAGE_BYTES, MessageEnd, MessageParty, OperatorBroadcastDispatch, TaskMessage,
+    TaskMessageDispatch,
 };
 mod task_outcomes;
 pub use task_outcomes::{TaskOutcomeDispatch, TaskOutcomeFailure};

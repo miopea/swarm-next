@@ -7,7 +7,7 @@ pub mod bundled_feedback;
 mod control_room;
 mod coordination_delivery;
 use coordination_delivery::{
-    TerminalSubmission, decision_delivery_message, delivery_marker, queen_automation_message,
+    TerminalSubmission, decision_delivery_message, queen_automation_message,
     submit_coordination_message, task_dispatch_message, task_outcome_message,
 };
 mod decisions;
@@ -1855,13 +1855,7 @@ impl AppState {
             store,
             client,
             deliveries,
-            |delivery| {
-                (
-                    delivery.session_id,
-                    decision_delivery_message(delivery),
-                    delivery_marker(delivery.decision_id),
-                )
-            },
+            |delivery| (delivery.session_id, decision_delivery_message(delivery)),
         )
         .await;
         for (delivery, submission) in settled {
@@ -1961,13 +1955,7 @@ impl AppState {
             store,
             client,
             deliveries,
-            |delivery| {
-                (
-                    delivery.session_id,
-                    task_dispatch_message(delivery),
-                    delivery_marker(delivery.task_id),
-                )
-            },
+            |delivery| (delivery.session_id, task_dispatch_message(delivery)),
         )
         .await;
         for (delivery, submission) in settled {
@@ -2067,20 +2055,7 @@ impl AppState {
             client,
             pending,
             |dispatch| dispatch.session_id,
-            |group| {
-                let body = group
-                    .iter()
-                    .map(|dispatch| dispatch.body.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
-                (
-                    coordination_delivery::operator_broadcast_message(&body),
-                    group
-                        .first()
-                        .map(|dispatch| delivery_marker(&dispatch.broadcast_id))
-                        .unwrap_or_default(),
-                )
-            },
+            coordination_delivery::operator_broadcast_message,
         )
         .await;
         for (group, submission) in settled {
@@ -2141,15 +2116,7 @@ impl AppState {
             client,
             pending,
             |dispatch| dispatch.session_id,
-            |group| {
-                (
-                    coordination_delivery::task_message_message(group),
-                    group
-                        .first()
-                        .map(|dispatch| delivery_marker(&dispatch.message_id))
-                        .unwrap_or_default(),
-                )
-            },
+            coordination_delivery::task_message_message,
         )
         .await;
         for (group, submission) in settled {
@@ -2213,17 +2180,7 @@ impl AppState {
             client,
             outcomes,
             |outcome| outcome.session_id,
-            |group| {
-                (
-                    task_outcome_message(group),
-                    // Any id in the message will do; the marker only has to be
-                    // findable on screen to confirm the write landed.
-                    group
-                        .first()
-                        .map(|outcome| delivery_marker(outcome.task_id))
-                        .unwrap_or_default(),
-                )
-            },
+            task_outcome_message,
         )
         .await;
         // Every outcome in a group shares the group's result, because they
@@ -2354,7 +2311,6 @@ impl AppState {
             client,
             delivery.session_id,
             queen_automation_message(&delivery),
-            &delivery_marker(&delivery.run_id),
         )
         .await
         {
@@ -8950,7 +8906,7 @@ mod tests {
             note: "green\u{1b}[31m\rchecks".into(),
             answers: std::collections::BTreeMap::new(),
         };
-        let message = decision_delivery_message(&delivery);
+        let message = decision_delivery_message(&delivery).bytes;
         assert_eq!(message.last(), Some(&b'\r'));
         assert!(!message[..message.len() - 1].contains(&b'\n'));
         assert!(!message.contains(&0x1b));
@@ -8977,7 +8933,7 @@ mod tests {
             answers,
         };
 
-        let message = decision_delivery_message(&delivery);
+        let message = decision_delivery_message(&delivery).bytes;
         let rendered = String::from_utf8_lossy(&message);
 
         assert!(rendered.contains("Scope: This repo only"));
@@ -9020,7 +8976,8 @@ mod tests {
             email_requester: None,
         };
 
-        let rendered = String::from_utf8_lossy(&task_dispatch_message(&dispatch)).into_owned();
+        let rendered =
+            String::from_utf8_lossy(&task_dispatch_message(&dispatch).bytes).into_owned();
 
         assert!(
             rendered.contains("Release the hold — repoint the forwarder"),
@@ -9087,7 +9044,8 @@ mod tests {
             email_requester: None,
         };
 
-        let rendered = String::from_utf8_lossy(&task_dispatch_message(&dispatch)).into_owned();
+        let rendered =
+            String::from_utf8_lossy(&task_dispatch_message(&dispatch).bytes).into_owned();
 
         // The OLDER one is the assertion that matters. Carrying the newest was
         // never the bug; losing the other one was.
@@ -9134,7 +9092,8 @@ mod tests {
             email_requester: None,
         };
 
-        let rendered = String::from_utf8_lossy(&task_dispatch_message(&dispatch)).into_owned();
+        let rendered =
+            String::from_utf8_lossy(&task_dispatch_message(&dispatch).bytes).into_owned();
 
         // "the operator's own words" rather than "their own words": a brief is
         // read by a worker, and an unqualified pronoun there has no referent.
@@ -9167,7 +9126,8 @@ mod tests {
             email_requester: None,
         };
 
-        let rendered = String::from_utf8_lossy(&task_dispatch_message(&dispatch)).into_owned();
+        let rendered =
+            String::from_utf8_lossy(&task_dispatch_message(&dispatch).bytes).into_owned();
 
         assert!(!rendered.contains("RULED"), "{rendered}");
         assert!(!rendered.contains("swarm_list_decisions"), "{rendered}");
@@ -9194,7 +9154,7 @@ mod tests {
             email_requester: Some("Lynn\u{1b}[31m Kuczyra".into()),
         };
 
-        let message = task_dispatch_message(&dispatch);
+        let message = task_dispatch_message(&dispatch).bytes;
         let rendered = String::from_utf8_lossy(&message);
 
         assert!(rendered.contains("came in by email from Lynn [31m Kuczyra"));
@@ -9223,7 +9183,8 @@ mod tests {
             email_requester: None,
         };
 
-        let rendered = String::from_utf8_lossy(&task_dispatch_message(&dispatch)).into_owned();
+        let rendered =
+            String::from_utf8_lossy(&task_dispatch_message(&dispatch).bytes).into_owned();
 
         assert!(!rendered.contains("waiting on a reply"));
         assert!(!rendered.contains("swarm_draft_email_reply"));
@@ -9246,7 +9207,7 @@ mod tests {
             operator_rulings: Vec::new(),
             email_requester: None,
         };
-        let message = task_dispatch_message(&dispatch);
+        let message = task_dispatch_message(&dispatch).bytes;
         // The operator's instruction governs how the work is approached, so a
         // worker has to receive it with the brief rather than have to go and
         // look for it.
@@ -9274,7 +9235,7 @@ mod tests {
             target_state: TaskState::Review,
             note: "Shipped\rand verified".into(),
         };
-        let message = task_outcome_message(std::slice::from_ref(&outcome));
+        let message = task_outcome_message(std::slice::from_ref(&outcome)).bytes;
         assert_eq!(message.last(), Some(&b'\r'));
         assert!(!message[..message.len() - 1].contains(&b'\n'));
         assert!(!message.contains(&0x1b));

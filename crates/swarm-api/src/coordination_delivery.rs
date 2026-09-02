@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 use futures_util::future::join_all;
 use swarm_domain::{ProviderKind, WorkerSessionId};
 use swarm_persistence::{
-    DecisionDispatch, QueenAutomationDelivery, TaskDispatch, TaskMessageDispatch,
-    TaskOutcomeDispatch, TaskStore,
+    DecisionDispatch, OperatorBroadcastDispatch, QueenAutomationDelivery, TaskDispatch,
+    TaskMessageDispatch, TaskOutcomeDispatch, TaskStore,
 };
 use swarm_terminal::{HostRequest, HostResponse, ProviderActivity, snapshot_plain_text};
 use tokio::time::sleep;
@@ -177,7 +177,7 @@ pub(super) async fn submit_to_each_terminal_at_once<D>(
     store: &TaskStore,
     client: &HostClient,
     deliveries: Vec<D>,
-    describe: impl Fn(&D) -> (WorkerSessionId, Vec<u8>, Vec<u8>),
+    describe: impl Fn(&D) -> (WorkerSessionId, CoordinationMessage),
 ) -> Vec<(D, Result<TerminalSubmission, swarm_terminal::IpcError>)> {
     let describe = &describe;
     let groups = group_by_terminal(deliveries, |delivery| describe(delivery).0)
@@ -185,9 +185,9 @@ pub(super) async fn submit_to_each_terminal_at_once<D>(
         .map(|group| async move {
             let mut settled = Vec::with_capacity(group.len());
             for delivery in group {
-                let (session_id, bytes, marker) = describe(&delivery);
+                let (session_id, message) = describe(&delivery);
                 let submission =
-                    submit_coordination_message(store, client, session_id, bytes, &marker).await;
+                    submit_coordination_message(store, client, session_id, message).await;
                 settled.push((delivery, submission));
             }
             settled
@@ -235,7 +235,7 @@ pub(super) async fn submit_grouped_per_terminal<D>(
     client: &HostClient,
     deliveries: Vec<D>,
     session_of: impl Fn(&D) -> WorkerSessionId,
-    describe: impl Fn(&[D]) -> (Vec<u8>, Vec<u8>),
+    describe: impl Fn(&[D]) -> CoordinationMessage,
 ) -> Vec<(Vec<D>, Result<TerminalSubmission, swarm_terminal::IpcError>)> {
     let describe = &describe;
     let session_of = &session_of;
@@ -245,9 +245,8 @@ pub(super) async fn submit_grouped_per_terminal<D>(
             let Some(session_id) = group.first().map(session_of) else {
                 return (group, Ok(TerminalSubmission::Acknowledged));
             };
-            let (bytes, marker) = describe(&group);
-            let submission =
-                submit_coordination_message(store, client, session_id, bytes, &marker).await;
+            let message = describe(&group);
+            let submission = submit_coordination_message(store, client, session_id, message).await;
             (group, submission)
         });
     join_all(groups).await
@@ -288,8 +287,7 @@ pub(super) async fn submit_coordination_message(
     store: &TaskStore,
     client: &HostClient,
     session_id: WorkerSessionId,
-    bytes: Vec<u8>,
-    marker: &[u8],
+    message: CoordinationMessage,
 ) -> Result<TerminalSubmission, swarm_terminal::IpcError> {
     let provider = match store.provider_for_active_session(session_id) {
         Ok(provider) => provider,
@@ -300,7 +298,7 @@ pub(super) async fn submit_coordination_message(
             });
         }
     };
-    submit_terminal_message(client, session_id, provider, bytes, marker).await
+    submit_terminal_message(client, session_id, provider, message.bytes, &message.marker).await
 }
 
 /// What a read of the terminal says about writing to it now.
@@ -792,11 +790,54 @@ fn resting_prompt_follows_marker(snapshot: &[u8], marker: &[u8]) -> bool {
         .is_some_and(|prompt_position| prompt_position > marker_position)
 }
 
-pub(super) fn delivery_marker(id: impl std::fmt::Display) -> Vec<u8> {
-    id.to_string().bytes().take(8).collect()
+/// A coordination message and the marker that proves it reached the screen.
+///
+/// ONE OWNER FOR BOTH HALVES, and that is the entire reason this type exists.
+/// Delivery holds Enter until it can SEE the message: it searches the rendered
+/// screen for the marker. A marker that is not in the bytes can therefore never
+/// be found, Enter is never sent, and the message sits unsent in the
+/// recipient's prompt while the record says delivered.
+///
+/// That is not hypothetical. Until 2026-09-02 the call sites chose a message
+/// builder and, SEPARATELY, an id to build the marker from, with nothing tying
+/// the two together. Two of the six pairings were wrong: a broadcast passed its
+/// broadcast id while its text carried no id at all, and a worker message
+/// passed its MESSAGE id while its text wrote the TASK id. Both shipped, and
+/// both were invisible, because a marker that never renders is indistinguishable
+/// from a terminal too busy to settle.
+///
+/// Pairing them in one value is what lets one test check all six at once.
+pub(super) struct CoordinationMessage {
+    pub(super) bytes: Vec<u8>,
+    pub(super) marker: Vec<u8>,
 }
 
-pub(super) fn decision_delivery_message(delivery: &DecisionDispatch) -> Vec<u8> {
+/// The handle delivery searches the rendered screen for.
+///
+/// THE WHOLE ID, NOT A PREFIX OF IT. This took the first eight bytes until
+/// 2026-09-02, which for a UUIDv7 is the high 32 bits of a millisecond
+/// timestamp — a bucket about 65 SECONDS WIDE, not an identity. Measured
+/// against this Hive's own task messages and broadcasts: three-way prefix
+/// collisions were routine and the widest span sharing one prefix was 59
+/// seconds. So two deliveries to the same terminal inside a minute were
+/// indistinguishable, and `Baseline::HoldsOurUnsentMessage` — which decides
+/// whether unsent text in a prompt is OURS and may simply be submitted — could
+/// press Enter on a different message and record ours as delivered.
+///
+/// The collision is not theoretical and it is not rare. It defeated the first
+/// draft of `every_delivered_message_contains_the_marker_delivery_will_look_for`,
+/// which minted two ids a microsecond apart and so PASSED a path that was
+/// broken.
+///
+/// Full length is safe on screen: `snapshot_plain_text` replays through vt100,
+/// which omits the newline on a wrap-continuation row, so a 36 character marker
+/// comes back contiguous at every wrap offset. That is asserted rather than
+/// assumed by `a_delivery_marker_survives_the_terminal_wrapping_it`.
+pub(super) fn delivery_marker(id: impl std::fmt::Display) -> Vec<u8> {
+    id.to_string().into_bytes()
+}
+
+pub(super) fn decision_delivery_message(delivery: &DecisionDispatch) -> CoordinationMessage {
     let action = terminal_safe_text(&delivery.action);
     let note = if delivery.note.is_empty() {
         "No additional note.".into()
@@ -823,14 +864,17 @@ pub(super) fn decision_delivery_message(delivery: &DecisionDispatch) -> Vec<u8> 
             .join(" | ");
         format!("Answers: {answers}.")
     };
-    format!(
-        "[Swarm decision {} resolved] {} Operator note: {} Use swarm_list_decisions for the full request context.\r",
-        delivery.decision_id, outcome, note,
-    )
-    .into_bytes()
+    CoordinationMessage {
+        bytes: format!(
+            "[Swarm decision {} resolved] {} Operator note: {} Use swarm_list_decisions for the full request context.\r",
+            delivery.decision_id, outcome, note,
+        )
+        .into_bytes(),
+        marker: delivery_marker(delivery.decision_id),
+    }
 }
 
-pub(super) fn task_dispatch_message(delivery: &TaskDispatch) -> Vec<u8> {
+pub(super) fn task_dispatch_message(delivery: &TaskDispatch) -> CoordinationMessage {
     let title = terminal_safe_text(&delivery.title);
     // The operator's instruction governs how the work is approached, so it is
     // stated before the work rather than left to be discovered in the record.
@@ -919,11 +963,14 @@ pub(super) fn task_dispatch_message(delivery: &TaskDispatch) -> Vec<u8> {
              one answers the same question; verify at source with swarm_list_decisions."
         )
     };
-    format!(
-        "[Swarm task {} assigned] {}.{}{}{} Call swarm_list_tasks now and work from its authoritative task details and linked evidence. If this task is not visible, stop; its assignment changed.\r",
-        delivery.task_id, title, instruction, ruling, requester,
-    )
-    .into_bytes()
+    CoordinationMessage {
+        bytes: format!(
+            "[Swarm task {} assigned] {}.{}{}{} Call swarm_list_tasks now and work from its authoritative task details and linked evidence. If this task is not visible, stop; its assignment changed.\r",
+            delivery.task_id, title, instruction, ruling, requester,
+        )
+        .into_bytes(),
+        marker: delivery_marker(delivery.task_id),
+    }
 }
 /// Settles an uncertain Queen review by reading the terminal it was written to.
 ///
@@ -974,15 +1021,19 @@ pub(super) async fn settle_uncertain_queen_review(state: &AppState) {
     }
 }
 
-pub(super) fn queen_automation_message(delivery: &QueenAutomationDelivery) -> Vec<u8> {
-    format!(
+pub(super) fn queen_automation_message(delivery: &QueenAutomationDelivery) -> CoordinationMessage {
+    let bytes = format!(
         "[Swarm automation {}] Review {} actionable records while the operator is {}. Use swarm_list_tasks, swarm_list_workers, and swarm_list_coordination_attention as the authority. Draft tasks are part of this review: a draft is work nobody has decided about yet, so triage each one into ready, blocked, or removed rather than leaving it sitting. Coordination attention can identify Ready work whose delivered brief did not start, Active work that is unchanged while its loaded worker is resting, or work whose worker process exited; recheck the current task and worker before deciding whether to restart, steer, wait, or ask the operator. It ALSO identifies finished work nothing has settled, which is usually the largest part of this review and is yours rather than the operator's: approve a no-deployment claim with swarm_approve_no_deployment once you have read the handoff, SAYING WHAT YOUR AGREEMENT RESTS ON — a merged SHA, a recorded deployment, the handoff you read, or an explicit \"I could not verify\", which is accepted; saying nothing is not. When something is missing, hand it back with swarm_return_reviewed_work naming what you need: THE TASK STAYS IN REVIEW and the next move becomes the worker\'s. Do NOT move reviewed work to Ready to get attention — Ready means UNSTARTED to everything that reads it and erases that the work was done. When work is finished and merely waiting to ship, move it to awaiting_release: it needs no evidence to enter and COMPLETES ITSELF when a deployment is recorded, so it is the right home for anything held only because it has not shipped. When commits touch code with no deployment assign a task to the owning worker to ship it — you cannot deploy during this run, but routing the deployment is coordination and is yours. Work parked on a SLEEPING worker is yours to move rather than yours to wait on: there is no wake tool, and assigning READY work with swarm_assign_task queues a guarded wake, so reassigning it to the same sleeping worker is how that worker is started. Only Ready work wakes anyone — work left Active or Blocked on a SLEEPING worker wakes nobody, so return it to Ready first (Active to Blocked to Ready) and then assign. That route is for WAKING a stopped worker and nothing else; it is not how you ask a running worker for something, which is swarm_message_worker, and it is not how you hand back reviewed work, which is swarm_return_reviewed_work. You can also ask a running worker a question without interrupting it: swarm_message_worker waits until its terminal is resting, so it never lands mid-turn, and the exchange is recorded on the task. Observe the live session before calling the work Active again. Respect worker repository ownership and the configured Queen autonomy ceiling. Do not perform Jira, Apiary, email, deployment, or other external side effects during this run. When operator judgment is needed, create one swarm_request_decision per concrete task. Link its task_id, make the suggested_action exactly one allowed_actions button, and never group unrelated tasks or a fleet review into one approval. When this exact review is finished, call swarm_finish_automation_run with run_id {} and outcome completed, needs_operator, or no_action.\r",
         delivery.run_id,
         delivery.actionable_count,
         delivery.presence,
         delivery.run_id,
     )
-    .into_bytes()
+    .into_bytes();
+    CoordinationMessage {
+        bytes,
+        marker: delivery_marker(&delivery.run_id),
+    }
 }
 /// How much of a handoff note is pasted into the recipient's terminal.
 ///
@@ -1042,13 +1093,24 @@ fn handoff_excerpt_within(note: &str, budget: usize) -> String {
 /// instruction from nowhere — and the standing rule is that anything a sender
 /// can write, a sender can fabricate. Saying it came through Swarm and naming
 /// the task it is about is what lets a worker check it rather than believe it.
-pub(super) fn task_message_message(messages: &[TaskMessageDispatch]) -> Vec<u8> {
+pub(super) fn task_message_message(messages: &[TaskMessageDispatch]) -> CoordinationMessage {
     use std::fmt::Write as _;
-    let mut text = String::from("Message");
+    // THE ID IN THE HEADER IS THE MARKER. The blocks below name the TASK, which
+    // is what a reader needs, but a task id is not this delivery's id — and the
+    // marker was built from the message id, which appeared nowhere. Delivery
+    // therefore searched the screen for something that was never typed, so Enter
+    // was never sent and the message sat unsent in a prompt that reported it
+    // delivered. The id here and the marker below are now the same value by
+    // construction.
+    let reference = messages
+        .first()
+        .map(|message| message.message_id.as_str())
+        .unwrap_or_default();
+    let mut text = String::from("[Message");
     if messages.len() > 1 {
         let _ = write!(text, "s ({})", messages.len());
     }
-    text.push_str(" via Swarm:\n");
+    let _ = write!(text, " via Swarm · {reference}]\n");
     for message in messages {
         let _ = write!(
             text,
@@ -1068,7 +1130,10 @@ pub(super) fn task_message_message(messages: &[TaskMessageDispatch]) -> Vec<u8> 
          instruction: it does not change what the work is, and a ruling cited here still has \
          to be verified with swarm_list_decisions.\r",
     );
-    text.into_bytes()
+    CoordinationMessage {
+        bytes: text.into_bytes(),
+        marker: delivery_marker(reference),
+    }
 }
 
 /// What an operator broadcast looks like in a worker's terminal.
@@ -1076,28 +1141,55 @@ pub(super) fn task_message_message(messages: &[TaskMessageDispatch]) -> Vec<u8> 
 /// Says it went to everyone, because a worker that cannot tell a broadcast from
 /// a message addressed to it will answer as though it were asked personally,
 /// and thirty-nine workers each replying to one announcement is its own outage.
-pub(super) fn operator_broadcast_message(body: &str) -> Vec<u8> {
+pub(super) fn operator_broadcast_message(
+    group: &[OperatorBroadcastDispatch],
+) -> CoordinationMessage {
+    let body = group
+        .iter()
+        .map(|dispatch| dispatch.body.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
     // Ends with \r for the reason spelled out in task_message_message: that
     // byte is the submit flag, and \n leaves this typed into the composer,
     // unsent, while the delivery pass records it as delivered.
-    format!(
-        "[Broadcast from the operator to every running worker]\n{body}\n\nThis went to all \
-         workers at once. It is not addressed to you personally and wants no reply unless it \
-         asks for one.\r"
-    )
-    .into_bytes()
+    // THE ID IN THE HEADER IS THE MARKER, and it is why the header carries one
+    // at all. Delivery holds Enter until it can see this line on screen; with no
+    // id in the text there was nothing to see, so Enter was never sent and the
+    // operator pressed it themselves on every worker. Reported 2026-09-02: "when
+    // I sent a broadcast, it only goes to certain workers and it didn't hit
+    // enter after so I had to do that manually."
+    let reference = group
+        .first()
+        .map(|dispatch| dispatch.broadcast_id.as_str())
+        .unwrap_or_default();
+    CoordinationMessage {
+        bytes: format!(
+            "[Broadcast from the operator to every running worker · {reference}]\n{body}\n\nThis \
+             went to all workers at once. It is not addressed to you personally and wants no \
+             reply unless it asks for one.\r"
+        )
+        .into_bytes(),
+        marker: delivery_marker(reference),
+    }
 }
 
-pub(super) fn task_outcome_message(outcomes: &[TaskOutcomeDispatch]) -> Vec<u8> {
+pub(super) fn task_outcome_message(outcomes: &[TaskOutcomeDispatch]) -> CoordinationMessage {
     let Some((first, rest)) = outcomes.split_first() else {
-        return Vec::new();
+        return CoordinationMessage {
+            bytes: Vec::new(),
+            marker: Vec::new(),
+        };
     };
+    let marker = delivery_marker(first.task_id);
     if rest.is_empty() {
-        return format!(
-            "[Swarm worker outcome] {} Use swarm_list_tasks and task history for authoritative context.\r",
-            one_outcome(first, HANDOFF_EXCERPT_BYTES),
-        )
-        .into_bytes();
+        return CoordinationMessage {
+            bytes: format!(
+                "[Swarm worker outcome] {} Use swarm_list_tasks and task history for authoritative context.\r",
+                one_outcome(first, HANDOFF_EXCERPT_BYTES),
+            )
+            .into_bytes(),
+            marker,
+        };
     }
     // The excerpt budget is per message, not per outcome, so a burst of six
     // does not paste six times as much as one did.
@@ -1108,11 +1200,14 @@ pub(super) fn task_outcome_message(outcomes: &[TaskOutcomeDispatch]) -> Vec<u8> 
         .map(|(index, outcome)| format!("{}) {}", index + 1, one_outcome(outcome, budget)))
         .collect::<Vec<_>>()
         .join(" ");
-    format!(
-        "[Swarm worker outcome] {} tasks reported. {reported} Use swarm_list_tasks and task history for authoritative context.\r",
-        outcomes.len(),
-    )
-    .into_bytes()
+    CoordinationMessage {
+        bytes: format!(
+            "[Swarm worker outcome] {} tasks reported. {reported} Use swarm_list_tasks and task history for authoritative context.\r",
+            outcomes.len(),
+        )
+        .into_bytes(),
+        marker,
+    }
 }
 
 fn one_outcome(outcome: &TaskOutcomeDispatch, budget: usize) -> String {
@@ -1220,9 +1315,19 @@ mod tests {
             TerminalSize::new(24, columns),
         );
         state.push(format!("{prefix}{marker} and the rest of the briefing").into_bytes());
-        let TerminalSnapshot { bytes, .. } = state.snapshot();
-        let marker = marker.as_bytes();
-        bytes.windows(marker.len()).any(|part| part == marker)
+        // SEARCH WHAT DELIVERY SEARCHES. This read the raw journal until
+        // 2026-09-02 — a copy of the bytes just pushed, which contains them by
+        // definition — so the test could not fail whatever the terminal did to
+        // them, and the wrap column it names was never exercised.
+        // observe_stable_marker reads the re-rendered screen, and that is the
+        // surface where a token can be broken.
+        let TerminalSnapshot {
+            bytes,
+            rows,
+            columns,
+            ..
+        } = state.snapshot();
+        snapshot_plain_text(&bytes, rows, columns).contains(marker)
     }
 
     #[test]
@@ -1267,13 +1372,28 @@ mod tests {
         //
         // Written while eliminating that as the cause of a real unconfirmed
         // delivery. It is not the cause, and this keeps it from becoming one.
-        let marker = "01a0169f";
+        // A WHOLE ID, because that is what a marker is now. It was eight bytes
+        // when this test was written, and eight bytes of a UUIDv7 identifies a
+        // ~65 second window rather than a delivery — see `delivery_marker`. A
+        // 36 character marker crosses far more wrap columns than an 8 character
+        // one, so the length change is exactly what this has to cover.
+        let marker = "01a0169f-4c1a-7c3e-9b2d-5f0e8a71c204";
 
         assert!(marker_survives_render(80, "moved task ", marker));
-        // Starting at column 37 of a 40 column terminal, so it crosses the wrap.
-        assert!(marker_survives_render(40, &"x".repeat(36), marker));
-        // And immediately before the boundary, the other side of the same edge.
-        assert!(marker_survives_render(40, &"x".repeat(32), marker));
+        // Every offset across the boundary at three widths, rather than the two
+        // hand-picked offsets this used to try. vt100 omits the newline on a
+        // wrap-continuation row, so a marker comes back contiguous — but that is
+        // a property of the renderer, not something the delivery code controls,
+        // and this is what would notice if it changed.
+        for columns in [40u16, 80, 120] {
+            for offset in 0..=usize::from(columns) + 1 {
+                assert!(
+                    marker_survives_render(columns, &"x".repeat(offset), marker),
+                    "a marker broken at the wrap is a delivery that can never be confirmed \
+                     (columns={columns}, offset={offset})"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1631,7 +1751,7 @@ mod tests {
             outcome("c", "Sculpt Studio", "the countdown is audible"),
         ];
 
-        let message = String::from_utf8(task_outcome_message(&burst)).unwrap();
+        let message = String::from_utf8(task_outcome_message(&burst).bytes).unwrap();
 
         assert!(message.starts_with("[Swarm worker outcome] 3 tasks reported."));
         for reporter in ["Architecture", "RCG Hub", "Sculpt Studio"] {
@@ -1650,7 +1770,9 @@ mod tests {
     #[test]
     fn a_burst_costs_about_what_one_outcome_costs() {
         let long = "x".repeat(4_000);
-        let one = task_outcome_message(&[outcome("a", "Architecture", &long)]).len();
+        let one = task_outcome_message(&[outcome("a", "Architecture", &long)])
+            .bytes
+            .len();
         let six = task_outcome_message(&[
             outcome("a", "Architecture", &long),
             outcome("b", "RCG Hub", &long),
@@ -1659,6 +1781,7 @@ mod tests {
             outcome("e", "Admin", &long),
             outcome("f", "Nexus", &long),
         ])
+        .bytes
         .len();
 
         assert!(
@@ -1671,12 +1794,9 @@ mod tests {
     /// shape for everything.
     #[test]
     fn a_single_outcome_is_unchanged() {
-        let message = String::from_utf8(task_outcome_message(&[outcome(
-            "a",
-            "Architecture",
-            "fixed",
-        )]))
-        .unwrap();
+        let message =
+            String::from_utf8(task_outcome_message(&[outcome("a", "Architecture", "fixed")]).bytes)
+                .unwrap();
 
         assert!(message.starts_with("[Swarm worker outcome] Architecture moved task "));
         assert!(!message.contains("tasks reported"));
@@ -1697,6 +1817,143 @@ mod tests {
     /// A per-builder test would not have caught it. The flag lives in the
     /// SUBMITTER and the builders are what must satisfy it, so the assertion
     /// belongs across all of them at once.
+    /// THE MARKER MUST BE IN THE BYTES. Every delivery, no exceptions.
+    ///
+    /// Delivery does not press Enter on faith. It writes the message, then
+    /// searches the RENDERED SCREEN for the marker and only submits once it can
+    /// see it. So a marker that is not in the bytes is not a weak check — it is
+    /// a check that can never pass. Enter is never sent, the message sits unsent
+    /// in the recipient's prompt, and the delivery is recorded as delivered.
+    ///
+    /// TWO OF THE SIX WERE WRONG WHEN THIS WAS WRITTEN, and both had shipped.
+    /// A broadcast passed its broadcast id while its text carried no id at all.
+    /// A worker message passed its MESSAGE id while its text wrote the TASK id —
+    /// a different id, one character class away from looking correct in review.
+    /// Briefs, decisions, outcomes and automation runs were right, which is why
+    /// the mechanism looked like it worked: the paths anyone tested by hand
+    /// were the four sound ones.
+    ///
+    /// Neither failure was visible from anywhere. An unfindable marker produces
+    /// exactly the same log line as a terminal too busy to settle, so 24
+    /// uncertain submissions on the first real broadcast read as load.
+    ///
+    /// EVERY BUILDER AT ONCE, AND NAMED IN THE FAILURE. Checking one path would
+    /// have passed on any of the four sound ones. The failure message has to
+    /// say WHICH message is wrong and what it was looking for, because a red
+    /// test that only says "some marker is missing" sends the next reader back
+    /// to re-derive the finding from scratch.
+    #[test]
+    fn every_delivered_message_contains_the_marker_delivery_will_look_for() {
+        let session = WorkerSessionId::new();
+        // FIXED IDS, AND THAT IS LOAD-BEARING. Written first with TaskId::new()
+        // for both, this test PASSED the task-message case it was written to
+        // fail — two UUIDv7s minted in the same millisecond share their first
+        // eight characters, which is all a marker takes. The bug hid inside the
+        // test for the bug. Distinct prefixes here are what make the check real,
+        // and the ease of losing it is the second half of this defect: eight
+        // characters of a UUIDv7 is a ~65 second bucket, not an identity.
+        let task: TaskId = "01a06300-0000-7000-8000-000000000001"
+            .parse()
+            .expect("a fixed task id");
+        let message_id = "01a0f00d-0000-7000-8000-000000000002".to_owned();
+        let built: Vec<(&str, CoordinationMessage)> = vec![
+            (
+                "task brief",
+                task_dispatch_message(&TaskDispatch {
+                    assignment_id: "assignment-1".to_owned(),
+                    task_id: task,
+                    worker_id: WorkerId::new(),
+                    session_id: session,
+                    title: "Repoint the syslog forwarder".to_owned(),
+                    description: String::new(),
+                    priority: swarm_domain::TaskPriority::High,
+                    workspace: "/workspace".to_owned(),
+                    operator_instruction: String::new(),
+                    operator_rulings: Vec::new(),
+                    email_requester: None,
+                }),
+            ),
+            (
+                "operator decision",
+                decision_delivery_message(&DecisionDispatch {
+                    decision_id: "01a0beef-0000-7000-8000-000000000003"
+                        .parse()
+                        .expect("a fixed decision id"),
+                    worker_id: WorkerId::new(),
+                    session_id: session,
+                    action: "Release the hold".to_owned(),
+                    note: String::new(),
+                    answers: Default::default(),
+                }),
+            ),
+            (
+                "operator broadcast",
+                operator_broadcast_message(&[broadcast("please pause")]),
+            ),
+            (
+                "task message",
+                task_message_message(&[TaskMessageDispatch {
+                    message_id,
+                    task_id: task,
+                    task_title: "Some work".to_owned(),
+                    session_id: session,
+                    sender: swarm_persistence::MessageParty::Queen,
+                    sender_name: "Queen".to_owned(),
+                    body: "Which SHA did this ship as?".to_owned(),
+                }]),
+            ),
+            (
+                "task outcome",
+                task_outcome_message(&[outcome("a", "Architecture", "fixed")]),
+            ),
+            (
+                "queen automation run",
+                queen_automation_message(&QueenAutomationDelivery {
+                    run_id: "run-1".to_owned(),
+                    session_id: session,
+                    worker_id: WorkerId::new(),
+                    trigger: QueenAutomationTrigger::ActionableWork,
+                    actionable_count: 1,
+                    presence: PresenceMode::AtHive,
+                }),
+            ),
+        ];
+
+        let missing = built
+            .iter()
+            .filter(|(_, message)| {
+                message.marker.is_empty()
+                    || !message
+                        .bytes
+                        .windows(message.marker.len())
+                        .any(|part| part == message.marker)
+            })
+            .map(|(name, message)| {
+                format!(
+                    "{name}: marker {:?} is nowhere in {:?}",
+                    String::from_utf8_lossy(&message.marker),
+                    String::from_utf8_lossy(&message.bytes),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            missing.is_empty(),
+            "a marker absent from the message can never be found on screen, so Enter is never \
+             sent and the message sits unsent while the record says delivered:\n  {}",
+            missing.join("\n  "),
+        );
+    }
+
+    fn broadcast(body: &str) -> OperatorBroadcastDispatch {
+        OperatorBroadcastDispatch {
+            broadcast_id: TaskId::new().to_string(),
+            worker_id: WorkerId::new().to_string(),
+            session_id: WorkerSessionId::new(),
+            body: body.to_owned(),
+        }
+    }
+
     #[test]
     fn every_delivered_message_ends_with_the_submit_byte() {
         let session = WorkerSessionId::new();
@@ -1709,12 +1966,14 @@ mod tests {
             presence: PresenceMode::AtHive,
         });
         assert_eq!(
-            queen.last(),
+            queen.bytes.last(),
             Some(&b'\r'),
             "the automation brief must submit"
         );
         assert_eq!(
-            operator_broadcast_message("reloading in five minutes").last(),
+            operator_broadcast_message(&[broadcast("reloading in five minutes")])
+                .bytes
+                .last(),
             Some(&b'\r'),
             "a broadcast that does not submit reaches every worker's composer and nobody's turn"
         );
@@ -1729,7 +1988,7 @@ mod tests {
             body: "Which SHA did this ship as?".to_owned(),
         }]);
         assert_eq!(
-            message.last(),
+            message.bytes.last(),
             Some(&b'\r'),
             "a message that does not submit is typed into the prompt and reported delivered"
         );
@@ -1750,14 +2009,17 @@ mod tests {
     /// deployment she may not perform during an unattended run but may route.
     #[test]
     fn the_run_brief_names_finished_work_and_the_move_for_each_state() {
-        let message = String::from_utf8(queen_automation_message(&QueenAutomationDelivery {
-            run_id: "run-1".to_owned(),
-            session_id: WorkerSessionId::new(),
-            worker_id: WorkerId::new(),
-            trigger: QueenAutomationTrigger::ActionableWork,
-            actionable_count: 16,
-            presence: PresenceMode::AtHive,
-        }))
+        let message = String::from_utf8(
+            queen_automation_message(&QueenAutomationDelivery {
+                run_id: "run-1".to_owned(),
+                session_id: WorkerSessionId::new(),
+                worker_id: WorkerId::new(),
+                trigger: QueenAutomationTrigger::ActionableWork,
+                actionable_count: 16,
+                presence: PresenceMode::AtHive,
+            })
+            .bytes,
+        )
         .unwrap();
 
         assert!(
