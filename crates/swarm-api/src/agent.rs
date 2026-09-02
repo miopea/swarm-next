@@ -3097,10 +3097,10 @@ fn refresh_jira_project_tool() -> Tool {
 ///
 /// Written by hand, this paragraph would be a second copy of the rules and
 /// would drift from them — which is the defect it exists to fix. On 2026-09-02
-/// Queen tried awaiting_release -> blocked and awaiting_release -> review,
+/// Queen tried `awaiting_release -> blocked` and `awaiting_release -> review`,
 /// was refused both times, and concluded the state could not be left at all.
 /// The worker who filed the ticket repeated that in writing without checking.
-/// BOTH WERE WRONG: awaiting_release -> active exists and always has, and the
+/// BOTH WERE WRONG: `awaiting_release -> active` exists and always has, and the
 /// lifecycle says so in a comment nobody had read. A description confidently
 /// stating the wrong refusals is worse than one stating none, so this one is
 /// not stated by anybody — it is generated.
@@ -3473,7 +3473,6 @@ mod tests {
     /// SILENT omission: a description missing one move reads perfectly.
     #[test]
     fn the_transition_description_names_exactly_the_moves_the_lifecycle_allows() {
-        let described = transition_task_tool().description.expect("a description");
         const EVERY_STATE: [TaskState; 8] = [
             TaskState::Draft,
             TaskState::Ready,
@@ -3484,12 +3483,12 @@ mod tests {
             TaskState::Completed,
             TaskState::Abandoned,
         ];
+        let described = transition_task_tool().description.expect("a description");
         for from in EVERY_STATE {
-            let listed = described
-                .split(&format!("{from} -> "))
-                .nth(1)
-                .map(|rest| rest.split(';').next().unwrap_or_default().to_owned())
-                .unwrap_or_else(|| panic!("{from} is not described at all"));
+            let listed = described.split(&format!("{from} -> ")).nth(1).map_or_else(
+                || panic!("{from} is not described at all"),
+                |rest| rest.split(';').next().unwrap_or_default().to_owned(),
+            );
             for to in EVERY_STATE {
                 let named = listed
                     .split(", ")
@@ -3506,7 +3505,7 @@ mod tests {
 
     /// THE FACT TWO PEOPLE GOT WRONG IN WRITING, pinned so a third does not.
     ///
-    /// Queen tried awaiting_release -> blocked and awaiting_release -> review,
+    /// Queen tried `awaiting_release -> blocked` and `awaiting_release -> review`,
     /// was refused both times, and reported that the state could not be left.
     /// I filed a ticket repeating it and wrote "the one-way door stays" into
     /// the scope. Neither of us tried the exit that exists.

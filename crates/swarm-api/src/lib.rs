@@ -1869,14 +1869,18 @@ impl AppState {
                 }
                 Ok(TerminalSubmission::Deferred(reason)) => {
                     tracing::info!(decision_id = %delivery.decision_id, worker_id = %delivery.worker_id, ?reason, "decision delivery is held at this worker's prompt");
-                    let _ = store.record_coordinator_refusal(
-                        reason.refusal_kind(),
-                        &format!("decision:{}", delivery.decision_id),
-                        Some(delivery.worker_id),
-                        None,
-                        &reason.describe("An answer"),
-                        unix_timestamp(),
-                    );
+                    // A cooldown is not a refusal anybody must act on, so it does not
+                    // become coordinator attention. See DeferralReason::refusal_kind.
+                    if let Some(kind) = reason.refusal_kind() {
+                        let _ = store.record_coordinator_refusal(
+                            kind,
+                            &format!("decision:{}", delivery.decision_id),
+                            Some(delivery.worker_id),
+                            None,
+                            &reason.describe("An answer"),
+                            unix_timestamp(),
+                        );
+                    }
                     store.defer_decision_delivery(delivery.decision_id, unix_timestamp())
                 }
                 Ok(TerminalSubmission::Rejected { code, message }) => {
@@ -1969,14 +1973,18 @@ impl AppState {
                 }
                 Ok(TerminalSubmission::Deferred(reason)) => {
                     tracing::info!(task_id = %delivery.task_id, worker_id = %delivery.worker_id, ?reason, "task briefing is held at this worker's prompt");
-                    let _ = store.record_coordinator_refusal(
-                        reason.refusal_kind(),
-                        &format!("task-brief:{}", delivery.task_id),
-                        Some(delivery.worker_id),
-                        None,
-                        &reason.describe("A briefing"),
-                        unix_timestamp(),
-                    );
+                    // A cooldown is not a refusal anybody must act on, so it does not
+                    // become coordinator attention. See DeferralReason::refusal_kind.
+                    if let Some(kind) = reason.refusal_kind() {
+                        let _ = store.record_coordinator_refusal(
+                            kind,
+                            &format!("task-brief:{}", delivery.task_id),
+                            Some(delivery.worker_id),
+                            None,
+                            &reason.describe("A briefing"),
+                            unix_timestamp(),
+                        );
+                    }
                     store.defer_task_dispatch(&delivery.assignment_id, unix_timestamp())
                 }
                 Ok(TerminalSubmission::Rejected { code, message }) => {
@@ -2212,14 +2220,18 @@ impl AppState {
                 }
                 Ok(TerminalSubmission::Deferred(reason)) => {
                     tracing::info!(task_id = %outcome.task_id, reporter_id = %outcome.reporting_worker_id, recipient_id = %outcome.recipient_worker_id, ?reason, "task outcome is held at this worker's prompt");
-                    let _ = store.record_coordinator_refusal(
-                        reason.refusal_kind(),
-                        &format!("task-outcome:{}", outcome.task_id),
-                        Some(outcome.recipient_worker_id),
-                        None,
-                        &reason.describe("An outcome report"),
-                        unix_timestamp(),
-                    );
+                    // A cooldown is not a refusal anybody must act on, so it does not
+                    // become coordinator attention. See DeferralReason::refusal_kind.
+                    if let Some(kind) = reason.refusal_kind() {
+                        let _ = store.record_coordinator_refusal(
+                            kind,
+                            &format!("task-outcome:{}", outcome.task_id),
+                            Some(outcome.recipient_worker_id),
+                            None,
+                            &reason.describe("An outcome report"),
+                            unix_timestamp(),
+                        );
+                    }
                     store.defer_task_outcome(&outcome.id, unix_timestamp())
                 }
                 Ok(TerminalSubmission::Rejected { code, message }) => {
@@ -2328,14 +2340,18 @@ impl AppState {
             }
             Ok(TerminalSubmission::Deferred(reason)) => {
                 tracing::info!(run_id = %delivery.run_id, ?reason, "Queen automation is held at Queen's prompt");
-                let _ = store.record_coordinator_refusal(
-                    reason.refusal_kind(),
-                    "queen-review",
-                    Some(delivery.worker_id),
-                    Some(delivery.session_id),
-                    &reason.describe("Queen's review"),
-                    unix_timestamp(),
-                );
+                // A cooldown is not a refusal anybody must act on, so it does not
+                // become coordinator attention. See DeferralReason::refusal_kind.
+                if let Some(kind) = reason.refusal_kind() {
+                    let _ = store.record_coordinator_refusal(
+                        kind,
+                        "queen-review",
+                        Some(delivery.worker_id),
+                        Some(delivery.session_id),
+                        &reason.describe("Queen's review"),
+                        unix_timestamp(),
+                    );
+                }
                 store.defer_queen_automation_delivery(&delivery.run_id, unix_timestamp())
             }
             Ok(TerminalSubmission::Rejected { code, message }) => {

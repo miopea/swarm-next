@@ -3884,10 +3884,10 @@ fn migrate_broadcast_expiry(transaction: &rusqlite::Transaction<'_>) -> rusqlite
 /// indistinguishable from one the running worker read and acted on. The sender
 /// saw "delivered" for both, so it stopped chasing the one nobody living had
 /// been told about. Queen caught the case that prompted this only by reading a
-/// delivery timestamp against the session id from swarm_list_workers BY HAND.
+/// delivery timestamp against the session id from `swarm_list_workers` BY HAND.
 ///
-/// THE BROADCAST PATH ALREADY DID THIS. operator_broadcast_deliveries has
-/// carried session_id since schema 119, and task_messages did not — the same
+/// THE BROADCAST PATH ALREADY DID THIS. `operator_broadcast_deliveries` has
+/// carried `session_id` since schema 119, and `task_messages` did not — the same
 /// feature area at two levels of record-keeping, which nobody decided.
 ///
 /// Existing rows keep NULL, and NULL means "delivered before this column

@@ -49,15 +49,25 @@ pub(super) enum DeferralReason {
 }
 
 impl DeferralReason {
-    /// The refusal kind this deferral is recorded under.
+    /// The refusal kind this deferral is recorded under, if it is one at all.
     ///
     /// The control room branches on the kind rather than reading the prose, so
-    /// the two situations can be told apart without matching on a sentence.
-    pub(super) fn refusal_kind(self) -> &'static str {
+    /// the situations can be told apart without matching on a sentence.
+    ///
+    /// NONE FOR A COOLDOWN, AND THAT IS THE POINT OF THE OPTION. The other two
+    /// are things a PERSON must fix — answer the prompt, clear the unsent line —
+    /// and they sit in coordinator attention until somebody does. A cooldown is
+    /// normal operation that resolves itself in five minutes. Recording it as
+    /// attention would put a permanent, self-clearing entry in front of the
+    /// operator every time coordination worked correctly, which is how a
+    /// surface that means "something needs you" stops meaning anything.
+    pub(super) fn refusal_kind(self) -> Option<&'static str> {
         match self {
-            Self::ProviderBusy => swarm_persistence::REFUSAL_DELIVERY_HELD,
-            Self::PromptHoldsUnsentText => swarm_persistence::REFUSAL_DELIVERY_HELD_UNSENT_TEXT,
-            Self::RecentDelivery => swarm_persistence::REFUSAL_DELIVERY_HELD,
+            Self::ProviderBusy => Some(swarm_persistence::REFUSAL_DELIVERY_HELD),
+            Self::PromptHoldsUnsentText => {
+                Some(swarm_persistence::REFUSAL_DELIVERY_HELD_UNSENT_TEXT)
+            }
+            Self::RecentDelivery => None,
         }
     }
 
@@ -871,7 +881,7 @@ pub(super) enum Cadence {
     /// ONLY OPERATOR BROADCASTS. A person has just typed something to every
     /// running worker and is waiting on it — "please pause so I can reload" is
     /// worthless five minutes late. It is also the one message class with an
-    /// expiry: BROADCAST_DELIVERY_WINDOW_SECONDS is 600, and a 300 second
+    /// expiry: `BROADCAST_DELIVERY_WINDOW_SECONDS` is 600, and a 300 second
     /// cooldown would silently eat half of every broadcast's window.
     Immediate,
 }
@@ -879,7 +889,7 @@ pub(super) enum Cadence {
 /// The handle delivery searches the rendered screen for.
 ///
 /// THE WHOLE ID, NOT A PREFIX OF IT. This took the first eight bytes until
-/// 2026-09-02, which for a UUIDv7 is the high 32 bits of a millisecond
+/// 2026-09-02, which for a `UUIDv7` is the high 32 bits of a millisecond
 /// timestamp — a bucket about 65 SECONDS WIDE, not an identity. Measured
 /// against this Hive's own task messages and broadcasts: three-way prefix
 /// collisions were routine and the widest span sharing one prefix was 59
@@ -1177,7 +1187,7 @@ pub(super) fn task_message_message(messages: &[TaskMessageDispatch]) -> Coordina
     if messages.len() > 1 {
         let _ = write!(text, "s ({})", messages.len());
     }
-    let _ = write!(text, " via Swarm · {reference}]\n");
+    let _ = writeln!(text, " via Swarm · {reference}]");
     for message in messages {
         let _ = write!(
             text,
@@ -1739,11 +1749,20 @@ mod tests {
         assert_ne!(busy.refusal_kind(), unsent.refusal_kind());
         assert_eq!(
             busy.refusal_kind(),
-            swarm_persistence::REFUSAL_DELIVERY_HELD
+            Some(swarm_persistence::REFUSAL_DELIVERY_HELD)
         );
         assert_eq!(
             unsent.refusal_kind(),
-            swarm_persistence::REFUSAL_DELIVERY_HELD_UNSENT_TEXT
+            Some(swarm_persistence::REFUSAL_DELIVERY_HELD_UNSENT_TEXT)
+        );
+        // A COOLDOWN IS NOT ATTENTION. The other two sit in front of the
+        // operator until a person acts; this one clears itself in five minutes,
+        // and recording it would put a self-resolving entry on the surface that
+        // exists to mean "something needs you" every time delivery worked.
+        assert_eq!(
+            DeferralReason::RecentDelivery.refusal_kind(),
+            None,
+            "a scheduled wait must not be filed as something the operator has to fix"
         );
 
         let busy_text = busy.describe("Queen's review");
@@ -1898,7 +1917,7 @@ mod tests {
     /// has just typed to every running worker and is waiting. "Please pause so
     /// I can reload" is worthless five minutes late.
     ///
-    /// It is also the only class with an EXPIRY — BROADCAST_DELIVERY_WINDOW_SECONDS
+    /// It is also the only class with an EXPIRY — `BROADCAST_DELIVERY_WINDOW_SECONDS`
     /// is 600 — so a 300 second cooldown would silently consume half of every
     /// broadcast's window and expire some of them outright.
     ///
@@ -1940,7 +1959,7 @@ mod tests {
                     session_id: session,
                     action: "Release the hold".to_owned(),
                     note: String::new(),
-                    answers: Default::default(),
+                    answers: std::collections::BTreeMap::default(),
                 })
                 .cadence,
             ),
@@ -2058,7 +2077,7 @@ mod tests {
                     session_id: session,
                     action: "Release the hold".to_owned(),
                     note: String::new(),
-                    answers: Default::default(),
+                    answers: std::collections::BTreeMap::default(),
                 }),
             ),
             (

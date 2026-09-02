@@ -114,7 +114,7 @@ pub struct TaskMessage {
     /// Whether the session it was written into IS STILL OPEN.
     ///
     /// This is the question Queen was answering by hand, comparing a delivery
-    /// timestamp against the session id from swarm_list_workers. False on a
+    /// timestamp against the session id from `swarm_list_workers`. False on a
     /// delivered message means it was written into a terminal that no longer
     /// exists: the bytes were typed, and nothing running was ever told.
     ///
@@ -503,16 +503,16 @@ mod tests {
     ///
     /// TWO MESSAGES, IDENTICAL RECORDS, DIFFERENT TRUTHS. One is delivered into
     /// a session that then exits; the other into the session that is running
-    /// now. Both come back with a delivered_at and nothing else, so the sender
+    /// now. Both come back with a `delivered_at` and nothing else, so the sender
     /// sees "delivered" for a message no living session was ever told about and
     /// stops chasing it.
     ///
     /// Queen only caught the case that prompted this by reading a delivery
-    /// timestamp against the session id from swarm_list_workers BY HAND. That
+    /// timestamp against the session id from `swarm_list_workers` BY HAND. That
     /// hand comparison is the thing this must remove.
     ///
     /// THE BROADCAST PATH IN THIS SAME FILE ALREADY RECORDS THE SESSION.
-    /// operator_broadcast_deliveries carries session_id; task_messages does
+    /// `operator_broadcast_deliveries` carries `session_id`; `task_messages` does
     /// not. Nobody decided that — it is divergence by authorship, the same
     /// shape as the two dispatch queries that disagreed about following a
     /// worker or a session.
