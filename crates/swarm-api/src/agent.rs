@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-const AGENT_TOOL_SURFACE_REVISION: u32 = 10;
+const AGENT_TOOL_SURFACE_REVISION: u32 = 11;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -403,7 +403,7 @@ const AGENT_TOOL_SURFACE_REVISION: u32 = 10;
 #[cfg(test)]
 /// The served surface as of revision 6. Update this and the revision together.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "ac80b2e99e5b3650c453b5f412ddd7ccb5a2c5ae21f304c6245dc71544f538e8";
+    "3ac170b9feef61377bbd6a4e98cacf432490c54941c54c352e02d5ac4de11ca5";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -1780,16 +1780,32 @@ impl AgentMcp {
     fn record_deployment(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
         let input = parse::<RecordDeploymentInput>(arguments)?;
         let task_id = self.task_evidence_may_reach(&input.task_id)?;
-        let record = self.tasks.store().record_task_deployment(
-            task_id,
-            &input.environment,
-            &input.reference,
-            crate::unix_timestamp(),
-        )?;
+        let store = self.tasks.store();
+        let record = if input.delivers_whole_task {
+            store.record_task_deployment(
+                task_id,
+                &input.environment,
+                &input.reference,
+                crate::unix_timestamp(),
+            )?
+        } else {
+            store.record_partial_task_deployment(
+                task_id,
+                &input.environment,
+                &input.reference,
+                crate::unix_timestamp(),
+            )?
+        };
         structured(json!({
             "task_id": task_id,
             "environment": record.environment,
             "reference": record.reference,
+            "delivers_whole_task": input.delivers_whole_task,
+            "next": if input.delivers_whole_task {
+                "Recorded as delivering the whole task, so work in Review or Awaiting Release closes on it with nobody in the loop."
+            } else {
+                "Recorded as PARTIAL, so this does not close the task. It stays where it is and the remaining work is still owed — say what is left in your handoff, and file the rest if it is a separate piece."
+            },
         }))
     }
 
@@ -2475,6 +2491,16 @@ struct RecordDeploymentInput {
     task_id: String,
     environment: String,
     reference: String,
+    /// Whether this deployment delivers the WHOLE task.
+    ///
+    /// Defaults to true, which is what every deployment meant before this
+    /// existed, so an omitted field behaves exactly as it always did.
+    #[serde(default = "delivers_whole_task_by_default")]
+    delivers_whole_task: bool,
+}
+
+const fn delivers_whole_task_by_default() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -3204,13 +3230,14 @@ fn record_task_commits_tool() -> Tool {
 fn record_deployment_tool() -> Tool {
     tool(
         "swarm_record_deployment",
-        "Record where the finished work is running, as part of completing a task. You deployed it and hold the reference; the operator cannot verify it for you, and until this exists the board shows a completion nobody has shown to be live. Required before an email reply can be drafted.",
+        "Record where the finished work is running, as part of completing a task. You deployed it and hold the reference; the operator cannot verify it for you, and until this exists the board shows a completion nobody has shown to be live. Required before an email reply can be drafted. IF THIS SHIPPED ONLY PART OF THE TASK, SET delivers_whole_task TO FALSE — recording a whole-task deployment CLOSES work in Review automatically, and Completed is terminal, so a partial delivery recorded as a whole one ends a ticket that still owes work.",
         &json!({
             "type": "object",
             "properties": {
                 "task_id": { "type": "string", "format": "uuid" },
                 "environment": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Where it is running, such as production or staging." },
-                "reference": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Anything a third party could use to confirm this is running. Nothing about the shape is required — a bare commit or a bare URL is accepted — but the more checkable the better. Example: \"budgetbug e99140c (PR #66 squash-merge), deploy run 32667983788 — /api/health returns sha e99140c matching origin/main, read 2026-08-23T21:49Z\"." }
+                "reference": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Anything a third party could use to confirm this is running. Nothing about the shape is required — a bare commit or a bare URL is accepted — but the more checkable the better. Example: \"budgetbug e99140c (PR #66 squash-merge), deploy run 32667983788 — /api/health returns sha e99140c matching origin/main, read 2026-08-23T21:49Z\"." },
+                "delivers_whole_task": { "type": "boolean", "description": "Whether this shipped the WHOLE task. Defaults to true. Set it FALSE when part of the work shipped and the rest has not — a real and common state that had no way to be said, so a true deployment for one half closed the whole ticket. False records the deployment as evidence and leaves the task where it is; the acceptance lines you have not met stay owed, and you should name them in your handoff." }
             },
             "required": ["task_id", "environment", "reference"],
             "additionalProperties": false

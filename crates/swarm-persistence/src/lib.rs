@@ -182,7 +182,8 @@ const AWAITING_RELEASE_SCHEMA_VERSION: i64 = 114;
 const RETURNED_REVIEW_SCHEMA_VERSION: i64 = 115;
 const TASK_MESSAGE_SCHEMA_VERSION: i64 = 116;
 const APPROVAL_BASIS_SCHEMA_VERSION: i64 = 117;
-const CURRENT_SCHEMA_VERSION: i64 = APPROVAL_BASIS_SCHEMA_VERSION;
+const PARTIAL_DEPLOYMENT_SCHEMA_VERSION: i64 = 118;
+const CURRENT_SCHEMA_VERSION: i64 = PARTIAL_DEPLOYMENT_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -3569,6 +3570,9 @@ fn migrate_newest_schema_steps(
     if schema_version < APPROVAL_BASIS_SCHEMA_VERSION {
         migrate_approval_basis(transaction)?;
     }
+    if schema_version < PARTIAL_DEPLOYMENT_SCHEMA_VERSION {
+        migrate_partial_deployments(transaction)?;
+    }
     Ok(())
 }
 
@@ -3697,6 +3701,45 @@ fn migrate_approval_basis(transaction: &rusqlite::Transaction<'_>) -> rusqlite::
         )?;
     }
     transaction.pragma_update(None, "user_version", crate::APPROVAL_BASIS_SCHEMA_VERSION)
+}
+
+/// A deployment can say "part of this shipped" instead of "this shipped".
+///
+/// The deterministic sweep closes a task in Review the moment a deployment is
+/// recorded against it, because a deployment normally IS the completion
+/// evidence. Partial delivery is common and the record could not express it: on
+/// 2026-09-02 at 02:08 a worker moved B7 to Review with a handoff opening "TWO
+/// OF THE THREE ACCEPTANCE LINES ARE NOT MET AND I AM NOT CLAIMING THEM",
+/// recorded a true deployment for the half that had shipped, and the sweep
+/// closed the whole ticket one second later. Completed is terminal.
+///
+/// This is NOT the reviewer's-hold case, which the operator ruled the sweep
+/// must keep winning. A hold is somebody's OPINION that work is unfinished, and
+/// obeying it lets a forgotten hold strand work forever. This is the EVIDENCE
+/// itself saying it does not cover the whole ticket, recorded by the author of
+/// the deployment at the moment they record it. The sweep's premise is "a
+/// deployment means this shipped"; against a partial deployment that premise is
+/// simply absent, so there is nothing for it to act on.
+fn migrate_partial_deployments(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('task_deployments')
+         WHERE name = 'delivers_whole_task')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !present {
+        // DEFAULT 1, so every deployment already recorded keeps meaning what it
+        // meant when it was written. A backfill to 0 would retroactively reopen
+        // nothing and unsettle everything.
+        transaction.execute_batch(
+            "ALTER TABLE task_deployments ADD COLUMN delivers_whole_task INTEGER NOT NULL DEFAULT 1;",
+        )?;
+    }
+    transaction.pragma_update(
+        None,
+        "user_version",
+        crate::PARTIAL_DEPLOYMENT_SCHEMA_VERSION,
+    )
 }
 
 /// A governed channel between Queen and a worker, durable on the task.
@@ -8111,6 +8154,13 @@ mod tests {
         SchemaStep {
             table: "task_completion_exemptions",
             artifact: "approved_basis",
+            undo_sql: "",
+            probe_sql: "",
+        },
+        // 118. A plain added column, so the default undo drops it.
+        SchemaStep {
+            table: "task_deployments",
+            artifact: "delivers_whole_task",
             undo_sql: "",
             probe_sql: "",
         },

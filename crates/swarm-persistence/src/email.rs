@@ -617,6 +617,41 @@ impl TaskStore {
         reference: &str,
         deployed_at: i64,
     ) -> Result<TaskDeploymentRecord, TaskStoreError> {
+        self.record_deployment_delivering(task_id, environment, reference, deployed_at, true)
+    }
+
+    /// Records that PART of this task shipped, without claiming the task is done.
+    ///
+    /// The deterministic sweep closes work in Review on a deployment record,
+    /// because a deployment normally is the completion evidence. Partial
+    /// delivery is common and there was no way to say it: on 2026-09-02 a
+    /// worker moved B7 to Review saying in capitals that two of three
+    /// acceptance lines were unmet, recorded a true deployment for the half
+    /// that had shipped, and the sweep closed the ticket one second later.
+    ///
+    /// This is not the reviewer's-hold case. A hold is an OPINION the sweep was
+    /// ruled to override; this is the EVIDENCE declaring its own scope.
+    ///
+    /// # Errors
+    /// Same as [`Self::record_task_deployment`].
+    pub fn record_partial_task_deployment(
+        &self,
+        task_id: TaskId,
+        environment: &str,
+        reference: &str,
+        deployed_at: i64,
+    ) -> Result<TaskDeploymentRecord, TaskStoreError> {
+        self.record_deployment_delivering(task_id, environment, reference, deployed_at, false)
+    }
+
+    fn record_deployment_delivering(
+        &self,
+        task_id: TaskId,
+        environment: &str,
+        reference: &str,
+        deployed_at: i64,
+        delivers_whole_task: bool,
+    ) -> Result<TaskDeploymentRecord, TaskStoreError> {
         let environment = environment.trim();
         let reference = reference.trim();
         if !bounded_text(environment, MAX_DEPLOYMENT_FIELD_BYTES)
@@ -655,13 +690,21 @@ impl TaskStore {
         let id = Uuid::now_v7().to_string();
         transaction.execute(
             "INSERT OR IGNORE INTO task_deployments (
-                 id, task_id, environment, reference, deployed_at, approved_by_operator_id
-             ) SELECT ?1, ?2, ?3, ?4, ?5, o.id
+                 id, task_id, environment, reference, deployed_at, approved_by_operator_id,
+                 delivers_whole_task
+             ) SELECT ?1, ?2, ?3, ?4, ?5, o.id, ?6
                FROM local_hive_identity local
                JOIN hives h ON h.id = local.hive_id
                JOIN operators o ON o.id = h.operator_id
                WHERE local.singleton = 1",
-            params![id, task_id.to_string(), environment, reference, deployed_at],
+            params![
+                id,
+                task_id.to_string(),
+                environment,
+                reference,
+                deployed_at,
+                i64::from(delivers_whole_task)
+            ],
         )?;
         let record = transaction.query_row(
             "SELECT id, task_id, environment, reference, deployed_at, recorded_at
@@ -682,7 +725,7 @@ impl TaskStore {
         // Only from AwaitingRelease. A deployment recorded against work still in
         // Review does NOT close it: that work has not been accepted yet, and
         // shipping something is not the same as somebody agreeing it is done.
-        if task_state == TaskState::AwaitingRelease.to_string() {
+        if task_state == TaskState::AwaitingRelease.to_string() && delivers_whole_task {
             transaction.execute(
                 "UPDATE tasks SET state = ?2, updated_at = ?3 WHERE id = ?1",
                 params![

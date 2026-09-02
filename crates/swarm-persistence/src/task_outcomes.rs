@@ -1166,6 +1166,66 @@ mod completion_evidence_tests {
     /// the sweep obeys can strand work whenever a reviewer forgets it. What was
     /// wrong was not the override but the ERASURE — the board showed Completed
     /// with evidence and no trace that anyone had disagreed.
+    /// A DEPLOYMENT THAT SAYS IT IS PARTIAL IS NOT COMPLETION EVIDENCE.
+    ///
+    /// 2026-09-02, 02:08. A worker moved B7 to Review with a handoff opening
+    /// "TWO OF THE THREE ACCEPTANCE LINES ARE NOT MET AND I AM NOT CLAIMING
+    /// THEM", recorded a TRUE deployment for the half that had shipped, and
+    /// this sweep closed the whole ticket one second later. Completed is
+    /// terminal. The worker did everything right; the record could not express
+    /// partial delivery, so a deployment meant "done" whatever they wrote.
+    ///
+    /// THIS IS NOT THE REVIEWER'S-HOLD CASE ABOVE, and the distinction is the
+    /// fix. A hold is somebody's OPINION that work is unfinished, and the
+    /// operator ruled the sweep must override it — a hold the sweep obeys can
+    /// strand work whenever a reviewer forgets it. This is the EVIDENCE
+    /// declaring its own scope, written by the author of the deployment in the
+    /// same act. The sweep's premise is "a deployment means this shipped";
+    /// against a partial one that premise is absent, so there is nothing to act
+    /// on rather than something to override.
+    #[test]
+    fn a_partial_deployment_does_not_close_the_task_it_only_half_delivers() {
+        let store = TaskStore::in_memory().unwrap();
+        let partial = task(&store);
+        store
+            .record_partial_task_deployment(partial, "production", "the platform half only", 1_000)
+            .unwrap();
+
+        let closed = store.complete_reviewed_work_with_deployment().unwrap();
+
+        assert!(
+            closed.is_empty(),
+            "a deployment that says it delivers part of the task is not evidence the task is done"
+        );
+        assert_eq!(
+            store.get_task(partial).unwrap().state,
+            TaskState::Review,
+            "it stays in Review for the coordinator, which costs one action and is recoverable — \
+             Completed is terminal and is not"
+        );
+    }
+
+    /// And the sweep still closes FULLY delivered work with nobody in the loop.
+    /// Trading one silent failure for a queue of manual approvals would be the
+    /// worse outcome, and it is the thing the ticket explicitly warned against.
+    #[test]
+    fn a_whole_delivery_still_closes_itself() {
+        let store = TaskStore::in_memory().unwrap();
+        let whole = task(&store);
+        store
+            .record_task_deployment(whole, "production", "release 42", 1_000)
+            .unwrap();
+
+        let closed = store.complete_reviewed_work_with_deployment().unwrap();
+
+        assert_eq!(
+            closed.len(),
+            1,
+            "unattended closing is what makes this work"
+        );
+        assert_eq!(store.get_task(whole).unwrap().state, TaskState::Completed);
+    }
+
     #[test]
     fn a_reviewers_hold_survives_the_sweep_that_closes_over_it() {
         let store = TaskStore::in_memory().unwrap();
@@ -1514,7 +1574,20 @@ impl TaskStore {
             let mut statement = connection.prepare(
                 "SELECT task.id, task.title, deployment.environment, deployment.reference
                  FROM tasks task
+                 -- ONLY A DEPLOYMENT THAT CLAIMS THE WHOLE TASK COUNTS.
+                 --
+                 -- This sweep's premise is that a deployment record means the
+                 -- work shipped, which is why closing on it needs no human. A
+                 -- deployment recorded as partial does not carry that premise,
+                 -- so there is nothing here to act on. It is not an override
+                 -- being obeyed -- see the reviewer's-hold case, which the
+                 -- operator ruled this sweep keeps winning -- it is the
+                 -- evidence declaring its own scope.
+                 --
+                 -- A task carrying BOTH a partial and a whole deployment still
+                 -- closes, on the whole one, which is the honest reading.
                  JOIN task_deployments deployment ON deployment.task_id = task.id
+                   AND deployment.delivers_whole_task = 1
                  WHERE task.state = ?1
                    AND task.removed_at IS NULL
                    AND deployment.id = (
