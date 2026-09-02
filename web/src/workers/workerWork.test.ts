@@ -95,3 +95,48 @@ test("falls back to blocked work when there is nothing else open", () => {
 
   expect(work.current?.id).toBe("blocked");
 });
+
+// THE OPERATOR'S TWO SCREENSHOTS, 2026-09-02. The terminal header said
+// "AWAITING RELEASE — Two delivery paths…" with a "+31" badge; the roster card
+// beside it said "1 review · 6 blocked". They asked which was the error.
+//
+// Neither and both. The badge counted all 32 open tasks and was right; the
+// summary dropped `awaiting_release` entirely, so it described 7 of them; and
+// the task the header chose to display was the one the worker was least on.
+test("a worker's finished-but-unshipped work is counted, summarised, and never called current", () => {
+  const tasks = [
+    task("t1", "review", 1),
+    task("t2", "blocked", 2),
+    ...Array.from({ length: 25 }, (_, index) => task(`r${index}`, "awaiting_release", 10 + index)),
+  ];
+
+  const work = workerWork(tasks);
+
+  expect(work.openCount).toBe(27);
+  // The summary must account for every open task, or it disagrees with the
+  // badge printed next to it by exactly the states it forgot.
+  expect(work.summary).toBe("1 review · 25 awaiting_release · 1 blocked");
+  // AND THE HEADER MUST NOT LEAD WITH FINISHED WORK. `indexOf` returned -1 for
+  // awaiting_release and -1 sorts before 0, so it outranked everything.
+  expect(work.current?.state).toBe("review");
+});
+
+// The bug generator, not the bug. A state added to the lifecycle and forgotten
+// in these arrays used to jump to the FRONT of both orders; it must now fall to
+// the back, where being forgotten costs nothing.
+test("a state nobody listed sorts last instead of taking over the display", () => {
+  const unlisted = task("x", "sideways" as Task["state"], 1);
+  const work = workerWork([task("t1", "active", 2), unlisted]);
+
+  expect(work.current?.id).toBe("t1");
+  expect(work.openCount).toBe(2);
+});
+
+// Abandoned is closed. Counting it as open inflates the badge with work nobody
+// will do again — five such tasks sat against this worker when it was found.
+test("abandoned work is closed and does not swell the open count", () => {
+  const work = workerWork([task("t1", "active", 1), task("t2", "abandoned", 2)]);
+
+  expect(work.openCount).toBe(1);
+  expect(work.summary).toBe("1 active");
+});
