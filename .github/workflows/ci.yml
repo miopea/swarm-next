@@ -68,5 +68,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # THE FINGERPRINT TEST NEEDS THE REGISTRY, AND WITHOUT THIS THE JOB WAS
+      # PASSING WITHOUT MEASURING ANYTHING.
+      #
+      # worker-engine-build-id.sh runs `cargo tree --locked --offline`. On a
+      # fresh runner nothing is fetched, so that fails — and in the form this
+      # job was green against, it failed inside a pipeline whose exit status
+      # came from `cut`. The script emitted a fingerprint computed with NO
+      # dependency tree at all: measured on a cold registry it returns
+      # 1670d7aa5769 and exits 0. Stable, plausible, and covering none of what
+      # it claims, which is the exact failure its own header calls the worst
+      # one it can have.
+      #
+      # The script now refuses instead of guessing, which is what turned this
+      # job red and is how the hole was found. Fetching first is what lets it
+      # measure the thing it is supposed to measure.
+      - run: cargo fetch --locked
       - run: packaging/linux/test-worker-engine-build-id.sh
       - run: packaging/linux/test-package-lifecycle.sh
