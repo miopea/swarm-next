@@ -189,7 +189,23 @@ const PARTIAL_DEPLOYMENT_SCHEMA_VERSION: i64 = 118;
 const OPERATOR_BROADCAST_SCHEMA_VERSION: i64 = 119;
 const BROADCAST_EXPIRY_SCHEMA_VERSION: i64 = 120;
 const MESSAGE_DELIVERY_SESSION_SCHEMA_VERSION: i64 = 121;
-const CURRENT_SCHEMA_VERSION: i64 = MESSAGE_DELIVERY_SESSION_SCHEMA_VERSION;
+const DELIVERY_COOLDOWN_SCHEMA_VERSION: i64 = 122;
+const CURRENT_SCHEMA_VERSION: i64 = DELIVERY_COOLDOWN_SCHEMA_VERSION;
+
+/// How long a terminal is left alone after coordination has written to it.
+///
+/// MEASURED, NOT CHOSEN BY FEEL. Across 331 delivery events on this Hive the
+/// gaps between consecutive deliveries to one recipient ran: 10% under a
+/// minute, 39% between one and three minutes, 14% between three and five, and
+/// the rest longer. The complaint is about the middle band — the operator,
+/// watching a worker: "It sure feels like you are getting flooded each time you
+/// stop for even a second." A sixty second cooldown would have merged 33 of
+/// those 331 events; five minutes merges 208.
+///
+/// The cost is latency and it is real: a message that would have arrived in
+/// forty seconds can now wait five minutes. The operator chose that trade with
+/// the cost stated.
+pub const COORDINATION_DELIVERY_COOLDOWN_SECONDS: i64 = 300;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -3593,6 +3609,12 @@ fn migrate_newest_schema_steps(
     if schema_version < MESSAGE_DELIVERY_SESSION_SCHEMA_VERSION {
         migrate_message_delivery_session(transaction)?;
     }
+    // LAST, and it has to stay last. Every migration sets user_version to its
+    // own number as its final act, so one running after this one winds the
+    // recorded version backwards.
+    if schema_version < DELIVERY_COOLDOWN_SCHEMA_VERSION {
+        migrate_delivery_cooldown(transaction)?;
+    }
     Ok(())
 }
 
@@ -3873,6 +3895,49 @@ fn migrate_broadcast_expiry(transaction: &rusqlite::Transaction<'_>) -> rusqlite
 /// history would be inventing one: nothing in the record says which session
 /// took a message that predates the column, and a guessed answer here is worse
 /// than an absent one because it reads exactly like a measured answer.
+/// A terminal remembers when coordination last wrote to it.
+///
+/// DURABLE ON PURPOSE, and the reason is the principle this Hive spent the day
+/// on: a commitment with nowhere durable to live is not a commitment. Holding
+/// this in memory would work until the next API restart, and then every session
+/// in the Hive would be delivered to at once — the exact flood the cooldown
+/// exists to prevent, triggered by the fix for it.
+///
+/// NULL means "coordination has not written here since this column existed",
+/// which correctly reads as "no cooldown in effect" rather than as a delivery
+/// at the epoch.
+fn migrate_delivery_cooldown(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    // GUARDED ON THE TABLE EXISTING AS WELL AS THE COLUMN, which is the house
+    // rule stated on migrate_superseded_exemptions and which I did not read
+    // before writing this: the migration tests rewind `user_version` WITHOUT
+    // rewinding tables, so a step can run against a database that never had the
+    // table it wants to alter. worker_sessions is created at schema 2, and the
+    // v23 fixture starts above that with only its own table — so this failed
+    // with "no such table: worker_sessions" and the ceiling tests said so.
+    let table: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                        WHERE type = 'table' AND name = 'worker_sessions')",
+        [],
+        |row| row.get(0),
+    )?;
+    let has_column: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('worker_sessions')
+                        WHERE name = 'last_coordination_delivery_at')",
+        [],
+        |row| row.get(0),
+    )?;
+    if table && !has_column {
+        transaction.execute_batch(
+            "ALTER TABLE worker_sessions ADD COLUMN last_coordination_delivery_at INTEGER",
+        )?;
+    }
+    transaction.pragma_update(
+        None,
+        "user_version",
+        crate::DELIVERY_COOLDOWN_SCHEMA_VERSION,
+    )
+}
+
 fn migrate_message_delivery_session(
     transaction: &rusqlite::Transaction<'_>,
 ) -> rusqlite::Result<()> {
@@ -8328,6 +8393,13 @@ mod tests {
         SchemaStep {
             table: "task_messages",
             artifact: "delivered_session_id",
+            undo_sql: "",
+            probe_sql: "",
+        },
+        // 122. A plain added column, so the default undo drops it.
+        SchemaStep {
+            table: "worker_sessions",
+            artifact: "last_coordination_delivery_at",
             undo_sql: "",
             probe_sql: "",
         },

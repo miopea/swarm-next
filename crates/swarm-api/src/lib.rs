@@ -15594,10 +15594,34 @@ mod tests {
             task.outcome_delivery_state,
             Some(swarm_domain::TaskOutcomeDeliveryState::Delivered)
         );
+        // TWO WRITES IN ONE PASS IS THE FLOOD, so the second is held. This test
+        // asserted both landed together until 2026-09-02, which was the
+        // behaviour the operator reported as "getting flooded each time you
+        // stop for even a second" — Queen's terminal written to twice at the
+        // first pause she produced.
+        //
+        // HELD IS NOT LOST, and that is the half worth asserting: the run is
+        // deferred and retried, not dropped, so the board is not left unattended.
         let automation = store.queen_automation_status(101).unwrap();
         assert_eq!(
             automation.state,
-            swarm_domain::QueenAutomationState::Running
+            swarm_domain::QueenAutomationState::Queued,
+            "the outcome landed first and started a cooldown, so the run brief waits"
+        );
+
+        // Time passing, expressed directly: the cooldown is a timestamp, and
+        // nothing but the clock releases it. No agent declares itself free and
+        // none can hold it open.
+        store
+            .record_coordination_delivery(queen_terminal.id(), 0)
+            .unwrap();
+        state.deliver_coordination().await;
+
+        let automation = store.queen_automation_status(101).unwrap();
+        assert_eq!(
+            automation.state,
+            swarm_domain::QueenAutomationState::Running,
+            "and once the terminal is no longer cooling, the held run brief arrives"
         );
         assert_eq!(
             automation.trigger,

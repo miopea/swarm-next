@@ -39,6 +39,13 @@ pub(super) enum DeferralReason {
     /// The provider is resting, but its prompt already holds text nobody sent.
     /// Appending to it would merge two unrelated instructions into one Enter.
     PromptHoldsUnsentText,
+    /// Coordination wrote to this terminal recently and is leaving it alone.
+    ///
+    /// NOT A FAILURE, and it is the only deferral that is a deliberate pause
+    /// rather than an obstacle. Nothing is wrong with the terminal; the message
+    /// is being saved up so it arrives with whatever else accumulates instead of
+    /// interrupting again.
+    RecentDelivery,
 }
 
 impl DeferralReason {
@@ -50,6 +57,7 @@ impl DeferralReason {
         match self {
             Self::ProviderBusy => swarm_persistence::REFUSAL_DELIVERY_HELD,
             Self::PromptHoldsUnsentText => swarm_persistence::REFUSAL_DELIVERY_HELD_UNSENT_TEXT,
+            Self::RecentDelivery => swarm_persistence::REFUSAL_DELIVERY_HELD,
         }
     }
 
@@ -61,6 +69,9 @@ impl DeferralReason {
             }
             Self::PromptHoldsUnsentText => format!(
                 "{subject} is waiting because this terminal's prompt holds text that was typed but never sent — clear the line to release it"
+            ),
+            Self::RecentDelivery => format!(
+                "{subject} is waiting so this terminal is not written to twice in a few minutes; it arrives with anything else that accumulates"
             ),
         }
     }
@@ -289,6 +300,20 @@ pub(super) async fn submit_coordination_message(
     session_id: WorkerSessionId,
     message: CoordinationMessage,
 ) -> Result<TerminalSubmission, swarm_terminal::IpcError> {
+    // ONE GATE, HERE, because every delivery path already funnels through this
+    // function. Putting the check in each caller is how the six marker pairings
+    // drifted into two wrong ones this morning.
+    //
+    // A store error does NOT hold the message. Failing to read the cooldown is
+    // not evidence that one is in effect, and treating it as one would turn a
+    // database hiccup into a Hive that silently stops coordinating.
+    if message.cadence == Cadence::Cooled
+        && store
+            .coordination_is_cooling_down(session_id, unix_timestamp())
+            .unwrap_or(false)
+    {
+        return Ok(TerminalSubmission::Deferred(DeferralReason::RecentDelivery));
+    }
     let provider = match store.provider_for_active_session(session_id) {
         Ok(provider) => provider,
         Err(error) => {
@@ -298,7 +323,21 @@ pub(super) async fn submit_coordination_message(
             });
         }
     };
-    submit_terminal_message(client, session_id, provider, message.bytes, &message.marker).await
+    let submission =
+        submit_terminal_message(client, session_id, provider, message.bytes, &message.marker)
+            .await?;
+    // ONLY AN ACKNOWLEDGED WRITE STARTS A COOLDOWN. A deferred or uncertain
+    // delivery interrupted nobody, and starting one for it would delay the
+    // retry of a message that never arrived.
+    if submission == TerminalSubmission::Acknowledged
+        && let Err(error) = store.record_coordination_delivery(session_id, unix_timestamp())
+    {
+        // Worth saying and not worth failing for: the message DID land. A lost
+        // cooldown means the next delivery is early, which is exactly the
+        // behaviour that existed before this and is survivable.
+        tracing::warn!(message = %error, %session_id, "a delivery landed but its cooldown could not be recorded");
+    }
+    Ok(submission)
 }
 
 /// What a read of the terminal says about writing to it now.
@@ -810,6 +849,31 @@ fn resting_prompt_follows_marker(snapshot: &[u8], marker: &[u8]) -> bool {
 pub(super) struct CoordinationMessage {
     pub(super) bytes: Vec<u8>,
     pub(super) marker: Vec<u8>,
+    /// Whether this message waits for the terminal's cooldown, or goes now.
+    ///
+    /// On the message rather than at the call site, for the same reason the
+    /// marker is: a property chosen separately from the message it describes is
+    /// a property that drifts from it. Two of six markers were wrong that way
+    /// this morning.
+    pub(super) cadence: Cadence,
+}
+
+/// Whether a message waits its turn or interrupts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Cadence {
+    /// Held while the terminal is cooling down, and delivered with whatever
+    /// else has accumulated. Everything the BOARD generates is this: briefs,
+    /// messages, outcomes, decision answers, automation runs. None of it is so
+    /// urgent that five minutes matters, and all of it together is the flood.
+    Cooled,
+    /// Written as soon as the terminal is resting, cooldown or not.
+    ///
+    /// ONLY OPERATOR BROADCASTS. A person has just typed something to every
+    /// running worker and is waiting on it — "please pause so I can reload" is
+    /// worthless five minutes late. It is also the one message class with an
+    /// expiry: BROADCAST_DELIVERY_WINDOW_SECONDS is 600, and a 300 second
+    /// cooldown would silently eat half of every broadcast's window.
+    Immediate,
 }
 
 /// The handle delivery searches the rendered screen for.
@@ -865,6 +929,7 @@ pub(super) fn decision_delivery_message(delivery: &DecisionDispatch) -> Coordina
         format!("Answers: {answers}.")
     };
     CoordinationMessage {
+        cadence: Cadence::Cooled,
         bytes: format!(
             "[Swarm decision {} resolved] {} Operator note: {} Use swarm_list_decisions for the full request context.\r",
             delivery.decision_id, outcome, note,
@@ -964,6 +1029,7 @@ pub(super) fn task_dispatch_message(delivery: &TaskDispatch) -> CoordinationMess
         )
     };
     CoordinationMessage {
+        cadence: Cadence::Cooled,
         bytes: format!(
             "[Swarm task {} assigned] {}.{}{}{} Call swarm_list_tasks now and work from its authoritative task details and linked evidence. If this task is not visible, stop; its assignment changed.\r",
             delivery.task_id, title, instruction, ruling, requester,
@@ -1031,6 +1097,7 @@ pub(super) fn queen_automation_message(delivery: &QueenAutomationDelivery) -> Co
     )
     .into_bytes();
     CoordinationMessage {
+        cadence: Cadence::Cooled,
         bytes,
         marker: delivery_marker(&delivery.run_id),
     }
@@ -1131,6 +1198,7 @@ pub(super) fn task_message_message(messages: &[TaskMessageDispatch]) -> Coordina
          to be verified with swarm_list_decisions.\r",
     );
     CoordinationMessage {
+        cadence: Cadence::Cooled,
         bytes: text.into_bytes(),
         marker: delivery_marker(reference),
     }
@@ -1163,6 +1231,7 @@ pub(super) fn operator_broadcast_message(
         .map(|dispatch| dispatch.broadcast_id.as_str())
         .unwrap_or_default();
     CoordinationMessage {
+        cadence: Cadence::Immediate,
         bytes: format!(
             "[Broadcast from the operator to every running worker · {reference}]\n{body}\n\nThis \
              went to all workers at once. It is not addressed to you personally and wants no \
@@ -1176,6 +1245,7 @@ pub(super) fn operator_broadcast_message(
 pub(super) fn task_outcome_message(outcomes: &[TaskOutcomeDispatch]) -> CoordinationMessage {
     let Some((first, rest)) = outcomes.split_first() else {
         return CoordinationMessage {
+            cadence: Cadence::Cooled,
             bytes: Vec::new(),
             marker: Vec::new(),
         };
@@ -1183,6 +1253,7 @@ pub(super) fn task_outcome_message(outcomes: &[TaskOutcomeDispatch]) -> Coordina
     let marker = delivery_marker(first.task_id);
     if rest.is_empty() {
         return CoordinationMessage {
+            cadence: Cadence::Cooled,
             bytes: format!(
                 "[Swarm worker outcome] {} Use swarm_list_tasks and task history for authoritative context.\r",
                 one_outcome(first, HANDOFF_EXCERPT_BYTES),
@@ -1201,6 +1272,7 @@ pub(super) fn task_outcome_message(outcomes: &[TaskOutcomeDispatch]) -> Coordina
         .collect::<Vec<_>>()
         .join(" ");
     CoordinationMessage {
+        cadence: Cadence::Cooled,
         bytes: format!(
             "[Swarm worker outcome] {} tasks reported. {reported} Use swarm_list_tasks and task history for authoritative context.\r",
             outcomes.len(),
@@ -1817,6 +1889,109 @@ mod tests {
     /// A per-builder test would not have caught it. The flag lives in the
     /// SUBMITTER and the builders are what must satisfy it, so the assertion
     /// belongs across all of them at once.
+    /// EXACTLY ONE MESSAGE CLASS INTERRUPTS, and it is the one a person is
+    /// waiting on.
+    ///
+    /// The cooldown exists because everything the BOARD generates arrives at
+    /// whatever pause an agent next produces, so a busy agent is written to at
+    /// every turn boundary. An operator broadcast is not board churn: a human
+    /// has just typed to every running worker and is waiting. "Please pause so
+    /// I can reload" is worthless five minutes late.
+    ///
+    /// It is also the only class with an EXPIRY — BROADCAST_DELIVERY_WINDOW_SECONDS
+    /// is 600 — so a 300 second cooldown would silently consume half of every
+    /// broadcast's window and expire some of them outright.
+    ///
+    /// Asserted over every builder rather than the one that changed, because
+    /// the failure this guards is a NEW path quietly choosing Immediate: one
+    /// exemption is a decision, and a second one nobody argued for is how a
+    /// cooldown stops meaning anything.
+    #[test]
+    fn only_an_operator_broadcast_is_allowed_past_the_cooldown() {
+        let session = WorkerSessionId::new();
+        let task: TaskId = "01a06300-0000-7000-8000-000000000001"
+            .parse()
+            .expect("a fixed task id");
+        let cadences: Vec<(&str, Cadence)> = vec![
+            (
+                "task brief",
+                task_dispatch_message(&TaskDispatch {
+                    assignment_id: "assignment-1".to_owned(),
+                    task_id: task,
+                    worker_id: WorkerId::new(),
+                    session_id: session,
+                    title: "Repoint the syslog forwarder".to_owned(),
+                    description: String::new(),
+                    priority: swarm_domain::TaskPriority::High,
+                    workspace: "/workspace".to_owned(),
+                    operator_instruction: String::new(),
+                    operator_rulings: Vec::new(),
+                    email_requester: None,
+                })
+                .cadence,
+            ),
+            (
+                "operator decision",
+                decision_delivery_message(&DecisionDispatch {
+                    decision_id: "01a0beef-0000-7000-8000-000000000003"
+                        .parse()
+                        .expect("a fixed decision id"),
+                    worker_id: WorkerId::new(),
+                    session_id: session,
+                    action: "Release the hold".to_owned(),
+                    note: String::new(),
+                    answers: Default::default(),
+                })
+                .cadence,
+            ),
+            (
+                "task message",
+                task_message_message(&[TaskMessageDispatch {
+                    message_id: "01a0f00d-0000-7000-8000-000000000002".to_owned(),
+                    task_id: task,
+                    task_title: "Some work".to_owned(),
+                    session_id: session,
+                    sender: swarm_persistence::MessageParty::Queen,
+                    sender_name: "Queen".to_owned(),
+                    body: "Which SHA did this ship as?".to_owned(),
+                }])
+                .cadence,
+            ),
+            (
+                "task outcome",
+                task_outcome_message(&[outcome("a", "Architecture", "fixed")]).cadence,
+            ),
+            (
+                "queen automation run",
+                queen_automation_message(&QueenAutomationDelivery {
+                    run_id: "run-1".to_owned(),
+                    session_id: session,
+                    worker_id: WorkerId::new(),
+                    trigger: QueenAutomationTrigger::ActionableWork,
+                    actionable_count: 1,
+                    presence: PresenceMode::AtHive,
+                })
+                .cadence,
+            ),
+            (
+                "operator broadcast",
+                operator_broadcast_message(&[broadcast("please pause")]).cadence,
+            ),
+        ];
+
+        let immediate = cadences
+            .iter()
+            .filter(|(_, cadence)| *cadence == Cadence::Immediate)
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            immediate,
+            vec!["operator broadcast"],
+            "exactly one class may interrupt a cooling terminal, and a second one \
+             appearing here is a decision somebody has to argue for"
+        );
+    }
+
     /// THE MARKER MUST BE IN THE BYTES. Every delivery, no exceptions.
     ///
     /// Delivery does not press Enter on faith. It writes the message, then

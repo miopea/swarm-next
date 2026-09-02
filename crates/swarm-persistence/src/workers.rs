@@ -1597,6 +1597,71 @@ impl TaskStore {
             .map_err(Into::into)
     }
 
+    /// Whether coordination wrote to this terminal recently enough to leave it
+    /// alone.
+    ///
+    /// THE FLOOD IS NOT THE DELIVERY PATH BEING WRONG. It refuses to write
+    /// unless the provider is resting, so nothing lands mid-turn. But `resting`
+    /// means the prompt is idle, and for an agent in a long exchange that is
+    /// true at every turn boundary it produces — so everything queued while it
+    /// was busy lands the instant it pauses. Measured on this Hive: 34 of 363
+    /// deliveries arrived within five seconds of a previous one to the same
+    /// recipient, 32 of them in the same second, the largest burst five at once
+    /// with the oldest having waited fifteen minutes.
+    ///
+    /// `deliver_coordination` runs on the maintenance sweep AND on essentially
+    /// every board mutation, so on a busy board every pause is a delivery
+    /// opportunity. This is the only thing that makes them rarer.
+    ///
+    /// A cooldown cannot be held open by anybody: it is a timestamp and time
+    /// passes. That is the whole reason it was chosen over an agent declaring
+    /// itself busy, which fails permanently if an agent exits still holding it.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn coordination_is_cooling_down(
+        &self,
+        session_id: WorkerSessionId,
+        now: i64,
+    ) -> Result<bool, TaskStoreError> {
+        let connection = self.connection()?;
+        let last: Option<Option<i64>> = connection
+            .query_row(
+                "SELECT last_coordination_delivery_at FROM worker_sessions
+                 WHERE session_id = ?1 AND ended_at IS NULL",
+                [session_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        // A session nobody has written to, and a session that has ended, both
+        // read as not cooling. The second cannot be delivered to anyway.
+        Ok(last.flatten().is_some_and(|at| {
+            now.saturating_sub(at) < crate::COORDINATION_DELIVERY_COOLDOWN_SECONDS
+        }))
+    }
+
+    /// Records that coordination has just written to this terminal.
+    ///
+    /// Called on an ACKNOWLEDGED write only. A deferred or uncertain delivery
+    /// did not interrupt anybody, and starting a cooldown for one would delay
+    /// the retry of a message that never arrived.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn record_coordination_delivery(
+        &self,
+        session_id: WorkerSessionId,
+        now: i64,
+    ) -> Result<(), TaskStoreError> {
+        let connection = self.connection()?;
+        connection.execute(
+            "UPDATE worker_sessions SET last_coordination_delivery_at = ?2
+             WHERE session_id = ?1",
+            params![session_id.to_string(), now],
+        )?;
+        Ok(())
+    }
+
     /// Releases a session binding after its process exits or is stopped.
     ///
     /// # Errors
@@ -2155,6 +2220,101 @@ pub(super) fn migrate_session_end_reason(
 
 #[cfg(test)]
 mod tests {
+    /// THE COOLDOWN HOLDS, AND THEN IT LETS GO ON ITS OWN.
+    ///
+    /// Both halves matter and only the second one is hard to get wrong by
+    /// accident. A cooldown that never releases is how a worker stops receiving
+    /// coordination forever, which is worse than the flood it prevents — that
+    /// is the failure mode that ruled out an agent declaring itself busy, and
+    /// this asserts the chosen mechanism does not have it.
+    ///
+    /// Measured before it was built: 34 of 363 deliveries arrived within five
+    /// seconds of a previous one to the same recipient, 32 in the same second,
+    /// the largest burst five at once with the oldest having waited fifteen
+    /// minutes. The operator, watching a worker rather than Queen: "It sure
+    /// feels like you are getting flooded each time you stop for even a second."
+    #[test]
+    fn a_terminal_written_to_is_left_alone_and_then_released_by_the_clock() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+
+        assert!(
+            !store.coordination_is_cooling_down(session, 1_000).unwrap(),
+            "a terminal nobody has written to is not cooling down; NULL is not a delivery at the epoch"
+        );
+
+        store.record_coordination_delivery(session, 1_000).unwrap();
+
+        assert!(store.coordination_is_cooling_down(session, 1_000).unwrap());
+        assert!(
+            store
+                .coordination_is_cooling_down(
+                    session,
+                    1_000 + crate::COORDINATION_DELIVERY_COOLDOWN_SECONDS - 1
+                )
+                .unwrap(),
+            "still inside the window"
+        );
+        assert!(
+            !store
+                .coordination_is_cooling_down(
+                    session,
+                    1_000 + crate::COORDINATION_DELIVERY_COOLDOWN_SECONDS
+                )
+                .unwrap(),
+            "TIME RELEASES IT AND NOBODY HAS TO. An agent that exits, hangs, or \
+             never speaks again cannot hold this open — which is the whole reason \
+             it was chosen over a hold an agent takes and releases"
+        );
+    }
+
+    /// A RESTART MUST NOT FLOOD EVERY TERMINAL AT ONCE.
+    ///
+    /// The cooldown is stored rather than held in memory, and this is why: an
+    /// in-memory version would work perfectly until the next API restart and
+    /// then deliver to every session in the Hive simultaneously — the exact
+    /// flood it exists to prevent, caused by the fix for it.
+    ///
+    /// This is the day's principle applied to its own remedy: a commitment with
+    /// nowhere durable to live is not a commitment.
+    #[test]
+    fn a_cooldown_survives_the_process_that_recorded_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm.sqlite3");
+        let session = WorkerSessionId::new();
+        {
+            let store = TaskStore::open(&path).unwrap();
+            let worker = store
+                .create_worker(
+                    "Petal",
+                    ProviderKind::ClaudeCode,
+                    "/workspace/petal",
+                    false,
+                    1,
+                )
+                .unwrap();
+            store.bind_worker_session(worker.id, session).unwrap();
+            store.record_coordination_delivery(session, 1_000).unwrap();
+        }
+        let reopened = TaskStore::open(&path).unwrap();
+        assert!(
+            reopened
+                .coordination_is_cooling_down(session, 1_100)
+                .unwrap(),
+            "a cooldown that does not survive a restart floods every terminal on every restart"
+        );
+    }
+
     /// A worker stood down on purpose says so, and one that simply stopped does
     /// not pretend to.
     ///
