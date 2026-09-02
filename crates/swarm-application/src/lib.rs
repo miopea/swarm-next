@@ -1877,6 +1877,22 @@ impl TaskService {
         self.store.list_tasks().map_err(Into::into)
     }
 
+    /// Settled work, which the board fetches once rather than on every poll.
+    ///
+    /// # Errors
+    /// Returns a persistence error when the board cannot be read.
+    pub fn list_settled_tasks(&self) -> Result<Vec<Task>, ApplicationError> {
+        self.store.list_settled_tasks().map_err(Into::into)
+    }
+
+    /// The browser board's working set: everything except settled work.
+    ///
+    /// # Errors
+    /// Returns a persistence error when the board cannot be read.
+    pub fn list_board_tasks(&self) -> Result<Vec<Task>, ApplicationError> {
+        self.store.list_board_tasks().map_err(Into::into)
+    }
+
     /// Lists the bounded recovery shelf for local, non-Jira work.
     ///
     /// # Errors

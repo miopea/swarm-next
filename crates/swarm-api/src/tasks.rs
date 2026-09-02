@@ -60,6 +60,23 @@ pub(super) async fn list_tasks(
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(tasks)).into_response())
 }
 
+/// Settled work, served separately from the board's polled list.
+///
+/// The board polls every 30 seconds and renders settled work inside a collapsed
+/// panel, so shipping it on every poll cost about 3.4 MB a minute on the
+/// operator's Hive to render a board whose actionable half is 99 rows. This is
+/// fetched when that panel is opened instead.
+pub(super) async fn list_settled_tasks(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let tasks = task_service(&state)?
+        .list_settled_tasks()
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(tasks)).into_response())
+}
+
 pub(super) async fn create_task(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

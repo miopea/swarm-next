@@ -68,6 +68,8 @@ type Props = {
   onJiraImported: () => Promise<void>;
   onEmailImported?: () => Promise<void>;
   onReorder: (taskIds: string[]) => Promise<void>;
+  /** Asked when the completed panel opens, so settled work can be refreshed. */
+  onCompletedPanelOpen?: () => void;
   query?: string;
   filter?: TaskBoardFilter;
   source?: TaskBoardSource;
@@ -145,6 +147,7 @@ export default function TaskBoard({
   onJiraImported,
   onEmailImported = onJiraImported,
   onReorder,
+  onCompletedPanelOpen,
   query = "",
   filter = "all",
   source = "all",
@@ -730,7 +733,11 @@ export default function TaskBoard({
           ref={completedTasksPanel}
           className="completed-tasks"
           open={completedOpen}
-          onToggle={(event) => setCompletedOpen(event.currentTarget.open)}
+          onToggle={(event) => {
+            const open = event.currentTarget.open;
+            setCompletedOpen(open);
+            if (open) onCompletedPanelOpen?.();
+          }}
         >
           <summary><span>Completed work</span><small>{completedTasks.length}</small></summary>
           <div className="task-grid compact">

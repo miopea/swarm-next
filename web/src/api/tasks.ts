@@ -121,6 +121,21 @@ export async function fetchTasks(operatorToken: string): Promise<Task[]> {
   return response.json() as Promise<Task[]>;
 }
 
+/**
+ * Settled work — abandoned, or completed with evidence or a recorded
+ * unverifiable closure. Deliberately NOT part of the board list.
+ *
+ * The control room reloads its whole snapshot on every task event, and settled
+ * work is the large majority of a long-lived Hive: measured on the operator's
+ * board, 462 of 561 tasks and 1,411 KB of the 1,711 KB. The board renders it
+ * inside a collapsed panel, so it was reloaded constantly and looked at rarely.
+ * This is fetched once per page load, and again when that panel is opened.
+ */
+export async function fetchSettledTasks(operatorToken: string): Promise<Task[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/tasks/settled");
+  return response.json() as Promise<Task[]>;
+}
+
 export async function fetchTaskActivity(operatorToken: string, taskId: string, limit = 30): Promise<TaskActivityPage> {
   const response = await authenticatedFetch(
     operatorToken,

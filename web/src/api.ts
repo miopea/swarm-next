@@ -53,6 +53,7 @@ export {
   fetchRemovedTasks,
   fetchTaskActivity,
   fetchTasks,
+  fetchSettledTasks,
   reorderTasks,
   removeTask,
   restoreTask,

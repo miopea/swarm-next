@@ -1,7 +1,7 @@
 import { isClosedTaskState, isOpenTaskState } from "./api/tasks";
 import PublicAddressWarning from "./PublicAddressWarning";
 import StaleBundleNotice from "./StaleBundleNotice";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 
 import {
   assignTask,
@@ -39,6 +39,7 @@ import {
   fetchProviderCapabilities,
   fetchPresentationPreferences,
   fetchTaskActivity,
+  fetchSettledTasks,
   fetchRecentTaskActivity,
   fetchJiraComments,
   addJiraComment,
@@ -220,6 +221,32 @@ export function App() {
     setJiraTaskLinks, setDecisions,
   } = controlRoomModel;
   const loadControlRoom = controlRoomModel.load;
+  /**
+   * SETTLED WORK, HELD SEPARATELY FROM THE BOARD SNAPSHOT.
+   *
+   * The control room reloads its entire snapshot on every task event, and
+   * settled work was the large majority of it — 462 of 561 tasks, 1,411 KB of
+   * 1,711 KB on the operator's Hive — reloaded constantly to render a collapsed
+   * panel. It now loads once per session, and again when that panel is opened,
+   * so an event refresh carries the 99 rows somebody is actually looking at.
+   *
+   * The trade: this list can be stale between those two moments. That is
+   * acceptable because settled work is, by definition, finished — nothing is
+   * coming for it — and opening the panel refreshes it.
+   */
+  const [settledTasks, setSettledTasks] = useState<Task[]>([]);
+  const loadSettledTasks = useCallback((token: string) => {
+    void fetchSettledTasks(token)
+      // A settled list that fails to load must not take the board down with it:
+      // the board's own 99 rows are the ones that matter.
+      .then((settled: Task[]) => { if (Array.isArray(settled)) setSettledTasks(settled); })
+      .catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    if (!operatorToken) { setSettledTasks([]); return; }
+    loadSettledTasks(operatorToken);
+  }, [operatorToken, loadSettledTasks]);
+  const boardTasks = useMemo(() => [...tasks, ...settledTasks], [tasks, settledTasks]);
   const keeper = hiveIdentity?.apiary_context?.mode === "federated" && hiveIdentity.apiary_context.local_role === "keeper";
   const federated = hiveIdentity?.apiary_context?.mode === "federated";
   const [activeSessionId, setActiveSessionId] = useState<string>();
@@ -2244,7 +2271,7 @@ export function App() {
           </Suspense>
         ) : surface === "tasks" ? (
           <Suspense fallback={<WorkspaceLoading label="task board" />}>
-            <TaskBoard tasks={tasks} jiraTaskLinks={jiraTaskLinks} operatorToken={operatorToken} hiveIdentity={hiveIdentity} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} query={taskQuery} filter={taskFilter} source={taskSource} sort={taskSort} project={taskProject} worker={taskWorker} projects={taskProjects} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSourceChange={(value) => { setTaskSource(value); if (value === "email" || value === "local") setTaskProject("all"); }} onSortChange={setTaskSort} onProjectChange={setTaskProject} onWorkerChange={setTaskWorkerFilter} onJiraSync={() => void syncJiraBoard()} onCreate={addTask} onUpdate={editTask} onRemove={removeTaskFromHive} onRestore={restoreTaskToHive} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); void refreshControlRoom(); }} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onFetchJiraComments={(taskId) => fetchJiraComments(operatorToken, taskId)} onAddJiraComment={(taskId, body) => addJiraComment(operatorToken, taskId, body)} onRetryJira={retryTaskJira} onJiraImported={refreshControlRoom} onEmailImported={refreshControlRoom} onReorder={reorderOpenTasks} />
+            <TaskBoard tasks={boardTasks} onCompletedPanelOpen={() => { if (operatorToken) loadSettledTasks(operatorToken); }} jiraTaskLinks={jiraTaskLinks} operatorToken={operatorToken} hiveIdentity={hiveIdentity} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} query={taskQuery} filter={taskFilter} source={taskSource} sort={taskSort} project={taskProject} worker={taskWorker} projects={taskProjects} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSourceChange={(value) => { setTaskSource(value); if (value === "email" || value === "local") setTaskProject("all"); }} onSortChange={setTaskSort} onProjectChange={setTaskProject} onWorkerChange={setTaskWorkerFilter} onJiraSync={() => void syncJiraBoard()} onCreate={addTask} onUpdate={editTask} onRemove={removeTaskFromHive} onRestore={restoreTaskToHive} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); void refreshControlRoom(); }} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onFetchJiraComments={(taskId) => fetchJiraComments(operatorToken, taskId)} onAddJiraComment={(taskId, body) => addJiraComment(operatorToken, taskId, body)} onRetryJira={retryTaskJira} onJiraImported={refreshControlRoom} onEmailImported={refreshControlRoom} onReorder={reorderOpenTasks} />
           </Suspense>
         ) : surface === "apiary" && keeper && hiveIdentity ? (
           <Suspense fallback={<WorkspaceLoading label="Apiary" />}>

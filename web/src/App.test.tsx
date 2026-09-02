@@ -874,6 +874,12 @@ test("creates a persisted task draft from the task board", async () => {
     if (String(url).includes("/api/v1/runtime/tunnel")) {
       return Promise.resolve(ok({ available: false, running: false, serving: false, error: null, url: null, started_at: null, qr_svg: null }));
     }
+    // Settled work loads once per session, outside the control-room snapshot.
+    // Named here for the reason the comment above gives: the queue is consumed
+    // in call order, so an unnamed request shifts every response after it.
+    if (String(url).includes("/api/v1/tasks/settled")) {
+      return Promise.resolve(ok([]));
+    }
     const response = responses.shift();
     if (!response) throw new Error(`Unexpected request: ${String(url)}`);
     return Promise.resolve(response);

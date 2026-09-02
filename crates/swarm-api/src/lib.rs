@@ -3644,6 +3644,7 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/tasks/order", put(tasks::reorder_tasks))
         .route("/api/v1/tasks/activity", get(tasks::recent_task_activity))
         .route("/api/v1/tasks/removed", get(tasks::list_removed_tasks))
+        .route("/api/v1/tasks/settled", get(tasks::list_settled_tasks))
         .route(
             "/api/v1/tasks/{task_id}",
             patch(tasks::update_task).delete(tasks::remove_task),

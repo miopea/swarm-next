@@ -1672,10 +1672,9 @@ impl TaskStore {
     ///
     /// # Errors
     /// Returns an error when persistence cannot be read safely.
-    pub fn list_tasks(&self) -> Result<Vec<Task>, TaskStoreError> {
-        let connection = self.connection()?;
-        let mut statement = connection.prepare(
-            "
+    /// The task projection, shared so the board list and the settled list cannot
+    /// drift apart in what they return.
+    const TASK_PROJECTION: &'static str = "
             SELECT t.id, t.hive_id, t.title, t.description, t.priority, t.workspace, t.state,
                    t.assigned_worker_id, a.worker_session_id,
                    (SELECT state FROM task_dispatches td WHERE td.assignment_id = a.id),
@@ -1695,12 +1694,75 @@ impl TaskStore {
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
-            WHERE t.removed_at IS NULL
-            ORDER BY CASE t.state WHEN 'completed' THEN 1 ELSE 0 END,
-                     CASE t.state WHEN 'completed' THEN -t.updated_at ELSE t.position END,
-                     t.id
-            ",
-        )?;
+";
+
+    /// Work that is finished and needs nobody: abandoned, or completed with
+    /// evidence recorded, or completed and recorded unverifiable.
+    ///
+    /// This is the disjunction `closed_on_evidence` and `closed_unverifiable`
+    /// are derived from in the projection above, and it deliberately does NOT
+    /// include the Jira-owned case the board also files under completed. That
+    /// one depends on Jira link data the server does not hold here, and a task
+    /// this query hides that the board would have shown as unverified lands in
+    /// neither list and disappears from the screen. Leaving those few in the
+    /// board list is the safe direction to be wrong in.
+    const SETTLED_PREDICATE: &'static str = "
+        (t.state = 'abandoned'
+         OR (t.state = 'completed'
+             AND (EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = t.id)
+                  OR EXISTS(SELECT 1 FROM task_completion_exemptions e
+                            WHERE e.task_id = t.id AND e.approved_at IS NOT NULL)
+                  OR EXISTS(SELECT 1 FROM task_unverifiable_closures u WHERE u.task_id = t.id))))
+    ";
+
+    /// THE BROWSER BOARD'S working set: everything except settled work.
+    ///
+    /// Deliberately NOT `list_tasks`. That name is what the agent surface reads
+    /// through `list_visible_tasks`, and narrowing it would have quietly taken
+    /// settled work out of what Queen and every worker can see — a change to
+    /// the agent surface that nobody asked for, to fix a cost in the browser.
+    /// The two callers want different things and now say so.
+    ///
+    /// Settled work is the large majority of a long-lived Hive and the board
+    /// renders it inside a collapsed panel. Measured on the operator's Hive
+    /// 2026-09-02: 561 tasks and 1,711 KB of title and description text, of
+    /// which 462 tasks and 1,411 KB were settled. This endpoint is polled every
+    /// 30 seconds, so shipping them cost about 3.4 MB a minute to render a
+    /// board whose actionable half is 99 rows.
+    ///
+    /// `list_settled_tasks` serves the rest, once, rather than twice a minute.
+    ///
+    /// # Errors
+    /// Returns an error when persistence cannot be read safely.
+    pub fn list_board_tasks(&self) -> Result<Vec<Task>, TaskStoreError> {
+        self.list_tasks_where(&format!("AND NOT {}", Self::SETTLED_PREDICATE))
+    }
+
+    /// Every task on the Hive. What the agent surface reads.
+    ///
+    /// # Errors
+    /// Returns an error when persistence cannot be read safely.
+    pub fn list_tasks(&self) -> Result<Vec<Task>, TaskStoreError> {
+        self.list_tasks_where("")
+    }
+
+    /// Settled work, which the board fetches when its completed panel is opened
+    /// rather than on every poll.
+    ///
+    /// # Errors
+    /// Returns an error when persistence cannot be read safely.
+    pub fn list_settled_tasks(&self) -> Result<Vec<Task>, TaskStoreError> {
+        self.list_tasks_where(&format!("AND {}", Self::SETTLED_PREDICATE))
+    }
+
+    fn list_tasks_where(&self, extra: &str) -> Result<Vec<Task>, TaskStoreError> {
+        let connection = self.connection()?;
+        let sql = format!(
+            "{projection}\n            WHERE t.removed_at IS NULL {extra}\n{ordering}",
+            projection = Self::TASK_PROJECTION,
+            ordering = "            ORDER BY CASE t.state WHEN 'completed' THEN 1 ELSE 0 END,\n                     CASE t.state WHEN 'completed' THEN -t.updated_at ELSE t.position END,\n                     t.id",
+        );
+        let mut statement = connection.prepare(&sql)?;
         statement
             .query_map([], task_from_row)?
             .collect::<Result<Vec<_>, _>>()
@@ -5464,6 +5526,80 @@ mod tests {
     ///
     /// Naming the holder is what makes that guess unnecessary, and the id was
     /// always one column away in the query that raises this.
+    /// THE TWO LISTS MUST PARTITION THE BOARD. Nothing may fall between them.
+    ///
+    /// The board stopped polling settled work, so anything `list_tasks` hides
+    /// and `list_settled_tasks` does not return is closed in the database and
+    /// nowhere on the screen. That is the same disappearance the board model
+    /// warns about where it admits abandoned work to the completed bucket.
+    #[test]
+    fn the_board_list_and_the_settled_list_partition_every_task() {
+        let store = TaskStore::in_memory().unwrap();
+        let mut expected = Vec::new();
+        for (title, state) in [
+            ("still open", TaskState::Ready),
+            ("in flight", TaskState::Active),
+            ("waiting on somebody", TaskState::Review),
+            ("stuck", TaskState::Blocked),
+            ("given up on", TaskState::Abandoned),
+            ("finished with nothing recorded", TaskState::Completed),
+        ] {
+            let task = store.create_task(title, "/workspace").unwrap();
+            if state != TaskState::Draft {
+                for step in [
+                    TaskState::Ready,
+                    TaskState::Active,
+                    TaskState::Review,
+                    state,
+                ] {
+                    if store.transition_task(task.id, step).is_err() {
+                        continue;
+                    }
+                    if store.get_task(task.id).unwrap().state == state {
+                        break;
+                    }
+                }
+            }
+            expected.push(task.id.to_string());
+        }
+
+        let board = store.list_board_tasks().unwrap();
+        let settled = store.list_settled_tasks().unwrap();
+
+        let mut seen: Vec<String> = board
+            .iter()
+            .chain(settled.iter())
+            .map(|task| task.id.to_string())
+            .collect();
+        seen.sort();
+        let mut want = expected.clone();
+        want.sort();
+        assert_eq!(
+            seen, want,
+            "every task must appear in exactly one of the two lists"
+        );
+
+        for task in &board {
+            assert!(
+                !settled.iter().any(|other| other.id == task.id),
+                "a task in both lists would render twice: {}",
+                task.title
+            );
+        }
+        assert!(
+            settled
+                .iter()
+                .any(|task| task.state == TaskState::Abandoned),
+            "abandoned work owes nothing and belongs in the settled list, not the board's"
+        );
+        assert!(
+            board
+                .iter()
+                .any(|task| task.title == "finished with nothing recorded"),
+            "completed work with NO evidence still owes some, so it stays on the board"
+        );
+    }
+
     #[test]
     fn the_busy_refusal_names_the_task_holding_the_slot() {
         let store = TaskStore::in_memory().unwrap();
