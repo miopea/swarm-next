@@ -31,10 +31,43 @@ crlf_checkout=$(build_id)
   exit 1
 }
 
-printf '\n// Task-domain-only test edit.\n' >> "$scratch/crates/swarm-domain/src/lib.rs"
-domain_only=$(build_id)
-[ "$domain_only" = "$baseline" ] || {
-  echo "task-domain-only edits must not request a worker engine restart" >&2
+# THIS ASSERTION USED TO RUN THE OTHER WAY, and reversing it was the whole
+# point of the change. It read "task-domain-only edits must not request a worker
+# engine restart" and required a swarm-domain edit to leave the id alone.
+#
+# That was defensible when it was written -- the terminal host does not use
+# TaskState, so a task-domain edit really is harmless to it -- but the property
+# it asserted is a fact about the current contents of swarm-domain, not about
+# the engine, and nothing fires at the moment it stops being true.
+#
+# It has already stopped being true once. Measured 2026-09-02 by building
+# swarm-terminal-host --release twice per row, deterministically (an identical
+# source rebuild is byte-identical, so a difference means something):
+#
+#   swarm-domain tasks.rs, semantics changed      binary IDENTICAL
+#   swarm-domain ProviderKind::as_str changed     binary IDENTICAL
+#   swarm-domain WorkerSessionId::new changed     binary DIFFERS
+#
+# The host links WorkerSessionId::new, WorkerId::new, PresenceDeviceId and
+# FederationStewardTakeoverLeaseId -- all of them in swarm-domain. So a
+# swarm-domain edit can and does change the compiled engine, and the old
+# assertion forbade the fingerprint from noticing.
+#
+# The cost is deliberate and is the cheaper side of the trade: the fingerprint
+# now moves for swarm-domain edits that do NOT change the binary, so some
+# restarts are unnecessary. An engine reconcile defers while any session is
+# mid-turn and surfaces on the worker engine card, so an unnecessary restart
+# waits for idle -- while a missed one runs the wrong engine silently.
+printf '\n// Linked-crate test edit.\n' >> "$scratch/crates/swarm-domain/src/lib.rs"
+domain_edit=$(build_id)
+[ "$domain_edit" != "$baseline" ] || {
+  echo "an edit to a workspace crate the engine links must move the build id" >&2
+  exit 1
+}
+# Put it back; every assertion below compares against the baseline.
+cp "$repo_root/crates/swarm-domain/src/lib.rs" "$scratch/crates/swarm-domain/src/lib.rs"
+[ "$(build_id)" = "$baseline" ] || {
+  echo "restoring the linked-crate edit did not restore the build id" >&2
   exit 1
 }
 
@@ -91,6 +124,16 @@ if PATH=/usr/bin:/bin sh "$scratch/packaging/linux/worker-engine-build-id.sh" "$
   echo "a missing toolchain still produced a build id" >&2
   exit 1
 fi
+
+# The crate list is derived from cargo rather than written down, so the failure
+# to guard against is no longer "the list is stale" but "the derivation resolved
+# to nothing". A crate cargo names whose directory holds no source must refuse.
+rm -f "$scratch/crates/swarm-domain/src/"*.rs "$scratch/crates/swarm-domain/Cargo.toml"
+if build_id >/dev/null 2>&1; then
+  echo "a dependency contributing no source still produced a build id" >&2
+  exit 1
+fi
+cp -R "$repo_root/crates/swarm-domain" "$scratch/crates/"
 
 rm -rf "$scratch/crates/swarm-terminal-host"
 if build_id >/dev/null 2>&1; then
