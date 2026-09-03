@@ -1,5 +1,7 @@
 #!/bin/sh
-# Run exactly what CI runs, so a local pass means the same thing CI's does.
+# Run the Rust/web validation commands used by CI, after dependency setup.
+# Package, security-action and platform jobs still require CI; this is not a
+# substitute for those jobs or real-device acceptance.
 #
 # ⚠️ THIS EXISTS BECAUSE TYPING THE COMMANDS FAILED TWICE IN ONE DAY, both times
 # in the same shape: the check that ran was not the check that decides.
@@ -24,8 +26,17 @@
 set -eu
 
 cd "$(dirname "$0")/.."
-export PATH="$HOME/.cargo/bin:$PATH"
 export CARGO_INCREMENTAL=0
+
+mode="${1:-all}"
+case "$mode" in
+  rust|web|all) ;;
+  *) printf 'Usage: scripts/verify.sh [rust|web|all]\n' >&2; exit 2 ;;
+esac
+if [ "$#" -gt 1 ]; then
+  printf 'Usage: scripts/verify.sh [rust|web|all]\n' >&2
+  exit 2
+fi
 
 failed=""
 
@@ -45,17 +56,19 @@ step() {
   fi
 }
 
-if [ "${1:-all}" = "rust" ] || [ "${1:-all}" = "all" ]; then
-  step "cargo fmt" cargo fmt --all --check
-  step "cargo clippy" cargo clippy --workspace --all-targets --all-features -- -D warnings
-  step "cargo test" cargo test --workspace --all-features
+if [ "$mode" = "rust" ] || [ "$mode" = "all" ]; then
+  step "cargo fmt" cargo +1.97.1 fmt --all --check
+  step "cargo clippy" cargo +1.97.1 clippy --workspace --all-targets --all-features -- -D warnings
+  step "cargo test" cargo +1.97.1 test --workspace --all-features
+  step "release terminal resize" cargo +1.97.1 test --release -p swarm-terminal resize_updates_pty_and_canonical_dimensions
 fi
 
-if [ "${1:-all}" = "web" ] || [ "${1:-all}" = "all" ]; then
-  # `build` rather than `check`: the reload runs `tsc -b && vite build`, and a
-  # type error that only the build surfaces has already failed a reload once.
-  step "web build" sh -c 'cd web && npm run build'
-  step "web test" sh -c 'cd web && npm test -- --run'
+if [ "$mode" = "web" ] || [ "$mode" = "all" ]; then
+  step "web audit" pnpm audit --prod --audit-level high
+  step "web check" pnpm check
+  step "web test" pnpm test
+  step "dogfood test" pnpm test:dogfood
+  step "web build" pnpm build
 fi
 
 if [ -n "$failed" ]; then

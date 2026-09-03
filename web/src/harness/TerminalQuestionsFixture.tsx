@@ -40,7 +40,6 @@ export default function TerminalQuestionsFixture() {
     const renderer = surface.current;
     setBusy(true);
     setStatus("Rendering synthetic screen");
-    setStatus("Rendering synthetic screen");
     setSerialized(undefined);
     try {
       if (snapshot) await renderer.restore({ sequence: next + 1, rows: 24, columns: width, truncated: false, reason: "attached", bytes: screenBytes(next) });
@@ -49,8 +48,6 @@ export default function TerminalQuestionsFixture() {
       setQuestion(next);
       setColumns(width);
       setStatus(`Ready · synthetic screen ${next + 1} · ${width} columns`);
-    } catch (error) {
-      if (surface.current === renderer) setStatus(`Fixture render failed: ${error instanceof Error ? error.message : "unknown error"}`);
     } catch (error) {
       if (surface.current === renderer) setStatus(`Fixture render failed: ${error instanceof Error ? error.message : "unknown error"}`);
     } finally { if (surface.current === renderer) setBusy(false); }

@@ -163,6 +163,18 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 - TERM-02 remains open: this is not an Android/iOS run or a recorded Claude
   AskUser sequence and does not reproduce or establish a fix for its overwrite.
 
+### P7 foundation: trustworthy verification entrypoint
+
+- `scripts/verify.sh` now rejects invalid/extra modes, pins Rust 1.97.1, includes
+  the release-mode terminal resize test, and uses CI's pnpm audit/check/test/
+  dogfood/build commands. Dependency setup and other CI jobs remain separate.
+- Executable stub-command tests prove command selection, nonzero failure
+  propagation while subsequent checks run, and parity with the Rust/web workflow
+  command lists. Nine dogfood tests passed; these are not actual Rust test runs.
+- Production build caught a duplicated catch in the fixture's post-inspection
+  error handling. Removed the duplicate and reran the production build: passed.
+  The terminal chunk size warning remains (about 539 kB).
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has
