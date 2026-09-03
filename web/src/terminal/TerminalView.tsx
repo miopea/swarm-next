@@ -38,6 +38,10 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   const [connectionState, setConnectionState] = useState<TerminalConnectionState>("connecting");
   const connectionStateRef = useRef<TerminalConnectionState>("connecting");
   const attachmentGeneration = useRef(0);
+  const uploadRequest = useRef<AbortController | undefined>(undefined);
+  const uploadDeadline = useRef<number | undefined>(undefined);
+  const waitingAttachment = useRef(false);
+  const [selectedFile, setSelectedFile] = useState<File>();
   const [detail, setDetail] = useState<string>();
   const [attachmentState, setAttachmentState] = useState<
     "idle" | "uploading" | "waiting" | "ready" | "error"
@@ -47,7 +51,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   // last step does. Without somewhere to keep the path, a file that
   // uploaded perfectly while the socket was down was reported "ready"
   // and pasted nowhere.
-  const [pendingPaste, setPendingPaste] = useState<string>();
+  const [pendingPaste, setPendingPaste] = useState<{ path: string; sessionId: string; controller: TerminalController }>();
   // NAMED IN THE CONFIRMATION. "File added" over a terminal the operator just
   // dropped something into is nearly contentless; the name is what tells them
   // the right file landed.
@@ -70,6 +74,13 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   useEffect(() => {
     const element = mount.current;
     if (!element) return;
+    setPendingPaste(undefined);
+    waitingAttachment.current = false;
+    uploadRequest.current = undefined;
+    setSelectedFile(undefined);
+    setAttachmentName(undefined);
+    setAttachmentError(undefined);
+    setAttachmentState("idle");
     controller.attach(element);
     const subscription = controller.subscribe((state, nextDetail) => {
       connectionStateRef.current = state;
@@ -83,13 +94,15 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
     const findSubscription = controller.subscribeFind(() => setFinding(true));
     return () => {
       attachmentGeneration.current += 1;
+      uploadRequest.current?.abort();
+      window.clearTimeout(uploadDeadline.current);
       connectionStateRef.current = "closed";
       subscription.dispose();
       scrollSubscription.dispose();
       findSubscription.dispose();
       controller.detach();
     };
-  }, [controller]);
+  }, [controller, session.session_id]);
 
   useEffect(() => {
     if (finding) findInput.current?.focus();
@@ -107,7 +120,20 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   }
 
   function dismissAttachmentNotice() {
-    setAttachmentState((state) => (state === "uploading" ? state : "idle"));
+    setAttachmentState((state) => (state === "ready" ? "idle" : state));
+  }
+
+  function removeAttachment() {
+    attachmentGeneration.current += 1;
+    uploadRequest.current?.abort();
+    uploadRequest.current = undefined;
+    window.clearTimeout(uploadDeadline.current);
+    waitingAttachment.current = false;
+    setPendingPaste(undefined);
+    setSelectedFile(undefined);
+    setAttachmentName(undefined);
+    setAttachmentError(undefined);
+    setAttachmentState("idle");
   }
 
   async function handlePaste(event: ClipboardEvent<HTMLDivElement>) {
@@ -169,13 +195,21 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   }
 
   async function addAttachment(file: File) {
-    const generation = attachmentGeneration.current;
+    // One owned selection, including all paste/drop/picker entry points.
+    if (uploadRequest.current || waitingAttachment.current) return;
+    const generation = ++attachmentGeneration.current;
+    const request = new AbortController();
+    uploadRequest.current = request;
+    setSelectedFile(file);
+    const deadline = window.setTimeout(() => request.abort(), 60_000);
+    uploadDeadline.current = deadline;
     setAttachmentState("uploading");
     setAttachmentError(undefined);
     setAttachmentName(file.name);
     try {
-      const path = await uploadTerminalAttachment(operatorToken, session.session_id, file);
+      const path = await uploadTerminalAttachment(operatorToken, session.session_id, file, request.signal);
       if (generation !== attachmentGeneration.current) return;
+      request.signal.throwIfAborted();
       // READ THE CONNECTION AT THE MOMENT OF PASTING, not before uploading. A
       // phone backgrounds this tab to open its file picker and the socket
       // drops, so the state that mattered when the operator tapped is not the
@@ -183,18 +217,23 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
       // reconnect time to finish, or not.
       if (connectionStateRef.current === "connected" && controller.sendInput(terminalAttachmentPaste(path))) {
         setAttachmentState("ready");
+        setSelectedFile(undefined);
         return;
       }
       // TerminalConnection#send DISCARDS ANYTHING SENT WHILE THE SOCKET IS
       // CLOSED, silently and by design. Calling it here would report success
       // for a paste that never happened, which is worse than the silence this
       // change exists to remove: the operator would be told the file arrived.
-      setPendingPaste(path);
+      setPendingPaste({ path, sessionId: session.session_id, controller });
+      waitingAttachment.current = true;
       setAttachmentState("waiting");
     } catch (error) {
       if (generation !== attachmentGeneration.current) return;
-      setAttachmentError(error instanceof Error ? error.message : undefined);
+      setAttachmentError(request.signal.aborted ? "Upload timed out; your selected file is available to retry" : error instanceof Error ? error.message : undefined);
       setAttachmentState("error");
+    } finally {
+      window.clearTimeout(deadline);
+      if (uploadRequest.current === request) uploadRequest.current = undefined;
     }
   }
 
@@ -202,10 +241,13 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   // when they picked the file. Nothing about an uploaded path expires.
   useEffect(() => {
     if (connectionState !== "connected" || pendingPaste === undefined) return;
-    if (!controller.sendInput(terminalAttachmentPaste(pendingPaste))) return;
+    if (pendingPaste.sessionId !== session.session_id || pendingPaste.controller !== controller) return;
+    if (!controller.sendInput(terminalAttachmentPaste(pendingPaste.path))) return;
+    waitingAttachment.current = false;
     setPendingPaste(undefined);
+    setSelectedFile(undefined);
     setAttachmentState("ready");
-  }, [connectionState, pendingPaste, controller]);
+  }, [connectionState, pendingPaste, controller, session.session_id]);
 
   async function copySessionId() {
     try {
@@ -269,6 +311,10 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
               {attachmentState === "uploading" ? `Adding ${attachmentName ?? "file"}…` : attachmentState === "waiting" ? `${attachmentName ?? "File"} uploaded · waiting for the connection to add it` : attachmentState === "ready" ? `Added ${attachmentName ?? "file"} · press Enter to send` : attachmentError ? `Could not add ${attachmentName ?? "file"} — ${attachmentError}. Try again.` : `Could not add ${attachmentName ?? "file"}. Try again.`}
             </small>
           )}
+          {selectedFile && <small className="attachment-selection">Selected file · {Math.max(1, Math.ceil(selectedFile.size / 1024))} KB</small>}
+          {attachmentState === "error" && selectedFile && <button type="button" className="secondary-button" onClick={() => void addAttachment(selectedFile)}>Retry attachment</button>}
+          {(attachmentState === "uploading" || attachmentState === "waiting" || attachmentState === "error") && <button type="button" className="secondary-button" onClick={removeAttachment}>{attachmentState === "uploading" ? "Cancel attachment" : "Remove attachment"}</button>}
+          {attachmentState === "ready" && <button type="button" className="secondary-button" onClick={dismissAttachmentNotice}>Dismiss attachment notice</button>}
         </div>
         {/* Sleep lives in the worker-list menu only. A destructive control on
             the terminal bar is prime space spent on something rarely used, and

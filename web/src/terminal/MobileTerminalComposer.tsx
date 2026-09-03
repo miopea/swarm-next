@@ -109,7 +109,7 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!connected || submitting || draft.length === 0 || attachmentState === "uploading" || attachmentState === "waiting") return;
+    if (!connected || submitting || draft.length === 0 || attachmentState === "uploading" || attachmentState === "waiting" || attachmentState === "error") return;
     const [content, submitKey] = composeTerminalSubmission(draft);
     // Provider TUIs distinguish pasted text from an Enter key event. Keep
     // these as separate WebSocket frames with a brief bounded pause so Codex's
@@ -235,7 +235,7 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
           autoCapitalize="sentences"
           enterKeyHint="enter"
         />
-        <button type="submit" disabled={!connected || submitting || draft.length === 0 || attachmentState === "uploading" || attachmentState === "waiting"}>{submitting ? "Sending…" : "Send"}</button>
+        <button type="submit" disabled={!connected || submitting || draft.length === 0 || attachmentState === "uploading" || attachmentState === "waiting" || attachmentState === "error"}>{submitting ? "Sending…" : "Send"}</button>
         {submissionWarning ? <p role="status">{submissionWarning}</p> : null}
       </form>
       <div className="mobile-terminal-key-heading">
@@ -256,7 +256,7 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
           {onRefresh ? (
             <button type="button" className="terminal-refresh-button" onClick={onRefresh}>Refresh</button>
           ) : null}
-          <button type="button" className="terminal-image-button" disabled={!onAttachment || attachmentState === "uploading"} onClick={openPicker}>{attachmentState === "uploading" ? "Adding…" : attachmentState === "waiting" ? "Waiting…" : "Add file"}</button>
+          <button type="button" className="terminal-image-button" disabled={!onAttachment || attachmentState === "uploading" || attachmentState === "waiting"} onClick={openPicker}>{attachmentState === "uploading" ? "Adding…" : attachmentState === "waiting" ? "Waiting…" : "Add file"}</button>
           <button type="button" className="terminal-keys-toggle" aria-expanded={keysExpanded} onClick={toggleKeys}>{keysExpanded ? "Hide keys" : "Show keys"}</button>
         </div>
         {pickerReturnedNothing && (

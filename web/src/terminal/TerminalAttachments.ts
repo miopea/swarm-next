@@ -197,13 +197,21 @@ export async function uploadTerminalAttachment(
   operatorToken: string,
   sessionId: string,
   file: File,
+  signal?: AbortSignal,
 ): Promise<string> {
-  const response = await recoverTransientRuntime(() => authenticatedFetch(
+  const response = await recoverTransientRuntime(() => {
+    signal?.throwIfAborted();
+    return authenticatedFetch(
     operatorToken,
     `/api/v1/terminal/sessions/${encodeURIComponent(sessionId)}/attachments`,
-    { method: "POST", headers: { "Content-Type": file.type }, body: file },
-  ));
-  return ((await response.json()) as { path: string }).path;
+    { method: "POST", headers: { "Content-Type": file.type }, body: file, signal },
+    );
+  });
+  const body = await response.json() as { path?: unknown };
+  if (typeof body.path !== "string" || !body.path.trim() || /[\x00-\x1f\x7f]/.test(body.path)) {
+    throw new Error("The upload response did not include a usable attachment path");
+  }
+  return body.path;
 }
 
 /** Types the provider turns into a visible chip when a bare path is pasted. */

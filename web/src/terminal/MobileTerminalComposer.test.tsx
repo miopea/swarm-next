@@ -33,6 +33,17 @@ test("refused input preserves the draft instead of silently clearing it", () => 
   expect(onInput).toHaveBeenCalledTimes(1);
 });
 
+test("a failed attachment keeps the draft and blocks Send until resolved or removed", () => {
+  const onInput = vi.fn(() => true);
+  const view = render(<MobileTerminalComposer connectionState="connected" onInput={onInput} attachmentState="error" />);
+  fireEvent.change(screen.getByLabelText(/Message worker/), { target: { value: "see the image" } });
+  expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  view.rerender(<MobileTerminalComposer connectionState="connected" onInput={onInput} attachmentState="idle" />);
+  expect(screen.getByLabelText(/Message worker/)).toHaveValue("see the image");
+  expect(screen.getByRole("button", { name: "Send" })).not.toBeDisabled();
+  expect(onInput).not.toHaveBeenCalled();
+});
+
 test("disconnect cancels a pending Enter and never replays it on reconnect", async () => {
   vi.useFakeTimers();
   const onInput = vi.fn(() => true);

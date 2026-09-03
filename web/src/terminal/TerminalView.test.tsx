@@ -61,6 +61,7 @@ afterEach(() => {
   controller.initialState = "connected";
   controller.stateListener = undefined;
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 test("Ctrl+F opens a find bar that searches the terminal and its scrollback", async () => {
@@ -266,6 +267,80 @@ test("finishing an upload after leaving the view cannot inject into its terminal
   act(() => { uploadDone = composerProps.current!.onAttachment!(new File(["image"], "screen.png", { type: "image/png" })); });
   view.unmount();
   await act(async () => { finish("/tmp/attachments/screen.png"); await uploadDone; });
+  expect(controller.sendInput).not.toHaveBeenCalled();
+});
+
+test("a failed attachment retries the retained file without reopening the picker", async () => {
+  upload.mockClear().mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce("/tmp/attachments/screen.png");
+  render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
+  const file = new File(["image"], "screen.png", { type: "image/png" });
+  await act(async () => { await composerProps.current!.onAttachment!(file); });
+  expect(screen.getByText(/Selected file/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Retry attachment" }));
+  await screen.findByText(/Added screen\.png/);
+  expect(upload.mock.calls[0][2]).toBe(file);
+  expect(upload.mock.calls[1][2]).toBe(file);
+  expect(controller.sendInput).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText(/Selected file/)).not.toBeInTheDocument();
+});
+
+test("overlapping file selections cannot create concurrent uploads", async () => {
+  let finish!: (path: string) => void;
+  upload.mockClear().mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }));
+  render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
+  let first!: Promise<void>;
+  act(() => { first = composerProps.current!.onAttachment!(new File(["one"], "one.png", { type: "image/png" })); });
+  await act(async () => { await composerProps.current!.onAttachment!(new File(["two"], "two.png", { type: "image/png" })); });
+  expect(upload).toHaveBeenCalledTimes(1);
+  expect(screen.getByText(/Adding one.png/)).toBeInTheDocument();
+  await act(async () => { finish("/tmp/attachments/one.png"); await first; });
+});
+
+test("cancelling upload aborts it and a late response cannot insert the file", async () => {
+  let finish!: (path: string) => void;
+  upload.mockClear().mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }));
+  render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
+  let pending!: Promise<void>;
+  act(() => { pending = composerProps.current!.onAttachment!(new File(["image"], "screen.png", { type: "image/png" })); });
+  const signal = upload.mock.calls[0][3] as AbortSignal;
+  fireEvent.click(screen.getByRole("button", { name: "Cancel attachment" }));
+  expect(signal.aborted).toBe(true);
+  await act(async () => { finish("/tmp/attachments/screen.png"); await pending; });
+  expect(controller.sendInput).not.toHaveBeenCalled();
+  expect(screen.queryByText(/Added screen/)).not.toBeInTheDocument();
+});
+
+test("removing a waiting reference prevents reconnect from inserting it", async () => {
+  upload.mockResolvedValueOnce("/tmp/attachments/screen.png");
+  controller.initialState = "disconnected";
+  render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
+  await act(async () => { await composerProps.current!.onAttachment!(new File(["image"], "screen.png", { type: "image/png" })); });
+  fireEvent.click(screen.getByRole("button", { name: "Remove attachment" }));
+  act(() => controller.stateListener?.("connected"));
+  expect(controller.sendInput).not.toHaveBeenCalled();
+});
+
+test("a waiting attachment cannot cross into another session on view reuse", async () => {
+  upload.mockResolvedValueOnce("/tmp/attachments/original.png");
+  controller.initialState = "disconnected";
+  const view = render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
+  await act(async () => { await composerProps.current!.onAttachment!(new File(["image"], "original.png", { type: "image/png" })); });
+  controller.initialState = "connected";
+  view.rerender(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-2", running: true }} />);
+  expect(controller.sendInput).not.toHaveBeenCalled();
+  expect(screen.queryByText(/original.png/)).not.toBeInTheDocument();
+});
+
+test("an upload deadline is visible and retains the file for retry", async () => {
+  vi.useFakeTimers();
+  upload.mockImplementationOnce((_token, _session, _file, signal: AbortSignal) => new Promise((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+  }));
+  render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
+  act(() => { void composerProps.current!.onAttachment!(new File(["image"], "screen.png", { type: "image/png" })); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+  expect(screen.getByText(/Upload timed out/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Retry attachment" })).toBeInTheDocument();
   expect(controller.sendInput).not.toHaveBeenCalled();
 });
 

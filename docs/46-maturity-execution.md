@@ -111,6 +111,23 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   after the timer-test assertion was corrected to inspect its owned timer rather
   than counting unrelated jsdom timers.
 
+### P2c: owned attachment recovery
+
+- One in-memory File selection owns upload/retry/cancellation across picker,
+  paste, and drop. A visible size placeholder avoids decoding large animated
+  images as a side effect of diagnostics. Uploads have a 60-second deadline.
+- Failed selections can be retried without reopening the picker while the page
+  retains the File. Send waits for retry or removal; the text draft is preserved.
+- Waiting references are bound to their original session and controller. Removal,
+  cancellation, unmount, and session changes cannot cause late reference insertion.
+  A ready reference is dismissed, not falsely removed from the provider prompt.
+- Upload replies require a usable path without terminal control characters.
+  The existing content-addressed server store makes retry storage idempotent;
+  cancelling a pending UI selection does not delete a shared artifact.
+- Focused attachment/composer/view tests: 71 passed. Production build passed
+  after correcting new refs to explicitly allow undefined (React types caught it).
+  Actual camera/gallery and provider receipt remain real-device verification.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

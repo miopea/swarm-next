@@ -93,6 +93,22 @@ test("carries an image through the API restarting underneath it", () => {
     .then(() => expect(fetch).toHaveBeenCalledTimes(2));
 });
 
+test("refuses malformed upload responses instead of pasting undefined or terminal controls", async () => {
+  for (const path of [undefined, "", "a\rmalicious"]) {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ path }), { status: 200 })));
+    await expect(uploadTerminalAttachment("token", "session", new File(["x"], "x.txt"))).rejects.toThrow("usable attachment path");
+  }
+});
+
+test("a cancelled upload does not start a network request", async () => {
+  const fetch = vi.fn();
+  vi.stubGlobal("fetch", fetch);
+  const request = new AbortController();
+  request.abort();
+  await expect(uploadTerminalAttachment("token", "session", new File(["x"], "x.txt"), request.signal)).rejects.toThrow();
+  expect(fetch).not.toHaveBeenCalled();
+});
+
 /**
  * "I tried to drag and drop an animated gif into the chat and it won't work.
  * Seems that copy and paste doesn't work for .gif either."
