@@ -411,6 +411,32 @@ impl TaskStore {
             .ok_or(TaskStoreError::DecisionNotFound)
     }
 
+    /// How many decisions this Hive holds, before the listing cap.
+    ///
+    /// ⚠️ THE CAP WAS SILENT AND THAT COST A PUBLISHED NUMBER. `list_decision_requests`
+    /// stops at `MAX_DECISION_RESULTS` and the response reported the returned
+    /// length as `count`, so a caller read "200 decisions" when there were 305.
+    /// A coordinator published ratios off that denominator tonight.
+    ///
+    /// The caption made it worse rather than better: it said the index omits
+    /// reason, risk and evidence — a truncation of CONTENT — while saying
+    /// nothing about omitted ROWS. A truncation that announces a different
+    /// truncation is worse than one that announces none, because the reader
+    /// believes they have already been warned.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn count_decision_requests(&self) -> Result<usize, TaskStoreError> {
+        let connection = self.connection()?;
+        let total: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM decision_requests d
+             JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(usize::try_from(total).unwrap_or(usize::MAX))
+    }
+
     /// Lists the bounded local-Hive inbox with pending and time-sensitive work first.
     ///
     /// # Errors

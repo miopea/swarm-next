@@ -112,7 +112,9 @@ pub use messages::{
 mod task_outcomes;
 pub use task_outcomes::{TaskOutcomeDispatch, TaskOutcomeFailure};
 mod workers;
-pub use decisions::{HeldForAnswer, INTERVIEW_ANSWERED_ACTION, OPERATOR_ANSWER_HEADER};
+pub use decisions::{
+    HeldForAnswer, INTERVIEW_ANSWERED_ACTION, MAX_DECISION_RESULTS, OPERATOR_ANSWER_HEADER,
+};
 use events::insert_control_room_event;
 #[cfg(test)]
 use events::{MAX_CONTROL_ROOM_EVENT_PAGE, MAX_CONTROL_ROOM_EVENTS};

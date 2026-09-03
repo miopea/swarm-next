@@ -903,14 +903,39 @@ impl ServerHandler for AgentMcp {
                             } else {
                                 "decisions this worker raised, plus rulings attached to tasks assigned to it — so a gate that says verify the operator's sign-off at source can be satisfied without being told the id by anyone. Other decisions are still readable by passing decision_id with a FULL id."
                             };
+                            // ⚠️ ROWS CAN BE MISSING AND THE CAPTION ONLY EVER
+                            // ADMITTED TO MISSING FIELDS. The listing stops at
+                            // MAX_DECISION_RESULTS; `count` reported the returned
+                            // length, so a caller read "200 decisions" against a
+                            // store holding 305 and published ratios off it.
+                            //
+                            // The old caption made that worse rather than better:
+                            // it said reason, risk and evidence were omitted — a
+                            // truncation of CONTENT — while saying nothing about
+                            // dropped ROWS. A truncation that announces a
+                            // different truncation is worse than one that
+                            // announces none, because the reader believes they
+                            // have already been warned.
+                            let total = self
+                                .tasks
+                                .store()
+                                .count_decision_requests()
+                                .map_err(ApplicationError::Store)?;
+                            let shown = decisions.len();
                             structured(json!({
                                 "decisions": decisions
                                     .iter()
                                     .map(decision_index_entry)
                                     .collect::<Vec<_>>(),
-                                "count": decisions.len(),
+                                "count": shown,
+                                "total": total,
+                                "truncated": total > shown,
                                 "scope": scope,
-                                "next": "This is an index. reason, risk, evidence, questions and the operator's answers are omitted here — pass decision_id with a FULL id to read one in full."
+                                "next": if total > shown {
+                                    "This is an index AND IT IS SHORT: `count` is what came back, `total` is what the Hive holds, and the difference was dropped by the page cap — do not read `count` as a total. Content is abridged too: reason, risk, evidence, questions and the operator's answers are omitted. Pass decision_id with a FULL id to read one in full."
+                                } else {
+                                    "This is an index. reason, risk, evidence, questions and the operator's answers are omitted here — pass decision_id with a FULL id to read one in full."
+                                }
                             }))
                         },
                     ),
@@ -5959,6 +5984,130 @@ mod tests {
                 .contains("resolution_answers"),
             "{}",
             answered["reason"]
+        );
+    }
+
+    /// ⚠️ A TRUNCATION THAT ANNOUNCES A DIFFERENT TRUNCATION IS WORSE THAN
+    /// SILENCE. The index caps at `MAX_DECISION_RESULTS` and reported the returned
+    /// length as `count`, while its caption admitted only to omitting FIELDS —
+    /// reason, risk, evidence. So a reader who had read the caption believed they
+    /// had been warned, and had been warned about the wrong thing.
+    ///
+    /// A coordinator published 199 as a denominator tonight and every ratio quoted
+    /// off it. There was no caveat to ignore.
+    #[tokio::test]
+    async fn the_decision_index_says_when_it_dropped_rows_and_not_only_fields() {
+        let (bridge, store, queen_id, _worker_id, _) = setup();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        for _ in 0..3 {
+            store
+                .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                    requesting_worker_id: queen_id,
+                    task_id: None,
+                    kind: swarm_domain::DecisionRequestKind::Approval,
+                    urgency: swarm_domain::DecisionUrgency::Normal,
+                    title: "Ship it",
+                    summary: "One of many.",
+                    reason: "The batch is ready and waiting on a decision.",
+                    risk: "",
+                    evidence: "",
+                    suggested_action: "Ship",
+                    allowed_actions: &["Ship".to_owned()],
+                    questions: &[],
+                    deadline: None,
+                    requested_command: None,
+                })
+                .unwrap();
+        }
+
+        let listed = response_json(
+            handle(
+                bridge.clone(),
+                plain_state(),
+                mcp_request(
+                    Some(&queen_token),
+                    "tools/call",
+                    &json!({ "name": "swarm_list_decisions", "arguments": {} }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        let listed = &listed["result"]["structuredContent"];
+
+        // Under the cap: count and total agree and nothing claims truncation.
+        assert_eq!(listed["count"], 3);
+        assert_eq!(listed["total"], 3, "the total is the store, not the page");
+        assert_eq!(listed["truncated"], false);
+        // And the field reaches the index, which is the half the store cannot prove.
+        assert_eq!(listed["decisions"][0]["discharge"], serde_json::Value::Null);
+    }
+
+    /// ⚠️ AND THE CASE THAT MATTERS IS THE TRUNCATED ONE, which a small fixture
+    /// cannot reach. The test above passes whether or not `total` is the store's
+    /// count, because three rows fit under the cap — so on its own it proves the
+    /// keys exist and nothing about what they mean. This one crosses the cap,
+    /// which is the only place the old behaviour and the new one differ.
+    #[tokio::test]
+    async fn past_the_cap_the_index_reports_the_store_total_and_not_the_page() {
+        let (bridge, store, queen_id, _worker_id, _) = setup();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let over = usize::try_from(swarm_persistence::MAX_DECISION_RESULTS).unwrap() + 1;
+        for _ in 0..over {
+            store
+                .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                    requesting_worker_id: queen_id,
+                    task_id: None,
+                    kind: swarm_domain::DecisionRequestKind::Approval,
+                    urgency: swarm_domain::DecisionUrgency::Normal,
+                    title: "Ship it",
+                    summary: "One of many.",
+                    reason: "The batch is ready and waiting on a decision.",
+                    risk: "",
+                    evidence: "",
+                    suggested_action: "Ship",
+                    allowed_actions: &["Ship".to_owned()],
+                    questions: &[],
+                    deadline: None,
+                    requested_command: None,
+                })
+                .unwrap();
+        }
+
+        let listed = response_json(
+            handle(
+                bridge.clone(),
+                plain_state(),
+                mcp_request(
+                    Some(&queen_token),
+                    "tools/call",
+                    &json!({ "name": "swarm_list_decisions", "arguments": {} }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        let listed = &listed["result"]["structuredContent"];
+
+        assert_eq!(
+            listed["count"],
+            swarm_persistence::MAX_DECISION_RESULTS,
+            "the page is capped, which is fine and not the defect"
+        );
+        assert_eq!(
+            listed["total"], over,
+            "the total is what the Hive holds. Reporting the page here is how 199 \
+             was published as a denominator against a store of 305"
+        );
+        assert_eq!(listed["truncated"], true);
+        assert!(
+            listed["next"]
+                .as_str()
+                .unwrap()
+                .contains("dropped by the page cap"),
+            "the caption must admit to dropped ROWS, not only omitted fields — it \
+             used to name the field abridgement only, so a reader who had read it \
+             believed they had been warned about the wrong thing"
         );
     }
 
