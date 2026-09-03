@@ -747,7 +747,7 @@ test("a socket that went quiet while the tab was frozen is replaced on return", 
 
   // Coming back ASKS rather than assuming.
   expect(sockets[0].sent.length).toBe(sentBeforeFreeze + 1);
-  expect(JSON.parse(sockets[0].sent.at(-1)!)).toMatchObject({ type: "resume" });
+  expect(JSON.parse(sockets[0].sent.at(-1)!)).toMatchObject({ type: "probe", request_id: expect.any(String) });
 
   // A dead socket cannot answer, so the confirmation timer closes it and the
   // ordinary reconnect path takes over — no new recovery machinery.
@@ -774,11 +774,49 @@ test("a live socket survives the return, having answered", async () => {
 
   document.dispatchEvent(new Event("visibilitychange"));
   await vi.advanceTimersByTimeAsync(0);
-  // It answers, as a live socket does.
-  sockets[0].message(snapshotFrame(1n, 24, 80, "still here"));
+  // Echo the correlated probe, exactly as the API does. No extra snapshot,
+  // provider resize, or duplicate resume is required to keep a healthy socket.
+  const probe = JSON.parse(sockets[0].sent.at(-1)!);
+  sockets[0].message(JSON.stringify({ type: "alive", request_id: probe.request_id }));
   await vi.advanceTimersByTimeAsync(3_000);
 
   expect(sockets[0].close).not.toHaveBeenCalled();
   expect(sockets).toHaveLength(1);
+  expect(handlers.onSnapshot).toHaveBeenCalledTimes(1);
   vi.useRealTimers();
+});
+
+test("an unrelated probe reply cannot confirm a frozen connection", async () => {
+  vi.useFakeTimers();
+  const { connection, handlers, sockets } = harness();
+  connection.start(handlers);
+  await vi.advanceTimersByTimeAsync(0);
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(0n, 24, 80, "screen"));
+  await vi.advanceTimersByTimeAsync(0);
+  document.dispatchEvent(new Event("visibilitychange"));
+  const sent = sockets[0].sent.length;
+  document.dispatchEvent(new Event("visibilitychange"));
+  expect(sockets[0].sent).toHaveLength(sent);
+  sockets[0].message(JSON.stringify({ type: "alive", request_id: "older-probe" }));
+  await vi.advanceTimersByTimeAsync(3_000);
+  expect(sockets[0].close).toHaveBeenCalled();
+  connection.dispose();
+});
+
+test("an older API without probes reattaches without replaying input or raising a protocol alert", async () => {
+  vi.useFakeTimers();
+  const { connection, handlers, sockets } = harness();
+  connection.start(handlers);
+  await vi.advanceTimersByTimeAsync(0);
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(0n, 24, 80, "screen"));
+  await vi.advanceTimersByTimeAsync(0);
+  document.dispatchEvent(new Event("visibilitychange"));
+  sockets[0].message(JSON.stringify({ type: "error", code: "invalid_message", message: "unknown variant probe" }));
+  expect(handlers.onState).not.toHaveBeenCalledWith("error", "unknown variant probe");
+  expect(sockets[0].sent.filter(value => JSON.parse(value).type === "resume")).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(sockets).toHaveLength(2);
+  connection.dispose();
 });

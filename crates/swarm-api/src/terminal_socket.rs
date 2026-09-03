@@ -33,6 +33,9 @@ pub const VIEWING_ENGAGEMENT_LEASE_SECONDS: i64 = 90;
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ClientTerminalMessage {
+    Probe {
+        request_id: String,
+    },
     Resume {
         after_sequence: Option<u64>,
         rows: u16,
@@ -56,6 +59,9 @@ enum ClientTerminalMessage {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ServerTerminalMessage<'a> {
+    Alive {
+        request_id: &'a str,
+    },
     State {
         running: bool,
         latest_sequence: u64,
@@ -496,6 +502,19 @@ async fn handle_input(
             }
         };
         match action {
+            ClientTerminalAction::Probe { request_id } => {
+                if send_control(
+                    &outbound,
+                    &ServerTerminalMessage::Alive {
+                        request_id: &request_id,
+                    },
+                )
+                .await
+                .is_err()
+                {
+                    return;
+                }
+            }
             ClientTerminalAction::Resize {
                 size,
                 claim_geometry,
@@ -615,6 +634,9 @@ async fn handle_resize(
 }
 
 enum ClientTerminalAction {
+    Probe {
+        request_id: String,
+    },
     Input {
         request: HostRequest,
         engaged: bool,
@@ -637,6 +659,16 @@ fn client_request(
     owner_device_id: Option<PresenceDeviceId>,
 ) -> Result<ClientTerminalAction, ClientMessageError> {
     match serde_json::from_str::<ClientTerminalMessage>(message) {
+        Ok(ClientTerminalMessage::Probe { request_id })
+            if !request_id.is_empty() && request_id.len() <= 64 =>
+        {
+            Ok(ClientTerminalAction::Probe { request_id })
+        }
+        Ok(ClientTerminalMessage::Probe { .. }) => Err(ClientMessageError {
+            code: "invalid_probe",
+            message: "terminal probe identity must contain 1 to 64 bytes".into(),
+            close: false,
+        }),
         Ok(ClientTerminalMessage::Input { text }) => {
             let bytes = text.into_bytes();
             Ok(ClientTerminalAction::Input {
@@ -798,6 +830,24 @@ async fn send_direct_error(socket: &mut WebSocket, code: &str, message: &str) {
 mod tests {
     use super::*;
     use swarm_persistence::TaskStore;
+
+    #[test]
+    fn a_liveness_probe_does_not_resume_resize_or_write() {
+        let session = WorkerSessionId::new();
+        assert!(
+            matches!(client_request(r#"{"type":"probe","request_id":"probe-1"}"#, session, None), Ok(ClientTerminalAction::Probe { request_id }) if request_id == "probe-1")
+        );
+        for request_id in [String::new(), "x".repeat(65)] {
+            let json = serde_json::json!({"type":"probe", "request_id":request_id}).to_string();
+            assert!(matches!(
+                client_request(&json, session, None),
+                Err(ClientMessageError {
+                    code: "invalid_probe",
+                    ..
+                })
+            ));
+        }
+    }
 
     /// The reported claim has to be permissive about an unowned terminal.
     ///

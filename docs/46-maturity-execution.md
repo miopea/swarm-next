@@ -301,6 +301,30 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 - Browser v4 ownership state, Resume Here, foreground renewal, and corresponding
   device tests are still pending. No deployed behavior or worker process changed.
 
+### P2i: returning to a healthy socket does not repeat resume
+
+- Found a client/server contract mismatch: visibility return sent another resume,
+  while the API rejects duplicate resume. The previous browser test supplied an
+  invented snapshot response instead of the API's actual behavior.
+- Replaced the second resume with one bounded, correlated read-only probe. The
+  API echoes it without a PTY write, resize, engagement change, or journal copy.
+  A matching reply retains the healthy socket; unrelated replies cannot confirm
+  it. Repeated visibility events cannot extend the same probe indefinitely.
+- Older v3 APIs lacking probes take the ordinary reattachment path quietly,
+  without resending input. The terminal adapter owns this compatibility path;
+  remove it with v3 support. V4 must support the same probe before activation.
+- Added a constant-space browser control-state model for v4. Tests cover exact
+  u64 ordering, stale handoffs, same-generation expiry, malformed status,
+  read-only engines, and reconnect without treating transport loss as expiry.
+  This model is not yet wired into the connection/controller or Resume Here UI.
+- Final focused browser checks: 51 passed. Web production build passed (existing
+  539-kB terminal chunk warning remains). An earlier full web run passed 935 tests
+  before the final probe/model assertions; it is not a final full-suite result.
+- Strict Linux-target API Clippy passed with incremental compilation disabled.
+  The first attempt hit a Rust incremental-fingerprint internal compiler error;
+  source was not changed to bypass it. The Rust probe test was compiled, not
+  executed on Linux. Real PWA return latency remains to be measured.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

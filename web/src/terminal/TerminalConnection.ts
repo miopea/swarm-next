@@ -149,6 +149,7 @@ export class TerminalConnection {
   #attachStartedAt: number | undefined;
   #processExited = false;
   #size: { rows: number; columns: number } | undefined;
+  #probeId: string | undefined;
 
   constructor(options: TerminalConnectionOptions) {
     this.#sessionId = options.sessionId;
@@ -231,6 +232,7 @@ export class TerminalConnection {
 
   async #connect(): Promise<void> {
     if (this.#disposed || this.#fatal) return;
+    this.#probeId = undefined;
     this.#attachStartedAt ??= performance.now();
     this.#handlers?.onState("connecting");
     const grantAbortController = new AbortController();
@@ -290,8 +292,8 @@ export class TerminalConnection {
   /// refresh to get it to load."
   ///
   /// OPEN means "nobody has told us otherwise", which is not the same as alive.
-  /// So this asks: it re-sends resume and arms the SAME confirmation timer a
-  /// fresh connection uses. A live socket answers with a snapshot and confirms;
+  /// A correlated probe uses the same bounded confirmation timer as attachment.
+  /// A live socket answers without resizing or copying a terminal snapshot;
   /// a dead one does not, and after the timeout that timer closes it and
   /// reconnects through the ordinary path. No new recovery machinery, and a
   /// healthy connection pays one message.
@@ -301,9 +303,10 @@ export class TerminalConnection {
     const socket = this.#socket;
     // Anything not OPEN is already the reconnect path's business; asking again
     // here would double it.
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    this.#sendResume(socket);
+    if (!socket || socket.readyState !== WebSocket.OPEN || this.#probeId !== undefined) return;
+    this.#probeId = crypto.randomUUID();
     this.#armConfirmationTimer(socket);
+    if (!this.#send({ type: "probe", request_id: this.#probeId })) this.#handleSocketError(socket);
   };
 
   #handleOpen(socket: WebSocket): void {
@@ -313,10 +316,8 @@ export class TerminalConnection {
 
   /// The resume frame, sent from the one place that knows its shape.
   ///
-  /// Extracted rather than copied when the resume-time liveness check needed
-  /// it: a second hand-written copy would drift from this one, and the two are
-  /// required to be identical — the server answers a resume with the snapshot
-  /// that both attachment and recovery depend on.
+  /// Sent exactly once per socket. A second resume is a protocol violation;
+  /// visibility checks use probes instead.
   #sendResume(socket: WebSocket): void {
     const size = this.#size;
     if (!size) {
@@ -350,19 +351,35 @@ export class TerminalConnection {
       this.#fail("unsupported terminal WebSocket message");
       return;
     }
-    let message: { type?: string; running?: boolean; latest_sequence?: number; geometry_owned?: boolean; code?: string; message?: string };
+    let message: { type?: string; request_id?: string; running?: boolean; latest_sequence?: number; geometry_owned?: boolean; code?: string; message?: string };
     try {
       message = JSON.parse(event.data) as typeof message;
     } catch {
       this.#fail("terminal WebSocket returned invalid JSON");
       return;
     }
-    if (message.type === "state" && typeof message.running === "boolean") {
+    if (message.type === "alive") {
+      if (this.#probeId !== undefined && message.request_id === this.#probeId) {
+        this.#probeId = undefined;
+        if (this.#hasCanonicalState) this.#confirmRenderedConnection();
+      }
+    } else if (message.type === "state" && typeof message.running === "boolean") {
       if (typeof message.geometry_owned === "boolean") this.#geometryOwned = message.geometry_owned;
       if (this.#hasCanonicalState) this.#confirmRenderedConnection();
       this.#processExited = !message.running;
       this.#handlers?.onRunningChange(message.running);
     } else if (message.type === "error") {
+      if (this.#probeId !== undefined && message.code === "invalid_message") {
+        // Terminal adapter owns this rolling-v3 compatibility path. Remove
+        // with v3 support: older APIs have no probe but can safely reattach.
+        // Never repeat resume or input on the existing socket.
+        this.#probeId = undefined;
+        this.#clearConfirmationTimer();
+        this.#socket = undefined;
+        socket.close(CLOSE_FRESH_SNAPSHOT, "terminal probe requires reattachment");
+        this.#scheduleReconnect("refreshing terminal connection");
+        return;
+      }
       this.#handlers?.onState("error", message.message ?? message.code ?? "terminal protocol error");
     }
   }
@@ -576,6 +593,7 @@ export class TerminalConnection {
   }
 
   #confirmRenderedConnection(detail?: string): void {
+    this.#probeId = undefined;
     this.#clearConfirmationTimer();
     this.#confirmConnection();
     if (this.#rendererConfirmed && detail === undefined) return;
@@ -592,6 +610,7 @@ export class TerminalConnection {
     this.#confirmationTimer = setTimeout(() => {
       this.#confirmationTimer = undefined;
       if (socket !== this.#socket || this.#disposed || this.#fatal) return;
+      this.#probeId = undefined;
       this.#socket = undefined;
       socket.close(CLOSE_FRESH_SNAPSHOT, "terminal confirmation timed out");
       this.#scheduleReconnect("terminal connection received no confirmation");
