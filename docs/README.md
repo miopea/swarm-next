@@ -36,6 +36,7 @@ Read and review these documents in order:
 32. [Ring 1 observation log](legacy/ring1-observation-log.md)
 33. [Transparent developer guidance](decisions/0047-transparent-developer-guidance.md)
 34. [Worker context surfaces](29-worker-context-surfaces.md)
+35. [Daily-driver maturity scope and plan](45-daily-driver-maturity-plan.md)
 
 `decisions/` contains architecture decision records. `legacy/` contains
 measured facts about the existing system. Legacy facts inform decisions but do

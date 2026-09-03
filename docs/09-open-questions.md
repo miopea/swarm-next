@@ -1,6 +1,26 @@
 # Open product questions
 
-Status: **All questions answered — dogfooding set closed 2026-08-22**
+Status: **Original dogfooding set closed 2026-08-22; maturity reconciliation resolved 2026-09-03**
+
+## Daily-driver maturity reconciliation — 2026-09-03
+
+The new maturity interview is complete. Its scope and phase candidates are in
+[the maturity plan](45-daily-driver-maturity-plan.md). Final reconciliations with
+prior decisions/current behavior are resolved as follows:
+
+1. **Resolved:** safe conversation recovery first, then provider-native
+   `--continue`, then a clearly identified fresh session as the final fallback.
+   The operator can use the provider's resume command from that session. Mandatory
+   confirmation before starting fresh is not required by the final answer.
+2. **Resolved:** reliable machine-checkable completion evidence needs no mandatory
+   Queen pass. Queen handles exceptions, conflicting evidence, and judgment;
+   unsupported worker self-approval is not verification.
+3. **Resolved:** no blanket twelve-hour blocked escalation. Queen elevates when
+   she cannot move the work and needs the operator, not when a timer expires.
+   Age belongs in Queues/diagnostics; resolved issues do not need operator attention.
+
+Delivery order and implementation/commit authorization follow full-scope review.
+These questions do not reopen the resolved original dogfooding answers below.
 
 The primary operator accepted the recommendations below on 2026-08-10. The
 remaining questions should be answered by side-by-side dogfooding rather than
