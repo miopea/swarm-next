@@ -71,6 +71,20 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 
 ## P3–P7 — Pending
 
+### P1c: developer evidence home
+
+- Developer Dogfood is a separate Settings section, gated by existing development
+  detection, with no additional enable switch or release action. Search follows
+  the same gate. API interruptions retain the last-known development flag.
+- It separates running build from checkout revision and shows bounded browser
+  samples, missing observer support, incident counts, and explicit local preview.
+  Means/maxima are labeled accurately; historical evidence is not an active alert.
+- Settings/component/navigation tests: 31 passed; runtime hook/component/navigation
+  tests after interruption coverage: 16 passed. Typecheck and production build
+  passed. Existing 537 kB terminal chunk warning remains.
+- This is the evidence home, not completion of DOG-01: long-term revision storage,
+  comparison, overhead validation, and real-session browser evidence remain open.
+
 ### P2b: interrupted picker evidence
 
 - A five-minute, timestamp-only pending-picker marker survives page recreation;

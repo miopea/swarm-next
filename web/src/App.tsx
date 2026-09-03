@@ -129,7 +129,7 @@ import { readSeenVersion, storeSeenVersion, whatsNewFor } from "./runtime/whatsN
 import type { RuntimeUpdateSummary } from "./runtime/runtimeUpdates";
 import HiveContextIndicator from "./controlRoom/HiveContextIndicator";
 import { useControlRoomModel } from "./controlRoom/useControlRoomModel";
-import { SETTINGS_SECTIONS, clearSettingsSection, navigateToSettingsSection, readSettingsSection, type SettingsSection } from "./settings/settingsNavigation";
+import { visibleSettingsSections, clearSettingsSection, navigateToSettingsSection, readSettingsSection, type SettingsSection } from "./settings/settingsNavigation";
 import { isSurface, readSavedSurface, saveSurface, surfaceWasRequested, type Surface } from "./navigation/startSurface";
 import { PresenceController, deviceClass, presenceDeviceId, type LockDetectionState } from "./presence/PresenceController";
 import { NotificationController, type NotificationCapabilityState } from "./notifications/NotificationController";
@@ -1855,7 +1855,7 @@ export function App() {
                   ) : null}
                 </div>
                 <nav className="rail-settings-sections" aria-label="Settings sections">
-                  {SETTINGS_SECTIONS.map(([id, label]) => (
+                  {visibleSettingsSections(developmentMode).map(([id, label]) => (
                     <button
                       key={id}
                       type="button"

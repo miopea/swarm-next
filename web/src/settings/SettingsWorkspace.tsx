@@ -21,6 +21,7 @@ import type { TunnelStatus } from "../api";
 import ProviderReleaseAction from "./ProviderReleaseAction";
 import { useDevelopmentRuntime } from "./useDevelopmentRuntime";
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
+import DeveloperDogfoodWorkspace from "./DeveloperDogfoodWorkspace";
 import EmailSettings from "./EmailSettings";
 import ConnectionsSettings from "./ConnectionsSettings";
 import JiraSettings from "./JiraSettings";
@@ -235,8 +236,8 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
   // and the filter is the answer when the operator does not know which section
   // to look in.
   const matched = useMemo(
-    () => new Set(filterSettingsCards(query).map((card) => card.id)),
-    [query],
+    () => new Set(filterSettingsCards(query, developmentRuntime?.enabled ?? false).map((card) => card.id)),
+    [query, developmentRuntime?.enabled],
   );
   const filtering = query.trim().length > 0;
   const shows = (id: string) =>
@@ -699,6 +700,10 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
 
       {shows("settings-diagnostics") && (
         <DiagnosticsWorkspace feedbackRevision={feedbackRevision} operatorToken={operatorToken} health={health} hiveIdentity={hiveIdentity} liveFeedState={liveFeedState} recentEvents={recentEvents} sessions={sessions} workers={workers} jiraReadiness={jiraReadiness} jiraUnavailable={jiraUnavailable} />
+      )}
+
+      {shows("settings-dogfood") && (
+        <DeveloperDogfoodWorkspace runtime={developmentRuntime} version={health?.version} reachable={developmentReachable} />
       )}
 
       {shows("settings-shortcuts") && (

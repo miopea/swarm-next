@@ -1,11 +1,24 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { useRuntimeUpdate } from "./useRuntimeUpdate";
 
 afterEach(() => {
+  cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+test("keeps development navigation through an API interruption and resets on logout", async () => {
+  stubRuntime(() => false);
+  const { result, rerender } = renderHook(({ token }: { token: string | undefined }) => useRuntimeUpdate(token), { initialProps: { token: "secret" as string | undefined } });
+  await act(async () => { await Promise.resolve(); });
+  expect(result.current.developmentMode).toBe(true);
+  vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("API restarting")));
+  await act(async () => { await result.current.refreshRuntimeUpdate(); });
+  expect(result.current.developmentMode).toBe(true);
+  rerender({ token: undefined });
+  expect(result.current.developmentMode).toBe(false);
 });
 
 function ok(payload: unknown) {

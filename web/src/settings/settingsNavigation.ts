@@ -14,9 +14,14 @@ export const SETTINGS_SECTIONS = [
   ["settings-connections", "Connections"],
   ["settings-updates", "Updates"],
   ["settings-maintenance", "Maintenance"],
+  ["settings-dogfood", "Developer Dogfood"],
 ] as const;
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number][0];
+
+export function visibleSettingsSections(developmentMode: boolean) {
+  return SETTINGS_SECTIONS.filter(([id]) => developmentMode || id !== "settings-dogfood");
+}
 
 /**
  * Every card, the section it lives in, and the words someone would type looking
@@ -34,6 +39,8 @@ export type SettingsCard = {
 };
 
 export const SETTINGS_CARDS: readonly SettingsCard[] = [
+  { id: "settings-dogfood", section: "settings-dogfood", title: "Developer Dogfood",
+    keywords: ["developer", "dogfood", "performance", "soak", "evidence", "regression"] },
   { id: "settings-crew", section: "settings-workers", title: "Crew",
     keywords: ["worker", "crew", "add worker", "repository", "workspace", "provider", "claude", "codex", "description", "order", "remove worker"] },
   { id: "settings-queen", section: "settings-workers", title: "Queen",
@@ -107,11 +114,11 @@ export function readSettingsSection(
  * finds both the tunnel and alerts, and "token" finds access. An empty query
  * matches nothing: the filter is a way to jump, not a way to browse.
  */
-export function filterSettingsCards(query: string): readonly SettingsCard[] {
+export function filterSettingsCards(query: string, developmentMode = false): readonly SettingsCard[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return [];
   const sectionLabel = new Map<string, string>(SETTINGS_SECTIONS.map(([id, label]) => [id, label.toLowerCase()]));
-  return SETTINGS_CARDS.filter((card) =>
+  return SETTINGS_CARDS.filter((card) => developmentMode || card.id !== "settings-dogfood").filter((card) =>
     card.title.toLowerCase().includes(needle)
     || (sectionLabel.get(card.section) ?? "").includes(needle)
     || card.keywords.some((keyword) => keyword.includes(needle)));

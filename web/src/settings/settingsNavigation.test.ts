@@ -7,9 +7,17 @@ import {
   filterSettingsCards,
   navigateToSettingsSection,
   readSettingsSection,
+  visibleSettingsSections,
 } from "./settingsNavigation";
 
 afterEach(() => window.history.replaceState({}, "", "/"));
+
+test("developer evidence is discoverable only in the existing development mode", () => {
+  expect(visibleSettingsSections(false).map(([id]) => id)).not.toContain("settings-dogfood");
+  expect(visibleSettingsSections(true).map(([id]) => id)).toContain("settings-dogfood");
+  expect(filterSettingsCards("dogfood")).toEqual([]);
+  expect(filterSettingsCards("dogfood", true).map((card) => card.id)).toEqual(["settings-dogfood"]);
+});
 
 test("recognizes every section anchor and rejects unrelated hashes", () => {
   expect(readSettingsSection("#settings-connections", "")).toBe("settings-connections");

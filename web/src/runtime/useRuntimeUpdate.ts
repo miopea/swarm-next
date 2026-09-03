@@ -36,7 +36,8 @@ export function useRuntimeUpdate(
       fetchDevelopmentRuntime(operatorToken).catch(() => undefined),
       fetchProviderCapabilities(operatorToken).catch(() => undefined),
     ]);
-    setDevelopmentMode(development?.enabled ?? false);
+    // An API restart is unknown status, not a switch to a release installation.
+    if (development) setDevelopmentMode(development.enabled);
     setUpdates((previous) =>
       nextRuntimeUpdates(previous, health, host, development, providers?.superseded ?? []));
   }, [operatorToken]);
@@ -44,6 +45,7 @@ export function useRuntimeUpdate(
   useEffect(() => {
     if (!operatorToken) {
       setUpdates(undefined);
+      setDevelopmentMode(false);
       return;
     }
     void refresh();
