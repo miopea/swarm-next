@@ -325,6 +325,21 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   source was not changed to bypass it. The Rust probe test was compiled, not
   executed on Linux. Real PWA return latency remains to be measured.
 
+### P2j: controlled attachments support read-only liveness
+
+- Extended opt-in WebSocket v4 with the same correlated `probe`/`alive`
+  contract as v3. Probe identifiers are nonempty and at most 64 bytes; extra
+  fields are rejected. Probes are transport actions, not engine commands.
+- Probes also work for read-only attachments to an older/unknown engine. They
+  do not renew ownership, resize, read snapshots, or write engagement records.
+  This removes a protocol prerequisite for the pending browser cutover; it does
+  not enable v4 in the browser or prove stable device handoff.
+- Linux-target strict API Clippy passed with all targets/features and
+  `CARGO_INCREMENTAL=0`. The probe contract test compiled; Linux API tests were
+  not executed. The final P2i TypeScript build check also passed.
+- Rollback is API-only while v4 remains opt-in. No push, release, deployment,
+  engine restart, or live-worker action was performed.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

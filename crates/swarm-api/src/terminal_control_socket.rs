@@ -26,6 +26,9 @@ type Failure = (String, String);
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum ClientMessage {
+    Probe {
+        request_id: String,
+    },
     Resume {
         after_sequence: Option<u64>,
         rows: u16,
@@ -59,6 +62,9 @@ enum ClientMessage {
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ServerMessage<'a> {
+    Alive {
+        request_id: &'a str,
+    },
     Control {
         control: BrowserControl,
     },
@@ -188,6 +194,12 @@ fn command(
     identity: TerminalControlIdentity,
 ) -> Result<TerminalControlCommand, Failure> {
     Ok(match message {
+        ClientMessage::Probe { .. } => {
+            return Err((
+                "invalid_control_command".into(),
+                "A probe is not an engine command.".into(),
+            ));
+        }
         ClientMessage::Claim {
             observed_generation,
             rows,
@@ -237,6 +249,30 @@ fn command(
             ));
         }
     })
+}
+
+enum ClientAction {
+    Probe(String),
+    Control(TerminalControlCommand),
+}
+
+fn action(text: &str, identity: TerminalControlIdentity) -> Result<ClientAction, Failure> {
+    let message = serde_json::from_str::<ClientMessage>(text).map_err(|_| {
+        (
+            "invalid_message".into(),
+            "Invalid terminal control message.".into(),
+        )
+    })?;
+    if let ClientMessage::Probe { request_id } = message {
+        if request_id.is_empty() || request_id.len() > 64 {
+            return Err((
+                "invalid_probe".into(),
+                "A bounded probe identifier is required.".into(),
+            ));
+        }
+        return Ok(ClientAction::Probe(request_id));
+    }
+    command(message, identity).map(ClientAction::Control)
 }
 
 async fn send(outbound: &mpsc::Sender<Message>, message: &ServerMessage<'_>) -> Result<(), ()> {
@@ -485,20 +521,24 @@ impl SocketContext {
                 Ok(Message::Close(_)) | Err(_) => return,
                 _ => continue,
             };
-            if !self.supported {
-                let _ = send_failure(&self.outbound, &("terminal_engine_update_required".into(), "This worker engine supports viewing only with this client. Update the engine safely to enable Resume Here.".into())).await;
-                continue;
-            }
-            let parsed = serde_json::from_str::<ClientMessage>(&text)
-                .map_err(|_| {
-                    (
-                        "invalid_message".into(),
-                        "Invalid terminal control message.".into(),
+            let command = match action(&text, self.identity) {
+                Ok(ClientAction::Probe(request_id)) => {
+                    // Transport liveness is independent of engine capabilities.
+                    // This must neither renew ownership nor copy terminal state.
+                    if send(
+                        &self.outbound,
+                        &ServerMessage::Alive {
+                            request_id: &request_id,
+                        },
                     )
-                })
-                .and_then(|message| command(message, self.identity));
-            let command = match parsed {
-                Ok(command) => command,
+                    .await
+                    .is_err()
+                    {
+                        return;
+                    }
+                    continue;
+                }
+                Ok(ClientAction::Control(command)) => command,
                 Err(failure) => {
                     let _ = send_failure(&self.outbound, &failure).await;
                     if failure.0 == "duplicate_resume" {
@@ -507,6 +547,10 @@ impl SocketContext {
                     continue;
                 }
             };
+            if !self.supported {
+                let _ = send_failure(&self.outbound, &("terminal_engine_update_required".into(), "This worker engine supports viewing only with this client. Update the engine safely to enable Resume Here.".into())).await;
+                continue;
+            }
             match control_request(&self.client, self.session_id, command).await {
                 Ok(status) => {
                     // A typing burst must not perform a SQLite read per key.
@@ -655,6 +699,31 @@ mod tests {
             device: PresenceDeviceId::new(),
             view: TerminalViewId::new(),
         }
+    }
+
+    #[test]
+    fn probes_are_bounded_transport_actions_not_engine_commands() {
+        assert!(
+            matches!(action(r#"{"type":"probe","request_id":"return-1"}"#, identity()).unwrap(), ClientAction::Probe(id) if id == "return-1")
+        );
+        for request_id in [String::new(), "x".repeat(65)] {
+            let text = serde_json::json!({ "type": "probe", "request_id": request_id }).to_string();
+            assert!(action(&text, identity()).is_err());
+        }
+        assert!(
+            action(
+                r#"{"type":"probe","request_id":"x","generation":"1"}"#,
+                identity()
+            )
+            .is_err()
+        );
+        assert_eq!(
+            serde_json::to_value(ServerMessage::Alive {
+                request_id: "return-1"
+            })
+            .unwrap(),
+            serde_json::json!({ "type": "alive", "request_id": "return-1" })
+        );
     }
 
     #[test]
