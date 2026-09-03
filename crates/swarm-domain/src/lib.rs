@@ -595,6 +595,37 @@ pub struct OperatorPresence {
     pub manual_mode: Option<PresenceMode>,
     pub source: PresenceSource,
 }
+/// Whether a resolved decision's authorised act has been performed.
+///
+/// ⚠️ THREE VALUES BECAUSE THE THIRD IS THE HONEST ONE. Three times on
+/// 2026-09-03 the operator approved an act, the act did not happen, and no
+/// surface anywhere said so — each was found by accident. The obvious query
+/// cannot see it: a decision names the task that RAISED it, never the task that
+/// EXECUTES it, and the work is routinely filed on a later ticket precisely
+/// because the first went quiet.
+///
+/// So the link is the executing task naming the decision in its own text, which
+/// is derivable from what is already written rather than a field anyone has to
+/// remember. Where nobody wrote it down there is no link at all, and that case
+/// reports `Unknown` rather than folding into either answer. A screen that
+/// cannot see returning the same value as a clean board is the failure this
+/// exists to end.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionDischarge {
+    /// A task naming this decision carries evidence recorded AFTER the ruling.
+    ///
+    /// The timestamp matters and is not decoration. The CA renewal's originating
+    /// ticket already carried a deployment from eleven hours BEFORE the ruling;
+    /// counting it would have read discharged for the entire twenty-six hours
+    /// the act sat undone.
+    Discharged,
+    /// A task names this decision and none of them carries evidence since it.
+    Outstanding,
+    /// No task names this decision, so nothing can be said either way.
+    Unknown,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DecisionRequest {
     pub id: DecisionRequestId,
@@ -648,6 +679,11 @@ pub struct DecisionRequest {
     pub updated_at: i64,
     pub resolved_at: Option<i64>,
     pub delivery_state: Option<DecisionDeliveryState>,
+    /// Whether the act this ruling authorised has evidence of having happened.
+    ///
+    /// `None` until the decision resolves — an unanswered question authorises
+    /// nothing, so there is no act to discharge.
+    pub discharge: Option<DecisionDischarge>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -5,8 +5,8 @@ use std::{
 
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
-    ControlRoomEventKind, DecisionDeliveryState, DecisionQuestion, DecisionRequest,
-    DecisionRequestId, DecisionRequestKind, DecisionRequestState, DecisionUrgency,
+    ControlRoomEventKind, DecisionDeliveryState, DecisionDischarge, DecisionQuestion,
+    DecisionRequest, DecisionRequestId, DecisionRequestKind, DecisionRequestState, DecisionUrgency,
     MAX_DECISION_QUESTION_HEADER_BYTES, MAX_DECISION_QUESTION_OPTION_BYTES,
     MAX_DECISION_QUESTION_OPTIONS, MAX_DECISION_QUESTION_TEXT_BYTES, MAX_DECISION_QUESTIONS,
     MAX_DECISION_SUMMARY_BYTES, MIN_DECISION_QUESTION_OPTIONS, TaskId, WorkerId, WorkerSessionId,
@@ -406,7 +406,32 @@ impl TaskStore {
                         resolution_surface, questions, resolution_answers, summary,
                         created_at, updated_at, resolved_at,
                         (SELECT state FROM decision_deliveries WHERE decision_id = decision_requests.id),
-                        requested_command
+                        requested_command,
+                        -- Same derivation as list_decision_requests. See the
+                        -- comment there for why the originating task is excluded
+                        -- and why evidence must postdate the ruling.
+                        CASE WHEN decision_requests.state <> 'resolved' THEN NULL
+                             WHEN NOT EXISTS (
+                                 SELECT 1 FROM tasks x
+                                 WHERE x.removed_at IS NULL
+                                   AND x.id <> COALESCE(decision_requests.task_id, '')
+                                   AND x.description LIKE '%' || substr(decision_requests.id, 1, 13) || '%')
+                                 THEN 'unknown'
+                             WHEN EXISTS (
+                                 SELECT 1 FROM tasks x
+                                 WHERE x.removed_at IS NULL
+                                   AND x.id <> COALESCE(decision_requests.task_id, '')
+                                   AND x.description LIKE '%' || substr(decision_requests.id, 1, 13) || '%'
+                                   AND (EXISTS (SELECT 1 FROM task_deployments dep
+                                                WHERE dep.task_id = x.id
+                                                  AND dep.recorded_at > decision_requests.resolved_at)
+                                     OR EXISTS (SELECT 1 FROM task_completion_exemptions ex
+                                                WHERE ex.task_id = x.id
+                                                  AND ex.approved_at IS NOT NULL
+                                                  AND ex.withdrawn_at IS NULL
+                                                  AND ex.approved_at > decision_requests.resolved_at)))
+                                 THEN 'discharged'
+                             ELSE 'outstanding' END
                  FROM decision_requests WHERE id = ?1",
                 [id.to_string()],
                 decision_from_row,
@@ -428,7 +453,44 @@ impl TaskStore {
                     resolution_surface, questions, resolution_answers, summary,
                     created_at, updated_at, resolved_at,
                     (SELECT state FROM decision_deliveries WHERE decision_id = d.id),
-                    d.requested_command
+                    d.requested_command,
+                    -- WHETHER THE AUTHORISED ACT HAPPENED. Derived, never stored:
+                    -- the link is the executing task naming the decision in its
+                    -- own text, which is already how workers write these up. A
+                    -- field somebody had to remember to fill would be the same
+                    -- failure one level up.
+                    --
+                    -- A decision names the task that RAISED it, never the one
+                    -- that EXECUTES it, and the work is routinely filed on a
+                    -- later ticket because the first went quiet. So the
+                    -- originating task is EXCLUDED from the naming set: its
+                    -- evidence says nothing about an act performed elsewhere.
+                    --
+                    -- EVIDENCE MUST POSTDATE THE RULING, strictly. The CA
+                    -- renewal's
+                    -- originating ticket carried a deployment from eleven hours
+                    -- BEFORE the ruling; without this comparison it read
+                    -- discharged for the twenty-six hours the act sat undone.
+                    CASE WHEN d.state <> 'resolved' THEN NULL
+                         WHEN NOT EXISTS (
+                             SELECT 1 FROM tasks x
+                             WHERE x.removed_at IS NULL AND x.id <> COALESCE(d.task_id, '')
+                               AND x.description LIKE '%' || substr(d.id, 1, 13) || '%')
+                             THEN 'unknown'
+                         WHEN EXISTS (
+                             SELECT 1 FROM tasks x
+                             WHERE x.removed_at IS NULL AND x.id <> COALESCE(d.task_id, '')
+                               AND x.description LIKE '%' || substr(d.id, 1, 13) || '%'
+                               AND (EXISTS (SELECT 1 FROM task_deployments dep
+                                            WHERE dep.task_id = x.id
+                                              AND dep.recorded_at > d.resolved_at)
+                                 OR EXISTS (SELECT 1 FROM task_completion_exemptions ex
+                                            WHERE ex.task_id = x.id
+                                              AND ex.approved_at IS NOT NULL
+                                              AND ex.withdrawn_at IS NULL
+                                              AND ex.approved_at > d.resolved_at)))
+                             THEN 'discharged'
+                         ELSE 'outstanding' END
              FROM decision_requests d
              JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1
              ORDER BY state = 'pending' DESC, urgency = 'time_sensitive' DESC,
@@ -1019,6 +1081,13 @@ fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionReques
         // — the kind of change that compiles, passes, and returns the wrong
         // field in production.
         requested_command: row.get(25)?,
+        discharge: row
+            .get::<_, Option<String>>(26)?
+            .map(|value| match value.as_str() {
+                "discharged" => DecisionDischarge::Discharged,
+                "outstanding" => DecisionDischarge::Outstanding,
+                _ => DecisionDischarge::Unknown,
+            }),
     })
 }
 
@@ -1152,6 +1221,19 @@ mod tests {
         );
     }
 
+    /// Moves a ruling's timestamp so a test's ordering is decided by intent
+    /// rather than by whether two writes land in the same second.
+    fn backdate_resolution(store: &TaskStore, id: DecisionRequestId, seconds: i64) {
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE decision_requests SET resolved_at = resolved_at - ?2 WHERE id = ?1",
+                rusqlite::params![id.to_string(), seconds],
+            )
+            .unwrap();
+    }
+
     fn request(worker_id: WorkerId, actions: &[String]) -> NewDecisionRequest<'_> {
         NewDecisionRequest {
             requesting_worker_id: worker_id,
@@ -1243,6 +1325,131 @@ mod tests {
         assert_eq!(
             store.get_task(task.id).unwrap().next_move_owner,
             NextMoveOwner::Worker
+        );
+    }
+
+    /// ⚠️ AN AUTHORISED ACT THAT NEVER HAPPENS HAD NO QUERY. Three times on
+    /// 2026-09-03 the operator approved something, it did not happen, and no
+    /// surface said so — each found by accident, one of them days later.
+    ///
+    /// The obvious screen cannot see it. A decision names the task that RAISED
+    /// it, never the one that EXECUTES it, and the work is routinely filed on a
+    /// later ticket precisely because the first went quiet. So "resolved
+    /// decision whose originating task is still open" was blind to both known
+    /// instances: their originating tasks are completed.
+    ///
+    /// The link that does work is the executing task naming the decision in its
+    /// own text — already how workers write these up, so nothing new has to be
+    /// remembered.
+    #[test]
+    fn a_ruling_is_discharged_only_by_evidence_on_a_task_that_names_it() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let origin = store
+            .create_task("Raised the question", "/workspace/queen")
+            .unwrap();
+        let actions = vec!["do it".into(), "do not".into()];
+        let mut asking = request(queen.id, &actions);
+        asking.task_id = Some(origin.id);
+        let decision = store.create_decision_request(&asking).unwrap();
+        store
+            .resolve_decision_request(decision.id, "do it", "Go ahead.", "operator")
+            .unwrap();
+        // recorded_at is server time and both land in the same second here, so
+        // the ruling is backdated to make the ordering unambiguous rather than
+        // leaving the assertion to race a one-second clock.
+        backdate_resolution(&store, decision.id, 60);
+
+        let named =
+            |id: &str| format!("Carries out {id}, filed later because the first went quiet");
+
+        // Nobody has written the decision down anywhere: the query cannot see the
+        // act at all, and says so rather than reporting a clean board.
+        let unknown = store.list_decision_requests().unwrap();
+        let found = unknown.iter().find(|d| d.id == decision.id).unwrap();
+        assert_eq!(
+            found.discharge,
+            Some(DecisionDischarge::Unknown),
+            "with no task naming it, neither answer is available"
+        );
+
+        // An executing task names it but has recorded nothing yet.
+        let doing = store
+            .create_task_with_details(
+                "Carries out the ruling",
+                &named(&decision.id.to_string()[..13]),
+                TaskPriority::Normal,
+                "/workspace/petal",
+            )
+            .unwrap();
+        let listed = store.list_decision_requests().unwrap();
+        let found = listed.iter().find(|d| d.id == decision.id).unwrap();
+        assert_eq!(found.discharge, Some(DecisionDischarge::Outstanding));
+
+        for state in [TaskState::Ready, TaskState::Active, TaskState::Review] {
+            store.transition_task(doing.id, state).unwrap();
+        }
+        store
+            .record_task_deployment(doing.id, "production", "sha abc123", i64::MAX / 4)
+            .unwrap();
+        let listed = store.list_decision_requests().unwrap();
+        let found = listed.iter().find(|d| d.id == decision.id).unwrap();
+        assert_eq!(
+            found.discharge,
+            Some(DecisionDischarge::Discharged),
+            "evidence recorded once the ruling existed discharges it"
+        );
+    }
+
+    /// ⚠️ EVIDENCE THAT PREDATES THE RULING CANNOT HAVE DISCHARGED IT, and this
+    /// is the case that would have made the whole query useless.
+    ///
+    /// The CA renewal's originating ticket already carried a deployment from
+    /// ELEVEN HOURS BEFORE the ruling. Counting any evidence rather than evidence
+    /// since would have read "discharged" for the entire twenty-six hours the act
+    /// sat undone — a false negative on exactly the instance the query exists to
+    /// catch, and one that looks identical to a real all-clear.
+    #[test]
+    fn evidence_older_than_the_ruling_does_not_discharge_it() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let origin = store
+            .create_task("Raised the question", "/workspace/queen")
+            .unwrap();
+        let actions = vec!["do it".into(), "do not".into()];
+        let mut asking = request(queen.id, &actions);
+        asking.task_id = Some(origin.id);
+        let decision = store.create_decision_request(&asking).unwrap();
+
+        // A task that names the decision and shipped something BEFORE the ruling.
+        let earlier = store
+            .create_task_with_details(
+                "Shipped something before the ruling",
+                &format!("Mentions {} in passing", &decision.id.to_string()[..13]),
+                TaskPriority::Normal,
+                "/workspace/petal",
+            )
+            .unwrap();
+        for state in [TaskState::Ready, TaskState::Active, TaskState::Review] {
+            store.transition_task(earlier.id, state).unwrap();
+        }
+        store
+            .record_task_deployment(earlier.id, "production", "sha older", 1_000)
+            .unwrap();
+
+        store
+            .resolve_decision_request(decision.id, "do it", "Go ahead.", "operator")
+            .unwrap();
+        // Push the ruling strictly after the evidence, which is the real shape:
+        // the CA deployment predated its ruling by eleven hours.
+        backdate_resolution(&store, decision.id, -60);
+
+        let listed = store.list_decision_requests().unwrap();
+        let found = listed.iter().find(|d| d.id == decision.id).unwrap();
+        assert_eq!(
+            found.discharge,
+            Some(DecisionDischarge::Outstanding),
+            "a deployment older than the ruling is not evidence the ruling was carried out"
         );
     }
 
