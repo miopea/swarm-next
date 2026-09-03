@@ -95,29 +95,71 @@ fn claude_holds_no_such_conversation(session_id: ProviderConversationId, workspa
             return false;
         }
     };
-    let deadline = Instant::now() + CONVERSATION_PROBE_TIMEOUT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                warn!(%session_id, "Claude did not answer about this conversation in time; resuming");
-                return false;
+    read_conversation_probe(&mut child, CONVERSATION_PROBE_TIMEOUT)
+        .is_some_and(|stderr| stderr.contains("No conversation found with session ID"))
+}
+
+/// The probe owns one child and one nonblocking pipe. Neither a full pipe nor
+/// a descendant retaining stderr can turn the startup deadline into an infinity.
+/// Oversize, timeout, and I/O failure remain unknown, never evidence of absence.
+fn read_conversation_probe(child: &mut std::process::Child, timeout: Duration) -> Option<String> {
+    use nix::fcntl::{FcntlArg, OFlag, fcntl};
+    use std::{io::Read as _, os::fd::AsRawFd};
+
+    const MAX_PROBE_STDERR: usize = 64 * 1024;
+    let result = (|| {
+        let mut pipe = child.stderr.take()?;
+        let flags = fcntl(pipe.as_raw_fd(), FcntlArg::F_GETFL).ok()?;
+        fcntl(
+            pipe.as_raw_fd(),
+            FcntlArg::F_SETFL(OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK),
+        )
+        .ok()?;
+        let deadline = Instant::now().checked_add(timeout)?;
+        let mut captured = Vec::new();
+        let mut chunk = [0_u8; 4096];
+        let mut exit_status: Option<std::process::ExitStatus> = None;
+        loop {
+            // Drain while the child runs, up to the owned total byte bound.
+            // Reading only after wait can deadlock a child on a full pipe.
+            loop {
+                if Instant::now() >= deadline {
+                    return None;
+                }
+                match pipe.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(count) => {
+                        if captured.len() + count > MAX_PROBE_STDERR {
+                            return None;
+                        }
+                        captured.extend_from_slice(&chunk[..count]);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(_) => return None,
+                }
             }
-            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-            Err(error) => {
-                warn!(%session_id, %error, "could not read Claude's answer; resuming");
-                return false;
+            if let Some(status) = exit_status {
+                // Claude's observed missing-conversation result exits 1.
+                // Success or a signal must not be mistaken for that result.
+                return (status.code() == Some(1))
+                    .then(|| String::from_utf8(captured).ok())
+                    .flatten();
+            }
+            exit_status = child.try_wait().ok()?;
+            if exit_status.is_none() {
+                std::thread::sleep(
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .min(Duration::from_millis(50)),
+                );
             }
         }
-    }
-    let mut stderr = String::new();
-    if let Some(mut pipe) = child.stderr.take() {
-        use std::io::Read as _;
-        let _ = pipe.read_to_string(&mut stderr);
-    }
-    stderr.contains("No conversation found with session ID")
+    })();
+    // Also reap on pipe setup/read/wait errors. Dropping Child does not stop it.
+    let _ = child.kill();
+    let _ = child.wait();
+    result
 }
 
 #[derive(Debug, Error)]
@@ -1203,6 +1245,48 @@ mod conversation_oracle_tests {
 
     fn pinned() -> ProviderConversationId {
         ProviderConversationId::new()
+    }
+
+    fn probe_child(script: &str) -> std::process::Child {
+        Command::new("sh")
+            .args(["-c", script])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    }
+
+    #[test]
+    fn bounded_probe_reads_small_failure_and_reaps_the_child() {
+        let mut child = probe_child("printf 'No conversation found with session ID' >&2; exit 1");
+        assert_eq!(
+            read_conversation_probe(&mut child, Duration::from_secs(2)).as_deref(),
+            Some("No conversation found with session ID")
+        );
+        assert!(child.try_wait().unwrap().is_some());
+    }
+
+    #[test]
+    fn success_is_not_evidence_of_a_missing_conversation() {
+        let mut child = probe_child("printf 'No conversation found with session ID' >&2; exit 0");
+        assert!(read_conversation_probe(&mut child, Duration::from_secs(2)).is_none());
+    }
+
+    #[test]
+    fn unbounded_probe_output_is_unknown_and_the_child_is_stopped() {
+        let mut child = probe_child(
+            "while :; do printf '0123456789012345678901234567890123456789012345678901234567890123456789' >&2; done",
+        );
+        assert!(read_conversation_probe(&mut child, Duration::from_secs(2)).is_none());
+        assert!(child.try_wait().unwrap().is_some());
+    }
+
+    #[test]
+    fn silent_probe_times_out_and_is_reaped() {
+        let mut child = probe_child("exec sleep 60");
+        assert!(read_conversation_probe(&mut child, Duration::from_millis(20)).is_none());
+        assert!(child.try_wait().unwrap().is_some());
     }
 
     /// The whole point: Claude's answer decides, not a file Swarm looked for.

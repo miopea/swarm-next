@@ -1,6 +1,7 @@
 # ADR 0011: Durable provider conversation recovery
 
-Status: **Accepted**
+Status: **Accepted**, amended by the approved daily-driver maturity interview
+(REC-01). Recovery ladder implementation and live acceptance remain incomplete.
 
 ## Context
 
@@ -20,20 +21,25 @@ session identity.
   and starts with `claude --session-id <uuid>`.
 - Later process incarnations use `claude --resume <uuid>`.
 - Profiles migrated with prior terminal history but no known conversation UUID
-  use workspace-scoped `claude --continue` as an explicit compatibility path.
+  use workspace-scoped `claude --continue`. Provider-native continuation is also
+  the second recovery step when safe recovery of the chosen conversation fails.
 - Fresh launches do not override Claude's configured permission mode.
 - Browser and API restarts continue attaching to the live PTY and never launch
   another provider process.
 
-The compatibility path is owned by the Claude provider adapter. It may be
-removed after import tooling can identify and bind legacy Claude session IDs,
-or after all active migrated profiles have been recreated with exact identity.
+Provider-specific recovery belongs to the provider adapter. The operator's
+explicit conversation switch must become the default for future resumption;
+filesystem timestamps are not authority to undo that choice. Provider-native
+continue semantics may choose a different workspace conversation, so Swarm must
+distinguish an exact restoration from that fallback in its recovery evidence.
 
 ## Consequences
 
-- Crash, reboot, and intentional stop/start preserve conversational context.
-- New profiles cannot resume another worker merely because they share a
-  workspace.
+- Crash, reboot, and intentional stop/start attempt to preserve the chosen
+  conversation; fallback reporting distinguishes continuity from fresh context.
+- New profiles start with their own identity. Exact recovery does not choose a
+  different worker's conversation merely because they share a workspace;
+  provider-native continue fallback retains the provider's workspace ambiguity.
 - The terminal-host protocol carries a typed conversation-start policy and
   therefore advances to version 6.
 - A planned terminal-host replacement is required to deploy this protocol
@@ -43,6 +49,21 @@ or after all active migrated profiles have been recreated with exact identity.
 
 ## Failure behavior
 
-An exact resume failure remains visible in the terminal instead of silently
-starting a blank conversation. Swarm does not fall back from a known UUID to a
-different workspace conversation.
+The approved order is safe recovery of the chosen conversation, provider-native
+continue (`--continue` for Claude or the supported provider equivalent), then a
+fresh session only as the last attempt. Do not retry indefinitely or substitute
+a provider. Uncertain errors are not proof that context is missing. Each attempt
+has an owned resource/time bound and an explicit outcome; never use a timer alone
+to declare a conversation restored or lost.
+
+Fresh fallback must clearly say prior context was not restored and leave the
+operator able to use the provider's resume command. It must not replay the prior
+task's commands or claim the task resumed. If the provider has no supported
+resumption capability, recovery is manual rather than an invented adapter path.
+
+The host currently probes Claude in the same environment as the provider. The
+probe's stderr is bounded and nonblocking; only the recognized exit-1 missing
+result is evidence of absence. Other outcomes retain the exact resume attempt.
+The remaining direct missing-to-New branch predates this amendment and must be
+replaced by the full ladder with visible fallback reporting. This ADR records the
+approved target, not a claim that that branch has already been corrected.

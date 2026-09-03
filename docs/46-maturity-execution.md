@@ -403,6 +403,28 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   The synthetic socket has no provider and does not echo typed input.
 - No releases, pushes, deployments, live-worker writes, or process restarts.
 
+### P2m: bound the provider conversation probe
+
+- Recovery audit confirmed the host still maps a recognized missing Claude
+  conversation directly to New. That contradicts REC-01; the ladder and visible
+  fallback reporting remain unfinished. Amended ADR 0011 to the approved target
+  (exact/safe recovery, native continue, fresh last), explicitly marking this gap.
+- Found a separate startup stability defect in that same path: waiting for exit
+  before draining stderr can fill the child's pipe, and reading to EOF after exit
+  can wait indefinitely if a descendant retains the pipe. Stderr was unbounded.
+- The owned probe now reads nonblocking while the child runs, enforces the
+  existing 20-second deadline and a 64-KiB stderr limit, and kills/reaps its child
+  on errors or overflow. Only a recognized exit-1 response is absence evidence;
+  all uncertain outcomes preserve the exact-resume attempt. No stderr content is
+  logged. This does not itself implement continuation or fresh-fallback reporting.
+- Added tests for a small missing result, misleading success, overflowing output,
+  and a silent process timeout with reaping. Strict Linux-target host Clippy passed
+  with all targets/features after correcting one lint. These tests compiled but
+  were not executed on Linux. No live Claude process was invoked for this check.
+- No provider/engine restart, push, release, or deployment. Engine rollout remains
+  a separate operator-controlled action; an API-only update cannot apply this fix
+  to an already-running older host.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has
