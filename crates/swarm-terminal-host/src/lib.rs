@@ -365,9 +365,10 @@ fn dispatch_blocking(
             workspace,
             size,
             conversation,
+            mcp_config,
             allow_outside_roots,
         } => CodexAdapter
-            .command_for(&workspace, conversation)
+            .command_for(&workspace, conversation, mcp_config.as_deref())
             .map_err(|error| error.to_string())
             .and_then(|command| {
                 registry

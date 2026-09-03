@@ -155,6 +155,25 @@ pub enum HostRequest {
         workspace: PathBuf,
         size: TerminalSize,
         conversation: CodexConversationStart,
+        /// The per-worker MCP config, so a Codex session can reach the board.
+        ///
+        /// A Codex worker received its assignment notification and had no swarm
+        /// tools, so it could not open the task, could not read the brief, and
+        /// could not move it. It stopped rather than guessing, which was right
+        /// and which left the work sitting with nothing saying anything was
+        /// wrong. The reported workaround was putting the entire brief in the
+        /// task TITLE, because the notification was all it could see.
+        ///
+        /// ⚠️ AN OLDER HOST IGNORES THIS AND THAT IS DELIBERATELY SURVIVABLE.
+        /// `#[serde(default)]` means it is tolerated, and tolerated means
+        /// dropped — so a Codex worker on a host that predates this starts with
+        /// no tools, WHICH IS EXACTLY WHAT IT DOES TODAY. The skew reproduces
+        /// the current behaviour rather than a new failure, and the API says so
+        /// out loud rather than assuming the host took it. That is the shape
+        /// operator decision 01a05b83 asked for: "Proceed with a loud warning
+        /// that says it could not check."
+        #[serde(default)]
+        mcp_config: Option<PathBuf>,
         #[serde(default)]
         allow_outside_roots: bool,
     },

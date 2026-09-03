@@ -173,23 +173,98 @@ impl CodexAdapter {
         &self,
         workspace: &Path,
         conversation: CodexConversationStart,
+        mcp_config: Option<&Path>,
     ) -> Result<ProviderCommand, ProviderCommandError> {
         if !workspace.is_absolute() {
             return Err(ProviderCommandError::WorkspaceNotAbsolute);
         }
-        let arguments = match conversation {
+        // THE OVERRIDE GOES FIRST, BEFORE ANY SUBCOMMAND. Measured against
+        // codex-cli 0.147.0 rather than read from its documentation, because
+        // this file's own rule is not to write arguments for a CLI nobody can
+        // run — and Codex, unlike the alpha providers, is installed:
+        //
+        //   $ codex -c 'mcp_servers.swarmtest={command="echo"}' mcp list
+        //   swarmtest  echo  ...  enabled
+        //
+        // Accepted on the bare invocation and before `resume`, so it covers
+        // New, Resume and Continue alike.
+        let mut arguments: Vec<String> = mcp_config
+            .and_then(codex_mcp_override)
+            .map(|value| vec!["-c".to_owned(), value])
+            .unwrap_or_default();
+        arguments.extend(match conversation {
             CodexConversationStart::New => Vec::new(),
             CodexConversationStart::Resume { session_id } => {
-                vec!["resume".into(), session_id.to_string()]
+                vec!["resume".to_owned(), session_id.to_string()]
             }
-            CodexConversationStart::Continue => vec!["resume".into(), "--last".into()],
-        };
+            CodexConversationStart::Continue => vec!["resume".to_owned(), "--last".to_owned()],
+        });
         Ok(ProviderCommand {
             executable: PathBuf::from("codex"),
             arguments,
             working_directory: workspace.to_path_buf(),
         })
     }
+}
+
+/// Turns the per-worker MCP config into one Codex `-c` value.
+///
+/// Swarm already mints this config — a stdio bridge command plus a per-worker
+/// bearer token — and writes it as Claude's `mcpServers` JSON. Codex reads TOML
+/// and takes overrides as `-c <dotted.path>=<toml>`, so the same facts are
+/// re-expressed rather than a second config being invented. The token is minted
+/// per worker by `ensure_worker_config`, which is why the reporter could not
+/// make this work by hand: "the working config uses a per-worker token that only
+/// swarm can mint."
+///
+/// Returns `None` rather than a partial override when anything is missing. A
+/// Codex session with no tools is today's behaviour and is survivable; one
+/// pointed at a half-built server is not.
+fn codex_mcp_override(config: &Path) -> Option<String> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(config).ok()?).ok()?;
+    let (name, server) = parsed.get("mcpServers")?.as_object()?.iter().next()?;
+    let command = server.get("command")?.as_str()?;
+    let args = server
+        .get("args")
+        .and_then(|value| value.as_array())
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str().map(toml_string))
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default();
+    let env = server
+        .get("env")
+        .and_then(|value| value.as_object())
+        .map(|pairs| {
+            pairs
+                .iter()
+                .filter_map(|(key, value)| {
+                    value
+                        .as_str()
+                        .map(|value| format!("{key}={}", toml_string(value)))
+                })
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default();
+    Some(format!(
+        "mcp_servers.{name}={{command={},args=[{args}],env={{{env}}}}}",
+        toml_string(command)
+    ))
+}
+
+/// A TOML basic string, escaped so a value cannot end the string it sits in.
+///
+/// The token goes through here. A bearer credential that breaks out of its
+/// quoting would land in Codex's argv as separate arguments, which is both a
+/// broken config and a secret in a place nothing expects one.
+fn toml_string(value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
 }
 
 /// The three ALPHA providers, started identically.
@@ -426,6 +501,7 @@ mod tests {
             .command_for(
                 Path::new("/workspaces/example"),
                 CodexConversationStart::New,
+                None,
             )
             .unwrap();
         assert_eq!(fresh.executable, PathBuf::from("codex"));
@@ -434,6 +510,7 @@ mod tests {
             .command_for(
                 Path::new("/workspaces/example"),
                 CodexConversationStart::Continue,
+                None,
             )
             .unwrap();
         assert_eq!(recovered.arguments, ["resume", "--last"]);
@@ -442,9 +519,133 @@ mod tests {
             .command_for(
                 Path::new("/workspaces/example"),
                 CodexConversationStart::Resume { session_id },
+                None,
             )
             .unwrap();
         assert_eq!(imported.arguments, ["resume", &session_id.to_string()]);
+    }
+
+    /// A CODEX WORKER REACHES THE BOARD, which is the whole defect.
+    ///
+    /// Reported: "The Codex worker gets the assignment notification but has no
+    /// swarm tools in its session, so it cannot open the task or read its body,
+    /// and cannot move it to review." The workaround was putting the entire
+    /// brief in the task TITLE, because the notification was all it could see.
+    ///
+    /// The override shape is measured against codex-cli 0.147.0, not read from
+    /// its documentation — `codex -c 'mcp_servers.x={command="echo"}' mcp list`
+    /// lists the server. This file refuses to write arguments for CLIs nobody
+    /// can run, and Codex is installed, so it is held to that standard.
+    #[test]
+    fn a_codex_worker_is_handed_the_swarm_mcp_server_on_its_command_line() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("worker.json");
+        // The exact payload AgentBridge::ensure_worker_config writes.
+        std::fs::write(
+            &config,
+            r#"{"mcpServers":{"swarm":{"type":"stdio","command":"swarm-terminal-host",
+               "args":["mcp-proxy"],"env":{"SWARM_MCP_URL":"http://127.0.0.1:8766/agent",
+               "SWARM_MCP_AUTHORIZATION":"Bearer abc123"}}}}"#,
+        )
+        .unwrap();
+
+        let command = CodexAdapter
+            .command_for(
+                Path::new("/workspaces/example"),
+                CodexConversationStart::New,
+                Some(&config),
+            )
+            .unwrap();
+
+        assert_eq!(command.arguments.first().map(String::as_str), Some("-c"));
+        let override_ = &command.arguments[1];
+        assert!(override_.starts_with("mcp_servers.swarm="), "{override_}");
+        assert!(
+            override_.contains(r#"command="swarm-terminal-host""#),
+            "{override_}"
+        );
+        assert!(override_.contains(r#"args=["mcp-proxy"]"#), "{override_}");
+        // The per-worker token is the thing that could not be supplied by hand.
+        assert!(
+            override_.contains(r#"SWARM_MCP_AUTHORIZATION="Bearer abc123""#),
+            "{override_}"
+        );
+    }
+
+    /// THE OVERRIDE PRECEDES THE SUBCOMMAND, on every conversation path.
+    ///
+    /// `codex -c ... resume --last` is accepted and `codex resume --last -c ...`
+    /// is a different thing; putting it after would be a config that silently
+    /// does nothing, which is the failure this fixes wearing a new hat.
+    #[test]
+    fn the_override_comes_before_resume_rather_than_after_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("worker.json");
+        std::fs::write(
+            &config,
+            r#"{"mcpServers":{"swarm":{"command":"swarm-terminal-host","args":[],"env":{}}}}"#,
+        )
+        .unwrap();
+
+        let command = CodexAdapter
+            .command_for(
+                Path::new("/workspaces/example"),
+                CodexConversationStart::Continue,
+                Some(&config),
+            )
+            .unwrap();
+
+        assert_eq!(command.arguments[0], "-c");
+        assert_eq!(command.arguments[2], "resume");
+        assert_eq!(command.arguments[3], "--last");
+    }
+
+    /// NO CONFIG MEANS NO FLAG, not an empty one.
+    ///
+    /// A worker whose bridge is unavailable starts exactly as it does today —
+    /// bare — rather than with `-c` and nothing after it, which Codex would
+    /// reject and which would turn a missing feature into a worker that will
+    /// not start at all.
+    #[test]
+    fn a_codex_worker_without_a_config_starts_exactly_as_before() {
+        let command = CodexAdapter
+            .command_for(
+                Path::new("/workspaces/example"),
+                CodexConversationStart::New,
+                None,
+            )
+            .unwrap();
+        assert!(command.arguments.is_empty());
+    }
+
+    /// A TOKEN CANNOT BREAK OUT OF ITS QUOTING.
+    ///
+    /// The bearer credential goes into a TOML string inside a shell argument.
+    /// A value that ended the string early would split into separate argv
+    /// entries — a broken config, and a secret somewhere nothing expects one.
+    #[test]
+    fn a_quote_in_a_value_cannot_end_the_string_it_sits_in() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("worker.json");
+        std::fs::write(
+            &config,
+            r#"{"mcpServers":{"swarm":{"command":"c","args":[],"env":{"T":"a\"b"}}}}"#,
+        )
+        .unwrap();
+
+        let command = CodexAdapter
+            .command_for(
+                Path::new("/workspaces/example"),
+                CodexConversationStart::New,
+                Some(&config),
+            )
+            .unwrap();
+
+        assert!(
+            command.arguments[1].contains(r#"T="a\"b""#),
+            "{}",
+            command.arguments[1]
+        );
     }
 }
 

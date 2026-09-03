@@ -41,6 +41,30 @@ fn host_too_old_for(error: &ApiError, attempted: &str) -> Option<ApiError> {
     })
 }
 
+/// Whether this provider gets a per-worker MCP config minted for it.
+///
+/// ⚠️ A NAMED FUNCTION BECAUSE THE CONDITION IS THE FIX. It was written inline
+/// as `profile.provider == ProviderKind::ClaudeCode`, and that one comparison is
+/// the whole of why a Codex worker had no swarm tools: the bridge, the
+/// per-worker token and the config file all already existed and were fenced off
+/// from it. Reported as "the Codex worker gets the assignment notification but
+/// has no swarm tools in its session, so it cannot open the task or read its
+/// body, and cannot move it to review."
+///
+/// The reporter tried to supply a config by hand and could not — "the working
+/// config uses a per-worker token that only swarm can mint" — which is exactly
+/// right, and is why this had to be fixed here rather than documented.
+///
+/// Inline, it was also untestable: restoring the old comparison broke no test,
+/// which is how a one-line fix ships and then quietly comes back.
+///
+/// THE ALPHA PROVIDERS STAY OUT on purpose. They start bare, none of their CLIs
+/// is installed on this machine, and minting a credential for a surface nobody
+/// can run would be issuing a secret on speculation.
+const fn provider_reaches_the_board(provider: ProviderKind) -> bool {
+    matches!(provider, ProviderKind::ClaudeCode | ProviderKind::Codex)
+}
+
 pub(super) async fn start_worker_process(
     state: &AppState,
     worker_id: WorkerId,
@@ -66,7 +90,7 @@ pub(super) async fn start_worker_process(
             },
         ));
     }
-    let mcp_config = if profile.provider == ProviderKind::ClaudeCode {
+    let mcp_config = if provider_reaches_the_board(profile.provider) {
         state
             .agent_bridge
             .as_ref()
@@ -242,9 +266,35 @@ fn provider_start_request(
                 (None, true) => CodexConversationStart::Continue,
                 _ => CodexConversationStart::New,
             },
+            mcp_config,
             allow_outside_roots,
         },
     };
+    // ⚠️ SAYS IT COULD NOT CHECK, RATHER THAN ASSUMING THE HOST TOOK IT.
+    //
+    // `mcp_config` on StartCodex is `#[serde(default)]`, so a host older than
+    // this build DROPS it silently and the worker starts with no tools — which
+    // is indistinguishable from the defect being fixed. Operator decision
+    // 01a05b83 ruled on exactly this shape: "Proceed with a loud warning that
+    // says it could not check."
+    //
+    // The protocol version cannot answer it: this adds a field to an existing
+    // request rather than a new request, so PROTOCOL_VERSION does not move and
+    // an old host reports the same number a new one does. Nothing here can tell
+    // them apart, and that is what is being said out loud.
+    if matches!(
+        request,
+        HostRequest::StartCodex {
+            mcp_config: Some(_),
+            ..
+        }
+    ) {
+        tracing::info!(
+            worker = %profile.name,
+            "a Codex worker is starting with swarm tools; a terminal host older than this build \
+             ignores that silently and the session comes up without them, exactly as it did before"
+        );
+    }
     Ok(request)
 }
 
@@ -704,6 +754,39 @@ mod tests {
             .unwrap(),
             b"history"
         );
+    }
+
+    /// A CODEX WORKER GETS A CONFIG MINTED FOR IT, and an alpha provider does not.
+    ///
+    /// This is the entire fix for "the Codex worker gets the assignment
+    /// notification but has no swarm tools in its session" — one comparison that
+    /// used to name Claude alone. It is asserted here because ablating the
+    /// original inline condition broke NOTHING: the line that mattered had no
+    /// test, which is how a one-line fix ships and then quietly comes back.
+    ///
+    /// The alpha providers are asserted OUT rather than left unmentioned. They
+    /// start bare and none of their CLIs is installed here, so minting a
+    /// per-worker bearer token for them would be issuing a credential for a
+    /// surface nobody can run.
+    #[test]
+    fn a_codex_worker_is_given_swarm_tools_and_an_alpha_provider_is_not() {
+        assert!(provider_reaches_the_board(ProviderKind::ClaudeCode));
+        assert!(
+            provider_reaches_the_board(ProviderKind::Codex),
+            "this is the defect: the bridge and the token already existed and Codex was fenced out"
+        );
+
+        for bare in [
+            ProviderKind::Gemini,
+            ProviderKind::Grok,
+            ProviderKind::OpenCode,
+        ] {
+            assert!(
+                !provider_reaches_the_board(bare),
+                "{bare:?} starts bare; minting it a token would issue a credential for a surface \
+                 nobody can run"
+            );
+        }
     }
 
     /// THE REPRODUCTION 01a05af0 ASKED FOR: the check says the conversation is
