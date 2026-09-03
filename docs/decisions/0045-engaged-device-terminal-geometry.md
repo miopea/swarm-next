@@ -4,6 +4,10 @@
 
 Accepted for dogfooding.
 
+Maturity amendment: [ADR 0062](0062-generation-bound-terminal-control.md)
+replaces implicit input takeover with explicit generation-bound control and
+atomic geometry transfer. Its implementation is in progress.
+
 ## Context
 
 One worker owns one server-side PTY, but the same worker may be visible from a

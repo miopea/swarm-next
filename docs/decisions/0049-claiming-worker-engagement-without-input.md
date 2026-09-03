@@ -1,5 +1,10 @@
 # ADR 0049: Claiming worker engagement without sending input
 
+Maturity amendment: [ADR 0062](0062-generation-bound-terminal-control.md)
+supersedes the no-geometry-transfer rule for the new Resume Here protocol.
+Its implementation is in progress; the historical behavior below is unchanged
+until the end-to-end protocol is enabled.
+
 ## Status
 
 Accepted, 2026-08-20, on the operator's ruling to proceed. Implemented: a device

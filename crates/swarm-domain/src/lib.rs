@@ -7,6 +7,7 @@ mod control_room;
 mod decisions;
 mod release;
 mod tasks;
+mod terminal_control;
 mod version;
 mod workers;
 
@@ -15,6 +16,7 @@ pub use control_room::*;
 pub use decisions::*;
 pub use release::*;
 pub use tasks::*;
+pub use terminal_control::*;
 pub use version::{DevelopmentBuild, SwarmVersion};
 pub use workers::*;
 
@@ -73,6 +75,7 @@ domain_id!(FederationStewardTakeoverLeaseId);
 domain_id!(StewardshipId);
 domain_id!(ProviderConversationId);
 domain_id!(PresenceDeviceId);
+domain_id!(TerminalViewId);
 domain_id!(JiraProjectBindingId);
 domain_id!(DeploymentGrantId);
 domain_id!(DeploymentAuthorizationId);

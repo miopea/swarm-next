@@ -207,12 +207,47 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 - Post-commit full web suite on unchanged runtime source: 113 files, 916 tests
   passed (two workers). This does not substitute for Rust or device tests.
 
+### P2e: generation-bound ownership domain foundation
+
+- ADR 0062 amends the historical implicit takeover rules. One constant-space
+  engine-owned state models device plus view identity, generation, and monotonic
+  lease expiry. A same-device popout is not the same interactive view.
+- Automatic acquisition cannot displace a live owner. Explicit takeover checks
+  its observed generation. Old input/resize authorization, renewals, releases,
+  and delayed takeover requests fail after transfer. Disconnect itself is not a
+  transition; expiry/reacquisition advances the generation. Failed proposals can
+  be discarded without modifying the current owner.
+- All 58 domain tests passed, including 12 new ownership tests. Domain formatting
+  and Clippy (`--all-targets --all-features -- -D warnings`) passed on Rust 1.97.1
+  Windows GNU. This is real compiled Rust evidence, not the earlier script stubs.
+- The model is not yet connected to the engine, IPC, or browser. TERM-01 remains
+  open until engine-serialized effects, rolling compatibility, and device tests
+  prove the complete cutover. No live behavior is changed by this foundation.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has
   eight CPUs and the pinned Rust 1.97.1 toolchain, but root disk is 94% full
   (about 3.8 GiB free). No large Rust build was started and no files were cleaned.
 - Remote development revision was `421eca9`; it is separate from this branch.
+- Established isolated local Rust 1.97.1 GNU with rustfmt/Clippy/LLVM helpers in
+  `%TEMP%/swarm-rust-5c449ae8c47144dc815fce6fa5fe3c9a`; no system PATH, service,
+  or existing Rust profile changes. Official rustup installer SHA-256:
+  `6D5B5709ADDC0122C916D8C810DA8D8A7B086A5D64FA805EF404D506392AADC8`.
+- Public dependency fetching needed process-local `CARGO_HTTP_CHECK_REVOKE=false`
+  because Windows revocation lookup failed. TLS certificate/hostname validation
+  remained enabled; final tests and lint ran offline. No private source upload.
+- Local test environment uses temporary `RUSTUP_HOME`, `CARGO_HOME`, and
+  `CARGO_TARGET_DIR`, adds only the temporary cargo bin to the process PATH, and
+  sets `RUSTFLAGS=-C link-self-contained=yes -C dlltool=<toolchain>/lib/rustlib/x86_64-pc-windows-gnu/bin/llvm-dlltool.exe`.
+  The DLL helper is a copy of the official LLVM archive tool under its supported
+  dlltool-mode name. Minimal GNU's original dlltool required a missing assembler;
+  LLVM mode plus bundled self-contained libraries resolved that local gap.
+  Commands: `cargo test --offline --locked -j 2 -p swarm-domain`,
+  `cargo fmt -p swarm-domain -- --check`, and
+  `cargo clippy --offline --locked -j 2 -p swarm-domain --all-targets --all-features -- -D warnings`.
+- Linux engine/PTY and persistence verification are not established by this
+  domain-only Windows route; isolated Linux source transfer is still unapproved.
 
 See the approved plan. No phase is complete solely because a patch was committed.
 Real Android/iOS and normal operator soak remain separate evidence requirements.

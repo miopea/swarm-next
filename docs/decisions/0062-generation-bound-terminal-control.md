@@ -1,0 +1,63 @@
+# ADR 0062: Generation-bound terminal control in the worker engine
+
+Status: Accepted for the operator-approved daily-driver maturity program;
+implementation in progress. The initial domain model is not an enabled protocol.
+
+## Context
+
+The approved TERM-01 contract replaces implicit keystroke takeover with one
+interactive owner. Resume Here must move input and geometry together. An API
+database check followed by a separate engine write is not sufficient: another
+attachment can take over between the check and the PTY operation. Same-device
+popouts also share a presence identity but must not share write authority.
+
+## Decision
+
+- Each engine session owns one bounded control state, including device identity,
+  a distinct browser-view identity, a monotonically increasing generation, and
+  a lease deadline measured using the engine's monotonic clock. Browser time is
+  never authoritative. Ownership dies with that immutable engine session, not
+  with the API process or socket.
+- Foreground automatic resume acquires only an unowned/expired session, or
+  renews the same view. Other views remain passive. Explicit Resume Here uses
+  the observed generation to compare-and-swap ownership; an old delayed claim
+  cannot undo a more recent takeover. Same-device windows are distinct views.
+- Input and resize carry the accepted generation. The engine serializes their
+  authorization checks and PTY effects with takeover. No adapter may check a
+  grant, release its guard, and later write as if the check were still current.
+- Prepare takeover on a copy, apply validated geometry while holding that same
+  session guard, then commit ownership and acknowledge it. Failed geometry must
+  not report a completed handoff. A failed/uncertain input is never replayed.
+- Retain the existing 90-second viewing and 300-second typing protection;
+  foreground presence may renew the shorter lease without shortening typing
+  protection. Hidden views stop renewals and resize requests. Disconnect itself
+  does not revoke ownership; reconnect of the same view retains its generation
+  while the lease is valid. Expiry is checked at operations, not by a timer.
+- Expired reacquisition and explicit release invalidate old generations. Counter
+  or deadline overflow fails closed without modifying the current grant.
+- Engagement remains the orchestration interruption guard, not terminal control
+  authority. The API must synchronize its engagement projection without becoming
+  a second authority for PTY ownership. Presence is not authorization.
+
+This supersedes the input-implicitly-steals geometry rules in ADRs 0012/0045 and
+the claim-does-not-move-geometry decision in ADR 0049 when the new protocol is
+enabled. It does not change provider sessions, task ownership, or scope of work.
+
+## Rolling compatibility and activation gate
+
+The terminal adapter and engine must negotiate support explicitly. Never silently
+downgrade a generation-bound attachment to unrestricted legacy input. Existing
+workers on an older engine must remain alive; expose that engine capability gap
+and its update requirement rather than pretending stable takeover is available.
+The terminal protocol owner removes the old control path after supported engines
+and clients have migrated. No browser control is enabled by the domain-only slice.
+
+## Verification
+
+Domain tests cover passive reads, competing views, compare-and-swap takeover,
+stale input/resize/renew/release, reconnect, expiry, generation exhaustion, and
+discarded failed proposals. Engine tests must additionally prove serialization
+with real PTY effects and failure rollback. Protocol tests must exercise API
+replacement and old-engine refusal. Android/iOS and desktop acceptance must prove
+a single stable cutover with no worker restart or stale input. Unit tests alone
+do not close TERM-01.

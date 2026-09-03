@@ -23,7 +23,7 @@ Decision meanings:
 | Task board | Redesign | Preserve work management while simplifying task types, transitions, and presentation. |
 | Task assignment | Redesign | Preserve manual and assisted assignment; separate recommendations from execution policy. |
 | Task history and audit | Keep | Implemented as bounded, durable per-task events plus a quiet operator Activity view with task search and progress, assignment, and change filters. It excludes terminal output and transport noise. |
-| Direct terminal input | Keep | Essential, with explicit input ownership, stale-session protection, provider-prompt guards, and content-free actor/shape attribution at the terminal-host write boundary. Typed content and terminal output never enter that audit. |
+| Direct terminal input | Keep | Essential, with explicit input ownership, stale-session protection, provider-prompt guards, and content-free actor/shape attribution at the terminal-host write boundary. Typed content and terminal output never enter that audit. Maturity ADR 0062 adds a tested generation-bound domain model; engine serialization, protocol negotiation, and Resume Here integration remain in progress and are not enabled by that foundation. |
 | Groups and bulk worker actions | Investigate | Likely useful, but validate actual use and whether workspace selection replaces groups. |
 | Worker routing descriptions | Redesign | Implemented as operator-reviewed Hive metadata for Queen routing, distinct from provider memory and project instructions. Swarm can draft locally from bounded README/manifest metadata or optionally improve that packet with one tool-free, non-persistent, budget-capped Claude turn; neither path saves without operator review. |
 

@@ -2,6 +2,10 @@
 
 Status: **Accepted**
 
+Maturity amendment: [ADR 0062](0062-generation-bound-terminal-control.md)
+supersedes implicit terminal input/geometry takeover when its generation-bound
+protocol is enabled. Engagement remains the orchestration interruption guard.
+
 ## Context
 
 Operators frequently steer workers directly without creating tasks. Legacy
