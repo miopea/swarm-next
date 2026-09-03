@@ -706,6 +706,78 @@ mod tests {
         );
     }
 
+    /// THE REPRODUCTION 01a05af0 ASKED FOR: the check says the conversation is
+    /// gone while Claude can still open it.
+    ///
+    /// The ticket refused a patch until this existed, and was right to —
+    /// "guessing at that is how the 17-unstartable-workers incident happened in
+    /// the first place."
+    ///
+    /// ⚠️ THE DISAGREEMENT IS TWO PROCESSES, NOT A PATH BUG. The check runs in
+    /// swarm-api and reads its OWN `CLAUDE_CONFIG_DIR`; Claude is spawned by
+    /// swarm-terminal-host and inherits THAT service's environment. They are
+    /// separate systemd units and cannot be assumed to agree — on this Hive
+    /// swarm-api additionally loads `swarm-dev.env`, which the host does not.
+    ///
+    /// The direction matters and I had it backwards at first. If only the API
+    /// has a config dir, the copy below RESCUES the case: the conversation is
+    /// found under `$HOME/.claude` and copied forward, so the check says
+    /// available and it is. The failure is the mirror image — Claude reading a
+    /// config dir the check knows nothing about, because `source_root` is
+    /// hardcoded to the API's own `$HOME/.claude/projects` and never asks where
+    /// the host will look.
+    ///
+    /// Then: the check reports gone, `New { id }` reuses the pinned id for a
+    /// fresh conversation, and Claude refuses an id it still holds. The worker
+    /// does not start. The arm exists to prevent exactly that.
+    ///
+    /// NOT REPRODUCED ON THE LIVE HIVE, deliberately: pointing the running API
+    /// at an empty tree with thirteen sessions attached risks the incident this
+    /// ticket exists to avoid, to show something a test shows for nothing.
+    #[test]
+    fn the_check_reports_gone_for_a_conversation_the_provider_can_still_open() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("home");
+        let conversation_id = "8e9ed267-7ed8-4b64-94ef-dde3ab17f21a";
+
+        // Where CLAUDE actually looks, because the terminal host has a config
+        // dir of its own. The conversation is here and is perfectly openable.
+        let provider_tree = directory.path().join("host-claude/projects");
+        let provider_directory = provider_tree.join("-home-projects-petal");
+        std::fs::create_dir_all(&provider_directory).unwrap();
+        std::fs::write(
+            provider_directory.join(format!("{conversation_id}.jsonl")),
+            b"history",
+        )
+        .unwrap();
+
+        // What the CHECK consults: its own home, which knows nothing about the
+        // host's config dir. source_root is hardcoded to this in the caller.
+        let error = ensure_claude_resume_history_between(
+            "/home/projects/petal",
+            conversation_id,
+            &home.join(".claude/projects"),
+            &home.join(".claude/projects"),
+            &home,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::NotFound,
+            "the check reports the conversation gone"
+        );
+        assert!(
+            provider_directory
+                .join(format!("{conversation_id}.jsonl"))
+                .is_file(),
+            "WHILE IT IS SITTING WHERE THE PROVIDER READS IT. This is the whole \
+             defect: `New {{ id }}` is then chosen for a conversation Claude still \
+             holds, Claude refuses the id as already in use, and the worker never \
+             starts."
+        );
+    }
+
     /// The lookup still reports a missing conversation. What changed is what
     /// the caller does with that: it starts a fresh conversation under the same
     /// session id rather than refusing to start the worker at all.
