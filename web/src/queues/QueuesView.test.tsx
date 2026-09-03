@@ -52,6 +52,19 @@ describe("QueuesView", () => {
     render(<QueuesView onOpenTask={vi.fn()} workers={[]} tasks={[
       task({ id: "a", title: "Unknown owner" }),
     ]} />);
-    expect(screen.getByText("Nothing is waiting on anyone.")).toBeInTheDocument();
+    expect(screen.queryByText("Nothing is waiting on anyone.")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Next owner not recorded/ })).toBeInTheDocument();
+    expect(screen.getByText("Unknown owner")).toBeInTheDocument();
+  });
+
+  test("blocked age is queue evidence without duplicating or resurrecting tasks", () => {
+    const wait = { task_id: "a", title: "Blocked task", worker_name: "Orchard", workspace: "/w", blocked_for_seconds: 50_000 };
+    render(<QueuesView onOpenTask={vi.fn()} workers={[]} tasks={[
+      task({ id: "a", title: "Blocked task", state: "blocked", next_move_owner: "blocked" }),
+      task({ id: "b", title: "Resolved task", state: "completed", next_move_owner: "nobody" }),
+    ]} blockedWaits={[wait, { ...wait, task_id: "b", title: "Resolved task" }]} />);
+    expect(screen.getAllByText("Blocked task")).toHaveLength(1);
+    expect(screen.getByText(/Blocked for 13h/)).toBeInTheDocument();
+    expect(screen.queryByText("Resolved task")).not.toBeInTheDocument();
   });
 });

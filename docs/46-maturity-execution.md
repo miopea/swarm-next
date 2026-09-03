@@ -71,6 +71,21 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 
 ## P3–P7 — Pending
 
+### P4a: age is queue evidence
+
+- ADR 0061 records the approved replacement of timer-only operator escalation.
+  Removed the aged-block card and its contribution to both Needs You counts.
+  Existing actionable decisions remain untouched.
+- Queues retains the coordinator's age evidence, deduplicates it against the
+  task list, and does not resurrect tasks already known closed. Missing next
+  ownership now has an explicit group rather than “Nothing is waiting”.
+- App/Queues/count-invariant tests: 39 passed. The prior App test asserting the
+  superseded twelve-hour behavior failed as expected and was replaced with a
+  behavioral Needs You-to-Queues routing assertion. Typecheck passed.
+- No Rust runtime change or new escalation timer. Queen-generated actionable
+  escalation, stale decision reconciliation, and broader queue ownership remain
+  open; this is not full ATT-01/QUEUE-01 completion.
+
 ### P3a: bounded visible status polling
 
 - Runtime-update and development-status polling now share a visible-page owner:

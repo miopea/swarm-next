@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import HeldBriefingList from "../orchestration/HeldBriefingList";
-import type { HeldBriefing } from "../api";
+import type { BlockedEscalation, HeldBriefing } from "../api";
 import type { NextMoveOwner, Task } from "../api/tasks";
 import { isOpenTaskState } from "../api/tasks";
 import type { Worker } from "../api/workers";
@@ -22,16 +22,17 @@ import type { Worker } from "../api/workers";
  */
 
 type Group = {
-  owner: NextMoveOwner;
+  owner: NextMoveOwner | "unknown";
   title: string;
   /** What the operator should conclude from this pile growing. */
   meaning: string;
   tasks: Task[];
 };
 
-const GROUP_ORDER: readonly NextMoveOwner[] = ["queen", "worker", "blocked", "release"];
+const GROUP_ORDER: readonly Group["owner"][] = ["queen", "worker", "blocked", "release", "unknown"];
 
-const GROUP_TITLES: Record<NextMoveOwner, string> = {
+const GROUP_TITLES: Record<Group["owner"], string> = {
+  unknown: "Next owner not recorded",
   queen: "Waiting on Queen",
   worker: "Waiting on a worker",
   blocked: "Blocked on something else",
@@ -39,8 +40,9 @@ const GROUP_TITLES: Record<NextMoveOwner, string> = {
   nobody: "Settled",
 };
 
-const GROUP_MEANINGS: Record<NextMoveOwner, string> = {
-  queen: "Finished work she has not judged, and unassigned work she has not routed.",
+const GROUP_MEANINGS: Record<Group["owner"], string> = {
+  unknown: "Open work without a known next owner. This is missing evidence, not a healthy queue.",
+  queen: "Work whose next recorded move belongs to Queen.",
   worker: "Work a worker owns — in progress, or handed back for something missing.",
   blocked: "Nothing here can move these. A hard reason, such as waiting on another task.",
   release: "Finished and accepted. These close themselves when the work ships.",
@@ -71,6 +73,7 @@ export default function QueuesView({
   workers,
   onOpenTask,
   heldBriefings = [],
+  blockedWaits = [],
   now = Date.now(),
 }: {
   tasks: Task[];
@@ -87,6 +90,7 @@ export default function QueuesView({
    * losing it would trade one defect for a blind spot.
    */
   heldBriefings?: HeldBriefing[];
+  blockedWaits?: BlockedEscalation[];
   now?: number;
 }) {
   const workerNames = useMemo(
@@ -103,16 +107,23 @@ export default function QueuesView({
       // Older servers omit the field. Nothing is invented for them: a task with
       // no stated owner is left out rather than assigned to somebody who might
       // then be blamed for a queue that is not theirs.
-      tasks: open.filter((task) => task.next_move_owner === owner),
+      tasks: open.filter((task) => owner === "unknown"
+        ? !GROUP_ORDER.includes(task.next_move_owner as Group["owner"])
+        : task.next_move_owner === owner),
     })).filter((group) => group.tasks.length > 0);
   }, [tasks]);
 
   const total = groups.reduce((sum, group) => sum + group.tasks.length, 0);
+  const waits = new Map(blockedWaits.map((wait) => [wait.task_id, wait]));
+  // Do not duplicate a task already in the main queue or resurrect one known
+  // to be closed from an older, independently polled coordinator response.
+  const known = new Set(tasks.map((task) => task.id));
+  const extraWaits = blockedWaits.filter((wait) => !known.has(wait.task_id));
 
-  if (total === 0) {
+  if (total === 0 && extraWaits.length === 0) {
     return (
       <section className="queues" aria-label="Queues">
-        <p className="queues-empty">Nothing is waiting on anyone.</p>
+        {heldBriefings.length === 0 && <p className="queues-empty">Nothing is waiting on anyone.</p>}
         <HeldBriefingList briefings={heldBriefings} onOpenTask={onOpenTask} />
       </section>
     );
@@ -143,6 +154,7 @@ export default function QueuesView({
                         ? (workerNames.get(task.assigned_worker_id) ?? "assigned")
                         : "unassigned"}
                     </span>
+                    {task.state === "blocked" && waits.has(task.id) && <span className="queue-task-meta">Blocked for {ageLabel(Math.max(0, Math.floor(waits.get(task.id)!.blocked_for_seconds / 3600)))} · Queen coordinates the next move</span>}
                   </button>
                 </li>
               ))}
@@ -150,6 +162,14 @@ export default function QueuesView({
           </article>
         );
       })}
+      {extraWaits.length > 0 && <article className="queue-group" data-owner="blocked">
+        <header><h2>Blocked work awaiting reconciliation <span className="queue-count">{extraWaits.length}</span></h2>
+          <p className="queue-meaning">Reported by the coordinator but absent from the current task list. Age alone does not require your approval.</p></header>
+        <ul>{extraWaits.map((wait) => <li key={wait.task_id}><button type="button" onClick={() => onOpenTask(wait.task_id)}>
+          <span className="queue-task-title">{wait.title}</span>
+          <span className="queue-task-meta">{wait.worker_name} · blocked {ageLabel(Math.max(0, Math.floor(wait.blocked_for_seconds / 3600)))}</span>
+        </button></li>)}</ul>
+      </article>}
       <HeldBriefingList briefings={heldBriefings} onOpenTask={onOpenTask} />
     </section>
   );

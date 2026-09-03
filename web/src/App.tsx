@@ -118,7 +118,6 @@ import ShellModal from "./terminal/ShellModal";
 import CommandPalette, { type CommandChoice } from "./navigation/CommandPalette";
 import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
 import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
-import BlockedEscalationCard from "./decisions/BlockedEscalationCard";
 import UnsettledReviewCard from "./decisions/UnsettledReviewCard";
 import MachinePressureBadge from "./runtime/MachinePressureBadge";
 import { machinePressureNotice, type MachineResourceState } from "./runtime/machinePressure";
@@ -1496,7 +1495,6 @@ export function App() {
   // plainly on the page. A badge that disagrees with the page teaches the
   // operator to stop believing the badge, which is the one thing it has to do.
   const heldDeliveryAttentionCount = heldDeliveries.length > 0 ? 1 : 0;
-  const blockedEscalationAttentionCount = blockedEscalations.length > 0 ? 1 : 0;
   // ONE CARD, ONE COUNT, like held deliveries and blocked escalations above.
   // The card carries the number itself, so the operator sees how much without
   // opening anything; the badge counts things to deal with, not rows.
@@ -1509,12 +1507,6 @@ export function App() {
   // above for held deliveries and blocked escalations. Third instance.
   const conversationDriftAttentionCount =
     workerConversations.some((worker) => worker.freshness.state !== "current") ? 1 : 0;
-  // blockedEscalationAttentionCount BELONGS HERE and was missing, which is the
-  // same defect the paragraph above describes and fixes for held deliveries.
-  // It was computed, passed to the inbox as additionalPendingCount, and left
-  // out of the badge — so a blocked task old enough to escalate rendered its
-  // card on the page while "Needs you" read 0. It also silenced the push for
-  // it, because the watermark below only quiets sources the count knows about.
   // ⚠️ unsettledReviewAttentionCount IS DELIBERATELY ABSENT, and so is its card.
   // QueuesView's own docstring names it as the anti-pattern: "a card there
   // reading 'N pieces of finished work are waiting on Queen' is Queen's backlog
@@ -1524,11 +1516,10 @@ export function App() {
   // is what it is. The operator: "some of this is queue items not needs you
   // items."
   //
-  // blockedEscalationAttentionCount STAYS despite being Queen's to move, because
-  // the operator ruled on exactly that: decision 01a0418f, "Reach me after 12
-  // hours", verified at source. A stall that old is theirs by their own choice.
+  // The maturity ruling supersedes the earlier twelve-hour escalation: age is
+  // queue evidence, not a human action. Queen escalates through a real decision.
   const attentionCount = pendingDecisionCount + pendingAssistCount + queenAutomationAttentionCount
-    + heldDeliveryAttentionCount + blockedEscalationAttentionCount
+    + heldDeliveryAttentionCount
     + conversationDriftAttentionCount + awaitingReply.length;
   // WHEN THEY ACTUALLY LOOKED. The watermark this advances is the only thing
   // keeping push quiet now that every Needs-you source is eligible, so it is
@@ -2284,13 +2275,12 @@ export function App() {
               busy={busy}
               focusDecisionId={decisionFocus?.id}
               focusRequest={decisionFocus?.request}
-              additionalPendingCount={pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + blockedEscalationAttentionCount + conversationDriftAttentionCount + awaitingReply.length}
+              additionalPendingCount={pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + conversationDriftAttentionCount + awaitingReply.length}
               attentionCards={<>
                 <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onReviseReply={reviseAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
                 <ConversationDriftCard workers={workerConversations} onOpenWorker={openWorker} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
-                <BlockedEscalationCard escalations={blockedEscalations} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <HeldDeliveryAttentionCard
                   held={heldDeliveries}
                   workerIsAwake={(name) => Boolean(workers.find((candidate) => candidate.name === name)?.active_session_id)}
@@ -2331,6 +2321,7 @@ export function App() {
               tasks={tasks}
               workers={workers}
               heldBriefings={heldBriefings}
+              blockedWaits={blockedEscalations}
               onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }}
             />
           </Suspense>

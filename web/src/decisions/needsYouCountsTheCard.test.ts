@@ -61,6 +61,13 @@ test("Queen's backlog is not rendered in the operator's attention area", () => {
   expect(badge.has("unsettledReviewAttentionCount")).toBe(false);
 });
 
+test("blocked age alone is queue evidence, not an operator escalation", () => {
+  expect(appSource).not.toContain("<BlockedEscalationCard");
+  expect(appSource).toContain("blockedWaits={blockedEscalations}");
+  const badge = countsIn(/const attentionCount = [^;]+;/);
+  expect(badge.has("blockedEscalationAttentionCount")).toBe(false);
+});
+
 /**
  * A self-resolving hold must not appear there either. HeldBriefingList's own
  * text says "Nothing is wrong with these — Swarm is holding them until the

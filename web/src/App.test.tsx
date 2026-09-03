@@ -1190,7 +1190,7 @@ test("counts held work in the Needs you badge", async () => {
   await waitFor(() => expect(screen.getByRole("button", { name: /^Needs you/ })).toHaveTextContent("1"));
 });
 
-test("a blocked task old enough to escalate is counted, not just drawn", async () => {
+test("a blocked task's age stays in Queues without operator attention", async () => {
   // THE BADGE MUST NOT DISAGREE WITH THE PAGE. The escalation was computed,
   // handed to the inbox as additionalPendingCount, and left out of the count —
   // so its card rendered while "Needs you" read 0. A badge that disagrees with
@@ -1229,10 +1229,12 @@ test("a blocked task old enough to escalate is counted, not just drawn", async (
 
   render(<App />);
 
-  // The card is on the page...
-  expect(await screen.findByText(/A task nobody has come back to/)).toBeInTheDocument();
-  // ...and the badge agrees with it, which is the part that was missing.
-  await waitFor(() => expect(screen.getByRole("button", { name: /^Needs you/ })).toHaveTextContent("1"));
+  await screen.findByRole("button", { name: /^Needs you/ });
+  expect(screen.queryByText(/A task nobody has come back to/)).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^Needs you/ })).toHaveTextContent("0");
+  fireEvent.click(screen.getByRole("button", { name: /^Queues/ }));
+  expect(await screen.findByText("A task nobody has come back to")).toBeInTheDocument();
+  expect(screen.getByText(/Age alone does not require your approval/)).toBeInTheDocument();
 });
 
 test("a queued briefing is shown but does not inflate the Needs you count", async () => {
