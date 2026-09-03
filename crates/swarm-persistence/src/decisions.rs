@@ -400,39 +400,10 @@ impl TaskStore {
         let connection = self.connection()?;
         connection
             .query_row(
-                "SELECT id, hive_id, requesting_worker_id, task_id, kind, urgency, title,
-                        reason, risk, evidence, suggested_action, allowed_actions, deadline,
-                        state, resolution_action, resolution_note, resolved_by_operator_id,
-                        resolution_surface, questions, resolution_answers, summary,
-                        created_at, updated_at, resolved_at,
-                        (SELECT state FROM decision_deliveries WHERE decision_id = decision_requests.id),
-                        requested_command,
-                        -- Same derivation as list_decision_requests. See the
-                        -- comment there for why the originating task is excluded
-                        -- and why evidence must postdate the ruling.
-                        CASE WHEN decision_requests.state <> 'resolved' THEN NULL
-                             WHEN NOT EXISTS (
-                                 SELECT 1 FROM tasks x
-                                 WHERE x.removed_at IS NULL
-                                   AND x.id <> COALESCE(decision_requests.task_id, '')
-                                   AND x.description LIKE '%' || substr(decision_requests.id, 1, 13) || '%')
-                                 THEN 'unknown'
-                             WHEN EXISTS (
-                                 SELECT 1 FROM tasks x
-                                 WHERE x.removed_at IS NULL
-                                   AND x.id <> COALESCE(decision_requests.task_id, '')
-                                   AND x.description LIKE '%' || substr(decision_requests.id, 1, 13) || '%'
-                                   AND (EXISTS (SELECT 1 FROM task_deployments dep
-                                                WHERE dep.task_id = x.id
-                                                  AND dep.recorded_at > decision_requests.resolved_at)
-                                     OR EXISTS (SELECT 1 FROM task_completion_exemptions ex
-                                                WHERE ex.task_id = x.id
-                                                  AND ex.approved_at IS NOT NULL
-                                                  AND ex.withdrawn_at IS NULL
-                                                  AND ex.approved_at > decision_requests.resolved_at)))
-                                 THEN 'discharged'
-                             ELSE 'outstanding' END
-                 FROM decision_requests WHERE id = ?1",
+                &format!(
+                    "{DECISION_COLUMNS}
+                 FROM decision_requests d WHERE d.id = ?1"
+                ),
                 [id.to_string()],
                 decision_from_row,
             )
@@ -446,57 +417,14 @@ impl TaskStore {
     /// Returns a database or persisted-data integrity error.
     pub fn list_decision_requests(&self) -> Result<Vec<DecisionRequest>, TaskStoreError> {
         let connection = self.connection()?;
-        let mut statement = connection.prepare(
-            "SELECT d.id, d.hive_id, d.requesting_worker_id, d.task_id, d.kind, d.urgency, d.title,
-                    reason, risk, evidence, suggested_action, allowed_actions, deadline,
-                    state, resolution_action, resolution_note, resolved_by_operator_id,
-                    resolution_surface, questions, resolution_answers, summary,
-                    created_at, updated_at, resolved_at,
-                    (SELECT state FROM decision_deliveries WHERE decision_id = d.id),
-                    d.requested_command,
-                    -- WHETHER THE AUTHORISED ACT HAPPENED. Derived, never stored:
-                    -- the link is the executing task naming the decision in its
-                    -- own text, which is already how workers write these up. A
-                    -- field somebody had to remember to fill would be the same
-                    -- failure one level up.
-                    --
-                    -- A decision names the task that RAISED it, never the one
-                    -- that EXECUTES it, and the work is routinely filed on a
-                    -- later ticket because the first went quiet. So the
-                    -- originating task is EXCLUDED from the naming set: its
-                    -- evidence says nothing about an act performed elsewhere.
-                    --
-                    -- EVIDENCE MUST POSTDATE THE RULING, strictly. The CA
-                    -- renewal's
-                    -- originating ticket carried a deployment from eleven hours
-                    -- BEFORE the ruling; without this comparison it read
-                    -- discharged for the twenty-six hours the act sat undone.
-                    CASE WHEN d.state <> 'resolved' THEN NULL
-                         WHEN NOT EXISTS (
-                             SELECT 1 FROM tasks x
-                             WHERE x.removed_at IS NULL AND x.id <> COALESCE(d.task_id, '')
-                               AND x.description LIKE '%' || substr(d.id, 1, 13) || '%')
-                             THEN 'unknown'
-                         WHEN EXISTS (
-                             SELECT 1 FROM tasks x
-                             WHERE x.removed_at IS NULL AND x.id <> COALESCE(d.task_id, '')
-                               AND x.description LIKE '%' || substr(d.id, 1, 13) || '%'
-                               AND (EXISTS (SELECT 1 FROM task_deployments dep
-                                            WHERE dep.task_id = x.id
-                                              AND dep.recorded_at > d.resolved_at)
-                                 OR EXISTS (SELECT 1 FROM task_completion_exemptions ex
-                                            WHERE ex.task_id = x.id
-                                              AND ex.approved_at IS NOT NULL
-                                              AND ex.withdrawn_at IS NULL
-                                              AND ex.approved_at > d.resolved_at)))
-                             THEN 'discharged'
-                         ELSE 'outstanding' END
+        let mut statement = connection.prepare(&format!(
+            "{DECISION_COLUMNS}
              FROM decision_requests d
              JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1
              ORDER BY state = 'pending' DESC, urgency = 'time_sensitive' DESC,
                       deadline IS NULL, deadline, created_at DESC, id DESC
              LIMIT ?1",
-        )?;
+        ))?;
         statement
             .query_map([MAX_DECISION_RESULTS], decision_from_row)?
             .collect::<Result<Vec<_>, _>>()
@@ -1025,6 +953,64 @@ fn validate_questions(questions: &[DecisionQuestion]) -> Result<(), TaskStoreErr
     }
     Ok(())
 }
+
+/// The one SELECT list feeding `decision_from_row`.
+///
+/// THERE WERE TWO, AND ADDING A COLUMN MEANT ADDING IT TWICE. The discharge
+/// derivation in 076fb33 went into `list_decision_requests` and was missed in
+/// `get_decision_request`; it surfaced as `InvalidColumnIndex(26)`, which is the
+/// lucky version — the task projection had the same shape and read `unwrap_or`,
+/// so a miss there returned a plausible `false` instead of failing.
+///
+/// The two were byte-identical once alias, whitespace and comments were
+/// normalised, so one list loses nothing. Each caller supplies its own FROM and
+/// WHERE; the columns are alias-qualified `d.` and every caller aliases the table
+/// `d` so the list is portable between them.
+const DECISION_COLUMNS: &str =
+    "SELECT d.id, d.hive_id, d.requesting_worker_id, d.task_id, d.kind, d.urgency, d.title,
+                    reason, risk, evidence, suggested_action, allowed_actions, deadline,
+                    state, resolution_action, resolution_note, resolved_by_operator_id,
+                    resolution_surface, questions, resolution_answers, summary,
+                    created_at, updated_at, resolved_at,
+                    (SELECT state FROM decision_deliveries WHERE decision_id = d.id),
+                    d.requested_command,
+                    -- WHETHER THE AUTHORISED ACT HAPPENED. Derived, never stored:
+                    -- the link is the executing task naming the decision in its
+                    -- own text, which is already how workers write these up. A
+                    -- field somebody had to remember to fill would be the same
+                    -- failure one level up.
+                    --
+                    -- A decision names the task that RAISED it, never the one
+                    -- that EXECUTES it, and the work is routinely filed on a
+                    -- later ticket because the first went quiet. So the
+                    -- originating task is EXCLUDED from the naming set: its
+                    -- evidence says nothing about an act performed elsewhere.
+                    --
+                    -- EVIDENCE MUST POSTDATE THE RULING, strictly. The CA
+                    -- renewal's
+                    -- originating ticket carried a deployment from eleven hours
+                    -- BEFORE the ruling; without this comparison it read
+                    -- discharged for the twenty-six hours the act sat undone.
+                    CASE WHEN d.state <> 'resolved' THEN NULL
+                         WHEN NOT EXISTS (
+                             SELECT 1 FROM tasks x
+                             WHERE x.removed_at IS NULL AND x.id <> COALESCE(d.task_id, '')
+                               AND x.description LIKE '%' || substr(d.id, 1, 13) || '%')
+                             THEN 'unknown'
+                         WHEN EXISTS (
+                             SELECT 1 FROM tasks x
+                             WHERE x.removed_at IS NULL AND x.id <> COALESCE(d.task_id, '')
+                               AND x.description LIKE '%' || substr(d.id, 1, 13) || '%'
+                               AND (EXISTS (SELECT 1 FROM task_deployments dep
+                                            WHERE dep.task_id = x.id
+                                              AND dep.recorded_at > d.resolved_at)
+                                 OR EXISTS (SELECT 1 FROM task_completion_exemptions ex
+                                            WHERE ex.task_id = x.id
+                                              AND ex.approved_at IS NOT NULL
+                                              AND ex.withdrawn_at IS NULL
+                                              AND ex.approved_at > d.resolved_at)))
+                             THEN 'discharged'
+                         ELSE 'outstanding' END";
 
 fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionRequest> {
     let actions =
@@ -2137,5 +2123,59 @@ mod tests {
         store.release_worker_session(session).unwrap();
         assert_eq!(store.forget_moot_unconfirmed_answers().unwrap(), 1);
         assert_eq!(store.forget_moot_unconfirmed_answers().unwrap(), 0);
+    }
+}
+
+/// ONE DECISION PROJECTION, AND THIS IS WHAT KEEPS IT ONE.
+///
+/// There were two SELECT lists feeding `decision_from_row`, byte-identical once
+/// alias and whitespace were normalised, and every column had to be added to
+/// both. 076fb33 added the discharge derivation to one and missed the other.
+///
+/// ⚠️ THE TASK GUARD DOES NOT COVER THIS, which is the reason this file needs its
+/// own. `the_task_projection_stays_singular` in lib.rs scans for the TASK
+/// projection head; a decision projection opens with its own `d.`-aliased id
+/// and hive columns, and is invisible to
+/// it. A guard that knows about one table is not a guard about duplication.
+///
+/// This file was luckier than tasks were: the discharge column is read with `?`,
+/// so a copy that forgets it errors rather than returning a plausible value. The
+/// duplication is still worth removing — being noisy is not the same as being
+/// safe, and the next column added might not be read strictly.
+#[cfg(test)]
+mod the_decision_projection_stays_singular {
+    const SOURCE: &str = include_str!("decisions.rs");
+
+    /// Split so the scanner does not match its own needle — this module lives in
+    /// the file it reads.
+    ///
+    /// ⚠️ AND THE DOC COMMENT ABOVE COUNTS TOO. It first quoted the head
+    /// verbatim to explain the problem, and the scan found two copies: one real
+    /// and one in the sentence describing it. Prose about a needle is a needle.
+    const PROJECTION_HEAD: &str = concat!("SELECT d.id,", " d.hive_id");
+    const DISCHARGE_CASE: &str = concat!("THEN ", "'discharged'");
+
+    #[test]
+    fn there_is_exactly_one_decision_projection() {
+        let copies = SOURCE.matches(PROJECTION_HEAD).count();
+        assert_eq!(
+            copies, 1,
+            "the decision projection appears {copies} times. Every column has to \
+             be added to each one. Use DECISION_COLUMNS and supply only a FROM \
+             and WHERE — the columns are alias-qualified `d.`, so alias the table \
+             `d`."
+        );
+    }
+
+    /// The derivation is twenty lines of SQL and the expensive part to duplicate.
+    #[test]
+    fn the_discharge_derivation_is_written_once() {
+        let copies = SOURCE.matches(DISCHARGE_CASE).count();
+        assert_eq!(
+            copies, 1,
+            "the discharge derivation appears {copies} times. Two copies drifted \
+             apart once already; whether an authorised act happened must not \
+             depend on which query asked."
+        );
     }
 }
