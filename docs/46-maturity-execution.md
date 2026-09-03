@@ -204,6 +204,8 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   highlights the second action correctly and retains the existing bee styling.
 - Decision/interview tests: 29 passed. Production build passed; existing terminal
   chunk warning remains. This is desktop fixture evidence, not mobile acceptance.
+- Post-commit full web suite on unchanged runtime source: 113 files, 916 tests
+  passed (two workers). This does not substitute for Rust or device tests.
 
 ### Verification environment update
 
