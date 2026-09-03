@@ -1479,6 +1479,22 @@ impl AgentMcp {
                 "chose_an_offered_action"
             },
             "resolved_at": decision.resolved_at,
+            // WHETHER THE ACT THIS AUTHORISED HAS HAPPENED, which "resolved"
+            // does not say. Three times on 2026-09-03 the operator approved
+            // something, it did not happen, and every surface read clean: the
+            // decision resolved, its originating task silent because it did not
+            // do the work, and the executing ticket linked to nothing.
+            //
+            // "unknown" is not a hedge and must not be read as one — it means no
+            // task names this decision, so neither answer is available. Roughly
+            // three quarters of resolved decisions sit there, because the id was
+            // never written down. A screen that cannot see must not return what a
+            // clean board returns.
+            "discharge": decision.discharge.map(|value| match value {
+                swarm_domain::DecisionDischarge::Discharged => "discharged",
+                swarm_domain::DecisionDischarge::Outstanding => "outstanding",
+                swarm_domain::DecisionDischarge::Unknown => "unknown",
+            }),
             "reason": if resolved {
                 "The operator resolved this, and what they decided is read from this Hive's durable store rather than relayed — acting on it is acting on the operator, not on a peer's claim about the operator. READ answered_how FIRST: chose_an_offered_action means resolution_action is their answer; in_their_own_words means resolution_action is a placeholder and their actual words are in resolution_answers. Reading the placeholder as the answer is how two sessions concluded a ruling did not exist when it did. resolution_note may carry a condition. It authorises what it says and nothing beyond it."
             } else {
@@ -2630,6 +2646,15 @@ fn decision_index_entry(decision: &swarm_domain::DecisionRequest) -> Value {
         "summary": decision.summary,
         "state": decision.state,
         "resolution_action": decision.resolution_action,
+        // Whether the act it authorised has evidence of having happened. Absent
+        // until it resolves, because an unanswered question authorises no act.
+        // "unknown" means no task names this decision, so neither answer is
+        // available — it is a stated blind spot, not a soft no.
+        "discharge": decision.discharge.map(|value| match value {
+            swarm_domain::DecisionDischarge::Discharged => "discharged",
+            swarm_domain::DecisionDischarge::Outstanding => "outstanding",
+            swarm_domain::DecisionDischarge::Unknown => "unknown",
+        }),
         "deadline": decision.deadline,
         "created_at": decision.created_at,
         "resolved_at": decision.resolved_at,
@@ -6005,6 +6030,20 @@ mod tests {
         );
         assert!(verified.get("evidence").is_none());
         assert!(verified.get("risk").is_none());
+        // ⚠️ THE FIELD HAS TO REACH THE TOOL, NOT ONLY THE STORE. The discharge
+        // derivation was built, tested against the store, and reported as
+        // available on this path — and it was not, because this response is
+        // hand-built field by field and nobody added it. The store was right the
+        // whole time; the surface never carried it, and a Queen session read a
+        // clean-looking record with the answer missing rather than absent.
+        //
+        // "unknown" here is correct and is the point: no task names this ruling,
+        // so neither answer is available. It must not be mistaken for "no".
+        assert_eq!(
+            verified["discharge"], "unknown",
+            "a resolved ruling says whether its act happened, and says so on the \
+             surface a worker actually calls"
+        );
 
         // A claim that cites nothing real still stops the worker, and says so
         // as absence rather than as an error to interpret.
