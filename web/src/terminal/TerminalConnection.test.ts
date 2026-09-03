@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { BROWSER_SESSION_AUTH } from "../api";
+import { browserPerformance } from "../runtime/browserPerformance";
 import { TerminalConnection, attachGrantFailure, type TerminalConnectionHandlers } from "./TerminalConnection";
 
 class FakeWebSocket extends EventTarget {
@@ -115,6 +116,22 @@ beforeEach(() => {
 });
 
 const documentHasFocus = document.hasFocus.bind(document);
+
+test("terminal timing records duration without session identity or content", async () => {
+  const record = vi.spyOn(browserPerformance, "record");
+  const clock = vi.spyOn(performance, "now").mockReturnValue(100);
+  const { connection, handlers, sockets } = harness();
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  sockets[0].open();
+  clock.mockReturnValue(150);
+  sockets[0].message(snapshotFrame(0n, 24, 80, "private terminal text"));
+  await vi.waitFor(() => expect(handlers.onSnapshot).toHaveBeenCalled());
+  expect(record).toHaveBeenCalledWith("terminal_reconnect", 50);
+  expect(record).toHaveBeenCalledWith("terminal_render", 0);
+  expect(JSON.stringify(record.mock.calls)).not.toMatch(/private|session-1|secret/);
+  connection.dispose();
+});
 
 afterEach(() => {
   document.hasFocus = documentHasFocus;

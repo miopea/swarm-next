@@ -12,6 +12,7 @@ import type {
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 import { readClientFailures } from "../feedback/clientDiagnostics";
 import { readRoutePaints, routePaintSummary } from "../runtime/routePaint";
+import { readBrowserPerformance } from "../runtime/browserPerformance";
 
 export type RuntimeDiagnostics = {
   terminalHost?: TerminalHostStatus;
@@ -103,6 +104,7 @@ export function buildSanitizedDiagnosticReport({ context, health, hiveIdentity, 
       live_updates: liveFeedState,
       recent_failures: readClientFailures(),
       route_paint: routePaintSummary(readRoutePaints()),
+      performance: readBrowserPerformance(),
       viewport: viewportDiagnostics(),
     },
     api: health ? { status: "healthy", version: health.version } : { status: "unavailable" },

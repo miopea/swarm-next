@@ -81,7 +81,7 @@ Decision meanings:
 | Cloudflare Tunnel | Redesign | Remote access is valuable; treat tunnel choice as deployment adapter, not core domain. |
 | Browser notifications | Keep | Implemented as a bounded, durable Web Push adapter for Needs you: presence-gated, generic encrypted payloads, explicit opt-in, configurable policy, and an eagerly refreshed current brand icon. |
 | PWA installation, push, and mobile terminal | Redesign | Android Chrome/Edge is a first-class dogfood surface. Push-only service worker and install manifest are implemented; preserve terminal commands alongside long-form voice input and continue rendered mobile acceptance. |
-| In-app feedback | Keep/Redesign | Critical to dogfooding; capture correlated diagnostics, bounded content-free browser failure markers, and privacy-safe context. Chat remains the richer path for screenshots until outbound attachment transport exists. |
+| In-app feedback | Keep/Redesign | Critical to dogfooding; capture correlated diagnostics, bounded content-free browser failure markers, and privacy-safe context. Maturity P1a adds bounded browser timing aggregates, incident windows, and before-reload evidence to the private report (ADR 0060); live overhead and cross-device proof remain pending. Chat remains the richer path for screenshots until outbound attachment transport exists. |
 
 Stewardship checkpoint: Keeper can atomically create, replace, list, and
 audit-preservingly revoke an explicit grant over selected Member Hives and

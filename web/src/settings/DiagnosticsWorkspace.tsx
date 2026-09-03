@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { readRoutePaints, routePaintSummary } from "../runtime/routePaint";
+import { readBrowserPerformance } from "../runtime/browserPerformance";
 
 import {
   downloadDogfoodScreenshot,
@@ -82,6 +83,7 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
   const launchFailures = workers.filter((worker) => Boolean(worker.runtime_error)).length;
   const providerStatus = launchFailures > 0 ? "Needs attention" : "Healthy";
   const routePaint = routePaintSummary(readRoutePaints());
+  const browserTiming = readBrowserPerformance();
   const terminalStatus = !runtime.loaded ? "Checking…" : runtime.terminalHost
     ? runtime.terminalHost.draining ? "Updating safely" : `Healthy · ${runtimeVersionIdentity(runtime.terminalHost.host_version)}`
     : "Unavailable";
@@ -218,6 +220,14 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
       <button type="button" className="diagnostic-show-all" aria-expanded={showEveryCheck} onClick={() => setShowEveryCheck((current) => !current)}>
         {showEveryCheck ? "Show only what needs attention" : `Show all ${rows.length} checks`}
       </button>
+      <details className="browser-performance-breakdown">
+        <summary>Browser performance evidence</summary>
+        <p>{browserTiming.collection === "active" ? "Local timing capture is active." : "Local timing capture is not installed in this view."} Content-free evidence is retained for up to one hour; incident snapshots expire after 24 hours.</p>
+        <p>{browserTiming.supported_observers.length ? `Native observers: ${browserTiming.supported_observers.join(", ")}.` : "Native long-task and interaction observers are unavailable; application timings may still be recorded."}</p>
+        <p>{browserTiming.current.buckets.length} timing buckets · {browserTiming.current.incidents.length} recent incident captures. These are historical evidence, not unresolved alerts.</p>
+        {browserTiming.before_reload ? <p>Before-reload snapshot available for comparison.</p> : null}
+        <p>Preview report includes the timing evidence. Browser CPU percentage is not available here; compare with your browser task manager.</p>
+      </details>
       {measuredWorkers.length ? (
         <details className="worker-resource-breakdown">
           <summary>Memory by loaded worker</summary>

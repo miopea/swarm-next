@@ -15,10 +15,31 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
   before Rust changes. Do not borrow or modify the live development checkout.
 - Planning docs and resolved interview decisions are the first commit checkpoint.
 
-## P1 — Measurement foundation (next)
+## P1 — Measurement foundation (in progress)
 
 Deliver the bounded browser recorder before more extensive Dogfood dashboards.
 Keep native browser capability gaps explicit. Record checks and evidence here.
+
+### P1a: browser timing recorder
+
+- ADR 0060 defines the single content-free browser recorder and its lifecycle.
+- Native long-task/interaction timings, route timings, terminal queue/render
+  latency, and attachment-to-render readiness now feed bounded aggregates.
+- One-hour/360-bucket ring, five coalesced before/after incident windows, 24-hour
+  expiry, before-reload snapshot, sanitized storage reads, and optional storage.
+- Settings Diagnostics exposes collection availability and historical counts;
+  diagnostic reports include this evidence without creating operator alerts.
+- Full web suite passed at the first verification point: 111 files, 875 tests.
+  Subsequent focused recorder/terminal integration tests passed: 36 tests,
+  including two new tests beyond that full-suite run. Build passed; final build
+  repeated after the last recorder edits before commit.
+- Existing Vite warning remains: terminal chunk exceeds 500 kB. No release built
+  or deployed; `web/dist` is only a local production-build validation artifact.
+- Instrumentation overhead, actual Edge rendering, Android/iOS, and the long
+  operator soak are not yet measured. P1 server correlation/Dogfood UI remain open.
+- Dependency restore used the existing pnpm lockfile, unchanged. Installed pnpm
+  runner reports 11.19.0, versus CI's declared 11.16.0; record this environment
+  difference rather than claim exact CI replication.
 
 ## P2–P7 — Pending
 

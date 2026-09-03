@@ -1,5 +1,6 @@
 import { BROWSER_SESSION_AUTH } from "../api";
 import { presenceDeviceId } from "../presence/PresenceController";
+import { browserPerformance } from "../runtime/browserPerformance";
 
 export type TerminalConnectionState =
   | "connecting"
@@ -145,6 +146,7 @@ export class TerminalConnection {
   #recoveryReason: SnapshotReason | undefined;
   #connectionConfirmed = false;
   #rendererConfirmed = false;
+  #attachStartedAt: number | undefined;
   #processExited = false;
   #size: { rows: number; columns: number } | undefined;
 
@@ -227,6 +229,7 @@ export class TerminalConnection {
 
   async #connect(): Promise<void> {
     if (this.#disposed || this.#fatal) return;
+    this.#attachStartedAt ??= performance.now();
     this.#handlers?.onState("connecting");
     const grantAbortController = new AbortController();
     this.#grantAbortController = grantAbortController;
@@ -397,11 +400,15 @@ export class TerminalConnection {
       return;
     }
     this.#pendingRenderBytes += frame.byteLength;
+    const enqueuedAt = performance.now();
     const generation = this.#renderGeneration;
     this.#renderQueue = this.#renderQueue
       .then(async () => {
         if (generation !== this.#renderGeneration || this.#disposed) return;
         await this.#applyBinaryFrame(frame);
+        if (!this.#disposed && generation === this.#renderGeneration && document.visibilityState === "visible") {
+          browserPerformance.record("terminal_render", performance.now() - enqueuedAt);
+        }
       })
       .catch((error: unknown) => {
         this.#fail(error instanceof Error ? error.message : "terminal renderer failed");
@@ -564,6 +571,10 @@ export class TerminalConnection {
     this.#clearConfirmationTimer();
     this.#confirmConnection();
     if (this.#rendererConfirmed && detail === undefined) return;
+    if (this.#attachStartedAt !== undefined) {
+      if (document.visibilityState === "visible") browserPerformance.record("terminal_reconnect", performance.now() - this.#attachStartedAt);
+      this.#attachStartedAt = undefined;
+    }
     this.#rendererConfirmed = true;
     this.#handlers?.onState("connected", detail);
   }

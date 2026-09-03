@@ -1,3 +1,5 @@
+import { browserPerformance } from "./browserPerformance";
+
 export type RoutePaintSample = {
   /** Which workspace section was opened. */
   surface: string;
@@ -27,6 +29,7 @@ const MAX_SAMPLES = 20;
  * architecture rules out.
  */
 export function recordRoutePaint(surface: string, durationMs: number, now = Date.now()) {
+  browserPerformance.record("route", durationMs);
   const sample: RoutePaintSample = {
     surface,
     duration_ms: Math.round(durationMs),
