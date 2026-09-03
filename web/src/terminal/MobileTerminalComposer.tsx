@@ -10,6 +10,23 @@ export const MOBILE_SUBMIT_KEY_DELAY_MS = 75;
  * produced nothing. Long enough that a `change` event still in flight wins.
  */
 export const PICKER_RETURN_GRACE_MS = 1_500;
+const PICKER_PENDING_KEY = "swarm.mobile-picker.pending.v1";
+
+function pickerWasInterrupted(): boolean {
+  try {
+    const raw = window.sessionStorage.getItem(PICKER_PENDING_KEY);
+    if (raw === null) return false;
+    const at = Number(raw);
+    return Number.isFinite(at) && at <= Date.now() && Date.now() - at < 5 * 60_000;
+  } catch { return false; }
+}
+
+function rememberPicker(pending: boolean) {
+  try {
+    if (pending) window.sessionStorage.setItem(PICKER_PENDING_KEY, String(Date.now()));
+    else window.sessionStorage.removeItem(PICKER_PENDING_KEY);
+  } catch { /* Picker operation must not depend on storage permission. */ }
+}
 
 export const MOBILE_TERMINAL_KEYS = {
   up: "\u001b[A",
@@ -70,7 +87,8 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
   // never fired because the page did not survive the round trip. Neither is
   // visible from inside without asking the question before leaving.
   const awaitingPick = useRef(false);
-  const [pickerReturnedNothing, setPickerReturnedNothing] = useState(false);
+  const [pickerReturnedNothing, setPickerReturnedNothing] = useState(pickerWasInterrupted);
+  const [pickerUploadFailed, setPickerUploadFailed] = useState(false);
   const connected = connectionState === "connected";
 
   useLayoutEffect(() => {
@@ -141,6 +159,7 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
     // BACKGROUNDS this tab, the socket drops, and whether the reconnect beat
     // their thumb decided whether the file survived. Nothing said so.
     awaitingPick.current = false;
+    rememberPicker(false);
     if (!onAttachment) return;
     if (!file) {
       // THE LAST SILENT BRANCH, and it is no longer silent. A change event
@@ -150,12 +169,15 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
       return;
     }
     setPickerReturnedNothing(false);
-    await onAttachment(file);
+    setPickerUploadFailed(false);
+    try { await onAttachment(file); }
+    catch { setPickerUploadFailed(true); }
   }
 
   function openPicker() {
     setPickerReturnedNothing(false);
     awaitingPick.current = true;
+    rememberPicker(true);
     attachmentInput.current?.click();
   }
 
@@ -165,17 +187,33 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
   // in this component runs at that point, so the only way to notice is to find
   // the flag still set when the page is next visible.
   useEffect(() => {
+    // The content-free marker survives an evicted page; an in-memory ref does not.
+    rememberPicker(false);
+    let settle: number | undefined;
     const check = () => {
+      window.clearTimeout(settle);
       if (document.visibilityState !== "visible" || !awaitingPick.current) return;
-      const settle = window.setTimeout(() => {
+      settle = window.setTimeout(() => {
         if (!awaitingPick.current) return;
         awaitingPick.current = false;
+        rememberPicker(false);
         setPickerReturnedNothing(true);
       }, PICKER_RETURN_GRACE_MS);
-      return () => window.clearTimeout(settle);
     };
+    const cancel = () => {
+      awaitingPick.current = false;
+      rememberPicker(false);
+      window.clearTimeout(settle);
+      setPickerReturnedNothing(false);
+    };
+    const input = attachmentInput.current;
+    input?.addEventListener("cancel", cancel);
     document.addEventListener("visibilitychange", check);
-    return () => document.removeEventListener("visibilitychange", check);
+    return () => {
+      window.clearTimeout(settle);
+      input?.removeEventListener("cancel", cancel);
+      document.removeEventListener("visibilitychange", check);
+    };
   }, []);
 
   return (
@@ -231,6 +269,7 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
             No file arrived from the picker. If you chose one, try again — it did not reach this page.
           </small>
         )}
+        {pickerUploadFailed ? <small role="status">The selected file could not be handed to the upload. Please try again.</small> : null}
       </div>
       {keysExpanded && <div className="mobile-terminal-keys" aria-label="Terminal keys">
         <div className="terminal-dpad">

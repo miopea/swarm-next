@@ -8,8 +8,8 @@ import {
   MobileTerminalComposer,
 } from "./MobileTerminalComposer";
 
-afterEach(() => { cleanup(); vi.useRealTimers(); });
-beforeEach(() => localStorage.clear());
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
+beforeEach(() => { localStorage.clear(); sessionStorage.clear(); });
 
 test("sends slash commands as bracketed paste before a separated Enter frame", async () => {
   const onInput = vi.fn<(text: string) => boolean>(() => true);
@@ -286,4 +286,37 @@ test("the notice clears when a file does arrive", async () => {
 
   await vi.waitFor(() => expect(onAttachment).toHaveBeenCalledWith(image));
   expect(screen.queryByText(/No file arrived/)).toBeNull();
+});
+
+test("an interrupted picker survives page recreation without retaining file data", () => {
+  const view = render(<MobileTerminalComposer connectionState="connected" onInput={vi.fn()} onAttachment={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Add file" }));
+  const stored = sessionStorage.getItem("swarm.mobile-picker.pending.v1");
+  expect(stored).toMatch(/^\d+$/);
+  view.unmount();
+  render(<MobileTerminalComposer connectionState="connected" onInput={vi.fn()} onAttachment={vi.fn()} />);
+  expect(screen.getByText(/No file arrived from the picker/)).toBeInTheDocument();
+  expect(sessionStorage.getItem("swarm.mobile-picker.pending.v1")).toBeNull();
+});
+
+test("cancelling the native picker is quiet and clears its pending marker", () => {
+  const view = render(<MobileTerminalComposer connectionState="connected" onInput={vi.fn()} onAttachment={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Add file" }));
+  fireEvent(view.container.querySelector('input[type="file"]')!, new Event("cancel"));
+  expect(sessionStorage.getItem("swarm.mobile-picker.pending.v1")).toBeNull();
+  expect(screen.queryByText(/No file arrived/)).not.toBeInTheDocument();
+});
+
+test("picker return timeout is owned and cancelled on unmount", async () => {
+  vi.useFakeTimers();
+  const schedule = vi.spyOn(window, "setTimeout");
+  const cancel = vi.spyOn(window, "clearTimeout");
+  const view = render(<MobileTerminalComposer connectionState="connected" onInput={vi.fn()} onAttachment={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Add file" }));
+  fireEvent(document, new Event("visibilitychange"));
+  const index = schedule.mock.calls.findIndex((call) => call[1] === 1_500);
+  expect(index).toBeGreaterThanOrEqual(0);
+  const handle = schedule.mock.results[index].value;
+  view.unmount();
+  expect(cancel).toHaveBeenCalledWith(handle);
 });

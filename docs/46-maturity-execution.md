@@ -71,5 +71,23 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 
 ## P3–P7 — Pending
 
+### P2b: interrupted picker evidence
+
+- A five-minute, timestamp-only pending-picker marker survives page recreation;
+  it reports interruption without retaining filenames or image contents.
+- Native picker cancellation remains quiet and clears the marker. Picker-return
+  timers now have real cleanup rather than returning an ignored cleanup function
+  from a DOM event listener. Unexpected upload callback rejection is visible.
+- Composer tests: 21 passed. Production build passed, then typecheck repeated
+  after the timer-test assertion was corrected to inspect its owned timer rather
+  than counting unrelated jsdom timers.
+
+### Verification environment update
+
+- Remote Linux reached read-only using SSH with forwarding disabled. The host has
+  eight CPUs and the pinned Rust 1.97.1 toolchain, but root disk is 94% full
+  (about 3.8 GiB free). No large Rust build was started and no files were cleaned.
+- Remote development revision was `421eca9`; it is separate from this branch.
+
 See the approved plan. No phase is complete solely because a patch was committed.
 Real Android/iOS and normal operator soak remain separate evidence requirements.
