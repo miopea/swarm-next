@@ -57,6 +57,7 @@ export function composeTerminalSubmission(draft: string): readonly [string, stri
 
 interface MobileTerminalComposerProps {
   connectionState: TerminalConnectionState;
+  inputAvailable?: boolean;
   onInput: (text: string) => boolean;
   keysExpanded?: boolean;
   onKeysExpandedChange?: (expanded: boolean) => void;
@@ -66,13 +67,13 @@ interface MobileTerminalComposerProps {
   onRefresh?: () => void;
 }
 
-export function MobileTerminalComposer({ connectionState, onInput, keysExpanded: controlledKeysExpanded, onKeysExpandedChange, onAttachment, attachmentState = "idle", onRefresh }: MobileTerminalComposerProps) {
+export function MobileTerminalComposer({ connectionState, inputAvailable = true, onInput, keysExpanded: controlledKeysExpanded, onKeysExpandedChange, onAttachment, attachmentState = "idle", onRefresh }: MobileTerminalComposerProps) {
   const [draft, setDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submissionWarning, setSubmissionWarning] = useState<string>();
   const submitTimer = useRef<number | undefined>(undefined);
   const currentInput = useRef(onInput);
-  const connectedRef = useRef(connectionState === "connected");
+  const connectedRef = useRef(connectionState === "connected" && inputAvailable);
   const [localKeysExpanded, setLocalKeysExpanded] = useState(initialMobileKeysVisibility);
   const keysExpanded = controlledKeysExpanded ?? localKeysExpanded;
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -89,7 +90,7 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
   const awaitingPick = useRef(false);
   const [pickerReturnedNothing, setPickerReturnedNothing] = useState(pickerWasInterrupted);
   const [pickerUploadFailed, setPickerUploadFailed] = useState(false);
-  const connected = connectionState === "connected";
+  const connected = connectionState === "connected" && inputAvailable;
 
   useLayoutEffect(() => {
     currentInput.current = onInput;
@@ -98,7 +99,7 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
       window.clearTimeout(submitTimer.current);
       submitTimer.current = undefined;
       setSubmitting(false);
-      setSubmissionWarning("Connection changed before submission finished. Text may already be in the terminal; inspect it before sending again.");
+      setSubmissionWarning("Terminal access changed before submission finished. Text may already be in the terminal; inspect it before sending again.");
     }
   }, [connected, onInput]);
 
@@ -221,7 +222,7 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
       <form onSubmit={submit}>
         <label htmlFor="mobile-terminal-draft">
           Message worker
-          <span>{draft.length.toLocaleString()} / {MAX_TERMINAL_DRAFT_LENGTH.toLocaleString()}</span>
+          <span aria-hidden="true">{draft.length.toLocaleString()} / {MAX_TERMINAL_DRAFT_LENGTH.toLocaleString()}</span>
         </label>
         <textarea
           ref={textarea}
@@ -236,6 +237,7 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
           enterKeyHint="enter"
         />
         <button type="submit" disabled={!connected || submitting || draft.length === 0 || attachmentState === "uploading" || attachmentState === "waiting" || attachmentState === "error"}>{submitting ? "Sending…" : "Send"}</button>
+        {!inputAvailable && draft.length > 0 && <p role="status">Your draft stays here while this terminal is viewing only.</p>}
         {submissionWarning ? <p role="status">{submissionWarning}</p> : null}
       </form>
       <div className="mobile-terminal-key-heading">

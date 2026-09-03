@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import TerminalQuestionsFixture from "./TerminalQuestionsFixture";
+import TerminalView from "../terminal/TerminalView";
 
 import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
 import { App } from "../App";
@@ -206,6 +207,16 @@ export type Surface = { id: string; title: string; why: string; render: () => Re
 const FILED = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
 
 export const SURFACES: Surface[] = [
+  {
+    id: "terminal-handoff",
+    title: "Terminal Resume Here",
+    why: "real terminal UI over synthetic v4 messages; add &terminalControl=elsewhere for a passive view. No engine or provider is exercised",
+    render: () => <main style={{ padding: 16, height: "100dvh", display: "flex", flexDirection: "column" }}>
+      <h1>Terminal handoff fixture</h1>
+      <p>Invented terminal. No Hive, worker, or provider. This tests browser wiring, not engine ownership.</p>
+      <div style={{ flex: 1, minHeight: 0 }}><TerminalView session={{ session_id: "fixture-terminal-handoff", running: true }} operatorToken="fixture-only" busy={false} /></div>
+    </main>,
+  },
   {
     id: "terminal-questions",
     title: "Terminal question transitions",

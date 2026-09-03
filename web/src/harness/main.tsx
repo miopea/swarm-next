@@ -70,7 +70,10 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
  * terminal can be photographed at all, because a canvas cannot be scrubbed
  * after the fact the way the DOM can.
  */
-globalThis.WebSocket = FixtureWebSocket as unknown as typeof WebSocket;
+const passiveTerminal = new URLSearchParams(window.location.search).get("terminalControl") === "elsewhere";
+globalThis.WebSocket = class extends FixtureWebSocket {
+  constructor(url: string, protocols: string[] = []) { super(url, protocols, !passiveTerminal); }
+} as unknown as typeof WebSocket;
 
 /**
  * The terminal draws with WebGL when it can, and a WebGL canvas photographs

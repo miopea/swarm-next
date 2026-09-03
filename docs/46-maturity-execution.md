@@ -374,6 +374,35 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   v3 cannot restore legacy writes. Preserve the compatible adapter/engine during
   rollback; do not restart active workers merely to bypass the safety boundary.
 
+### P2l: rendered handoff and ownership-aware mobile composition
+
+- Updated the isolated visual harness from its obsolete grant/socket protocol
+  to synthetic v4 messages. Added `terminal-handoff` with optional
+  `terminalControl=elsewhere`; it renders the production controller, renderer,
+  toolbar, and composer without a Hive, provider, engine, or network socket.
+  Fixture claims/probes and close-before-open behavior have dedicated tests.
+- Used the Chrome/Edge skill in a new Edge test tab. The earlier browser binding
+  was unavailable; selecting the currently connected Edge succeeded. Local
+  sandbox diagnostics were inconclusive and are not evidence of a broken install.
+  The existing isolated harness on port 5199 was reachable; no duplicate server
+  was started and no live worker tab was used.
+- Desktop: passive notice and Resume Here rendered; clicking Resume Here removed
+  the notice and restored interactive state. At a measured **390 x 844 CSS-pixel**
+  viewport, Resume Here remained visible. The responsive override was reset.
+- Browser testing found that passive Send preserved text but misleadingly blamed
+  the connection. The composer now receives ownership availability: its draft
+  stays editable while Send/terminal keys are disabled, then becomes sendable
+  after Resume Here. Its accessible field name stays stable while the visual
+  character counter changes. In the Edge fixture, the same synthetic draft was
+  retained through handoff and cleared only after successful submission.
+- Focused checks: **46 tests passed** across composer, terminal view, and harness
+  protocol. Final TypeScript/production build passed after correcting test-only
+  locator options. Existing terminal bundle warning remains (543.62 kB).
+- This is rendered-browser wiring evidence, not real Android/iOS PWA behavior,
+  provider acceptance, cross-process engine handoff, or a Claude AskUser fix.
+  The synthetic socket has no provider and does not echo typed input.
+- No releases, pushes, deployments, live-worker writes, or process restarts.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

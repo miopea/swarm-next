@@ -81,12 +81,12 @@ const TRANSCRIPT: string = [
   `${D}>${R} `,
 ].join("\r\n");
 
-function encodeSnapshotFrame(text: string, rows: number, columns: number): ArrayBuffer {
+function encodeSnapshotFrame(text: string, rows: number, columns: number, sequence: number): ArrayBuffer {
   const payload = new TextEncoder().encode(text);
   // 1 type + 8 sequence + 2 rows + 2 columns + 1 truncated, then the bytes.
   const frame = new Uint8Array(14 + payload.byteLength);
   frame[0] = SNAPSHOT_FRAME_TYPE;
-  new DataView(frame.buffer, 1, 8).setBigUint64(0, 1n);
+  new DataView(frame.buffer, 1, 8).setBigUint64(0, BigInt(sequence));
   const dimensions = new DataView(frame.buffer, 9, 4);
   dimensions.setUint16(0, rows);
   dimensions.setUint16(2, columns);
@@ -113,12 +113,21 @@ export class FixtureWebSocket extends EventTarget {
   readonly protocol: string;
   binaryType: "blob" | "arraybuffer" = "blob";
   readyState: number = FixtureWebSocket.CONNECTING;
+  #resumed = false;
+  #owned: boolean;
+  #occupied = true;
+  #generation = 1;
+  #sequence = 1;
+  #rows = 32;
+  #columns = 120;
 
-  constructor(url: string, protocols: string[] = []) {
+  constructor(url: string, protocols: string[] = [], initiallyOwned = true) {
     super();
     this.url = url;
     this.protocol = protocols[0] ?? "";
+    this.#owned = initiallyOwned;
     queueMicrotask(() => {
+      if (this.readyState === FixtureWebSocket.CLOSED) return;
       this.readyState = FixtureWebSocket.OPEN;
       this.dispatchEvent(new Event("open"));
     });
@@ -126,20 +135,61 @@ export class FixtureWebSocket extends EventTarget {
 
   send(data: unknown): void {
     if (typeof data !== "string") return;
-    let message: { type?: string; rows?: number; columns?: number };
+    if (this.readyState !== FixtureWebSocket.OPEN) return;
+    let message: { type?: string; rows?: number; columns?: number; request_id?: string; generation?: string; observed_generation?: string | null };
     try {
       message = JSON.parse(data) as typeof message;
     } catch {
       return;
     }
+    if (message.type === "probe") {
+      this.#reply({ type: "alive", request_id: message.request_id });
+      return;
+    }
+    if (message.type === "claim") {
+      if (message.observed_generation !== String(this.#generation) && !(message.observed_generation === null && (this.#owned || !this.#occupied))) {
+        this.#reply({ type: "error", code: "terminal_control_owned_elsewhere", message: "Another synthetic view controls this fixture." });
+        this.#publishControl();
+        return;
+      }
+      if (!this.#owned) this.#generation++;
+      this.#owned = true;
+      this.#occupied = true;
+      this.#resize(message.rows, message.columns);
+      this.#publishControl();
+      return;
+    }
+    if (["resize", "input", "renew", "release"].includes(message.type ?? "")) {
+      if (!this.#owned || message.generation !== String(this.#generation)) {
+        this.#reply({ type: "error", code: "terminal_control_stale", message: "Synthetic control is stale." });
+        this.#publishControl();
+        return;
+      }
+      if (message.type === "resize") this.#resize(message.rows, message.columns);
+      if (message.type === "release") {
+        this.#owned = false;
+        this.#occupied = false;
+        this.#generation++;
+      }
+      this.#publishControl();
+      return;
+    }
     if (message.type !== "resume") return;
+    if (this.#resumed) {
+      this.#reply({ type: "error", code: "duplicate_resume", message: "One resume per fixture socket." });
+      return;
+    }
+    this.#resumed = true;
     // Draw at whatever geometry the renderer actually asked for, so the fixture
     // never wedges the terminal at a width the viewport does not have.
     const rows = message.rows && message.rows > 0 ? message.rows : 32;
     const columns = message.columns && message.columns > 0 ? message.columns : 120;
+    this.#rows = rows;
+    this.#columns = columns;
     queueMicrotask(() => {
+      if (this.readyState !== FixtureWebSocket.OPEN) return;
       this.dispatchEvent(
-        new MessageEvent("message", { data: encodeSnapshotFrame(TRANSCRIPT, rows, columns) }),
+        new MessageEvent("message", { data: encodeSnapshotFrame(TRANSCRIPT, rows, columns, this.#sequence) }),
       );
       this.dispatchEvent(
         new MessageEvent("message", {
@@ -147,10 +197,32 @@ export class FixtureWebSocket extends EventTarget {
             type: "state",
             running: true,
             latest_sequence: 1,
-            geometry_owned: true,
+            control: this.#control(),
           }),
         }),
       );
+    });
+  }
+
+  #control() {
+    return { supported: true, generation: String(this.#generation), owned: this.#owned, occupied: this.#occupied, lease_remaining_ms: this.#occupied ? 90_000 : 0 };
+  }
+
+  #publishControl(): void { this.#reply({ type: "control", control: this.#control() }); }
+
+  #reply(message: object): void {
+    queueMicrotask(() => {
+      if (this.readyState === FixtureWebSocket.OPEN) this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(message) }));
+    });
+  }
+
+  #resize(rows?: number, columns?: number): void {
+    if (!rows || !columns || rows <= 0 || columns <= 0 || (rows === this.#rows && columns === this.#columns)) return;
+    this.#rows = rows;
+    this.#columns = columns;
+    const frame = encodeSnapshotFrame(TRANSCRIPT, rows, columns, ++this.#sequence);
+    queueMicrotask(() => {
+      if (this.readyState === FixtureWebSocket.OPEN) this.dispatchEvent(new MessageEvent("message", { data: frame }));
     });
   }
 

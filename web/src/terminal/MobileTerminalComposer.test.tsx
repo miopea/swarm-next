@@ -11,6 +11,20 @@ import {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
 beforeEach(() => { localStorage.clear(); sessionStorage.clear(); });
 
+test("passive control preserves editable drafts and disables Send and terminal keys", () => {
+  const onInput = vi.fn(() => true);
+  const view = render(<MobileTerminalComposer connectionState="connected" inputAvailable={false} keysExpanded onInput={onInput} />);
+  const draft = screen.getByRole("textbox", { name: "Message worker" });
+  fireEvent.change(draft, { target: { value: "keep my thought" } });
+  expect(draft).toHaveAccessibleName("Message worker");
+  expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Arrow up" })).toBeDisabled();
+  expect(onInput).not.toHaveBeenCalled();
+  view.rerender(<MobileTerminalComposer connectionState="connected" inputAvailable keysExpanded onInput={onInput} />);
+  expect(draft).toHaveValue("keep my thought");
+  expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+});
+
 test("sends slash commands as bracketed paste before a separated Enter frame", async () => {
   const onInput = vi.fn<(text: string) => boolean>(() => true);
   render(<MobileTerminalComposer connectionState="connected" onInput={onInput} />);

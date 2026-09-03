@@ -26,7 +26,7 @@ export function hiveFixture(path: string): unknown | undefined {
   if (path.startsWith("/api/v1/terminal/sessions/") && path.endsWith("/attach-grants")) {
     return {
       grant: "harness-grant",
-      protocol: "swarm-terminal.v1",
+      protocol: "swarm-terminal.v4",
       websocket_path: "/api/v1/terminal/attach",
       expires_in_ms: 60_000,
     };
