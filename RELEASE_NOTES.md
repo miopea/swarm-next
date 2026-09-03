@@ -12,6 +12,28 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.4.1
+
+**Swarm stopped guessing whether Claude still has a worker's conversation, and
+asks Claude instead.** No schema change and no protocol change, so this is an
+ordinary `update` and your workers keep running.
+
+### Fixes
+- A worker can no longer be left unable to start because Swarm and Claude
+  disagreed about whether its conversation still exists. Swarm decided this by
+  looking for the transcript file itself — in its own configuration directory,
+  which is not always the one Claude uses. When the two differed it concluded the
+  conversation was gone, reused the pinned id for a fresh one, and Claude refused
+  an id it still held. The worker then did not start at all, which is the exact
+  failure that check existed to prevent.
+
+  Claude is now asked directly, from the process that actually launches it, so
+  the answer cannot disagree with the thing it is predicting. A conversation
+  Claude genuinely no longer holds still starts fresh under the same id — a lost
+  thread rather than a lost worker — and anything other than a clear "no such
+  conversation" resumes, so an unanswered question is never mistaken for
+  permission to reuse a live id.
+
 ## 1.4.0
 
 **A Codex worker can reach the board, and a claim that nothing shipped can be
