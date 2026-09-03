@@ -8,7 +8,10 @@ use std::{
 };
 
 use nix::unistd::Uid;
-use swarm_domain::{ProviderConversationId, ProviderKind, WorkerSessionId};
+use swarm_domain::{
+    ConversationRecovery, ConversationRecoveryEvidence, ConversationRecoveryState,
+    ConversationRecoveryStep, ProviderConversationId, ProviderKind, WorkerSessionId,
+};
 use swarm_terminal::{
     AlphaProviderAdapter, ClaudeCodeAdapter, ClaudeConversationStart, CodexAdapter, HostRequest,
     HostResponse, HostSessionSummary, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, PROTOCOL_VERSION,
@@ -44,10 +47,10 @@ const CONVERSATION_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 /// mechanism. Asking here cannot disagree with Claude, because it IS Claude, in
 /// the environment Claude will use.
 ///
-/// ONLY AN EXPLICIT "NO SUCH CONVERSATION" TURNS A RESUME INTO A NEW. Every other
-/// outcome — the binary missing, a timeout, an unrecognised error — resumes, and
-/// that asymmetry is deliberate: reusing a pinned id Claude still holds is the
-/// failure being removed, so silence must never be read as permission to do it.
+/// Only explicit missing-context evidence advances to native continuation.
+/// Every other probe outcome retains the exact attempt: an inconclusive
+/// preflight is not evidence that the interactive provider cannot restore it.
+/// Selecting Continue is an attempt, not proof of restored context.
 fn conversation_claude_can_open(
     conversation: ClaudeConversationStart,
     holds_no_such_conversation: impl Fn(ProviderConversationId) -> bool,
@@ -56,11 +59,21 @@ fn conversation_claude_can_open(
         return conversation;
     };
     if holds_no_such_conversation(session_id) {
-        info!(
-            %session_id,
-            "Claude no longer holds this conversation; starting a fresh one under the same id"
-        );
-        return ClaudeConversationStart::New { session_id };
+        let mut recovery = ConversationRecovery::new(Some(session_id), true);
+        if let ConversationRecoveryState::Attempt { attempt } = recovery.state() {
+            recovery.observe(attempt, ConversationRecoveryEvidence::ContextUnavailable);
+        }
+        if let ConversationRecoveryState::Attempt { attempt } = recovery.state()
+            && attempt.step == ConversationRecoveryStep::Continue
+        {
+            warn!(
+                %session_id,
+                recovery_id = %attempt.recovery_id,
+                attempt = attempt.number,
+                "Claude cannot restore the saved conversation; attempting native continuation, context not yet verified"
+            );
+            return ClaudeConversationStart::Continue;
+        }
     }
     conversation
 }
@@ -1291,12 +1304,46 @@ mod conversation_oracle_tests {
 
     /// The whole point: Claude's answer decides, not a file Swarm looked for.
     #[test]
-    fn claude_saying_it_has_no_such_conversation_turns_a_resume_into_a_new() {
+    fn missing_exact_conversation_attempts_native_continue_before_fresh() {
         let session_id = pinned();
         assert_eq!(
             conversation_claude_can_open(ClaudeConversationStart::Resume { session_id }, |_| true),
-            ClaudeConversationStart::New { session_id },
-            "the pin is kept and the thread starts fresh — a lost thread, not a lost worker"
+            ClaudeConversationStart::Continue,
+            "missing exact context must not skip native continuation or reuse the pin for fresh context"
+        );
+    }
+
+    #[test]
+    fn missing_context_fallback_keeps_provider_configuration_and_probes_once() {
+        let calls = std::cell::Cell::new(0);
+        let session_id = pinned();
+        let start = conversation_claude_can_open(
+            ClaudeConversationStart::Resume { session_id },
+            |requested| {
+                assert_eq!(requested, session_id);
+                calls.set(calls.get() + 1);
+                true
+            },
+        );
+        let command = ClaudeCodeAdapter
+            .command_for_with_configuration(
+                Path::new("/workspace"),
+                start,
+                Some(Path::new("/state/worker.json")),
+                Some(Path::new("/state/settings.json")),
+            )
+            .unwrap();
+        assert_eq!(calls.get(), 1);
+        assert_eq!(
+            command.arguments,
+            [
+                "--continue",
+                "--mcp-config",
+                "/state/worker.json",
+                "--strict-mcp-config",
+                "--settings",
+                "/state/settings.json",
+            ]
         );
     }
 

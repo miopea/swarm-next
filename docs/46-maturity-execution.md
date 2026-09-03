@@ -451,6 +451,24 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 - No schema/protocol activation, live provider invocation, worker restart,
   release, push, or deployment occurred.
 
+### P2o: wire confirmed missing context to native continuation
+
+- Replaced the host's direct exact-resume-to-fresh selection with the domain
+  Exact -> Continue transition. Only the recognized missing-context probe result
+  advances it; inconclusive probes preserve the exact interactive attempt.
+- Recovery logging says continuation is being attempted and context is not yet
+  verified. The saved ID is not reused to manufacture a fresh conversation.
+- Updated the selector regression and added a configuration/one-probe test:
+  continuation retains explicit MCP isolation and operator settings.
+- Strict Linux-target all-target/all-feature host Clippy passed, including test
+  compilation. These host tests were not executed on Linux. This is not evidence
+  of successful interactive provider restoration.
+- Remaining: carry the recovery operation through interactive execution, obtain
+  provider outcome evidence, persist/report fallback, implement the final fresh
+  attempt and authoritative chosen-conversation tracking. This checkpoint does
+  not claim the full recovery ladder or P2 complete.
+- No live worker changes, push, deployment, or release.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

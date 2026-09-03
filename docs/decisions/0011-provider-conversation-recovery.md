@@ -64,9 +64,10 @@ resumption capability, recovery is manual rather than an invented adapter path.
 The host currently probes Claude in the same environment as the provider. The
 probe's stderr is bounded and nonblocking; only the recognized exit-1 missing
 result is evidence of absence. Other outcomes retain the exact resume attempt.
-The remaining direct missing-to-New branch predates this amendment and must be
-replaced by the full ladder with visible fallback reporting. This ADR records the
-approved target, not a claim that that branch has already been corrected.
+Confirmed missing exact context now selects native Continue through the domain
+transition, rather than the former direct missing-to-New branch. This is only
+startup selection: the full interactive ladder and visible fallback reporting
+remain incomplete. No process launch is treated as evidence of restoration.
 
 ## Recovery operation contract (implementation in progress)
 
@@ -76,8 +77,10 @@ evidence, never on a PID, elapsed timer, or transport/authentication failure.
 Late evidence from another attempt/operation is ignored. Exact restoration must
 match the chosen identity; continuation and fresh results remain distinguishable.
 An uncertain outcome requires resolution without starting a duplicate process.
-This bounded model is implemented and tested; host execution, durable reporting,
-and provider evidence adapters are not yet wired to it.
+This bounded model is implemented and tested. The host uses its first transition
+for a confirmed missing exact conversation; retaining the operation through the
+interactive lifecycle, durable reporting, and provider outcome evidence remain
+unimplemented.
 
 Do not infer interactive continuation from a print-mode continuation probe:
 [Claude's session documentation](https://code.claude.com/docs/en/sessions)
