@@ -108,11 +108,23 @@ const UNSTARTED_WORK_CANDIDATES_SQL: &str = concat!(
              -- Delivered-at alone asks 'has this been transitioned to Active
              -- yet', and treats that as a proxy for 'is anyone working it'. It
              -- is not one. A worker can work a Ready task for an hour --
-             -- amending its facts, correcting the record, leaving notes -- and
-             -- never transition it, and the proxy reports it as ignored the
-             -- whole time. Eleven of the twelve instances Queen recorded were
-             -- that exact shape, and reading each one cost a transcript.
+             -- amending its facts, correcting the record -- and never transition
+             -- it, and the proxy reports it as ignored the whole time. Eleven of
+             -- the twelve instances Queen recorded were that exact shape, and
+             -- reading each one cost a transcript.
              --
+             -- ⚠️ THIS SENTENCE ALSO SAID `leaving notes` UNTIL 2026-09-03 AND
+             -- CODE HAS NEVER DONE THAT. `noted` is deliberately absent from
+             -- last_task_action_source!, defended by
+             -- a_note_does_not_hold_off_the_stale_flag_although_an_amendment_does,
+             -- because a note is cheap and would become a way to look busy.
+             --
+             -- So a comment and a test stated opposite intentions, both in this
+             -- file, with no way for a reader to tell which was authoritative
+             -- without running the suite. A worker read this comment, made the
+             -- one-word change it implies, and was caught only because the
+             -- existing test asserts the opposite. The comment was the wrong
+             -- half: the test is the decision somebody made on purpose.
 
              LEFT JOIN ",
     last_task_action_source!(),
@@ -328,6 +340,54 @@ pub struct CoordinatorWorkerWake {
     pub action_id: String,
     pub worker_id: WorkerId,
     pub task_id: TaskId,
+}
+
+/// Adds what the worker HAS recorded to a row saying nothing has changed.
+///
+/// A note deliberately buys no quiet — see
+/// `a_note_does_not_hold_off_the_stale_flag_although_an_amendment_does` — so the
+/// age keeps climbing while a worker records progress. That is correct, and it
+/// is not what a coordinator reads. Queen read 9002 seconds on one row and asked
+/// a worker whether it had stalled; it had not, it was two hours into shipping
+/// seven of nine subsystems and had written 32 notes, the newest a minute old.
+///
+/// Her own diagnosis is the design: "the row's prose is right while its number
+/// is wrong — the number is what makes a coordinator ask." So the number stays
+/// honest and stops being the only thing on the row.
+fn note_evidence_beside(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: TaskId,
+    now: i64,
+    reason: &str,
+) -> Result<String, TaskStoreError> {
+    let (count, newest): (i64, Option<i64>) = transaction.query_row(
+        "SELECT count(*), MAX(occurred_at) FROM task_activity
+         WHERE task_id = ?1 AND kind = 'noted'",
+        [task_id.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let Some(newest) = newest.filter(|_| count > 0) else {
+        return Ok(reason.to_owned());
+    };
+    Ok(format!(
+        "{reason} The worker has recorded {count} note{} on it, the newest {}. \
+         Notes do not clear this flag on purpose — read them before deciding it stalled.",
+        if count == 1 { "" } else { "s" },
+        describe_age(now.saturating_sub(newest)),
+    ))
+}
+
+/// How long ago, for a coordinator reading a row rather than a log.
+///
+/// Rounded and in words on purpose: the point of this number is whether to
+/// interrupt somebody, and "a minute ago" answers that where 63 seconds asks
+/// the reader to do arithmetic first.
+fn describe_age(seconds: i64) -> String {
+    match seconds {
+        ..=90 => "moments ago".to_owned(),
+        _ if seconds < 5_400 => format!("{} minutes ago", (seconds + 30) / 60),
+        _ => format!("{} hours ago", (seconds + 1_800) / 3_600),
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1508,6 +1568,7 @@ impl TaskStore {
                 "stale-owned-work",
             )
         };
+        let reason = note_evidence_beside(&transaction, candidate.task_id, now, reason)?;
         let idempotency_key = format!(
             "{key}:{}:{}:{}:{}",
             candidate.task_id, candidate.worker_id, candidate.session_id, candidate.task_revision
@@ -4440,7 +4501,78 @@ mod tests {
         );
     }
 
-    /// A note is a record, not an alibi.    /// A note is a record, not an alibi.
+    /// THE EVIDENCE IS BESIDE THE NUMBER, and the number is unchanged.
+    ///
+    /// Queen read 9002 seconds on a stale row and asked a worker whether it had
+    /// stalled. It had not: two hours into shipping seven of nine subsystems,
+    /// with 32 notes recorded, the newest a minute old. Her own diagnosis is
+    /// the design — "the row's prose is right while its number is wrong, and
+    /// the number is what makes a coordinator ask."
+    ///
+    /// So notes still buy no quiet, which the test below defends, and the row
+    /// now carries what a coordinator would otherwise have to open the task to
+    /// find. Both halves are asserted here because fixing one by breaking the
+    /// other is the obvious wrong move: counting notes would have suppressed
+    /// the flag entirely.
+    #[test]
+    fn a_stale_row_carries_the_notes_that_do_not_clear_it() {
+        let store = TaskStore::in_memory().unwrap();
+        let (worker, _session, task) = active_owned_work(&store, "Sorrel", 100);
+
+        for note in ["Seven of nine subsystems are live.", "Eighth deployed."] {
+            store.record_task_note(task, worker, note).unwrap();
+        }
+        store
+            .connection()
+            .unwrap()
+            .execute_batch("UPDATE task_activity SET occurred_at = 1_540 WHERE kind = 'noted';")
+            .unwrap();
+
+        let candidate = store
+            .stale_owned_work_candidates(1_600, 600)
+            .unwrap()
+            .pop()
+            .expect("notes buy no quiet, so the row still fires");
+        assert_eq!(
+            candidate.age_seconds, 1_500,
+            "and the age is untouched — measured from the last ACTION, not the last note"
+        );
+
+        store
+            .record_stale_owned_work_attention(
+                &candidate,
+                1_600,
+                600,
+                BackgroundWorkReading::NoneVisible,
+            )
+            .unwrap();
+
+        let reason: String = store
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT reason FROM coordinator_actions
+                 WHERE kind = 'stale_owned_work_attention' AND task_id = ?1",
+                [task.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert!(
+            reason.contains("2 notes"),
+            "the coordinator sees the evidence without opening the task: {reason}"
+        );
+        assert!(
+            reason.contains("moments ago"),
+            "and how recent it is, which is the part that says whether to interrupt: {reason}"
+        );
+        assert!(
+            reason.contains("do not clear this flag on purpose"),
+            "and why the age is high anyway, so the row is not read as a contradiction: {reason}"
+        );
+    }
+
+    /// A note is a record, not an alibi.
     ///
     /// The worry when this was filed was that a progress note becomes a way to
     /// look busy. It cannot: `last_task_action_source!` counts `corrected`,
