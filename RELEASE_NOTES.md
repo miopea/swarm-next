@@ -12,6 +12,42 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.4.0
+
+**A Codex worker can reach the board, and a claim that nothing shipped can be
+taken back.** This one carries a schema change (123), so copy your
+`swarm.sqlite3` before installing. No protocol change, so your workers keep
+running and this is an ordinary `update`.
+
+### New features
+- A worker can withdraw a no-deployment claim that has stopped being true. Until
+  now a claim was a permanent fact about a moment: a worker who realised its own
+  claim was wrong — or whose investigation ticket was later turned into build
+  work — had two options and both were false, leave it standing or record another
+  one. "There is no valid claim on this task" could not be said at all, and one
+  claim on the board still carries a note whose first line reads DO NOT APPROVE
+  THIS CLAIM because a note was the only instrument there was. Withdrawing puts
+  the task back in front of Queen as work with no evidence, which is what it
+  actually is. The claim and its reason stay on the record, marked withdrawn.
+- Queen can take back an approval, which is the case that was invisible. Agreeing
+  to a claim is the single act that removes a task from the detector watching it,
+  so an approval given before somebody noticed the claim was false left the task
+  looking settled with nothing watching it.
+
+### Fixes
+- A Codex worker now starts with its swarm tools instead of no connection to the
+  board at all. It received its assignment notification, could not open the task
+  or read the brief, and correctly stopped rather than guessing — so the work sat
+  untouched with nothing saying anything was wrong. The reported workaround was
+  putting the whole brief in the task title, because the notification was all it
+  could see.
+- An email reply can no longer be sent on the strength of a no-deployment claim
+  whose own author has retracted it.
+
+**Sessions already running will not see the new tool until they reconnect.** A
+session caches its tool list when it connects, so restart a worker if you want it
+to be able to withdraw a claim today.
+
 ## 1.3.1
 
 **Interface fixes, all from watching one operator use it for an evening.** No
