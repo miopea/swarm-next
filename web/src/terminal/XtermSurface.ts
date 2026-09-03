@@ -186,19 +186,26 @@ export class XtermSurface implements TerminalSurface {
    */
   #useGpuRendering(): void {
     if (this.#webgl || this.#disposed) return;
+    let webgl: WebglAddon | undefined;
     try {
-      const webgl = new WebglAddon();
+      webgl = new WebglAddon();
+      const candidate = webgl;
+      this.#webgl = candidate;
       // Registered before loading: a context lost during load must still be
       // caught rather than leaving a terminal drawing to nothing.
-      webgl.onContextLoss(() => {
-        webgl.dispose();
-        if (this.#webgl === webgl) this.#webgl = undefined;
+      candidate.onContextLoss(() => {
+        if (this.#webgl !== candidate) return;
+        this.#webgl = undefined;
+        candidate.dispose();
       });
-      this.#terminal.loadAddon(webgl);
-      this.#webgl = webgl;
+      this.#terminal.loadAddon(candidate);
     } catch {
-      // No WebGL2 here. The DOM renderer is already handling the terminal.
-      this.#webgl = undefined;
+      // Activation can throw after allocation; release the candidate as well
+      // as falling back. Do not retain an already-lost context after load.
+      if (this.#webgl === webgl) {
+        this.#webgl = undefined;
+        try { webgl?.dispose(); } catch { /* A broken addon must not block fallback. */ }
+      }
     }
   }
 
@@ -425,12 +432,14 @@ export class XtermSurface implements TerminalSurface {
   }
 
   dispose(): void {
+    if (this.#disposed) return;
     this.#disposed = true;
     this.#cancelScheduledFit();
     this.#cancelScheduledRedraw();
     this.#themeObserver?.disconnect();
     this.#terminalResizeSubscription.dispose();
     this.#resizeListeners.clear();
+    this.#renderableListeners.clear();
     this.#resizeObserver?.disconnect();
     window.removeEventListener("resize", this.#handleViewportChange);
     window.removeEventListener("focus", this.#handleViewportChange);

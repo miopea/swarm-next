@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import TerminalQuestionsFixture from "./TerminalQuestionsFixture";
 
 import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
 import { App } from "../App";
@@ -206,6 +207,12 @@ export type Surface = { id: string; title: string; why: string; render: () => Re
 const FILED = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
 
 export const SURFACES: Surface[] = [
+  {
+    id: "terminal-questions",
+    title: "Terminal question transitions",
+    why: "synthetic narrow/wide ANSI repaint and snapshot recovery; not a captured Claude AskUser trace",
+    render: () => <TerminalQuestionsFixture />,
+  },
   {
     id: "unsettled-review",
     title: "Finished work nothing has settled",

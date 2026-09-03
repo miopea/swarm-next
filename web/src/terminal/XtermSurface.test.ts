@@ -18,6 +18,10 @@ const xterm = vi.hoisted(() => ({
   scrollListener: undefined as ((viewportY: number) => void) | undefined,
   bufferBaseY: 0,
   bufferViewportY: 0,
+  gpuMode: "unavailable" as "unavailable" | "works" | "activation-fails" | "loss-during-load",
+  gpuDispose: vi.fn(),
+  gpuLoss: undefined as (() => void) | undefined,
+  terminalDispose: vi.fn(),
 }));
 
 vi.mock("@xterm/addon-fit", () => ({
@@ -53,7 +57,10 @@ vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
 // path a real browser takes on a GPU denylist. The surface must fall back.
 vi.mock("@xterm/addon-webgl", () => ({
   WebglAddon: class {
-    constructor() { throw new Error("WebGL2 is unavailable"); }
+    readonly gpu = true;
+    constructor() { if (xterm.gpuMode === "unavailable") throw new Error("WebGL2 is unavailable"); }
+    onContextLoss(listener: () => void) { xterm.gpuLoss = listener; return { dispose() {} }; }
+    dispose() { xterm.gpuDispose(); }
   },
 }));
 
@@ -78,7 +85,11 @@ vi.mock("@xterm/xterm", () => ({
       xterm.terminal = this;
     }
 
-    loadAddon(): void {}
+    loadAddon(addon: { gpu?: boolean }): void {
+      if (!addon.gpu) return;
+      if (xterm.gpuMode === "activation-fails") throw new Error("GPU activation failed");
+      if (xterm.gpuMode === "loss-during-load") xterm.gpuLoss?.();
+    }
     open(): void {}
     attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean): void {
       xterm.keyHandler = handler;
@@ -110,15 +121,43 @@ vi.mock("@xterm/xterm", () => ({
       xterm.scrollListener = listener;
       return { dispose: vi.fn() };
     }
-    dispose(): void {}
+    dispose(): void { xterm.terminalDispose(); }
   },
 }));
 
 import { XtermSurface } from "./XtermSurface";
 
 afterEach(() => {
+  xterm.gpuMode = "unavailable";
+  xterm.gpuLoss = undefined;
+  xterm.gpuDispose.mockClear();
+  xterm.terminalDispose.mockClear();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+test("failed GPU activation disposes the allocated addon and leaves the terminal usable", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  xterm.gpuMode = "activation-fails";
+  const surface = new XtermSurface();
+  surface.open(document.createElement("div"));
+  expect(xterm.gpuDispose).toHaveBeenCalledTimes(1);
+  await surface.write(new Uint8Array([65]));
+  surface.dispose();
+  surface.dispose();
+  expect(xterm.gpuDispose).toHaveBeenCalledTimes(1);
+  expect(xterm.terminalDispose).toHaveBeenCalledTimes(1);
+});
+
+test("a context lost during addon activation is not retained or disposed twice", () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  xterm.gpuMode = "loss-during-load";
+  const surface = new XtermSurface();
+  surface.open(document.createElement("div"));
+  expect(xterm.gpuDispose).toHaveBeenCalledTimes(1);
+  xterm.gpuLoss?.();
+  surface.dispose();
+  expect(xterm.gpuDispose).toHaveBeenCalledTimes(1);
 });
 
 function press(key: string, init: Partial<KeyboardEventInit> = {}): boolean {

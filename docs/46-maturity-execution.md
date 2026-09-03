@@ -146,6 +146,23 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   after correcting new refs to explicitly allow undefined (React types caught it).
   Actual camera/gallery and provider receipt remain real-device verification.
 
+### P2d: renderer cleanup and safe question fixture
+
+- Failed WebGL activation now disposes its allocated addon; context loss during
+  activation cannot leave a stale addon reference. Renderer disposal is idempotent
+  and clears renderability listeners. Renderer/controller tests: 57 passed;
+  typecheck passed. Tests initially lacked the existing ResizeObserver test stub;
+  adding it allowed the intended activation-failure assertions to run.
+- Extended the existing no-proxy harness with `terminal-questions`. Run
+  `pnpm --dir web harness` and open
+  `http://127.0.0.1:5199/harness.html?surface=terminal-questions`.
+- Edge plugin verified synthetic screens 1, 2, 3 at 36 columns and canonical
+  snapshot replay of screen 3. DOM inspection and a screenshot showed screen 2
+  without the previous screen's marker. This uses the harness's DOM fallback,
+  desktop Edge, synthetic full-clear ANSI, and no provider/server transport.
+- TERM-02 remains open: this is not an Android/iOS run or a recorded Claude
+  AskUser sequence and does not reproduce or establish a fix for its overwrite.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has
