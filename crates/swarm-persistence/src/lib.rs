@@ -1714,7 +1714,12 @@ impl TaskStore {
                           WHERE worked.task_id = t.id AND worked.actor_kind = 'worker'),
                    EXISTS(SELECT 1 FROM task_unverifiable_closures u WHERE u.task_id = t.id),
                    EXISTS(SELECT 1 FROM task_returned_reviews r
-                          WHERE r.task_id = t.id AND r.answered_at IS NULL)
+                          WHERE r.task_id = t.id AND r.answered_at IS NULL),
+                   -- Reviewed work waiting on a ruling is the OPERATOR's, not
+                   -- Queen's. Read from the decision rather than stored beside
+                   -- it, so it unsets itself the moment they answer.
+                   EXISTS(SELECT 1 FROM decision_requests dr
+                          WHERE dr.task_id = t.id AND dr.state = 'pending')
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
@@ -1820,7 +1825,12 @@ impl TaskStore {
                           WHERE worked.task_id = t.id AND worked.actor_kind = 'worker'),
                    EXISTS(SELECT 1 FROM task_unverifiable_closures u WHERE u.task_id = t.id),
                    EXISTS(SELECT 1 FROM task_returned_reviews r
-                          WHERE r.task_id = t.id AND r.answered_at IS NULL)
+                          WHERE r.task_id = t.id AND r.answered_at IS NULL),
+                   -- Reviewed work waiting on a ruling is the OPERATOR's, not
+                   -- Queen's. Read from the decision rather than stored beside
+                   -- it, so it unsets itself the moment they answer.
+                   EXISTS(SELECT 1 FROM decision_requests dr
+                          WHERE dr.task_id = t.id AND dr.state = 'pending')
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
@@ -1860,7 +1870,12 @@ impl TaskStore {
                           WHERE worked.task_id = t.id AND worked.actor_kind = 'worker'),
                    EXISTS(SELECT 1 FROM task_unverifiable_closures u WHERE u.task_id = t.id),
                    EXISTS(SELECT 1 FROM task_returned_reviews r
-                          WHERE r.task_id = t.id AND r.answered_at IS NULL)
+                          WHERE r.task_id = t.id AND r.answered_at IS NULL),
+                   -- Reviewed work waiting on a ruling is the OPERATOR's, not
+                   -- Queen's. Read from the decision rather than stored beside
+                   -- it, so it unsets itself the moment they answer.
+                   EXISTS(SELECT 1 FROM decision_requests dr
+                          WHERE dr.task_id = t.id AND dr.state = 'pending')
                 FROM tasks t
                 LEFT JOIN task_assignments a
                   ON a.task_id = t.id AND a.released_at IS NULL
@@ -5762,6 +5777,7 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
             TaskState::from_str(&state).unwrap_or(TaskState::Draft),
             has_assignee,
             row.get(19).unwrap_or(false),
+            row.get(20).unwrap_or(false),
         ),
         outcome_delivery_state: outcome_delivery_state
             .map(|value| TaskOutcomeDeliveryState::from_str(&value))

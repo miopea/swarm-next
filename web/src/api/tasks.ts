@@ -44,7 +44,7 @@ export function isOpenTaskState(state: TaskState): boolean {
  * and folding it into her queue would bury exactly the cases that need a
  * different kind of attention.
  */
-export type NextMoveOwner = "worker" | "queen" | "blocked" | "release" | "nobody";
+export type NextMoveOwner = "worker" | "queen" | "operator" | "blocked" | "release" | "nobody";
 
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
 

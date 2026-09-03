@@ -29,9 +29,10 @@ type Group = {
   tasks: Task[];
 };
 
-const GROUP_ORDER: readonly NextMoveOwner[] = ["queen", "worker", "blocked", "release"];
+const GROUP_ORDER: readonly NextMoveOwner[] = ["operator", "queen", "worker", "blocked", "release"];
 
 const GROUP_TITLES: Record<NextMoveOwner, string> = {
+  operator: "Waiting on you",
   queen: "Waiting on Queen",
   worker: "Waiting on a worker",
   blocked: "Blocked on something else",
@@ -40,6 +41,7 @@ const GROUP_TITLES: Record<NextMoveOwner, string> = {
 };
 
 const GROUP_MEANINGS: Record<NextMoveOwner, string> = {
+  operator: "Reviewed work with a decision open on it. Nobody in the Hive can move these — answering the decision releases them.",
   queen: "Finished work she has not judged, and unassigned work she has not routed.",
   worker: "Work a worker owns — in progress, or handed back for something missing.",
   blocked: "Nothing here can move these. A hard reason, such as waiting on another task.",

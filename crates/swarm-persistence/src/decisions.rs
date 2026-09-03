@@ -1028,6 +1028,7 @@ fn parse_id<T: FromStr>(value: &str) -> rusqlite::Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use swarm_domain::{NextMoveOwner, TaskState};
     use swarm_domain::{PresenceDeviceId, ProviderKind, TaskPriority};
 
     /// A grant exists only when the operator pressed the button naming the command.
@@ -1168,6 +1169,81 @@ mod tests {
             deadline: None,
             requested_command: None,
         }
+    }
+
+    /// REVIEWED WORK WITH A RULING OPEN ON IT IS THE OPERATOR'S, NOT QUEEN'S.
+    ///
+    /// It read as Queen's to judge while Queen was the one who could not judge
+    /// it — she was waiting too. Twice in one day she tried to move such a task
+    /// to Blocked and could not: Review has no Blocked exit, and the detour
+    /// through Active is refused whenever the assignee holds any other task.
+    ///
+    /// The second half is the one that made this the right fix rather than a new
+    /// edge: it UNSETS ITSELF. Resolving the decision hands the task back to
+    /// Queen with no transition, because ownership is read from the decision
+    /// rather than stored beside it. A Blocked edge would have needed a return
+    /// trip through Active — the same gate that caused the problem.
+    #[test]
+    fn a_ruling_open_on_reviewed_work_makes_it_the_operators_until_it_is_answered() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let task = store
+            .create_task("Ship the thing", "/workspace/petal")
+            .unwrap();
+        for state in [TaskState::Ready, TaskState::Active, TaskState::Review] {
+            store.transition_task(task.id, state).unwrap();
+        }
+        assert_eq!(
+            store.get_task(task.id).unwrap().next_move_owner,
+            NextMoveOwner::Queen,
+            "reviewed work with nothing open on it is hers to judge"
+        );
+
+        let actions = vec!["ship".into(), "hold".into()];
+        let mut asking = request(queen.id, &actions);
+        asking.task_id = Some(task.id);
+        let decision = store.create_decision_request(&asking).unwrap();
+
+        assert_eq!(
+            store.get_task(task.id).unwrap().next_move_owner,
+            NextMoveOwner::Operator,
+            "nobody in the Hive can move this while the ruling is open"
+        );
+
+        store
+            .resolve_decision_request(decision.id, "ship", "Checked the artifact.", "operator")
+            .unwrap();
+
+        assert_eq!(
+            store.get_task(task.id).unwrap().next_move_owner,
+            NextMoveOwner::Queen,
+            "answering the decision releases it — no transition, nothing to remember"
+        );
+    }
+
+    /// A ruling open on work that is NOT in review changes nothing. Active work
+    /// is still the worker's to progress; they can keep going while an operator
+    /// question sits beside it, and saying otherwise would empty the worker
+    /// queue every time somebody asked something.
+    #[test]
+    fn a_ruling_on_active_work_leaves_it_with_the_worker() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let task = store
+            .create_task("Still building", "/workspace/petal")
+            .unwrap();
+        for state in [TaskState::Ready, TaskState::Active] {
+            store.transition_task(task.id, state).unwrap();
+        }
+        let actions = vec!["ship".into(), "hold".into()];
+        let mut asking = request(queen.id, &actions);
+        asking.task_id = Some(task.id);
+        store.create_decision_request(&asking).unwrap();
+
+        assert_eq!(
+            store.get_task(task.id).unwrap().next_move_owner,
+            NextMoveOwner::Worker
+        );
     }
 
     #[test]
