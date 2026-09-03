@@ -109,7 +109,8 @@ export function buildSanitizedDiagnosticReport({ context, health, hiveIdentity, 
     },
     api: health ? { status: "healthy", version: health.version } : { status: "unavailable" },
     database: {
-      status: hiveIdentity ? "healthy" : "unavailable",
+      status: hiveIdentity ? "reachable" : "unavailable",
+      integrity: "not_checked",
       hive_id: hiveIdentity?.hive.id,
     },
     terminal_host: runtime.terminalHost

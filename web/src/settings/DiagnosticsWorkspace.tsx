@@ -53,12 +53,22 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
 
   useEffect(() => {
     let cancelled = false;
+    let inFlight: AbortController | undefined;
+    let deadline: number | undefined;
     async function refreshRuntime() {
+      if (cancelled || inFlight || document.visibilityState !== "visible") return;
+      const controller = new AbortController();
+      inFlight = controller;
+      // A slow endpoint cannot accumulate work or hold a refresh forever.
+      deadline = window.setTimeout(() => controller.abort(), 8_000);
       const [host, history, resources] = await Promise.allSettled([
-        fetchTerminalHostStatus(operatorToken),
-        fetchHistoryDiagnostics(operatorToken),
-        fetchRuntimeResources(operatorToken),
+        fetchTerminalHostStatus(operatorToken, controller.signal),
+        fetchHistoryDiagnostics(operatorToken, controller.signal),
+        fetchRuntimeResources(operatorToken, controller.signal),
       ]);
+      window.clearTimeout(deadline);
+      deadline = undefined;
+      inFlight = undefined;
       if (cancelled) return;
       setRuntime({
         terminalHost: host.status === "fulfilled" ? host.value : undefined,
@@ -69,7 +79,18 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
     }
     void refreshRuntime();
     const timer = window.setInterval(() => void refreshRuntime(), 10_000);
-    return () => { cancelled = true; window.clearInterval(timer); };
+    const visibilityChanged = () => {
+      if (document.visibilityState === "visible") void refreshRuntime();
+      else inFlight?.abort();
+    };
+    document.addEventListener("visibilitychange", visibilityChanged);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.clearTimeout(deadline);
+      inFlight?.abort();
+      document.removeEventListener("visibilitychange", visibilityChanged);
+    };
   }, [operatorToken, runtimeRevision]);
 
   useEffect(() => {
@@ -161,7 +182,7 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
       healthy: true,
     },
     { label: "API", value: health ? `Healthy · ${health.version}` : "Unavailable", healthy: Boolean(health) },
-    { label: "Database", value: hiveIdentity ? "Healthy" : "Unavailable", healthy: Boolean(hiveIdentity) },
+    { label: "Database", value: hiveIdentity ? "Reachable · integrity not checked" : "Unavailable", healthy: Boolean(hiveIdentity) },
     { label: "Terminal host", value: terminalStatus, healthy: terminalStatus !== "Unavailable" },
     { label: "API memory", value: apiMemory, healthy: healthyPressure(runtime.resources?.api.pressure), className: resourceClass(runtime.resources?.api.pressure) },
     { label: "Terminal host service", value: hostMemory, healthy: true },

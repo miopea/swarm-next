@@ -43,5 +43,14 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 
 ## P2–P7 — Pending
 
+### P1b: diagnostics request ownership
+
+- Runtime diagnostic requests now accept cancellation, have an eight-second
+  deadline, do not overlap within the view, and stop when hidden/unmounted.
+- Database status is reachability evidence, explicitly not an integrity check.
+- Focused diagnostics/report recovery checks: 13 passed after correcting an
+  invalid test fixture. Settings/API regression tests: 27 passed. Production
+  build passed; only the existing terminal chunk-size warning remains.
+
 See the approved plan. No phase is complete solely because a patch was committed.
 Real Android/iOS and normal operator soak remain separate evidence requirements.

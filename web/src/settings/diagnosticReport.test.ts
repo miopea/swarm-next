@@ -16,6 +16,10 @@ function report() {
   });
 }
 
+test("database integrity is not inferred from reachability", () => {
+  expect(report().database.integrity).toBe("not_checked");
+});
+
 /**
  * A layout report is unanswerable without the size the layout decided from.
  *

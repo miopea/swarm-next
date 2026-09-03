@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
@@ -6,7 +6,46 @@ import { workerTreePressure } from "./DiagnosticsWorkspace";
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+test("bounds diagnostic requests, aborts on unmount, and recovers after timeout", async () => {
+  vi.useFakeTimers();
+  const signals: AbortSignal[] = [];
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("feedback/reports")) return Promise.resolve(new Response("[]"));
+    signals.push(init!.signal as AbortSignal);
+    return new Promise<Response>((_resolve, reject) => {
+      init!.signal!.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+    });
+  }));
+  const view = render(<DiagnosticsWorkspace feedbackRevision={0} operatorToken="secret" health={undefined} hiveIdentity={undefined} liveFeedState="connected" recentEvents={[]} sessions={[]} workers={[]} jiraReadiness={undefined} jiraUnavailable={true} />);
+  expect(signals).toHaveLength(3);
+  await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+  expect(signals.every((signal) => signal.aborted)).toBe(true);
+  await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+  expect(signals).toHaveLength(6);
+  view.unmount();
+  expect(signals.every((signal) => signal.aborted)).toBe(true);
+  await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+  expect(signals).toHaveLength(6);
+});
+
+test("hidden diagnostics do not poll and become fresh when visible", async () => {
+  vi.useFakeTimers();
+  let visibility: DocumentVisibilityState = "hidden";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+  const fetch = vi.fn(async (input: RequestInfo | URL) => String(input).includes("feedback/reports")
+    ? new Response("[]") : new Response("unavailable", { status: 503 }));
+  vi.stubGlobal("fetch", fetch);
+  render(<DiagnosticsWorkspace feedbackRevision={0} operatorToken="secret" health={undefined} hiveIdentity={undefined} liveFeedState="connected" recentEvents={[]} sessions={[]} workers={[]} jiraReadiness={undefined} jiraUnavailable={true} />);
+  await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+  expect(fetch).toHaveBeenCalledTimes(1); // saved reports only
+  visibility = "visible";
+  await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+  expect(fetch).toHaveBeenCalledTimes(4);
 });
 
 test("retries saved dogfood reports without disturbing live diagnostics", async () => {

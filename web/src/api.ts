@@ -1095,8 +1095,8 @@ export async function sendTestNotification(operatorToken: string, deviceId: stri
   );
   return response.json() as Promise<NotificationSettings>;
 }
-export async function fetchTerminalHostStatus(operatorToken: string): Promise<TerminalHostStatus> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/terminal-host");
+export async function fetchTerminalHostStatus(operatorToken: string, signal?: AbortSignal): Promise<TerminalHostStatus> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/terminal-host", signal ? { signal } : undefined);
   const payload = (await response.json()) as { type: "host_status"; status: TerminalHostStatus };
   return payload.status;
 }
@@ -1119,13 +1119,13 @@ export async function revokeConnection(operatorToken: string, id: string): Promi
   await authenticatedFetch(operatorToken, `/api/v1/connections/${id}`, { method: "DELETE" });
 }
 
-export async function fetchRuntimeResources(operatorToken: string): Promise<RuntimeResources> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/resources");
+export async function fetchRuntimeResources(operatorToken: string, signal?: AbortSignal): Promise<RuntimeResources> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/resources", signal ? { signal } : undefined);
   return response.json() as Promise<RuntimeResources>;
 }
 
-export async function fetchHistoryDiagnostics(operatorToken: string): Promise<HistoryDiagnostics | null> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/terminal/history/diagnostics");
+export async function fetchHistoryDiagnostics(operatorToken: string, signal?: AbortSignal): Promise<HistoryDiagnostics | null> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/terminal/history/diagnostics", signal ? { signal } : undefined);
   const payload = (await response.json()) as { type: "history_diagnostics"; diagnostics: HistoryDiagnostics | null };
   return payload.diagnostics;
 }
