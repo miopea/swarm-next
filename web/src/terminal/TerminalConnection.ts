@@ -173,8 +173,10 @@ export class TerminalConnection {
     void this.#connect();
   }
 
-  sendInput(text: string): void {
-    this.#send({ type: "input", text });
+  /** True means accepted by the browser socket, not acknowledged by the provider. */
+  sendInput(text: string): boolean {
+    if (this.#disposed || this.#fatal) return false;
+    return this.#send({ type: "input", text });
   }
 
   /** Whether this device may set the terminal's size. */
@@ -538,8 +540,14 @@ export class TerminalConnection {
     }, delay);
   }
 
-  #send(message: object): void {
-    if (this.#socket?.readyState === WebSocket.OPEN) this.#socket.send(JSON.stringify(message));
+  #send(message: object): boolean {
+    if (this.#socket?.readyState !== WebSocket.OPEN) return false;
+    try {
+      this.#socket.send(JSON.stringify(message));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   #fail(detail: string): void {

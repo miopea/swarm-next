@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 
 import { TERMINAL_ATTACHMENT_ACCEPT } from "./TerminalAttachments";
 import type { TerminalConnectionState } from "./TerminalConnection";
@@ -40,7 +40,7 @@ export function composeTerminalSubmission(draft: string): readonly [string, stri
 
 interface MobileTerminalComposerProps {
   connectionState: TerminalConnectionState;
-  onInput: (text: string) => void;
+  onInput: (text: string) => boolean;
   keysExpanded?: boolean;
   onKeysExpandedChange?: (expanded: boolean) => void;
   onAttachment?: (file: File) => Promise<void>;
@@ -51,6 +51,11 @@ interface MobileTerminalComposerProps {
 
 export function MobileTerminalComposer({ connectionState, onInput, keysExpanded: controlledKeysExpanded, onKeysExpandedChange, onAttachment, attachmentState = "idle", onRefresh }: MobileTerminalComposerProps) {
   const [draft, setDraft] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submissionWarning, setSubmissionWarning] = useState<string>();
+  const submitTimer = useRef<number | undefined>(undefined);
+  const currentInput = useRef(onInput);
+  const connectedRef = useRef(connectionState === "connected");
   const [localKeysExpanded, setLocalKeysExpanded] = useState(initialMobileKeysVisibility);
   const keysExpanded = controlledKeysExpanded ?? localKeysExpanded;
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -68,19 +73,49 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
   const [pickerReturnedNothing, setPickerReturnedNothing] = useState(false);
   const connected = connectionState === "connected";
 
+  useLayoutEffect(() => {
+    currentInput.current = onInput;
+    connectedRef.current = connected;
+    if (!connected && submitTimer.current !== undefined) {
+      window.clearTimeout(submitTimer.current);
+      submitTimer.current = undefined;
+      setSubmitting(false);
+      setSubmissionWarning("Connection changed before submission finished. Text may already be in the terminal; inspect it before sending again.");
+    }
+  }, [connected, onInput]);
+
+  useEffect(() => () => {
+    window.clearTimeout(submitTimer.current);
+    submitTimer.current = undefined;
+  }, []);
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!connected || draft.length === 0) return;
+    if (!connected || submitting || draft.length === 0 || attachmentState === "uploading" || attachmentState === "waiting") return;
     const [content, submitKey] = composeTerminalSubmission(draft);
     // Provider TUIs distinguish pasted text from an Enter key event. Keep
     // these as separate WebSocket frames with a brief bounded pause so Codex's
     // paste-burst guard sees a human-style submit instead of leaving the text
     // in its prompt. Claude accepts the same terminal semantics, including
     // bracketed multiline paste.
-    onInput(content);
-    window.setTimeout(() => onInput(submitKey), MOBILE_SUBMIT_KEY_DELAY_MS);
-    setDraft("");
-    requestAnimationFrame(() => textarea.current?.focus());
+    setSubmissionWarning(undefined);
+    if (!onInput(content)) {
+      setSubmissionWarning("The connection did not accept your text. Your draft is still here.");
+      return;
+    }
+    setSubmitting(true);
+    // Existing provider paste pacing is not proof of delivery. Every write
+    // still checks the current socket, and disposal cancels this pending key.
+    submitTimer.current = window.setTimeout(() => {
+      submitTimer.current = undefined;
+      setSubmitting(false);
+      if (!connectedRef.current || !currentInput.current(submitKey)) {
+        setSubmissionWarning("Submission could not be confirmed. Text may already be in the terminal; inspect it before sending again.");
+        return;
+      }
+      setDraft("");
+      textarea.current?.focus();
+    }, MOBILE_SUBMIT_KEY_DELAY_MS);
   }
 
   function sendKey(value: string) {
@@ -156,12 +191,14 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
           rows={2}
           maxLength={MAX_TERMINAL_DRAFT_LENGTH}
           value={draft}
+          readOnly={submitting}
           onChange={(event) => setDraft(event.target.value.slice(0, MAX_TERMINAL_DRAFT_LENGTH))}
           placeholder="Type or dictate. Slash commands work here."
           autoCapitalize="sentences"
           enterKeyHint="enter"
         />
-        <button type="submit" disabled={!connected || draft.length === 0}>Send</button>
+        <button type="submit" disabled={!connected || submitting || draft.length === 0 || attachmentState === "uploading" || attachmentState === "waiting"}>{submitting ? "Sending…" : "Send"}</button>
+        {submissionWarning ? <p role="status">{submissionWarning}</p> : null}
       </form>
       <div className="mobile-terminal-key-heading">
         <span>Terminal tools</span>

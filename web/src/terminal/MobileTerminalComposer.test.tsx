@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import {
@@ -8,11 +8,11 @@ import {
   MobileTerminalComposer,
 } from "./MobileTerminalComposer";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.useRealTimers(); });
 beforeEach(() => localStorage.clear());
 
 test("sends slash commands as bracketed paste before a separated Enter frame", async () => {
-  const onInput = vi.fn();
+  const onInput = vi.fn<(text: string) => boolean>(() => true);
   render(<MobileTerminalComposer connectionState="connected" onInput={onInput} />);
 
   fireEvent.change(screen.getByLabelText(/Message worker/), { target: { value: "/status" } });
@@ -21,6 +21,43 @@ test("sends slash commands as bracketed paste before a separated Enter frame", a
   expect(onInput.mock.calls.map(([value]) => value)).toEqual(["\u001b[200~/status\u001b[201~"]);
   await waitFor(() => expect(onInput.mock.calls.map(([value]) => value)).toEqual(["\u001b[200~/status\u001b[201~", MOBILE_TERMINAL_KEYS.enter]));
   expect(screen.getByLabelText(/Message worker/)).toHaveValue("");
+});
+
+test("refused input preserves the draft instead of silently clearing it", () => {
+  const onInput = vi.fn(() => false);
+  render(<MobileTerminalComposer connectionState="connected" onInput={onInput} />);
+  fireEvent.change(screen.getByLabelText(/Message worker/), { target: { value: "keep this" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  expect(screen.getByLabelText(/Message worker/)).toHaveValue("keep this");
+  expect(screen.getByText(/did not accept your text/)).toBeInTheDocument();
+  expect(onInput).toHaveBeenCalledTimes(1);
+});
+
+test("disconnect cancels a pending Enter and never replays it on reconnect", async () => {
+  vi.useFakeTimers();
+  const onInput = vi.fn(() => true);
+  const view = render(<MobileTerminalComposer connectionState="connected" onInput={onInput} />);
+  fireEvent.change(screen.getByLabelText(/Message worker/), { target: { value: "keep this" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  view.rerender(<MobileTerminalComposer connectionState="disconnected" onInput={onInput} />);
+  view.rerender(<MobileTerminalComposer connectionState="connected" onInput={onInput} />);
+  await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+  expect(onInput).toHaveBeenCalledTimes(1);
+  expect(screen.getByLabelText(/Message worker/)).toHaveValue("keep this");
+  expect(screen.getByText(/inspect it before sending again/)).toBeInTheDocument();
+});
+
+test("unmount cancels delayed submission and upload-in-progress blocks Send", async () => {
+  vi.useFakeTimers();
+  const onInput = vi.fn(() => true);
+  const view = render(<MobileTerminalComposer connectionState="connected" onInput={onInput} attachmentState="uploading" />);
+  fireEvent.change(screen.getByLabelText(/Message worker/), { target: { value: "wait for image" } });
+  expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  view.rerender(<MobileTerminalComposer connectionState="connected" onInput={onInput} attachmentState="ready" />);
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  view.unmount();
+  await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+  expect(onInput).toHaveBeenCalledTimes(1);
 });
 
 test("uses bracketed paste for multiline dictation before a separate Enter frame", () => {

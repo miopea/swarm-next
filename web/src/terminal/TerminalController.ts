@@ -45,7 +45,7 @@ export interface TerminalSurface {
 
 export interface TerminalConnectionLike {
   start(handlers: TerminalConnectionHandlers): void;
-  sendInput(text: string): void;
+  sendInput(text: string): boolean;
   resize(rows: number, columns: number, intent?: "operator" | "echo"): void;
   dispose(): void;
   /**
@@ -176,9 +176,9 @@ export class TerminalController {
     return { dispose: () => this.#statusSubscribers.delete(listener) };
   }
 
-  sendInput(text: string): void {
+  sendInput(text: string): boolean {
     if (this.#disposed) throw new Error("Cannot send input to a disposed terminal");
-    this.#connection.sendInput(text);
+    return this.#connection.sendInput(text);
   }
 
   requestFocus(input: boolean): void {

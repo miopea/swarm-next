@@ -4,7 +4,7 @@ import { afterEach, expect, test, vi } from "vitest";
 const controller = vi.hoisted(() => ({
   attach: vi.fn(),
   detach: vi.fn(),
-  sendInput: vi.fn(),
+  sendInput: vi.fn(() => true),
   stateListener: undefined as ((state: string) => void) | undefined,
   initialState: "connected",
   subscribe: vi.fn((listener: (state: string) => void) => {
@@ -56,7 +56,7 @@ import TerminalView from "./TerminalView";
 
 afterEach(() => {
   cleanup();
-  controller.sendInput.mockClear();
+  controller.sendInput.mockReset().mockReturnValue(true);
   controller.scrollToBottom.mockClear();
   controller.initialState = "connected";
   controller.stateListener = undefined;
@@ -229,6 +229,44 @@ test("an attachment uploaded while disconnected waits, then lands when the socke
 
   await screen.findByText(/Added screen\.png/i);
   expect(controller.sendInput).toHaveBeenCalledWith(expect.stringContaining("/tmp/attachments/screen.png"));
+});
+
+test("a connection lost during an upload does not report a discarded reference as added", async () => {
+  let finish!: (path: string) => void;
+  upload.mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }));
+  render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
+  let uploadDone!: Promise<void>;
+  act(() => { uploadDone = composerProps.current!.onAttachment!(new File(["image"], "screen.png", { type: "image/png" })); });
+  act(() => controller.stateListener?.("disconnected"));
+  await act(async () => { finish("/tmp/attachments/screen.png"); await uploadDone; });
+  expect(controller.sendInput).not.toHaveBeenCalled();
+  expect(screen.getByText(/waiting for the connection/i)).toBeInTheDocument();
+  act(() => controller.stateListener?.("connected"));
+  expect(controller.sendInput).toHaveBeenCalledTimes(1);
+});
+
+test("socket refusal wins over a stale connected UI", async () => {
+  upload.mockResolvedValueOnce("/tmp/attachments/screen.png");
+  controller.sendInput.mockReturnValue(false);
+  render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
+  await act(async () => { await composerProps.current!.onAttachment!(new File(["image"], "screen.png", { type: "image/png" })); });
+  expect(screen.getByText(/waiting for the connection/i)).toBeInTheDocument();
+  expect(screen.queryByText(/Added screen\.png/i)).not.toBeInTheDocument();
+  act(() => controller.stateListener?.("disconnected"));
+  controller.sendInput.mockReturnValue(true);
+  act(() => controller.stateListener?.("connected"));
+  expect(screen.getByText(/Added screen\.png/i)).toBeInTheDocument();
+});
+
+test("finishing an upload after leaving the view cannot inject into its terminal", async () => {
+  let finish!: (path: string) => void;
+  upload.mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }));
+  const view = render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
+  let uploadDone!: Promise<void>;
+  act(() => { uploadDone = composerProps.current!.onAttachment!(new File(["image"], "screen.png", { type: "image/png" })); });
+  view.unmount();
+  await act(async () => { finish("/tmp/attachments/screen.png"); await uploadDone; });
+  expect(controller.sendInput).not.toHaveBeenCalled();
 });
 
 

@@ -117,6 +117,20 @@ beforeEach(() => {
 
 const documentHasFocus = document.hasFocus.bind(document);
 
+test("input reports browser acceptance and never queues a disconnected write", async () => {
+  const { connection, handlers, sockets } = harness();
+  expect(connection.sendInput("not connected")).toBe(false);
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  sockets[0].open();
+  expect(connection.sendInput("accepted")).toBe(true);
+  sockets[0].readyState = WebSocket.CLOSED;
+  expect(connection.sendInput("do not replay")).toBe(false);
+  expect(JSON.stringify(sockets[0].sent)).not.toContain("do not replay");
+  connection.dispose();
+  expect(connection.sendInput("disposed")).toBe(false);
+});
+
 test("terminal timing records duration without session identity or content", async () => {
   const record = vi.spyOn(browserPerformance, "record");
   const clock = vi.spyOn(performance, "now").mockReturnValue(100);

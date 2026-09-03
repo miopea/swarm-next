@@ -36,6 +36,8 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
     );
   }, [operatorToken, session.session_id]);
   const [connectionState, setConnectionState] = useState<TerminalConnectionState>("connecting");
+  const connectionStateRef = useRef<TerminalConnectionState>("connecting");
+  const attachmentGeneration = useRef(0);
   const [detail, setDetail] = useState<string>();
   const [attachmentState, setAttachmentState] = useState<
     "idle" | "uploading" | "waiting" | "ready" | "error"
@@ -70,6 +72,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
     if (!element) return;
     controller.attach(element);
     const subscription = controller.subscribe((state, nextDetail) => {
+      connectionStateRef.current = state;
       setConnectionState(state);
       setDetail(nextDetail);
       report.current?.(state);
@@ -79,6 +82,8 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
     // arrives — the panel never sees it once xterm has focus.
     const findSubscription = controller.subscribeFind(() => setFinding(true));
     return () => {
+      attachmentGeneration.current += 1;
+      connectionStateRef.current = "closed";
       subscription.dispose();
       scrollSubscription.dispose();
       findSubscription.dispose();
@@ -164,18 +169,19 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   }
 
   async function addAttachment(file: File) {
+    const generation = attachmentGeneration.current;
     setAttachmentState("uploading");
     setAttachmentError(undefined);
     setAttachmentName(file.name);
     try {
       const path = await uploadTerminalAttachment(operatorToken, session.session_id, file);
+      if (generation !== attachmentGeneration.current) return;
       // READ THE CONNECTION AT THE MOMENT OF PASTING, not before uploading. A
       // phone backgrounds this tab to open its file picker and the socket
       // drops, so the state that mattered when the operator tapped is not the
       // state that matters now -- and an upload of any size gives the
       // reconnect time to finish, or not.
-      if (connectionState === "connected") {
-        controller.sendInput(terminalAttachmentPaste(path));
+      if (connectionStateRef.current === "connected" && controller.sendInput(terminalAttachmentPaste(path))) {
         setAttachmentState("ready");
         return;
       }
@@ -186,6 +192,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
       setPendingPaste(path);
       setAttachmentState("waiting");
     } catch (error) {
+      if (generation !== attachmentGeneration.current) return;
       setAttachmentError(error instanceof Error ? error.message : undefined);
       setAttachmentState("error");
     }
@@ -195,7 +202,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   // when they picked the file. Nothing about an uploaded path expires.
   useEffect(() => {
     if (connectionState !== "connected" || pendingPaste === undefined) return;
-    controller.sendInput(terminalAttachmentPaste(pendingPaste));
+    if (!controller.sendInput(terminalAttachmentPaste(pendingPaste))) return;
     setPendingPaste(undefined);
     setAttachmentState("ready");
   }, [connectionState, pendingPaste, controller]);
@@ -310,7 +317,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
         <div className="terminal-mount" ref={mount} />
         {!atBottom ? <button type="button" className="terminal-jump-latest" onClick={() => controller.scrollToBottom()}>Jump to latest ↓</button> : null}
       </div>
-      <MobileTerminalComposer connectionState={connectionState} onInput={(text) => { controller.sendInput(text); if (text.includes("\r")) dismissAttachmentNotice(); }} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onAttachment={acceptChosenFile} attachmentState={attachmentState} onRefresh={onRefresh} />
+      <MobileTerminalComposer key={session.session_id} connectionState={connectionState} onInput={(text) => { const accepted = controller.sendInput(text); if (accepted && text.includes("\r")) dismissAttachmentNotice(); return accepted; }} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onAttachment={acceptChosenFile} attachmentState={attachmentState} onRefresh={onRefresh} />
     </div>
   );
 }
