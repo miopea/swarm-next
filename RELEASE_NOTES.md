@@ -12,6 +12,33 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.3.1
+
+**Interface fixes, all from watching one operator use it for an evening.** No
+schema change and no protocol change, so this is an ordinary `update` and your
+workers keep running.
+
+### Fixes
+- Swarm no longer repaints the worker roster sixty times a second. A pulsing
+  ring on every busy worker was animating a property the browser cannot
+  composite, so the page burned CPU continuously with nothing happening on it —
+  measured at 15% in Edge on an idle tab.
+- Dragging a non-image file into a terminal now puts a usable reference in the
+  prompt. It previously left a single space: the file uploaded, the reference
+  was swallowed, and the turn could be sent believing something was attached.
+- The worker engine card says "No worker engine update is needed" when none is,
+  instead of showing two different version numbers and explaining underneath
+  that they do not mean what they look like.
+- Force worker reload is now under its own heading saying it is not the worker
+  engine. It restarts sessions so a changed tool surface reaches them, which is
+  a different thing for a different reason.
+- "What needs you" holds only what you can act on. Queen's unjudged work and
+  briefings waiting their turn moved to Queues, where they were always meant to
+  live, and the count on the tab now matches the cards on the page.
+- A worker that has gone quiet on a task now shows the notes it recorded while
+  going quiet, so a stalled-looking row can be told from a busy one without
+  opening the task.
+
 ## 1.3.0
 
 **Broadcasts and worker messages now actually send themselves.** Carries three
