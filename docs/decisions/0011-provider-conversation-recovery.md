@@ -67,3 +67,20 @@ result is evidence of absence. Other outcomes retain the exact resume attempt.
 The remaining direct missing-to-New branch predates this amendment and must be
 replaced by the full ladder with visible fallback reporting. This ADR records the
 approved target, not a claim that that branch has already been corrected.
+
+## Recovery operation contract (implementation in progress)
+
+The domain model owns a unique recovery operation and numbered attempt tokens.
+It advances Exact -> Continue -> Fresh only on positive context-unavailable
+evidence, never on a PID, elapsed timer, or transport/authentication failure.
+Late evidence from another attempt/operation is ignored. Exact restoration must
+match the chosen identity; continuation and fresh results remain distinguishable.
+An uncertain outcome requires resolution without starting a duplicate process.
+This bounded model is implemented and tested; host execution, durable reporting,
+and provider evidence adapters are not yet wired to it.
+
+Do not infer interactive continuation from a print-mode continuation probe:
+[Claude's session documentation](https://code.claude.com/docs/en/sessions)
+states that those modes can consider different sets of sessions. Preserve the
+interactive provider contract and verify its outcome directly. The existing
+exact-ID probe does not justify extending that technique to `--continue`.

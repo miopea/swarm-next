@@ -425,6 +425,32 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   a separate operator-controlled action; an API-only update cannot apply this fix
   to an already-running older host.
 
+### P2n: explicit conversation recovery transitions
+
+- Added a domain-owned recovery operation with unique operation identity and
+  numbered attempt tokens. Exact -> Continue -> Fresh is bounded to three
+  attempts. Late, duplicate, forged-step, and other-operation evidence cannot
+  advance it. Final failure and uncertain outcomes stop rather than loop.
+- Exact restoration requires the selected conversation identity. Continuation
+  results remain distinct from exact restoration, and a fresh result is never
+  called restored context. Providers without supported resumption stay manual.
+  No domain transition authorizes task-command replay or provider substitution.
+- Verified current [Claude session documentation](https://code.claude.com/docs/en/sessions):
+  interactive and print-mode continuation can consider different session sets.
+  Therefore the existing exact-ID print probe must not be generalized into a
+  purported proof of interactive continuation. Added this integration constraint
+  to ADR 0011.
+- **67 domain tests passed natively**, including nine recovery tests; strict
+  all-target/all-feature domain Clippy passed. This is executed domain evidence,
+  not a provider or Linux-host integration test.
+- The new model is not yet wired into worker startup. The existing host's direct
+  missing-to-New branch, durable recovery reporting, provider-native evidence,
+  and chosen-conversation switch tracking remain open. Next integration must
+  carry operation/attempt identity through the actual provider lifecycle and
+  expose fresh fallback honestly; a print-mode continuation shortcut is not valid.
+- No schema/protocol activation, live provider invocation, worker restart,
+  release, push, or deployment occurred.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

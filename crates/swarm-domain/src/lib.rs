@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 mod apiary;
 mod control_room;
+mod conversation_recovery;
 mod decisions;
 mod release;
 mod tasks;
@@ -13,6 +14,7 @@ mod workers;
 
 pub use apiary::*;
 pub use control_room::*;
+pub use conversation_recovery::*;
 pub use decisions::*;
 pub use release::*;
 pub use tasks::*;
@@ -74,6 +76,7 @@ domain_id!(FederationStewardTakeoverCommandId);
 domain_id!(FederationStewardTakeoverLeaseId);
 domain_id!(StewardshipId);
 domain_id!(ProviderConversationId);
+domain_id!(ConversationRecoveryId);
 domain_id!(PresenceDeviceId);
 domain_id!(TerminalViewId);
 domain_id!(JiraProjectBindingId);
