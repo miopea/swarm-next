@@ -306,6 +306,30 @@ test("updates the palette in place when the application theme changes", async ()
   delete document.documentElement.dataset.theme;
 });
 
+test("ownership lost during asynchronous fit prevents local grid mutation", async () => {
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    frames.push(callback);
+    return frames.length;
+  });
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  xterm.propose.mockReturnValue({ rows: 38, cols: 132 });
+  const surface = new XtermSurface();
+  surface.open(document.createElement("div"));
+  let owner = true;
+  surface.observeGeometryOwnership(() => owner);
+  xterm.resize.mockClear();
+  const fitting = surface.fit();
+  await Promise.resolve();
+  frames.shift()?.(0);
+  await Promise.resolve();
+  owner = false;
+  frames.shift()?.(16);
+  await expect(fitting).resolves.toEqual({ rows: 38, columns: 132 });
+  expect(xterm.resize).not.toHaveBeenCalled();
+  surface.dispose();
+});
+
 test("authoritative fit waits until xterm can propose real dimensions", async () => {
   const frames: FrameRequestCallback[] = [];
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {

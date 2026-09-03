@@ -7,6 +7,13 @@ const controller = vi.hoisted(() => ({
   sendInput: vi.fn(() => true),
   stateListener: undefined as ((state: string) => void) | undefined,
   initialState: "connected",
+  controlListener: undefined as ((control: string) => void) | undefined,
+  subscribeControl: vi.fn((listener: (control: string) => void) => {
+    controller.controlListener = listener;
+    listener("owned");
+    return { dispose: vi.fn() };
+  }),
+  resumeHere: vi.fn(() => true),
   subscribe: vi.fn((listener: (state: string) => void) => {
     controller.stateListener = listener;
     listener(controller.initialState);
@@ -53,6 +60,17 @@ vi.mock("./TerminalAttachments", async (importOriginal) => ({
 }));
 
 import TerminalView from "./TerminalView";
+
+test("a passive terminal offers Resume Here and keeps its toolbar visible on mobile", () => {
+  render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
+  act(() => controller.controlListener!("elsewhere"));
+  const button = screen.getByRole("button", { name: "Resume Here" });
+  expect(button.closest(".terminal-toolbar")).not.toHaveClass("terminal-toolbar-quiet");
+  fireEvent.click(button);
+  expect(controller.resumeHere).toHaveBeenCalled();
+  act(() => controller.controlListener!("owned"));
+  expect(screen.queryByRole("button", { name: "Resume Here" })).not.toBeInTheDocument();
+});
 
 afterEach(() => {
   cleanup();

@@ -2,8 +2,8 @@
 
 Status: Accepted for the operator-approved daily-driver maturity program;
 implementation in progress. Domain and engine gates and protocol-11 engine
-commands and the opt-in v4 API adapter are implemented; the browser cutover is
-not yet enabled.
+commands, v4 API adapter, and browser Resume Here integration are implemented
+locally. Real-device and rolling-update acceptance remain pending; not deployed.
 
 ## Context
 
@@ -52,7 +52,15 @@ downgrade a generation-bound attachment to unrestricted legacy input. Existing
 workers on an older engine must remain alive; expose that engine capability gap
 and its update requirement rather than pretending stable takeover is available.
 The terminal protocol owner removes the old control path after supported engines
-and clients have migrated. No browser control is enabled by the domain-only slice.
+and clients have migrated. The browser now requests v4 explicitly and refuses
+legacy grants. A v4 attachment to an older engine remains visibly read-only.
+Each retained controller has a unique view id that survives socket reconnects.
+Resume Here claims input and measured geometry in one generation-bound command.
+Hidden/unfocused views cannot write or resize and stop foreground renewal;
+explicit worker navigation releases ownership without ending the worker.
+Visibility return probes transport, then requests a non-displacing engine claim
+before allowing input. Probe replies alone cannot authorize input. A renderer
+rechecks ownership after asynchronous fit waits.
 
 Once a session has accepted generation-bound control, legacy operator writes and
 resizes remain refused even after release or expiry. Authorized coordination may

@@ -408,7 +408,7 @@ test("transport waits for a post-layout renderer fit", async () => {
   expect(surface.onResize).toHaveBeenCalledTimes(1);
 });
 
-test("a device that has lost the geometry claim asks once, then stops arguing", async () => {
+test("a passive view accepts snapshots without implicitly reclaiming geometry", async () => {
   // Two operator reports, one mechanism, pulling in opposite directions.
   //
   // "I had the terminal open on my computer... I went away, opened it on my
@@ -440,8 +440,7 @@ test("a device that has lost the geometry claim asks once, then stops arguing", 
 
   expect(surface.restore).toHaveBeenCalledWith(snapshot);
   // Asks, and with operator intent — an echo would not claim anything.
-  expect(connection.resize).toHaveBeenCalledTimes(1);
-  expect(connection.resize).toHaveBeenCalledWith(60, 40, "operator");
+  expect(connection.resize).not.toHaveBeenCalled();
   // AND DOES NOT APPLY IT. fit() resizes the grid; this device does not own the
   // geometry, so applying its own width before the server agrees is what left a
   // phone reflowing a desktop's content — shredded rather than narrow.
@@ -511,7 +510,7 @@ test("the device that owns the claim still asserts its own size", async () => {
  * So this test does not check one call site. It drives attach, the observer and
  * the snapshot, and asserts the mutating fit() is never reached on any of them.
  */
-test("a device that does not own the geometry never resizes its own grid, on any path", async () => {
+test("after initial measurement a passive device never resizes its canonical grid", async () => {
   const surface = fakeSurface();
   vi.mocked(surface.proposeFit!).mockReturnValue({ rows: 60, columns: 40 });
   const connection = { ...fakeConnection(), ownsGeometry: false };
@@ -521,7 +520,8 @@ test("a device that does not own the geometry never resizes its own grid, on any
   //    reason to believe it owned anything.
   controller.attach(document.createElement("div"));
   await vi.waitFor(() => expect(connection.start).toHaveBeenCalledTimes(1));
-  expect(surface.fit).not.toHaveBeenCalled();
+  expect(surface.fit).toHaveBeenCalledTimes(1);
+  vi.mocked(surface.fit).mockClear();
 
   const handlers = vi.mocked(connection.start).mock.calls[0][0];
   document.hasFocus = () => true;

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 
 import { MobileTerminalComposer } from "./MobileTerminalComposer";
-import { TerminalConnection, type TerminalConnectionState } from "./TerminalConnection";
+import { TerminalConnection, type TerminalConnectionState, type TerminalControlView } from "./TerminalConnection";
 import type { TerminalController } from "./TerminalController";
 import { terminalWorkspace } from "./TerminalWorkspace";
 import { XtermSurface } from "./XtermSurface";
@@ -36,6 +36,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
     );
   }, [operatorToken, session.session_id]);
   const [connectionState, setConnectionState] = useState<TerminalConnectionState>("connecting");
+  const [control, setControl] = useState<TerminalControlView>("checking");
   const connectionStateRef = useRef<TerminalConnectionState>("connecting");
   const attachmentGeneration = useRef(0);
   const uploadRequest = useRef<AbortController | undefined>(undefined);
@@ -89,6 +90,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
       report.current?.(state);
     });
     const scrollSubscription = controller.subscribeScroll(setAtBottom);
+    const controlSubscription = controller.subscribeControl(setControl);
     // Ctrl+F is taken at the terminal surface, because that is where the key
     // arrives — the panel never sees it once xterm has focus.
     const findSubscription = controller.subscribeFind(() => setFinding(true));
@@ -99,6 +101,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
       connectionStateRef.current = "closed";
       subscription.dispose();
       scrollSubscription.dispose();
+      controlSubscription.dispose();
       findSubscription.dispose();
       controller.detach();
     };
@@ -247,7 +250,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
     setPendingPaste(undefined);
     setSelectedFile(undefined);
     setAttachmentState("ready");
-  }, [connectionState, pendingPaste, controller, session.session_id]);
+  }, [connectionState, control, pendingPaste, controller, session.session_id]);
 
   async function copySessionId() {
     try {
@@ -261,7 +264,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   // On a phone the connection chip and the sleep action live in the workspace
   // header instead. The toolbar then has nothing left to say unless something
   // transient is happening, so it reports that and the layout reclaims the row.
-  const quiet = connectionState === "connected" && !detail && attachmentState === "idle";
+  const quiet = connectionState === "connected" && control === "owned" && !detail && attachmentState === "idle";
 
   return (
     <div
@@ -306,6 +309,8 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
             </div>
           </details>
           {detail && <small>{detail}</small>}
+          {control !== "owned" && <small role="status">{control === "unsupported" ? "Viewing only · a safe worker-engine update is needed for terminal control." : control === "checking" ? "Checking terminal control…" : control === "elsewhere" ? "Viewing only · another view controls this terminal." : "Viewing only · ready to resume here."}</small>}
+          {(control === "elsewhere" || control === "available") && <button type="button" className="secondary-button" onClick={() => controller.resumeHere()}>Resume Here</button>}
           {attachmentState !== "idle" && (
             <small className={`attachment-state attachment-${attachmentState}`} role="status">
               {attachmentState === "uploading" ? `Adding ${attachmentName ?? "file"}…` : attachmentState === "waiting" ? `${attachmentName ?? "File"} uploaded · waiting for the connection to add it` : attachmentState === "ready" ? `Added ${attachmentName ?? "file"} · press Enter to send` : attachmentError ? `Could not add ${attachmentName ?? "file"} — ${attachmentError}. Try again.` : `Could not add ${attachmentName ?? "file"}. Try again.`}

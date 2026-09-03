@@ -1,6 +1,9 @@
 import { BROWSER_SESSION_AUTH } from "../api";
 import { presenceDeviceId } from "../presence/PresenceController";
 import { browserPerformance } from "../runtime/browserPerformance";
+import { TerminalControl } from "./TerminalControl";
+
+export type TerminalControlView = "checking" | "owned" | "available" | "elsewhere" | "unsupported";
 
 export type TerminalConnectionState =
   | "connecting"
@@ -15,6 +18,7 @@ export interface TerminalConnectionHandlers {
   onSnapshot(snapshot: TerminalSnapshot): void | Promise<void>;
   onState(state: TerminalConnectionState, detail?: string): void;
   onRunningChange(running: boolean): void;
+  onControlChange?(control: TerminalControlView): void;
 }
 
 /**
@@ -125,15 +129,12 @@ export class TerminalConnection {
   /** Whether anything was dropped while detached, so the screen is now stale. */
   #missedWhileDetached = false;
   #hasCanonicalState = false;
-  /**
-   * Whether this device may set the terminal's size, as the server last said.
-   *
-   * Assumed true until told otherwise so a fresh connection still sizes itself.
-   * A device that has lost the claim must stop re-asserting its own size: it
-   * cannot win, and each attempt costs a canonical snapshot that resizes the
-   * screen back.
-   */
-  #geometryOwned = true;
+  /** Input and geometry share the engine's generation-bound owner. */
+  readonly #control = new TerminalControl();
+  readonly #viewId = crypto.randomUUID();
+  #controlView: TerminalControlView = "checking";
+  #controlReceived = false;
+  #renewTimer: ReturnType<typeof setTimeout> | undefined;
   #renderQueue = Promise.resolve();
   #pendingRenderBytes = 0;
   #renderGeneration = 0;
@@ -170,51 +171,97 @@ export class TerminalConnection {
     this.#handlers = handlers;
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", this.#handleVisibilityChange);
+      window.addEventListener("focus", this.#handleVisibilityChange);
+      window.addEventListener("blur", this.#handleVisibilityChange);
     }
     void this.#connect();
   }
 
   /** True means accepted by the browser socket, not acknowledged by the provider. */
   sendInput(text: string): boolean {
-    if (this.#disposed || this.#fatal) return false;
-    return this.#send({ type: "input", text });
+    const generation = this.#control.inputGeneration;
+    if (this.#disposed || this.#fatal || !this.#foreground() || !this.#rendererConfirmed || generation === undefined) return false;
+    return this.#send({ type: "input", generation, text });
   }
 
   /** Whether this device may set the terminal's size. */
   get ownsGeometry(): boolean {
-    return this.#geometryOwned;
+    return this.#control.ownsControl && this.#foreground();
   }
 
-  /**
-   * @param intent `"operator"` when a person changed this viewport — resizing
-   * the window, selecting the worker, pressing refresh. `"echo"` when the
-   * renderer is re-fitting to a size that arrived from somewhere else.
-   *
-   * Only an operator's own change asks to take authority over the PTY. An echo
-   * asking to claim is what made two devices trade a terminal's size: measured
-   * on 2026-08-23, 31 of 31 requests in one 68-second window asked to take
-   * authority, four of them succeeded in taking it from the other device, and
-   * nine were refused — including the operator's own attempts to take over,
-   * which is why taking over needed several tries.
-   */
-  resize(rows: number, columns: number, intent: "operator" | "echo" = "operator"): void {
+  get controlView(): TerminalControlView { return this.#controlView; }
+
+  resumeHere(rows: number, columns: number): boolean {
+    const generation = this.#control.observedGeneration;
+    if (!this.#foreground() || generation === undefined || rows <= 0 || columns <= 0) return false;
+    this.#size = { rows, columns };
+    const sent = this.#send({ type: "claim", observed_generation: generation, rows, columns });
+    if (sent) this.#unconfirmControl();
+    return sent;
+  }
+
+  /** Explicit worker navigation releases control; merely hiding a PWA does not. */
+  releaseControl(): void {
+    const generation = this.#control.inputGeneration;
+    if (generation !== undefined) this.#send({ type: "release", generation });
+    this.#unconfirmControl();
+  }
+
+  #foreground(): boolean {
+    return this.#rendering && document.visibilityState === "visible" && document.hasFocus();
+  }
+
+  #publishControl(): void {
+    const next: TerminalControlView = !this.#control.confirmed ? "checking"
+      : !this.#control.status.supported ? "unsupported"
+      : this.#control.ownsControl ? "owned"
+      : this.#control.status.occupied ? "elsewhere" : "available";
+    if (next !== this.#controlView) {
+      this.#controlView = next;
+      this.#handlers?.onControlChange?.(next);
+    }
+    if (this.#renewTimer !== undefined && (!this.#foreground() || !this.#control.ownsControl)) {
+      clearTimeout(this.#renewTimer);
+      this.#renewTimer = undefined;
+    }
+    if (this.#renewTimer === undefined && this.#foreground() && this.#control.ownsControl) {
+      this.#renewTimer = setTimeout(() => {
+        this.#renewTimer = undefined;
+        const generation = this.#control.inputGeneration;
+        if (generation !== undefined && this.#foreground()) {
+          if (!this.#send({ type: "renew", generation })) this.#unconfirmControl();
+        }
+      }, 30_000);
+    }
+  }
+
+  #unconfirmControl(): void {
+    this.#control.disconnect();
+    this.#publishControl();
+  }
+
+  /** Measuring never claims ownership; only Resume Here can displace a view. */
+  resize(rows: number, columns: number, _intent: "operator" | "echo" = "operator"): void {
     if (rows <= 0 || columns <= 0) return;
     this.#size = { rows, columns };
+    const generation = this.#control.inputGeneration;
+    if (!this.#foreground() || generation === undefined) return;
     this.#send({
       type: "resize",
       rows,
       columns,
-      // Focus rather than visibility, because a pop-out and the window it came
-      // from are both visible at once and would each claim the same PTY.
-      claim_geometry: intent === "operator" && document.hasFocus(),
+      generation,
     });
   }
 
   dispose(): void {
     if (this.#disposed) return;
+    this.releaseControl();
     this.#disposed = true;
     if (typeof document !== "undefined") {
       document.removeEventListener("visibilitychange", this.#handleVisibilityChange);
+      window.removeEventListener("focus", this.#handleVisibilityChange);
+      window.removeEventListener("blur", this.#handleVisibilityChange);
     }
     if (this.#retryTimer !== undefined) clearTimeout(this.#retryTimer);
     this.#retryTimer = undefined;
@@ -232,6 +279,7 @@ export class TerminalConnection {
 
   async #connect(): Promise<void> {
     if (this.#disposed || this.#fatal) return;
+    this.#unconfirmControl();
     this.#probeId = undefined;
     this.#attachStartedAt ??= performance.now();
     this.#handlers?.onState("connecting");
@@ -240,7 +288,7 @@ export class TerminalConnection {
     this.#armGrantTimer(grantAbortController);
     try {
       const response = await this.#fetch(
-        `/api/v1/terminal/sessions/${encodeURIComponent(this.#sessionId)}/attach-grants`,
+        `/api/v1/terminal/sessions/${encodeURIComponent(this.#sessionId)}/attach-grants?protocol=swarm-terminal.v4`,
         {
           method: "POST",
           headers: this.#operatorToken === BROWSER_SESSION_AUTH
@@ -256,6 +304,10 @@ export class TerminalConnection {
       if (this.#disposed || this.#grantAbortController !== grantAbortController) return;
       this.#grantAbortController = undefined;
       this.#clearConfirmationTimer();
+      if (grant.protocol !== "swarm-terminal.v4") {
+        this.#fail("Update the Swarm App/API to enable safe terminal control. This client will not use legacy input.");
+        return;
+      }
       const websocketUrl = new URL(grant.websocket_path, this.#locationOrigin);
       websocketUrl.protocol = websocketUrl.protocol === "https:" ? "wss:" : "ws:";
       const socket = this.#websocketFactory(websocketUrl.toString(), [
@@ -299,7 +351,8 @@ export class TerminalConnection {
   /// healthy connection pays one message.
   #handleVisibilityChange = (): void => {
     if (this.#disposed || this.#fatal) return;
-    if (typeof document === "undefined" || document.visibilityState !== "visible") return;
+    this.#unconfirmControl();
+    if (!this.#foreground()) return;
     const socket = this.#socket;
     // Anything not OPEN is already the reconnect path's business; asking again
     // here would double it.
@@ -331,18 +384,16 @@ export class TerminalConnection {
         rows: size.rows,
         columns: size.columns,
         device_id: this.#deviceId,
-        // The selected terminal in the focused window is the operator's
-        // current viewport. Claiming on attachment lets refresh and worker
-        // selection repair stale geometry, and keying on focus rather than
-        // visibility stops a pop-out and its opener — which the server sees as
-        // one device — from each claiming the same PTY on connect.
-        claim_geometry: document.hasFocus(),
+        // Distinct views on the same device cannot share input authority.
+        // Foreground attachment may acquire an empty owner, never displace one.
+        view_id: this.#viewId,
+        foreground: this.#foreground(),
       }),
     );
   }
 
   #handleMessage(socket: WebSocket, event: MessageEvent): void {
-    if (socket !== this.#socket || this.#disposed) return;
+    if (socket !== this.#socket || this.#disposed || this.#fatal) return;
     if (event.data instanceof ArrayBuffer) {
       this.#enqueueBinaryFrame(new Uint8Array(event.data));
       return;
@@ -351,7 +402,7 @@ export class TerminalConnection {
       this.#fail("unsupported terminal WebSocket message");
       return;
     }
-    let message: { type?: string; request_id?: string; running?: boolean; latest_sequence?: number; geometry_owned?: boolean; code?: string; message?: string };
+    let message: { type?: string; request_id?: string; running?: boolean; latest_sequence?: number; control?: unknown; code?: string; message?: string };
     try {
       message = JSON.parse(event.data) as typeof message;
     } catch {
@@ -362,16 +413,39 @@ export class TerminalConnection {
       if (this.#probeId !== undefined && message.request_id === this.#probeId) {
         this.#probeId = undefined;
         if (this.#hasCanonicalState) this.#confirmRenderedConnection();
+        // A transport reply is not ownership evidence. Ask the engine without
+        // displacing another view; its reply alone can restore permission.
+        if (!this.#controlReceived || this.#control.status.supported) {
+          if (this.#foreground() && this.#size) this.#send({ type: "claim", observed_generation: null, ...this.#size });
+        } else if (this.#controlView === "checking") {
+          this.#control.observe(this.#control.status);
+          this.#publishControl();
+        }
       }
-    } else if (message.type === "state" && typeof message.running === "boolean") {
-      if (typeof message.geometry_owned === "boolean") this.#geometryOwned = message.geometry_owned;
+    } else if (message.type === "control" || (message.type === "state" && typeof message.running === "boolean")) {
+      if (this.#control.observe(message.control) === "invalid") {
+        this.#fail("The engine returned invalid terminal ownership. Input is disabled.");
+        return;
+      }
+      this.#controlReceived = true;
+      this.#publishControl();
+      if (message.type === "control") return;
       if (this.#hasCanonicalState) this.#confirmRenderedConnection();
       this.#processExited = !message.running;
-      this.#handlers?.onRunningChange(message.running);
+      this.#handlers?.onRunningChange(message.running!);
     } else if (message.type === "error") {
+      this.#unconfirmControl();
+      // The following engine status explains an ownership refusal. It is not
+      // a transport failure and no input is retried.
+      if (["terminal_control_owned_elsewhere", "terminal_control_stale", "terminal_control_expired"].includes(message.code ?? "")) return;
+      if (message.code === "terminal_engine_update_required") {
+        this.#control.observe({ supported: false, generation: null, owned: false, occupied: false, lease_remaining_ms: 0 });
+        this.#publishControl();
+        return;
+      }
       if (this.#probeId !== undefined && message.code === "invalid_message") {
-        // Terminal adapter owns this rolling-v3 compatibility path. Remove
-        // with v3 support: older APIs have no probe but can safely reattach.
+        // Terminal adapter owns this early-v4 compatibility path. Remove
+        // when probe support is the minimum API: safe reattachment only.
         // Never repeat resume or input on the existing socket.
         this.#probeId = undefined;
         this.#clearConfirmationTimer();
@@ -395,12 +469,14 @@ export class TerminalConnection {
    */
   suspendRendering(): void {
     this.#rendering = false;
+    this.#unconfirmControl();
   }
 
   /** Back on screen: take a snapshot if anything happened while it was away. */
   resumeRendering(): void {
     if (this.#rendering) return;
     this.#rendering = true;
+    this.#handleVisibilityChange();
     if (!this.#missedWhileDetached) return;
     this.#missedWhileDetached = false;
     this.#recoverFromSnapshot("reattached", "terminal is catching up to live");
@@ -508,11 +584,13 @@ export class TerminalConnection {
     if (socket !== this.#socket) return;
     this.#clearConfirmationTimer();
     this.#socket = undefined;
+    this.#unconfirmControl();
     if (!this.#disposed && !this.#fatal && !this.#processExited) this.#scheduleReconnect("terminal connection closed");
   }
 
   #handleSocketError(socket: WebSocket): void {
     if (socket === this.#socket && !this.#disposed) {
+      this.#unconfirmControl();
       this.#handlers?.onState("disconnected", "terminal connection error");
     }
   }
@@ -536,6 +614,7 @@ export class TerminalConnection {
    * failure is still visible rather than looking like a routine blip.
    */
   #scheduleReconnect(detail: string): void {
+    this.#unconfirmControl();
     if (this.#disposed || this.#fatal || this.#retryTimer !== undefined) return;
     const ladder = this.#retryDelaysMs;
     const exhausted = this.#retryAttempt >= ladder.length;
@@ -568,6 +647,7 @@ export class TerminalConnection {
   }
 
   #fail(detail: string): void {
+    this.#unconfirmControl();
     this.#fatal = true;
     this.#renderGeneration += 1;
     this.#clearConfirmationTimer();
@@ -593,8 +673,7 @@ export class TerminalConnection {
   }
 
   #confirmRenderedConnection(detail?: string): void {
-    this.#probeId = undefined;
-    this.#clearConfirmationTimer();
+    if (this.#probeId === undefined) this.#clearConfirmationTimer();
     this.#confirmConnection();
     if (this.#rendererConfirmed && detail === undefined) return;
     if (this.#attachStartedAt !== undefined) {

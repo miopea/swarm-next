@@ -340,6 +340,40 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 - Rollback is API-only while v4 remains opt-in. No push, release, deployment,
   engine restart, or live-worker action was performed.
 
+### P2k: browser-controlled terminal handoff
+
+- Browser attachments now explicitly require v4; legacy grants fail visibly
+  without creating an unrestricted socket. Older engines on v4 remain visibly
+  read-only. Each retained controller owns a distinct view UUID across reconnects.
+- Resume Here sends measured geometry and the observed generation together.
+  Input is disabled until engine ownership is confirmed; input/resize carry that
+  generation, and stale replies cannot undo a newer handoff. No input replay.
+- Removed the controller's implicit one-time reclaim after snapshots. Passive
+  views accept canonical geometry. Renderer fit also rechecks ownership after
+  awaiting layout, preventing a late fit from changing a passive grid.
+- Focused, visible ownership renews on a single bounded timer; losing focus or
+  visibility stops renewals and local input permission. Returning probes the
+  socket, then requests a non-displacing engine claim. Explicit worker navigation
+  releases control, whereas hiding the PWA does not release its engine lease.
+- The toolbar shows Resume Here for passive/available control, and does not hide
+  it on mobile. A pending uploaded reference retries insertion on ownership
+  change, retaining the existing session/controller identity guards.
+- Verification: final terminal suite **196 passed / 11 files**; TypeScript and
+  production Vite build passed. The broad web run before the final renderer fix
+  had **943 passed / 1 failed**: the source invariant caught a second fit caller.
+  That caller was moved back into the common helper, and the invariant plus all
+  terminal behavior tests passed afterward. Do not describe that earlier full
+  run as green. Terminal chunk remains above the existing warning threshold
+  (**543.60 kB**, gzip 145.36 kB); no size/performance acceptance claim.
+- This is local integration evidence, not real-device or rendered-browser
+  acceptance. Android/iOS AskUser, repeated cutovers, PWA return latency, and
+  rolling API/engine coexistence still need acceptance evidence. No deployment,
+  release, push, or live-worker restart occurred.
+- Rollout requires the v4 API and compatible engine for interactive control.
+  Once an engine session accepts controlled input, reverting only the browser to
+  v3 cannot restore legacy writes. Preserve the compatible adapter/engine during
+  rollback; do not restart active workers merely to bypass the safety boundary.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

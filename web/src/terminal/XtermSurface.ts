@@ -338,6 +338,9 @@ export class XtermSurface implements TerminalSurface {
         else stableFrames = 1;
         previous = usable;
         if (stableFrames < STABLE_FIT_FRAMES) continue;
+        // Ownership can change while fonts/layout frames are awaited. A
+        // passive fit measures only; it cannot reflow the canonical screen.
+        if (!this.#ownsGeometry()) return usable;
         // The same anti-flap the observer path uses, because this is the path
         // the loop actually runs through.
         //

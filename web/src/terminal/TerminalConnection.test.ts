@@ -4,6 +4,8 @@ import { BROWSER_SESSION_AUTH } from "../api";
 import { browserPerformance } from "../runtime/browserPerformance";
 import { TerminalConnection, attachGrantFailure, type TerminalConnectionHandlers } from "./TerminalConnection";
 
+const ownedControl = { supported: true, generation: "1", owned: true, occupied: true, lease_remaining_ms: 90_000 };
+
 class FakeWebSocket extends EventTarget {
   static readonly OPEN = WebSocket.OPEN;
   binaryType = "blob";
@@ -20,6 +22,7 @@ class FakeWebSocket extends EventTarget {
   open(): void {
     this.readyState = WebSocket.OPEN;
     this.dispatchEvent(new Event("open"));
+    this.message(JSON.stringify({ type: "control", control: ownedControl }));
   }
 
   message(data: string | ArrayBuffer): void {
@@ -78,7 +81,7 @@ function harness(
     ok: true,
     json: async () => ({
       grant: `grant-${sockets.length}`,
-      protocol: "swarm-terminal.v3",
+      protocol: "swarm-terminal.v4",
       websocket_path: "/api/v1/terminal/sessions/session-1/attach",
       expires_in_ms: 30_000,
     }),
@@ -98,7 +101,7 @@ function harness(
     confirmationTimeoutMs,
     deviceId: "019fedfc-1c30-70e1-a5e2-9a3c94268093",
     websocketFactory: (_url, protocols) => {
-      expect(protocols[0]).toBe("swarm-terminal.v3");
+      expect(protocols[0]).toBe("swarm-terminal.v4");
       expect(protocols[1]).toMatch(/^swarm-grant\./);
       const socket = new FakeWebSocket();
       sockets.push(socket);
@@ -117,12 +120,103 @@ beforeEach(() => {
 
 const documentHasFocus = document.hasFocus.bind(document);
 
+test("Resume Here binds size and input to the new generation, never a stale reply", async () => {
+  const { connection, handlers, sockets } = harness();
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  const socket = sockets[0];
+  socket.open();
+  socket.message(snapshotFrame(0n, 24, 80, "screen"));
+  await vi.waitFor(() => expect(handlers.onState).toHaveBeenCalledWith("connected", undefined));
+  socket.message(JSON.stringify({ type: "control", control: { ...ownedControl, generation: "2", owned: false } }));
+  expect(connection.controlView).toBe("elsewhere");
+  expect(connection.sendInput("passive")).toBe(false);
+  const before = socket.sent.length;
+  connection.resize(40, 120);
+  expect(socket.sent).toHaveLength(before);
+  expect(connection.resumeHere(40, 120)).toBe(true);
+  expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "claim", observed_generation: "2", rows: 40, columns: 120 });
+  expect(connection.sendInput("before acknowledgment")).toBe(false);
+  socket.message(JSON.stringify({ type: "control", control: { ...ownedControl, generation: "3" } }));
+  socket.message(JSON.stringify({ type: "control", control: { ...ownedControl, generation: "2", owned: false } }));
+  expect(connection.controlView).toBe("owned");
+  expect(connection.sendInput("after acknowledgment")).toBe(true);
+  expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "input", generation: "3", text: "after acknowledgment" });
+  connection.dispose();
+});
+
+test("foreground renewal is bounded and stops when the view loses focus", async () => {
+  vi.useFakeTimers();
+  const { connection, handlers, sockets } = harness();
+  connection.start(handlers);
+  await vi.advanceTimersByTimeAsync(0);
+  const socket = sockets[0];
+  socket.open();
+  socket.message(snapshotFrame(0n, 24, 80, "screen"));
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "renew", generation: "1" });
+  socket.message(JSON.stringify({ type: "control", control: ownedControl }));
+  document.hasFocus = () => false;
+  window.dispatchEvent(new Event("blur"));
+  const count = socket.sent.length;
+  await vi.advanceTimersByTimeAsync(90_000);
+  expect(socket.sent).toHaveLength(count);
+  expect(connection.controlView).toBe("checking");
+  expect(connection.sendInput("background")).toBe(false);
+  connection.dispose();
+});
+
+test("new clients refuse a legacy grant instead of falling back to unguarded writes", async () => {
+  const { connection, handlers, sockets, fetch } = harness();
+  fetch.mockResolvedValue({ ok: true, json: async () => ({ protocol: "swarm-terminal.v3", grant: "old", websocket_path: "/attach" }) });
+  connection.start(handlers);
+  await vi.waitFor(() => expect(handlers.onState).toHaveBeenCalledWith("recovery_required", expect.stringContaining("legacy input")));
+  expect(sockets).toHaveLength(0);
+  expect(connection.sendInput("never")).toBe(false);
+  connection.dispose();
+});
+
+test("socket reconnect retains view identity but requires fresh engine ownership", async () => {
+  const { connection, handlers, sockets } = harness();
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  sockets[0].open();
+  const first = JSON.parse(sockets[0].sent[0]);
+  sockets[0].disconnect();
+  expect(connection.controlView).toBe("checking");
+  await vi.waitFor(() => expect(sockets).toHaveLength(2));
+  sockets[1].readyState = WebSocket.OPEN;
+  sockets[1].dispatchEvent(new Event("open"));
+  expect(JSON.parse(sockets[1].sent[0]).view_id).toBe(first.view_id);
+  expect(connection.sendInput("unconfirmed")).toBe(false);
+  connection.dispose();
+});
+
+test("read-only engines can confirm liveness without attempting a claim", async () => {
+  const { connection, handlers, sockets } = harness();
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  const socket = sockets[0];
+  socket.open();
+  socket.message(JSON.stringify({ type: "control", control: { supported: false, generation: null, owned: false, occupied: false, lease_remaining_ms: 0 } }));
+  document.dispatchEvent(new Event("visibilitychange"));
+  const probe = JSON.parse(socket.sent.at(-1)!);
+  socket.message(JSON.stringify({ type: "alive", request_id: probe.request_id }));
+  expect(connection.controlView).toBe("unsupported");
+  expect(connection.resumeHere(40, 120)).toBe(false);
+  expect(socket.sent.map((value) => JSON.parse(value).type)).toEqual(["resume", "probe"]);
+  connection.dispose();
+});
+
 test("input reports browser acceptance and never queues a disconnected write", async () => {
   const { connection, handlers, sockets } = harness();
   expect(connection.sendInput("not connected")).toBe(false);
   connection.start(handlers);
   await vi.waitFor(() => expect(sockets).toHaveLength(1));
   sockets[0].open();
+  sockets[0].message(snapshotFrame(0n, 24, 80, "screen"));
+  await vi.waitFor(() => expect(handlers.onState).toHaveBeenCalledWith("connected", undefined));
   expect(connection.sendInput("accepted")).toBe(true);
   sockets[0].readyState = WebSocket.CLOSED;
   expect(connection.sendInput("do not replay")).toBe(false);
@@ -158,7 +252,7 @@ test("requests a no-store grant and applies a snapshot before sequenced deltas",
   connection.start(handlers);
   await vi.waitFor(() => expect(sockets).toHaveLength(1));
   expect(fetch).toHaveBeenCalledWith(
-    "/api/v1/terminal/sessions/session-1/attach-grants",
+    "/api/v1/terminal/sessions/session-1/attach-grants?protocol=swarm-terminal.v4",
     expect.objectContaining({ method: "POST", cache: "no-store" }),
   );
   sockets[0].open();
@@ -168,7 +262,8 @@ test("requests a no-store grant and applies a snapshot before sequenced deltas",
     rows: 24,
     columns: 80,
     device_id: "019fedfc-1c30-70e1-a5e2-9a3c94268093",
-    claim_geometry: true,
+    view_id: expect.any(String),
+    foreground: true,
   });
   sockets[0].message(snapshotFrame(0n, 24, 80, "screen"));
   sockets[0].message(outputFrame(1n, "one"));
@@ -181,7 +276,7 @@ test("requests a no-store grant and applies a snapshot before sequenced deltas",
   expect(Array.from(vi.mocked(handlers.onOutput).mock.calls[0][0])).toEqual([111, 110, 101]);
 });
 
-test("only the focused window claims the geometry of a shared terminal", async () => {
+test("only the focused owner sends geometry and background views send nothing", async () => {
   const { connection, handlers, sockets } = harness();
   connection.start(handlers);
   await vi.waitFor(() => expect(sockets).toHaveLength(1));
@@ -192,7 +287,7 @@ test("only the focused window claims the geometry of a shared terminal", async (
     type: "resize",
     rows: 38,
     columns: 154,
-    claim_geometry: true,
+    generation: "1",
   });
 
   // A popped-out window and the window it came from are both visible, and
@@ -200,13 +295,10 @@ test("only the focused window claims the geometry of a shared terminal", async (
   // one device and would apply both their resizes. Focus picks exactly one
   // window browser-wide.
   document.hasFocus = () => false;
+  const before = sockets[0].sent.length;
   connection.resize(20, 72);
-  expect(JSON.parse(sockets[0].sent.at(-1) ?? "null")).toEqual({
-    type: "resize",
-    rows: 20,
-    columns: 72,
-    claim_geometry: false,
-  });
+  expect(sockets[0].sent).toHaveLength(before);
+  connection.dispose();
 });
 
 /**
@@ -220,7 +312,7 @@ test("only the focused window claims the geometry of a shared terminal", async (
  * A focused window re-fitting to a size that arrived from somewhere else is not
  * a person changing their viewport, and must not ask for authority.
  */
-test("only a person changing their own viewport asks to take the terminal", async () => {
+test("neither viewport changes nor echoes implicitly take control", async () => {
   const { connection, handlers, sockets } = harness();
   connection.start(handlers);
   await vi.waitFor(() => expect(sockets).toHaveLength(1));
@@ -232,7 +324,7 @@ test("only a person changing their own viewport asks to take the terminal", asyn
     type: "resize",
     rows: 38,
     columns: 154,
-    claim_geometry: false,
+    generation: "1",
   });
 
   // The same focused window, resized by the person sitting at it.
@@ -241,8 +333,9 @@ test("only a person changing their own viewport asks to take the terminal", asyn
     type: "resize",
     rows: 38,
     columns: 154,
-    claim_geometry: true,
+    generation: "1",
   });
+  connection.dispose();
 });
 
 test("uses the trusted browser cookie for terminal attach grants", async () => {
@@ -267,7 +360,7 @@ test("does not report connected until the canonical renderer is ready", async ()
   await vi.waitFor(() => expect(sockets).toHaveLength(1));
 
   sockets[0].open();
-  sockets[0].message(JSON.stringify({ type: "state", running: true }));
+  sockets[0].message(JSON.stringify({ type: "state", running: true, control: ownedControl }));
   expect(vi.mocked(handlers.onState).mock.calls.some(([state]) => state === "connected")).toBe(false);
   sockets[0].message(snapshotFrame(0n, 24, 80, "screen"));
   await vi.waitFor(() => expect(handlers.onSnapshot).toHaveBeenCalledTimes(1));
@@ -285,7 +378,7 @@ test("a completed provider session closes without a reconnect loop", async () =>
   sockets[0].open();
   sockets[0].message(snapshotFrame(0n, 24, 80, "Resume this session"));
   await vi.advanceTimersByTimeAsync(0);
-  sockets[0].message(JSON.stringify({ type: "state", running: false }));
+  sockets[0].message(JSON.stringify({ type: "state", running: false, control: ownedControl }));
   sockets[0].disconnect();
   await vi.advanceTimersByTimeAsync(10);
 
@@ -314,7 +407,8 @@ test("detects sequence gaps and reconnects from a fresh snapshot", async () => {
     rows: 24,
     columns: 80,
     device_id: "019fedfc-1c30-70e1-a5e2-9a3c94268093",
-    claim_geometry: true,
+    view_id: expect.any(String),
+    foreground: true,
   });
   expect(handlers.onState).toHaveBeenCalledWith(
     "disconnected",
@@ -344,7 +438,8 @@ test("unexpected disconnect obtains a fresh grant and resumes without duplicatin
     rows: 24,
     columns: 80,
     device_id: "019fedfc-1c30-70e1-a5e2-9a3c94268093",
-    claim_geometry: true,
+    view_id: expect.any(String),
+    foreground: true,
   });
   sockets[1].message(outputFrame(2n, "two"));
   await vi.waitFor(() => expect(connection.sequence).toBe(2));
@@ -522,14 +617,14 @@ test("state messages without canonical bytes cannot reset the reconnect budget",
   connection.start(handlers);
   await vi.advanceTimersByTimeAsync(0);
   sockets[0].open();
-  sockets[0].message(JSON.stringify({ type: "state", running: true }));
+  sockets[0].message(JSON.stringify({ type: "state", running: true, control: ownedControl }));
 
   await vi.advanceTimersByTimeAsync(1);
   await vi.advanceTimersByTimeAsync(1);
   await vi.advanceTimersByTimeAsync(0);
   expect(sockets).toHaveLength(2);
   sockets[1].open();
-  sockets[1].message(JSON.stringify({ type: "state", running: true }));
+  sockets[1].message(JSON.stringify({ type: "state", running: true, control: ownedControl }));
 
   await vi.advanceTimersByTimeAsync(1);
   expect(handlers.onState).toHaveBeenCalledWith(

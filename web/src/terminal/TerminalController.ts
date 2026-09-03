@@ -2,6 +2,7 @@ import type {
   TerminalConnectionHandlers,
   TerminalConnectionState,
   TerminalSnapshot,
+  TerminalControlView,
 } from "./TerminalConnection";
 
 export interface Disposable {
@@ -53,6 +54,9 @@ export interface TerminalConnectionLike {
    * that does not model the claim behaves as it did before — owning it.
    */
   readonly ownsGeometry?: boolean;
+  readonly controlView?: TerminalControlView;
+  resumeHere?(rows: number, columns: number): boolean;
+  releaseControl?(): void;
   /**
    * Told when there is, and is not, a surface on screen to draw into.
    *
@@ -85,20 +89,10 @@ export class TerminalController {
    */
   #attached = false;
   #visible = true;
-  /**
-   * Whether this attach has already tried to take the geometry it was refused.
-   *
-   * ONE ATTEMPT, and that bound is the whole safety argument. Two devices each
-   * re-claiming on every snapshot is the flapping this file has been fixed for
-   * three times: each claim sends the other a canonical snapshot, which
-   * provokes another claim, forever. Capping it per ATTACH rather than per
-   * snapshot makes the exchange terminate by construction — each device may
-   * insist once, the last one to open wins, and the loser stops.
-   */
-  #reclaimedGeometry = false;
   readonly #surfaceSubscriptions: Disposable[];
   readonly #statusSubscribers = new Set<TerminalStatusListener>();
   readonly #scrollSubscribers = new Set<TerminalScrollListener>();
+  readonly #controlSubscribers = new Set<(control: TerminalControlView) => void>();
   #opened = false;
   #started = false;
   #startPromise: Promise<void> | undefined;
@@ -148,6 +142,7 @@ export class TerminalController {
     // render into a detached element, so frames arriving now would queue behind
     // a write that cannot finish and replay on return.
     this.#attached = false;
+    this.#connection.releaseControl?.();
     this.#updateRendering();
     this.#host.remove();
   }
@@ -179,6 +174,19 @@ export class TerminalController {
   sendInput(text: string): boolean {
     if (this.#disposed) throw new Error("Cannot send input to a disposed terminal");
     return this.#connection.sendInput(text);
+  }
+
+  subscribeControl(listener: (control: TerminalControlView) => void): Disposable {
+    if (this.#controlSubscribers.size >= MAX_STATUS_SUBSCRIBERS) throw new Error("Terminal control subscriber limit reached");
+    this.#controlSubscribers.add(listener);
+    listener(this.#connection.controlView ?? "owned");
+    return { dispose: () => this.#controlSubscribers.delete(listener) };
+  }
+
+  resumeHere(): boolean {
+    if (this.#disposed || !this.#attached || !this.#visible) return false;
+    const size = this.#surface.proposeFit?.();
+    return size ? this.#connection.resumeHere?.(size.rows, size.columns) ?? false : false;
   }
 
   requestFocus(input: boolean): void {
@@ -215,6 +223,7 @@ export class TerminalController {
     this.#surface.dispose();
     this.#statusSubscribers.clear();
     this.#scrollSubscribers.clear();
+    this.#controlSubscribers.clear();
   }
 
   #startWhenFitted(): void {
@@ -273,7 +282,7 @@ export class TerminalController {
    * arrives as a snapshot.
    */
   async #measureForResize(): Promise<{ rows: number; columns: number } | undefined> {
-    if (this.#connection.ownsGeometry === false) {
+    if (this.#started && this.#connection.ownsGeometry === false) {
       return this.#surface.proposeFit?.();
     }
     return this.#surface.fit();
@@ -291,17 +300,14 @@ export class TerminalController {
   }
 
   async #fitAndStart(): Promise<void> {
-    // A new attach is a new chance to ask, and only one.
-    this.#reclaimedGeometry = false;
     // The surface owns the ResizeObserver, so it has to know this too. A
     // predicate rather than a value: ownership changes mid-session when another
     // device takes or releases the claim, and a copied boolean goes stale.
     this.#surface.observeGeometryOwnership?.(() => this.#connection.ownsGeometry !== false);
-    // Ownership is usually unknown on a first attach, and unknown is not
-    // `false`, so this still fits — a device attaching to an unowned terminal
-    // must size it. When the connection already knows another device holds the
-    // claim, this measures instead.
+    // No canonical screen exists yet. Initial fit waits for usable metrics;
+    // once attached, passive views only measure and accept engine dimensions.
     const measured = await this.#measureForResize();
+    if (!measured) return;
     if (!measured) return;
     const { rows, columns } = measured;
     if (this.#disposed || this.#started || !this.#host.parentElement) return;
@@ -313,90 +319,22 @@ export class TerminalController {
         const restoreFocus = document.activeElement === this.#host
           || Boolean(document.activeElement && this.#host.contains(document.activeElement));
         await this.#surface.restore(snapshot);
-        // Only the window the operator is actually in re-asserts its own size.
-        //
-        // Two viewers of one PTY on the same machine are one device — the
-        // device id lives in localStorage and is shared by every window and tab
-        // — so the server cannot tell them apart and applies both their
-        // resizes. Each then restores at the other's size, re-fits to its own,
-        // and resizes back: a pop-out and its opener adjust the terminal
-        // forever. `hasFocus` picks exactly one window browser-wide, so the
-        // other accepts the canonical size instead of arguing with it.
-        //
-        // Ungated below this: the fit before `start`, so a fresh mount still
-        // sizes itself, and ResizeObserver, which reports a real viewport
-        // change rather than an echo of someone else's.
-        try {
-          // Two gates, for two different fights.
-          //
-          // Focus settles the one between a pop-out and the window it came
-          // from: they share a device id, so the server sees one device and
-          // applies both their resizes.
-          //
-          // Ownership settles the one between separate machines. A phone opened
-          // on a worker left running on a desktop has focus and has lost the
-          // claim, so focus alone let it re-fit, be refused, take the canonical
-          // size, and re-fit again — the terminal jumped continuously and the
-          // operator could not use it. A device that does not own the geometry
-          // accepts the size it is given; typing takes the claim, which is what
-          // moving to another device is supposed to mean.
-          if (!documentHasFocus()) {
-            return this.#applyRestoredFocus(restoreFocus);
+        // Passive views always accept canonical geometry. Neither a snapshot
+        // nor a viewport resize is an implicit request to take control.
+        if (documentHasFocus() && this.#connection.ownsGeometry !== false) {
+          try {
+            const fitted = await this.#measureForResize();
+            if (fitted) this.#connection.resize(fitted.rows, fitted.columns, "echo");
+          } catch {
+            // Keep the canonical screen when a transient layout cannot fit.
           }
-          if (this.#connection.ownsGeometry === false) {
-            // THE DEVICE THE OPERATOR IS LOOKING AT ASKS ONCE, then accepts.
-            //
-            // Without this a desktop reopened after a phone session renders at
-            // the phone's columns and stays there: the operator's own report
-            // was "after being on mobile the screen gets stuck like this,
-            // refresh doesn't fix it". Nothing repairs it because ResizeObserver
-            // watches the CONTAINER, which never changed — only the terminal's
-            // column count did — so the one path that reclaims geometry is
-            // never reached until the window is resized by hand.
-            //
-            // The attach frame does ask, but the server grants an attach claim
-            // only over UNOWNED geometry, deliberately: claiming on every
-            // socket open used to steal a running desktop's size. So the ask
-            // has to carry operator intent, which is what a resize does.
-            if (this.#reclaimedGeometry) return this.#applyRestoredFocus(restoreFocus);
-            this.#reclaimedGeometry = true;
-            // ASKS WITHOUT APPLYING. `fit` resizes the local grid as a side
-            // effect, and this device does NOT own the geometry — so when the
-            // server refuses, as it does while another device holds the claim,
-            // the grid is left reflowing the owner's wide content at this
-            // width. A phone beside a mid-session desktop rendered its terminal
-            // shredded: words broken mid-word, stray characters down the right
-            // edge. Unreadable rather than merely narrow.
-            //
-            // If the claim IS granted the server resizes the PTY and the
-            // redraw arrives as a snapshot, whose dimensions `restore` applies.
-            // So nothing needs to be applied optimistically here, and refusing
-            // costs the viewer nothing.
-            const wanted = await this.#measureForResize();
-            if (wanted) {
-              this.#connection.resize(wanted.rows, wanted.columns, "operator");
-            }
-            return this.#applyRestoredFocus(restoreFocus);
-          }
-          // THROUGH THE ONE PLACE THAT KNOWS THE RULE, even though this branch
-          // has already established that this device owns the geometry and
-          // could mutate safely. The invariant survived being stated at four
-          // call sites exactly as well as it survived being stated at one: it
-          // was taught to the one the bug report arrived through. A second
-          // caller that happens to be correct today is a second caller that
-          // will not be told when the rule changes.
-          const fitted = await this.#measureForResize();
-          if (fitted) {
-            this.#connection.resize(fitted.rows, fitted.columns, "echo");
-          }
-        } catch {
-          // Responsive PWA transitions can briefly leave the mounted surface
-          // without measurable font metrics. The canonical snapshot is already
-          // restored; ResizeObserver will publish the settled dimensions.
         }
         this.#applyRestoredFocus(restoreFocus);
       },
       onState: (state, detail) => this.#setState(state, detail),
+      onControlChange: (control) => {
+        for (const subscriber of this.#controlSubscribers) subscriber(control);
+      },
       onRunningChange: (running) => {
         if (!running) this.#setState("closed", "worker process exited");
       },
