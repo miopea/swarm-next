@@ -146,6 +146,7 @@ import { useWorkerRailWidth } from "./layout/useWorkerRailWidth";
 import { useModalFocus } from "./shared/useModalFocus";
 import { isExpectedRuntimeHandoff, requestRuntimeHandoff } from "./runtime/runtimeMaintenance";
 import { useRuntimeUpdate } from "./runtime/useRuntimeUpdate";
+import { useVisiblePolling } from "./runtime/useVisiblePolling";
 import {
   detachedSurface,
   focusDetachedSurface,
@@ -424,17 +425,15 @@ export function App() {
    */
   const [workerConversations, setWorkerConversations] = useState<WorkerConversation[]>([]);
   useEffect(() => {
-    if (!operatorToken) { setWorkerConversations([]); return; }
-    let current = true;
-    const load = () => void fetchWorkerConversations(operatorToken)
-      .then((page) => { if (current && Array.isArray(page.workers)) setWorkerConversations(page.workers as WorkerConversation[]); })
-      .catch(() => undefined);
-    load();
-    // Reading transcripts is filesystem work, so this is deliberately slow:
-    // conversations drift when somebody resumes one by hand, not by the second.
-    const interval = window.setInterval(load, 120_000);
-    return () => { current = false; window.clearInterval(interval); };
+    if (!operatorToken) setWorkerConversations([]);
+  }, [operatorToken]);
+  const refreshConversations = useCallback(async (signal: AbortSignal) => {
+    if (!operatorToken) return;
+    const page = await fetchWorkerConversations(operatorToken, signal);
+    if (!signal.aborted && Array.isArray(page.workers)) setWorkerConversations(page.workers as WorkerConversation[]);
   }, [operatorToken, workers.length]);
+  // Filesystem-backed transcript checks do not run for hidden windows or overlap.
+  useVisiblePolling(refreshConversations, Boolean(operatorToken), 120_000);
   const [operationError, setOperationError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState<string>();
@@ -452,18 +451,12 @@ export function App() {
   // Polled, not pushed. The control-room feed carries task and worker change,
   // and a tunnel is neither; a fifteen-second local read is cheaper than a new
   // event kind for something an operator starts by hand.
-  useEffect(() => {
-    if (!operatorToken || detached) return undefined;
-    let cancelled = false;
-    const read = () => {
-      void readTunnel(operatorToken)
-        .then((status) => { if (!cancelled) setPublicAddress(status); })
-        .catch(() => { /* a Hive that cannot answer is not publishing */ });
-    };
-    read();
-    const timer = window.setInterval(read, 15_000);
-    return () => { cancelled = true; window.clearInterval(timer); };
-  }, [operatorToken, detached]);
+  const refreshPublicAddress = useCallback(async (signal: AbortSignal) => {
+    if (!operatorToken) return;
+    const status = await readTunnel(operatorToken, signal);
+    if (!signal.aborted) setPublicAddress(status);
+  }, [operatorToken]);
+  useVisiblePolling(refreshPublicAddress, Boolean(operatorToken) && !detached, 15_000);
 
   const [presence, setPresence] = useState<OperatorPresence>();
   const [lockDetectionState, setLockDetectionState] = useState<LockDetectionState>("unsupported");

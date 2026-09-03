@@ -342,7 +342,8 @@ export async function broadcastToWorkers(
  */
 export async function fetchWorkerConversations(
   operatorToken: string,
+  signal?: AbortSignal,
 ): Promise<{ workers: { worker_id: string; name: string; freshness: { state: string; [key: string]: unknown } }[] }> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/workers/conversations");
+  const response = await authenticatedFetch(operatorToken, "/api/v1/workers/conversations", { signal });
   return response.json() as Promise<{ workers: { worker_id: string; name: string; freshness: { state: string; [key: string]: unknown } }[] }>;
 }

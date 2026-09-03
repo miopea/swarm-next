@@ -86,6 +86,24 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 - No measured CPU improvement is claimed yet. Other App-level polls and live
   feed behavior remain under audit; terminal-cache experiments are not enabled.
 
+### P3b: avoid hidden transcript scans
+
+- Conversation-history and public-address polling now use the same bounded
+  visible-page owner. Hidden windows do not start transcript filesystem scans;
+  visibility restores freshness without waiting two minutes.
+- App/API/remote-access tests: 38 passed. Added a direct hidden-to-visible App
+  regression test: all 30 App tests passed. Typecheck passed.
+
+### Pending verification permissions
+
+- The separate Edge tab still requires operator unlock; requested asynchronously.
+- A source-transfer safety check rejected uploading the tracked-source archive
+  to bgsdev because prior SSH permission covered read-only diagnostics. No source
+  was transferred and no remote tests ran. Explicit permission requested for an
+  isolated RAM-backed test directory with one CPU, 4 GiB RAM, no swap and a
+  15-minute ceiling. The empty directory is `/dev/shm/swarm-maturity.fidSZS`.
+- These are verification dependencies, not claims that P0–P7 are complete.
+
 ### P1c: developer evidence home
 
 - Developer Dogfood is a separate Settings section, gated by existing development

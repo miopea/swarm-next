@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 vi.mock("./terminal/XtermSurface", () => ({ XtermSurface: class {} }));
@@ -1053,6 +1053,26 @@ function bootFetch() {
     return Promise.resolve(ok({}));
   });
 }
+
+test("hidden windows defer transcript scans and tunnel polling until visible", async () => {
+  let visibility: DocumentVisibilityState = "hidden";
+  const visibilitySpy = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+  const fetch = bootFetch();
+  vi.stubGlobal("fetch", fetch);
+  try {
+    render(<App />);
+    await screen.findByRole("button", { name: "Open quick navigation" });
+    expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/workers/conversations"))).toBe(false);
+    expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/runtime/tunnel"))).toBe(false);
+    visibility = "visible";
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/workers/conversations"))).toBe(true);
+    expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/runtime/tunnel"))).toBe(true);
+  } finally {
+    cleanup();
+    visibilitySpy.mockRestore();
+  }
+});
 
 test("a detached window keeps the controls belonging to what it shows", async () => {
   // The operator: "while secondary screens don't need to show the control areas

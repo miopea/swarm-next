@@ -2039,8 +2039,8 @@ export type TunnelStatus = {
   qr_svg: string | null;
 };
 
-export async function readTunnel(operatorToken: string): Promise<TunnelStatus> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/tunnel");
+export async function readTunnel(operatorToken: string, signal?: AbortSignal): Promise<TunnelStatus> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/tunnel", { signal });
   return (await response.json()) as TunnelStatus;
 }
 
