@@ -150,7 +150,15 @@ note_deferral() {
   count=$((count + 1))
   mkdir -p "$state_root" 2>/dev/null || true
   printf '%s\n' "$count" > "$file" 2>/dev/null || true
-  if [ "$count" -ge "${SWARM_RECONCILE_DEFERRAL_CEILING:-30}" ]; then
+  # THIRTY GUARANTEED SILENCE IN EVERY CASE ANYONE HAS SEEN. This runs on a
+  # ~3-minute timer, so thirty consecutive declines is ninety minutes before the
+  # first word. The two real episodes on 2026-09-03 deferred three times and
+  # seventeen times; both landed well inside the ceiling and printed nothing.
+  #
+  # Three is one deferral short of ten minutes of waiting, which is long enough
+  # that it is not chatter and short enough that a stall is visible while it is
+  # still a stall. The variable stays overridable for anyone who disagrees.
+  if [ "$count" -ge "${SWARM_RECONCILE_DEFERRAL_CEILING:-3}" ]; then
     printf 'WARNING: %s has been deferred %s times in a row and has never landed; %s\n' \
       "$deferral_subject" "$count" "$deferral_detail" >&2
   fi
