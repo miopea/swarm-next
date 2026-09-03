@@ -12,10 +12,15 @@ use std::{
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
-use swarm_domain::{FederationStewardTakeoverLeaseId, ProviderKind, WorkerSessionId};
+use swarm_domain::{
+    FederationStewardTakeoverLeaseId, ProviderKind, TerminalControlError, TerminalControlGrant,
+    TerminalControlIdentity, WorkerSessionId,
+};
 use thiserror::Error;
 use tokio::sync::watch;
 use tracing::warn;
+
+use crate::control_gate::{ControlGateError, TerminalControlGate};
 
 use crate::{
     CanonicalTerminalState, HistoryAppendOutcome, HistoryCursor, HistoryDiagnostics, HistoryError,
@@ -93,6 +98,10 @@ pub enum SessionRegistryError {
     TakeoverConflict,
     #[error("terminal takeover authority is missing, stale, or expired")]
     TakeoverDenied,
+    #[error("terminal control refused: {0:?}")]
+    ControlDenied(TerminalControlError),
+    #[error("this terminal requires generation-bound control")]
+    ControlGenerationRequired,
     #[error("terminal operation failed: {0}")]
     Terminal(String),
     #[error(transparent)]
@@ -121,6 +130,7 @@ fn unix_seconds() -> i64 {
 
 pub struct ProcessTerminalSession {
     id: WorkerSessionId,
+    control: TerminalControlGate,
     child: Mutex<Box<dyn Child + Send + Sync>>,
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
@@ -272,6 +282,7 @@ impl ProcessTerminalSession {
 
         Ok(Self {
             id,
+            control: TerminalControlGate::default(),
             child: Mutex::new(child),
             writer: Mutex::new(writer),
             master: Mutex::new(pair.master),
@@ -297,6 +308,12 @@ impl ProcessTerminalSession {
     /// Returns an error when the session lock is poisoned or the PTY rejects
     /// the write.
     pub fn write_input(&self, bytes: &[u8]) -> Result<(), SessionRegistryError> {
+        self.control
+            .legacy(false, || self.write_input_unchecked(bytes))
+            .map_err(control_error)
+    }
+
+    fn write_input_unchecked(&self, bytes: &[u8]) -> Result<(), SessionRegistryError> {
         let mut writer = lock(&self.writer)?;
         writer.write_all(bytes).map_err(terminal_error)?;
         writer.flush().map_err(terminal_error)
@@ -308,6 +325,12 @@ impl ProcessTerminalSession {
     ///
     /// Returns an error for a zero dimension, poisoned lock, or PTY failure.
     pub fn resize(&self, size: TerminalSize) -> Result<(), SessionRegistryError> {
+        self.control
+            .legacy(false, || self.resize_unchecked(size))
+            .map_err(control_error)
+    }
+
+    fn resize_unchecked(&self, size: TerminalSize) -> Result<(), SessionRegistryError> {
         size.validate()?;
         let mut terminal_state = lock(&self.terminal_state)?;
         if terminal_state.size() == size {
@@ -327,6 +350,94 @@ impl ProcessTerminalSession {
         drop(terminal_state);
         self.output_state.send_replace(true);
         Ok(())
+    }
+
+    /// Current engine-owned control revision and live owner. Reading never renews.
+    ///
+    /// # Errors
+    /// Fails closed if the session control lock is poisoned.
+    pub fn control_status(
+        &self,
+    ) -> Result<(u64, Option<TerminalControlGrant>), SessionRegistryError> {
+        self.control.status().map_err(control_error)
+    }
+
+    /// Acquires an unowned view, or explicitly takes over the observed revision.
+    /// Geometry and ownership commit under one session guard; no input is sent.
+    ///
+    /// # Errors
+    /// Refuses competing/stale ownership, invalid geometry, or PTY failure.
+    pub fn claim_control(
+        &self,
+        identity: TerminalControlIdentity,
+        observed_generation: Option<u64>,
+        size: TerminalSize,
+    ) -> Result<TerminalControlGrant, SessionRegistryError> {
+        self.control
+            .claim(identity, observed_generation, || {
+                self.resize_unchecked(size)
+            })
+            .map_err(control_error)
+    }
+
+    /// Renews a confirmed foreground view, without changing geometry or input.
+    ///
+    /// # Errors
+    /// Refuses missing, stale, or expired control.
+    pub fn renew_control(
+        &self,
+        identity: TerminalControlIdentity,
+        generation: u64,
+    ) -> Result<TerminalControlGrant, SessionRegistryError> {
+        self.control
+            .renew(identity, generation)
+            .map_err(control_error)
+    }
+
+    /// Releases only this exact live owner; disconnect must not call this.
+    ///
+    /// # Errors
+    /// Refuses missing, stale, or expired control.
+    pub fn release_control(
+        &self,
+        identity: TerminalControlIdentity,
+        generation: u64,
+    ) -> Result<(), SessionRegistryError> {
+        self.control
+            .release(identity, generation)
+            .map_err(control_error)
+    }
+
+    /// Changes geometry only while this exact view still owns the generation.
+    ///
+    /// # Errors
+    /// Refuses stale control, invalid dimensions, poisoned locks, or PTY failure.
+    pub fn resize_controlled(
+        &self,
+        identity: TerminalControlIdentity,
+        generation: u64,
+        size: TerminalSize,
+    ) -> Result<(), SessionRegistryError> {
+        self.control
+            .resize(identity, generation, || self.resize_unchecked(size))
+            .map_err(control_error)
+    }
+
+    fn write_controlled(
+        &self,
+        identity: TerminalControlIdentity,
+        generation: u64,
+        bytes: &[u8],
+    ) -> Result<(), SessionRegistryError> {
+        self.control
+            .input(identity, generation, || self.write_input_unchecked(bytes))
+            .map_err(control_error)
+    }
+
+    fn write_coordination(&self, bytes: &[u8]) -> Result<(), SessionRegistryError> {
+        self.control
+            .legacy(true, || self.write_input_unchecked(bytes))
+            .map_err(control_error)
     }
 
     /// Returns retained deltas or a deterministic snapshot requirement.
@@ -745,8 +856,49 @@ impl SessionRegistry {
             }
             takeovers.remove(&session_id);
             drop(takeovers);
-            self.get(session_id)?.write_input(bytes)
+            let session = self.get(session_id)?;
+            if matches!(
+                provenance.actor,
+                crate::TerminalWriteActor::SwarmCoordination
+            ) {
+                session.write_coordination(bytes)
+            } else {
+                session.write_input(bytes)
+            }
         })
+    }
+
+    /// Audited operator input whose generation is checked through the PTY write.
+    ///
+    /// # Errors
+    /// Refuses active remote takeover, stale control, or terminal failure. A write
+    /// failure may have accepted a prefix and must never be retried automatically.
+    pub fn write_controlled(
+        &self,
+        session_id: WorkerSessionId,
+        identity: TerminalControlIdentity,
+        generation: u64,
+        bytes: &[u8],
+    ) -> Result<(), SessionRegistryError> {
+        self.audit_write(
+            session_id,
+            TerminalWriteProvenance::operator(Some(identity.device), bytes),
+            bytes,
+            || {
+                let mut takeovers = lock(&self.takeovers)?;
+                if takeovers
+                    .get(&session_id)
+                    .is_some_and(|lease| lease.expires_at > unix_timestamp())
+                {
+                    return Err(SessionRegistryError::TakeoverDenied);
+                }
+                takeovers.remove(&session_id);
+                // Keep the takeover lock until the session guard has checked and
+                // executed the write. Remote authority cannot appear in that gap.
+                self.get(session_id)?
+                    .write_controlled(identity, generation, bytes)
+            },
+        )
     }
 
     /// Returns the newest bounded, content-free terminal write records.
@@ -1037,8 +1189,148 @@ fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, SessionRegistryError> 
     mutex.lock().map_err(|_| SessionRegistryError::LockPoisoned)
 }
 
+fn control_error<E: std::fmt::Display>(error: ControlGateError<E>) -> SessionRegistryError {
+    match error {
+        ControlGateError::Authority(reason) => SessionRegistryError::ControlDenied(reason),
+        ControlGateError::GenerationRequired => SessionRegistryError::ControlGenerationRequired,
+        ControlGateError::Poisoned => SessionRegistryError::LockPoisoned,
+        ControlGateError::Effect(error) => terminal_error(error),
+    }
+}
+
 fn terminal_error(error: impl std::fmt::Display) -> SessionRegistryError {
     SessionRegistryError::Terminal(error.to_string())
+}
+
+#[cfg(all(test, any(unix, windows)))]
+mod control_tests {
+    use super::*;
+    use swarm_domain::{PresenceDeviceId, TerminalViewId};
+
+    fn identity() -> TerminalControlIdentity {
+        TerminalControlIdentity {
+            device: PresenceDeviceId::new(),
+            view: TerminalViewId::new(),
+        }
+    }
+
+    fn fixture() -> (SessionRegistry, Arc<ProcessTerminalSession>) {
+        let workspace = std::env::temp_dir();
+        let registry =
+            SessionRegistry::new(JournalLimits::default(), 1, [workspace.clone()]).unwrap();
+        let (executable, arguments) = if cfg!(windows) {
+            (
+                PathBuf::from(
+                    std::env::var_os("COMSPEC")
+                        .unwrap_or_else(|| "C:/Windows/System32/cmd.exe".into()),
+                ),
+                vec!["/D".into(), "/Q".into()],
+            )
+        } else {
+            (PathBuf::from("/bin/sh"), vec!["-c".into(), "cat".into()])
+        };
+        let command = ProviderCommand {
+            executable,
+            arguments,
+            working_directory: workspace,
+        };
+        let session = registry.spawn(&command, TerminalSize::new(24, 80)).unwrap();
+        (registry, session)
+    }
+
+    fn size(session: &ProcessTerminalSession) -> TerminalSize {
+        let Resume::Snapshot { snapshot } = session.resume_after(None).unwrap() else {
+            panic!("fresh snapshot required")
+        };
+        TerminalSize::new(snapshot.rows, snapshot.columns)
+    }
+
+    #[test]
+    fn real_pty_handoff_preserves_process_and_rejects_previous_view() {
+        let (registry, session) = fixture();
+        let id = session.id();
+        let desktop = identity();
+        let phone = identity();
+        let original = session
+            .claim_control(desktop, None, TerminalSize::new(24, 100))
+            .unwrap();
+        assert!(
+            session
+                .claim_control(phone, None, TerminalSize::new(40, 36))
+                .is_err()
+        );
+        assert_eq!(size(&session), TerminalSize::new(24, 100));
+        let transferred = session
+            .claim_control(phone, Some(original.generation), TerminalSize::new(40, 36))
+            .unwrap();
+        assert_eq!(size(&session), TerminalSize::new(40, 36));
+        assert!(
+            session
+                .resize_controlled(desktop, original.generation, TerminalSize::new(24, 100))
+                .is_err()
+        );
+        assert!(
+            registry
+                .write_controlled(id, desktop, original.generation, b"stale")
+                .is_err()
+        );
+        assert!(session.resize(TerminalSize::new(24, 100)).is_err());
+        assert!(
+            registry
+                .write_local(
+                    id,
+                    b"legacy",
+                    TerminalWriteProvenance::operator(Some(desktop.device), b"legacy")
+                )
+                .is_err()
+        );
+        assert_eq!(size(&session), TerminalSize::new(40, 36));
+        registry
+            .write_controlled(
+                id,
+                phone,
+                transferred.generation,
+                b"echo SWARM_CONTROL_OK\r\n",
+            )
+            .unwrap();
+        let audit = registry.recent_write_audit(10).unwrap();
+        assert_eq!(audit[0].result, TerminalWriteResult::Acknowledged);
+        assert_eq!(audit[1].result, TerminalWriteResult::Rejected);
+        assert_eq!(audit[2].result, TerminalWriteResult::Rejected);
+        assert_eq!(session.id(), id);
+        assert!(session.is_running().unwrap());
+        session
+            .release_control(phone, transferred.generation)
+            .unwrap();
+        assert!(session.is_running().unwrap());
+    }
+
+    #[test]
+    fn invalid_handoff_geometry_leaves_current_owner_and_pty_unchanged() {
+        let (_registry, session) = fixture();
+        let desktop = identity();
+        let original = session
+            .claim_control(desktop, None, TerminalSize::new(24, 100))
+            .unwrap();
+        assert!(
+            session
+                .claim_control(
+                    identity(),
+                    Some(original.generation),
+                    TerminalSize::new(0, 0)
+                )
+                .is_err()
+        );
+        assert_eq!(
+            session.control_status().unwrap(),
+            (original.generation, Some(original))
+        );
+        assert_eq!(size(&session), TerminalSize::new(24, 100));
+        session
+            .resize_controlled(desktop, original.generation, TerminalSize::new(25, 100))
+            .unwrap();
+        assert_eq!(size(&session), TerminalSize::new(25, 100));
+    }
 }
 
 #[cfg(all(test, unix))]

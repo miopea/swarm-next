@@ -1228,6 +1228,9 @@ fn secure_file(path: &Path) -> Result<(), HistoryError> {
 }
 
 #[cfg(not(unix))]
+// Preserve the fallible interface of the Unix permission adapter. This existing
+// fallback does not claim to apply Unix permissions on a non-Unix filesystem.
+#[allow(clippy::unnecessary_wraps)]
 fn secure_file(_path: &Path) -> Result<(), HistoryError> {
     Ok(())
 }

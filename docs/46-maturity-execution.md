@@ -224,6 +224,32 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   open until engine-serialized effects, rolling compatibility, and device tests
   prove the complete cutover. No live behavior is changed by this foundation.
 
+### P2f: engine-serialized terminal effects
+
+- Each process session now owns a control gate. Claim prepares a transition,
+  applies geometry while holding the same guard, then commits. Input and resize
+  validate their generation under the guard held through the effect. Failed
+  input is called once, not retried, and does not earn a successful renewal.
+- Generation-bound operator input goes through the existing content-free audit.
+  Legacy operator input/resize cannot bypass a session that has entered the new
+  contract, including after expiry/release. Coordination cannot inject beneath a
+  live owner; its existing application authorization remains required.
+- Seven gate tests cover guard lifetime, stale-effect rejection, failed proposal
+  rollback, uncertain input, passive reads, and compatibility boundaries. Two
+  additional disposable-PTY tests verify handoff geometry, stale writes/resizes,
+  audit outcomes, live process continuity, and invalid-size rollback.
+- All 70 terminal-library tests passed on Windows GNU after the final edits.
+  Formatting and strict all-target/all-feature Clippy passed. The first portable
+  run caught ten Linux-only workspace fixtures; replaced those fixture paths with
+  platform-absolute paths without changing the asserted provider arguments.
+- Unix socket imports/client and the Unix symlink test are explicitly Unix-only;
+  Linux retains them unchanged. This permits the actual portable library and
+  ConPTY tests to run locally, not a substitute test implementation or a new
+  Windows server. Linux-specific process/socket tests remain unrun.
+- IPC protocol and browser handshake remain unchanged, so existing sessions do
+  not activate this contract yet. Next: negotiated host commands, authoritative
+  control-state notification, engagement projection, and the browser cutover.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

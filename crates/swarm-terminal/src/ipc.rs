@@ -1,13 +1,13 @@
-use std::{
-    env,
-    path::{Path, PathBuf},
-};
+#[cfg(unix)]
+use std::path::Path;
+use std::{env, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 use swarm_domain::{
     FederationStewardTakeoverLeaseId, PresenceDeviceId, ProviderKind, WorkerSessionId,
 };
 use thiserror::Error;
+#[cfg(unix)]
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::UnixStream,
@@ -371,10 +371,12 @@ pub enum IpcError {
 }
 
 #[derive(Clone, Debug)]
+#[cfg(unix)]
 pub struct HostClient {
     socket_path: PathBuf,
 }
 
+#[cfg(unix)]
 impl HostClient {
     #[must_use]
     pub fn new(socket_path: impl Into<PathBuf>) -> Self {

@@ -1,7 +1,8 @@
 # ADR 0062: Generation-bound terminal control in the worker engine
 
 Status: Accepted for the operator-approved daily-driver maturity program;
-implementation in progress. The initial domain model is not an enabled protocol.
+implementation in progress. Domain and engine gates are implemented; IPC and
+browser integration are not yet an enabled protocol.
 
 ## Context
 
@@ -51,6 +52,11 @@ workers on an older engine must remain alive; expose that engine capability gap
 and its update requirement rather than pretending stable takeover is available.
 The terminal protocol owner removes the old control path after supported engines
 and clients have migrated. No browser control is enabled by the domain-only slice.
+
+Once a session has accepted generation-bound control, legacy operator writes and
+resizes remain refused even after release or expiry. Authorized coordination may
+proceed without an active owner, under the same engine guard; it cannot bypass a
+live interactive owner. Before activation, the existing legacy contract remains.
 
 ## Verification
 

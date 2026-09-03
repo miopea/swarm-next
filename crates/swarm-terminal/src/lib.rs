@@ -1,3 +1,4 @@
+mod control_gate;
 mod history;
 mod ipc;
 mod journal;
@@ -12,11 +13,13 @@ pub use history::{
     HistoryPage, HistoryRecord, HistorySessionSummary, HistoryStore, MAX_HISTORY_PAGE_BYTES,
     MAX_HISTORY_PAGE_RECORDS, MAX_HISTORY_RECORD_BYTES, default_terminal_history_path,
 };
+#[cfg(unix)]
+pub use ipc::HostClient;
 pub use ipc::{
-    HostClient, HostRequest, HostResponse, HostSessionSummary, IpcError, MAX_REQUEST_BYTES,
-    MAX_RESPONSE_BYTES, MAX_WRITE_AUDIT_PAGE, PROTOCOL_VERSION, TerminalHostStatus,
-    TerminalInputKind, TerminalTakeoverLease, TerminalWriteActor, TerminalWriteAuditEntry,
-    TerminalWriteProvenance, TerminalWriteResult, default_terminal_socket_path,
+    HostRequest, HostResponse, HostSessionSummary, IpcError, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES,
+    MAX_WRITE_AUDIT_PAGE, PROTOCOL_VERSION, TerminalHostStatus, TerminalInputKind,
+    TerminalTakeoverLease, TerminalWriteActor, TerminalWriteAuditEntry, TerminalWriteProvenance,
+    TerminalWriteResult, default_terminal_socket_path,
 };
 pub use journal::{JournalLimits, SequencedFrame};
 pub use process::{

@@ -317,6 +317,15 @@ impl AlphaProviderAdapter {
 mod tests {
     use super::*;
 
+    fn absolute_workspace() -> &'static Path {
+        if cfg!(windows) {
+            Path::new("C:/workspaces/example")
+        } else {
+            Path::new("/workspaces/example")
+        }
+    }
+
+    #[cfg(unix)]
     #[test]
     fn a_provider_release_is_the_versioned_file_a_symlink_points_at() {
         // Claude installs each release beside the others and moves a symlink,
@@ -406,7 +415,7 @@ mod tests {
         let session_id = ProviderConversationId::new();
         let command = ClaudeCodeAdapter
             .command_for(
-                Path::new("/workspaces/example"),
+                absolute_workspace(),
                 ClaudeConversationStart::New { session_id },
             )
             .expect("absolute workspace should be valid");
@@ -419,7 +428,7 @@ mod tests {
         let session_id = ProviderConversationId::new();
         let command = ClaudeCodeAdapter
             .command_for(
-                Path::new("/workspaces/example"),
+                absolute_workspace(),
                 ClaudeConversationStart::Resume { session_id },
             )
             .unwrap();
@@ -429,10 +438,7 @@ mod tests {
     #[test]
     fn claude_continues_the_workspace_for_migrated_profiles() {
         let command = ClaudeCodeAdapter
-            .command_for(
-                Path::new("/workspaces/example"),
-                ClaudeConversationStart::Continue,
-            )
+            .command_for(absolute_workspace(), ClaudeConversationStart::Continue)
             .unwrap();
         assert_eq!(command.arguments, ["--continue"]);
     }
@@ -450,7 +456,7 @@ mod tests {
             ClaudeConversationStart::Continue,
         ] {
             let command = ClaudeCodeAdapter
-                .command_for_with_mcp(Path::new("/workspace/example"), start, Some(config))
+                .command_for_with_mcp(absolute_workspace(), start, Some(config))
                 .unwrap();
             assert_eq!(
                 &command.arguments[command.arguments.len() - 3..],
@@ -467,7 +473,7 @@ mod tests {
     fn claude_layers_operator_settings_without_replacing_private_session_state() {
         let command = ClaudeCodeAdapter
             .command_for_with_configuration(
-                Path::new("/workspace/example"),
+                absolute_workspace(),
                 ClaudeConversationStart::Continue,
                 Some(Path::new("/state/swarm/agents/worker.json")),
                 Some(Path::new("/home/operator/.claude/settings.json")),
@@ -498,26 +504,18 @@ mod tests {
     fn codex_starts_new_and_recovers_the_latest_repository_thread() {
         let adapter = CodexAdapter;
         let fresh = adapter
-            .command_for(
-                Path::new("/workspaces/example"),
-                CodexConversationStart::New,
-                None,
-            )
+            .command_for(absolute_workspace(), CodexConversationStart::New, None)
             .unwrap();
         assert_eq!(fresh.executable, PathBuf::from("codex"));
         assert!(fresh.arguments.is_empty());
         let recovered = adapter
-            .command_for(
-                Path::new("/workspaces/example"),
-                CodexConversationStart::Continue,
-                None,
-            )
+            .command_for(absolute_workspace(), CodexConversationStart::Continue, None)
             .unwrap();
         assert_eq!(recovered.arguments, ["resume", "--last"]);
         let session_id = ProviderConversationId::new();
         let imported = adapter
             .command_for(
-                Path::new("/workspaces/example"),
+                absolute_workspace(),
                 CodexConversationStart::Resume { session_id },
                 None,
             )
@@ -551,7 +549,7 @@ mod tests {
 
         let command = CodexAdapter
             .command_for(
-                Path::new("/workspaces/example"),
+                absolute_workspace(),
                 CodexConversationStart::New,
                 Some(&config),
             )
@@ -589,7 +587,7 @@ mod tests {
 
         let command = CodexAdapter
             .command_for(
-                Path::new("/workspaces/example"),
+                absolute_workspace(),
                 CodexConversationStart::Continue,
                 Some(&config),
             )
@@ -609,11 +607,7 @@ mod tests {
     #[test]
     fn a_codex_worker_without_a_config_starts_exactly_as_before() {
         let command = CodexAdapter
-            .command_for(
-                Path::new("/workspaces/example"),
-                CodexConversationStart::New,
-                None,
-            )
+            .command_for(absolute_workspace(), CodexConversationStart::New, None)
             .unwrap();
         assert!(command.arguments.is_empty());
     }
@@ -635,7 +629,7 @@ mod tests {
 
         let command = CodexAdapter
             .command_for(
-                Path::new("/workspaces/example"),
+                absolute_workspace(),
                 CodexConversationStart::New,
                 Some(&config),
             )
