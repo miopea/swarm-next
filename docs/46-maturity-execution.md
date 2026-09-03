@@ -273,6 +273,34 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   use the existing terminal path. Protocol support must be confirmed before new
   requests are sent. No worker engine update, deployment, or release was run.
 
+### P2h: negotiated API adapter and ordered activity projection
+
+- Added opt-in `swarm-terminal.v4` alongside v3; the browser does not request it
+  yet. One-time grants bind session and protocol. Engine support is checked at
+  grant issuance and attachment; unsupported engines get read-only output, not
+  unrestricted writes. Capable-engine grant validation reads control status
+  instead of copying a terminal snapshot solely to confirm session existence.
+- V4 binds device and view identity in its handshake, validates decimal u64
+  generations, rejects identity replacement, and uses the engine control gate for
+  every effect. Control-aware output waits report handoffs without requiring
+  output or a resize. Transport/writer waits are bounded and sibling tasks are
+  cancelled on socket teardown. Uncertain input is never repeated.
+- Schema 124 keeps one ordered control projection per worker, including an
+  expiry/release watermark. Older generations and ended sessions cannot restore
+  stale engagement. Legacy engagement endpoints cannot overwrite an activated
+  projection. Typing bursts coalesce projection work without skipping engine
+  authorization, and projection failure does not claim successful input was lost.
+- The four new persistence tests passed on native Windows GNU. Full persistence
+  run: 422 passed, seven home/path failures. All seven reproduced with the same
+  failure reasons on preceding commit `346f823` in an isolated local worktree;
+  they are baseline Windows environment failures, not introduced by this slice.
+  New schema ceiling/data-preservation/recovery checks passed in that full run.
+- Linux-target strict all-target/all-feature Clippy passed for the API and its
+  local dependencies. API protocol/handshake tests were compiled, not executed;
+  live Linux WebSocket/PTY and rolling API replacement tests remain outstanding.
+- Browser v4 ownership state, Resume Here, foreground renewal, and corresponding
+  device tests are still pending. No deployed behavior or worker process changed.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has
@@ -302,6 +330,16 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   `68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e`.
   Compiler wrappers translate only the Rust target argument to Zig's target spelling.
   Build artifacts and Zig caches stay in the temporary root. No source upload.
+- API cross-checks use checksum-verified Debian OpenSSL development headers and
+  static archives under the same temporary root, with no system installation:
+  `libssl-dev_3.5.7-1~deb13u2_amd64.deb`, SHA-256
+  `f245b646a4fe5beb31d6a387da9db3399e3b14a904efef1a23227ff5465a1d11`.
+  Provenance: [Debian package download metadata](https://packages.debian.org/trixie/amd64/libssl-dev/download).
+- Native persistence tests compile bundled SQLite through the isolated Zig
+  wrapper. `CFLAGS_x86_64_pc_windows_gnu=-fno-sanitize=undefined` matches the normal
+  C dependency build; Zig's default sanitizer references otherwise caused the
+  GNU linker to fail. This is not a sanitizer test run. No Rust checking or
+  production security feature was disabled.
 
 See the approved plan. No phase is complete solely because a patch was committed.
 Real Android/iOS and normal operator soak remain separate evidence requirements.

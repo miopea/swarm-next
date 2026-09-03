@@ -1210,6 +1210,16 @@ impl TaskStore {
             )
             .optional()?;
         let renewal_threshold = now.saturating_add(lease_seconds / 2);
+        let controlled: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM worker_terminal_control WHERE session_id = ?1)",
+            [session_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if controlled {
+            // A delayed v3 input or engagement button cannot overwrite the
+            // engine-owned indicator after the new contract has been activated.
+            return Ok(false);
+        }
         let owner_device_id = owner_device_id.map(|device_id| device_id.to_string());
         // An operator is in one place. Engaging a worker therefore ends this
         // device's engagement everywhere else, rather than leaving the worker
@@ -1222,7 +1232,9 @@ impl TaskStore {
         let released_elsewhere = match &owner_device_id {
             Some(device_id) => transaction.execute(
                 "DELETE FROM worker_engagements
-                 WHERE owner_device_id = ?1 AND worker_id <> ?2",
+                 WHERE owner_device_id = ?1 AND worker_id <> ?2
+                   AND NOT EXISTS(SELECT 1 FROM worker_terminal_control control
+                                  WHERE control.session_id = worker_engagements.session_id)",
                 params![device_id, worker_id],
             )?,
             None => 0,
@@ -1296,7 +1308,8 @@ impl TaskStore {
         let transaction = connection.transaction()?;
         let released = transaction.execute(
             "DELETE FROM worker_engagements
-             WHERE session_id = ?1 AND owner_device_id = ?2",
+             WHERE session_id = ?1 AND owner_device_id = ?2
+               AND NOT EXISTS(SELECT 1 FROM worker_terminal_control WHERE session_id = ?1)",
             params![session_id.to_string(), owner_device_id.to_string()],
         )? == 1;
         if released {

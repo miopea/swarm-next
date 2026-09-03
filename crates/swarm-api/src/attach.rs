@@ -10,6 +10,14 @@ use thiserror::Error;
 pub const ATTACH_GRANT_TTL: Duration = Duration::from_secs(30);
 pub const MAX_ATTACH_GRANTS: usize = 128;
 
+/// A one-time grant cannot be reused to negotiate a weaker input contract.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum AttachProtocol {
+    #[default]
+    Legacy,
+    Controlled,
+}
+
 #[derive(Debug, Error)]
 pub enum AttachGrantError {
     #[error("attach grant capacity of {limit} reached")]
@@ -23,6 +31,7 @@ pub enum AttachGrantError {
 #[derive(Clone, Copy, Debug)]
 struct Grant {
     session_id: WorkerSessionId,
+    protocol: AttachProtocol,
     expires_at: Instant,
 }
 
@@ -49,18 +58,38 @@ impl AttachGrantStore {
         }
     }
 
+    #[cfg(test)]
     pub fn issue(&self, session_id: WorkerSessionId) -> Result<String, AttachGrantError> {
-        self.issue_at(session_id, Instant::now())
+        self.issue_for(session_id, AttachProtocol::Legacy)
     }
 
+    #[cfg(test)]
     pub fn consume(&self, token: &str, session_id: WorkerSessionId) -> bool {
-        self.consume_at(token, session_id, Instant::now())
+        self.consume_for(token, session_id, AttachProtocol::Legacy)
+    }
+
+    pub fn issue_for(
+        &self,
+        session_id: WorkerSessionId,
+        protocol: AttachProtocol,
+    ) -> Result<String, AttachGrantError> {
+        self.issue_at(session_id, protocol, Instant::now())
+    }
+
+    pub fn consume_for(
+        &self,
+        token: &str,
+        session_id: WorkerSessionId,
+        protocol: AttachProtocol,
+    ) -> bool {
+        self.consume_at(token, session_id, protocol, Instant::now())
             .unwrap_or(false)
     }
 
     fn issue_at(
         &self,
         session_id: WorkerSessionId,
+        protocol: AttachProtocol,
         now: Instant,
     ) -> Result<String, AttachGrantError> {
         let mut grants = self.lock()?;
@@ -75,6 +104,7 @@ impl AttachGrantStore {
             if let std::collections::hash_map::Entry::Vacant(entry) = grants.entry(token.clone()) {
                 entry.insert(Grant {
                     session_id,
+                    protocol,
                     expires_at: now + self.ttl,
                 });
                 return Ok(token);
@@ -87,13 +117,14 @@ impl AttachGrantStore {
         &self,
         token: &str,
         session_id: WorkerSessionId,
+        protocol: AttachProtocol,
         now: Instant,
     ) -> Result<bool, AttachGrantError> {
         let mut grants = self.lock()?;
         let Some(grant) = grants.remove(token) else {
             return Ok(false);
         };
-        Ok(grant.expires_at > now && grant.session_id == session_id)
+        Ok(grant.expires_at > now && grant.session_id == session_id && grant.protocol == protocol)
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, HashMap<String, Grant>>, AttachGrantError> {
@@ -137,16 +168,45 @@ mod tests {
         let store = AttachGrantStore::new(1, Duration::from_secs(1));
         let session_id = WorkerSessionId::new();
         let now = Instant::now();
-        let expired = store.issue_at(session_id, now).unwrap();
+        let expired = store
+            .issue_at(session_id, AttachProtocol::Legacy, now)
+            .unwrap();
         assert!(
             !store
-                .consume_at(&expired, session_id, now + Duration::from_secs(2))
+                .consume_at(
+                    &expired,
+                    session_id,
+                    AttachProtocol::Legacy,
+                    now + Duration::from_secs(2)
+                )
                 .unwrap()
         );
         assert!(
             store
-                .issue_at(session_id, now + Duration::from_secs(2))
+                .issue_at(
+                    session_id,
+                    AttachProtocol::Legacy,
+                    now + Duration::from_secs(2)
+                )
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn controlled_grants_cannot_downgrade_and_failed_use_consumes_them() {
+        let store = AttachGrantStore::default();
+        let session = WorkerSessionId::new();
+        let token = store
+            .issue_for(session, AttachProtocol::Controlled)
+            .unwrap();
+        assert!(!store.consume(&token, session));
+        assert!(!store.consume_for(&token, session, AttachProtocol::Controlled));
+        let token = store
+            .issue_for(session, AttachProtocol::Controlled)
+            .unwrap();
+        assert!(store.consume_for(&token, session, AttachProtocol::Controlled));
+        assert!(!store.consume_for(&token, session, AttachProtocol::Controlled));
+        let token = store.issue(session).unwrap();
+        assert!(!store.consume_for(&token, session, AttachProtocol::Controlled));
     }
 }

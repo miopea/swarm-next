@@ -38,6 +38,7 @@ mod session_history;
 mod tasks;
 mod terminal_attach;
 mod terminal_control;
+mod terminal_control_socket;
 mod terminal_host;
 mod terminal_socket;
 mod tunnel;

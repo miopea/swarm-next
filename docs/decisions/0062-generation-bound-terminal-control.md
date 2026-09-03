@@ -2,7 +2,8 @@
 
 Status: Accepted for the operator-approved daily-driver maturity program;
 implementation in progress. Domain and engine gates and protocol-11 engine
-commands are implemented; the browser/API cutover is not yet enabled.
+commands and the opt-in v4 API adapter are implemented; the browser cutover is
+not yet enabled.
 
 ## Context
 
@@ -65,6 +66,22 @@ claims/releases notify them even without output or a geometry change. They may
 wake at the authoritative expiry deadline and recheck renewals, not poll guesses.
 Wire status exposes remaining lease duration rather than the private engine clock.
 Nested command variants are pinned alongside the top-level protocol surface.
+
+WebSocket v4 is explicitly requested at grant issuance. Grants are bound to the
+selected protocol as well as session and expiry; a controlled grant cannot be
+consumed as v3. Engine support is checked again at attachment. Older or unknown
+engines receive an explicit read-only v4 surface, never legacy input/resize.
+The handshake binds device and unique view identity. Subsequent commands cannot
+replace it, and generations use decimal strings to preserve the full u64 range.
+
+Schema 124 projects engine observations into one row per worker. It retains a
+generation watermark across release/expiry, refuses older observations, and only
+accepts observations for the active immutable session. Same-generation expiry
+cannot be undone by a delayed live-owner reply. Legacy engagement writes cannot
+replace or delete an activated projection. This is an activity indicator and
+additional coordination guard, never permission to write to the PTY. Repeated
+typing observations are coalesced; handoff/expiry changes are not. Projection
+failure after a successful PTY operation must not claim the input was unsent.
 
 ## Verification
 

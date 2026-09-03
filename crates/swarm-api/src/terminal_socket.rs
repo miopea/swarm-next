@@ -401,7 +401,7 @@ async fn request_output(
     }
 }
 
-async fn send_output_frames(
+pub(super) async fn send_output_frames(
     outbound: &mpsc::Sender<Message>,
     frames: Vec<swarm_terminal::SequencedFrame>,
     after_sequence: &mut Option<u64>,
@@ -435,7 +435,7 @@ async fn send_output_frames(
     Ok(())
 }
 
-async fn send_snapshot(
+pub(super) async fn send_snapshot(
     outbound: &mpsc::Sender<Message>,
     snapshot: &swarm_terminal::TerminalSnapshot,
 ) -> Result<(), ()> {

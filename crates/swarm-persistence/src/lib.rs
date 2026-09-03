@@ -92,10 +92,12 @@ pub use email::{
 };
 pub use presence::PresenceMutation;
 mod notifications;
+mod terminal_control_projection;
 pub use notifications::{
     NotificationDeliveryFailure, NotificationDispatch, NotificationSettings, PushSubscriptionInput,
     VapidKeyMaterial,
 };
+pub use terminal_control_projection::TerminalControlProjection;
 mod deployment_grants;
 mod orchestration;
 mod queen_conductor;
@@ -191,7 +193,8 @@ const BROADCAST_EXPIRY_SCHEMA_VERSION: i64 = 120;
 const MESSAGE_DELIVERY_SESSION_SCHEMA_VERSION: i64 = 121;
 const DELIVERY_COOLDOWN_SCHEMA_VERSION: i64 = 122;
 const CLAIM_WITHDRAWAL_SCHEMA_VERSION: i64 = 123;
-const CURRENT_SCHEMA_VERSION: i64 = CLAIM_WITHDRAWAL_SCHEMA_VERSION;
+const TERMINAL_CONTROL_PROJECTION_SCHEMA_VERSION: i64 = 124;
+const CURRENT_SCHEMA_VERSION: i64 = TERMINAL_CONTROL_PROJECTION_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -3711,7 +3714,7 @@ fn migrate_newest_schema_steps(
     if schema_version < CLAIM_WITHDRAWAL_SCHEMA_VERSION {
         migrate_claim_withdrawal(transaction)?;
     }
-    Ok(())
+    terminal_control_projection::migrate(transaction, schema_version)
 }
 
 /// Work closed for a reason other than success gets its own state.
@@ -8530,6 +8533,12 @@ mod tests {
                      )
                      BEGIN SELECT RAISE(ABORT, 'An email reply cannot be sent without a recorded deployment or an approved no-deployment exemption'); END;
                  ALTER TABLE task_completion_exemptions DROP COLUMN withdrawn_at",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "worker_terminal_control",
+            artifact: "",
+            undo_sql: "",
             probe_sql: "",
         },
     ];
