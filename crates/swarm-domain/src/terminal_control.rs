@@ -3,8 +3,9 @@
 //! Time is an engine-local monotonic millisecond tick, never browser time.
 
 use crate::{PresenceDeviceId, TerminalViewId};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TerminalControlIdentity {
     pub device: PresenceDeviceId,
     pub view: TerminalViewId,

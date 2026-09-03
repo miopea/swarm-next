@@ -39,11 +39,19 @@ impl TerminalControlGate {
     pub(crate) fn status(
         &self,
     ) -> Result<(u64, Option<TerminalControlGrant>), ControlGateError<Infallible>> {
+        self.snapshot()
+            .map(|(generation, owner, _)| (generation, owner))
+    }
+
+    pub(crate) fn snapshot(
+        &self,
+    ) -> Result<(u64, Option<TerminalControlGrant>, u64), ControlGateError<Infallible>> {
         let control = self
             .control
             .lock()
             .map_err(|_| ControlGateError::Poisoned)?;
-        Ok((control.generation(), control.owner(self.now())))
+        let now = self.now();
+        Ok((control.generation(), control.owner(now), now))
     }
 
     pub(crate) fn claim<E>(

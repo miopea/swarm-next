@@ -350,6 +350,11 @@ async fn dispatch(
             session_id,
             after_sequence,
         } => dispatch_wait(&registry, session_id, after_sequence).await,
+        HostRequest::WaitControlled {
+            session_id,
+            after_sequence,
+            after_control,
+        } => dispatch_wait_controlled(&registry, session_id, after_sequence, after_control).await,
         request => tokio::task::spawn_blocking(move || {
             dispatch_blocking(&registry, &host_version, &host_build_id, request)
         })
@@ -383,6 +388,47 @@ async fn dispatch_wait(
                 running,
             },
             (Err(error), _) | (_, Err(error)) => {
+                error_response("terminal_operation_failed", &error.to_string())
+            }
+        },
+    }
+}
+
+async fn dispatch_wait_controlled(
+    registry: &SessionRegistry,
+    session_id: WorkerSessionId,
+    after_sequence: Option<u64>,
+    after_control: swarm_terminal::TerminalControlCursor,
+) -> HostResponse {
+    let session = match registry.get(session_id) {
+        Ok(session) => session,
+        Err(error) => return error_response("terminal_operation_failed", &error.to_string()),
+    };
+    let result = tokio::time::timeout(
+        Duration::from_secs(30),
+        session.wait_controlled_after(after_sequence, after_control),
+    )
+    .await;
+    match result {
+        Ok(Ok((resume, running, control))) => HostResponse::ControlledOutput {
+            session_id,
+            resume,
+            running,
+            control,
+        },
+        Ok(Err(error)) => error_response("terminal_operation_failed", &error.to_string()),
+        Err(_) => match (
+            session.resume_after(after_sequence),
+            session.is_running(),
+            session.control_wire_status(),
+        ) {
+            (Ok(resume), Ok(running), Ok(control)) => HostResponse::ControlledOutput {
+                session_id,
+                resume,
+                running,
+                control,
+            },
+            (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
                 error_response("terminal_operation_failed", &error.to_string())
             }
         },
@@ -552,7 +598,7 @@ fn dispatch_blocking(
                 running,
             })
             .map_err(|error| error.to_string()),
-        HostRequest::Wait { .. } => {
+        HostRequest::Wait { .. } | HostRequest::WaitControlled { .. } => {
             return error_response(
                 "invalid_dispatch",
                 "wait requests must use the asynchronous dispatcher",
@@ -605,6 +651,12 @@ fn dispatch_blocking(
             .and_then(|session| session.resize(size))
             .map(|()| HostResponse::Acknowledged)
             .map_err(|error| error.to_string()),
+        HostRequest::Control {
+            session_id,
+            command,
+        } => {
+            return swarm_terminal::dispatch_terminal_control(registry, session_id, command);
+        }
         HostRequest::Stop { session_id } => registry
             .stop(session_id)
             .map(|()| HostResponse::Acknowledged)

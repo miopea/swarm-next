@@ -1,4 +1,5 @@
 mod control_gate;
+mod control_protocol;
 mod history;
 mod ipc;
 mod journal;
@@ -8,6 +9,7 @@ mod provider_activity;
 mod resources;
 mod state;
 
+pub use control_protocol::dispatch_terminal_control;
 pub use history::{
     HistoryAppendOutcome, HistoryCursor, HistoryDiagnostics, HistoryError, HistoryLimits,
     HistoryPage, HistoryRecord, HistorySessionSummary, HistoryStore, MAX_HISTORY_PAGE_BYTES,
@@ -20,6 +22,10 @@ pub use ipc::{
     MAX_WRITE_AUDIT_PAGE, PROTOCOL_VERSION, TerminalHostStatus, TerminalInputKind,
     TerminalTakeoverLease, TerminalWriteActor, TerminalWriteAuditEntry, TerminalWriteProvenance,
     TerminalWriteResult, default_terminal_socket_path,
+};
+pub use ipc::{
+    MAX_CONTROL_INPUT_BYTES, TERMINAL_CONTROL_PROTOCOL_VERSION, TerminalControlCommand,
+    TerminalControlCursor, TerminalControlStatus,
 };
 pub use journal::{JournalLimits, SequencedFrame};
 pub use process::{

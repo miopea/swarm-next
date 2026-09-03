@@ -1,8 +1,8 @@
 # ADR 0062: Generation-bound terminal control in the worker engine
 
 Status: Accepted for the operator-approved daily-driver maturity program;
-implementation in progress. Domain and engine gates are implemented; IPC and
-browser integration are not yet an enabled protocol.
+implementation in progress. Domain and engine gates and protocol-11 engine
+commands are implemented; the browser/API cutover is not yet enabled.
 
 ## Context
 
@@ -57,6 +57,14 @@ Once a session has accepted generation-bound control, legacy operator writes and
 resizes remain refused even after release or expiry. Authorized coordination may
 proceed without an active owner, under the same engine guard; it cannot bypass a
 live interactive owner. Before activation, the existing legacy contract remains.
+
+Protocol 11 adds a typed `Control` command and a `WaitControlled` output request.
+Control cursors include generation and occupied state, so lease expiry is not
+mistaken for an unchanged live owner. Waiters subscribe before observing state;
+claims/releases notify them even without output or a geometry change. They may
+wake at the authoritative expiry deadline and recheck renewals, not poll guesses.
+Wire status exposes remaining lease duration rather than the private engine clock.
+Nested command variants are pinned alongside the top-level protocol surface.
 
 ## Verification
 

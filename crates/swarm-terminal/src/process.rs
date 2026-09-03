@@ -7,7 +7,7 @@ use std::{
         atomic::{AtomicBool, AtomicI64, Ordering},
     },
     thread::{self, JoinHandle},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -102,6 +102,8 @@ pub enum SessionRegistryError {
     ControlDenied(TerminalControlError),
     #[error("this terminal requires generation-bound control")]
     ControlGenerationRequired,
+    #[error("terminal input must contain between 1 and 65536 bytes")]
+    InvalidControlInput,
     #[error("terminal operation failed: {0}")]
     Terminal(String),
     #[error(transparent)]
@@ -131,6 +133,7 @@ fn unix_seconds() -> i64 {
 pub struct ProcessTerminalSession {
     id: WorkerSessionId,
     control: TerminalControlGate,
+    control_changes: watch::Sender<()>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
@@ -283,6 +286,7 @@ impl ProcessTerminalSession {
         Ok(Self {
             id,
             control: TerminalControlGate::default(),
+            control_changes: watch::channel(()).0,
             child: Mutex::new(child),
             writer: Mutex::new(writer),
             master: Mutex::new(pair.master),
@@ -362,6 +366,21 @@ impl ProcessTerminalSession {
         self.control.status().map_err(control_error)
     }
 
+    /// A wire-safe snapshot with remaining duration instead of a private epoch.
+    ///
+    /// # Errors
+    /// Fails closed on a poisoned control lock.
+    pub fn control_wire_status(
+        &self,
+    ) -> Result<crate::TerminalControlStatus, SessionRegistryError> {
+        let (generation, owner, now) = self.control.snapshot().map_err(control_error)?;
+        Ok(crate::TerminalControlStatus {
+            generation,
+            owner: owner.map(|grant| grant.identity),
+            lease_remaining_ms: owner.map_or(0, |grant| grant.expires_at_ms.saturating_sub(now)),
+        })
+    }
+
     /// Acquires an unowned view, or explicitly takes over the observed revision.
     /// Geometry and ownership commit under one session guard; no input is sent.
     ///
@@ -373,11 +392,14 @@ impl ProcessTerminalSession {
         observed_generation: Option<u64>,
         size: TerminalSize,
     ) -> Result<TerminalControlGrant, SessionRegistryError> {
-        self.control
+        let grant = self
+            .control
             .claim(identity, observed_generation, || {
                 self.resize_unchecked(size)
             })
-            .map_err(control_error)
+            .map_err(control_error)?;
+        self.control_changes.send_replace(());
+        Ok(grant)
     }
 
     /// Renews a confirmed foreground view, without changing geometry or input.
@@ -405,7 +427,9 @@ impl ProcessTerminalSession {
     ) -> Result<(), SessionRegistryError> {
         self.control
             .release(identity, generation)
-            .map_err(control_error)
+            .map_err(control_error)?;
+        self.control_changes.send_replace(());
+        Ok(())
     }
 
     /// Changes geometry only while this exact view still owns the generation.
@@ -471,6 +495,44 @@ impl ProcessTerminalSession {
             changes.changed().await.map_err(|_| {
                 SessionRegistryError::Terminal("terminal output notifier closed".into())
             })?;
+        }
+    }
+
+    /// Waits for bytes, a control transition, process exit, or lease expiry.
+    /// Subscription precedes observation; no periodic poll establishes truth.
+    ///
+    /// # Errors
+    /// Fails if terminal/control state or an owned notification channel fails.
+    pub async fn wait_controlled_after(
+        &self,
+        sequence: Option<u64>,
+        after_control: crate::TerminalControlCursor,
+    ) -> Result<(Resume, bool, crate::TerminalControlStatus), SessionRegistryError> {
+        let mut output = self.output_state.subscribe();
+        let mut controls = self.control_changes.subscribe();
+        loop {
+            let running = *output.borrow_and_update();
+            drop(controls.borrow_and_update());
+            let control = self.control_wire_status()?;
+            let resume = self.resume_after(sequence)?;
+            if control.cursor() != after_control || resume_has_output(&resume) || !running {
+                return Ok((resume, running, control));
+            }
+            if control.owner.is_some() {
+                // This is the authoritative lease deadline, not a guessed delay.
+                // Renewal may extend it; waking at the previous deadline simply
+                // rechecks state without revoking or publishing a false expiry.
+                tokio::select! {
+                    result = output.changed() => result.map_err(terminal_error)?,
+                    result = controls.changed() => result.map_err(terminal_error)?,
+                    () = tokio::time::sleep(Duration::from_millis(control.lease_remaining_ms)) => {},
+                }
+            } else {
+                tokio::select! {
+                    result = output.changed() => result.map_err(terminal_error)?,
+                    result = controls.changed() => result.map_err(terminal_error)?,
+                }
+            }
         }
     }
 
@@ -759,6 +821,9 @@ impl SessionRegistry {
         }
         self.get(session_id)?;
         let mut takeovers = lock(&self.takeovers)?;
+        if self.get(session_id)?.control_status()?.1.is_some() {
+            return Err(SessionRegistryError::TakeoverConflict);
+        }
         if let Some(current) = takeovers.get(&session_id).copied()
             && current.expires_at > unix_timestamp()
             && (current.lease_id != lease.lease_id || current.revision > lease.revision)
@@ -868,6 +933,30 @@ impl SessionRegistry {
         })
     }
 
+    /// Claims are routed through the registry so a remote takeover cannot appear
+    /// between checking that boundary and committing local geometry/ownership.
+    ///
+    /// # Errors
+    /// Refuses active remote authority, stale control, invalid size, or PTY failure.
+    pub fn claim_control(
+        &self,
+        session_id: WorkerSessionId,
+        identity: TerminalControlIdentity,
+        observed_generation: Option<u64>,
+        size: TerminalSize,
+    ) -> Result<TerminalControlGrant, SessionRegistryError> {
+        let mut takeovers = lock(&self.takeovers)?;
+        if takeovers
+            .get(&session_id)
+            .is_some_and(|lease| lease.expires_at > unix_timestamp())
+        {
+            return Err(SessionRegistryError::TakeoverDenied);
+        }
+        takeovers.remove(&session_id);
+        self.get(session_id)?
+            .claim_control(identity, observed_generation, size)
+    }
+
     /// Audited operator input whose generation is checked through the PTY write.
     ///
     /// # Errors
@@ -880,6 +969,9 @@ impl SessionRegistry {
         generation: u64,
         bytes: &[u8],
     ) -> Result<(), SessionRegistryError> {
+        if bytes.is_empty() || bytes.len() > crate::MAX_CONTROL_INPUT_BYTES {
+            return Err(SessionRegistryError::InvalidControlInput);
+        }
         self.audit_write(
             session_id,
             TerminalWriteProvenance::operator(Some(identity.device), bytes),
@@ -1203,7 +1295,7 @@ fn terminal_error(error: impl std::fmt::Display) -> SessionRegistryError {
 }
 
 #[cfg(all(test, any(unix, windows)))]
-mod control_tests {
+pub(crate) mod control_tests {
     use super::*;
     use swarm_domain::{PresenceDeviceId, TerminalViewId};
 
@@ -1214,7 +1306,7 @@ mod control_tests {
         }
     }
 
-    fn fixture() -> (SessionRegistry, Arc<ProcessTerminalSession>) {
+    pub(crate) fn fixture() -> (SessionRegistry, Arc<ProcessTerminalSession>) {
         let workspace = std::env::temp_dir();
         let registry =
             SessionRegistry::new(JournalLimits::default(), 1, [workspace.clone()]).unwrap();
@@ -1330,6 +1422,73 @@ mod control_tests {
             .resize_controlled(desktop, original.generation, TerminalSize::new(25, 100))
             .unwrap();
         assert_eq!(size(&session), TerminalSize::new(25, 100));
+    }
+
+    #[tokio::test]
+    async fn control_changes_are_observable_without_requiring_terminal_output() {
+        let (registry, session) = fixture();
+        let initial = session.control_wire_status().unwrap();
+        let sequence = || {
+            let Resume::Snapshot { snapshot } = session.resume_after(None).unwrap() else {
+                panic!("expected snapshot");
+            };
+            Some(snapshot.sequence)
+        };
+        let mut changes = session.control_changes.subscribe();
+        let desktop = identity();
+        // Keep geometry unchanged: the control notification must own this event.
+        let grant = registry
+            .claim_control(session.id(), desktop, None, TerminalSize::new(24, 80))
+            .unwrap();
+        assert!(changes.has_changed().unwrap());
+        drop(changes.borrow_and_update());
+        let (_, _, claimed) = tokio::time::timeout(
+            Duration::from_secs(2),
+            session.wait_controlled_after(sequence(), initial.cursor()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(claimed.owner, Some(desktop));
+        session.release_control(desktop, grant.generation).unwrap();
+        assert!(changes.has_changed().unwrap());
+        let (_, _, released) = tokio::time::timeout(
+            Duration::from_secs(2),
+            session.wait_controlled_after(sequence(), claimed.cursor()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(released.owner, None);
+        assert_ne!(released.cursor(), claimed.cursor());
+    }
+
+    #[test]
+    fn remote_takeover_and_local_control_do_not_overlap() {
+        let (registry, session) = fixture();
+        let lease = TerminalTakeoverLease {
+            lease_id: FederationStewardTakeoverLeaseId::new(),
+            revision: 1,
+            expires_at: unix_timestamp() + 300,
+        };
+        registry.install_takeover(session.id(), lease).unwrap();
+        let desktop = identity();
+        assert!(matches!(
+            registry.claim_control(session.id(), desktop, None, TerminalSize::new(24, 100)),
+            Err(SessionRegistryError::TakeoverDenied)
+        ));
+        assert_eq!(session.control_status().unwrap().1, None);
+        assert_eq!(size(&session), TerminalSize::new(24, 80));
+        registry
+            .release_takeover(session.id(), lease.lease_id, lease.revision)
+            .unwrap();
+        registry
+            .claim_control(session.id(), desktop, None, TerminalSize::new(24, 100))
+            .unwrap();
+        assert!(matches!(
+            registry.install_takeover(session.id(), lease),
+            Err(SessionRegistryError::TakeoverConflict)
+        ));
     }
 }
 

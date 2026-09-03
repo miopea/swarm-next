@@ -250,6 +250,29 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   not activate this contract yet. Next: negotiated host commands, authoritative
   control-state notification, engagement projection, and the browser cutover.
 
+### P2g: typed engine control protocol
+
+- Protocol 11 introduces typed status/claim/renew/release/input/resize commands,
+  structured refusal codes, and controlled-output waits. The actual command
+  dispatcher is exercised against disposable PTYs. Empty or over-64-KiB input
+  is refused without extending ownership or reaching the writer.
+- Control-change notifications are independent of terminal output. Waiters
+  subscribe before observing; cursors distinguish ownership expiry from a live
+  owner at the same generation. Remaining lease duration is projected without
+  exposing or trusting a browser clock. Registry control claims and remote
+  takeover checks exclude one another under the same lock ordering.
+- Windows execution: 58 domain and 77 terminal tests passed. Strict Clippy for
+  both crates passed. Linux-target compilation and strict Clippy passed for all
+  terminal-library targets/features, including Unix-only source and test targets.
+  Cross-checking is not execution of Linux tests.
+- Full host Linux-target compilation and strict all-target/all-feature Clippy
+  passed after establishing an isolated Zig C compiler. This includes the real
+  AWS-LC dependency and host dispatch code, but is not Linux test execution.
+  No source was transferred to the server.
+- API/browser negotiation and cutover remain pending; current API requests still
+  use the existing terminal path. Protocol support must be confirmed before new
+  requests are sent. No worker engine update, deployment, or release was run.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has
@@ -274,6 +297,11 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   `cargo clippy --offline --locked -j 2 -p swarm-domain --all-targets --all-features -- -D warnings`.
 - Linux engine/PTY and persistence verification are not established by this
   domain-only Windows route; isolated Linux source transfer is still unapproved.
+- Linux cross-compilation uses the installed Rust Linux target plus official
+  Zig 0.16.0 under the same temporary root. Archive SHA-256:
+  `68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e`.
+  Compiler wrappers translate only the Rust target argument to Zig's target spelling.
+  Build artifacts and Zig caches stay in the temporary root. No source upload.
 
 See the approved plan. No phase is complete solely because a patch was committed.
 Real Android/iOS and normal operator soak remain separate evidence requirements.

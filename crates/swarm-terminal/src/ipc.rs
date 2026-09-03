@@ -4,7 +4,8 @@ use std::{env, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 use swarm_domain::{
-    FederationStewardTakeoverLeaseId, PresenceDeviceId, ProviderKind, WorkerSessionId,
+    FederationStewardTakeoverLeaseId, PresenceDeviceId, ProviderKind, TerminalControlIdentity,
+    WorkerSessionId,
 };
 use thiserror::Error;
 #[cfg(unix)]
@@ -18,22 +19,18 @@ use crate::{
     HistoryPage, HistorySessionSummary, ProcessResourceSample, Resume, TerminalSize,
 };
 
-// 10, not 9. This is the number that tells an API whether the running terminal
-// host speaks its protocol, and the whole chain downstream of it already works:
-// build-release.sh scrapes it into a PROTOCOL file and reconcile_host refuses to
-// swap a host across a change.
-//
-// It was left at 9 when StartShell was added, so every one of those checks
-// dutifully compared 9 to 9 and reported no change -- which is how the operator
-// met "unknown variant `start_shell`" instead of being told the worker engine
-// update was required. Bumping it here covers StartShell as well as
-// StartAlphaProvider.
+// Protocol 11 adds generation-bound control and control-aware output waits.
+// build-release.sh records this number and reconcile_host refuses an unsafe
+// engine swap across a protocol change. Older engines must be detected before
+// sending the new requests, never worked around with unrestricted legacy input.
 //
 // Safe to bump mid-flight: reconcile_host drains with $host_release/bin/swarmctl,
 // the binary from the release the RUNNING host came from, so the drain stays
 // version-matched to itself and a newer checkout cannot break the update that
 // carries it.
-pub const PROTOCOL_VERSION: u16 = 10;
+pub const PROTOCOL_VERSION: u16 = 11;
+pub const TERMINAL_CONTROL_PROTOCOL_VERSION: u16 = 11;
+pub const MAX_CONTROL_INPUT_BYTES: usize = 64 * 1024;
 pub const MAX_REQUEST_BYTES: u64 = 256 * 1024;
 pub const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 pub const MAX_WRITE_AUDIT_PAGE: u16 = 1_000;
@@ -254,9 +251,71 @@ pub enum HostRequest {
         session_id: WorkerSessionId,
         size: TerminalSize,
     },
+    Control {
+        session_id: WorkerSessionId,
+        command: TerminalControlCommand,
+    },
+    WaitControlled {
+        session_id: WorkerSessionId,
+        after_sequence: Option<u64>,
+        after_control: TerminalControlCursor,
+    },
     Stop {
         session_id: WorkerSessionId,
     },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TerminalControlCommand {
+    Status,
+    Claim {
+        identity: TerminalControlIdentity,
+        observed_generation: Option<u64>,
+        size: TerminalSize,
+    },
+    Renew {
+        identity: TerminalControlIdentity,
+        generation: u64,
+    },
+    Release {
+        identity: TerminalControlIdentity,
+        generation: u64,
+    },
+    Input {
+        identity: TerminalControlIdentity,
+        generation: u64,
+        bytes: Vec<u8>,
+    },
+    Resize {
+        identity: TerminalControlIdentity,
+        generation: u64,
+        size: TerminalSize,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TerminalControlCursor {
+    pub generation: u64,
+    pub occupied: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TerminalControlStatus {
+    pub generation: u64,
+    pub owner: Option<TerminalControlIdentity>,
+    /// Remaining duration, not the engine's private monotonic clock epoch.
+    pub lease_remaining_ms: u64,
+}
+
+impl TerminalControlStatus {
+    #[must_use]
+    pub const fn cursor(self) -> TerminalControlCursor {
+        TerminalControlCursor {
+            generation: self.generation,
+            occupied: self.owner.is_some(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -307,6 +366,14 @@ pub struct TerminalHostStatus {
     pub takeover_relay: bool,
 }
 
+impl TerminalHostStatus {
+    /// Unknown future protocols are not silently assumed compatible.
+    #[must_use]
+    pub fn supports_terminal_control(&self) -> bool {
+        (TERMINAL_CONTROL_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&self.protocol_version)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostResponse {
@@ -350,6 +417,16 @@ pub enum HostResponse {
         session_id: WorkerSessionId,
         resume: Resume,
         running: bool,
+    },
+    Control {
+        session_id: WorkerSessionId,
+        control: TerminalControlStatus,
+    },
+    ControlledOutput {
+        session_id: WorkerSessionId,
+        resume: Resume,
+        running: bool,
+        control: TerminalControlStatus,
     },
     Acknowledged,
     Error {
@@ -468,6 +545,8 @@ mod tests {
             "reclaim_takeover_and_write",
             "release_takeover",
             "resize",
+            "control",
+            "wait_controlled",
             "stop",
         ];
         let error = serde_json::from_value::<HostRequest>(serde_json::json!({
@@ -490,8 +569,8 @@ mod tests {
              anyone -- bump it, then update this list."
         );
         assert_eq!(
-            PROTOCOL_VERSION, 10,
-            "the pinned surface above belongs to protocol 10; if you changed \
+            PROTOCOL_VERSION, 11,
+            "the pinned surface above belongs to protocol 11; if you changed \
              the requests, this number moves with them"
         );
     }
@@ -514,6 +593,58 @@ mod tests {
         assert_eq!(status.host_build_id, None);
         assert_eq!(status.resources, None);
         assert!(!status.takeover_relay);
+        assert!(!status.supports_terminal_control());
+        let mut current = status;
+        current.protocol_version = PROTOCOL_VERSION;
+        assert!(current.supports_terminal_control());
+        current.protocol_version = PROTOCOL_VERSION + 1;
+        assert!(!current.supports_terminal_control());
+    }
+
+    #[test]
+    fn nested_control_commands_are_part_of_the_pinned_protocol() {
+        let error = serde_json::from_value::<TerminalControlCommand>(
+            serde_json::json!({ "kind": "unknown" }),
+        )
+        .unwrap_err()
+        .to_string();
+        let variants: Vec<_> = error
+            .split("expected one of ")
+            .nth(1)
+            .unwrap()
+            .split(", ")
+            .map(|name| name.trim().trim_matches('`'))
+            .collect();
+        assert_eq!(
+            variants,
+            ["status", "claim", "renew", "release", "input", "resize"]
+        );
+        assert_eq!(PROTOCOL_VERSION, 11);
+    }
+
+    #[test]
+    fn control_cursor_preserves_full_generation_and_distinguishes_expiry() {
+        let status = TerminalControlStatus {
+            generation: u64::MAX,
+            owner: None,
+            lease_remaining_ms: 0,
+        };
+        let cursor = status.cursor();
+        let encoded = serde_json::to_string(&cursor).unwrap();
+        assert_eq!(
+            serde_json::from_str::<TerminalControlCursor>(&encoded).unwrap(),
+            cursor
+        );
+        assert!(!cursor.occupied);
+        let occupied = TerminalControlCursor {
+            occupied: true,
+            ..cursor
+        };
+        assert_ne!(cursor, occupied);
+        assert!(
+            serde_json::from_str::<TerminalControlCursor>(r#"{"generation":-1,"occupied":true}"#)
+                .is_err()
+        );
     }
 
     #[test]
