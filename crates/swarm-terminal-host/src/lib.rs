@@ -2,16 +2,17 @@ use std::{
     fs,
     os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use nix::unistd::Uid;
-use swarm_domain::{ProviderKind, WorkerSessionId};
+use swarm_domain::{ProviderConversationId, ProviderKind, WorkerSessionId};
 use swarm_terminal::{
-    AlphaProviderAdapter, ClaudeCodeAdapter, CodexAdapter, HostRequest, HostResponse,
-    HostSessionSummary, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, PROTOCOL_VERSION, SessionRegistry,
-    TerminalHostStatus,
+    AlphaProviderAdapter, ClaudeCodeAdapter, ClaudeConversationStart, CodexAdapter, HostRequest,
+    HostResponse, HostSessionSummary, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, PROTOCOL_VERSION,
+    SessionRegistry, TerminalHostStatus,
 };
 use thiserror::Error;
 use tokio::{
@@ -20,6 +21,104 @@ use tokio::{
     sync::Semaphore,
 };
 use tracing::{info, warn};
+
+/// How long Claude gets to answer whether it holds a conversation.
+///
+/// Measured at ~1s: the answer is decided locally, before any request leaves the
+/// machine. The bound exists because this sits in the WORKER START path, and a
+/// probe that hangs would wedge every start behind it — which is the shape of the
+/// incident that left seventeen workers unstartable.
+const CONVERSATION_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Replaces a guess about Claude's history with Claude's own answer.
+///
+/// ⚠️ THE ORACLE HAS TO RUN WHERE CLAUDE RUNS, WHICH IS WHY THIS LIVES IN THE
+/// HOST. swarm-api used to decide this by looking for the conversation file under
+/// its OWN `CLAUDE_CONFIG_DIR`, while Claude is spawned here and inherits this
+/// service's. The two can differ, so the check could report a conversation gone
+/// that Claude could open perfectly — Swarm then reused the pinned id for a fresh
+/// conversation, Claude refused an id it still held, and the worker did not start
+/// at all. The arm existed to prevent exactly that failure and could cause it.
+///
+/// Asking from inside swarm-api would have rebuilt the same class with a new
+/// mechanism. Asking here cannot disagree with Claude, because it IS Claude, in
+/// the environment Claude will use.
+///
+/// ONLY AN EXPLICIT "NO SUCH CONVERSATION" TURNS A RESUME INTO A NEW. Every other
+/// outcome — the binary missing, a timeout, an unrecognised error — resumes, and
+/// that asymmetry is deliberate: reusing a pinned id Claude still holds is the
+/// failure being removed, so silence must never be read as permission to do it.
+fn conversation_claude_can_open(
+    conversation: ClaudeConversationStart,
+    holds_no_such_conversation: impl Fn(ProviderConversationId) -> bool,
+) -> ClaudeConversationStart {
+    let ClaudeConversationStart::Resume { session_id } = conversation else {
+        return conversation;
+    };
+    if holds_no_such_conversation(session_id) {
+        info!(
+            %session_id,
+            "Claude no longer holds this conversation; starting a fresh one under the same id"
+        );
+        return ClaudeConversationStart::New { session_id };
+    }
+    conversation
+}
+
+/// Asks the real Claude, read-only.
+///
+/// `--resume <id> --print ""` answers and stops: with no such conversation it
+/// says so and exits 1; with one it exits 1 complaining about the empty prompt
+/// instead. Measured against claude 2.1.259 — both under a second, neither
+/// reaching the API, and the transcript's content hash unchanged by the ask.
+///
+/// The distinguishing text is prose from another program and could be reworded.
+/// That is survivable HERE and only here, because of the asymmetry above: if the
+/// wording changes this stops recognising an absent conversation and every start
+/// becomes a Resume, which is the behaviour Swarm had before the `New` arm
+/// existed. It degrades to the old safe answer rather than to the failure.
+fn claude_holds_no_such_conversation(session_id: ProviderConversationId, workspace: &Path) -> bool {
+    let mut child = match Command::new("claude")
+        .arg("--resume")
+        .arg(session_id.to_string())
+        .arg("--print")
+        .arg("")
+        .current_dir(workspace)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            warn!(%session_id, %error, "could not ask Claude about this conversation; resuming");
+            return false;
+        }
+    };
+    let deadline = Instant::now() + CONVERSATION_PROBE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                warn!(%session_id, "Claude did not answer about this conversation in time; resuming");
+                return false;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(error) => {
+                warn!(%session_id, %error, "could not read Claude's answer; resuming");
+                return false;
+            }
+        }
+    }
+    let mut stderr = String::new();
+    if let Some(mut pipe) = child.stderr.take() {
+        use std::io::Read as _;
+        let _ = pipe.read_to_string(&mut stderr);
+    }
+    stderr.contains("No conversation found with session ID")
+}
 
 #[derive(Debug, Error)]
 pub enum HostServerError {
@@ -343,7 +442,9 @@ fn dispatch_blocking(
         } => ClaudeCodeAdapter
             .command_for_with_configuration(
                 &workspace,
-                conversation,
+                conversation_claude_can_open(conversation, |session_id| {
+                    claude_holds_no_such_conversation(session_id, &workspace)
+                }),
                 mcp_config.as_deref(),
                 claude_settings_for(mcp_config.as_deref()).as_deref(),
             )
@@ -1040,5 +1141,65 @@ mod grant_settings_tests {
         let grants = root.join("w.settings.json");
         std::fs::write(&grants, r#"{"permissions":{"allow":[]}}"#).unwrap();
         assert!(merged_settings(None, &grants).is_err());
+    }
+}
+
+#[cfg(test)]
+mod conversation_oracle_tests {
+    use super::*;
+    use swarm_domain::ProviderConversationId;
+
+    fn pinned() -> ProviderConversationId {
+        ProviderConversationId::new()
+    }
+
+    /// The whole point: Claude's answer decides, not a file Swarm looked for.
+    #[test]
+    fn claude_saying_it_has_no_such_conversation_turns_a_resume_into_a_new() {
+        let session_id = pinned();
+        assert_eq!(
+            conversation_claude_can_open(ClaudeConversationStart::Resume { session_id }, |_| true),
+            ClaudeConversationStart::New { session_id },
+            "the pin is kept and the thread starts fresh — a lost thread, not a lost worker"
+        );
+    }
+
+    /// ⚠️ THE ASYMMETRY, AND IT IS THE SAFETY PROPERTY. Anything other than an
+    /// explicit "no such conversation" resumes: the binary missing, a timeout, an
+    /// error nobody has seen before. Reusing a pinned id Claude still holds is
+    /// the failure being removed, so silence must never be read as permission.
+    #[test]
+    fn anything_short_of_an_explicit_no_still_resumes() {
+        let session_id = pinned();
+        assert_eq!(
+            conversation_claude_can_open(ClaudeConversationStart::Resume { session_id }, |_| false),
+            ClaudeConversationStart::Resume { session_id },
+            "an unanswered question is not an answer"
+        );
+    }
+
+    /// The oracle is asked about a resume and nothing else. A worker starting a
+    /// genuinely new conversation must not pay a second of startup to be told
+    /// what the caller already knows.
+    #[test]
+    fn a_new_conversation_and_a_continue_are_never_put_to_claude() {
+        let session_id = pinned();
+        let asked = std::cell::Cell::new(false);
+        let spy = |_| {
+            asked.set(true);
+            true
+        };
+        assert_eq!(
+            conversation_claude_can_open(ClaudeConversationStart::New { session_id }, spy),
+            ClaudeConversationStart::New { session_id }
+        );
+        assert_eq!(
+            conversation_claude_can_open(ClaudeConversationStart::Continue, spy),
+            ClaudeConversationStart::Continue
+        );
+        assert!(
+            !asked.get(),
+            "neither case has a pinned conversation to ask about"
+        );
     }
 }

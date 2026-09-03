@@ -223,16 +223,27 @@ fn provider_start_request(
             // workers permanently unstartable with nothing in the product able
             // to clear them, because Claude prunes its own history on a
             // schedule Swarm does not control.
-            let resumable = claude_resume_history_available(profile);
+            //
+            // ⚠️ SWARM NO LONGER DECIDES WHETHER THE CONVERSATION IS STILL THERE,
+            // and nothing here reads a directory to find out. It used to look for
+            // the transcript under swarm-api's own CLAUDE_CONFIG_DIR while Claude
+            // is spawned by the terminal host and inherits THAT service's, so the
+            // check could report a conversation gone that Claude could open — and
+            // then `New` reused a pinned id Claude still held, Claude refused it,
+            // and the worker did not start.
+            //
+            // A pinned id is now always sent as Resume and the HOST asks Claude,
+            // in the environment Claude actually runs in. Correcting which
+            // directory this read would have fixed the instance and left a check
+            // that can still disagree; the operator chose to remove the class.
             HostRequest::StartClaude {
                 workspace: worker_workspace.clone(),
                 size,
                 conversation: match (
                     profile.provider_conversation_id,
-                    profile.has_session_history && resumable,
+                    profile.has_session_history,
                 ) {
-                    (Some(session_id), false) => ClaudeConversationStart::New { session_id },
-                    (Some(session_id), true) => ClaudeConversationStart::Resume { session_id },
+                    (Some(session_id), _) => ClaudeConversationStart::Resume { session_id },
                     (None, true) => ClaudeConversationStart::Continue,
                     (None, false) => {
                         let session_id = task_store(state)?
@@ -296,43 +307,6 @@ fn provider_start_request(
         );
     }
     Ok(request)
-}
-
-/// Whether this worker's saved Claude conversation can be resumed, making it
-/// available where the worker's Claude will look for it if it is not there yet.
-///
-/// Returns false rather than failing when it cannot be found. The worker then
-/// starts a fresh conversation under the same session id, which is a lost
-/// thread rather than a lost worker — Claude prunes its own history on a
-/// schedule Swarm does not control, and refusing to start left workers
-/// unstartable with nothing in the product able to clear them.
-fn claude_resume_history_available(profile: &WorkerProfile) -> bool {
-    let Some(conversation_id) = profile
-        .provider_conversation_id
-        .filter(|_| profile.has_session_history)
-    else {
-        return true;
-    };
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
-        return false;
-    };
-    let target =
-        std::env::var_os("CLAUDE_CONFIG_DIR").map_or_else(|| home.join(".claude"), PathBuf::from);
-    let available = ensure_claude_resume_history_between(
-        &profile.workspace,
-        &conversation_id.to_string(),
-        &home.join(".claude/projects"),
-        &target.join("projects"),
-        &home,
-    )
-    .is_ok();
-    if !available {
-        tracing::info!(
-            worker = %profile.name,
-            "the saved Claude conversation is no longer on this machine; starting a fresh one"
-        );
-    }
-    available
 }
 
 /// Resolves a leading `~` against the operator's home.
@@ -486,35 +460,6 @@ pub(crate) fn conversation_freshness(
         pinned_last_entry: pinned_last,
         newest_last_entry: newest_timestamp,
     }
-}
-
-fn ensure_claude_resume_history_between(
-    workspace: &str,
-    conversation_id: &str,
-    source_root: &Path,
-    target_root: &Path,
-    home: &Path,
-) -> Result<(), std::io::Error> {
-    let workspace = expand_home_against(workspace, home);
-    let [encoded, older_encoded] = swarm_persistence::claude_project_slugs(&workspace);
-    let destination_directory = target_root.join(&encoded);
-    let destination = destination_directory.join(format!("{conversation_id}.jsonl"));
-    if destination.is_file() {
-        return Ok(());
-    }
-    let source = [encoded.as_str(), older_encoded.as_str()]
-        .into_iter()
-        .map(|directory| {
-            source_root
-                .join(directory)
-                .join(format!("{conversation_id}.jsonl"))
-        })
-        .find(|path| path.is_file())
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "conversation missing"))?;
-    std::fs::create_dir_all(&destination_directory)?;
-    let temporary = destination.with_extension("jsonl.importing");
-    std::fs::copy(source, &temporary)?;
-    std::fs::rename(temporary, destination)
 }
 
 fn worker_is_scout(state: &AppState, worker_id: WorkerId) -> Result<bool, ApiError> {
@@ -725,37 +670,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn first_wake_stages_an_existing_legacy_claude_conversation() {
-        let directory = tempfile::tempdir().unwrap();
-        let home = directory.path().join("home");
-        let source_root = home.join(".claude/projects");
-        let target_root = home.join("isolated/projects");
-        let conversation_id = "8e9ed267-7ed8-4b64-94ef-dde3ab17f21a";
-        let source = source_root.join("-home-projects-petal");
-        std::fs::create_dir_all(&source).unwrap();
-        std::fs::write(source.join(format!("{conversation_id}.jsonl")), b"history").unwrap();
-
-        ensure_claude_resume_history_between(
-            "~/projects/petal",
-            conversation_id,
-            &source_root,
-            &target_root,
-            Path::new("/home"),
-        )
-        .unwrap();
-
-        assert_eq!(
-            std::fs::read(
-                target_root
-                    .join("-home-projects-petal")
-                    .join(format!("{conversation_id}.jsonl"))
-            )
-            .unwrap(),
-            b"history"
-        );
-    }
-
     /// A CODEX WORKER GETS A CONFIG MINTED FOR IT, and an alpha provider does not.
     ///
     /// This is the entire fix for "the Codex worker gets the assignment
@@ -789,100 +703,6 @@ mod tests {
         }
     }
 
-    /// THE REPRODUCTION 01a05af0 ASKED FOR: the check says the conversation is
-    /// gone while Claude can still open it.
-    ///
-    /// The ticket refused a patch until this existed, and was right to —
-    /// "guessing at that is how the 17-unstartable-workers incident happened in
-    /// the first place."
-    ///
-    /// ⚠️ THE DISAGREEMENT IS TWO PROCESSES, NOT A PATH BUG. The check runs in
-    /// swarm-api and reads its OWN `CLAUDE_CONFIG_DIR`; Claude is spawned by
-    /// swarm-terminal-host and inherits THAT service's environment. They are
-    /// separate systemd units and cannot be assumed to agree — on this Hive
-    /// swarm-api additionally loads `swarm-dev.env`, which the host does not.
-    ///
-    /// The direction matters and I had it backwards at first. If only the API
-    /// has a config dir, the copy below RESCUES the case: the conversation is
-    /// found under `$HOME/.claude` and copied forward, so the check says
-    /// available and it is. The failure is the mirror image — Claude reading a
-    /// config dir the check knows nothing about, because `source_root` is
-    /// hardcoded to the API's own `$HOME/.claude/projects` and never asks where
-    /// the host will look.
-    ///
-    /// Then: the check reports gone, `New { id }` reuses the pinned id for a
-    /// fresh conversation, and Claude refuses an id it still holds. The worker
-    /// does not start. The arm exists to prevent exactly that.
-    ///
-    /// NOT REPRODUCED ON THE LIVE HIVE, deliberately: pointing the running API
-    /// at an empty tree with thirteen sessions attached risks the incident this
-    /// ticket exists to avoid, to show something a test shows for nothing.
-    #[test]
-    fn the_check_reports_gone_for_a_conversation_the_provider_can_still_open() {
-        let directory = tempfile::tempdir().unwrap();
-        let home = directory.path().join("home");
-        let conversation_id = "8e9ed267-7ed8-4b64-94ef-dde3ab17f21a";
-
-        // Where CLAUDE actually looks, because the terminal host has a config
-        // dir of its own. The conversation is here and is perfectly openable.
-        let provider_tree = directory.path().join("host-claude/projects");
-        let provider_directory = provider_tree.join("-home-projects-petal");
-        std::fs::create_dir_all(&provider_directory).unwrap();
-        std::fs::write(
-            provider_directory.join(format!("{conversation_id}.jsonl")),
-            b"history",
-        )
-        .unwrap();
-
-        // What the CHECK consults: its own home, which knows nothing about the
-        // host's config dir. source_root is hardcoded to this in the caller.
-        let error = ensure_claude_resume_history_between(
-            "/home/projects/petal",
-            conversation_id,
-            &home.join(".claude/projects"),
-            &home.join(".claude/projects"),
-            &home,
-        )
-        .unwrap_err();
-
-        assert_eq!(
-            error.kind(),
-            std::io::ErrorKind::NotFound,
-            "the check reports the conversation gone"
-        );
-        assert!(
-            provider_directory
-                .join(format!("{conversation_id}.jsonl"))
-                .is_file(),
-            "WHILE IT IS SITTING WHERE THE PROVIDER READS IT. This is the whole \
-             defect: `New {{ id }}` is then chosen for a conversation Claude still \
-             holds, Claude refuses the id as already in use, and the worker never \
-             starts."
-        );
-    }
-
-    /// The lookup still reports a missing conversation. What changed is what
-    /// the caller does with that: it starts a fresh conversation under the same
-    /// session id rather than refusing to start the worker at all.
-    ///
-    /// Seventeen of the operator's workers were unstartable because Claude had
-    /// pruned conversations Swarm still had ids for — a schedule Swarm does not
-    /// control — and nothing in the product could clear them. A lost thread is
-    /// a smaller loss than a worker that will not run.
-    #[test]
-    fn a_missing_saved_conversation_is_reported_rather_than_hidden() {
-        let directory = tempfile::tempdir().unwrap();
-        let error = ensure_claude_resume_history_between(
-            "/home/projects/petal",
-            "8e9ed267-7ed8-4b64-94ef-dde3ab17f21a",
-            &directory.path().join("source"),
-            &directory.path().join("target"),
-            Path::new("/home"),
-        )
-        .unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
-    }
-
     /// A workspace stored with a tilde was expanded when looking for resume
     /// history and not when starting the worker, so the terminal host was asked
     /// to open a directory literally named `~`. One worker on the operator's
@@ -899,43 +719,6 @@ mod tests {
         // part of the name rather than a reference to home.
         assert_eq!(expand_home_against("/srv/petal", home), "/srv/petal");
         assert_eq!(expand_home_against("/srv/~petal", home), "/srv/~petal");
-    }
-    /// A worker with nothing saved has nothing to look for, so nothing can
-    /// block it. This is the case the caller must not treat as a failure.
-    #[test]
-    fn a_worker_with_no_saved_conversation_is_never_blocked() {
-        let directory = tempfile::tempdir().unwrap();
-        let profile = worker_profile(&directory.path().join("projects/petal"), None, false);
-        assert!(claude_resume_history_available(&profile));
-    }
-
-    /// And a conversation that is present is found where the worker's Claude
-    /// will look for it, which is the whole point of the copy.
-    #[test]
-    fn a_surviving_conversation_is_made_available_to_the_worker() {
-        let directory = tempfile::tempdir().unwrap();
-        let home = directory.path();
-        let workspace = "/home/projects/petal";
-        let conversation = "8e9ed267-7ed8-4b64-94ef-dde3ab17f21a";
-        let source = home.join("source").join(workspace.replace(['/', '.'], "-"));
-        std::fs::create_dir_all(&source).unwrap();
-        std::fs::write(source.join(format!("{conversation}.jsonl")), b"history").unwrap();
-
-        ensure_claude_resume_history_between(
-            workspace,
-            conversation,
-            &home.join("source"),
-            &home.join("target"),
-            Path::new("/home"),
-        )
-        .unwrap();
-
-        assert!(
-            home.join("target")
-                .join(workspace.replace(['/', '.'], "-"))
-                .join(format!("{conversation}.jsonl"))
-                .is_file()
-        );
     }
 
     /// Writes a transcript whose LAST entry carries `last`, and whose mtime is
@@ -1074,5 +857,46 @@ mod tests {
             ephemeral: false,
             mark: None,
         }
+    }
+}
+
+/// THE CLASS IS GONE ONLY IF NOTHING HERE LOOKS FOR THE CONVERSATION AGAIN.
+///
+/// The defect was never the particular directory: it was swarm-api answering a
+/// question about a tree the terminal host owns. Correcting which path it read
+/// would have fixed the instance and left a check that can still disagree with
+/// Claude for some other reason — a permissions case, a path difference, a
+/// pruning race. The operator chose to remove the class, so this fails if
+/// worker-start ever grows another local oracle for it.
+///
+/// Deliberately a source scan. A behavioural test would have to construct the
+/// disagreement to catch a regression; this catches the reintroduction itself,
+/// which is the thing that would be written by somebody who did not read the
+/// history.
+#[cfg(test)]
+mod the_conversation_oracle_is_not_ours {
+    const SOURCE: &str = include_str!("worker_runtime.rs");
+
+    /// Split so the scanner does not match its own message, and matching the
+    /// ENV READ rather than the name: this file explains in prose why it no
+    /// longer reads that variable, and a guard that cannot tell an explanation
+    /// from an instruction reports the comment describing the fix as the defect.
+    /// It did exactly that on the first run.
+    const READS_THE_VARIABLE: &str = concat!("var_os(\"CLAUDE", "_CONFIG_DIR\")");
+
+    #[test]
+    fn worker_start_never_decides_for_itself_whether_claude_holds_a_conversation() {
+        assert!(
+            !SOURCE.contains(READS_THE_VARIABLE),
+            "worker start reads Claude's config directory again. Whether Claude \
+             holds a conversation is Claude's to answer, in the host, where Claude \
+             runs — see conversation_claude_can_open in swarm-terminal-host."
+        );
+        assert!(
+            !SOURCE.contains(concat!("fn claude_resume", "_history_available")),
+            "the inference-based availability check is back. It was deleted rather \
+             than corrected, on an operator ruling, because a second oracle \
+             reintroduces the disagreement being removed."
+        );
     }
 }
