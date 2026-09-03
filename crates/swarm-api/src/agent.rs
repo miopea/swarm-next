@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 11;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 12;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -403,7 +403,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 11;
 #[cfg(test)]
 /// The served surface as of revision 6. Update this and the revision together.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "3ac170b9feef61377bbd6a4e98cacf432490c54941c54c352e02d5ac4de11ca5";
+    "3792ff6454173eb7721d01f4b494fdf6aae65d64da6629d407d08f84258d1f10";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -587,6 +587,7 @@ impl ServerHandler for AgentMcp {
             record_task_note_tool(),
             retitle_task_tool(),
             record_no_deployment_tool(),
+            withdraw_no_deployment_tool(),
             draft_email_reply_tool(),
             create_task_tool(),
             list_decisions_tool(),
@@ -692,6 +693,7 @@ impl ServerHandler for AgentMcp {
             "swarm_record_deployment" => self.record_deployment(arguments),
             "swarm_record_task_commits" => self.record_task_commits(arguments).await,
             "swarm_record_no_deployment" => self.record_no_deployment(arguments),
+            "swarm_withdraw_no_deployment" => self.withdraw_no_deployment(arguments),
             "swarm_draft_email_reply" => self.draft_email_reply(arguments),
             "swarm_list_workers" => self
                 .tasks
@@ -1830,6 +1832,39 @@ impl AgentMcp {
         }))
     }
 
+    /// Takes back a no-deployment claim that has stopped being true.
+    ///
+    /// A claim is a fact about a MOMENT and nothing carried that expiry. The
+    /// worker with the clearest case wrote "investigation only, no code" while
+    /// the ticket was investigation-only, was then told to build it, and had no
+    /// way to say the claim no longer held: the options were to leave it
+    /// standing or record another false one.
+    ///
+    /// The actor decides what the store will allow. Queen withdraws anyone's,
+    /// including one she approved -- which is the only route back for a claim
+    /// approved before somebody noticed it was false, because approving is the
+    /// one act that takes a task off the detector watching it.
+    fn withdraw_no_deployment(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<WithdrawNoDeploymentInput>(arguments)?;
+        let task_id = self.task_evidence_may_reach(&input.task_id)?;
+        let actor = if self.principal.role == WorkerRole::Queen {
+            "queen".to_owned()
+        } else {
+            self.principal.worker_id.to_string()
+        };
+        let evidence = self.tasks.store().withdraw_completion_exemption(
+            task_id,
+            &actor,
+            crate::unix_timestamp(),
+        )?;
+        structured(json!({
+            "task_id": task_id,
+            "evidence": format!("{evidence:?}"),
+            "next": "This task has no valid claim and no deployment. Record what is true now \
+                     -- a deployment if something shipped, or a fresh claim if nothing did.",
+        }))
+    }
+
     /// Writes the reply the person who emailed in will receive.
     ///
     /// Drafting only. Sending is an external effect and stays an explicit
@@ -2507,6 +2542,11 @@ const fn delivers_whole_task_by_default() -> bool {
 struct RecordNoDeploymentInput {
     task_id: String,
     reason: String,
+}
+
+#[derive(Deserialize)]
+struct WithdrawNoDeploymentInput {
+    task_id: String,
 }
 
 #[derive(Deserialize)]
@@ -3310,6 +3350,22 @@ fn record_no_deployment_tool() -> Tool {
                 "reason": { "type": "string", "minLength": 1, "maxLength": 500, "description": "Why there is nothing running to point at. Say what you did instead." }
             },
             "required": ["task_id", "reason"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
+fn withdraw_no_deployment_tool() -> Tool {
+    tool(
+        "swarm_withdraw_no_deployment",
+        "Take back a no-deployment claim that has stopped being true, so the task has no valid claim again. Use it when the claim was wrong when you made it, or when it was true and your own later work invalidated it -- an investigation you were then told to build is the common one. This is not a way to tidy a claim you still stand behind: the row and its reason stay on the record, marked withdrawn, because \"claimed, then withdrawn\" is the honest history. Withdrawing puts the task back in front of Queen as work with no evidence, which is what it actually is. You may withdraw your own claim; only Queen or the operator may withdraw one Queen already approved.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string", "format": "uuid" }
+            },
+            "required": ["task_id"],
             "additionalProperties": false
         }),
         false,
@@ -4429,6 +4485,11 @@ mod tests {
                 "swarm_record_task_note",
                 "swarm_retitle_task",
                 "swarm_record_no_deployment",
+                // Beside the tool it undoes, and a WORKER tool on purpose: the
+                // author of a claim that stopped being true is the one who finds
+                // out first, and needing to ask Queen to retract it is the state
+                // this pair exists to end.
+                "swarm_withdraw_no_deployment",
                 "swarm_draft_email_reply",
                 "swarm_create_task",
                 "swarm_list_decisions",

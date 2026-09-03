@@ -990,7 +990,7 @@ impl TaskStore {
                                 WHERE deployment.task_id = task.id)
                        OR EXISTS (SELECT 1 FROM task_completion_exemptions exemption
                                    WHERE exemption.task_id = task.id
-                                     AND exemption.approved_at IS NOT NULL)
+                                     AND exemption.approved_at IS NOT NULL AND exemption.withdrawn_at IS NULL)
                    )
              )",
             [id],

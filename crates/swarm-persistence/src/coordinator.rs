@@ -233,7 +233,7 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
                        AND NOT EXISTS (
                            SELECT 1 FROM task_completion_exemptions exemption
                            WHERE exemption.task_id = task.id
-                             AND exemption.approved_at IS NOT NULL
+                             AND exemption.approved_at IS NOT NULL AND exemption.withdrawn_at IS NULL
                        ))
                    -- Clears itself by the task being CLOSED, which is the
                    -- only act that answers it. Approving the evidence is what
@@ -248,7 +248,7 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
                            OR EXISTS (
                                SELECT 1 FROM task_completion_exemptions exemption
                                WHERE exemption.task_id = task.id
-                                 AND exemption.approved_at IS NOT NULL
+                                 AND exemption.approved_at IS NOT NULL AND exemption.withdrawn_at IS NULL
                            )))
                    OR (action.kind = 'stale_owned_work_attention'
                        AND task.assigned_worker_id = action.worker_id
@@ -878,7 +878,7 @@ impl TaskStore {
                    OR EXISTS (
                        SELECT 1 FROM task_completion_exemptions exemption
                        WHERE exemption.task_id = task.id
-                         AND exemption.approved_at IS NOT NULL
+                         AND exemption.approved_at IS NOT NULL AND exemption.withdrawn_at IS NULL
                    ))
                AND NOT EXISTS (
                    SELECT 1 FROM coordinator_actions action
@@ -1191,7 +1191,7 @@ impl TaskStore {
                AND NOT EXISTS (
                    SELECT 1 FROM task_completion_exemptions exemption
                    WHERE exemption.task_id = task.id
-                     AND exemption.approved_at IS NOT NULL
+                     AND exemption.approved_at IS NOT NULL AND exemption.withdrawn_at IS NULL
                )
                AND NOT EXISTS (
                    SELECT 1 FROM coordinator_actions action
@@ -1259,7 +1259,7 @@ impl TaskStore {
                    AND NOT EXISTS (
                        SELECT 1 FROM task_completion_exemptions exemption
                        WHERE exemption.task_id = task.id
-                         AND exemption.approved_at IS NOT NULL
+                         AND exemption.approved_at IS NOT NULL AND exemption.withdrawn_at IS NULL
                    )
              )",
             params![
@@ -2949,6 +2949,82 @@ mod reviewed_work_tests {
                 .unwrap()
                 .is_empty(),
             "approved evidence is evidence"
+        );
+    }
+
+    /// WITHDRAWING AN APPROVED CLAIM PUTS THE WORK BACK IN FRONT OF HER, and
+    /// that is the whole reason withdrawal has to exist rather than being a
+    /// tidier way to write a note.
+    ///
+    /// Approving is the ONE act that takes a task off this detector. So a claim
+    /// that was approved and later found false is the only genuinely invisible
+    /// case on this board: the task looks settled, nothing is watching it, and
+    /// the record says work shipped nowhere. One such claim was approved at
+    /// 04:25 on work whose PR was still open.
+    ///
+    /// The second half is the control, and it is the half that would have caught
+    /// me implementing this as "any exemption row stops counting". A live
+    /// approved claim on a second task must be untouched by the same query.
+    #[test]
+    fn a_withdrawn_approval_makes_the_work_visible_again_and_a_live_one_does_not() {
+        let store = TaskStore::in_memory().unwrap();
+        store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let now = i64::MAX / 4;
+        let grace = 15 * 60;
+
+        let reviewed = |title: &str| {
+            let task = store.create_task(title, "/workspace/petal").unwrap();
+            store.transition_task(task.id, TaskState::Ready).unwrap();
+            store.assign_task(task.id, session).unwrap();
+            store.transition_task(task.id, TaskState::Active).unwrap();
+            store.transition_task(task.id, TaskState::Review).unwrap();
+            store
+                .claim_completion_exemption(task.id, "nothing to deploy", Some(worker.id), now)
+                .unwrap();
+            store
+                .approve_completion_exemption(task.id, "queen", "Read the handoff.", now)
+                .unwrap();
+            task
+        };
+        let withdrawn = reviewed("Approved, then found false");
+        let _live = reviewed("Approved and still true");
+
+        assert!(
+            store
+                .reviewed_work_without_evidence_candidates(now, grace)
+                .unwrap()
+                .is_empty(),
+            "both are approved, so neither is stranded yet"
+        );
+
+        store
+            .withdraw_completion_exemption(withdrawn.id, "queen", now)
+            .unwrap();
+
+        let candidates = store
+            .reviewed_work_without_evidence_candidates(now, grace)
+            .unwrap();
+        assert_eq!(
+            candidates.iter().map(|row| row.task_id).collect::<Vec<_>>(),
+            vec![withdrawn.id],
+            "the withdrawn one comes back and the live one stays settled"
+        );
+        assert!(
+            store
+                .record_reviewed_work_without_evidence_attention(&candidates[0], now, grace)
+                .unwrap(),
+            "the re-check inside recording must agree with the selection"
         );
     }
 

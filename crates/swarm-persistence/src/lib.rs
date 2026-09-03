@@ -190,7 +190,8 @@ const OPERATOR_BROADCAST_SCHEMA_VERSION: i64 = 119;
 const BROADCAST_EXPIRY_SCHEMA_VERSION: i64 = 120;
 const MESSAGE_DELIVERY_SESSION_SCHEMA_VERSION: i64 = 121;
 const DELIVERY_COOLDOWN_SCHEMA_VERSION: i64 = 122;
-const CURRENT_SCHEMA_VERSION: i64 = DELIVERY_COOLDOWN_SCHEMA_VERSION;
+const CLAIM_WITHDRAWAL_SCHEMA_VERSION: i64 = 123;
+const CURRENT_SCHEMA_VERSION: i64 = CLAIM_WITHDRAWAL_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -1524,7 +1525,7 @@ impl TaskStore {
         let has_evidence: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = ?1)
                  OR EXISTS(SELECT 1 FROM task_completion_exemptions e
-                           WHERE e.task_id = ?1 AND e.approved_at IS NOT NULL)",
+                           WHERE e.task_id = ?1 AND e.approved_at IS NOT NULL AND e.withdrawn_at IS NULL)",
             [id.to_string()],
             |row| row.get(0),
         )?;
@@ -1708,7 +1709,7 @@ impl TaskStore {
                    EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = t.id),
                    EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = t.id)
                      OR EXISTS(SELECT 1 FROM task_completion_exemptions e
-                               WHERE e.task_id = t.id AND e.approved_at IS NOT NULL),
+                               WHERE e.task_id = t.id AND e.approved_at IS NOT NULL AND e.withdrawn_at IS NULL),
                    EXISTS(SELECT 1 FROM task_activity worked
                           WHERE worked.task_id = t.id AND worked.actor_kind = 'worker'),
                    EXISTS(SELECT 1 FROM task_unverifiable_closures u WHERE u.task_id = t.id),
@@ -1734,7 +1735,7 @@ impl TaskStore {
          OR (t.state = 'completed'
              AND (EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = t.id)
                   OR EXISTS(SELECT 1 FROM task_completion_exemptions e
-                            WHERE e.task_id = t.id AND e.approved_at IS NOT NULL)
+                            WHERE e.task_id = t.id AND e.approved_at IS NOT NULL AND e.withdrawn_at IS NULL)
                   OR EXISTS(SELECT 1 FROM task_unverifiable_closures u WHERE u.task_id = t.id))))
     ";
 
@@ -1814,7 +1815,7 @@ impl TaskStore {
                    EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = t.id),
                    EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = t.id)
                      OR EXISTS(SELECT 1 FROM task_completion_exemptions e
-                               WHERE e.task_id = t.id AND e.approved_at IS NOT NULL),
+                               WHERE e.task_id = t.id AND e.approved_at IS NOT NULL AND e.withdrawn_at IS NULL),
                    EXISTS(SELECT 1 FROM task_activity worked
                           WHERE worked.task_id = t.id AND worked.actor_kind = 'worker'),
                    EXISTS(SELECT 1 FROM task_unverifiable_closures u WHERE u.task_id = t.id),
@@ -1854,7 +1855,7 @@ impl TaskStore {
                    EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = t.id),
                    EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = t.id)
                      OR EXISTS(SELECT 1 FROM task_completion_exemptions e
-                               WHERE e.task_id = t.id AND e.approved_at IS NOT NULL),
+                               WHERE e.task_id = t.id AND e.approved_at IS NOT NULL AND e.withdrawn_at IS NULL),
                    EXISTS(SELECT 1 FROM task_activity worked
                           WHERE worked.task_id = t.id AND worked.actor_kind = 'worker'),
                    EXISTS(SELECT 1 FROM task_unverifiable_closures u WHERE u.task_id = t.id),
@@ -2999,6 +3000,98 @@ fn migrate_superseded_exemptions(transaction: &rusqlite::Transaction<'_>) -> rus
     transaction.pragma_update(None, "user_version", SUPERSEDED_EXEMPTION_SCHEMA_VERSION)
 }
 
+/// Records that the author of a no-deployment claim took it back.
+///
+/// WITHDRAWAL IS NOT SUPERSESSION AND MUST NOT REUSE `superseded_at`. That
+/// column already means one specific thing — a recorded deployment contradicted
+/// the claim — and it is written from two directions: `claim_completion_exemption`
+/// marks a claim born onto an already-deployed task, and `record_deployment`
+/// marks a standing claim the deployment overtook. Both are statements of FACT
+/// made by the store: the claim said nothing shipped, and something did.
+///
+/// A withdrawal is a different act by a different party. It is a RETRACTION —
+/// the author, or a coordinator, saying the claim should never have been made or
+/// has stopped being true. Nothing shipped, so supersession cannot express it,
+/// and bolting a second meaning onto that column would destroy the distinction
+/// the task that asked for this named in its own title.
+///
+/// Three shapes it has to carry, all observed on this board in one afternoon:
+/// a claim FALSE when made and the author could not take it back; a claim
+/// APPROVED before anyone noticed it was false, which is the invisible case
+/// because approving removes the task from the detector; and a claim TRUE when
+/// written and invalidated by the author's own later work.
+///
+/// Guarded on the columns being absent AND the table existing, because the
+/// migration tests rewind `user_version` without rewinding tables.
+fn migrate_claim_withdrawal(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                        WHERE type = 'table' AND name = 'task_completion_exemptions')",
+        [],
+        |row| row.get(0),
+    )?;
+    if present {
+        let has_withdrawn_at: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('task_completion_exemptions')
+                            WHERE name = 'withdrawn_at')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_withdrawn_at {
+            transaction.execute_batch(
+                "ALTER TABLE task_completion_exemptions ADD COLUMN withdrawn_at INTEGER;",
+            )?;
+        }
+        let has_withdrawn_by: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('task_completion_exemptions')
+                            WHERE name = 'withdrawn_by')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_withdrawn_by {
+            transaction.execute_batch(
+                "ALTER TABLE task_completion_exemptions ADD COLUMN withdrawn_by TEXT;",
+            )?;
+        }
+    }
+    // THE SEND GUARD IS A TRIGGER, AND A TRIGGER CANNOT SEE A COLUMN THAT DOES
+    // NOT EXIST YET. `email_reply_send_requires_evidence` was written at schema
+    // 108 and lets a reply go out on an approved exemption; a withdrawn one must
+    // stop counting there too, or a reply ships to a person on evidence its own
+    // author has retracted.
+    //
+    // It is recreated HERE rather than edited in place at 108. Editing the older
+    // migration makes it reference `withdrawn_at` while replaying a database that
+    // has not reached 123 — every fresh build runs 108 first, and the trigger
+    // then fails at the next write with "no such column". That is not
+    // hypothetical: it is what this migration did on its first run.
+    //
+    // Dropped by name before creating, for the reason spelled out at 108: the
+    // migration tests tear a modern store back and migrate forward again, and a
+    // CREATE with no DROP fails there with "already exists".
+    transaction.execute_batch(
+        "DROP TRIGGER IF EXISTS email_reply_send_requires_evidence;
+         CREATE TRIGGER email_reply_send_requires_evidence
+             BEFORE UPDATE OF state ON email_reply_deliveries
+             WHEN NEW.state = 'queued' AND OLD.state <> 'queued'
+              AND NOT EXISTS (
+                 SELECT 1 FROM tasks task
+                 WHERE task.id = NEW.task_id
+                   AND task.state IN ('completed', 'review')
+                   AND (
+                       EXISTS (SELECT 1 FROM task_deployments deployment
+                                WHERE deployment.task_id = task.id)
+                       OR EXISTS (SELECT 1 FROM task_completion_exemptions exemption
+                                   WHERE exemption.task_id = task.id
+                                     AND exemption.approved_at IS NOT NULL
+                                     AND exemption.withdrawn_at IS NULL)
+                   )
+             )
+             BEGIN SELECT RAISE(ABORT, 'An email reply cannot be sent without a recorded deployment or an approved no-deployment exemption'); END;",
+    )?;
+    transaction.pragma_update(None, "user_version", CLAIM_WITHDRAWAL_SCHEMA_VERSION)
+}
+
 /// The columns of `worker_profiles` in creation order, for a rebuild.
 ///
 /// `SQLite` cannot ALTER a CHECK constraint, so changing one means the whole
@@ -3609,11 +3702,14 @@ fn migrate_newest_schema_steps(
     if schema_version < MESSAGE_DELIVERY_SESSION_SCHEMA_VERSION {
         migrate_message_delivery_session(transaction)?;
     }
+    if schema_version < DELIVERY_COOLDOWN_SCHEMA_VERSION {
+        migrate_delivery_cooldown(transaction)?;
+    }
     // LAST, and it has to stay last. Every migration sets user_version to its
     // own number as its final act, so one running after this one winds the
     // recorded version backwards.
-    if schema_version < DELIVERY_COOLDOWN_SCHEMA_VERSION {
-        migrate_delivery_cooldown(transaction)?;
+    if schema_version < CLAIM_WITHDRAWAL_SCHEMA_VERSION {
+        migrate_claim_withdrawal(transaction)?;
     }
     Ok(())
 }
@@ -8401,6 +8497,39 @@ mod tests {
             table: "worker_sessions",
             artifact: "last_coordination_delivery_at",
             undo_sql: "",
+            probe_sql: "",
+        },
+        // 123. THE COLUMN CANNOT GO BACK ALONE. `migrate_claim_withdrawal`
+        // recreates email_reply_send_requires_evidence to read withdrawn_at, and
+        // SQLite checks a trigger body against the table it fires on: dropping
+        // the column out from under it makes the next write fail with "error in
+        // trigger ... after drop column", which is what two migration tests said
+        // when the default undo was left in place here.
+        //
+        // So the undo puts the schema-108 trigger back first and drops the
+        // column second. That is what a database which never ran 123 actually
+        // looks like, which is the whole point of these steps.
+        SchemaStep {
+            table: "task_completion_exemptions",
+            artifact: "withdrawn_at",
+            undo_sql: "DROP TRIGGER IF EXISTS email_reply_send_requires_evidence;
+                 CREATE TRIGGER email_reply_send_requires_evidence
+                     BEFORE UPDATE OF state ON email_reply_deliveries
+                     WHEN NEW.state = 'queued' AND OLD.state <> 'queued'
+                      AND NOT EXISTS (
+                         SELECT 1 FROM tasks task
+                         WHERE task.id = NEW.task_id
+                           AND task.state IN ('completed', 'review')
+                           AND (
+                               EXISTS (SELECT 1 FROM task_deployments deployment
+                                        WHERE deployment.task_id = task.id)
+                               OR EXISTS (SELECT 1 FROM task_completion_exemptions exemption
+                                           WHERE exemption.task_id = task.id
+                                             AND exemption.approved_at IS NOT NULL)
+                           )
+                     )
+                     BEGIN SELECT RAISE(ABORT, 'An email reply cannot be sent without a recorded deployment or an approved no-deployment exemption'); END;
+                 ALTER TABLE task_completion_exemptions DROP COLUMN withdrawn_at",
             probe_sql: "",
         },
     ];

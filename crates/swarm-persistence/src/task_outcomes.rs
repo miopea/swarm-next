@@ -731,6 +731,11 @@ pub struct CompletionExemptionRecord {
     /// before citing one was required — absent, not empty.
     pub approved_basis: Option<String>,
     pub superseded_at: Option<i64>,
+    /// Set when the claim was taken back. Distinct from `superseded_at`: that
+    /// one means a deployment contradicted the claim, this one means its author
+    /// or a coordinator retracted it while nothing shipped.
+    pub withdrawn_at: Option<i64>,
+    pub withdrawn_by: Option<String>,
 }
 
 impl TaskStore {
@@ -751,17 +756,30 @@ impl TaskStore {
         if deployed {
             return Ok(CompletionEvidence::Deployed);
         }
-        let exemption: Option<Option<i64>> = connection
+        // A WITHDRAWN CLAIM IS NOT EVIDENCE, INCLUDING AN APPROVED ONE. The row
+        // stays — the honest history is that it was claimed and then taken back,
+        // and the approval stays legible beside it — but it stops answering for
+        // the task. This is read as "no valid claim on this task", which is the
+        // state a worker who realised their claim was wrong previously had no
+        // way to say: their only options were to leave it standing or record
+        // another false one.
+        //
+        // Deliberately NOT keyed on superseded_at. That column means a
+        // deployment contradicted the claim, and a task with a deployment has
+        // already returned Deployed above, so folding the two here would be
+        // dead code that reads like a rule.
+        let exemption: Option<(Option<i64>, Option<i64>)> = connection
             .query_row(
-                "SELECT approved_at FROM task_completion_exemptions WHERE task_id = ?1",
+                "SELECT approved_at, withdrawn_at
+                 FROM task_completion_exemptions WHERE task_id = ?1",
                 [task_id.to_string()],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
         Ok(match exemption {
-            None => CompletionEvidence::None,
-            Some(None) => CompletionEvidence::ExemptionClaimed,
-            Some(Some(_)) => CompletionEvidence::ExemptionApproved,
+            None | Some((_, Some(_))) => CompletionEvidence::None,
+            Some((None, None)) => CompletionEvidence::ExemptionClaimed,
+            Some((Some(_), None)) => CompletionEvidence::ExemptionApproved,
         })
     }
 
@@ -806,7 +824,7 @@ impl TaskStore {
         let connection = self.connection()?;
         let approved: bool = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM task_completion_exemptions
-             WHERE task_id = ?1 AND approved_at IS NOT NULL)",
+             WHERE task_id = ?1 AND approved_at IS NOT NULL AND withdrawn_at IS NULL)",
             [task_id.to_string()],
             |row| row.get(0),
         )?;
@@ -842,7 +860,15 @@ impl TaskStore {
                  SET reason = excluded.reason,
                      claimed_by_worker_id = excluded.claimed_by_worker_id,
                      claimed_at = excluded.claimed_at,
-                     superseded_at = excluded.superseded_at",
+                     superseded_at = excluded.superseded_at,
+                     -- A RE-CLAIM AFTER A WITHDRAWAL IS A NEW CLAIM, so the
+                     -- withdrawal must not survive it. Leaving these set would
+                     -- mint a claim that is born retracted: completion_evidence
+                     -- reads withdrawn_at and would report None for a claim
+                     -- somebody just made, which is a worse silence than the one
+                     -- withdrawal exists to fix.
+                     withdrawn_at = NULL,
+                     withdrawn_by = NULL",
             params![
                 task_id.to_string(),
                 reason,
@@ -852,6 +878,85 @@ impl TaskStore {
             ],
         )?;
         drop(connection);
+        self.completion_evidence(task_id)
+    }
+
+    /// Takes back a no-deployment claim, so the task has no valid claim again.
+    ///
+    /// THE HONEST STATE HAD NO WAY TO BE SAID. A worker who realised its claim
+    /// was wrong had two options and both were false: leave it standing, or
+    /// record another one. One such claim on this board carries a note whose
+    /// first line reads DO NOT APPROVE THIS CLAIM, because a note was the only
+    /// instrument there was.
+    ///
+    /// WHO MAY. The worker that claimed it, because a retraction by its author
+    /// needs no adjudication. Queen or the operator for anyone's, because the
+    /// author is often gone or stood down by the time the claim is found wrong
+    /// — and because the worst case is a claim a coordinator already APPROVED,
+    /// which no worker should be able to undo and which its author cannot reach.
+    /// An approved claim is therefore coordinator-only, and that is the one rule
+    /// here that is about authority rather than shape.
+    ///
+    /// NOTHING IS REWRITTEN. The reason, the claimant and the approval all stay
+    /// exactly as recorded; only `withdrawn_at` and `withdrawn_by` are added.
+    /// "Claimed, then withdrawn" is the history, and it is more useful to a
+    /// later reader than a row that was quietly made to look like it never
+    /// existed.
+    ///
+    /// # Errors
+    /// Returns an error when no claim exists, when it is already withdrawn, or
+    /// when the actor may not withdraw this particular claim.
+    pub fn withdraw_completion_exemption(
+        &self,
+        task_id: TaskId,
+        actor: &str,
+        now: i64,
+    ) -> Result<CompletionEvidence, TaskStoreError> {
+        let connection = self.connection()?;
+        let existing: Option<(Option<i64>, Option<i64>, Option<String>)> = connection
+            .query_row(
+                "SELECT approved_at, withdrawn_at, claimed_by_worker_id
+                 FROM task_completion_exemptions WHERE task_id = ?1",
+                [task_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let Some((approved_at, withdrawn_at, claimed_by)) = existing else {
+            return Err(TaskStoreError::IntegrityFailure(
+                "there is no no-deployment claim on this task to withdraw".to_owned(),
+            ));
+        };
+        if withdrawn_at.is_some() {
+            return Err(TaskStoreError::IntegrityFailure(
+                "this no-deployment claim has already been withdrawn".to_owned(),
+            ));
+        }
+        let coordinator = matches!(actor, "queen" | "operator");
+        let author = claimed_by.as_deref() == Some(actor);
+        if approved_at.is_some() && !coordinator {
+            return Err(TaskStoreError::IntegrityFailure(
+                "an approved no-deployment claim is withdrawn by Queen or the operator, \
+                 not by the worker that claimed it"
+                    .to_owned(),
+            ));
+        }
+        if !coordinator && !author {
+            return Err(TaskStoreError::IntegrityFailure(format!(
+                "{actor} did not make this no-deployment claim and cannot withdraw it"
+            )));
+        }
+        let updated = connection.execute(
+            "UPDATE task_completion_exemptions
+             SET withdrawn_at = ?2, withdrawn_by = ?3
+             WHERE task_id = ?1 AND withdrawn_at IS NULL",
+            params![task_id.to_string(), now, actor],
+        )?;
+        drop(connection);
+        if updated == 0 {
+            return Err(TaskStoreError::IntegrityFailure(
+                "this no-deployment claim has already been withdrawn".to_owned(),
+            ));
+        }
         self.completion_evidence(task_id)
     }
 
@@ -978,7 +1083,8 @@ impl TaskStore {
             connection
                 .query_row(
                     "SELECT reason, claimed_by_worker_id, claimed_at, approved_at,
-                            approved_by, superseded_at, approved_basis
+                            approved_by, superseded_at, approved_basis,
+                            withdrawn_at, withdrawn_by
                      FROM task_completion_exemptions WHERE task_id = ?1",
                     [task_id.to_string()],
                     |row| {
@@ -990,6 +1096,8 @@ impl TaskStore {
                             approved_by: row.get(4)?,
                             superseded_at: row.get(5)?,
                             approved_basis: row.get(6)?,
+                            withdrawn_at: row.get(7)?,
+                            withdrawn_by: row.get(8)?,
                         })
                     },
                 )
@@ -1024,6 +1132,7 @@ impl TaskStore {
 mod completion_evidence_tests {
     use super::*;
     use crate::TaskStore;
+    use swarm_domain::ProviderKind;
 
     /// A task far enough along to have something to say about deployment.
     /// Recording one is only allowed from Review or Completed.
@@ -1086,6 +1195,183 @@ mod completion_evidence_tests {
             .unwrap();
         assert_eq!(approved, CompletionEvidence::ExemptionApproved);
         assert!(approved.closes_a_task());
+    }
+
+    /// THE HONEST STATE IS NOW SAYABLE, and this is the test that says it.
+    ///
+    /// A claim is a fact about a MOMENT and nothing carried that expiry. The
+    /// worker with the clearest case wrote "Investigation only — no code
+    /// written", which was true when the ticket was investigation-only and false
+    /// the moment the same worker was told to build it. Their two options were
+    /// to leave it standing or record another false one; "there is no valid
+    /// claim on this task" could not be expressed at all.
+    #[test]
+    fn a_withdrawn_claim_stops_being_evidence_and_the_record_still_says_it_happened() {
+        let store = TaskStore::in_memory().unwrap();
+        let spike = task(&store);
+        store
+            .claim_completion_exemption(spike, "Investigation only, no code written.", None, 1_000)
+            .unwrap();
+        store
+            .approve_completion_exemption(spike, "queen", "Read the handoff.", 2_000)
+            .unwrap();
+        assert!(
+            store.completion_evidence(spike).unwrap().closes_a_task(),
+            "the approved claim is evidence until it is taken back"
+        );
+
+        let after = store
+            .withdraw_completion_exemption(spike, "queen", 3_000)
+            .unwrap();
+        assert_eq!(
+            after,
+            CompletionEvidence::None,
+            "a withdrawn claim answers for nothing"
+        );
+        assert!(!after.closes_a_task());
+
+        // NOTHING IS REWRITTEN. "Claimed, then withdrawn" is the honest history
+        // and it is more use to a later reader than a row quietly made to look
+        // as though it never existed.
+        let record = store
+            .task_evidence_record(spike)
+            .unwrap()
+            .exemption
+            .expect("the row survives its own withdrawal");
+        assert_eq!(record.reason, "Investigation only, no code written.");
+        assert_eq!(record.approved_at, Some(2_000), "the approval still stands");
+        assert_eq!(record.withdrawn_at, Some(3_000));
+        assert_eq!(record.withdrawn_by.as_deref(), Some("queen"));
+        assert_eq!(
+            record.superseded_at, None,
+            "nothing shipped, so this is a retraction and NOT a supersession"
+        );
+    }
+
+    /// WITHDRAWAL AND SUPERSESSION ARE DIFFERENT ACTS and the store has to keep
+    /// them apart. `superseded_at` already means one thing — a recorded
+    /// deployment contradicted the claim — written from both directions by the
+    /// store itself as a statement of fact. A withdrawal is a person retracting
+    /// while nothing shipped. Reusing the column would have been the easy
+    /// implementation and would have destroyed the distinction this task named
+    /// in its own title.
+    #[test]
+    fn a_deployment_supersedes_and_a_person_withdraws_and_the_two_do_not_share_a_column() {
+        let store = TaskStore::in_memory().unwrap();
+        let shipped = task(&store);
+        store
+            .claim_completion_exemption(shipped, "Nothing to deploy.", None, 1_000)
+            .unwrap();
+        store
+            .record_task_deployment(shipped, "production", "sha abc123", 1_100)
+            .unwrap();
+        let superseded = store
+            .task_evidence_record(shipped)
+            .unwrap()
+            .exemption
+            .expect("the claim is kept and marked");
+        assert_eq!(superseded.superseded_at, Some(1_100));
+        assert_eq!(
+            superseded.withdrawn_at, None,
+            "a deployment contradicts a claim; it does not retract it"
+        );
+    }
+
+    /// An approved claim is the worst case and the one no worker may undo.
+    ///
+    /// Approving is the single act that removes a task from the detector
+    /// watching it, so an approval taken back has to be a coordinator's. The
+    /// author cannot reach it, and by then the author is often gone anyway.
+    #[test]
+    fn who_may_withdraw_depends_on_whether_a_coordinator_already_agreed() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Sorrel",
+                ProviderKind::ClaudeCode,
+                "/workspace/sorrel",
+                false,
+                1,
+            )
+            .unwrap();
+        let stranger = store
+            .create_worker(
+                "Bracken",
+                ProviderKind::ClaudeCode,
+                "/workspace/bracken",
+                false,
+                2,
+            )
+            .unwrap();
+
+        let own = task(&store);
+        store
+            .claim_completion_exemption(own, "No code.", Some(worker.id), 1_000)
+            .unwrap();
+        assert!(
+            store
+                .withdraw_completion_exemption(own, &stranger.id.to_string(), 1_100)
+                .is_err(),
+            "a worker cannot retract somebody else's claim"
+        );
+        store
+            .withdraw_completion_exemption(own, &worker.id.to_string(), 1_200)
+            .expect("its author needs nobody's permission to take it back");
+
+        let agreed = task(&store);
+        store
+            .claim_completion_exemption(agreed, "No code.", Some(worker.id), 1_000)
+            .unwrap();
+        store
+            .approve_completion_exemption(agreed, "queen", "Read the handoff.", 1_100)
+            .unwrap();
+        assert!(
+            store
+                .withdraw_completion_exemption(agreed, &worker.id.to_string(), 1_200)
+                .is_err(),
+            "a worker does not undo a coordinator's approval"
+        );
+        store
+            .withdraw_completion_exemption(agreed, "queen", 1_300)
+            .expect("the coordinator who approved it can take it back");
+        assert!(
+            store
+                .withdraw_completion_exemption(agreed, "queen", 1_400)
+                .is_err(),
+            "withdrawing twice is not a thing that happened twice"
+        );
+    }
+
+    /// A RE-CLAIM AFTER A WITHDRAWAL IS A NEW CLAIM, not a resurrection of the
+    /// old one. Without clearing the withdrawal the upsert mints a claim that is
+    /// born retracted — `completion_evidence` would read it as None while a
+    /// worker had just made it, which is a worse silence than the one this whole
+    /// change exists to fix.
+    #[test]
+    fn a_claim_made_after_a_withdrawal_is_live() {
+        let store = TaskStore::in_memory().unwrap();
+        let spike = task(&store);
+        store
+            .claim_completion_exemption(spike, "First, and wrong.", None, 1_000)
+            .unwrap();
+        store
+            .withdraw_completion_exemption(spike, "queen", 1_100)
+            .unwrap();
+        let again = store
+            .claim_completion_exemption(spike, "Second, and true.", None, 1_200)
+            .unwrap();
+        assert_eq!(
+            again,
+            CompletionEvidence::ExemptionClaimed,
+            "the new claim stands on its own"
+        );
+        let record = store
+            .task_evidence_record(spike)
+            .unwrap()
+            .exemption
+            .unwrap();
+        assert_eq!(record.withdrawn_at, None);
+        assert_eq!(record.withdrawn_by, None);
     }
 
     /// An assertion with no argument behind it is what this gate exists to
@@ -1697,7 +1983,7 @@ impl TaskStore {
                AND NOT EXISTS (SELECT 1 FROM task_deployments d WHERE d.task_id = task.id)
                AND NOT EXISTS (
                    SELECT 1 FROM task_completion_exemptions e
-                   WHERE e.task_id = task.id AND e.approved_at IS NOT NULL
+                   WHERE e.task_id = task.id AND e.approved_at IS NOT NULL AND e.withdrawn_at IS NULL
                )
              ORDER BY task.updated_at",
         )?;
@@ -2273,7 +2559,7 @@ impl TaskStore {
                    -- Already settled one way or another; nothing to decide.
                    AND NOT EXISTS (
                        SELECT 1 FROM task_completion_exemptions e
-                       WHERE e.task_id = task.id AND e.approved_at IS NOT NULL
+                       WHERE e.task_id = task.id AND e.approved_at IS NOT NULL AND e.withdrawn_at IS NULL
                    )
                    -- SKIPPED, NOT REFUSED, exactly as the deployment sweep
                    -- treats it: work owing somebody a reply is not well-formed,
@@ -2484,5 +2770,72 @@ impl TaskStore {
             reported_at,
             commits,
         }))
+    }
+}
+
+/// A SEVENTEENTH READER WOULD SILENTLY IGNORE WITHDRAWALS, so this counts them.
+///
+/// "An approved exemption is evidence" is written in SIXTEEN separate SQL
+/// queries across four files — detectors, email reply gates, task listings, and
+/// the guard that refuses a second claim. Withdrawal is only real if every one
+/// of them honours it; miss one and the feature works in the places somebody
+/// tested and not in the place that matters, which is the failure shape this
+/// repository keeps producing.
+///
+/// Finding that out cost a real mistake: the first cut of this change updated
+/// ONE detector, because that is the one the task asked about.
+///
+/// THREE SITES ARE DELIBERATELY EXEMPT, and all three are the SAME trigger body
+/// as it exists before schema 123. A trigger created at 108 cannot reference a
+/// column added at 123 — every fresh database runs 108 first and the trigger
+/// then aborts the next write with "no such column", which is exactly what this
+/// change did on its first run. Two are the historical migrations; the third is
+/// the schema step's `undo_sql`, which puts that same older trigger back when a
+/// test rewinds the database, because a rewound database must look like one that
+/// never ran 123.
+///
+/// `migrate_claim_withdrawal` recreates the live trigger WITH the clause once the
+/// column exists, so the end state is guarded while the history stays replayable.
+#[cfg(test)]
+mod every_reader_honours_a_withdrawal {
+    /// Sources scanned, in the order the count below reads them.
+    const SOURCES: &[(&str, &str)] = &[
+        ("task_outcomes.rs", include_str!("task_outcomes.rs")),
+        ("coordinator.rs", include_str!("coordinator.rs")),
+        ("email.rs", include_str!("email.rs")),
+        ("lib.rs", include_str!("lib.rs")),
+    ];
+
+    /// The three pre-123 trigger bodies described above.
+    const EXEMPT: usize = 3;
+
+    #[test]
+    fn every_query_that_reads_an_approval_also_reads_the_withdrawal() {
+        let mut unguarded: Vec<String> = Vec::new();
+        let mut total = 0usize;
+        for (name, source) in SOURCES {
+            // SPLIT SO THE SCANNER DOES NOT FIND ITSELF. This module is one of
+            // the files it reads, and written as one literal the needle matched
+            // its own source and reported this test as an unguarded query.
+            for (offset, _) in source.match_indices(concat!("approved_at", " IS NOT NULL")) {
+                total += 1;
+                let tail = &source[offset..source.len().min(offset + 160)];
+                if !tail.contains("withdrawn_at IS NULL") {
+                    let line = source[..offset].lines().count();
+                    unguarded.push(format!("{name}:{line}"));
+                }
+            }
+        }
+        assert!(
+            total >= 16,
+            "the readers went from 16 to {total}; if a query was deleted, lower the floor deliberately"
+        );
+        assert_eq!(
+            unguarded.len(),
+            EXEMPT,
+            "a query reads an approval without reading whether it was withdrawn: {unguarded:?}. \
+             Add `AND <alias>withdrawn_at IS NULL` beside it, or — if it is a trigger in a \
+             migration older than 123 — recreate the trigger from migrate_claim_withdrawal instead."
+        );
     }
 }
