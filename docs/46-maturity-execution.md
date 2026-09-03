@@ -71,6 +71,21 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 
 ## P3–P7 — Pending
 
+### P3a: bounded visible status polling
+
+- Runtime-update and development-status polling now share a visible-page owner:
+  one request in flight, eight-second cancellation deadline, abort on hide or
+  teardown, and immediate refresh after a rapid hide/show cancellation settles.
+  Polling intervals remain freshness optimizations, not correctness evidence.
+- Aborted old requests cannot replace newer hook state. Existing last-known
+  update information remains available across API interruptions.
+- Focused checks: 37 passed, then five polling lifecycle tests including rapid
+  hide/show. Production build passed. Full unchanged-tree suite: 113 files,
+  899 tests passed. An earlier full run overlapped an edit and failed the newly
+  added test; it was superseded by this clean rerun, not counted as a pass.
+- No measured CPU improvement is claimed yet. Other App-level polls and live
+  feed behavior remain under audit; terminal-cache experiments are not enabled.
+
 ### P1c: developer evidence home
 
 - Developer Dogfood is a separate Settings section, gated by existing development

@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 import { fetchDevelopmentRuntime, type DevelopmentRuntime } from "../api";
+import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
 const DEVELOPMENT_STATUS_REFRESH_MS = 15_000;
 
@@ -20,26 +21,17 @@ export function useDevelopmentRuntime(
   const [runtime, setRuntime] = useState<DevelopmentRuntime>();
   const [reachable, setReachable] = useState(true);
 
-  useEffect(() => {
-    let cancelled = false;
-    const refresh = async () => {
+  const refresh = useCallback(async (signal: AbortSignal) => {
       try {
-        const next = await fetchDevelopmentRuntime(operatorToken);
-        if (cancelled) return;
+        const next = await fetchDevelopmentRuntime(operatorToken, signal);
+        if (signal.aborted) return;
         setRuntime(next);
         setReachable(true);
       } catch {
-        if (!cancelled) setReachable(false);
+        if (!signal.aborted) setReachable(false);
       }
-    };
-
-    void refresh();
-    const interval = window.setInterval(() => void refresh(), refreshMs);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [operatorToken, refreshMs, runningVersion]);
+  }, [operatorToken, runningVersion]);
+  useVisiblePolling(refresh, Boolean(operatorToken), refreshMs);
 
   return { runtime, reachable };
 }

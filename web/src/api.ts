@@ -1833,8 +1833,8 @@ export async function updateWorkerEngine(operatorToken: string): Promise<WorkerE
   return response.json() as Promise<WorkerEngineMaintenanceResult>;
 }
 
-export async function fetchDevelopmentRuntime(operatorToken: string): Promise<DevelopmentRuntime> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/development");
+export async function fetchDevelopmentRuntime(operatorToken: string, signal?: AbortSignal): Promise<DevelopmentRuntime> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/development", { signal });
   return response.json() as Promise<DevelopmentRuntime>;
 }
 
@@ -1884,8 +1884,8 @@ export async function restartSupersededWorkers(operatorToken: string): Promise<{
   return response.json() as Promise<{ restarted_workers: number }>;
 }
 
-export async function fetchProviderCapabilities(operatorToken: string): Promise<ProviderCapabilities> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/providers");
+export async function fetchProviderCapabilities(operatorToken: string, signal?: AbortSignal): Promise<ProviderCapabilities> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/providers", { signal });
   return response.json() as Promise<ProviderCapabilities>;
 }
 
@@ -2019,8 +2019,8 @@ export async function revokeBrowserSession(): Promise<void> {
   await authenticatedFetch(BROWSER_SESSION_AUTH, "/api/v1/auth/session", { method: "DELETE" });
 }
 
-export async function fetchHealth(): Promise<Health> {
-  const response = await fetch("/health", { cache: "no-store" });
+export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
+  const response = await fetch("/health", { cache: "no-store", signal });
   if (!response.ok) throw new RuntimeRequestError(response.status, `Health returned ${response.status}`);
   return response.json() as Promise<Health>;
 }
