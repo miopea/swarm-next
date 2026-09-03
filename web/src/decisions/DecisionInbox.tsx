@@ -78,17 +78,34 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
       shown.filter((decision) => decision.state === "pending").map((decision) => decision.id),
     );
     pendingOrder.current = pendingOrder.current.filter((id) => stillPending.has(id));
+    const ordered = new Set(pendingOrder.current);
     for (const decision of shown) {
-      if (decision.state === "pending" && !pendingOrder.current.includes(decision.id)) {
+      if (decision.state === "pending" && !ordered.has(decision.id)) {
         pendingOrder.current.push(decision.id);
+        ordered.add(decision.id);
       }
     }
+    const positions = new Map(pendingOrder.current.map((id, index) => [id, index]));
     const place = (decision: DecisionRequest) =>
-      decision.state === "pending" ? pendingOrder.current.indexOf(decision.id) : Number.MAX_SAFE_INTEGER;
+      decision.state === "pending" ? positions.get(decision.id)! : Number.MAX_SAFE_INTEGER;
     return [...shown].sort((first, second) => place(first) - place(second));
   }, [decisions, showResolved]);
   const pending = decisions.filter((decision) => decision.state === "pending").length;
   const pendingTotal = pending + additionalPendingCount;
+
+  useEffect(() => {
+    // Draft UI state belongs to pending requests, not every request ever seen
+    // during a multi-day browser session. Never carry a resolved answer forward.
+    const pendingIds = new Set(decisions.filter((decision) => decision.state === "pending").map((decision) => decision.id));
+    const prune = (previous: Record<string, string>) => {
+      const entries = Object.entries(previous).filter(([id]) => pendingIds.has(id));
+      return entries.length === Object.keys(previous).length ? previous : Object.fromEntries(entries);
+    };
+    setNotes(prune);
+    setSpoken(prune);
+    setSpeakingId((id) => id && pendingIds.has(id) ? id : undefined);
+    setDismissConfirmId((id) => id && pendingIds.has(id) ? id : undefined);
+  }, [decisions]);
 
   useEffect(() => {
     if (!focusDecisionId) return;
@@ -190,16 +207,16 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                     reason, risk and evidence are the argument behind it — on
                     the live inbox they ran to about five thousand characters
                     together — so they fold behind it rather than in front. */}
-                {decision.summary ? <p className="decision-summary">{decision.summary}</p> : null}
+                {decision.summary ? <div className="decision-summary"><LongText text={decision.summary} label="the summary" foldAbove={300} /></div> : null}
                 <p className="decision-ask"><span>Asking the operator to</span> {decision.suggested_action}</p>
                 <details className="decision-argument">
                   <summary>Why, and what it rests on</summary>
                   <DecisionReason reason={decision.reason} />
+                  {decision.evidence && <div><p className="eyebrow">Evidence</p><LongText text={decision.evidence} label="the evidence" /></div>}
                 </details>
                 <dl className="decision-context">
                   {decision.task_id && <div><dt>Task</dt><dd>{onOpenTask ? <button type="button" className="decision-task-link" onClick={() => onOpenTask(decision.task_id!)}>{taskNames.get(decision.task_id) ?? "Linked task"}</button> : taskNames.get(decision.task_id) ?? "Linked task"}</dd></div>}
                   {decision.risk && <div><dt>Risk</dt><dd><LongText text={decision.risk} label="the risk" /></dd></div>}
-                  {decision.evidence && <div><dt>Evidence</dt><dd><LongText text={decision.evidence} label="the evidence" /></dd></div>}
                 </dl>
                 {decision.state === "pending" && decision.questions?.length ? (
                   <div className="decision-resolution">
@@ -249,8 +266,8 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                     ) : null}
                     <label><span>Optional note</span><textarea value={note} maxLength={4000} onChange={(event) => setNotes((current) => ({ ...current, [decision.id]: event.target.value }))} placeholder="Add context for the worker" /></label>
                     <div className="decision-actions">
-                      {decision.allowed_actions.map((action, index) => (
-                        <button key={action} type="button" className={index === 0 ? "primary-action" : "secondary-button"} disabled={busy} onClick={() => { setDismissConfirmId(undefined); void onResolve(decision, action, note, "inbox_action"); }}>{humanize(action)}</button>
+                      {decision.allowed_actions.map((action) => (
+                        <button key={action} type="button" className={humanize(action).trim().toLowerCase() === humanize(decision.suggested_action).trim().toLowerCase() ? "primary-action" : "secondary-button"} disabled={busy} onClick={() => { setDismissConfirmId(undefined); void onResolve(decision, action, note, "inbox_action"); }}>{humanize(action)}</button>
                       ))}
                       {/* The buttons above are the asker's guesses. When none
                           of them is the answer, the answer is still the

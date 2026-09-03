@@ -4,13 +4,12 @@ import TerminalQuestionsFixture from "./TerminalQuestionsFixture";
 import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
 import { App } from "../App";
 import { SURFACE_STORAGE_KEY } from "../navigation/startSurface";
-import BlockedEscalationCard from "../decisions/BlockedEscalationCard";
+import QueuesView from "../queues/QueuesView";
 import TaskBoard from "../tasks/TaskBoard";
 import WorkerRosterItem from "../workers/WorkerRosterItem";
 import WorkerSettings from "../settings/WorkerSettings";
 import { demoBlocked, demoBriefings, demoDecision, demoTasks, demoWorkers } from "./productFixtures";
 import DecisionInbox from "../decisions/DecisionInbox";
-import HeldBriefingList from "../orchestration/HeldBriefingList";
 import UnansweredEmailAttentionCard from "../tasks/UnansweredEmailAttentionCard";
 import ConnectionsSettings from "../settings/ConnectionsSettings";
 import MachinePressureBadge from "../runtime/MachinePressureBadge";
@@ -361,7 +360,7 @@ export const SURFACES: Surface[] = [
   {
     id: "needs-you",
     title: "Needs you",
-    why: "the composition cb1ffd5 changed — an email draft, queued briefings and a request that blocks work",
+    why: "an email draft and actionable request; waiting work is on the separate Queues fixture",
     render: () => (
       <div className="attention-workspace">
         <DecisionInbox
@@ -371,14 +370,18 @@ export const SURFACES: Surface[] = [
           busy={false}
           additionalPendingCount={1}
           attentionCards={<>
-            <BlockedEscalationCard escalations={agedBlock} />
             <UnansweredEmailAttentionCard awaiting={[waitingEmail]} busy={false} onOpenTask={() => undefined} />
           </>}
-          trailingCards={<HeldBriefingList briefings={briefings} />}
           onResolve={async () => undefined}
         />
       </div>
     ),
+  },
+  {
+    id: "queues",
+    title: "Queues",
+    why: "waiting work from the operator screenshot, separate from actionable Needs You requests; not publishable",
+    render: () => <QueuesView tasks={[]} workers={[]} blockedWaits={agedBlock} heldBriefings={briefings} onOpenTask={() => undefined} />,
   },
   {
     id: "machine-pressure",
@@ -439,12 +442,16 @@ export const SURFACES: Surface[] = [
           tasks={[]}
           workers={[]}
           busy={false}
-          attentionCards={<BlockedEscalationCard escalations={demoBlocked} />}
-          trailingCards={<HeldBriefingList briefings={demoBriefings} />}
           onResolve={async () => undefined}
         />
       </div>
     ),
+  },
+  {
+    id: "queues-demo",
+    title: "Queues (publishable)",
+    why: "invented task, blocked-age and briefing evidence; no operator data",
+    render: () => <QueuesView tasks={demoTasks} workers={demoWorkers} blockedWaits={demoBlocked} heldBriefings={demoBriefings} onOpenTask={() => undefined} />,
   },
   {
     id: "app",

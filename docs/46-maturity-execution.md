@@ -190,6 +190,21 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   error handling. Removed the duplicate and reran the production build: passed.
   The terminal chunk size warning remains (about 539 kB).
 
+### P4b: readable decisions and owned draft state
+
+- Long summaries can be expanded without losing their text. Supporting evidence
+  joins the folded explanation; risk and requested commands remain accessible
+  in the main decision flow. Recommendation emphasis follows a matching allowed
+  action rather than arbitrarily favoring the first button.
+- Pending notes survive refresh; resolved requests release draft and confirmation
+  state. Stable pending ordering now uses indexed lookups. This does not infer
+  that a similar worker conversation resolved a request: reconciliation is pending.
+- Updated isolated Needs You fixtures to exclude age-only waiting cards, with
+  separate Queues fixtures. Edge screenshot verified the synthetic recommendation
+  highlights the second action correctly and retains the existing bee styling.
+- Decision/interview tests: 29 passed. Production build passed; existing terminal
+  chunk warning remains. This is desktop fixture evidence, not mobile acceptance.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

@@ -403,6 +403,39 @@ test("leads with what is being decided and folds the argument behind it", () => 
   const argument = screen.getByText("Why, and what it rests on");
   expect(argument).toBeInTheDocument();
   expect(argument.closest("details")).not.toHaveAttribute("open");
+  expect(screen.getByText(pending.evidence).closest("details")).toBe(argument.closest("details"));
+  expect(screen.getByText(pending.risk).closest("details")).toBeNull();
+});
+
+test("long summaries expand without hiding the ask or losing source text", () => {
+  const summary = "A long explanation of the decision. ".repeat(20);
+  render(<DecisionInbox decisions={[{ ...pending, summary }]} tasks={[task]} workers={[worker]} busy={false} onResolve={vi.fn()} />);
+  expect(screen.getByText(pending.suggested_action, { exact: false })).toBeInTheDocument();
+  expect(screen.getByText(summary.trim())).toHaveClass("clamped");
+  fireEvent.click(screen.getByRole("button", { name: "Show all of the summary" }));
+  expect(screen.getByText(summary.trim())).not.toHaveClass("clamped");
+});
+
+test("action emphasis follows the stated suggestion rather than array order", () => {
+  const props = { tasks: [task], workers: [worker], busy: false, onResolve: vi.fn() };
+  const view = render(<DecisionInbox {...props} decisions={[{ ...pending, suggested_action: "minimal_path" }]} />);
+  expect(screen.getByRole("button", { name: "Minimal path" })).toHaveClass("primary-action");
+  expect(screen.getByRole("button", { name: "Durable path" })).not.toHaveClass("primary-action");
+  view.rerender(<DecisionInbox {...props} decisions={[{ ...pending, suggested_action: "Ask a follow-up first" }]} />);
+  expect(screen.getByRole("button", { name: "Minimal path" })).not.toHaveClass("primary-action");
+  expect(screen.getByRole("button", { name: "Durable path" })).not.toHaveClass("primary-action");
+});
+
+test("pending notes survive refresh but a resolved request releases its draft", () => {
+  const props = { tasks: [task], workers: [worker], busy: false, onResolve: vi.fn() };
+  const view = render(<DecisionInbox {...props} decisions={[pending]} />);
+  fireEvent.change(screen.getByLabelText("Optional note"), { target: { value: "Keep my context" } });
+  view.rerender(<DecisionInbox {...props} decisions={[{ ...pending, updated_at: 5 }]} />);
+  expect(screen.getByLabelText("Optional note")).toHaveValue("Keep my context");
+  view.rerender(<DecisionInbox {...props} decisions={[{ ...pending, state: "resolved" }]} />);
+  expect(screen.queryByLabelText("Optional note")).not.toBeInTheDocument();
+  view.rerender(<DecisionInbox {...props} decisions={[pending]} />);
+  expect(screen.getByLabelText("Optional note")).toHaveValue("");
 });
 
 test("does not push a card the operator is reaching for down the page", () => {

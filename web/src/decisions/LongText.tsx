@@ -15,9 +15,9 @@ const FOLD_ABOVE = 700;
  * something; nothing that was written for them is thrown away, but the queue
  * stays readable while they choose which one to read.
  */
-export default function LongText({ text, label }: { text: string; label: string }) {
+export default function LongText({ text, label, foldAbove = FOLD_ABOVE }: { text: string; label: string; foldAbove?: number }) {
   const [expanded, setExpanded] = useState(false);
-  const folds = text.length > FOLD_ABOVE;
+  const folds = text.length > foldAbove;
   if (!folds) return <p className="decision-prose">{text}</p>;
   return (
     <div className="decision-prose-folded">
