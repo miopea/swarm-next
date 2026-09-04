@@ -216,7 +216,22 @@ fn refusal(error: &OpsTicketError) -> CallToolResponse {
 }
 
 impl OpsMcp {
-    async fn execute(&self, name: &str, arguments: Value) -> Result<CallToolResponse, ErrorData> {
+    async fn execute(
+        &self,
+        name: &str,
+        mut arguments: Value,
+    ) -> Result<CallToolResponse, ErrorData> {
+        // A rotated or misconfigured credential must not silently file the same
+        // source key under a different integration identity.
+        let expected = arguments
+            .as_object_mut()
+            .and_then(|args| args.remove("integration_id"));
+        if expected.as_ref().and_then(Value::as_str) != Some(self.scope.integration_id.as_str()) {
+            return Err(ErrorData::invalid_params(
+                "Integration identity does not match this credential",
+                None,
+            ));
+        }
         let service = self.service.clone();
         let scope = self.scope.clone();
         // A disconnected caller must not release the work budget while its
@@ -291,8 +306,8 @@ impl ServerHandler for OpsMcp {
                 "Submit a reviewed request once. Identical retries return the original task; changed retries conflict.",
                 &json!({
                     "type":"object","additionalProperties":false,
-                    "required":["app_id","request_id","conversation_id","title","description","priority"],
-                    "properties":{"app_id":{"type":"string","maxLength":128},"request_id":{"type":"string","maxLength":128},
+                    "required":["integration_id","app_id","request_id","conversation_id","title","description","priority"],
+                    "properties":{"integration_id":{"type":"string","maxLength":128},"app_id":{"type":"string","maxLength":128},"request_id":{"type":"string","maxLength":128},
                         "conversation_id":{"type":"string","maxLength":128},"title":{"type":"string","maxLength":240},
                         "description":{"type":"string","maxLength":64000},"priority":{"type":"string","enum":["low","normal","high","urgent"]}}
                 }),
@@ -302,8 +317,8 @@ impl ServerHandler for OpsMcp {
                 "ops_ticket_progress",
                 "Read bounded progress for this integration's request. Closure does not prove deployment.",
                 &json!({
-                    "type":"object","additionalProperties":false,"required":["app_id","request_id"],
-                    "properties":{"app_id":{"type":"string","maxLength":128},"request_id":{"type":"string","maxLength":128}}
+                    "type":"object","additionalProperties":false,"required":["integration_id","app_id","request_id"],
+                    "properties":{"integration_id":{"type":"string","maxLength":128},"app_id":{"type":"string","maxLength":128},"request_id":{"type":"string","maxLength":128}}
                 }),
                 true,
             ),
@@ -356,7 +371,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await.unwrap()).unwrap()
     }
-    async fn call(state: &Arc<crate::AppState>, name: &str, arguments: Value) -> Value {
+    async fn call(state: &Arc<crate::AppState>, name: &str, mut arguments: Value) -> Value {
+        if arguments.get("integration_id").is_none() {
+            arguments["integration_id"] = json!("console-one");
+        }
         json_response(
             handle(
                 State(state.clone()),
@@ -486,6 +504,14 @@ mod tests {
     #[tokio::test]
     async fn ops_mcp_refuses_caller_workspace_and_requires_a_valid_configured_host() {
         let (state, _directory) = setup();
+        let mut mistaken_identity = input();
+        mistaken_identity["integration_id"] = json!("another-console");
+        assert!(
+            call(&state, "ops_submit_ticket", mistaken_identity)
+                .await
+                .get("error")
+                .is_some()
+        );
         let mut supplied = input();
         supplied["workspace"] = json!("/unapproved");
         assert!(

@@ -45,7 +45,11 @@ No runtime credentials or app mappings have been provisioned by this change.
 
 ## Commands and receipts
 
-`ops_submit_ticket` accepts `app_id`, `request_id`, `conversation_id`, reviewed
+Both tools require `integration_id` to match the authenticated credential. This
+prevents a rotated or incorrectly provisioned credential from creating the same
+source key under a different integration. The caller cannot choose its identity.
+
+`ops_submit_ticket` accepts `integration_id`, `app_id`, `request_id`, `conversation_id`, reviewed
 `title`, reviewed `description`, and `priority` (`low`, `normal`, `high`, `urgent`).
 Identifiers are at most 128 ASCII identity characters; titles are at most 240
 UTF-8 bytes and descriptions at most 64,000 UTF-8 bytes. Workspace and actor
@@ -61,7 +65,7 @@ must not invent a new request ID merely to bypass an uncertain earlier result.
 Successful submission creates an inert draft. It cannot assign a worker, start
 a terminal, transition a task or send a customer message.
 
-`ops_ticket_progress` accepts `app_id` and `request_id`. It returns selected task
+`ops_ticket_progress` accepts `integration_id`, `app_id` and `request_id`. It returns selected task
 facts, at most 50 recent activity records and at most 50 deployment records.
 Each page has an explicit `truncated` flag. It excludes the task description,
 workspace and worker/session identifiers. Deployment records retain environment,
