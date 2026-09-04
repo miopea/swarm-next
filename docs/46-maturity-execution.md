@@ -6,6 +6,25 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2 / P4: require trustworthy terminal observations before coordination input
+
+- Removed a fallback that treated any other host output as a ready terminal.
+  Initial input now requires a full snapshot from the exact running session;
+  stopped, wrong-session, delta-only or unexpected responses are explicit
+  pre-write rejections. Host errors keep their original cause.
+- Extracted the observation decision for direct failure/recovery tests. A valid
+  subsequent resting snapshot remains usable, while unsent operator text stays
+  protected. A marker in older transcript output no longer authorizes Enter on
+  a later operator draft; recovering our rendered message requires the marker
+  after the latest prompt marker.
+- Final Linux API test build and strict Clippy passed. All 31 coordination
+  regressions and two message transport/recovery tests passed on that build,
+  including the invalid-observation and historical-marker cases. Formatting
+  and diff checks passed. No browser rendering or live-provider claim is made.
+- This does not claim provider-independent composer parsing or close the
+  task-state race across observation and PTY input. Real mobile AskUser behavior
+  and live-provider acceptance remain open. No live worker changes or releases.
+
 ### P4: task-aware message selection and pre-contact revalidation
 
 - Cross-task messages remain queued while the recipient worker owns unrelated

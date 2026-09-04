@@ -421,6 +421,7 @@ pub(super) async fn submit_coordination_message(
 }
 
 /// What a read of the terminal says about writing to it now.
+#[derive(Debug)]
 enum Baseline {
     Ready {
         sequence: u64,
@@ -462,65 +463,88 @@ async fn delivery_baseline(
     provider: ProviderKind,
     marker: &[u8],
 ) -> Result<Baseline, swarm_terminal::IpcError> {
-    Ok(
-        match client
-            .request(&HostRequest::Read {
-                session_id,
-                after_sequence: None,
+    let response = client
+        .request(&HostRequest::Read {
+            session_id,
+            after_sequence: None,
+        })
+        .await?;
+    Ok(baseline_from_response(
+        session_id, provider, marker, response,
+    ))
+}
+
+/// A full snapshot of this running session is the only evidence that can
+/// establish an empty resting prompt. Partial, stale or stopped output cannot.
+fn baseline_from_response(
+    expected_session: WorkerSessionId,
+    provider: ProviderKind,
+    marker: &[u8],
+    response: HostResponse,
+) -> Baseline {
+    match response {
+        HostResponse::Output { session_id, .. } if session_id != expected_session => {
+            Baseline::Refused(TerminalSubmission::Rejected {
+                code: "terminal_identity_mismatch".into(),
+                message: "Terminal observation belongs to another session; no input was written"
+                    .into(),
             })
-            .await?
-        {
-            HostResponse::Output {
-                resume: swarm_terminal::Resume::Snapshot { snapshot },
-                running: true,
-                ..
-            } => {
-                let activity = provider_activity::classify_observed_activity(provider, &snapshot);
-                if activity != ProviderActivity::Resting {
-                    return Ok(Baseline::Refused(TerminalSubmission::Deferred(
-                        DeferralReason::ProviderBusy,
-                    )));
-                }
-                if provider_activity::has_open_provider_input(provider, &snapshot) {
-                    // OURS, OR SOMEBODY ELSE'S? The refusal below protects the
-                    // worker's own typing and stays. But when the unsent text
-                    // carries THIS delivery's marker it is our own stranded
-                    // message, and appending is not what it needs — Enter is.
-                    let visible =
-                        snapshot_plain_text(&snapshot.bytes, snapshot.rows, snapshot.columns);
-                    let ours = !marker.is_empty()
-                        && visible
-                            .as_bytes()
-                            .windows(marker.len())
-                            .any(|part| part == marker);
-                    if ours {
-                        return Ok(Baseline::HoldsOurUnsentMessage {
-                            sequence: snapshot.sequence,
-                        });
-                    }
-                    return Ok(Baseline::Refused(TerminalSubmission::Deferred(
-                        DeferralReason::PromptHoldsUnsentText,
-                    )));
-                }
-                Baseline::Ready {
-                    sequence: snapshot.sequence,
-                    paste_placeholder: latest_claude_paste_placeholder(
-                        snapshot_plain_text(&snapshot.bytes, snapshot.rows, snapshot.columns)
-                            .as_bytes(),
-                    )
-                    .map(<[u8]>::to_vec),
-                }
+        }
+        HostResponse::Output { running: false, .. } => {
+            Baseline::Refused(TerminalSubmission::Rejected {
+                code: "terminal_not_running".into(),
+                message: "Terminal process is not running; no input was written".into(),
+            })
+        }
+        HostResponse::Output {
+            resume: swarm_terminal::Resume::Snapshot { snapshot },
+            running: true,
+            ..
+        } => {
+            let activity = provider_activity::classify_observed_activity(provider, &snapshot);
+            if activity != ProviderActivity::Resting {
+                return Baseline::Refused(TerminalSubmission::Deferred(
+                    DeferralReason::ProviderBusy,
+                ));
             }
-            HostResponse::Output { resume, .. } => Baseline::Ready {
-                sequence: resume_sequence(&resume),
-                paste_placeholder: None,
-            },
-            HostResponse::Error { code, message } => {
-                Baseline::Refused(TerminalSubmission::Rejected { code, message })
+            if provider_activity::has_open_provider_input(provider, &snapshot) {
+                // OURS, OR SOMEBODY ELSE'S? The refusal below protects the
+                // worker's own typing and stays. But when the unsent text
+                // carries THIS delivery's marker it is our own stranded
+                // message, and appending is not what it needs — Enter is.
+                let visible = snapshot_plain_text(&snapshot.bytes, snapshot.rows, snapshot.columns);
+                let ours = !marker.is_empty()
+                    && visible
+                        .as_bytes()
+                        .windows(marker.len())
+                        .any(|part| part == marker)
+                    && !resting_prompt_follows_marker(visible.as_bytes(), marker);
+                if ours {
+                    return Baseline::HoldsOurUnsentMessage {
+                        sequence: snapshot.sequence,
+                    };
+                }
+                return Baseline::Refused(TerminalSubmission::Deferred(
+                    DeferralReason::PromptHoldsUnsentText,
+                ));
             }
-            _ => Baseline::Refused(TerminalSubmission::Uncertain),
-        },
-    )
+            Baseline::Ready {
+                sequence: snapshot.sequence,
+                paste_placeholder: latest_claude_paste_placeholder(
+                    snapshot_plain_text(&snapshot.bytes, snapshot.rows, snapshot.columns)
+                        .as_bytes(),
+                )
+                .map(<[u8]>::to_vec),
+            }
+        }
+        HostResponse::Error { code, message } => {
+            Baseline::Refused(TerminalSubmission::Rejected { code, message })
+        }
+        _ => Baseline::Refused(TerminalSubmission::Rejected {
+            code: "terminal_snapshot_required".into(),
+            message: "A full terminal snapshot was not returned; no input was written".into(),
+        }),
+    }
 }
 
 async fn submit_terminal_message(
@@ -880,15 +904,6 @@ fn claude_input_marker_is_still_open(
     provider == ProviderKind::ClaudeCode
         && snapshot.windows(marker.len()).any(|part| part == marker)
         && !resting_prompt_follows_marker(snapshot, marker)
-}
-
-fn resume_sequence(resume: &swarm_terminal::Resume) -> u64 {
-    match resume {
-        swarm_terminal::Resume::Snapshot { snapshot } => snapshot.sequence,
-        swarm_terminal::Resume::Deltas { frames } => {
-            frames.last().map_or(0, |frame| frame.sequence)
-        }
-    }
 }
 
 fn resting_prompt_follows_marker(snapshot: &[u8], marker: &[u8]) -> bool {
@@ -1395,6 +1410,117 @@ mod tests {
     use swarm_domain::{PresenceMode, QueenAutomationTrigger, TaskId, WorkerId};
     use swarm_persistence::{QueenAutomationDelivery, TaskMessageDispatch};
     use swarm_terminal::{CanonicalTerminalState, JournalLimits, TerminalSize, TerminalSnapshot};
+
+    fn prompt_observation(session_id: WorkerSessionId, text: &str, running: bool) -> HostResponse {
+        let mut state = CanonicalTerminalState::new(
+            JournalLimits::new(64 * 1024, 64),
+            TerminalSize::new(24, 100),
+        );
+        state.push(text.as_bytes().to_vec());
+        HostResponse::Output {
+            session_id,
+            running,
+            resume: swarm_terminal::Resume::Snapshot {
+                snapshot: state.snapshot(),
+            },
+        }
+    }
+
+    #[test]
+    fn coordination_requires_a_running_full_snapshot_of_the_exact_session() {
+        let session = WorkerSessionId::new();
+        let prompt = "● Done.\r\n\r\n❯ \r\n  ? for shortcuts";
+        for (response, expected) in [
+            (
+                prompt_observation(WorkerSessionId::new(), prompt, true),
+                "terminal_identity_mismatch",
+            ),
+            (
+                prompt_observation(session, prompt, false),
+                "terminal_not_running",
+            ),
+            (
+                HostResponse::Output {
+                    session_id: session,
+                    running: true,
+                    resume: swarm_terminal::Resume::Deltas { frames: Vec::new() },
+                },
+                "terminal_snapshot_required",
+            ),
+            (HostResponse::Acknowledged, "terminal_snapshot_required"),
+            (
+                HostResponse::Error {
+                    code: "session_missing".into(),
+                    message: "gone".into(),
+                },
+                "session_missing",
+            ),
+        ] {
+            let observed =
+                baseline_from_response(session, ProviderKind::ClaudeCode, b"marker", response);
+            assert!(
+                matches!(&observed, Baseline::Refused(TerminalSubmission::Rejected { code, .. }) if code == expected),
+                "{observed:?}"
+            );
+        }
+        let recovered = baseline_from_response(
+            session,
+            ProviderKind::ClaudeCode,
+            b"marker",
+            prompt_observation(session, prompt, true),
+        );
+        assert!(matches!(recovered, Baseline::Ready { .. }), "{recovered:?}");
+    }
+
+    #[test]
+    fn complete_snapshot_still_protects_unsent_text_and_recovers_only_our_marker() {
+        let session = WorkerSessionId::new();
+        let marker = b"[Swarm delivery exact-id]";
+        let historical = baseline_from_response(
+            session,
+            ProviderKind::ClaudeCode,
+            marker,
+            prompt_observation(
+                session,
+                "❯ [Swarm delivery exact-id]\r\n● Done.\r\n❯ operator draft\r\nauto mode on",
+                true,
+            ),
+        );
+        assert!(
+            matches!(
+                historical,
+                Baseline::Refused(TerminalSubmission::Deferred(
+                    DeferralReason::PromptHoldsUnsentText
+                ))
+            ),
+            "{historical:?}"
+        );
+        let held = baseline_from_response(
+            session,
+            ProviderKind::ClaudeCode,
+            marker,
+            prompt_observation(session, "❯ operator draft\r\nauto mode on", true),
+        );
+        assert!(
+            matches!(
+                held,
+                Baseline::Refused(TerminalSubmission::Deferred(
+                    DeferralReason::PromptHoldsUnsentText
+                ))
+            ),
+            "{held:?}"
+        );
+        let ours = baseline_from_response(
+            session,
+            ProviderKind::ClaudeCode,
+            marker,
+            prompt_observation(session, "❯ [Swarm delivery exact-id]\r\nauto mode on", true),
+        );
+        assert!(
+            matches!(ours, Baseline::HoldsOurUnsentMessage { .. }),
+            "{ours:?}"
+        );
+    }
 
     fn message_worker_fixture() -> (TaskStore, swarm_domain::WorkerProfile, WorkerSessionId) {
         let store = TaskStore::in_memory().unwrap();

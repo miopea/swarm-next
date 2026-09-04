@@ -57,6 +57,19 @@ lifetimes remain unchanged.
 
 ## Acceptance
 
+### Terminal observation is not optional
+
+Before any coordination input, the host must return a full snapshot of the exact
+requested, running session. Delta-only output, a stopped process, a mismatched
+identity or an unexpected response is a pre-write rejection, not evidence of an
+empty prompt. Host errors retain their cause. A subsequent valid observation can
+establish readiness; rejection never fabricates acknowledgement or starts a
+delivery cooldown.
+
+Recovery of an already-rendered unsent message also requires its exact marker
+to belong after the latest prompt marker. A matching marker in older transcript
+output cannot authorize Enter on the operator's current draft.
+
 ### Task-aware delivery holds
 
 Queue selection leaves a worker's cross-task messages queued while that worker
