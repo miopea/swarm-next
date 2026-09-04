@@ -6,6 +6,7 @@ import { useDevelopmentRuntime } from "./useDevelopmentRuntime";
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -62,6 +63,40 @@ test("keeps what it knew while the API is restarting under the reload", async ()
   expect(result.current.reachable).toBe(false);
   expect(result.current.runtime?.enabled).toBe(true);
   expect(result.current.runtime?.state).toBe("building");
+});
+
+test("a timeout is unavailable but visibility cancellation is not a new failure", async () => {
+  vi.useFakeTimers();
+  let visibility: DocumentVisibilityState = "visible";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+  let stalled = false;
+  const signals: AbortSignal[] = [];
+  vi.stubGlobal("fetch", vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+    if (!stalled) return Promise.resolve(ok({ enabled: true, version: "dev-build", state: "idle" }));
+    const signal = init!.signal as AbortSignal;
+    signals.push(signal);
+    return new Promise<Response>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+  }));
+  const { result, unmount } = renderHook(() => useDevelopmentRuntime("secret", "dev-build"));
+  await act(async () => { await Promise.resolve(); });
+  const known = result.current.runtime;
+  expect(known?.version).toBe("dev-build");
+  stalled = true;
+  await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+  visibility = "hidden";
+  await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+  expect(signals[0].aborted).toBe(true);
+  expect(result.current.reachable).toBe(true);
+  visibility = "visible";
+  await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+  expect(signals[1].reason.name).toBe("TimeoutError");
+  expect(result.current.reachable).toBe(false);
+  expect(result.current.runtime).toBe(known);
+  stalled = false;
+  await act(async () => { await vi.advanceTimersByTimeAsync(7_000); });
+  expect(result.current.reachable).toBe(true);
+  unmount();
 });
 
 function ok(payload: unknown) {

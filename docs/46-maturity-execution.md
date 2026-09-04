@@ -6,6 +6,20 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P1e: development-status timeouts are unavailable, not reachable
+
+- Corrected the development-status reader's timeout classification. It preserves
+  last known build details during restart but marks timed-out reads unreachable.
+  A hide/unmount cancellation is not a new failure. Later successful reads restore
+  reachability without a reload or second status owner.
+- Passed 27 affected hook, Settings, and Dogfood tests and the production web
+  build. The regression covers hide cancellation, timed-out visible return,
+  retained build identity, and recovery. Existing terminal chunk warning remains.
+- Rechecked live Swarm in a new dedicated Edge tab: still at Welcome back/unlock.
+  Asked the operator to unlock that tab; no credentials inspected or working tab
+  used. No authenticated live performance measurement was possible this turn.
+- No push, deployment, release, or phase-completion claim.
+
 ### P3l: Settings status reads follow rendered cards
 
 - Worker-engine/tool-surface, Queen/coordinator, Jira readiness, and email

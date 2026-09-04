@@ -28,7 +28,7 @@ export function useDevelopmentRuntime(
         setRuntime(next);
         setReachable(true);
       } catch {
-        if (!signal.aborted) setReachable(false);
+        if (!signal.aborted || (signal.reason instanceof DOMException && signal.reason.name === "TimeoutError")) setReachable(false);
       }
   }, [operatorToken, runningVersion]);
   useVisiblePolling(refresh, Boolean(operatorToken), refreshMs);
