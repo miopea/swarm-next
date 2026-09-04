@@ -6,6 +6,39 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2: preserve one composer draft through renderer and page recovery
+
+- One tab-owned, bounded draft now survives renderer replacement and view changes.
+  Lifecycle flushes preserve it in sessionStorage without per-keystroke writes.
+  Its immutable session owner prevents text moving to another worker; explicit
+  discard is offered there. Logout and credential replacement clear the draft.
+- Interrupted submission preserves an uncertainty marker before the first write.
+  Returning never replays input and requires inspection before editing/resending.
+  Storage denial keeps memory state and displays the durability limitation.
+- Edge testing exposed panel capture redirecting text paste from the composer
+  directly to the terminal. Composer/search text paste now stays native; terminal
+  surface paste and image handling retain their existing paths.
+- All 235 terminal tests and production web build passed. Isolated Edge at
+  390x844 retained exact text through full navigation, prevented another session
+  from inheriting it, and restored it on return. Synthetic draft and owned tab
+  were cleared; the owned fixture server was stopped. No live worker input.
+- Real Android/iOS lifecycle eviction and native provider interaction remain
+  acceptance work. Browser acceptance of Enter is not provider consumption;
+  abrupt termination before a lifecycle flush can still lose recent edits.
+- No push, deployment, release or live worker interruption.
+
+### Full web regression follow-up
+
+- Full execution ran 1,066 tests across 126 files: 1,064 passed and two settings
+  tests failed. Both were stale test assumptions: ambiguous paint wording and a
+  fake tunnel server that advanced on read count instead of explicit server state.
+- Corrected the exact diagnostic-text assertion and modeled tunnel state changes
+  explicitly, using visible return to observe the final failure. Both affected
+  files then passed all 13 tests. These are test corrections, not runtime fixes.
+- Final full rerun passed all 1,066 tests across 126 files in 97.35 seconds.
+  Production web build passed after correcting the fixture's TunnelStatus type;
+  the existing terminal chunk-size warning remains. No live acceptance inferred.
+
 ### P2: renderer recovery does not wait for control-room reads
 
 - The existing terminal refresh waited for a full control-room load before

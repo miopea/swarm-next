@@ -142,6 +142,10 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
 
   async function handlePaste(event: ClipboardEvent<HTMLDivElement>) {
     const transferred = transferredAttachment(event.clipboardData);
+    // Native text editing owns composer/search paste. Only terminal-surface
+    // paste should bypass the draft and write directly to the PTY.
+    if (transferred.kind === "none" && event.target instanceof HTMLElement
+      && event.target.closest(".mobile-terminal-composer, .terminal-find")) return;
     event.preventDefault();
     event.stopPropagation();
     if (transferred.kind === "file") return addAttachment(transferred.file);
@@ -401,7 +405,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
         <div className="terminal-mount" ref={mount} />
         {!atBottom ? <button type="button" className="terminal-jump-latest" onClick={() => controller.scrollToBottom()}>Jump to latest ↓</button> : null}
       </div>
-      <MobileTerminalComposer key={session.session_id} connectionState={connectionState} inputAvailable={control === "owned"} onInput={(text) => { const accepted = controller.sendInput(text); if (accepted && text.includes("\r")) dismissAttachmentNotice(); return accepted; }} onRecordSubmission={(text, signal) => recordOperatorSubmission(operatorToken, session.session_id, text, signal)} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onAttachment={acceptChosenFile} attachmentState={attachmentState} onRefresh={onRefresh} />
+      <MobileTerminalComposer key={session.session_id} sessionId={session.session_id} connectionState={connectionState} inputAvailable={control === "owned"} onInput={(text) => { const accepted = controller.sendInput(text); if (accepted && text.includes("\r")) dismissAttachmentNotice(); return accepted; }} onRecordSubmission={(text, signal) => recordOperatorSubmission(operatorToken, session.session_id, text, signal)} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onAttachment={acceptChosenFile} attachmentState={attachmentState} onRefresh={onRefresh} />
     </div>
   );
 }

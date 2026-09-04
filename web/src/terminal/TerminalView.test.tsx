@@ -200,6 +200,14 @@ test("keeps the internal terminal id behind session details", () => {
   expect(screen.queryByText(/Continuation fallback/)).not.toBeInTheDocument();
 });
 
+test("pasting into the search field remains native instead of writing to the terminal", () => {
+  render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
+  act(() => controller.findListener!());
+  const input = screen.getByLabelText("Find in terminal");
+  expect(fireEvent.paste(input, { clipboardData: { items: [], getData: () => "find this" } })).toBe(true);
+  expect(controller.sendInput).not.toHaveBeenCalled();
+});
+
 test("shows continuation provenance without claiming restoration and clears it for another session", () => {
   const { rerender } = render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{
     session_id: "recovery-session", running: true,

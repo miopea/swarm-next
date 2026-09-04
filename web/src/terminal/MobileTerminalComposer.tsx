@@ -1,9 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ChangeEvent, type FormEvent } from "react";
 
 import { TERMINAL_ATTACHMENT_ACCEPT } from "./TerminalAttachments";
 import type { TerminalConnectionState } from "./TerminalConnection";
 
-export const MAX_TERMINAL_DRAFT_LENGTH = 16_384;
+import { MAX_TERMINAL_DRAFT_LENGTH, terminalDraft } from "./TerminalDraft";
+export { MAX_TERMINAL_DRAFT_LENGTH } from "./TerminalDraft";
 export const MOBILE_SUBMIT_KEY_DELAY_MS = 75;
 /**
  * How long to wait, after the page is visible again, before deciding a pick
@@ -56,6 +57,7 @@ export function composeTerminalSubmission(draft: string): readonly [string, stri
 }
 
 interface MobileTerminalComposerProps {
+  sessionId?: string;
   connectionState: TerminalConnectionState;
   inputAvailable?: boolean;
   onInput: (text: string) => boolean;
@@ -69,8 +71,13 @@ interface MobileTerminalComposerProps {
   onRefresh?: () => void;
 }
 
-export function MobileTerminalComposer({ connectionState, inputAvailable = true, onInput, onRecordSubmission, keysExpanded: controlledKeysExpanded, onKeysExpandedChange, onAttachment, attachmentState = "idle", onRefresh }: MobileTerminalComposerProps) {
-  const [draft, setDraft] = useState("");
+export function MobileTerminalComposer({ sessionId, connectionState, inputAvailable = true, onInput, onRecordSubmission, keysExpanded: controlledKeysExpanded, onKeysExpandedChange, onAttachment, attachmentState = "idle", onRefresh }: MobileTerminalComposerProps) {
+  const saved = useSyncExternalStore(terminalDraft.subscribe, terminalDraft.snapshot);
+  const [localDraft, setLocalDraft] = useState("");
+  const otherDraft = Boolean(sessionId && saved.draft && saved.draft.sessionId !== sessionId);
+  const draft = sessionId ? (saved.draft?.sessionId === sessionId ? saved.draft.text : "") : localDraft;
+  const uncertainDraft = Boolean(sessionId && saved.draft?.sessionId === sessionId && saved.draft.uncertain);
+  const setDraft = (text: string) => { if (sessionId) terminalDraft.update(sessionId, text); else setLocalDraft(text); };
   const [submitting, setSubmitting] = useState(false);
   const [submissionWarning, setSubmissionWarning] = useState<string>();
   const [sourceWarning, setSourceWarning] = useState<string>();
@@ -96,6 +103,18 @@ export function MobileTerminalComposer({ connectionState, inputAvailable = true,
   const [pickerReturnedNothing, setPickerReturnedNothing] = useState(pickerWasInterrupted);
   const [pickerUploadFailed, setPickerUploadFailed] = useState(false);
   const connected = connectionState === "connected" && inputAvailable;
+
+  useEffect(() => {
+    if (!sessionId) return;
+    const flushHidden = () => { if (document.visibilityState === "hidden") terminalDraft.flush(); };
+    window.addEventListener("pagehide", terminalDraft.flush);
+    document.addEventListener("visibilitychange", flushHidden);
+    return () => {
+      window.removeEventListener("pagehide", terminalDraft.flush);
+      document.removeEventListener("visibilitychange", flushHidden);
+      terminalDraft.flush();
+    };
+  }, [sessionId]);
 
   useLayoutEffect(() => {
     currentInput.current = onInput;
@@ -140,7 +159,7 @@ export function MobileTerminalComposer({ connectionState, inputAvailable = true,
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!connected || submitting || draft.length === 0 || attachmentState === "uploading" || attachmentState === "waiting" || attachmentState === "error") return;
+    if (!connected || submitting || otherDraft || uncertainDraft || draft.length === 0 || attachmentState === "uploading" || attachmentState === "waiting" || attachmentState === "error") return;
     const [content, submitKey] = composeTerminalSubmission(draft);
     // Provider TUIs distinguish pasted text from an Enter key event. Keep
     // these as separate WebSocket frames with a brief bounded pause so Codex's
@@ -148,7 +167,9 @@ export function MobileTerminalComposer({ connectionState, inputAvailable = true,
     // in its prompt. Claude accepts the same terminal semantics, including
     // bracketed multiline paste.
     setSubmissionWarning(undefined);
+    if (sessionId) terminalDraft.markUncertain(sessionId, true);
     if (!onInput(content)) {
+      if (sessionId) terminalDraft.markUncertain(sessionId, false);
       setSubmissionWarning("The connection did not accept your text. Your draft is still here.");
       return;
     }
@@ -261,13 +282,16 @@ export function MobileTerminalComposer({ connectionState, inputAvailable = true,
           rows={2}
           maxLength={MAX_TERMINAL_DRAFT_LENGTH}
           value={draft}
-          readOnly={submitting}
+          readOnly={submitting || otherDraft || uncertainDraft}
           onChange={(event) => setDraft(event.target.value.slice(0, MAX_TERMINAL_DRAFT_LENGTH))}
           placeholder="Type or dictate. Slash commands work here."
           autoCapitalize="sentences"
           enterKeyHint="enter"
         />
-        <button type="submit" disabled={!connected || submitting || draft.length === 0 || attachmentState === "uploading" || attachmentState === "waiting" || attachmentState === "error"}>{submitting ? "Sending…" : "Send"}</button>
+        <button type="submit" disabled={!connected || submitting || otherDraft || uncertainDraft || draft.length === 0 || attachmentState === "uploading" || attachmentState === "waiting" || attachmentState === "error"}>{submitting ? "Sending…" : "Send"}</button>
+        {otherDraft && <p role="status">An unsent draft belongs to another terminal. Return there to continue, or <button type="button" onClick={() => terminalDraft.clear()}>Discard the other terminal’s draft</button> to write here.</p>}
+        {uncertainDraft && !submitting && <p role="status">This text may already be in the terminal. Inspect it before sending again. <button type="button" onClick={() => { terminalDraft.markUncertain(sessionId!, false); setSubmissionWarning(undefined); }}>I checked; allow editing or resending</button></p>}
+        {sessionId && saved.storageUnavailable && <p role="status">Draft storage is unavailable. Text survives view changes in memory, but may be lost if this page reloads.</p>}
         {!inputAvailable && draft.length > 0 && <p role="status">Your draft stays here while this terminal is viewing only.</p>}
         {submissionWarning ? <p role="status">{submissionWarning}</p> : null}
         {sourceWarning ? <p role="status">{sourceWarning}</p> : null}

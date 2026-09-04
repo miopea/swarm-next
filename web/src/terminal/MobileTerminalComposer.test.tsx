@@ -7,9 +7,42 @@ import {
   MOBILE_TERMINAL_KEYS,
   MobileTerminalComposer,
 } from "./MobileTerminalComposer";
+import { terminalDraft } from "./TerminalDraft";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
-beforeEach(() => { localStorage.clear(); sessionStorage.clear(); });
+beforeEach(() => { terminalDraft.clear(); localStorage.clear(); sessionStorage.clear(); });
+
+test("a bound draft survives remount and cannot move into another session", () => {
+  const input = vi.fn(() => true);
+  const view = render(<MobileTerminalComposer sessionId="a" connectionState="connected" onInput={input} />);
+  fireEvent.change(screen.getByLabelText(/Message worker/), { target: { value: "Keep this thought" } });
+  view.unmount();
+  const other = render(<MobileTerminalComposer sessionId="b" connectionState="connected" onInput={input} />);
+  expect(screen.getByLabelText(/Message worker/)).toHaveValue("");
+  expect(screen.getByLabelText(/Message worker/)).toHaveAttribute("readonly");
+  expect(screen.getByText(/An unsent draft belongs/)).toBeInTheDocument();
+  other.unmount();
+  render(<MobileTerminalComposer sessionId="a" connectionState="connected" onInput={input} />);
+  expect(screen.getByLabelText(/Message worker/)).toHaveValue("Keep this thought");
+  expect(input).not.toHaveBeenCalled();
+});
+
+test("remount between paste and Enter keeps uncertain text and never replays", async () => {
+  vi.useFakeTimers();
+  const input = vi.fn(() => true);
+  const view = render(<MobileTerminalComposer sessionId="a" connectionState="connected" onInput={input} />);
+  fireEvent.change(screen.getByLabelText(/Message worker/), { target: { value: "Possibly pasted" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  view.unmount();
+  render(<MobileTerminalComposer sessionId="a" connectionState="connected" onInput={input} />);
+  await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+  expect(input).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  expect(screen.getByLabelText(/Message worker/)).toHaveValue("Possibly pasted");
+  fireEvent.click(screen.getByRole("button", { name: "I checked; allow editing or resending" }));
+  expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+  expect(input).toHaveBeenCalledTimes(1);
+});
 
 test("source recording never waits before Enter and is aborted on disposal", async () => {
   vi.useFakeTimers();

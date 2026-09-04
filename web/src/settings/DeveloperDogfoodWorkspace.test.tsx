@@ -17,7 +17,7 @@ test("uses development detection without another enable toggle", () => {
   expect(screen.queryByRole("checkbox")).toBeNull();
   expect(screen.getByText(/Means and maxima are not percentiles/)).toBeTruthy();
   expect(screen.getByText("Terminal apply latency: No samples")).toBeInTheDocument();
-  expect(screen.getByText(/not confirmed screen paint/)).toBeInTheDocument();
+  expect(screen.getByText(/Terminal apply includes queueing, parsing and snapshot setup, not confirmed screen paint/)).toBeInTheDocument();
   expect(screen.queryByText(/^Terminal paint:/)).toBeNull();
 });
 

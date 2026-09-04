@@ -2,6 +2,18 @@ import { expect, test, vi } from "vitest";
 
 import type { TerminalConnectionLike, TerminalSurface } from "./TerminalController";
 import { TerminalWorkspace } from "./TerminalWorkspace";
+import { terminalDraft } from "./TerminalDraft";
+
+test("renderer reload preserves the one draft while logout clears it", () => {
+  const workspace = new TerminalWorkspace();
+  workspace.authenticate("operator");
+  terminalDraft.clear();
+  terminalDraft.update("session-a", "Unsent thought");
+  workspace.resetSessionRenderer("session-a");
+  expect(terminalDraft.snapshot().draft?.text).toBe("Unsent thought");
+  workspace.logout();
+  expect(terminalDraft.snapshot().draft).toBeUndefined();
+});
 
 function fakeSurface(): TerminalSurface {
   return {

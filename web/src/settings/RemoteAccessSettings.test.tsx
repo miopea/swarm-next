@@ -2,6 +2,7 @@ import { act, cleanup, render, screen, waitFor, fireEvent } from "@testing-libra
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import RemoteAccessSettings from "./RemoteAccessSettings";
+import type { TunnelStatus } from "../api";
 
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 beforeEach(() => vi.restoreAllMocks());
@@ -156,14 +157,16 @@ test("an address that never served is reported, and no QR is offered until it do
     { available: true, running: true, serving: false, error: null, url: "https://x.trycloudflare.com", started_at: 1, qr_svg: "<svg/>" },
     { available: true, running: false, serving: false, error: "The address was created but never started serving within 45 seconds.", url: null, started_at: null, qr_svg: null },
   ];
-  let read = 0;
+  let current: TunnelStatus = { available: true, running: false, serving: false, error: null, url: null, started_at: null, qr_svg: null };
+  let visibility: DocumentVisibilityState = "visible";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.endsWith("/api/v1/runtime/tunnel/start")) return reply(statuses[0]);
-    return reply(statuses[Math.min(read++, statuses.length - 1)]);
+    if (url.endsWith("/api/v1/runtime/tunnel/start")) current = statuses[0];
+    return reply(current);
   }));
 
-  const { rerender } = render(<RemoteAccessSettings operatorToken="operator-token" busy={false} />);
+  render(<RemoteAccessSettings operatorToken="operator-token" busy={false} />);
   fireEvent.click(await screen.findByRole("button", { name: "Open on my phone" }));
 
   // While it is being checked: said plainly, and no code to scan.
@@ -171,9 +174,9 @@ test("an address that never served is reported, and no QR is offered until it do
   expect(document.querySelector(".tunnel-qr")).toBeNull();
 
   // Once it has given up, the operator is told why.
-  read = 1;
-  rerender(<RemoteAccessSettings operatorToken="operator-token" busy={true} />);
-  rerender(<RemoteAccessSettings operatorToken="operator-token" busy={false} />);
+  current = statuses[1];
+  act(() => { visibility = "hidden"; document.dispatchEvent(new Event("visibilitychange")); });
+  act(() => { visibility = "visible"; document.dispatchEvent(new Event("visibilitychange")); });
   await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/never started serving/));
 });
 

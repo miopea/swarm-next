@@ -150,7 +150,8 @@ input, or clear a decision. Each mounted composer owns at most four source
 requests with eight-second abort deadlines and cancels them on disposal. Capacity
 or recording failure produces a local warning explicitly discouraging resend;
 stale completions cannot overwrite the latest submission status. Nothing is
-persisted in browser storage. A canceled request may already have committed on
+persisted in browser storage by source recording. [ADR 0069](0069-single-terminal-draft-continuity.md)
+separately owns the single recoverable composer draft. A canceled request may already have committed on
 the server, so absence of an acknowledgement is stated as unconfirmed, not lost.
 
 `swarm_operator_submissions` provides a content-free index of the newest ten

@@ -4,6 +4,7 @@ import {
   type TerminalConnectionFactory,
   type TerminalSurfaceFactory,
 } from "./TerminalController";
+import { terminalDraft } from "./TerminalDraft";
 
 /** Application-lifetime owner kept outside React component lifecycle. */
 export class TerminalWorkspace {
@@ -13,6 +14,7 @@ export class TerminalWorkspace {
 
   authenticate(operatorToken: string): void {
     if (operatorToken === this.#operatorToken) return;
+    if (this.#operatorToken !== undefined) terminalDraft.clear();
     this.#controllers.closeAll();
     this.#operatorToken = operatorToken;
   }
@@ -72,6 +74,7 @@ export class TerminalWorkspace {
   }
 
   logout(): void {
+    terminalDraft.clear();
     this.#controllers.closeAll();
     this.#controllers.setRetainedLimit(undefined);
     this.#pendingFocus.clear();
