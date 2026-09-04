@@ -1,0 +1,17 @@
+[Unit]
+Description=Create a verified daily Swarm database snapshot
+After=swarm-api.service
+PartOf=swarm.target
+# Older rollback releases do not support backup-daily.
+ConditionPathExists=@INSTALL_ROOT@/current/systemd-user/swarm-database-backup.service.in
+
+[Service]
+Type=oneshot
+ExecStart=@INSTALL_ROOT@/current/swarm-package backup-daily
+TimeoutStartSec=190
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@STATE_ROOT@

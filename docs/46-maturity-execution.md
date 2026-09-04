@@ -6,6 +6,23 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P5 / REC-02: package-owned seven-daily snapshot job
+
+- Added a bounded `backup-daily` action and persistent UTC calendar timer. Uses
+  the existing online export, verifies a private candidate, then publishes and
+  retains seven managed daily snapshots. Never stops workers or falls back to
+  copying a live database. Same-day calls are idempotent; flock coalesces overlap.
+- Download/verification/service deadlines are 120/60/190 seconds, with a 2 GiB
+  download ceiling and fixed private staging. Failed download/verification does
+  not prune good copies. Unit write access is limited to managed state.
+- Older bundles without the timer are supported by conditional unit removal and
+  a current-template service condition. Uninstall removes units, not snapshots.
+- WSL isolated package lifecycle smoke passed with lock contention, verification
+  refusal, seven-copy retention, manual-file preservation, idempotence, no service
+  calls from backup, and older-bundle paths. Real SQLite/systemd acceptance and
+  runtime failure presentation remain open. No live timer was installed.
+- No push, deployment, release or live-worker interruption.
+
 ### P5 / REC-02: approved package pre-update retention
 
 - Replaced the package's ten-copy policy with three managed pre-update snapshots.

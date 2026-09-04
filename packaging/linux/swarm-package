@@ -25,6 +25,8 @@ restore_rollback=
 restore_candidate=
 restore_auth=
 restore_incoming=
+daily_incoming=
+daily_auth=
 update_rollback=
 update_schema_before=
 update_auth=
@@ -353,6 +355,8 @@ on_exit() {
   [ -z "$restore_auth" ] || rm -f "$restore_auth"
   [ -z "$restore_incoming" ] || rm -f "$restore_incoming"
   [ -z "$restore_candidate" ] || rm -f "$restore_candidate"
+  [ -z "$daily_incoming" ] || rm -f "$daily_incoming" "$daily_incoming-wal" "$daily_incoming-shm"
+  [ -z "$daily_auth" ] || rm -f "$daily_auth"
   [ -z "$update_auth" ] || rm -f "$update_auth"
   [ -z "$return_auth" ] || rm -f "$return_auth"
   [ -z "$update_incoming" ] || rm -f "$update_incoming"
@@ -614,6 +618,48 @@ prune_superseded_releases() {
   done
 }
 
+daily_database_backup() {
+  current=$(release_from_link "$install_root/current")
+  [ -n "$current" ] || die "no current release is installed"
+  umask 077
+  mkdir -p "$state_root/backups"
+  chmod 0700 "$state_root/backups"
+  # A process-owned, nonblocking lock prevents timer/manual duplicate work.
+  exec 9>"$state_root/.daily-backup.lock"
+  flock -n 9 || return 0
+  trap 'exit 143' TERM
+  trap 'exit 130' INT
+  daily_saved="$state_root/backups/daily-$(date -u +%Y%m%d).sqlite3"
+  [ ! -f "$daily_saved" ] || return 0
+  # Fixed, lock-owned staging bounds remnants even after an uncatchable kill.
+  daily_incoming="$state_root/.daily-incoming.sqlite3"
+  daily_auth="$state_root/.daily-auth"
+  [ ! -L "$daily_incoming" ] && [ ! -L "$daily_auth" ] || die "daily backup staging must not be a symbolic link"
+  rm -f "$daily_incoming" "$daily_incoming-wal" "$daily_incoming-shm" "$daily_auth"
+  : > "$daily_incoming"
+  : > "$daily_auth"
+  token=$(sed -n 's/^SWARM_OPERATOR_TOKEN=//p' "$config_root/swarm.env")
+  printf 'header = "Authorization: Bearer %s"\n' "$token" > "$daily_auth"
+  authenticated_curl "$daily_auth" --fail --silent --show-error --max-time 120 --max-filesize 2147483648 \
+    --output "$daily_incoming" "${health_url%/health}/api/v1/backups/database" \
+    || die "daily database backup could not be downloaded; retained snapshots were not changed"
+  rm -f "$daily_auth"
+  daily_auth=
+  timeout 60 "$current/bin/swarmctl" verify-database "$daily_incoming" >/dev/null \
+    || die "daily database backup failed verification; retained snapshots were not changed"
+  chmod 0600 "$daily_incoming"
+  mv "$daily_incoming" "$daily_saved"
+  daily_incoming=
+  count=1
+  for candidate in $(find "$state_root/backups" -maxdepth 1 -type f -name 'daily-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].sqlite3' -printf '%T@ %p\n' | sort -nr | sed 's/^[^ ]* //'); do
+    [ "$candidate" != "$daily_saved" ] || continue
+    count=$((count + 1))
+    [ "$count" -le 7 ] && continue
+    case "$candidate" in "$state_root"/backups/daily-*.sqlite3) rm -f -- "$candidate";; *) die "daily backup cleanup path escapes managed state";; esac
+  done
+  printf 'Daily Hive database backup verified: %s\n' "$daily_saved"
+}
+
 restore_database() {
   backup=$bundle
   case "$backup" in "$home_dir"/*) :;; *) die "restore input must remain below HOME";; esac
@@ -854,7 +900,20 @@ install_units() {
       die "$name still contains an unsubstituted placeholder: $(grep -o '@[A-Z_]*@' "$unit_root/$name" | sort -u | tr '\n' ' ')"
     fi
   done
+  # This package generation owns these optional units. When rolling back to
+  # an older bundle, disable/remove them rather than invoking an unknown action.
+  if [ -f "$unit_release/systemd-user/swarm-database-backup.service.in" ]; then
+    for name in swarm-database-backup.service swarm-database-backup.timer; do
+      render_unit "$unit_release/systemd-user/$name.in" "$unit_root/$name"
+    done
+  else
+    run_systemctl disable --now swarm-database-backup.timer >/dev/null 2>&1 || true
+    rm -f "$unit_root/swarm-database-backup.service" "$unit_root/swarm-database-backup.timer"
+  fi
   run_systemctl daemon-reload
+  if [ -f "$unit_release/systemd-user/swarm-database-backup.service.in" ]; then
+    run_systemctl enable --now swarm-database-backup.timer
+  fi
 }
 
 validate_dev_checkout() {
@@ -1789,6 +1848,7 @@ uninstall_product() {
     "$unit_root/swarm-host-reconcile.service" "$unit_root/swarm-host-reconcile.path" "$unit_root/swarm-host-reconcile.timer" \
     "$unit_root/swarm-development-reload.service" "$unit_root/swarm-development-reload.path" \
     "$unit_root/swarm-release-apply.service" "$unit_root/swarm-release-apply.path" \
+    "$unit_root/swarm-database-backup.service" "$unit_root/swarm-database-backup.timer" \
     "$unit_root/swarm.target"
   run_systemctl daemon-reload
   [ ! -L "$bin_root/swarmctl" ] || rm -f "$bin_root/swarmctl"
@@ -1814,5 +1874,6 @@ case "$action" in
   apply-release) apply_release;;
   uninstall) uninstall_product;;
   restore) restore_database;;
-  *) die "usage: swarm-package <install|update|migrate-protocol> RELEASE_DIR | apply-release | enable-development CHECKOUT | disable-development | reload-development | restore DATABASE | rollback | reconcile-host | reconcile-host-if-idle | reconcile-host-requested | uninstall";;
+  backup-daily) daily_database_backup;;
+  *) die "usage: swarm-package <install|update|migrate-protocol> RELEASE_DIR | apply-release | enable-development CHECKOUT | disable-development | reload-development | backup-daily | restore DATABASE | rollback | reconcile-host | reconcile-host-if-idle | reconcile-host-requested | uninstall";;
 esac

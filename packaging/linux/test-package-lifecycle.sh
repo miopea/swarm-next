@@ -121,7 +121,9 @@ chmod +x "$SWARM_SYSTEMCTL_BIN" "$SWARM_CURL_BIN"
 # the worker engine reconcile — so it is checked rather than remembered.
 for unit in "$repo_root"/packaging/systemd-user/*.service.in; do
   grep -q 'ExecStart=.*swarm-package' "$unit" || continue
-  for required in @INSTALL_ROOT@ @UNIT_ROOT@ @STATE_ROOT@ @BIN_ROOT@; do
+  required_paths='@INSTALL_ROOT@ @UNIT_ROOT@ @STATE_ROOT@ @BIN_ROOT@'
+  case "$unit" in */swarm-database-backup.service.in) required_paths='@STATE_ROOT@';; esac
+  for required in $required_paths; do
     grep -q "ReadWritePaths=.*$required" "$unit" || {
       printf 'unit %s runs swarm-package but cannot write %s\n' "$(basename "$unit")" "$required" >&2
       exit 1
@@ -249,6 +251,9 @@ EOF
   printf '<!doctype html><title>test</title>\n' > "$bundle/web/index.html"
   printf 'export const version = "%s";\n' "$version" > "$bundle/web/assets/app-$version.js"
   cp "$repo_root/packaging/systemd-user/"*.in "$bundle/systemd-user/"
+  if [ "$version" = "1.0.0" ]; then
+    rm -f "$bundle/systemd-user/swarm-database-backup.service.in" "$bundle/systemd-user/swarm-database-backup.timer.in"
+  fi
   cp "$repo_root/packaging/linux/swarm-package" "$bundle/"
   chmod +x "$bundle/swarm-package"
   printf '%s\n' "$version" > "$bundle/VERSION"
@@ -932,6 +937,29 @@ fi
 
 # Database restore verifies input, creates a rollback snapshot, restarts only
 # the API, and preserves the terminal host and repository root.
+# Daily snapshots are bounded, verified, idempotent and never stop services.
+flock "$SWARM_STATE_ROOT/.daily-backup.lock" "$package" backup-daily
+[ ! -f "$SWARM_STATE_ROOT/backups/daily-$(date -u +%Y%m%d).sqlite3" ]
+for day in 01 02 03 04 05 06 07 08 09; do
+  printf 'historical\n' > "$SWARM_STATE_ROOT/backups/daily-200001$day.sqlite3"
+done
+printf 'manual\n' > "$SWARM_STATE_ROOT/backups/daily-personal.sqlite3"
+: > "$HOME/verify-fails"
+if "$package" backup-daily; then echo "unverified daily backup accepted" >&2; exit 1; fi
+[ "$(find "$SWARM_STATE_ROOT/backups" -name 'daily-2000*.sqlite3' | wc -l)" -eq 9 ]
+rm "$HOME/verify-fails"
+: > "$HOME/systemctl.log"
+printf 'daily source\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
+"$package" backup-daily
+daily_path="$SWARM_STATE_ROOT/backups/daily-$(date -u +%Y%m%d).sqlite3"
+[ "$(cat "$daily_path")" = 'daily source' ]
+[ "$(find "$SWARM_STATE_ROOT/backups" -name 'daily-[0-9]*.sqlite3' | wc -l)" -eq 7 ]
+[ "$(cat "$SWARM_STATE_ROOT/backups/daily-personal.sqlite3")" = manual ]
+printf 'later source\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
+"$package" backup-daily
+[ "$(cat "$daily_path")" = 'daily source' ]
+[ ! -s "$HOME/systemctl.log" ]
+[ -f "$SWARM_SYSTEMD_USER_ROOT/swarm-database-backup.timer" ]
 printf 'old-database\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
 printf 'restored-database\n' > "$HOME/hive-backup.sqlite3"
 # A refused rollback snapshot must not activate EXIT rollback or stop the API.

@@ -1,0 +1,12 @@
+[Unit]
+Description=Keep seven daily Swarm database snapshots
+PartOf=swarm.target
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 UTC
+Persistent=true
+RandomizedDelaySec=15min
+Unit=swarm-database-backup.service
+
+[Install]
+WantedBy=swarm.target
