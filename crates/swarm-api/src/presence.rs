@@ -20,6 +20,8 @@ pub(super) struct SetPresenceRequest {
 pub(super) struct PresenceObservationRequest {
     device_class: PresenceDeviceClass,
     state: PresenceObservationState,
+    #[serde(default)]
+    desktop_return: bool,
 }
 
 pub(super) async fn operator_presence(
@@ -67,6 +69,7 @@ pub(super) async fn observe_presence_device(
             device_id,
             request.device_class,
             request.state,
+            request.desktop_return,
             unix_timestamp(),
         )
         .map_err(application_error)?;

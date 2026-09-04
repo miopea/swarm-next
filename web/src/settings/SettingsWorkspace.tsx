@@ -781,6 +781,7 @@ function presenceLabel(mode: PresenceMode | undefined) {
 function presenceSourceLabel(presence: OperatorPresence | undefined) {
   if (!presence) return "Waiting for the first device observation";
   if (presence.source === "manual") return "Manual override";
+  if (presence.source === "scheduled") return "Night Watch schedule";
   if (presence.source === "active_device") return "Active device detected";
   if (presence.source === "screen_locked") return "Computer lock detected";
   if (presence.source === "inactive_device") return "No active visible device";

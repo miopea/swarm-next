@@ -83,6 +83,9 @@ impl TaskStore {
         let transaction = connection.transaction()?;
         let before = operator_presence_from_connection(&transaction, now)?;
         let operator_id = local_operator_id(&transaction)?;
+        if mode.is_none() {
+            transaction.execute("UPDATE operator_night_watch SET dismissed_occurrence = NULL WHERE operator_id = ?1", [operator_id.to_string()])?;
+        }
         transaction.execute(
             "INSERT INTO operator_presence_preferences (operator_id, manual_mode, updated_at)
              VALUES (?1, ?2, ?3)
@@ -120,6 +123,21 @@ impl TaskStore {
         state: PresenceObservationState,
         now: i64,
     ) -> Result<PresenceMutation, TaskStoreError> {
+        self.record_presence_observation_with_return(device_id, device_class, state, false, now)
+    }
+
+    /// Records an observation, distinguishing explicit desktop return from a heartbeat.
+    ///
+    /// # Errors
+    /// Rejects capacity overflow or persistence failures atomically.
+    pub fn record_presence_observation_with_return(
+        &self,
+        device_id: PresenceDeviceId,
+        device_class: PresenceDeviceClass,
+        state: PresenceObservationState,
+        desktop_return: bool,
+        now: i64,
+    ) -> Result<PresenceMutation, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         let before = operator_presence_from_connection(&transaction, now)?;
@@ -146,6 +164,17 @@ impl TaskStore {
             }
         }
         let operator_id = local_operator_id(&transaction)?;
+        if desktop_return
+            && device_class == PresenceDeviceClass::Desktop
+            && state == PresenceObservationState::Active
+        {
+            super::night_watch::dismiss_current(&transaction, now)?;
+            transaction.execute(
+                "UPDATE operator_presence_preferences SET manual_mode = NULL, updated_at = ?2
+                 WHERE operator_id = ?1 AND manual_mode = 'night_watch'",
+                params![operator_id.to_string(), now],
+            )?;
+        }
         let expires_at = now.saturating_add(observation_ttl(state));
         transaction.execute(
             "INSERT INTO operator_presence_devices (
@@ -214,6 +243,13 @@ pub(super) fn operator_presence_from_connection(
             mode,
             manual_mode: Some(mode),
             source: PresenceSource::Manual,
+        });
+    }
+    if super::night_watch::scheduled_active(connection, now)? {
+        return Ok(OperatorPresence {
+            mode: PresenceMode::NightWatch,
+            manual_mode: None,
+            source: PresenceSource::Scheduled,
         });
     }
     let state = connection

@@ -81,6 +81,31 @@ test("mobile devices never request desktop lock-detection permission", async () 
   controller.stop();
 });
 
+test("desktop entry and deliberate return are distinct from background heartbeats", async () => {
+  const observe = vi.fn().mockResolvedValue(atHive);
+  const controller = new PresenceController(observe);
+  controller.start("secret", vi.fn(), vi.fn());
+  await vi.runAllTicks();
+  expect(observe.mock.lastCall?.[4]).toBe(true);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(observe.mock.lastCall?.[4]).toBe(false);
+  controller.setPresenceMode("night_watch");
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
+  await vi.runAllTicks();
+  expect(observe.mock.lastCall?.[4]).toBe(true);
+  controller.stop();
+});
+
+test("mobile entry cannot produce a desktop-return command", async () => {
+  Object.defineProperty(navigator, "userAgent", { configurable: true, value: "Android Mobile" });
+  const observe = vi.fn().mockResolvedValue(atHive);
+  const controller = new PresenceController(observe);
+  controller.start("secret", vi.fn(), vi.fn());
+  await vi.runAllTicks();
+  expect(observe.mock.lastCall?.[4]).toBe(false);
+  controller.stop();
+});
+
 test("granted desktop lock detection becomes enabled and reports locked presence", async () => {
   class FakeIdleDetector extends EventTarget {
     static requestPermission = vi.fn().mockResolvedValue("granted");

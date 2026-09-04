@@ -7,6 +7,7 @@ vi.mock("./presence/PresenceController", () => ({
   deviceClass: () => "desktop",
   presenceDeviceId: () => "019fedfc-1c30-70e1-a5e2-9a3c94268093",
   PresenceController: class {
+    setPresenceMode() {}
     start() {}
     stop() {}
     async enableLockDetection() { return false; }

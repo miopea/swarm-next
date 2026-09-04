@@ -1,7 +1,7 @@
 import { authenticatedFetch } from "./request";
 
 export type PresenceMode = "at_hive" | "away" | "night_watch";
-export type PresenceSource = "manual" | "active_device" | "screen_locked" | "inactive_device" | "timed_out";
+export type PresenceSource = "manual" | "scheduled" | "active_device" | "screen_locked" | "inactive_device" | "timed_out";
 export type PresenceDeviceClass = "desktop" | "mobile";
 export type PresenceObservationState = "active" | "idle" | "locked" | "hidden";
 export type OperatorPresence = {
@@ -32,6 +32,7 @@ export async function observePresence(
   deviceId: string,
   deviceClass: PresenceDeviceClass,
   state: PresenceObservationState,
+  desktopReturn = false,
 ): Promise<OperatorPresence> {
   const response = await authenticatedFetch(
     operatorToken,
@@ -39,7 +40,7 @@ export async function observePresence(
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ device_class: deviceClass, state }),
+      body: JSON.stringify({ device_class: deviceClass, state, ...(desktopReturn ? { desktop_return: true } : {}) }),
     },
   );
   return response.json() as Promise<OperatorPresence>;

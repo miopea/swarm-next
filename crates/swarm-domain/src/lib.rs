@@ -591,6 +591,7 @@ impl std::error::Error for ParsePresenceObservationStateError {}
 #[serde(rename_all = "snake_case")]
 pub enum PresenceSource {
     Manual,
+    Scheduled,
     ActiveDevice,
     ScreenLocked,
     InactiveDevice,

@@ -3,7 +3,7 @@ use chrono::{DateTime, Datelike, Timelike, Utc};
 use chrono_tz::Tz;
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
-use swarm_domain::{ControlRoomEventKind, NightWatchSchedule};
+use swarm_domain::{ControlRoomEventKind, NightWatchCommand, NightWatchPolicy, NightWatchSchedule};
 
 use crate::{TaskStore, TaskStoreError, insert_control_room_event};
 
@@ -70,7 +70,7 @@ pub(super) fn migrate(
     transaction.pragma_update(None, "user_version", crate::NIGHT_WATCH_SCHEMA_VERSION)
 }
 
-fn read(
+pub(super) fn read(
     connection: &rusqlite::Connection,
 ) -> Result<Option<NightWatchConfiguration>, TaskStoreError> {
     let operator = crate::presence::local_operator_id(connection)?;
@@ -127,6 +127,51 @@ impl TaskStore {
     }
 }
 
+pub(super) fn scheduled_active(
+    connection: &rusqlite::Connection,
+    now: i64,
+) -> Result<bool, TaskStoreError> {
+    let Some(config) = read(connection)? else {
+        return Ok(false);
+    };
+    let operator = crate::presence::local_operator_id(connection)?;
+    let dismissed_occurrence = connection.query_row(
+        "SELECT dismissed_occurrence FROM operator_night_watch WHERE operator_id = ?1",
+        [operator.to_string()],
+        |row| row.get(0),
+    )?;
+    Ok(NightWatchPolicy {
+        manual: false,
+        dismissed_occurrence,
+    }
+    .is_active(config.occurrence(now)?))
+}
+
+pub(super) fn dismiss_current(
+    connection: &rusqlite::Connection,
+    now: i64,
+) -> Result<(), TaskStoreError> {
+    let Some(config) = read(connection)? else {
+        return Ok(());
+    };
+    let operator = crate::presence::local_operator_id(connection)?;
+    let dismissed_occurrence = connection.query_row(
+        "SELECT dismissed_occurrence FROM operator_night_watch WHERE operator_id = ?1",
+        [operator.to_string()],
+        |row| row.get(0),
+    )?;
+    let next = NightWatchPolicy {
+        manual: false,
+        dismissed_occurrence,
+    }
+    .transition(NightWatchCommand::DesktopReturn, config.occurrence(now)?);
+    connection.execute(
+        "UPDATE operator_night_watch SET dismissed_occurrence = ?2 WHERE operator_id = ?1",
+        params![operator.to_string(), next.dismissed_occurrence],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,6 +206,65 @@ mod tests {
         }
         assert!(config.occurrence(i64::MAX).is_err());
         assert!(NightWatchConfiguration::new(true, "not/a-zone", 0, 60).is_none());
+    }
+
+    #[test]
+    fn schedule_return_is_atomic_and_heartbeats_or_mobile_cannot_end_it() {
+        use swarm_domain::{
+            PresenceDeviceClass as Class, PresenceDeviceId, PresenceMode,
+            PresenceObservationState as State, PresenceSource,
+        };
+        let store = TaskStore::in_memory().unwrap();
+        let config = NightWatchConfiguration::new(true, "UTC", 1_320, 420).unwrap();
+        store.set_night_watch_configuration(&config).unwrap();
+        let now = instant("2026-09-03T23:00:00Z");
+        assert_eq!(
+            store.operator_presence(now).unwrap().source,
+            PresenceSource::Scheduled
+        );
+        let desktop = PresenceDeviceId::new();
+        let heartbeat = store
+            .record_presence_observation(desktop, Class::Desktop, State::Active, now)
+            .unwrap();
+        assert_eq!(heartbeat.presence.mode, PresenceMode::NightWatch);
+        let mobile = store
+            .record_presence_observation_with_return(
+                PresenceDeviceId::new(),
+                Class::Mobile,
+                State::Active,
+                true,
+                now,
+            )
+            .unwrap();
+        assert_eq!(mobile.presence.mode, PresenceMode::NightWatch);
+        store
+            .set_manual_presence(Some(PresenceMode::NightWatch), now)
+            .unwrap();
+        let returned = store
+            .record_presence_observation_with_return(
+                desktop,
+                Class::Desktop,
+                State::Active,
+                true,
+                now + 1,
+            )
+            .unwrap();
+        assert!(returned.changed);
+        assert_eq!(returned.presence.mode, PresenceMode::AtHive);
+        assert_eq!(returned.presence.manual_mode, None);
+        assert_ne!(
+            store.operator_presence(now + 600).unwrap().mode,
+            PresenceMode::NightWatch
+        );
+        assert_eq!(
+            store.operator_presence(now + 86_400).unwrap().source,
+            PresenceSource::Scheduled
+        );
+        store.set_manual_presence(None, now + 2).unwrap();
+        assert_eq!(
+            store.operator_presence(now + 2).unwrap().source,
+            PresenceSource::Scheduled
+        );
     }
 
     #[test]

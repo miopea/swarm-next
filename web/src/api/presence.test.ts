@@ -15,6 +15,7 @@ test("owns the complete presence HTTP contract behind the shared transport", asy
   await expect(fetchPresence("operator-token")).resolves.toEqual(presence);
   await expect(setManualPresence("operator-token", "night_watch")).resolves.toEqual(presence);
   await expect(observePresence("operator-token", "phone/one", "mobile", "hidden")).resolves.toEqual(presence);
+  await expect(observePresence("operator-token", "desktop-one", "desktop", "active", true)).resolves.toEqual(presence);
 
   expect(fetch).toHaveBeenNthCalledWith(1, "/api/v1/presence", expect.objectContaining({
     cache: "no-store",
@@ -27,6 +28,10 @@ test("owns the complete presence HTTP contract behind the shared transport", asy
   expect(fetch).toHaveBeenNthCalledWith(3, "/api/v1/presence/devices/phone%2Fone", expect.objectContaining({
     method: "PUT",
     body: JSON.stringify({ device_class: "mobile", state: "hidden" }),
+  }));
+  expect(fetch).toHaveBeenNthCalledWith(4, "/api/v1/presence/devices/desktop-one", expect.objectContaining({
+    method: "PUT",
+    body: JSON.stringify({ device_class: "desktop", state: "active", desktop_return: true }),
   }));
   for (const [, init] of fetch.mock.calls) {
     expect((init.headers as Headers).get("Authorization")).toBe("Bearer operator-token");

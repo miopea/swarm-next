@@ -1862,11 +1862,16 @@ impl TaskService {
         device_id: PresenceDeviceId,
         device_class: PresenceDeviceClass,
         state: PresenceObservationState,
+        desktop_return: bool,
         now: i64,
     ) -> Result<(OperatorPresence, bool), ApplicationError> {
-        let mutation =
-            self.store
-                .record_presence_observation(device_id, device_class, state, now)?;
+        let mutation = self.store.record_presence_observation_with_return(
+            device_id,
+            device_class,
+            state,
+            desktop_return,
+            now,
+        )?;
         Ok((mutation.presence, mutation.changed))
     }
     /// Lists the complete local Hive queue for an operator or Queen coordinator.

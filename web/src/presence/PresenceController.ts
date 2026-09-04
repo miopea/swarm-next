@@ -20,6 +20,8 @@ export class PresenceController {
   #lastActiveSentAt = 0;
   #sending = false;
   #pending?: PresenceObservationState;
+  #pendingReturn = false;
+  #nightWatch = false;
   #generation = 0;
   #idleAbort?: AbortController;
   #screenLocked = false;
@@ -50,7 +52,7 @@ export class PresenceController {
     window.addEventListener("pointerdown", this.#handleInteraction, { passive: true });
     window.addEventListener("keydown", this.#handleInteraction);
     window.addEventListener("touchstart", this.#handleInteraction, { passive: true });
-    this.#queue(this.#state);
+    this.#queue(this.#state, this.#state === "active");
     this.#timer = window.setInterval(() => this.#queue(this.#state), HEARTBEAT_MS);
     if (lockDetectionAvailable) void this.#restoreLockDetection(this.#generation);
   }
@@ -69,6 +71,8 @@ export class PresenceController {
     window.removeEventListener("touchstart", this.#handleInteraction);
     this.#token = undefined;
     this.#pending = undefined;
+    this.#pendingReturn = false;
+    this.#nightWatch = false;
     this.#sending = false;
   }
 
@@ -90,6 +94,10 @@ export class PresenceController {
       if (!controllerAborted(this.#idleAbort)) this.#onLockState("error");
       return false;
     }
+  }
+
+  setPresenceMode(mode: OperatorPresence["mode"] | undefined) {
+    this.#nightWatch = mode === "night_watch";
   }
 
   async #restoreLockDetection(generation: number) {
@@ -131,18 +139,19 @@ export class PresenceController {
     this.#state = this.#screenLocked ? "locked"
       : this.#userIdle ? "idle"
         : document.visibilityState === "visible" ? "active" : "hidden";
-    this.#queue(this.#state);
+    this.#queue(this.#state, this.#state === "active");
   };
 
   #handleInteraction = () => {
     if (document.visibilityState !== "visible" || this.#state === "locked") return;
     this.#state = "active";
-    if (this.now() - this.#lastActiveSentAt >= HEARTBEAT_MS) this.#queue("active");
+    if (this.#nightWatch || this.now() - this.#lastActiveSentAt >= HEARTBEAT_MS) this.#queue("active", true);
   };
 
-  #queue(state: PresenceObservationState) {
+  #queue(state: PresenceObservationState, desktopReturn = false) {
     if (!this.#token) return;
     this.#pending = state;
+    this.#pendingReturn = state === "active" && this.#deviceClass === "desktop" && (desktopReturn || this.#pendingReturn);
     if (!this.#sending) void this.#flush();
   }
 
@@ -151,12 +160,15 @@ export class PresenceController {
     const generation = this.#generation;
     while (this.#pending && this.#token && generation === this.#generation) {
       const state = this.#pending;
+      const desktopReturn = this.#pendingReturn;
+      this.#pendingReturn = false;
       this.#pending = undefined;
       const token = this.#token;
       try {
-        const presence = await this.observe(token, this.#deviceId, this.#deviceClass, state);
+        const presence = await this.observe(token, this.#deviceId, this.#deviceClass, state, desktopReturn);
         if (generation !== this.#generation) return;
         if (state === "active") this.#lastActiveSentAt = this.now();
+        this.#nightWatch = presence.mode === "night_watch";
         this.#onPresence(presence);
       } catch {
         // The next explicit event or bounded heartbeat retries. Presence expires safely server-side.

@@ -686,6 +686,28 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   this checkpoint does not claim an available Night Watch schedule.
 - No push, deployment, release, or live configuration change.
 
+### P5d: schedule evaluation and explicit desktop return
+
+- Effective presence evaluates configured windows with a distinct `scheduled`
+  source. Existing manual overrides retain precedence. Selecting Automatic clears
+  the dismissed occurrence. No configuration still means no scheduled watch.
+- Presence observations now accept an optional `desktop_return` signal through
+  HTTP/application/persistence. Only an active desktop observation may use it.
+  It clears manual Night Watch and dismisses the current scheduled occurrence in
+  the same transaction as the device update and presence event.
+- Browser entry/visible return and interaction during Night Watch report return;
+  normal heartbeats and mobile entry do not. App changes to manual presence inform
+  the controller immediately, without waiting for its next heartbeat. Missing
+  fields from older clients remain ordinary observations, never implicit returns.
+- Seven focused persistence tests passed; 39 App/controller/API tests passed, plus
+  the expanded HTTP serialization assertion. Strict persistence and Linux-target
+  API all-target/all-feature Clippy passed. Production web build passed; existing
+  terminal chunk warning remains. Linux API checks are compilation, not execution.
+- Schedule configuration endpoints/settings controls and real-device acceptance
+  remain open. Late-return ordering across network outages and concurrent manual
+  changes requires further reconciliation; this is not full presence acceptance.
+- No live settings, databases, workers, push, release, or deployment changed.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

@@ -476,6 +476,7 @@ export function App() {
   const [providerCapabilitiesUnavailable, setProviderCapabilitiesUnavailable] = useState(false);
   const [notificationState, setNotificationState] = useState<NotificationCapabilityState>("unsupported");
   const presenceController = useMemo(() => new PresenceController(), []);
+  useEffect(() => presenceController.setPresenceMode(presence?.mode), [presenceController, presence?.mode]);
   const notificationController = useMemo(() => new NotificationController(), []);
   const presentationDevice = useMemo<PresentationDeviceClass>(() => deviceClass(), []);
 
