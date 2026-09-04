@@ -2442,6 +2442,19 @@ impl TaskService {
         self.store.list_worker_profiles().map_err(Into::into)
     }
 
+    /// Queen-only durable Scout routing evidence; not permission to dispatch.
+    ///
+    /// # Errors
+    /// Denies ordinary workers and propagates persistence failures.
+    pub fn scout_routing_facts(
+        &self,
+        principal: AgentPrincipal,
+        now: i64,
+    ) -> Result<Option<swarm_persistence::ScoutRoutingFacts>, ApplicationError> {
+        require_queen(principal)?;
+        self.store.scout_routing_facts(now).map_err(Into::into)
+    }
+
     /// Creates a draft in the local Hive.
     ///
     /// Open to any worker, not only Queen. A worker that discovers follow-up

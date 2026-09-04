@@ -47,6 +47,21 @@ provisioning remains a separately tested installation concern.
 
 ## Validation
 
+### Queen routing evidence (daily-driver maturity)
+
+The Queen-only MCP roster includes `scout_routing`: a single-query durable
+snapshot of the managed Scout ID, open session binding, operator engagement
+at the supplied observation time, and active-task ownership. A worker merely
+named Scout does not qualify. Missing managed identity is explicit null.
+The existing worker array remains unchanged.
+
+This snapshot is neither a reservation nor a terminal-idle observation. It
+explicitly reports terminal activity as unobserved and grants no dispatch
+authority. Read failure returns an error rather than an optimistic idle state.
+Delivery must still revalidate engagement and live terminal evidence, and
+second-opinion admission must protect ongoing tasks. This projection does not
+complete that separate enforcement work.
+
 Persistence tests prove exact-only in-place promotion, stable identity and
 conversation, sleeping default, pinned ordering, protected rename/removal, and
 continued provider/description configuration. API and browser tests expose and

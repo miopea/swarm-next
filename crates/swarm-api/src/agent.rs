@@ -705,7 +705,18 @@ impl ServerHandler for AgentMcp {
             "swarm_list_workers" => self
                 .tasks
                 .list_workers(self.principal)
-                .and_then(|workers| structured(json!({ "workers": workers }))),
+                .and_then(|workers| {
+                    let scout = self.tasks.scout_routing_facts(self.principal, now_seconds())?;
+                    structured(json!({
+                        "workers": workers,
+                        "scout_routing": {
+                            "durable_facts": scout,
+                            "terminal_activity": "not_observed",
+                            "dispatch_authorized": false,
+                            "note": "Durable snapshot only, not an idle guarantee or reservation. Null means no managed Scout. Recheck current work, operator engagement, and terminal activity through guarded delivery; never infer availability from a name or an open session."
+                        }
+                    }))
+                }),
             "swarm_list_coordination_attention" => {
                 if self.principal.role == WorkerRole::Queen {
                     self.tasks
@@ -7054,6 +7065,10 @@ mod tests {
             petal["description"],
             "Owns petal rendering and its repository-scoped release checks."
         );
+        let routing = &workers["result"]["structuredContent"]["scout_routing"];
+        assert!(routing["durable_facts"].is_null());
+        assert_eq!(routing["terminal_activity"], "not_observed");
+        assert_eq!(routing["dispatch_authorized"], false);
     }
 
     /// A worker asked to file follow-up work had no tool for it and stalled,

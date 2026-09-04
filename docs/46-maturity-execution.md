@@ -6,6 +6,26 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: expose managed Scout routing facts without guessing idle
+
+- The Queen-only worker list now includes a read-only `scout_routing` projection.
+  Persistence reads managed identity, open session binding, current engagement
+  and active-task ownership in one SQL snapshot. The application boundary enforces
+  Queen authority. No name inference, wake, reservation, extra browser poll or
+  process inspection is introduced; the existing worker array is unchanged.
+- Null explicitly means no managed Scout. Terminal activity is explicitly
+  unobserved and the response grants no dispatch authority. Expired engagement
+  does not erase ongoing work. Failure propagates instead of becoming idle.
+- Linux API and persistence test builds passed. The focused MCP roster test and
+  new persistence identity/engagement-expiry/active-task test passed. An initial
+  test command selected an older executable and matched zero tests; only the
+  verified new executable's one-test pass is counted. Strict Linux API Clippy
+  (all targets/features, warnings denied) and formatting/diff checks passed.
+- Second-opinion purpose/admission and delivery-time task guards remain open.
+  Ordinary task messages currently share a grouped terminal delivery path;
+  this snapshot alone cannot prevent a later cross-task interruption. QUEEN-01
+  is not marked complete. No push, deployment, release or live worker change.
+
 ### P4: worker-first judgment and Scout-only second-opinion guidance
 
 - Queen's standing brief and every automation message now share the approved

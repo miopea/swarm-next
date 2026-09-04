@@ -15,6 +15,16 @@ use super::{
     insert_control_room_event,
 };
 
+/// Durable routing evidence, not a live terminal-idle or dispatch guarantee.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ScoutRoutingFacts {
+    pub worker_id: WorkerId,
+    pub active_session_id: Option<WorkerSessionId>,
+    pub operator_engaged: bool,
+    pub has_active_task: bool,
+    pub observed_at: i64,
+}
+
 /// Records which workers a worker-engine replacement unloaded, so they can be
 /// brought back by whoever is running next rather than only by the request that
 /// stopped them.
@@ -223,6 +233,53 @@ impl TaskStore {
             .optional()?
             .map(|id| parse_worker_identity(&id))
             .transpose()
+    }
+
+    /// Reads managed identity, session binding and durable holds in one snapshot.
+    /// No name matching, process probing, wake, reservation or dispatch occurs.
+    ///
+    /// # Errors
+    /// Returns persistence and stored-identity errors rather than guessing idle.
+    pub fn scout_routing_facts(
+        &self,
+        now: i64,
+    ) -> Result<Option<ScoutRoutingFacts>, TaskStoreError> {
+        let connection = self.connection()?;
+        let row = connection
+            .query_row(
+                "SELECT p.id, s.session_id,
+                EXISTS(SELECT 1 FROM worker_engagements e
+                       WHERE e.worker_id = p.id AND e.expires_at > ?1),
+                EXISTS(SELECT 1 FROM tasks t
+                       WHERE t.assigned_worker_id = p.id AND t.state = 'active'
+                         AND t.removed_at IS NULL)
+             FROM worker_profiles p
+             LEFT JOIN worker_sessions s ON s.worker_id = p.id AND s.ended_at IS NULL
+             WHERE p.system_role = 'scout' AND p.archived_at IS NULL",
+                [now],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, bool>(2)?,
+                        row.get::<_, bool>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        row.map(|(worker, session, operator_engaged, has_active_task)| {
+            Ok(ScoutRoutingFacts {
+                worker_id: parse_worker_identity(&worker)?,
+                active_session_id: session
+                    .map(|id| WorkerSessionId::from_str(&id))
+                    .transpose()
+                    .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?,
+                operator_engaged,
+                has_active_task,
+                observed_at: now,
+            })
+        })
+        .transpose()
     }
 
     /// Creates one durable worker profile without starting a process.
@@ -2562,6 +2619,72 @@ mod tests {
         assert_eq!(queen.name, "Queen");
         assert_eq!(queen.role, WorkerRole::Queen);
         assert!(queen.autostart);
+    }
+
+    #[test]
+    fn scout_routing_facts_follow_identity_engagement_and_active_work() {
+        let store = TaskStore::in_memory().unwrap();
+        assert!(store.scout_routing_facts(10).unwrap().is_none());
+        let worker = store
+            .create_worker("Scout", ProviderKind::ClaudeCode, "/ordinary", false, 0)
+            .unwrap();
+        assert!(
+            store.scout_routing_facts(10).unwrap().is_none(),
+            "an ordinary worker's name is not managed identity"
+        );
+        store
+            .update_worker_profile(worker.id, Some("Petal"), None, None, None, None)
+            .unwrap();
+        store
+            .create_worker(
+                "Project Root",
+                ProviderKind::ClaudeCode,
+                "/projects",
+                false,
+                1,
+            )
+            .unwrap();
+        let scout = store
+            .promote_project_root_to_scout("/projects")
+            .unwrap()
+            .unwrap();
+        let sleeping = store.scout_routing_facts(10).unwrap().unwrap();
+        assert_eq!(sleeping.worker_id, scout.id);
+        assert!(sleeping.active_session_id.is_none());
+        assert!(!sleeping.operator_engaged && !sleeping.has_active_task);
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(scout.id, session).unwrap();
+        store
+            .renew_worker_engagement(session, None, 10, 30)
+            .unwrap();
+        let task = store.create_task("Scoped opinion", "/projects").unwrap();
+        store.assign_task_to_worker(task.id, scout.id).unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Active)
+            .unwrap();
+        let occupied = store.scout_routing_facts(11).unwrap().unwrap();
+        assert_eq!(occupied.active_session_id, Some(session));
+        assert!(occupied.operator_engaged && occupied.has_active_task);
+        assert_eq!(occupied.observed_at, 11);
+        let expired = store.scout_routing_facts(40).unwrap().unwrap();
+        assert!(!expired.operator_engaged);
+        assert!(
+            expired.has_active_task,
+            "an expired engagement does not finish work"
+        );
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Review)
+            .unwrap();
+        assert!(
+            !store
+                .scout_routing_facts(41)
+                .unwrap()
+                .unwrap()
+                .has_active_task
+        );
     }
 
     #[test]

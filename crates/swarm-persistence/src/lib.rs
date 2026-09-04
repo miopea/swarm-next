@@ -138,7 +138,7 @@ pub use decisions::{
 use events::insert_control_room_event;
 #[cfg(test)]
 use events::{MAX_CONTROL_ROOM_EVENT_PAGE, MAX_CONTROL_ROOM_EVENTS};
-pub use workers::{ActiveWorkerSession, ConnectionProfile, GeometryContention};
+pub use workers::{ActiveWorkerSession, ConnectionProfile, GeometryContention, ScoutRoutingFacts};
 pub(crate) const MAX_TASK_TITLE_BYTES: usize = 240;
 /// Matches the ceiling the Outlook fetcher accepts for a message body, because
 /// an imported email becomes a description verbatim. Anything smaller fetches
