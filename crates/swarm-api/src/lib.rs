@@ -8506,6 +8506,15 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         | TaskStoreError::CompletionEvidenceRequired => {
             ApiError::new(StatusCode::BAD_REQUEST, "invalid_task", error.to_string())
         }
+        // ITS OWN CODE for the same reason as the refusal below: the approver
+        // did nothing wrong, and the remedy is not in their hands. Reported as
+        // invalid_task it reads as a malformed approval, which is how four
+        // attempts went into rewriting a basis that was never the problem.
+        TaskStoreError::NoCompletionExemptionToApprove => ApiError::new(
+            StatusCode::CONFLICT,
+            "no_no_deployment_claim_to_approve",
+            error.to_string(),
+        ),
         // ITS OWN CODE, because it is not a malformed request and the caller is
         // not at fault for asking. The claim was refused because the recorded
         // commits disagree with it, and a client that can tell this apart can

@@ -399,6 +399,24 @@ pub enum TaskStoreError {
     InvalidTaskActivityNote,
     #[error("completed work requires concise verification evidence")]
     CompletionEvidenceRequired,
+    // ⚠️ NAMES THE MISSING RECORD, NOT THE BASIS. This case used to return
+    // CompletionEvidenceRequired, whose text is "completed work requires
+    // concise verification evidence" -- so an approver with a perfectly good
+    // basis was told their basis was inadequate, and the actual cause was that
+    // there was no claim to countersign at all.
+    //
+    // Measured cost: Queen attempted swarm_approve_no_deployment FOUR TIMES on
+    // 01a06b37-eac8, rewriting the basis each time, before working out that
+    // `evidence.exemption` was NULL because the worker's claim had been
+    // REFUSED. The error pointed at the one thing that was fine.
+    //
+    // A refused claim leaves no row, so there is nothing to approve and the
+    // remedy is not a better basis -- it is the worker recording a claim, or
+    // the operator writing the task off as unverifiable.
+    #[error(
+        "no nothing-to-deploy claim has been recorded for this task, so there is nothing to approve. The worker's claim was refused or never made -- have the worker record one, or write the task off as unverifiable"
+    )]
+    NoCompletionExemptionToApprove,
     // NAMES THE CONTRADICTION, not the rule. A worker reading "not authorized"
     // or "evidence required" would go looking at permissions or at what it
     // wrote; the thing to look at is the commits it reported.

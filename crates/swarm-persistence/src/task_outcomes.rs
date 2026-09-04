@@ -1001,7 +1001,12 @@ impl TaskStore {
             if evidence == CompletionEvidence::ExemptionApproved {
                 return Ok(evidence);
             }
-            return Err(TaskStoreError::CompletionEvidenceRequired);
+            // NOTHING TO APPROVE IS NOT AN INADEQUATE BASIS. Zero rows updated
+            // with no approved exemption means no claim exists -- the worker
+            // never made one, or it was refused. Reporting that as
+            // CompletionEvidenceRequired sent an approver back to rewrite a
+            // basis that was never the problem, four times.
+            return Err(TaskStoreError::NoCompletionExemptionToApprove);
         }
         self.completion_evidence(task_id)
     }
@@ -2263,6 +2268,59 @@ mod settlement_tests {
             CompletionEvidence::None,
             "a refused claim must leave no record behind"
         );
+    }
+
+    /// ⚠️ AN APPROVAL WITH NOTHING TO APPROVE MUST NOT BLAME THE BASIS.
+    ///
+    /// A refused claim leaves NO exemption row, so a later approval updates
+    /// zero rows. That used to return `CompletionEvidenceRequired` — "completed
+    /// work requires concise verification evidence" — which points at the one
+    /// thing the approver got right.
+    ///
+    /// Measured: Queen attempted this four times on 01a06b37-eac8, rewriting
+    /// the basis each time, before working out that the worker's claim had been
+    /// REFUSED and there was nothing to countersign. The remedy is never a
+    /// better basis; it is a claim existing, or the operator writing the task
+    /// off as unverifiable.
+    #[test]
+    fn approving_a_claim_that_was_never_recorded_says_so_rather_than_blaming_the_basis() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = reviewed_task(&store, "Claim was refused");
+        store
+            .record_task_commits(
+                task,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[commit(&["src/app/api/log/route.ts"])],
+                1_000,
+            )
+            .unwrap();
+        // Refused, exactly as it was on the real task, so no row exists.
+        assert!(matches!(
+            store.claim_completion_exemption(task, "Comment-only", None, 2_000),
+            Err(TaskStoreError::CommitsContradictNoDeployment)
+        ));
+
+        let approving =
+            store.approve_completion_exemption(task, "queen", "A basis that is fine", 3_000);
+        assert!(
+            matches!(
+                approving,
+                Err(TaskStoreError::NoCompletionExemptionToApprove)
+            ),
+            "an approver with a good basis must be told the CLAIM is missing: {approving:?}"
+        );
+
+        // And the other error keeps its own meaning: an empty basis IS the
+        // basis being wrong, and must not be relabelled by this change.
+        let task = reviewed_task(&store, "Claim exists");
+        store
+            .claim_completion_exemption(task, "Investigation only", None, 2_000)
+            .unwrap();
+        assert!(matches!(
+            store.approve_completion_exemption(task, "queen", "   ", 3_000),
+            Err(TaskStoreError::CompletionEvidenceRequired)
+        ));
     }
 
     /// The refusal is NARROW, and this is the case that makes it so.
