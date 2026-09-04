@@ -6,6 +6,22 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P1f: durable browser evidence contract
+
+- ADR 0063 specifies content-free hourly, build-linked aggregates with 90-day
+  retention, 4,096 captures, 4,096-byte payloads, and bounded reads. This is the
+  agreed engineering design, not an already-running storage feature.
+- Domain validation rejects unknown fields, invalid identity/build/hour,
+  impossible or unbounded timing aggregates, and cumulative replacements that
+  rewrite existing samples. Upload freshness is separate from stored validity
+  so retained history does not become invalid after the upload window closes.
+- All 81 domain tests and strict all-target/all-feature domain Clippy passed.
+  Initial test compilation found UUID v4 generation is not enabled; deterministic
+  fixture IDs fixed that without expanding production dependencies.
+- Persistence/migration, authenticated API, collection, comparisons, and measured
+  overhead remain pending. No schema migration or live data change was performed.
+  This contract does not establish measured CPU improvement or finish P1.
+
 ### P1e: development-status timeouts are unavailable, not reachable
 
 - Corrected the development-status reader's timeout classification. It preserves
