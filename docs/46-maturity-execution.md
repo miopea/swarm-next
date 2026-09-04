@@ -6,6 +6,29 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P3: cap transcript scan work without inferring partial health
+
+- One allowance now spans the complete worker conversation scan: 4,096 worker/
+  directory entries, 64 MiB of reserved transcript-tail reads, and a cooperative
+  six-second deadline. Each file still uses at most its existing 256 KiB tail.
+  Growing files cannot exceed the bytes reserved from their observed length.
+- A limit reached anywhere rejects the complete HTTP result as scan-incomplete;
+  a partially scanned directory cannot be published as Current or Stale. Existing
+  browser data is not replaced by a misleading empty page. No conversation is
+  selected or changed by the scan.
+- Only regular transcript files are considered. Descriptor opening uses
+  no-follow/nonblocking flags and verifies the opened file type, preventing a
+  symlink or FIFO replacement from turning a diagnostic read into a stream wait.
+  Symlinked transcripts are not treated as verified history by this diagnostic.
+- All 17 local Linux scan/recovery API tests passed, including entry/byte/deadline
+  exhaustion, refusal of symlinks and a real FIFO, cancellation ownership, and
+  retained-context stop recovery. No live transcripts or workers were touched.
+- Strict all-target/all-feature Linux API Clippy and formatting passed.
+- The deadline cannot forcibly interrupt a stalled regular-file filesystem call.
+  Provider-authoritative drift reconciliation, clearer stale diagnostic status,
+  and measured live CPU/latency acceptance remain open. These limits protect the
+  read path; they are not proof that the reported sluggishness is fixed.
+
 ### P3: isolate and serialize transcript freshness scans
 
 - Conversation freshness previously performed synchronous filesystem scanning on

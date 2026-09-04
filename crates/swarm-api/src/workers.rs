@@ -363,20 +363,28 @@ pub(super) async fn conversation_freshness(
         .map_or_else(|| home.join(".claude"), PathBuf::from)
         .join("projects");
     let workers = run_conversation_scan(Arc::clone(&state.conversation_scan_limit), move || {
-        profiles.iter().map(|profile| {
+        let mut budget = crate::worker_runtime::ConversationScanBudget::new();
+        let mut workers = Vec::new();
+        for profile in &profiles {
+            let freshness = crate::worker_runtime::conversation_freshness(profile, &projects, &home, &mut budget);
+            if budget.exhausted {
+                return Err(ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "conversation_scan_incomplete", "Conversation checks reached their work limit. No partial result was used to judge conversation health."));
+            }
+            workers.push(
             serde_json::json!({
                 "worker_id": profile.id.to_string(),
                 "name": profile.name,
-                "freshness": crate::worker_runtime::conversation_freshness(profile, &projects, &home),
-            })
-        }).collect::<Vec<_>>()
+                "freshness": freshness,
+            }));
+        }
+        Ok(workers)
     }).await?;
     Ok(Json(serde_json::json!({ "workers": workers })).into_response())
 }
 
 async fn run_conversation_scan(
     limit: Arc<tokio::sync::Semaphore>,
-    scan: impl FnOnce() -> Vec<serde_json::Value> + Send + 'static,
+    scan: impl FnOnce() -> Result<Vec<serde_json::Value>, ApiError> + Send + 'static,
 ) -> Result<Vec<serde_json::Value>, ApiError> {
     let permit = limit.try_acquire_owned().map_err(|_| {
         ApiError::new(
@@ -399,7 +407,7 @@ async fn run_conversation_scan(
             "conversation_scan_failed",
             "Conversation checks could not finish; no healthy result was inferred.",
         )
-    })
+    })?
 }
 
 #[cfg(test)]
@@ -414,7 +422,7 @@ mod conversation_scan_tests {
         let first = tokio::spawn(run_conversation_scan(Arc::clone(&limit), move || {
             started_tx.send(()).unwrap();
             finish_rx.recv().unwrap();
-            vec![]
+            Ok(vec![])
         }));
         started_rx.await.unwrap();
         // This runs on a current-thread runtime while filesystem work waits on
@@ -438,7 +446,7 @@ mod conversation_scan_tests {
             .unwrap();
         drop(permit);
         assert_eq!(
-            run_conversation_scan(limit, || vec![serde_json::json!("ready")])
+            run_conversation_scan(limit, || Ok(vec![serde_json::json!("ready")]))
                 .await
                 .unwrap(),
             vec![serde_json::json!("ready")]
@@ -453,7 +461,11 @@ mod conversation_scan_tests {
                 .await
                 .is_err()
         );
-        assert!(run_conversation_scan(limit, Vec::new).await.is_ok());
+        assert!(
+            run_conversation_scan(limit, || Ok(Vec::new()))
+                .await
+                .is_ok()
+        );
     }
 }
 

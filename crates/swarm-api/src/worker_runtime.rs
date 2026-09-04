@@ -432,23 +432,64 @@ pub(crate) enum ConversationFreshness {
     Unknown { reason: String },
 }
 
-/// The last entry timestamp in a transcript, read from its tail.
-///
-/// Tail-read rather than parsed whole: these run to megabytes and there are
-/// dozens. Modification time is NOT usable as the recency signal — Claude
-/// rewrites cost-state into old transcripts at startup, so two conversations
-/// that last spoke hours apart can share an mtime to the second. Measured on
-/// 2026-09-02: Scout's pinned and newest transcripts both showed 11:57 while
-/// their last real entries were 00:57 and 02:13.
-fn last_entry_timestamp(path: &Path) -> Option<String> {
+/// One work allowance shared by the complete diagnostic scan, not per worker.
+/// The deadline is cooperative: it cannot interrupt a stalled filesystem call.
+pub(crate) struct ConversationScanBudget {
+    entries: usize,
+    bytes: u64,
+    deadline: std::time::Instant,
+    pub(crate) exhausted: bool,
+}
+
+impl ConversationScanBudget {
+    pub(crate) fn new() -> Self {
+        Self {
+            entries: 4096,
+            bytes: 64 * 1024 * 1024,
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(6),
+            exhausted: false,
+        }
+    }
+
+    fn reserve(&mut self, entries: usize, bytes: u64) -> bool {
+        if self.exhausted
+            || std::time::Instant::now() >= self.deadline
+            || entries > self.entries
+            || bytes > self.bytes
+        {
+            self.exhausted = true;
+            return false;
+        }
+        self.entries -= entries;
+        self.bytes -= bytes;
+        true
+    }
+}
+
+/// Reads entry time from a bounded tail, not mtime: provider cost-state updates
+/// can touch an old transcript without advancing its conversation.
+fn last_entry_timestamp(path: &Path, budget: &mut ConversationScanBudget) -> Option<String> {
     use std::io::{Read as _, Seek as _, SeekFrom};
+    use std::os::unix::fs::OpenOptionsExt as _;
     const TAIL: u64 = 256 * 1024;
-    let mut file = std::fs::File::open(path).ok()?;
-    let length = file.metadata().ok()?.len();
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
+        .open(path)
+        .ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let length = metadata.len();
+    let read_limit = length.min(TAIL);
+    if !budget.reserve(0, read_limit) {
+        return None;
+    }
     let start = length.saturating_sub(TAIL);
     file.seek(SeekFrom::Start(start)).ok()?;
     let mut tail = String::new();
-    file.take(TAIL).read_to_string(&mut tail).ok()?;
+    file.take(read_limit).read_to_string(&mut tail).ok()?;
     // The last well-formed timestamp wins. A partial first line from seeking
     // mid-file is simply skipped rather than guessed at.
     tail.lines()
@@ -466,7 +507,13 @@ pub(crate) fn conversation_freshness(
     profile: &WorkerProfile,
     projects_root: &Path,
     home: &Path,
+    budget: &mut ConversationScanBudget,
 ) -> ConversationFreshness {
+    if !budget.reserve(1, 0) {
+        return ConversationFreshness::Unknown {
+            reason: "conversation scan limit reached".into(),
+        };
+    }
     if profile.provider != ProviderKind::ClaudeCode {
         return ConversationFreshness::Current;
     }
@@ -491,7 +538,16 @@ pub(crate) fn conversation_freshness(
     };
     let mut newest: Option<(String, String)> = None;
     let mut pinned_last: Option<String> = None;
-    for entry in entries.flatten() {
+    for entry in entries {
+        if !budget.reserve(1, 0) {
+            break;
+        }
+        let Ok(entry) = entry else { continue };
+        // A transcript is a regular file. Never open a pipe/device or follow a
+        // symlink while performing a best-effort diagnostic scan.
+        if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            continue;
+        }
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
             continue;
@@ -499,7 +555,10 @@ pub(crate) fn conversation_freshness(
         let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
-        let Some(timestamp) = last_entry_timestamp(&path) else {
+        let Some(timestamp) = last_entry_timestamp(&path, budget) else {
+            if budget.exhausted {
+                break;
+            }
             continue;
         };
         if id == pinned.to_string() {
@@ -511,6 +570,11 @@ pub(crate) fn conversation_freshness(
         {
             newest = Some((id.to_owned(), timestamp));
         }
+    }
+    if !budget.reserve(0, 0) {
+        return ConversationFreshness::Unknown {
+            reason: "conversation scan limit reached".into(),
+        };
     }
     let Some((newest_id, newest_timestamp)) = newest else {
         return ConversationFreshness::Unknown {
@@ -1347,7 +1411,12 @@ mod tests {
             Some("11111111-1111-4111-8111-111111111111"),
             true,
         );
-        let freshness = conversation_freshness(&profile, &projects, home.path());
+        let freshness = conversation_freshness(
+            &profile,
+            &projects,
+            home.path(),
+            &mut ConversationScanBudget::new(),
+        );
 
         match freshness {
             ConversationFreshness::Stale {
@@ -1367,7 +1436,48 @@ mod tests {
         }
     }
 
-    /// And the newest being the pinned one is not reported as a problem.
+    #[test]
+    fn scan_limits_never_publish_partial_health() {
+        let home = tempfile::tempdir().unwrap();
+        let workspace = home.path().join("projects/scout");
+        let projects = home.path().join(".claude/projects");
+        let slug = workspace.to_string_lossy().replace(['/', '.'], "-");
+        let id = "11111111-1111-4111-8111-111111111111";
+        transcript(&projects.join(&slug), id, "2026-09-02T09:00:00.000Z");
+        let profile = worker_profile(&workspace, Some(id), true);
+        for kind in ["entries", "bytes", "deadline"] {
+            let mut budget = ConversationScanBudget::new();
+            match kind {
+                "entries" => budget.entries = 1,
+                "bytes" => budget.bytes = 1,
+                _ => budget.deadline = std::time::Instant::now(),
+            }
+            assert!(matches!(
+                conversation_freshness(&profile, &projects, home.path(), &mut budget),
+                ConversationFreshness::Unknown { .. }
+            ));
+            assert!(
+                budget.exhausted,
+                "{kind} limit must be visible to the whole-scan owner"
+            );
+            assert!(!budget.reserve(0, 0));
+        }
+    }
+
+    #[test]
+    fn transcript_reader_does_not_follow_symlinks_or_open_fifo_streams() {
+        let directory = tempfile::tempdir().unwrap();
+        transcript(directory.path(), "regular", "2026-09-02T09:00:00.000Z");
+        let link = directory.path().join("link.jsonl");
+        std::os::unix::fs::symlink(directory.path().join("regular.jsonl"), &link).unwrap();
+        let fifo = directory.path().join("fifo.jsonl");
+        nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRUSR).unwrap();
+        let mut budget = ConversationScanBudget::new();
+        assert!(last_entry_timestamp(&link, &mut budget).is_none());
+        assert!(last_entry_timestamp(&fifo, &mut budget).is_none());
+        assert!(!budget.exhausted);
+    }
+
     #[test]
     fn a_pinned_conversation_that_is_the_newest_is_current() {
         let home = tempfile::tempdir().unwrap();
@@ -1391,7 +1501,12 @@ mod tests {
             true,
         );
         assert_eq!(
-            conversation_freshness(&profile, &projects, home.path()),
+            conversation_freshness(
+                &profile,
+                &projects,
+                home.path(),
+                &mut ConversationScanBudget::new()
+            ),
             ConversationFreshness::Current
         );
     }
@@ -1412,7 +1527,12 @@ mod tests {
             Some("11111111-1111-4111-8111-111111111111"),
             true,
         );
-        let freshness = conversation_freshness(&profile, &projects, home.path());
+        let freshness = conversation_freshness(
+            &profile,
+            &projects,
+            home.path(),
+            &mut ConversationScanBudget::new(),
+        );
 
         assert!(
             matches!(freshness, ConversationFreshness::Unknown { .. }),
