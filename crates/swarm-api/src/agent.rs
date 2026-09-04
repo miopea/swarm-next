@@ -3056,7 +3056,7 @@ fn list_workers_tool() -> Tool {
 fn list_coordination_attention_tool() -> Tool {
     tool(
         "swarm_list_coordination_attention",
-        "Queen only: list current deterministic coordination attention, including Ready work whose delivered brief did not start, Active work that is durably unchanged while its loaded worker is resting, and Active work whose worker exited. Also reports work assigned to a worker that is not running at all, which has no briefing anywhere because there is no session to put one in — start that worker or move the work. And briefings that are queued and not being delivered, and what each is waiting on — an operator using that terminal, or the worker already having Active work. A briefing held for either reason is working as intended and is not a task to chase. One waiting its turn names the earlier task it is queued behind in blocked_by; if that task has been Ready for a long time it is the thing to steer, because the whole queue behind it is stopped. Also lists FINISHED WORK NOTHING HAS SETTLED, which is the largest kind here and is yours to clear: a claim that nothing was deployed which nobody has approved — approve it with swarm_approve_no_deployment after reading the handoff; work whose commits touch code with no deployment — you cannot deploy, but you can create and assign a task to the owning worker to do it; and work where nobody reported what was produced — return it to Ready and reassign so the worker records it. Recheck the task and worker before deciding whether to steer, wait, or ask the operator.",
+        "Queen only: list current deterministic coordination attention, including Ready work whose delivered brief did not start, Active work that is durably unchanged while its loaded worker is resting, and Active work whose worker exited. Recheck the current task, session, and next-move owner before acting. A queued briefing held for operator engagement or existing Active work is working as intended; do not interrupt it. blocked_by names earlier work holding up a queue, not permission to bypass it. Age alone is not a reason to escalate. Also lists FINISHED WORK NOTHING HAS SETTLED. The coordinator settles supported routine evidence without another Queen approval; you own remaining exceptions and judgments. Read task history, completion evidence, and messages before deciding. If a no-deployment claim needs judgment, use swarm_approve_no_deployment only after checking its basis. If evidence or an answer is missing, use swarm_return_reviewed_work with a specific request: the task stays in Review and the next move becomes the assigned worker's. Do not move reviewed work to Ready or Active to get attention. Work finished but waiting only to ship belongs in awaiting_release; you may create and assign a task to the owning worker to ship it, but this tool grants no deployment authority. Use swarm_message_worker for task-scoped questions to a running worker; delivery waits for a safe prompt. Try safe scoped recovery first and request operator judgment only when you cannot move the work within existing authority.",
         &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         true,
     )
@@ -5537,7 +5537,23 @@ mod tests {
             description.contains("swarm_approve_no_deployment"),
             "{description}"
         );
-        assert!(description.contains("return it to Ready"), "{description}");
+        assert!(
+            description.contains("swarm_return_reviewed_work")
+                && description.contains("task stays in Review")
+                && description.contains("next move becomes the assigned worker's"),
+            "missing evidence must change the next mover, not erase finished work: {description}"
+        );
+        assert!(
+            !description.contains("return it to Ready")
+                && description.contains("Do not move reviewed work to Ready or Active"),
+            "the attention tool must not contradict the guarded hand-back workflow: {description}"
+        );
+        assert!(description.contains("awaiting_release"), "{description}");
+        assert!(
+            description.contains("without another Queen approval")
+                && description.contains("Age alone is not a reason to escalate"),
+            "routine evidence and age must not manufacture Queen/operator approval work: {description}"
+        );
         assert!(
             description.contains("assign a task to the owning worker"),
             "a deployment she may not perform is still hers to route: {description}"

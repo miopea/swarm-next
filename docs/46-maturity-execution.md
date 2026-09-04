@@ -6,6 +6,27 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: remove contradictory review-routing instructions
+
+- The served Queen attention tool still instructed her to return finished work
+  to Ready and reassign it when evidence was missing. This contradicted both
+  the per-run prompt and the existing hand-back tool, and a test explicitly
+  preserved the old advice. Replaced it with the established Review-preserving
+  hand-back: a specific request transfers the next move to the assigned worker.
+- Attention guidance now distinguishes routine coordinator settlement from
+  Queen judgment, names awaiting_release for finished unshipped work, protects
+  engagement/active-work holds, and does not use age alone to escalate.
+  No state machine, completion-evidence authority, or tool schema changed.
+- Rebuilt the Linux API harness and ran all 83 agent/coordination-delivery tests:
+  passed, including revised guidance assertions and the existing per-run brief
+  checks. Formatting and diff checks passed. Existing connected providers may
+  retain cached descriptions; no live session was restarted to refresh them.
+- Follow-up found by tracing the recommended path: return_reviewed_work currently
+  writes the next-move marker and its message in separate persistence calls.
+  Message validation/storage failure can leave responsibility assigned without
+  the corresponding question. Atomic hand-back and failure/recovery coverage
+  remain implementation work; this wording correction does not fix that gap.
+
 ### Full web and Linux API regression execution
 
 - Ran the complete web suite with two workers: 125 files and 1,033 tests passed
