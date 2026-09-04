@@ -4,6 +4,22 @@ Approved program: [scope and acceptance](45-daily-driver-maturity-plan.md).
 Branch: `codex/daily-driver-maturity`. Starting revision: `36420b3`.
 Local commits authorized; no push, deployment, releases, or live worker interruption.
 
+## Cross-phase regression checkpoint — 2026-09-04
+
+- Verified clean implementation revision `67eefee`; refreshed origin refs.
+  `origin/main` remains `7b02058` and has no commits missing from this branch.
+  No unrelated remote branch was merged and no ref was pushed.
+- Full web suite passed: 120 files, 993 tests, using two Vitest workers.
+  This includes terminal ownership/render fixtures, composer and attachments,
+  attention/queues, diagnostics, presence, settings, and the App integration tests.
+- All nine `pnpm test:dogfood` tests passed, including process-sample disappearance,
+  sustained-growth calculations, and verification-entrypoint failure behavior.
+  These test the measurement tools; they are not a browser or live-worker soak.
+- No runtime source changed during this checkpoint. The production build passed
+  at the preceding implementation checkpoint. Dependency audit, complete native
+  Linux integration execution, live CPU/latency attribution, real Android/iOS
+  AskUser and attachment journeys, and operator soak remain separate gates.
+
 ### P5m: stale browser presence responses and permission completions
 
 - The presence controller suppresses a response superseded by a queued device
