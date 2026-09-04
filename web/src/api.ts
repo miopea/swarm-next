@@ -528,7 +528,9 @@ export type RuntimeResources = {
   api: ProcessResources & { pressure: ResourcePressure };
   terminal_host: ProcessResources & { pressure: ResourcePressure };
   machine?: MachineResources;
+  daily_backup?: DailyBackupStatus;
 };
+export type DailyBackupStatus = { state: "not_reported" | "unavailable" | "failed" } | { state: "ready"; snapshot_day: string };
 export type MachineResources = {
   memory_total_bytes: number | null;
   memory_available_bytes: number | null;

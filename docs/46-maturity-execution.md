@@ -6,6 +6,26 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P5 / P6: daily backup outcome reaches the runtime area
+
+- The authenticated, no-store resource response now projects the package outcome
+  using a 1 KiB bounded file read. Missing evidence is not reported as healthy;
+  malformed, duplicate-field and invalid-date records are unavailable. Only
+  status and snapshot day cross the API, not raw failure detail or credentials.
+- The existing shared resource poll drives a runtime notice and link to the
+  Maintenance/Backup settings. Ready removes the notice; older APIs without the
+  optional field remain compatible. No added browser polling or worker command.
+- Settings now names the actual `swarm-package restore` command and explains
+  retained rollback copies and daily-backup troubleshooting.
+- Three Linux tests passed: bounded file/state projection, malformed record
+  refusal and the resource endpoint's authentication guard. The 38 App tests
+  passed; after updating the old restore-command assertion, 23 notice/Settings
+  tests and production web build passed. Existing terminal chunk warning remains.
+- Strict Linux API Clippy passed after mechanical closure/test placement cleanup.
+- These checks do not establish a live backup failure/recovery journey or real
+  mobile rendering. Real browser, systemd scheduling and SQLite corruption drill
+  remain acceptance work. No deployment, release, push or live-worker changes.
+
 ### P5 / REC-02: durable daily backup outcome for runtime presentation
 
 - The daily job now atomically publishes one managed status file. Failure uses

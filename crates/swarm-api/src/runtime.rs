@@ -163,6 +163,7 @@ struct RuntimeResourcesResponse {
     api: ProcessResourceResponse,
     terminal_host: ProcessResourceResponse,
     machine: MachineResourceResponse,
+    daily_backup: crate::backups::DailyBackupStatus,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -617,6 +618,13 @@ pub(super) async fn resources(
         api: resource_response(Some(sample_current_process()), &machine),
         terminal_host,
         machine,
+        daily_backup: crate::backups::daily_status(
+            state
+                .database_directory
+                .as_deref()
+                .map(std::path::PathBuf::as_path),
+        )
+        .await,
     };
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(response)).into_response())
 }

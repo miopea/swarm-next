@@ -352,8 +352,9 @@ test("downloads a consistent Hive database snapshot", async () => {
   expect(revokeObjectURL).toHaveBeenCalledWith("blob:hive-backup");
   expect(screen.getByText("Hive backup downloaded. Keep it somewhere private and durable.")).toBeInTheDocument();
   fireEvent.click(screen.getByText("How to restore this backup"));
-  expect(screen.getByText(/swarm-next-package restore/)).toBeInTheDocument();
-  expect(screen.getByText(/creates a rollback snapshot/)).toBeInTheDocument();
+  expect(screen.getByText(/swarm-package restore/)).toBeInTheDocument();
+  expect(screen.getByText(/retains a rollback snapshot/)).toBeInTheDocument();
+  expect(screen.getByText(/swarm-package backup-daily/)).toBeInTheDocument();
 });
 
 test("keeps backup failure visible and safely retryable", async () => {

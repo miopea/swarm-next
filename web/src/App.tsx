@@ -122,6 +122,7 @@ import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/the
 import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
 import UnsettledReviewCard from "./decisions/UnsettledReviewCard";
 import MachinePressureBadge from "./runtime/MachinePressureBadge";
+import DailyBackupNotice from "./runtime/DailyBackupNotice";
 import { machinePressureNotice, type MachineResourceState } from "./runtime/machinePressure";
 import RuntimeUpdateConfirm from "./runtime/RuntimeUpdateConfirm";
 import HeldBriefingList from "./orchestration/HeldBriefingList";
@@ -1996,6 +1997,7 @@ export function App() {
               shows something most of the day stops being read, which is the
               failure this exists to prevent. */}
           <MachinePressureBadge notice={machinePressure} />
+          {operatorToken && machineResources.kind === "ready" ? <DailyBackupNotice status={machineResources.resources.daily_backup} onDetails={() => openSettings("settings-maintenance")} /> : null}
           {operatorToken && conversationChecksUnavailable ? (
             <div className="runtime-update-card" role="status">
               <p className="runtime-update-label">Conversation checks unavailable</p>

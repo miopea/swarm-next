@@ -693,10 +693,14 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
             <summary>How to restore this backup</summary>
             <ol>
               <li>Move the downloaded file to the Swarm host under your home folder.</li>
-              <li>Run <code>swarm-next-package restore /home/you/path/to/swarm-next-backup.sqlite3</code>.</li>
+              <li>Run <code>swarm-package restore /home/you/path/to/swarm-next-backup.sqlite3</code>.</li>
               <li>Reopen Swarm. The API restarts, but running worker terminals and repositories stay in place.</li>
             </ol>
-            <p>Restore verifies the backup first and creates a rollback snapshot before changing the Hive database.</p>
+            <p>Restore verifies a copy of the backup first and retains a rollback snapshot before changing the Hive database.</p>
+          </details>
+          <details><summary>Daily backups and troubleshooting</summary>
+            <p>Packages with daily backup support retain seven daily database snapshots. A failed attempt leaves older snapshots in place.</p>
+            <p>On the Swarm host, inspect <code>systemctl --user status swarm-database-backup.service</code>. To try again, run <code>swarm-package backup-daily</code>. This does not restart workers.</p>
           </details>
           <small className="privacy-note">This file contains private operational data. Store it like a credential. Host credentials and repository contents remain intentionally separate.</small>
         </section>

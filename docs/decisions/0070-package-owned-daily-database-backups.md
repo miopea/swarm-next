@@ -39,7 +39,13 @@ success replaces it with `state=ready` and the available UTC snapshot day. A
 same-day no-op reports the existing snapshot, not a new verification. Contending
 jobs do not modify the status. The file is a subsystem observation, not an
 operator decision or proof that older snapshots remain uncorrupted. Runtime UI
-consumption remains required; the package file alone is not operator visibility.
+consumption uses the existing authenticated resource response, with no new browser
+poll. The API bounds the file read to 1 KiB, rejects duplicate fields and invalid
+dates, and projects only failed/unavailable/not-reported or ready plus snapshot
+day. Raw failure details are not exported. The runtime area shows failure or
+unavailable evidence and links to Backup settings; ready removes the notice.
+Missing status is not represented as proven backup health. Live scheduling and
+UI acceptance remain separate from this implementation wiring.
 
 Isolated package smoke covers verification failure without pruning, exact seven
 retained files, manual-file preservation, same-day idempotence, lock contention,
