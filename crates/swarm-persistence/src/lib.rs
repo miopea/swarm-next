@@ -87,7 +87,7 @@ pub use migration::{
 mod conversation_recovery;
 mod dogfood_evidence;
 mod operator_statements;
-pub use operator_statements::OperatorStatementError;
+pub use operator_statements::{OperatorStatementError, VerifiedOperatorStatement};
 mod night_watch;
 pub use dogfood_evidence::{EvidenceError, EvidenceWrite};
 mod passkeys;

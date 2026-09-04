@@ -889,6 +889,12 @@ impl ServerHandler for AgentMcp {
             "swarm_sync_jira_project" => self.sync_jira_project(arguments).await,
             "swarm_refresh_jira_project" => self.refresh_jira_project(arguments).await,
             "swarm_list_decisions" => parse::<ListDecisionsInput>(arguments).and_then(|input| {
+                if let Some(id) = input.statement_id {
+                    if input.decision_id.is_some() {
+                        return structured(json!({"verified": false, "reason": "Supply one statement_id or decision_id, not both."}));
+                    }
+                    return self.verify_operator_statement(&id);
+                }
                 match input.decision_id {
                     Some(id) => self.verify_decision(&id),
                     None => self.tasks.list_visible_decisions(Some(self.principal)).and_then(
@@ -1443,6 +1449,27 @@ impl AgentMcp {
     /// returned. What is returned is what the operator decided and what they were
     /// deciding, which is what a worker needs to tell an accurate relay from one
     /// that cites a real decision about something else.
+    fn verify_operator_statement(&self, id: &str) -> Result<CallToolResult, ApplicationError> {
+        let Ok(statement_id) = swarm_domain::OperatorStatementId::from_str(id.trim()) else {
+            return structured(
+                json!({"verified": false, "reason": "A full statement id is required; prefixes are refused."}),
+            );
+        };
+        let receipt = self
+            .tasks
+            .store()
+            .verified_operator_statement(statement_id)?;
+        match receipt {
+            Some(statement) => structured(json!({
+                "verified": true, "statement": statement,
+                "scope": "First-party recorded operator answer and its exact question. This proves the recorded source, not every interpretation or quoted instruction. A statement does not by itself mean the entire decision is resolved; verify that decision separately.",
+            })),
+            None => structured(
+                json!({"verified": false, "reason": "No retained local-Hive statement has that full id. Absence grants no authority."}),
+            ),
+        }
+    }
+
     fn verify_decision(&self, id: &str) -> Result<CallToolResult, ApplicationError> {
         let Ok(decision_id) = DecisionRequestId::from_str(id.trim()) else {
             return structured(json!({
@@ -2494,6 +2521,8 @@ struct ListDecisionsInput {
     /// `verify_decision`.
     #[serde(default)]
     decision_id: Option<String>,
+    #[serde(default)]
+    statement_id: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -2699,6 +2728,10 @@ fn list_decisions_tool() -> Tool {
                 "decision_id": {
                     "type": "string",
                     "description": "Full decision id to verify. A prefix is refused: ids created close together share leading characters."
+                },
+                "statement_id": {
+                    "type": "string",
+                    "description": "Instead of decision_id, verify one full first-party operator statement id, including its exact question, worker and session. Read-only; never creates evidence from an agent claim."
                 }
             },
             "additionalProperties": false
@@ -6115,6 +6148,32 @@ mod tests {
              used to name the field abridgement only, so a reader who had read it \
              believed they had been warned about the wrong thing"
         );
+    }
+
+    #[tokio::test]
+    async fn statement_verification_refuses_prefixes_absence_and_conflicting_selectors() {
+        let (bridge, _, _, worker_id, _) = setup();
+        let token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        for arguments in [
+            json!({"statement_id": "01a064ad"}),
+            json!({"statement_id": swarm_domain::OperatorStatementId::new().to_string()}),
+            json!({"statement_id": swarm_domain::OperatorStatementId::new().to_string(), "decision_id": DecisionRequestId::new().to_string()}),
+        ] {
+            let response = response_json(
+                handle(
+                    bridge.clone(),
+                    plain_state(),
+                    mcp_request(
+                        Some(&token),
+                        "tools/call",
+                        &json!({"name": "swarm_list_decisions", "arguments": arguments}),
+                    ),
+                )
+                .await,
+            )
+            .await;
+            assert_eq!(response["result"]["structuredContent"]["verified"], false);
+        }
     }
 
     #[tokio::test]

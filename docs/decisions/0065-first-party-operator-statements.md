@@ -77,6 +77,15 @@ existing queued answer notification. This is persistence integration, not proof
 of authenticated end-to-end provider capture. Partial evidence leaves Needs You
 pending until every question has a matching confirmed receipt.
 
+Verification reuses `swarm_list_decisions` with an alternative `statement_id`
+argument. Supplying both selectors is rejected. Full typed IDs only; a missing
+retained receipt reports unverified rather than granting authority. The response
+contains the exact statement and question, operator, worker/session, recorded time,
+and resolution-link status. A verified statement is not a claim that every question
+in the decision is answered. This read adds no agent write capability, general
+statement listing, or control-room invalidation. Existing provider sessions need
+their normal tool-schema refresh before the optional argument becomes visible.
+
 Verification reads return the statement and its scope, evidence status, and exact
 decision link when present. A full ID is required; no prefix lookup. Verified
 origin never expands the action authorized by the actual words. Preserve ADR 0054's

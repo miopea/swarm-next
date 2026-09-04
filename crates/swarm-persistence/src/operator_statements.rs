@@ -13,6 +13,20 @@ const MAX_RECORDS: i64 = 4096;
 const MAX_BYTES: i64 = 16 * 1024 * 1024;
 const RETENTION: i64 = 90 * 86_400;
 
+/// Deliberately has no Debug implementation: answer content is not diagnostics.
+#[derive(serde::Serialize)]
+pub struct VerifiedOperatorStatement {
+    pub id: OperatorStatementId,
+    pub decision_id: DecisionRequestId,
+    pub worker_id: WorkerId,
+    pub session_id: WorkerSessionId,
+    pub operator_id: swarm_domain::OperatorId,
+    pub question: DecisionQuestion,
+    pub answer: String,
+    pub recorded_at: i64,
+    pub used_for_resolution: bool,
+}
+
 pub(super) fn migrate_resolutions(tx: &Transaction<'_>, version: i64) -> rusqlite::Result<()> {
     if version >= crate::OPERATOR_STATEMENT_RESOLUTIONS_SCHEMA_VERSION {
         return Ok(());
@@ -67,6 +81,46 @@ pub(super) fn migrate(tx: &Transaction<'_>, version: i64) -> rusqlite::Result<()
 }
 
 impl TaskStore {
+    /// Reads one exact local-Hive first-party receipt, including its scope.
+    /// Absence is not proof of approval or rejection. No input is replayed.
+    ///
+    /// # Errors
+    /// Returns storage or integrity errors, never an invented missing record.
+    pub fn verified_operator_statement(
+        &self,
+        id: OperatorStatementId,
+    ) -> Result<Option<VerifiedOperatorStatement>, TaskStoreError> {
+        let connection = self.connection()?;
+        let receipt = connection.query_row(
+            "SELECT s.decision_id, s.worker_id, s.session_id, s.operator_id, s.question, s.answer,
+                    s.recorded_at, EXISTS(SELECT 1 FROM operator_statement_resolutions r
+                        WHERE r.statement_id=s.id AND r.decision_id=s.decision_id)
+             FROM operator_statements s JOIN decision_requests d ON d.id=s.decision_id
+             JOIN local_hive_identity l ON l.hive_id=d.hive_id AND l.singleton=1 WHERE s.id=?1",
+            [id.to_string()], |row| {
+                let parse = |index| -> rusqlite::Result<String> { row.get(index) };
+                Ok(VerifiedOperatorStatement {
+                    id,
+                    decision_id: parse(0)?.parse().map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    worker_id: parse(1)?.parse().map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    session_id: parse(2)?.parse().map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    operator_id: parse(3)?.parse().map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    question: serde_json::from_str(&parse(4)?).map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    answer: row.get(5)?, recorded_at: row.get(6)?, used_for_resolution: row.get(7)?,
+                })
+            }).optional()?;
+        if let Some(receipt) = &receipt
+            && (receipt.answer.trim().is_empty()
+                || receipt.answer.len() > swarm_domain::MAX_OPERATOR_ANSWER_BYTES
+                || !swarm_domain::valid_decision_questions(std::slice::from_ref(&receipt.question)))
+        {
+            return Err(TaskStoreError::IntegrityFailure(
+                "invalid operator statement".into(),
+            ));
+        }
+        Ok(receipt)
+    }
+
     /// Resolves an interview from a complete set of stored, confirmed receipts.
     /// Revalidates question and session identities in the same transaction as
     /// resolution and delivery bookkeeping. No terminal input is written here.
@@ -333,8 +387,26 @@ mod tests {
                 &[id],
             )
         };
+        let receipt = store.verified_operator_statement(id).unwrap().unwrap();
+        assert_eq!(receipt.answer, "Narrow");
+        assert_eq!(receipt.question, target.question);
+        assert_eq!(receipt.session_id, target.session_id);
+        assert!(!receipt.used_for_resolution);
         assert!(resolve().unwrap());
         assert!(!resolve().unwrap());
+        assert!(
+            store
+                .verified_operator_statement(id)
+                .unwrap()
+                .unwrap()
+                .used_for_resolution
+        );
+        assert!(
+            store
+                .verified_operator_statement(OperatorStatementId::new())
+                .unwrap()
+                .is_none()
+        );
         let decision = store.get_decision_request(target.decision_id).unwrap();
         assert_eq!(decision.state, swarm_domain::DecisionRequestState::Resolved);
         assert_eq!(

@@ -6,6 +6,22 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: first-party statement verification is readable by agents
+
+- Added one-record local-Hive receipt reads with exact text/question, operator,
+  worker/session, recorded time and resolution-link status. Returned data has no
+  Debug implementation; invalid stored answer/question shapes return integrity
+  errors rather than fabricated absence.
+- `swarm_list_decisions` accepts alternative full `statement_id`; rejects combined
+  selectors and prefixes, and reports missing receipts as unverified. Read-only
+  verification does not wake control-room refreshes or expose a statement-writing
+  tool. Provider sessions learn the argument through normal schema refresh.
+- All nine receipt tests passed, including before/after resolution verification.
+  Strict Linux-target API/persistence all-target/all-feature Clippy passed after
+  correcting a collapsible-if lint. Added MCP rejection tests compile for Linux;
+  they were not executed on this Windows host. No authenticated live agent read
+  or source capture claimed; provider/composer provenance remains the next gap.
+
 ### P4: receipt-based resolution commits attention and delivery together
 
 - Schema 131 records exact consumed receipt links. Bounded resolution rereads
