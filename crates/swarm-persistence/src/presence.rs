@@ -226,7 +226,8 @@ pub(super) fn operator_presence_from_connection(
             // number: an active observation is already treated as meaningful
             // for exactly that long.
             "SELECT CASE
-                 WHEN last_active_at IS NOT NULL AND last_active_at + ?3 > ?2 THEN 'active'
+                 WHEN state = 'hidden' AND last_active_at IS NOT NULL
+                      AND last_active_at + ?3 > ?2 THEN 'active'
                  ELSE state
              END AS state
              FROM operator_presence_devices
@@ -282,6 +283,40 @@ pub(super) fn local_operator_id(connection: &Connection) -> Result<OperatorId, T
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_lock_or_idle_overrides_the_same_devices_recent_activity() {
+        for state in [
+            PresenceObservationState::Locked,
+            PresenceObservationState::Idle,
+        ] {
+            let store = TaskStore::in_memory().unwrap();
+            let device = PresenceDeviceId::new();
+            store
+                .record_presence_observation(
+                    device,
+                    PresenceDeviceClass::Desktop,
+                    PresenceObservationState::Active,
+                    1_000,
+                )
+                .unwrap();
+            let away = store
+                .record_presence_observation(device, PresenceDeviceClass::Desktop, state, 1_001)
+                .unwrap();
+            assert_eq!(away.presence.mode, PresenceMode::Away);
+            assert!(away.changed);
+            let back = store
+                .record_presence_observation(
+                    device,
+                    PresenceDeviceClass::Desktop,
+                    PresenceObservationState::Active,
+                    1_002,
+                )
+                .unwrap();
+            assert_eq!(back.presence.mode, PresenceMode::AtHive);
+            assert!(back.changed);
+        }
+    }
 
     #[test]
     fn a_machine_that_stopped_reporting_stops_being_called_locked() {

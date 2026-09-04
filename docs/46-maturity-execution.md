@@ -627,6 +627,24 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   fixes do not prove the original live Queen-warning incident fully resolved.
 - No schema migration, new timer, live worker mutation, push, or deployment.
 
+### P5a: preserve explicit lock and idle evidence
+
+- Found visibility events overwriting a detector's locked/idle observation, and
+  server recent-activity grace overriding that same device's fresh locked/idle
+  report. The browser now retains OS state across visibility changes; the server
+  applies recent-activity grace only to hidden observations. Detector callbacks
+  after abort cannot update presence or report enabled.
+- Six focused browser controller tests passed, including visibility while locked
+  and unlock recovery. Seven native persistence presence tests passed, including
+  immediate lock/idle precedence, return to active use, capacity, expiry, and
+  heartbeat event deduplication. Strict persistence Clippy and web build passed.
+  The existing terminal bundle warning remains.
+- This preserves existing manual modes and phone grace behavior. Reachable
+  semantics, scheduled Night Watch, and desktop-return cancellation are not yet
+  implemented. Real OS lock/device evidence remains required; tests use synthetic
+  detector events and isolated persistence, not the operator's live machine state.
+- No live settings, worker permissions, deployment, or release changed.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

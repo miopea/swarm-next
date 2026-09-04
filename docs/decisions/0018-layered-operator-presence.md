@@ -22,6 +22,9 @@ expiring per-device observations plus an optional explicit override.
 - Effective modes are At Hive, Away, and Night Watch.
 - Automatic mode prefers a current active observation, then a current locked or
   idle observation, and otherwise resolves to Away after observations expire.
+  Recent interaction may bridge a hidden tab, but must not override that same
+  device's explicit locked/idle observation. Browser visibility changes preserve
+  the latest OS lock/idle state until the detector reports a change.
 - An explicit At Hive, Away, or Night Watch override wins until the operator
   returns to Automatic.
 - Each device reports only its stable random device ID, class, observation

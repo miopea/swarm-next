@@ -22,6 +22,8 @@ export class PresenceController {
   #pending?: PresenceObservationState;
   #generation = 0;
   #idleAbort?: AbortController;
+  #screenLocked = false;
+  #userIdle = false;
   #onPresence: (presence: OperatorPresence) => void = () => undefined;
   #onLockState: (state: LockDetectionState) => void = () => undefined;
 
@@ -57,6 +59,8 @@ export class PresenceController {
     this.#generation += 1;
     this.#idleAbort?.abort();
     this.#idleAbort = undefined;
+    this.#screenLocked = false;
+    this.#userIdle = false;
     if (this.#timer !== undefined) window.clearInterval(this.#timer);
     this.#timer = undefined;
     document.removeEventListener("visibilitychange", this.#handleVisibility);
@@ -106,21 +110,27 @@ export class PresenceController {
     this.#idleAbort = controller;
     const detector = new IdleDetector();
     const update = () => {
-      this.#state = detector.screenState === "locked"
+      if (controller.signal.aborted) return;
+      this.#screenLocked = detector.screenState === "locked";
+      this.#userIdle = detector.userState === "idle";
+      this.#state = this.#screenLocked
         ? "locked"
-        : detector.userState === "idle"
+        : this.#userIdle
           ? "idle"
           : document.visibilityState === "visible" ? "active" : "hidden";
       this.#queue(this.#state);
     };
     detector.addEventListener("change", update, { signal: controller.signal });
     await detector.start({ threshold: 60_000, signal: controller.signal });
+    if (controller.signal.aborted) return;
     this.#onLockState("enabled");
     update();
   }
 
   #handleVisibility = () => {
-    this.#state = document.visibilityState === "visible" ? "active" : "hidden";
+    this.#state = this.#screenLocked ? "locked"
+      : this.#userIdle ? "idle"
+        : document.visibilityState === "visible" ? "active" : "hidden";
     this.#queue(this.#state);
   };
 

@@ -102,5 +102,33 @@ test("granted desktop lock detection becomes enabled and reports locked presence
   expect(states).toContain("enabling");
   expect(states.at(-1)).toBe("enabled");
   expect(observe.mock.calls.some((call) => call[3] === "locked")).toBe(true);
+  for (const visibility of ["hidden", "visible"]) {
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: visibility });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.runAllTicks();
+    expect(observe.mock.lastCall?.[3]).toBe("locked");
+  }
+  controller.stop();
+});
+
+test("unlock restores visibility-derived presence without a new controller", async () => {
+  let detector: FakeIdleDetector;
+  class FakeIdleDetector extends EventTarget {
+    static requestPermission = vi.fn().mockResolvedValue("granted");
+    screenState = "locked";
+    userState = "active";
+    constructor() { super(); detector = this; }
+    start = vi.fn().mockResolvedValue(undefined);
+  }
+  vi.stubGlobal("IdleDetector", FakeIdleDetector);
+  const observe = vi.fn().mockResolvedValue(atHive);
+  const controller = new PresenceController(observe);
+  controller.start("secret", vi.fn(), vi.fn());
+  await controller.enableLockDetection();
+  await vi.runAllTicks();
+  detector!.screenState = "unlocked";
+  detector!.dispatchEvent(new Event("change"));
+  await vi.runAllTicks();
+  expect(observe.mock.lastCall?.[3]).toBe("active");
   controller.stop();
 });
