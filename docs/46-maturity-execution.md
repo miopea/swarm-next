@@ -6,6 +6,22 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: Linux execution closes the agent-source verification gate
+
+- Executed 61 agent, loopback-authentication, and source-HTTP tests in the existing
+  local Ubuntu/WSL distribution: all passed. This includes the actual served-tool
+  fingerprint, role-scoped discovery, forged-source rejection, and explicit
+  operator authentication. These supersede the compile-only qualification for
+  those specific tests below, not for the entire Linux runtime suite.
+  Final formatting and strict all-target/all-feature Linux API Clippy passed.
+- Added an HTTP regression that uses an unavailable PTY socket and still records
+  an authenticated source successfully. Unauthenticated localhost is refused;
+  exact retries are idempotent; conflicting text and forged actor fields fail;
+  exact text remains unchanged, responses are no-store and do not echo it.
+- Established local Linux test execution without a remote build, source upload,
+  package installation, live database, or worker interruption. Full provider
+  capture, mobile behavior, and operator soak remain separate acceptance gates.
+
 ### P4: Queen and workers can discover and verify composer sources
 
 - Added the read-only `swarm_operator_submissions` tool: a content-free newest-ten
@@ -1889,3 +1905,29 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 
 See the approved plan. No phase is complete solely because a patch was committed.
 Real Android/iOS and normal operator soak remain separate evidence requirements.
+
+### Local Linux test execution recipe — 2026-09-04
+
+The existing Ubuntu WSL distribution can execute Linux tests built by the isolated
+Windows cross-toolchain described above. Its `/usr/bin/cc` is available; Cargo is
+not on its PATH. No toolchain was installed into Ubuntu. Retain the existing
+Linux environment variables, set `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER`
+to the temporary `zig-cc.cmd`, and use `cargo rustc --offline --locked -j 2
+--target x86_64-unknown-linux-gnu -p swarm-api --lib --profile test -- ...`.
+The `--profile test` library build produces a test harness, verified from the
+running rustc command and by executing its tests.
+
+For this isolated test executable, the extra rustc arguments are
+`-C link-arg=--target=x86_64-linux-gnu.2.38` plus one `-C link-arg=<absolute-path>`
+per copied Ubuntu library: `libz.so.1.3.1`, `libzstd.so.1.5.7`,
+`libbrotlienc.so.1.2.0`, `libbrotlidec.so.1.2.0`, `libbrotlicommon.so.1.2.0`.
+Copies reside beside the temporary OpenSSL archives; originals are unchanged.
+The OpenSSL archive requires compression symbols and glibc 2.38; the initial
+default-libc link correctly failed, rather than suppressing unresolved symbols.
+This is not a change to Swarm's production build or minimum supported platform.
+
+Run the resulting exact executable through `wsl -d Ubuntu --cd
+/mnt/c/projects/swarm-next --exec <absolute-WSL-path-to-test-executable>
+--test-threads=2 agent::tests auth::loopback_tests terminal_control::submission_tests`.
+Observed binary: `swarm_api-7cc466ef3b041aec`; derive the filename from each build,
+not from this historical name. The 61-test run finished in 29.79 seconds.

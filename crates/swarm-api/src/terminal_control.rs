@@ -233,3 +233,89 @@ pub(super) async fn geometry_contention(
     )
         .into_response())
 }
+
+#[cfg(test)]
+mod submission_tests {
+    use super::*;
+    use axum::{Router, body::Body, http::Request, routing::post};
+    use serde_json::{Value, json};
+    use swarm_domain::{OperatorSubmissionId, WorkerSessionId};
+    use swarm_persistence::TaskStore;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn authored_submission_http_requires_operator_and_never_contacts_the_pty() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store.ensure_queen("/workspace").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let state = AppState::default()
+            .with_task_store(store.clone())
+            .with_terminal_host(
+                swarm_terminal::HostClient::new("/nonexistent-submission-test/socket"),
+                "operator-test-secret",
+            );
+        let router = Router::new()
+            .route(
+                "/sessions/{session_id}/submissions",
+                post(record_submission),
+            )
+            .with_state(Arc::new(state));
+        let id = OperatorSubmissionId::new();
+        let body = json!({"id":id,"text":"Keep the exact scope.\nNo release."});
+        let request = |authorized: bool, body: &Value| {
+            let mut request = Request::post(format!("/sessions/{session}/submissions"))
+                .header("host", "localhost")
+                .header("content-type", "application/json");
+            if authorized {
+                request = request.header("authorization", "Bearer operator-test-secret");
+            }
+            request.body(Body::from(body.to_string())).unwrap()
+        };
+        let denied = router.clone().oneshot(request(false, &body)).await.unwrap();
+        assert_eq!(denied.status(), axum::http::StatusCode::UNAUTHORIZED);
+        assert!(
+            store
+                .authored_operator_submission(id, crate::unix_timestamp())
+                .unwrap()
+                .is_none()
+        );
+        for created in [true, false] {
+            let accepted = router.clone().oneshot(request(true, &body)).await.unwrap();
+            assert_eq!(accepted.status(), axum::http::StatusCode::OK);
+            assert_eq!(accepted.headers()["cache-control"], "no-store");
+            let bytes = axum::body::to_bytes(accepted.into_body(), 4096)
+                .await
+                .unwrap();
+            let response: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(response["created"], created);
+            assert_eq!(response["provider_consumption"], "unconfirmed");
+            assert!(response.get("text").is_none());
+        }
+        let conflict = router
+            .clone()
+            .oneshot(request(true, &json!({"id":id,"text":"Changed scope"})))
+            .await
+            .unwrap();
+        assert_eq!(
+            conflict.status(),
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let forged = router
+            .oneshot(request(
+                true,
+                &json!({"id":id,"text":"Changed scope","operator_id":"forged"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            forged.status(),
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let source = store
+            .authored_operator_submission(id, crate::unix_timestamp())
+            .unwrap()
+            .unwrap();
+        assert_eq!(source.text, "Keep the exact scope.\nNo release.");
+    }
+}
