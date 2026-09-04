@@ -838,8 +838,17 @@ export function App() {
   async function testNotification() {
     await perform(() => notificationController.test());
   }
+  function reloadTerminalView() {
+    if (!activeSessionId) return;
+    terminalWorkspace.resetSessionRenderer(activeSessionId);
+    setTerminalRevision((current) => current + 1);
+  }
+
   async function refreshControlRoom(recoverTerminal = false) {
     if (!operatorToken) return;
+    // A local renderer failure must not wait behind unrelated API reads. Bind
+    // the reset to the view selected now, not whichever view is open later.
+    if (recoverTerminal) reloadTerminalView();
     await perform(async () => {
       const [controlRoom, automation] = await Promise.all([
         loadControlRoom(operatorToken),
@@ -851,10 +860,6 @@ export function App() {
       // who presses refresh does not wait out the next tick.
       void refreshRuntimeUpdate();
       setHeldDeliveryRefresh((current) => current + 1);
-      if (recoverTerminal && activeSessionId) {
-        terminalWorkspace.resetSessionRenderer(activeSessionId);
-        setTerminalRevision((current) => current + 1);
-      }
       setActiveSessionId((current) =>
         current && controlRoom.sessions.some((session) => session.session_id === current)
           ? current
@@ -2454,7 +2459,7 @@ export function App() {
         ) : activeSession ? (
           <TerminalLoadBoundary key={`${operatorToken}:${activeSession.session_id}:${terminalRevision}`}>
             <Suspense fallback={<div className="terminal-empty">Preparing terminal…</div>}>
-              <TerminalView operatorToken={operatorToken} session={activeSession} busy={busy} canStop={activeWorker?.role !== "queen"} mobileKeysVisible={mobileKeysVisible} onMobileKeysVisibleChange={changeMobileKeysVisibility} onRefresh={() => void refreshControlRoom(true)} queenAutomation={activeWorker?.role === "queen" ? queenAutomation : undefined} queenAutonomy={activeWorker?.role === "queen" ? queenPolicy?.[presence?.mode ?? "at_hive"] : undefined} onOpenQueenSettings={activeWorker?.role === "queen" ? () => openSettings("settings-workers") : undefined} onConnectionStateChange={setTerminalConnection} />
+              <TerminalView operatorToken={operatorToken} session={activeSession} busy={busy} canStop={activeWorker?.role !== "queen"} mobileKeysVisible={mobileKeysVisible} onMobileKeysVisibleChange={changeMobileKeysVisibility} onRefresh={reloadTerminalView} queenAutomation={activeWorker?.role === "queen" ? queenAutomation : undefined} queenAutonomy={activeWorker?.role === "queen" ? queenPolicy?.[presence?.mode ?? "at_hive"] : undefined} onOpenQueenSettings={activeWorker?.role === "queen" ? () => openSettings("settings-workers") : undefined} onConnectionStateChange={setTerminalConnection} />
             </Suspense>
           </TerminalLoadBoundary>
         ) : (

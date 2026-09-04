@@ -6,6 +6,22 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2: renderer recovery does not wait for control-room reads
+
+- The existing terminal refresh waited for a full control-room load before
+  replacing a hung local renderer. Terminal-only reload now resets the selected
+  browser renderer directly. Full control-room refresh performs its requested
+  local reset immediately, before awaiting data, rather than after navigation
+  may have changed the viewed terminal. No worker/session lifecycle command.
+- Two App integration tests hold API reads pending and verify immediate renderer
+  replacement for the selected immutable session. The terminal-only action makes
+  no API requests; neither path issues start/stop. All 38 App tests and production
+  web build passed; existing terminal chunk warning remains.
+- Audit found the existing remount also loses the composer's component-local
+  unsent draft. Draft continuity is not fixed by this change and remains the next
+  MOB-01 implementation gap, not an accepted recovery outcome.
+- No push, deployment, release or live worker interruption.
+
 ### P2/P3: bound a parser callback that never completes
 
 - Size-bounded output could still wait indefinitely behind a stalled parser

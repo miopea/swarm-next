@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, expect, test, vi } from "vitest";
 
 vi.mock("./terminal/XtermSurface", () => ({ XtermSurface: class {} }));
-vi.mock("./terminal/TerminalView", () => ({ default: ({ session }: { session?: { session_id: string } }) => <div data-testid="terminal-view" data-session-id={session?.session_id}>Terminal ready</div> }));
+vi.mock("./terminal/TerminalView", () => ({ default: ({ session, onRefresh }: { session?: { session_id: string }; onRefresh?: () => void }) => <div data-testid="terminal-view" data-session-id={session?.session_id}>Terminal ready<button onClick={onRefresh}>Fixture reload terminal</button></div> }));
 vi.mock("./presence/PresenceController", () => ({
   deviceClass: () => "desktop",
   presenceDeviceId: () => "019fedfc-1c30-70e1-a5e2-9a3c94268093",
@@ -1081,6 +1081,38 @@ function bootFetch() {
     return Promise.resolve(ok({}));
   });
 }
+
+test.each(["Fixture reload terminal", "Refresh control room"])("%s resets the selected renderer without waiting for API reads", async (action) => {
+  window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
+  const sessionId = "019fedfc-1c30-70e1-a5e2-9a3c94268082";
+  const base = bootFetch();
+  let holdReads = false;
+  const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/control-room/events") || holdReads) return new Promise<Response>((_, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    });
+    if (url === "/api/v1/workers") return Promise.resolve(ok([{ id: "daisy", name: "Daisy", role: "worker", provider: "claude_code", workspace: "/daisy", autostart: false, position: 0, active_session_id: sessionId, running: true, attention_state: "resting", created_at: 1, updated_at: 1 }]));
+    if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: [{ session_id: sessionId, running: true }] }));
+    return base(input);
+  });
+  vi.stubGlobal("fetch", fetch);
+  const reset = vi.spyOn(terminalWorkspace, "resetSessionRenderer");
+  try {
+    render(<App />);
+    await screen.findByTestId("terminal-view");
+    const previous = screen.getByTestId("terminal-view");
+    fetch.mockClear();
+    holdReads = true;
+    fireEvent.click(screen.getByRole("button", { name: action }));
+    expect(reset).toHaveBeenCalledOnce();
+    expect(reset).toHaveBeenCalledWith(sessionId);
+    await waitFor(() => expect(screen.getByTestId("terminal-view")).not.toBe(previous));
+    expect(screen.getByTestId("terminal-view")).toHaveAttribute("data-session-id", sessionId);
+    if (action === "Fixture reload terminal") expect(fetch).not.toHaveBeenCalled();
+    expect(fetch.mock.calls.some(([url]) => /\/(start|stop)$/.test(String(url)))).toBe(false);
+  } finally { reset.mockRestore(); }
+});
 
 test.each(["busy", "malformed"])("conversation scan %s stays in runtime status and clears on recovery", async (failure) => {
   const baseFetch = bootFetch();
