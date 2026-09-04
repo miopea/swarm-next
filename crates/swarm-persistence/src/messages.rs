@@ -184,6 +184,19 @@ impl TaskStore {
         body: &str,
         now: i64,
     ) -> Result<TaskMessage, TaskStoreError> {
+        let connection = self.connection()?;
+        Self::insert_task_message(&connection, task_id, from, to, body, now)
+    }
+
+    /// Shared insertion boundary for messages that accompany a domain change.
+    pub(super) fn insert_task_message(
+        connection: &rusqlite::Connection,
+        task_id: TaskId,
+        from: MessageEnd,
+        to: MessageEnd,
+        body: &str,
+        now: i64,
+    ) -> Result<TaskMessage, TaskStoreError> {
         let (sender, sender_worker_id) = (from.party, from.worker_id);
         let (recipient, recipient_worker_id) = (to.party, to.worker_id);
         let body = body.trim();
@@ -206,7 +219,6 @@ impl TaskStore {
                 max: MAX_TASK_MESSAGE_BYTES,
             });
         }
-        let connection = self.connection()?;
         let exists: bool = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM tasks WHERE id = ?1 AND removed_at IS NULL)",
             [task_id.to_string()],

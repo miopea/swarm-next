@@ -1644,25 +1644,17 @@ impl AgentMcp {
             .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
         let store = self.tasks.store();
         let task = store.get_task(task_id)?;
-        // The assignee is read rather than asked for. Queen naming a worker
-        // here could hand work back to somebody who does not hold it, and the
-        // board already knows who does.
-        let Some(worker_id) = task.assigned_worker_id else {
+        if task.assigned_worker_id.is_none() {
             return Err(ApplicationError::NotAuthorized);
-        };
+        }
         let now = now_seconds();
+        // Persistence rechecks the current assignee and Review state, then
+        // commits the next-move marker and message in one transaction.
         store.return_review_to_worker(task_id, &input.request, now)?;
-        store.send_task_message(
-            task_id,
-            swarm_persistence::MessageEnd::queen(),
-            swarm_persistence::MessageEnd::worker(worker_id),
-            &input.request,
-            now,
-        )?;
         self.changed.notify_waiters();
         structured(json!({
             "task_id": input.task_id,
-            "state": task.state.to_string(),
+            "state": TaskState::Review.to_string(),
             "next_move_owner": "worker",
             "next": "The task stays in Review and the next move is the worker's. They are told when their terminal is resting; answering hands the move back to you.",
         }))
@@ -4886,6 +4878,59 @@ mod tests {
         let denied =
             response_json(handle(bridge, plain_state(), request(&worker_token)).await).await;
         assert!(denied["result"]["isError"].as_bool().unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn review_handback_commits_one_request_without_losing_review_state() {
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let task = store
+            .create_task("Verify handoff", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(task.id, worker_id).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        let request = |token: &str, body: &str| {
+            mcp_request(
+                Some(token),
+                "tools/call",
+                &json!({
+                    "name": "swarm_return_reviewed_work",
+                    "arguments": {"task_id": task.id.to_string(), "request": body}
+                }),
+            )
+        };
+        for (token, body) in [
+            (&worker_token, "Which SHA?".to_owned()),
+            (&queen_token, "é".repeat(2_001)),
+        ] {
+            let refused =
+                response_json(handle(bridge.clone(), plain_state(), request(token, &body)).await)
+                    .await;
+            assert_eq!(refused["result"]["isError"], true, "{refused}");
+            assert_eq!(
+                store.get_task(task.id).unwrap().next_move_owner,
+                swarm_domain::NextMoveOwner::Queen
+            );
+            assert!(store.task_messages(task.id).unwrap().is_empty());
+        }
+        let returned =
+            response_json(handle(bridge, plain_state(), request(&queen_token, "Which SHA?")).await)
+                .await;
+        assert_eq!(returned["result"]["isError"], false, "{returned}");
+        let current = store.get_task(task.id).unwrap();
+        assert_eq!(current.state, TaskState::Review);
+        assert_eq!(current.next_move_owner, swarm_domain::NextMoveOwner::Worker);
+        let messages = store.task_messages(task.id).unwrap();
+        assert_eq!(messages.len(), 1, "the adapter must not send a second copy");
+        assert_eq!(messages[0].recipient_worker_id, Some(worker_id.to_string()));
+        assert_eq!(messages[0].body, "Which SHA?");
+        assert_eq!(messages[0].delivered_at, None);
     }
 
     /// A refusal must name the problem the caller actually has.

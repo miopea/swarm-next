@@ -6,6 +6,29 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: atomic reviewed-work hand-back
+
+- The hand-back persistence operation now reads the current Review state and
+  assignee inside one transaction, saves the next-move marker, queues the exact
+  request through the shared message-validation boundary, and publishes a durable
+  Tasks Changed event. All three writes commit together or none survive.
+- The MCP adapter no longer sends a second message after changing ownership.
+  Its success response describes the committed Review state, not a pre-operation
+  read. Existing Queen-only authorization, safe-prompt delivery, conversation
+  lifetime, and message byte limits remain unchanged. No schema change.
+- Failure injection at both message insertion and event insertion proves that
+  the marker, message, and event roll back; retry after the storage fault clears
+  produces one queued request. An oversized Unicode request preserves an earlier
+  answered marker rather than silently making the worker responsible again.
+  Unassigned work is refused. All 29 Linux persistence/messaging tests passed.
+- All 84 Linux MCP/coordination-delivery tests passed, including the new real
+  MCP request-path regression: worker refusal and invalid input leave Queen as
+  owner, and a successful Queen request queues exactly one message. Strict Linux
+  API/persistence all-target/all-feature Clippy, formatting, and diff checks passed.
+- These tests cover retry after a failed transaction, not automatic replay after
+  an ambiguous successful MCP response. No new replay or delivery guarantee is
+  claimed, and no live Queen/worker session was interrupted.
+
 ### P4: remove contradictory review-routing instructions
 
 - The served Queen attention tool still instructed her to return finished work

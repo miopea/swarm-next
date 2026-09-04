@@ -434,6 +434,12 @@ mod tests {
             NextMoveOwner::Queen
         );
 
+        let worker = store
+            .create_worker("Petal", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        store.assign_task(task.id, session).unwrap();
         store.transition_task(task.id, TaskState::Active).unwrap();
         assert_eq!(
             store.get_task(task.id).unwrap().next_move_owner,
@@ -467,6 +473,11 @@ mod tests {
             "it must NOT move backwards"
         );
         assert_eq!(returned.next_move_owner, NextMoveOwner::Worker);
+        let messages = store.task_messages(task.id).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].body, "Say which SHA this shipped as.");
+        assert_eq!(messages[0].recipient_worker_id, Some(worker.id.to_string()));
+        assert_eq!(messages[0].delivered_at, None);
 
         store.answer_returned_review(task.id, 2_000).unwrap();
         assert_eq!(
@@ -499,6 +510,115 @@ mod tests {
                 .is_err(),
             "active work is already the worker's move; there is nothing to hand back"
         );
+    }
+
+    #[test]
+    fn failed_review_message_does_not_transfer_responsibility_and_can_retry() {
+        for failed_table in ["task_messages", "control_room_events"] {
+            let fixture = active_assignment();
+            let store = &fixture.store;
+            let task_id = fixture.task_id;
+            store.transition_task(task_id, TaskState::Review).unwrap();
+            let event_count = || -> i64 {
+                store
+                    .connection()
+                    .unwrap()
+                    .query_row("SELECT COUNT(*) FROM control_room_events", [], |row| {
+                        row.get(0)
+                    })
+                    .unwrap()
+            };
+            let before_events = event_count();
+            store
+                .connection()
+                .unwrap()
+                .execute_batch(&format!(
+                    "CREATE TEMP TRIGGER reject_review_message BEFORE INSERT ON {failed_table}
+             BEGIN SELECT RAISE(ABORT, 'injected hand-back failure'); END;"
+                ))
+                .unwrap();
+            assert!(
+                store
+                    .return_review_to_worker(task_id, "Which SHA shipped?", 100)
+                    .is_err()
+            );
+            assert_eq!(
+                store.get_task(task_id).unwrap().next_move_owner,
+                swarm_domain::NextMoveOwner::Queen
+            );
+            assert!(store.task_messages(task_id).unwrap().is_empty());
+            let markers: i64 = store
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM task_returned_reviews WHERE task_id = ?1",
+                    [task_id.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(markers, 0);
+            assert_eq!(event_count(), before_events);
+            store
+                .connection()
+                .unwrap()
+                .execute_batch("DROP TRIGGER reject_review_message")
+                .unwrap();
+            store
+                .return_review_to_worker(task_id, "Which SHA shipped?", 101)
+                .unwrap();
+            assert_eq!(
+                store.get_task(task_id).unwrap().next_move_owner,
+                swarm_domain::NextMoveOwner::Worker
+            );
+            assert_eq!(store.task_messages(task_id).unwrap().len(), 1);
+            assert_eq!(event_count(), before_events + 1);
+        }
+    }
+
+    #[test]
+    fn invalid_review_message_preserves_the_previous_request_and_answer() {
+        let fixture = active_assignment();
+        let store = &fixture.store;
+        let task_id = fixture.task_id;
+        store.transition_task(task_id, TaskState::Review).unwrap();
+        store
+            .return_review_to_worker(task_id, "Which SHA shipped?", 100)
+            .unwrap();
+        store.answer_returned_review(task_id, 101).unwrap();
+        // A schema-valid character count can still exceed the message byte cap.
+        let oversized = "é".repeat(2_001);
+        assert!(matches!(
+            store.return_review_to_worker(task_id, &oversized, 102),
+            Err(TaskStoreError::InvalidTaskMessage { .. })
+        ));
+        let marker: (String, i64, Option<i64>) = store.connection().unwrap().query_row(
+            "SELECT request, returned_at, answered_at FROM task_returned_reviews WHERE task_id = ?1",
+            [task_id.to_string()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap();
+        assert_eq!(marker, ("Which SHA shipped?".to_owned(), 100, Some(101)));
+        assert_eq!(
+            store.get_task(task_id).unwrap().next_move_owner,
+            swarm_domain::NextMoveOwner::Queen
+        );
+        assert_eq!(store.task_messages(task_id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn unassigned_review_has_no_worker_to_owe_an_answer() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("Review", "/workspace").unwrap();
+        for state in [TaskState::Ready, TaskState::Active, TaskState::Review] {
+            store.transition_task(task.id, state).unwrap();
+        }
+        assert!(matches!(
+            store.return_review_to_worker(task.id, "Which SHA?", 100),
+            Err(TaskStoreError::WorkerNotFound)
+        ));
+        assert_eq!(
+            store.get_task(task.id).unwrap().next_move_owner,
+            swarm_domain::NextMoveOwner::Queen
+        );
+        assert!(store.task_messages(task.id).unwrap().is_empty());
     }
 
     /// Evidence is readable for a task whose activity log shows none.
@@ -1126,8 +1246,12 @@ impl TaskStore {
     /// everything that reads it; returning it to Active makes finished work
     /// look unfinished. What changes is who owes the next move.
     ///
+    /// The next-move marker and the request message commit together. The current
+    /// assignee is read inside that transaction, never supplied by the caller.
+    ///
     /// # Errors
-    /// Refuses work that is not in review, and returns persistence failures.
+    /// Refuses unassigned work, work not in review, invalid messages, and
+    /// persistence failures. A failed message leaves the next mover unchanged.
     pub fn return_review_to_worker(
         &self,
         task_id: TaskId,
@@ -1138,12 +1262,13 @@ impl TaskStore {
         if request.is_empty() {
             return Err(TaskStoreError::CompletionEvidenceRequired);
         }
-        let connection = self.connection()?;
-        let state: String = connection
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let (state, worker_id): (String, Option<String>) = transaction
             .query_row(
-                "SELECT state FROM tasks WHERE id = ?1 AND removed_at IS NULL",
+                "SELECT state, assigned_worker_id FROM tasks WHERE id = ?1 AND removed_at IS NULL",
                 [task_id.to_string()],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?
             .ok_or(TaskStoreError::NotFound)?;
@@ -1153,7 +1278,10 @@ impl TaskStore {
                 to: TaskState::Review,
             });
         }
-        connection.execute(
+        let worker_id = worker_id.ok_or(TaskStoreError::WorkerNotFound)?;
+        let worker_id = WorkerId::from_str(&worker_id)
+            .map_err(|_| TaskStoreError::IntegrityFailure("invalid review assignee".to_owned()))?;
+        transaction.execute(
             "INSERT INTO task_returned_reviews (task_id, request, returned_at, answered_at)
              VALUES (?1, ?2, ?3, NULL)
              ON CONFLICT(task_id) DO UPDATE
@@ -1162,6 +1290,16 @@ impl TaskStore {
                    answered_at = NULL",
             params![task_id.to_string(), request, now],
         )?;
+        Self::insert_task_message(
+            &transaction,
+            task_id,
+            super::MessageEnd::queen(),
+            super::MessageEnd::worker(worker_id),
+            request,
+            now,
+        )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        transaction.commit()?;
         Ok(())
     }
 
