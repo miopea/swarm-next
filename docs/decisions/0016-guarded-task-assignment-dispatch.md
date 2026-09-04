@@ -56,6 +56,14 @@ sleeping, her next session binding creates the first dispatch atomically.
 
 ## Consequences
 
+The daily-driver maturity policy also gates new task briefings during Night
+Watch using the builder-owned provider promotion list. Experimental and unknown
+providers retain their queued briefings without consuming attempts; filtering
+precedes the batch limit. Queues reports this policy hold explicitly. Ending
+Night Watch restores ordinary eligibility without restarting or interrupting
+the current worker. This does not cancel previously submitted work or replace
+the separate guards required for startup, messages, and decision delivery.
+
 Queen assignment now wakes the correct quiet worker without introducing a
 worker-to-worker message bus. Operators can keep steering a worker without an
 automation injection breaking context. Queue pressure and ambiguous delivery

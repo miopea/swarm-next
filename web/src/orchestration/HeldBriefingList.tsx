@@ -108,6 +108,8 @@ function groupByWorker(briefings: HeldBriefing[]): { workerName: string; briefin
  */
 function holdReason(briefing: HeldBriefing): string {
   switch (briefing.reason) {
+    case "experimental_during_night_watch":
+      return "experimental provider — queued until Night Watch ends";
     case "operator_in_the_terminal":
       return "you are in that terminal";
     case "worker_already_working":

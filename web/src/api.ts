@@ -354,7 +354,7 @@ export type HeldBriefing = {
   worker_id: string;
   worker_name: string;
   queued_at: number;
-  /** "operator_in_the_terminal", "worker_already_working" or "waiting_its_turn". */
+  /** Operator engagement, active work, queue order, or experimental_during_night_watch. */
   reason: string;
   /**
    * The earlier task this one is behind, when that is the hold.

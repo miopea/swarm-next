@@ -92,6 +92,8 @@ pub enum TaskDispatchFailure {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DispatchHold {
+    /// Experimental providers wait for attended operation without consuming retries.
+    ExperimentalDuringNightWatch,
     /// Somebody is using that terminal. Delivering would type into their work.
     OperatorInTheTerminal,
     /// The worker is already on something. Two briefs at once is two tasks.
@@ -242,6 +244,9 @@ impl TaskStore {
     /// Returns an error when the dispatch queue cannot be read.
     pub fn held_task_dispatches(&self, now: i64) -> Result<Vec<HeldTaskDispatch>, TaskStoreError> {
         let connection = self.connection()?;
+        let night_watch = super::presence::operator_presence_from_connection(&connection, now)?
+            .mode
+            == swarm_domain::PresenceMode::NightWatch;
         let mut statement = connection.prepare(
             "SELECT td.task_id, t.title, td.worker_id, w.name, td.updated_at,
                     EXISTS(SELECT 1 FROM worker_engagements e
@@ -260,7 +265,8 @@ impl TaskStore {
                             WHERE earlier_brief.task_id = earlier.id
                               AND earlier_brief.state IN ('delivered','uncertain')
                               AND earlier_brief.updated_at + ?2 <= ?1)
-                      ORDER BY earlier.position, earlier.id LIMIT 1) AS blocked_by
+                      ORDER BY earlier.position, earlier.id LIMIT 1) AS blocked_by,
+                    w.provider
              FROM task_dispatches td
              JOIN tasks t ON t.id = td.task_id
              JOIN worker_profiles w ON w.id = td.worker_id
@@ -278,7 +284,12 @@ impl TaskStore {
                 worker_name: row.get(3)?,
                 queued_at: row.get(4)?,
                 blocked_by: blocked_by.clone(),
-                reason: if engaged {
+                reason: if night_watch
+                    && !swarm_domain::ProviderKind::from_stored(&row.get::<_, String>(8)?)
+                        .night_watch_approved()
+                {
+                    DispatchHold::ExperimentalDuringNightWatch
+                } else if engaged {
                     DispatchHold::OperatorInTheTerminal
                 } else if busy {
                     DispatchHold::WorkerAlreadyWorking
@@ -535,6 +546,10 @@ fn deliverable_briefings(
     transaction: &rusqlite::Transaction<'_>,
     now: i64,
 ) -> Result<Vec<TaskDispatch>, TaskStoreError> {
+    let night_watch = super::presence::operator_presence_from_connection(transaction, now)?.mode
+        == swarm_domain::PresenceMode::NightWatch;
+    let approved =
+        swarm_domain::ProviderKind::NIGHT_WATCH_APPROVED.map(|provider| provider.to_string());
     let mut statement = transaction.prepare(
         "SELECT td.assignment_id, td.task_id, td.worker_id, a.worker_session_id,
                     t.title, t.description, t.priority, t.workspace,
@@ -546,6 +561,7 @@ fn deliverable_briefings(
              FROM task_dispatches td
              JOIN task_assignments a ON a.id = td.assignment_id AND a.released_at IS NULL
              JOIN tasks t ON t.id = td.task_id
+             JOIN worker_profiles provider ON provider.id = td.worker_id
              JOIN worker_sessions ws ON ws.session_id = a.worker_session_id
                  AND ws.worker_id = td.worker_id AND ws.ended_at IS NULL
              -- A briefing is owed for work that has already started, not
@@ -556,6 +572,7 @@ fn deliverable_briefings(
              -- sitting at a blank prompt.
              WHERE td.state = 'queued' AND t.removed_at IS NULL
                AND t.state IN ('ready', 'active')
+               AND (NOT ?4 OR provider.provider IN (?5, ?6))
                AND NOT EXISTS (
                    SELECT 1 FROM worker_engagements e
                    WHERE e.worker_id = td.worker_id AND e.expires_at > ?1
@@ -595,7 +612,14 @@ fn deliverable_briefings(
     )?;
     let mut briefings = statement
         .query_map(
-            params![now, MAX_DISPATCH_CLAIMS, ABANDONED_BRIEF_SECONDS],
+            params![
+                now,
+                MAX_DISPATCH_CLAIMS,
+                ABANDONED_BRIEF_SECONDS,
+                night_watch,
+                approved[0],
+                approved[1]
+            ],
             task_dispatch_from_row,
         )?
         .collect::<Result<Vec<_>, _>>()?;
@@ -740,6 +764,48 @@ mod tests {
             .unwrap();
         store.assign_task(task.id, session).unwrap();
         (store, task.id, session)
+    }
+
+    #[test]
+    fn night_watch_holds_experimental_briefs_without_spending_attempts() {
+        for provider in ["gemini", "grok", "opencode", "future-provider"] {
+            let (store, task_id, session) = assigned_task();
+            store.connection().unwrap().execute(
+                "UPDATE worker_profiles SET provider = ?1 WHERE id = (SELECT assigned_worker_id FROM tasks WHERE id = ?2)",
+                params![provider, task_id.to_string()],
+            ).unwrap();
+            store
+                .set_manual_presence(Some(swarm_domain::PresenceMode::NightWatch), 100)
+                .unwrap();
+            for now in 100..105 {
+                assert!(
+                    store
+                        .claim_task_dispatches(now, &HashSet::new())
+                        .unwrap()
+                        .is_empty()
+                );
+            }
+            let held = store.held_task_dispatches(105).unwrap();
+            assert_eq!(held.len(), 1);
+            assert_eq!(held[0].reason, DispatchHold::ExperimentalDuringNightWatch);
+            let attempts: i64 = store
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT attempts FROM task_dispatches WHERE task_id = ?1",
+                    [task_id.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(attempts, 0);
+            store
+                .set_manual_presence(Some(swarm_domain::PresenceMode::AtHive), 106)
+                .unwrap();
+            let resumed = store.claim_task_dispatches(106, &HashSet::new()).unwrap();
+            assert_eq!(resumed.len(), 1);
+            assert_eq!(resumed[0].session_id, session);
+            assert_eq!(resumed[0].task_id, task_id);
+        }
     }
 
     #[test]

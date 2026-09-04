@@ -39,6 +39,12 @@ test("names the task a briefing is queued behind", () => {
   expect(screen.getByText(/behind Backfill the contact index/)).toBeInTheDocument();
 });
 
+test("explains experimental Night Watch holds instead of blaming earlier work", () => {
+  render(<HeldBriefingList briefings={[briefing({ reason: "experimental_during_night_watch", blocked_by: null })]} />);
+  expect(screen.getByText(/experimental provider — queued until Night Watch ends/)).toBeInTheDocument();
+  expect(screen.queryByText(/behind earlier work/)).not.toBeInTheDocument();
+});
+
 test("falls back to a plain reason when nothing is named", () => {
   render(<HeldBriefingList briefings={[briefing({ blocked_by: null })]} />);
   expect(screen.getByText(/behind earlier work/)).toBeInTheDocument();

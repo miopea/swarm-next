@@ -744,6 +744,21 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   This is not complete Night Watch provider-policy enforcement.
 - No schema change, push, deployment, or release.
 
+### P5g: experimental-provider task briefing holds
+
+- New task briefing claims now apply the builder-owned Night Watch provider
+  gate before the batch limit. Existing sessions and submitted work are untouched.
+  Queues explicitly identifies experimental-provider Night Watch holds rather
+  than claiming they are behind earlier work. No operator escalation is added.
+- All 16 persistence task-dispatch tests passed, including repeated holds with
+  zero consumed attempts and delivery to the same session after exit for Gemini,
+  Grok, OpenCode, and an unknown stored provider. Strict persistence Clippy passed.
+  Ten briefing component tests and the production web build passed; the existing
+  terminal bundle-size warning remains. No live browser/device acceptance claim.
+- Automatic startup/recovery, message and decision delivery, and presence changes
+  after claim still need policy reconciliation. Full provider maturity remains
+  incomplete. No schema change, push, release, or live worker interruption.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has
