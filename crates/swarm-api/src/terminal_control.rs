@@ -39,6 +39,39 @@ pub(super) struct InputRequest {
     text: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AuthoredSubmissionRequest {
+    id: swarm_domain::OperatorSubmissionId,
+    text: String,
+}
+
+pub(super) async fn record_submission(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(session_id): Path<String>,
+    Json(request): Json<AuthoredSubmissionRequest>,
+) -> Result<Response, ApiError> {
+    crate::auth::authorize_operator_credential(&state, &headers)?;
+    let created = crate::task_store(&state)?
+        .record_operator_submission(
+            request.id,
+            parse_session_id(&session_id)?,
+            &request.text,
+            crate::unix_timestamp(),
+        )
+        .map_err(|error| {
+            ApiError::new(
+                axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                "operator_submission_not_recorded",
+                error.to_string(),
+            )
+        })?;
+    Ok(([(axum::http::header::CACHE_CONTROL, "no-store")], Json(serde_json::json!({
+        "id":request.id, "created":created, "source":"operator_authored", "provider_consumption":"unconfirmed"
+    }))).into_response())
+}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct ResizeRequest {
     rows: u16,

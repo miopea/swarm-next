@@ -45,6 +45,14 @@ impl std::fmt::Debug for OperatorAnswerEvidence {
 
 pub const MAX_OPERATOR_ANSWER_BYTES: usize = 16 * 1024;
 
+/// Allows the existing 16K UTF-16 composer draft without truncating UTF-8 text.
+pub const MAX_OPERATOR_SUBMISSION_BYTES: usize = 64 * 1024;
+
+#[must_use]
+pub fn valid_operator_submission(text: &str) -> bool {
+    !text.trim().is_empty() && text.len() <= MAX_OPERATOR_SUBMISSION_BYTES
+}
+
 impl OperatorAnswerEvidence {
     /// Constructs bounded evidence after the application verifies its origin.
     /// Returns None for empty or oversized answers; never trims or truncates.

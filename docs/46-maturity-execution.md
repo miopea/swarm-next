@@ -6,6 +6,24 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: authenticated authored submissions without consumption claims
+
+- Schema 132 stores immutable general submissions without requiring a decision:
+  local operator, worker/session, exact text and time. Bounds: 64 KiB text,
+  4,096 records, 16 MiB payload, admission-time 90-day expiry. Source records do
+  not create decisions, terminal writes or consumed-answer receipts.
+- Added a no-store HTTP recording endpoint requiring operator bearer/browser
+  credentials even on localhost. Existing loopback terminal behavior is unchanged.
+  Response explicitly states provider consumption is unconfirmed. No UI caller
+  or agent source read is connected yet, so current typing behavior is unchanged.
+- Three source persistence tests passed: immutability/invalid input, quota/expiry,
+  and schema131 upgrade/reopen. Strict Linux-target API/persistence lint passed;
+  final added persistence tests also passed strict Windows GNU lint. The explicit
+  loopback/worker-token/operator-token/browser-cookie auth test compiles for Linux
+  but was not executed here. No live source recording or migration performed.
+- Composer recording, source verification reads, native terminal/AskUser capture,
+  and confirmed-consumption correlation remain open. No release or deployment.
+
 ### P4: installed provider constrains the next capture integration
 
 - Read-only remote version/help checks found Claude 2.1.260. Input/output

@@ -127,6 +127,22 @@ correlation without weakening confirmed-answer admission or deriving authority
 from arbitrary terminal bytes. Raw terminal and native AskUser capture remain
 separate required acceptance paths, not silently satisfied by composer support.
 
+Schema 132 adds immutable `operator_submissions`, distinct from consumed-answer
+receipts. Sources have their own typed ID, local operator and worker/session,
+exact text and recorded time; no decision link or delivery claim is fabricated.
+Admission allows 64 KiB UTF-8 text to accommodate the existing 16K UTF-16 composer
+limit, with 4,096 rows, 16 MiB text payload and admission-time 90-day expiry.
+Future decision dependencies must pin source evidence before depending on it.
+
+`POST /api/v1/terminal/sessions/{session_id}/submissions` requires an explicit
+operator bearer credential or browser session even on localhost. It does not use
+the general loopback authorization exemption. This authenticates the operator
+credential, not physical keyboard ownership on a compromised shared account.
+Ordinary terminal endpoints retain their existing authorization behavior. The
+response states authored source and unconfirmed provider consumption and is not
+cacheable. No raw text is echoed or added to general activity events. UI recording,
+source verification reads and consumption correlation remain integration steps.
+
 Verification reads return the statement and its scope, evidence status, and exact
 decision link when present. A full ID is required; no prefix lookup. Verified
 origin never expands the action authorized by the actual words. Preserve ADR 0054's

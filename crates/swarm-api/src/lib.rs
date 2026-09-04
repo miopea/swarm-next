@@ -4003,6 +4003,10 @@ fn api_router(state: AppState) -> Router {
             post(terminal_control::write_input),
         )
         .route(
+            "/api/v1/terminal/sessions/{session_id}/submissions",
+            post(terminal_control::record_submission),
+        )
+        .route(
             "/api/v1/terminal/sessions/{session_id}/engagements/{device_id}",
             delete(terminal_attach::release_engagement),
         )

@@ -694,7 +694,7 @@ mod tests {
         store
             .connection()
             .unwrap()
-            .execute_batch("DROP TABLE operator_statement_resolutions; DROP TABLE operator_statements; PRAGMA user_version = 129;")
+            .execute_batch("DROP TABLE operator_submissions; DROP TABLE operator_statement_resolutions; DROP TABLE operator_statements; PRAGMA user_version = 129;")
             .unwrap();
         drop(store);
         let reopened = TaskStore::open(&path).unwrap();

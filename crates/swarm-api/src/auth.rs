@@ -224,6 +224,14 @@ pub(super) fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), Api
     if is_trusted_loopback(headers) {
         return Ok(());
     }
+    authorize_operator_credential(state, headers)
+}
+
+/// First-party authorship requires a credential, not just local network access.
+pub(super) fn authorize_operator_credential(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(), ApiError> {
     let expected = state.operator_token().ok_or_else(|| {
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -451,6 +459,45 @@ mod loopback_tests {
             );
         }
         headers
+    }
+
+    #[test]
+    fn first_party_authorship_needs_a_credential_even_on_loopback() {
+        let state = crate::AppState::default().with_terminal_host(
+            swarm_terminal::HostClient::new("/unused/socket"),
+            "operator-test-secret",
+        );
+        let local = headers(&[("host", "localhost:8766")]);
+        assert!(super::authorize(&state, &local).is_ok());
+        assert!(super::authorize_operator_credential(&state, &local).is_err());
+        assert!(
+            super::authorize_operator_credential(
+                &state,
+                &headers(&[
+                    ("host", "localhost:8766"),
+                    ("authorization", "Bearer worker-token")
+                ])
+            )
+            .is_err()
+        );
+        assert!(
+            super::authorize_operator_credential(
+                &state,
+                &headers(&[
+                    ("host", "localhost:8766"),
+                    ("authorization", "Bearer operator-test-secret")
+                ])
+            )
+            .is_ok()
+        );
+        let cookie = format!(
+            "{}={}",
+            super::OPERATOR_SESSION_COOKIE,
+            super::browser_session_value("operator-test-secret")
+        );
+        assert!(
+            super::authorize_operator_credential(&state, &headers(&[("cookie", &cookie)])).is_ok()
+        );
     }
 
     /// "Localhost is not public, it shouldn't need any tokens."
