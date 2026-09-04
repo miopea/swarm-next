@@ -325,6 +325,28 @@ clear_start_limit() {
   done
 }
 
+stop_restore_api() {
+  run_systemctl stop swarm-api.service || return 1
+  restore_api_state=$(run_systemctl show swarm-api.service --property=ActiveState --value) || return 1
+  case "$restore_api_state" in inactive|failed) return 0;; *) return 1;; esac
+}
+
+rollback_restore_database() {
+  stop_restore_api || return 1
+  restore_replacement=$(mktemp "$state_root/.restore-return-XXXXXX.sqlite3") || return 1
+  if ! cp "$restore_rollback" "$restore_replacement" || ! chmod 0600 "$restore_replacement"; then
+    rm -f "$restore_replacement"
+    return 1
+  fi
+  if ! mv -f "$restore_replacement" "$state_root/swarm.sqlite3"; then
+    rm -f "$restore_replacement"
+    return 1
+  fi
+  rm -f "$state_root/swarm.sqlite3-wal" "$state_root/swarm.sqlite3-shm" || return 1
+  run_systemctl start swarm-api.service || return 1
+  wait_for_health || return 1
+}
+
 on_exit() {
   result=$?
   trap - EXIT
@@ -335,11 +357,13 @@ on_exit() {
   [ -z "$return_auth" ] || rm -f "$return_auth"
   [ -z "$update_incoming" ] || rm -f "$update_incoming"
   if [ -n "$restore_rollback" ] && [ -f "$restore_rollback" ]; then
-    run_systemctl stop swarm-api.service >/dev/null 2>&1 || true
-    cp "$restore_rollback" "$state_root/swarm.sqlite3" >/dev/null 2>&1 || true
-    chmod 0600 "$state_root/swarm.sqlite3" >/dev/null 2>&1 || true
-    rm -f "$state_root/swarm.sqlite3-wal" "$state_root/swarm.sqlite3-shm"
-    run_systemctl start swarm-api.service >/dev/null 2>&1 || true
+    if rollback_restore_database; then
+      fail_changed=rolled-back
+      printf 'Previous database restored and API health verified. Recovery copy: %s\n' "$restore_rollback" >&2
+    else
+      fail_changed=partial
+      printf 'RESTORE ROLLBACK INCOMPLETE. API recovery could not be verified. Recovery copy retained at %s; inspect service state before retrying restore.\n' "$restore_rollback" >&2
+    fi
   fi
   # THESE TWO BRANCHES ARE THE ONLY CODE THAT KNOWS A ROLLBACK RAN, so they are
   # what set `changed`. Concluding it anywhere else would be a guess, and a
@@ -619,14 +643,14 @@ restore_database() {
   restore_saved="$state_root/backups/pre-restore-$(date -u +%Y%m%dT%H%M%S)-$$.sqlite3"
   mv "$restore_candidate" "$restore_saved"
   restore_candidate=
-  run_systemctl stop swarm-api.service
+  stop_restore_api || die "API stop could not be confirmed; database was not replaced. Recovery copy retained at $restore_saved"
   restore_rollback=$restore_saved
   chmod 0600 "$restore_incoming"
   mv -f "$restore_incoming" "$database"
   restore_incoming=
   rm -f "$database-wal" "$database-shm"
   run_systemctl start swarm-api.service
-  wait_for_health || die "restored API failed health verification; previous database will be restored"
+  wait_for_health || die "restored API failed health verification; attempting previous database recovery"
   restore_rollback=
   count=1
   for candidate in $(find "$state_root/backups" -maxdepth 1 -type f -name 'pre-restore-*.sqlite3' -printf '%T@ %p\n' | sort -nr | sed 's/^[^ ]* //'); do

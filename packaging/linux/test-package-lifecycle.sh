@@ -57,9 +57,13 @@ done
 stub_mark() { for stub_unit in $stub_units; do : > "$stub_state/$stub_unit"; done; }
 stub_clear() { for stub_unit in $stub_units; do rm -f "$stub_state/$stub_unit"; done; }
 case "$stub_verb" in
+  show)
+    [ ! -f "$HOME/restore-state-unreadable" ] || exit 1
+    if [ -f "$HOME/unit-state/swarm-api.service" ]; then printf 'active\n'; else printf 'inactive\n'; fi
+    exit 0;;
   start|restart) stub_mark;;
   enable) [ -z "$stub_now" ] || stub_mark;;
-  stop) stub_clear;;
+  stop) [ ! -f "$HOME/restore-stop-refused" ] || exit 1; stub_clear;;
   disable) [ -z "$stub_now" ] || stub_clear;;
   is-active)
     for stub_unit in $stub_units; do [ -f "$stub_state/$stub_unit" ] || exit 3; done
@@ -98,6 +102,11 @@ if [ -n "$output" ]; then
   exit 0
 fi
 version=$(cat "$SWARM_INSTALL_ROOT/current/VERSION")
+if [ -f "$HOME/restore-health-fails" ]; then
+  rm "$HOME/restore-health-fails"
+  [ ! -f "$HOME/restore-block-rollback" ] || touch "$HOME/restore-stop-refused"
+  exit 22
+fi
 printf '%s\n' "$version" >> "$HOME/curl.log"
 [ "$version" != "3.0.0" ] || printf 'database-v3\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
 [ "$version" != "6.0.0" ] || printf 'database-v6\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
@@ -955,6 +964,26 @@ done
 "$package" restore "$HOME/hive-backup.sqlite3"
 [ "$(find "$SWARM_STATE_ROOT/backups" -maxdepth 1 -type f -name 'pre-restore-*.sqlite3' | wc -l)" -eq 3 ]
 [ "$(cat "$SWARM_STATE_ROOT/backups/manual.sqlite3")" = "manual" ]
+# Unknown service state is not evidence that replacing the database is safe.
+: > "$HOME/restore-state-unreadable"
+printf 'preserve-on-unknown\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
+if "$package" restore "$HOME/hive-backup.sqlite3"; then
+  echo "restore proceeded without confirmed API stop" >&2; exit 1
+fi
+[ "$(cat "$SWARM_STATE_ROOT/swarm.sqlite3")" = "preserve-on-unknown" ]
+rm "$HOME/restore-state-unreadable"
+# A failed restored API must roll back and verify the previous database.
+: > "$HOME/restore-health-fails"
+rollback_report=$("$package" restore "$HOME/hive-backup.sqlite3" 2>&1 && exit 1 || true)
+case "$rollback_report" in *"Previous database restored and API health verified"*) :;; *) echo "$rollback_report" >&2; exit 1;; esac
+[ "$(cat "$SWARM_STATE_ROOT/swarm.sqlite3")" = "preserve-on-unknown" ]
+# Refusing to stop during rollback must not overwrite a still-running database.
+: > "$HOME/restore-health-fails"
+: > "$HOME/restore-block-rollback"
+rollback_report=$("$package" restore "$HOME/hive-backup.sqlite3" 2>&1 && exit 1 || true)
+case "$rollback_report" in *"RESTORE ROLLBACK INCOMPLETE"*) :;; *) echo "$rollback_report" >&2; exit 1;; esac
+[ "$(cat "$SWARM_STATE_ROOT/swarm.sqlite3")" = "restored-database" ]
+rm "$HOME/restore-block-rollback" "$HOME/restore-stop-refused"
 grep -q '^--user stop swarm-api.service$' "$HOME/systemctl.log"
 grep -q '^--user start swarm-api.service$' "$HOME/systemctl.log"
 if grep -q 'swarm-terminal-host.service' "$HOME/systemctl.log"; then

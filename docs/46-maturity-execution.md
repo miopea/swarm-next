@@ -6,6 +6,22 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P5 / REC-02: verify restore rollback instead of suppressing failures
+
+- Restore and its failure rollback now require a successful API stop plus an
+  explicit inactive/failed service state. Unknown state cannot authorize writes.
+- Rollback stages the saved database and atomically renames the complete file;
+  copy/rename failures do not lead to an API restart over a partial copy. The
+  rollback reports success only after API health passes. Otherwise it reports
+  incomplete recovery and the retained snapshot path; terminal host is untouched.
+- Isolated WSL package lifecycle smoke passed. Added unknown-state refusal,
+  restored-API health failure with successful verified rollback, and refused API
+  stop during rollback, proving the running database was not overwritten and
+  incomplete recovery was reported. Existing source/partial-download/retention
+  cases also passed. This uses fake services/files, not a live SQLite drill.
+- Corruption quarantine, API-unavailable restore and scheduled backup policy
+  remain open. No live service changes, push, deployment or release.
+
 ### P5 / REC-02: protect restore source and rollback admission
 
 - Package restore verified the selected backup directly through a CLI that may

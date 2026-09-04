@@ -58,6 +58,13 @@ and prints its path, keeping the current pre-restore snapshot plus the two newes
 other managed pre-restore snapshots. Manual backups are outside this retention.
 Failed restores retain their recovery snapshot rather than pruning evidence.
 
+Before replacement or rollback, the package requires a successful API stop and
+an explicit inactive/failed ActiveState reading; missing or unreadable state
+refuses database replacement. Rollback stages a complete replacement before
+renaming it, restarts only the API, and verifies health. An incomplete rollback
+is reported as such with the retained recovery path, not hidden behind ignored
+command failures. No terminal-host stop is authorized by this recovery path.
+
 This does not yet make corrupt/offline databases restorable: acquiring the
 pre-restore snapshot still requires the API. That separate REC-02 gap must not
 be confused with the source-preservation and rollback-admission safeguards here.
