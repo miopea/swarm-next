@@ -143,7 +143,14 @@ pub(super) async fn stop(
     headers: HeaderMap,
     Path(session_id): Path<String>,
 ) -> Result<Json<HostResponse>, ApiError> {
+    crate::authorize(&state, &headers)?;
+    let _guard = state.worker_lifecycle.lock().await;
     let session_id = parse_session_id(&session_id)?;
+    if let Some(store) = &state.task_store {
+        store
+            .cancel_session_revival(session_id)
+            .map_err(|error| task_store_error(&error))?;
+    }
     let response = authorized_request(&state, &headers, HostRequest::Stop { session_id }).await?;
     if let Some(store) = &state.task_store {
         store

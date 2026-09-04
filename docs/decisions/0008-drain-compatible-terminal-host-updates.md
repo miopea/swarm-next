@@ -44,6 +44,21 @@ Descriptor handoff remains an allowed future optimization. It requires a
 separate ADR and must prove child supervision, signal routing, rollback,
 duplicate-reader exclusion, and no missing/duplicate terminal bytes.
 
+## Durable restart promises (maturity)
+
+Record the loaded workers owed a restart before stopping them. Keep at most 256
+promises, one per worker; overflow fails the recording transaction before
+maintenance may stop workers. Read at most 256 per pass. Elapsed time is not
+cancellation: Night Watch can defer an experimental provider overnight. Explicit
+Sleep/Stop or archive cancels its promise; maintenance session release does not.
+Successful revival or a surfaced definitive failure settles it. Unknown start
+outcomes must not be blindly retried.
+
+Immediate and supervisor revival share lifecycle-locked admission that rechecks
+the exact promise and provider policy. Policy holds retain the promise without
+becoming recovery failures. No running worker is stopped to enforce admission.
+Presence changes after admission and crash ambiguity remain separate recovery work.
+
 ## Consequences
 
 - Normal application updates preserve every worker immediately.

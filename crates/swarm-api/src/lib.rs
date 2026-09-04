@@ -159,7 +159,6 @@ const WORKER_RECOVERY_STABILITY_SECONDS: i64 = 5 * 60;
 /// revival. Long enough to outlast a slow engine swap and an API restart,
 /// short enough that it cannot wake workers the operator later chose to
 /// leave asleep.
-pub(crate) const WORKER_REVIVAL_INTENT_MAX_AGE_SECONDS: i64 = 15 * 60;
 const ASSIGNED_READY_START_GRACE_SECONDS: i64 = 5 * 60;
 /// How long finished work may sit in review before Queen is told it cannot be
 /// closed. Longer than the start grace on purpose: a worker recording its claim
@@ -1254,9 +1253,7 @@ impl AppState {
         let Ok(store) = task_store(self) else {
             return;
         };
-        let owed = match store
-            .worker_revival_intents(unix_timestamp(), WORKER_REVIVAL_INTENT_MAX_AGE_SECONDS)
-        {
+        let owed = match store.worker_revival_intents() {
             Ok(owed) => owed,
             Err(error) => {
                 tracing::warn!(message = %error, "workers owed a return could not be read");
@@ -1279,22 +1276,30 @@ impl AppState {
             Err(_) => return,
         }
         for worker_id in owed {
-            let already_running = store
-                .get_worker_profile(worker_id)
-                .is_ok_and(|profile| profile.active_session_id.is_some());
-            if !already_running
-                && let Err(error) =
-                    worker_runtime::start_worker_process(self, worker_id, TerminalSize::default())
+            let Ok(profile) = store.get_worker_profile(worker_id) else {
+                continue;
+            };
+            let already_running = profile.active_session_id.is_some();
+            if !already_running && !worker_runtime::automation_admitted(self, profile.provider) {
+                continue;
+            }
+            if !already_running {
+                let result =
+                    worker_runtime::revive_worker_process(self, worker_id, TerminalSize::default())
+                        .await;
+                if matches!(result, Ok(None)) {
+                    continue;
+                }
+                if let Err(error) = result {
+                    // The intent is cleared either way. The roster shows the error
+                    // where the operator can act on it, which is a better answer
+                    // than starting the same worker every half minute in silence.
+                    self.worker_errors
+                        .write()
                         .await
-            {
-                // The intent is cleared either way. The roster shows the error
-                // where the operator can act on it, which is a better answer
-                // than starting the same worker every half minute in silence.
-                self.worker_errors
-                    .write()
-                    .await
-                    .insert(worker_id, error.message.clone());
-                tracing::warn!(worker_id = %worker_id, message = %error.message, "worker owed a return after a worker-engine replacement could not be started");
+                        .insert(worker_id, error.message.clone());
+                    tracing::warn!(worker_id = %worker_id, message = %error.message, "worker owed a return after a worker-engine replacement could not be started");
+                }
             }
             let _ = store.clear_worker_revival_intent(worker_id);
         }
@@ -16353,12 +16358,7 @@ mod tests {
         // The worker was stopped, and who it was survived the request that
         // stopped it, so the supervisor can still bring it back.
         assert!(!session.is_running().unwrap());
-        assert_eq!(
-            store
-                .worker_revival_intents(unix_timestamp(), WORKER_REVIVAL_INTENT_MAX_AGE_SECONDS)
-                .unwrap(),
-            vec![worker.id]
-        );
+        assert_eq!(store.worker_revival_intents().unwrap(), vec![worker.id]);
 
         server_task.abort();
         let _ = server_task.await;

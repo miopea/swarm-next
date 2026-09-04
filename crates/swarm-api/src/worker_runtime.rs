@@ -85,6 +85,39 @@ pub(super) async fn start_worker_process(
     size: TerminalSize,
 ) -> Result<crate::WorkerView, ApiError> {
     let _guard = state.worker_lifecycle.lock().await;
+    start_worker_process_unlocked(state, worker_id, size).await
+}
+
+/// None means cancelled or policy-deferred, not a failed recovery attempt.
+pub(super) async fn revive_worker_process(
+    state: &AppState,
+    worker_id: WorkerId,
+    size: TerminalSize,
+) -> Result<Option<crate::WorkerView>, ApiError> {
+    let _guard = state.worker_lifecycle.lock().await;
+    let store = task_store(state)?;
+    if !store
+        .worker_revival_pending(worker_id)
+        .map_err(|error| task_store_error(&error))?
+    {
+        return Ok(None);
+    }
+    let profile = store
+        .get_worker_profile(worker_id)
+        .map_err(|error| task_store_error(&error))?;
+    if !automation_admitted(state, profile.provider) {
+        return Ok(None);
+    }
+    start_worker_process_unlocked(state, worker_id, size)
+        .await
+        .map(Some)
+}
+
+async fn start_worker_process_unlocked(
+    state: &AppState,
+    worker_id: WorkerId,
+    size: TerminalSize,
+) -> Result<crate::WorkerView, ApiError> {
     let live = reconcile_worker_bindings_unlocked(state).await?;
     let profile = task_store(state)?
         .get_worker_profile(worker_id)
@@ -582,6 +615,46 @@ async fn reconcile_worker_bindings_unlocked(state: &AppState) -> Result<LiveSess
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn revival_rechecks_cancellation_and_policy_before_host_contact() {
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Experimental", ProviderKind::Gemini, "/workspace", false, 1)
+            .unwrap();
+        let state = AppState::default().with_task_store(store.clone());
+        store
+            .record_worker_revival_intents(&[worker.id], 1)
+            .unwrap();
+        store
+            .set_manual_presence(
+                Some(swarm_domain::PresenceMode::NightWatch),
+                crate::unix_timestamp(),
+            )
+            .unwrap();
+        assert!(
+            revive_worker_process(&state, worker.id, TerminalSize::default())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(store.worker_revival_pending(worker.id).unwrap());
+        assert!(state.worker_errors.read().await.is_empty());
+        assert!(state.worker_recovery_attempts.read().await.is_empty());
+        store
+            .set_manual_presence(
+                Some(swarm_domain::PresenceMode::AtHive),
+                crate::unix_timestamp(),
+            )
+            .unwrap();
+        store.clear_worker_revival_intent(worker.id).unwrap();
+        assert!(
+            revive_worker_process(&state, worker.id, TerminalSize::default())
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
 
     /// Builds the start request for a worker whose workspace is `workspace`,
     /// with `root` as the only configured root, and reports whether the

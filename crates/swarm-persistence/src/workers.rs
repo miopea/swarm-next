@@ -766,6 +766,10 @@ impl TaskStore {
             params![worker_id.to_string(), archived_name],
         )?;
         transaction.execute(
+            "DELETE FROM worker_revival_intents WHERE worker_id = ?1",
+            [worker_id.to_string()],
+        )?;
+        transaction.execute(
             "DELETE FROM worker_agent_credentials WHERE worker_id = ?1",
             [worker_id.to_string()],
         )?;
@@ -1799,41 +1803,65 @@ impl TaskStore {
                 params![worker_id.to_string(), now],
             )?;
         }
+        let pending: i64 =
+            transaction.query_row("SELECT COUNT(*) FROM worker_revival_intents", [], |row| {
+                row.get(0)
+            })?;
+        if pending > 256 {
+            return Err(TaskStoreError::IntegrityFailure(
+                "worker restart queue is full; maintenance must wait before stopping workers"
+                    .into(),
+            ));
+        }
         transaction.commit()?;
         Ok(())
     }
 
-    /// The workers still owed a revival, discarding any older than `max_age_seconds`.
-    ///
-    /// Ageing them out matters: an intent that outlives the maintenance it
-    /// belongs to would wake workers the operator has since chosen to leave
-    /// asleep.
+    /// One bounded page of workers still owed a revival. Only explicit lifecycle
+    /// actions cancel the promise; time spent deferred cannot erase it.
     ///
     /// # Errors
     /// Returns an error when persistence is unavailable.
-    pub fn worker_revival_intents(
-        &self,
-        now: i64,
-        max_age_seconds: i64,
-    ) -> Result<Vec<WorkerId>, TaskStoreError> {
-        let mut connection = self.connection()?;
-        let transaction = connection.transaction()?;
-        transaction.execute(
-            "DELETE FROM worker_revival_intents WHERE recorded_at + ?2 <= ?1",
-            params![now, max_age_seconds],
-        )?;
-        let intents = transaction
+    pub fn worker_revival_intents(&self) -> Result<Vec<WorkerId>, TaskStoreError> {
+        let connection = self.connection()?;
+        let intents = connection
             .prepare(
                 "SELECT worker_id FROM worker_revival_intents
-                 ORDER BY recorded_at, worker_id",
+                 ORDER BY recorded_at, worker_id LIMIT 256",
             )?
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<Result<Vec<_>, _>>()?;
-        transaction.commit()?;
         Ok(intents
             .into_iter()
             .filter_map(|id| WorkerId::from_str(&id).ok())
             .collect())
+    }
+
+    /// Whether the exact worker still has a promised restart.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn worker_revival_pending(&self, worker_id: WorkerId) -> Result<bool, TaskStoreError> {
+        Ok(self.connection()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM worker_revival_intents WHERE worker_id = ?1)",
+            [worker_id.to_string()],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// Explicit terminal Stop cancels the owning worker's promised restart.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn cancel_session_revival(
+        &self,
+        session_id: WorkerSessionId,
+    ) -> Result<(), TaskStoreError> {
+        self.connection()?.execute(
+            "DELETE FROM worker_revival_intents WHERE worker_id IN (SELECT worker_id FROM worker_sessions WHERE session_id = ?1)",
+            [session_id.to_string()],
+        )?;
+        Ok(())
     }
 
     /// Forgets one revival intent, whether it was honoured or refused.
@@ -3240,21 +3268,59 @@ mod tests {
             .record_worker_revival_intents(&[first.id, second.id], 1_000)
             .unwrap();
         assert_eq!(
-            store.worker_revival_intents(1_100, 900).unwrap(),
+            store.worker_revival_intents().unwrap(),
             vec![first.id, second.id]
         );
 
         // Honouring one leaves the other owed.
         store.clear_worker_revival_intent(first.id).unwrap();
-        assert_eq!(
-            store.worker_revival_intents(1_100, 900).unwrap(),
-            vec![second.id]
-        );
+        assert_eq!(store.worker_revival_intents().unwrap(), vec![second.id]);
 
-        // An intent that outlives its maintenance is dropped rather than
-        // waking a worker the operator has since left asleep.
-        assert!(store.worker_revival_intents(1_901, 900).unwrap().is_empty());
-        assert!(store.worker_revival_intents(1_902, 900).unwrap().is_empty());
+        // Even ancient intent is retained until an explicit cancellation.
+        assert!(store.worker_revival_pending(second.id).unwrap());
+        store.archive_worker_profile(second.id).unwrap();
+        assert!(store.worker_revival_intents().unwrap().is_empty());
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(first.id, session).unwrap();
+        store.record_worker_revival_intents(&[first.id], 1).unwrap();
+        store.release_worker_session(session).unwrap();
+        assert!(
+            store.worker_revival_pending(first.id).unwrap(),
+            "maintenance release is not cancellation"
+        );
+        store.cancel_session_revival(session).unwrap();
+        assert!(!store.worker_revival_pending(first.id).unwrap());
+    }
+
+    #[test]
+    fn workers_owed_a_return_refuse_overflow_atomically() {
+        let store = TaskStore::in_memory().unwrap();
+        let workers = (0..257)
+            .map(|index| {
+                store
+                    .create_worker(
+                        &format!("Worker {index}"),
+                        ProviderKind::ClaudeCode,
+                        "/workspace",
+                        false,
+                        index,
+                    )
+                    .unwrap()
+                    .id
+            })
+            .collect::<Vec<_>>();
+        assert!(store.record_worker_revival_intents(&workers, 1).is_err());
+        assert!(store.worker_revival_intents().unwrap().is_empty());
+        store
+            .record_worker_revival_intents(&workers[..256], 1)
+            .unwrap();
+        assert_eq!(store.worker_revival_intents().unwrap().len(), 256);
+        assert!(
+            store
+                .record_worker_revival_intents(&workers[256..], 2)
+                .is_err()
+        );
+        assert_eq!(store.worker_revival_intents().unwrap().len(), 256);
     }
 
     #[test]

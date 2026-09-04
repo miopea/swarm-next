@@ -714,9 +714,11 @@ async fn revive_loaded_workers(state: &AppState, worker_ids: &[swarm_domain::Wor
             }
             continue;
         }
-        match worker_runtime::start_worker_process(state, *worker_id, TerminalSize::default()).await
+        match worker_runtime::revive_worker_process(state, *worker_id, TerminalSize::default())
+            .await
         {
-            Ok(_) => {
+            Ok(None) => {}
+            Ok(Some(_)) => {
                 restarted += 1;
                 if let Ok(store) = task_store(state) {
                     let _ = store.clear_worker_revival_intent(*worker_id);
@@ -729,6 +731,11 @@ async fn revive_loaded_workers(state: &AppState, worker_ids: &[swarm_domain::Wor
                     .await
                     .insert(*worker_id, error.message.clone());
                 tracing::warn!(worker_id = %worker_id, message = %error.message, "worker could not be revived after the worker engine was replaced");
+                // The start was attempted: preserve its error, not a promise
+                // that could replay an ambiguous process creation.
+                if let Ok(store) = task_store(state) {
+                    let _ = store.clear_worker_revival_intent(*worker_id);
+                }
             }
         }
     }

@@ -778,6 +778,24 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   remain to be reconciled. No running work was stopped or modified.
 - No schema change, push, deployment, release, or live acceptance claim.
 
+### P5i: restart promises survive policy holds
+
+- Removed timer-only deletion of maintenance restart intents. Admission is
+  bounded to 256 durable worker promises and reads at most that many; overflow
+  rolls back before maintenance is allowed to stop the recorded batch.
+- Sleep/Stop and archive explicitly cancel revival; ordinary maintenance session
+  release preserves it. Immediate and supervisor revival share a lifecycle-locked
+  check of the pending intent and provider policy. Deferred starts retain their
+  promise, while attempted failures keep the error rather than silently retrying.
+- Two focused persistence tests passed for retention/cancellation and atomic
+  capacity failure; strict persistence Clippy passed. Strict Linux-target API
+  all-target/all-feature Clippy passed, including compilation of a no-host test
+  for policy deferral and cancellation. Linux integration tests were not executed.
+- No schema migration. Restart promises created by older builds now survive age;
+  no live database was opened. Presence changes after admission, durable attempt
+  identity across process crashes, and real maintenance recovery acceptance remain
+  open. No engine update, live restart, push, deployment, or release performed.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

@@ -1060,6 +1060,9 @@ pub(super) async fn stand_worker_down(
     let profile = task_store(state)?
         .get_worker_profile(worker_id)
         .map_err(|error| task_store_error(&error))?;
+    task_store(state)?
+        .clear_worker_revival_intent(worker_id)
+        .map_err(|error| task_store_error(&error))?;
     if let Some(session_id) = profile.active_session_id {
         request_host(state, HostRequest::Stop { session_id }).await?;
         task_store(state)?
