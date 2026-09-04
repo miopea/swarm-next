@@ -128,6 +128,11 @@ pub struct TaskMessage {
     /// live session it demonstrably reached. Read it with `delivered_at`, not
     /// instead of it.
     pub reached_the_current_session: bool,
+    /// Durable transport state, not evidence of provider comprehension.
+    pub delivery_state: String,
+    /// Identity needed for fenced reconciliation of an uncertain attempt.
+    pub delivery_claim_id: Option<String>,
+    pub delivery_resolution_reason: Option<String>,
 }
 
 /// The largest message the channel accepts.
@@ -169,7 +174,10 @@ pub(super) const MESSAGE_COLUMNS: &str =
             m.delivered_session_id,
             EXISTS(SELECT 1 FROM worker_sessions live
                    WHERE live.session_id = m.delivered_session_id
-                     AND live.ended_at IS NULL)";
+                     AND live.ended_at IS NULL),
+            (SELECT state FROM task_message_deliveries WHERE message_id = m.id),
+            (SELECT claim_id FROM task_message_deliveries WHERE message_id = m.id),
+            (SELECT resolution_reason FROM task_message_deliveries WHERE message_id = m.id)";
 
 impl TaskStore {
     /// Records a message from Queen to a worker, or from a worker to Queen.
@@ -185,8 +193,11 @@ impl TaskStore {
         body: &str,
         now: i64,
     ) -> Result<TaskMessage, TaskStoreError> {
-        let connection = self.connection()?;
-        Self::insert_task_message(&connection, task_id, from, to, body, now)
+        let mut connection = self.connection()?;
+        let tx = connection.transaction()?;
+        let message = Self::insert_task_message(&tx, task_id, from, to, body, now)?;
+        tx.commit()?;
+        Ok(message)
     }
 
     /// Shared insertion boundary for messages that accompany a domain change.
@@ -228,6 +239,15 @@ impl TaskStore {
         if !exists {
             return Err(TaskStoreError::NotFound);
         }
+        let pending: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM task_message_deliveries WHERE state IN
+                ('queued','dispatching','uncertain','rejected')",
+            [],
+            |row| row.get(0),
+        )?;
+        if pending >= i64::try_from(crate::TASK_MESSAGE_QUEUE_LIMIT).unwrap_or(i64::MAX) {
+            return Err(TaskStoreError::TaskMessageQueueFull);
+        }
         let id = Uuid::now_v7().to_string();
         connection.execute(
             "INSERT INTO task_messages
@@ -245,6 +265,10 @@ impl TaskStore {
                 now,
             ],
         )?;
+        connection.execute(
+            "INSERT INTO task_message_deliveries(message_id, state, updated_at) VALUES (?1, 'queued', ?2)",
+            params![id, now],
+        )?;
         Ok(TaskMessage {
             id,
             task_id,
@@ -257,6 +281,9 @@ impl TaskStore {
             delivered_at: None,
             delivered_session_id: None,
             reached_the_current_session: false,
+            delivery_state: "queued".into(),
+            delivery_claim_id: None,
+            delivery_resolution_reason: None,
         })
     }
 
@@ -290,7 +317,8 @@ impl TaskStore {
         let sql = format!(
             "SELECT {MESSAGE_COLUMNS}
              FROM task_messages m
-             WHERE m.recipient_worker_id = ?1 AND m.delivered_at IS NULL
+             JOIN task_message_deliveries d ON d.message_id = m.id
+             WHERE m.recipient_worker_id = ?1 AND d.state = 'queued'
              ORDER BY m.created_at, m.id"
         );
         let mut statement = connection.prepare(&sql)?;
@@ -309,18 +337,26 @@ impl TaskStore {
     ///
     /// # Errors
     /// Returns an error when persistence is unavailable.
+    #[cfg(test)]
     pub fn mark_task_message_delivered(
         &self,
         id: &str,
         session_id: swarm_domain::WorkerSessionId,
         now: i64,
     ) -> Result<(), TaskStoreError> {
-        let connection = self.connection()?;
-        connection.execute(
+        let mut connection = self.connection()?;
+        let tx = connection.transaction()?;
+        tx.execute(
             "UPDATE task_messages SET delivered_at = ?2, delivered_session_id = ?3
              WHERE id = ?1 AND delivered_at IS NULL",
             params![id, now, session_id.to_string()],
         )?;
+        tx.execute(
+            "UPDATE task_message_deliveries SET state = 'delivered', updated_at = ?2
+            WHERE message_id = ?1 AND state = 'queued'",
+            params![id, now],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -366,8 +402,14 @@ impl TaskStore {
     pub fn pending_task_message_dispatches(
         &self,
     ) -> Result<Vec<TaskMessageDispatch>, TaskStoreError> {
-        use std::str::FromStr;
         let connection = self.connection()?;
+        Self::read_pending_task_message_dispatches(&connection)
+    }
+
+    pub(super) fn read_pending_task_message_dispatches(
+        connection: &rusqlite::Connection,
+    ) -> Result<Vec<TaskMessageDispatch>, TaskStoreError> {
+        use std::str::FromStr;
         // BOTH DIRECTIONS. This filtered `m.recipient = 'worker'`, so every
         // worker-to-Queen message was recorded and never delivered — the
         // channel was one-way while its tool told the worker "Queen sees it on
@@ -384,14 +426,19 @@ impl TaskStore {
             "SELECT m.id, m.task_id, task.title, session.session_id, m.sender,
                     COALESCE(sender.name, 'Queen'), m.body
              FROM task_messages m
+             JOIN task_message_deliveries delivery ON delivery.message_id = m.id
              JOIN tasks task ON task.id = m.task_id AND task.removed_at IS NULL
              JOIN worker_profiles recipient
                   ON (m.recipient = 'worker' AND recipient.id = m.recipient_worker_id)
                   OR (m.recipient = 'queen' AND recipient.role = 'queen')
              {live_session}
              LEFT JOIN worker_profiles sender ON sender.id = m.sender_worker_id
-             WHERE m.delivered_at IS NULL
-             ORDER BY m.created_at, m.id",
+             WHERE m.delivered_at IS NULL AND delivery.state = 'queued'
+               AND NOT EXISTS (SELECT 1 FROM task_message_deliveries active
+                   WHERE active.state = 'dispatching' AND active.session_id = session.session_id)
+             ORDER BY ROW_NUMBER() OVER (PARTITION BY recipient.id ORDER BY m.created_at, m.id),
+                 MIN(delivery.attempts) OVER (PARTITION BY recipient.id), m.created_at, m.id LIMIT {limit}",
+            limit = crate::TASK_MESSAGE_BATCH_LIMIT,
             live_session = LIVE_RECIPIENT_SESSION_JOIN.replace("{recipient}", "recipient.id"),
         );
         let mut statement = connection.prepare(&sql)?;
@@ -488,6 +535,9 @@ pub(super) fn message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task
             .transpose()
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
         reached_the_current_session: row.get(10)?,
+        delivery_state: row.get(11)?,
+        delivery_claim_id: row.get(12)?,
+        delivery_resolution_reason: row.get(13)?,
     })
 }
 

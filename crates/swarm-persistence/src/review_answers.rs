@@ -18,7 +18,7 @@ pub(super) fn invalidate_pending_request(
     task_id: TaskId,
     retained_worker: Option<WorkerId>,
 ) -> rusqlite::Result<()> {
-    tx.execute(
+    let changed = tx.execute(
         "UPDATE task_returned_reviews SET request_worker_id = NULL
          WHERE task_id = ?1 AND answered_at IS NULL AND request_message_id IS NOT NULL
            AND (?2 IS NULL OR request_worker_id != ?2)",
@@ -27,6 +27,9 @@ pub(super) fn invalidate_pending_request(
             retained_worker.map(|id| id.to_string())
         ],
     )?;
+    if changed > 0 {
+        crate::message_delivery::cancel_queued_review(tx, task_id)?;
+    }
     Ok(())
 }
 
@@ -34,7 +37,8 @@ pub(super) fn invalidate_pending_request(
 #[cfg(test)]
 pub(super) fn remove_schema_for_test(connection: &rusqlite::Connection) -> rusqlite::Result<()> {
     connection.execute_batch(
-        "ALTER TABLE task_returned_reviews DROP COLUMN request_message_id;
+        "DROP TABLE task_message_deliveries;
+        ALTER TABLE task_returned_reviews DROP COLUMN request_message_id;
         ALTER TABLE task_returned_reviews DROP COLUMN request_worker_id;
         ALTER TABLE task_returned_reviews DROP COLUMN answer_message_id;",
     )
@@ -154,6 +158,9 @@ impl TaskStore {
             if state != "review" || answered_at.is_some() {
                 return Err(TaskStoreError::InvalidReviewReply);
             }
+        }
+        if reply_to.is_some() {
+            crate::message_delivery::cancel_queued_review(&tx, task_id)?;
         }
         let message = Self::insert_task_message(
             &tx,

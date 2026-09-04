@@ -22,6 +22,8 @@ mod jira;
 mod jira_oauth;
 mod maintenance;
 mod mcp_oauth;
+#[cfg(test)]
+mod message_delivery_tests;
 mod microsoft_oauth;
 mod migration;
 mod notifications;
@@ -2131,72 +2133,40 @@ impl AppState {
     }
 
     async fn deliver_task_messages(&self, store: &TaskStore, client: &HostClient) {
-        let pending = match store.pending_task_message_dispatches() {
+        let pending = match store.claim_task_messages(unix_timestamp()) {
             Ok(pending) => pending,
             Err(error) => {
-                tracing::warn!(message = %error, "task message queue could not be read");
+                tracing::warn!(message = %error, "task message queue could not be claimed");
                 return;
             }
         };
-        if pending.is_empty() {
-            return;
-        }
         let settled = coordination_delivery::submit_grouped_per_terminal(
             store,
             client,
             pending,
-            |dispatch| dispatch.session_id,
-            coordination_delivery::task_message_message,
+            |claim| claim.message.session_id,
+            |claims| {
+                coordination_delivery::task_message_message(
+                    &claims
+                        .iter()
+                        .map(|claim| claim.message.clone())
+                        .collect::<Vec<_>>(),
+                )
+            },
         )
         .await;
         for (group, submission) in settled {
-            match submission {
-                Ok(TerminalSubmission::Acknowledged) => {
-                    for dispatch in group {
-                        // THE SESSION IT WENT TO, not just when. A delivery
-                        // that records only a timestamp cannot be told apart
-                        // from one written into a session that has since
-                        // exited, which is what left a sender believing a
-                        // request had landed when nothing running had been
-                        // told.
-                        if let Err(error) = store.mark_task_message_delivered(
-                            &dispatch.message_id,
-                            dispatch.session_id,
-                            unix_timestamp(),
-                        ) {
-                            tracing::warn!(message = %error, message_id = %dispatch.message_id, "a delivered message could not be recorded as delivered");
-                        }
-                    }
-                }
-                // NOT an error and NOT recorded as delivered. The worker is
-                // mid-turn, which is the case this whole path exists to
-                // respect; it stays queued for the next pass.
-                Ok(TerminalSubmission::Deferred(reason)) => {
-                    tracing::info!(
-                        ?reason,
-                        count = group.len(),
-                        "messages are held at this worker's prompt"
-                    );
-                }
-                Ok(TerminalSubmission::Rejected { code, message }) => {
-                    tracing::warn!(%code, %message, count = group.len(), "task messages were rejected by terminal host");
-                }
-                // NOT marked delivered, deliberately, so it is tried again.
-                //
-                // Uncertain means the write may or may not have landed. The two
-                // ways to be wrong are a duplicate question and a lost one, and
-                // they are not equally bad: a worker reading the same question
-                // twice is untidy, while silence is the one failure this
-                // channel exists to remove — an undelivered instruction is
-                // indistinguishable from none.
-                Ok(TerminalSubmission::Uncertain) => {
-                    tracing::info!(
-                        count = group.len(),
-                        "task message delivery is uncertain; it stays queued and may arrive twice"
-                    );
-                }
-                Err(error) => {
-                    tracing::warn!(message = %error, count = group.len(), "task messages could not be delivered");
+            use swarm_persistence::TaskMessageResult;
+            let result = match submission {
+                Ok(TerminalSubmission::Acknowledged) => TaskMessageResult::Delivered,
+                Ok(TerminalSubmission::Deferred(_)) => TaskMessageResult::Deferred,
+                Ok(TerminalSubmission::Rejected { .. }) => TaskMessageResult::Rejected,
+                Ok(TerminalSubmission::Uncertain) | Err(_) => TaskMessageResult::Uncertain,
+            };
+            for claim in group {
+                if let Err(error) = store.finish_task_message(&claim, result, unix_timestamp()) {
+                    tracing::warn!(message = %error, message_id = %claim.message.message_id,
+                        "task message claim could not be settled; it must not be replayed");
                 }
             }
         }
@@ -2433,6 +2403,15 @@ impl AppState {
         self.task_store
             .as_ref()
             .map_or(Ok(0), TaskStore::recover_inflight_task_outcomes)
+    }
+    /// Makes interrupted message sends explicit before the dispatcher starts.
+    ///
+    /// # Errors
+    /// Returns database errors without replaying uncertain writes.
+    pub fn recover_task_messages(&self) -> Result<usize, TaskStoreError> {
+        self.task_store.as_ref().map_or(Ok(0), |store| {
+            store.recover_task_message_claims(unix_timestamp())
+        })
     }
     /// Makes crash-interrupted Queen automation explicit rather than replaying it.
     ///
@@ -8255,6 +8234,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::InvalidReviewReply => ApiError::new(
             StatusCode::CONFLICT,
             "review_reply_conflict",
+            error.to_string(),
+        ),
+        TaskStoreError::TaskMessageQueueFull => ApiError::new(
+            StatusCode::CONFLICT,
+            "task_message_queue_full",
             error.to_string(),
         ),
         TaskStoreError::InvalidTaskMessage { .. } => ApiError::new(

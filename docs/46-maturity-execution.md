@@ -6,6 +6,48 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: durable task-message ownership and Queen reconciliation
+
+- ADR 0067 / schema 134 adds a transactional message outbox, admission capped at
+  4,096 unresolved deliveries and claims capped at 16 per pass. Each claim names
+  its exact recipient session and immutable attempt identity. One batch per
+  terminal can be in flight; fair selection preserves each recipient's message
+  order and does not require time to advance before another recipient gets a turn.
+- The API now claims before sending. A definitive deferral returns the message
+  to queued; acknowledgement records delivery to the exact session. Rejection
+  and uncertain transport do not automatically repeat. API startup recovers
+  interrupted claims as uncertain. A late result cannot settle a newer claim.
+- Queen's attention tool exposes bounded delivery metadata and the total count.
+  New Queen-only `swarm_reconcile_task_message` uses the exact observed claim,
+  a recorded reason, and an explicit duplicate-risk retry choice. Resolving an
+  item does not fabricate terminal receipt, answer its review, or complete work.
+  Task history exposes transport state, claim identity, and the resolution reason.
+  Tool-surface revision 15 and its fingerprint require normal provider refresh.
+- Queues groups these exceptions under Queen. They do not inflate Needs You or
+  claim her prompt has stopped. Reconciliation removes the exception. No timer
+  escalates it to the operator; Queen owns the recovery judgment.
+- Reassignment, reissued review questions, leaving Review, and an exact answer
+  retrieved from history cancel an obsolete queued review question atomically.
+  Ordinary questions remain intact. Superseding an in-flight request cannot
+  recall bytes: its actual outcome remains recorded, and it cannot be retried.
+- Migration preserves known delivery records. The older implementation did not
+  store uncertain attempts, so historical ambiguity cannot be reconstructed.
+- Verification: 86 Linux persistence/review/messaging/migration/assignment tests
+  passed, including admission overflow, transactional rollback, same-timestamp
+  fairness, exclusive sessions, stale claims, and cancellation after an answer.
+  All 94 Linux API/MCP/coordination/reload-guard tests passed, including the real
+  dispatcher method against an absent terminal host and Queen-only reconciliation.
+  The initial API run correctly failed the old tool-schema fingerprint; revision
+  15 now carries the measured new fingerprint. Strict all-target/all-feature
+  Linux Clippy passed after removing a duplicated test insertion; formatting
+  and diff checks passed. Forty focused web tests and the production web build
+  passed; the existing terminal bundle-size warning remains.
+- Follow-up: notify control-feed waiters promptly after a settled message batch,
+  and verify the normal unattended Queen loop consumes these delivery exceptions.
+- Live provider receipt, overnight self-reconciliation, real-device behavior,
+  and API-replacement/crash acceptance remain open. No whole-app performance
+  improvement is claimed. No push, deployment, release, or worker interruption.
+
 ### P4: discover current review identity and keep ownership current
 
 - Task history now includes review_request with exact request/answer message IDs,

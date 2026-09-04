@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 14;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 15;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -401,9 +401,9 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 14;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 14. Update this and the revision together.
+/// The served surface as of revision 15. Update this and the revision together.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "edefa0288f0414e66db516e57113223236701effc4beafb125077a05fb4cdca9";
+    "99c19c82f110a4efa1288cdcff244a7aa6ce39543c172266a424f3719edeb35c";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -602,6 +602,7 @@ impl ServerHandler for AgentMcp {
             tools.extend([
                 list_workers_tool(),
                 list_coordination_attention_tool(),
+                reconcile_task_message_tool(),
                 assign_task_tool(),
                 approve_no_deployment_tool(),
                 retire_task_tool(),
@@ -677,6 +678,7 @@ impl ServerHandler for AgentMcp {
             "swarm_message_worker" => self.message_worker(arguments),
             "swarm_return_reviewed_work" => self.return_reviewed_work(arguments),
             "swarm_message_queen" => self.message_queen(arguments),
+            "swarm_reconcile_task_message" => self.reconcile_task_message(arguments),
             "swarm_reload_app" => self.reload_app(arguments).await,
             "swarm_approve_no_deployment" => self.approve_no_deployment(arguments),
             "swarm_retire_task" => self.retire_task(arguments),
@@ -719,6 +721,7 @@ impl ServerHandler for AgentMcp {
                                     "observed_at": item.observed_at,
                                     "age_seconds": item.age_seconds,
                                 })).collect::<Vec<_>>(),
+                                "task_message_deliveries": self.tasks.store().task_message_attention()?,
                                 // Briefings that are queued and not moving, and
                                 // what each is waiting on. A dispatch that is
                                 // never claimed is never attempted and so never
@@ -1688,14 +1691,32 @@ impl AgentMcp {
         structured(json!({
             "message_id": message.id,
             "task_id": input.task_id,
-            "status": if message.delivered_at.is_some() { "delivered" } else if reachable { "queued" } else { "queued_but_unreachable" },
+            "status": if message.delivery_state != "queued" { message.delivery_state.as_str() } else if reachable { "queued" } else { "queued_but_unreachable" },
             "next": if message.delivered_at.is_some() {
                 "This saved answer already has a delivery record; it was not queued again. Check swarm_read_task_history for the recipient session and whether it is still current."
+            } else if message.delivery_state != "queued" {
+                "This is the saved answer, not a new send. Inspect its delivery_state and delivery_claim_id in swarm_read_task_history. Queen reconciles uncertain or rejected deliveries explicitly; no automatic replay."
             } else if reachable {
                 "Queued, NOT delivered — this returns before delivery. Queen sees it when her terminal is next resting; it does not interrupt her. Delivery shows up as a delivered_at on the message in swarm_read_task_history."
             } else {
                 "Recorded, and NOTHING CAN DELIVER IT: no Queen session is open, so it is excluded from delivery rather than queued behind a busy terminal. It waits until one starts."
             },
+        }))
+    }
+
+    fn reconcile_task_message(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<ReconcileTaskMessageInput>(arguments)?;
+        let changed = self.tasks.reconcile_task_message(
+            self.principal,
+            &input.message_id,
+            &input.claim_id,
+            input.retry_may_duplicate,
+            &input.reason,
+            now_seconds(),
+        )?;
+        self.changed.notify_waiters();
+        structured(json!({ "changed": changed,
+            "status": if !changed { "stale_or_superseded" } else if input.retry_may_duplicate { "queued" } else { "resolved_without_delivery_claim" }
         }))
     }
 
@@ -2575,6 +2596,15 @@ struct MessageQueenInput {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReconcileTaskMessageInput {
+    message_id: String,
+    claim_id: String,
+    retry_may_duplicate: bool,
+    reason: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct ReadTaskHistoryInput {
     task_id: String,
     #[serde(default)]
@@ -3060,6 +3090,20 @@ fn list_coordination_attention_tool() -> Tool {
         "Queen only: list current deterministic coordination attention, including Ready work whose delivered brief did not start, Active work that is durably unchanged while its loaded worker is resting, and Active work whose worker exited. Recheck the current task, session, and next-move owner before acting. A queued briefing held for operator engagement or existing Active work is working as intended; do not interrupt it. blocked_by names earlier work holding up a queue, not permission to bypass it. Age alone is not a reason to escalate. Also lists FINISHED WORK NOTHING HAS SETTLED. The coordinator settles supported routine evidence without another Queen approval; you own remaining exceptions and judgments. Read task history, completion evidence, and messages before deciding. If a no-deployment claim needs judgment, use swarm_approve_no_deployment only after checking its basis. If evidence or an answer is missing, use swarm_return_reviewed_work with a specific request: the task stays in Review and the next move becomes the assigned worker's. Do not move reviewed work to Ready or Active to get attention. Work finished but waiting only to ship belongs in awaiting_release; you may create and assign a task to the owning worker to ship it, but this tool grants no deployment authority. Use swarm_message_worker for task-scoped questions to a running worker; delivery waits for a safe prompt. Try safe scoped recovery first and request operator judgment only when you cannot move the work within existing authority.",
         &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         true,
+    )
+}
+
+fn reconcile_task_message_tool() -> Tool {
+    tool(
+        "swarm_reconcile_task_message",
+        "Queen only: reconcile an uncertain or rejected task-message delivery from swarm_list_coordination_attention. First retrieve the exact message with swarm_read_task_history and establish whether further action is needed. Set retry_may_duplicate=false to resolve without claiming terminal receipt, or true only when a new submission is necessary and a possible duplicate is acceptable. Give the observed claim_id and a reason. Superseded review requests cannot be retried. This does not answer a review or complete work. Safe recovery is yours; ask the operator only if you cannot proceed within existing authority, never merely because a timer elapsed.",
+        &json!({ "type": "object", "properties": {
+            "message_id": { "type": "string", "format": "uuid" },
+            "claim_id": { "type": "string", "format": "uuid" },
+            "retry_may_duplicate": { "type": "boolean" },
+            "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }, "required": ["message_id", "claim_id", "retry_may_duplicate", "reason"], "additionalProperties": false }),
+        false,
     )
 }
 
@@ -3732,6 +3776,7 @@ mod tests {
         "swarm_transition_apiary_task",
         "swarm_list_coordination_attention",
         "swarm_finish_automation_run",
+        "swarm_reconcile_task_message",
         "swarm_assign_task",
         "swarm_list_jira_projects",
         // A reviewer's dissent is a reviewer's to record. A worker holding its
@@ -4914,6 +4959,71 @@ mod tests {
         assert_eq!(
             response["result"]["structuredContent"]["review_request"]["status"],
             expected
+        );
+    }
+
+    #[tokio::test]
+    async fn queen_reconciles_the_exact_uncertain_message_without_worker_authority() {
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let task = store
+            .create_task("Message recovery", "/workspace/petal")
+            .unwrap();
+        let message = store
+            .send_task_message(
+                task.id,
+                swarm_persistence::MessageEnd::queen(),
+                swarm_persistence::MessageEnd::worker(worker_id),
+                "Which SHA?",
+                10,
+            )
+            .unwrap();
+        let claim = store.claim_task_messages(11).unwrap().remove(0);
+        store
+            .finish_task_message(&claim, swarm_persistence::TaskMessageResult::Uncertain, 12)
+            .unwrap();
+        let attention = call_review_test_tool(
+            bridge.clone(),
+            &queen_token,
+            "swarm_list_coordination_attention",
+            json!({}),
+        )
+        .await;
+        assert_eq!(
+            attention["result"]["structuredContent"]["task_message_deliveries"]["total"],
+            1
+        );
+        let args = json!({"message_id": message.id, "claim_id": claim.claim_id,
+            "retry_may_duplicate": false, "reason": "Read the durable question; handled directly"});
+        let refused = call_review_test_tool(
+            bridge.clone(),
+            &worker_token,
+            "swarm_reconcile_task_message",
+            args.clone(),
+        )
+        .await;
+        assert_eq!(refused["result"]["isError"], true);
+        assert_eq!(store.task_message_attention().unwrap().total, 1);
+        let resolved = call_review_test_tool(
+            bridge.clone(),
+            &queen_token,
+            "swarm_reconcile_task_message",
+            args.clone(),
+        )
+        .await;
+        assert_eq!(resolved["result"]["structuredContent"]["changed"], true);
+        let stale =
+            call_review_test_tool(bridge, &queen_token, "swarm_reconcile_task_message", args).await;
+        assert_eq!(stale["result"]["structuredContent"]["changed"], false);
+        assert_eq!(store.task_message_attention().unwrap().total, 0);
+        assert!(
+            store.task_messages(task.id).unwrap()[0]
+                .delivered_at
+                .is_none()
         );
     }
 

@@ -385,6 +385,13 @@ fn recover_interrupted_deliveries(state: &AppState) -> Result<(), Box<dyn std::e
         );
     }
     let recovered_task_outcomes = state.recover_task_outcomes()?;
+    let recovered_task_messages = state.recover_task_messages()?;
+    if recovered_task_messages > 0 {
+        tracing::warn!(
+            recovered_task_messages,
+            "interrupted task messages await Queen reconciliation; not replayed"
+        );
+    }
     if recovered_task_outcomes > 0 {
         tracing::warn!(
             recovered_task_outcomes,

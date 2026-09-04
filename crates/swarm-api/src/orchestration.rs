@@ -289,7 +289,7 @@ fn held_deliveries(state: &Arc<AppState>) -> Result<Vec<HeldDeliveryResponse>, A
     let refusals = crate::task_store(state)?
         .standing_coordinator_refusals(crate::unix_timestamp(), HELD_DELIVERY_GRACE_SECONDS)
         .map_err(|error| task_store_error(&error))?;
-    Ok(refusals
+    let mut held: Vec<_> = refusals
         .into_iter()
         .map(|refusal| HeldDeliveryResponse {
             kind: refusal.kind,
@@ -300,7 +300,22 @@ fn held_deliveries(state: &Arc<AppState>) -> Result<Vec<HeldDeliveryResponse>, A
             last_observed_at: refusal.last_observed_at,
             observations: refusal.observations,
         })
-        .collect())
+        .collect();
+    let messages = crate::task_store(state)?
+        .task_message_attention()
+        .map_err(|error| task_store_error(&error))?;
+    held.extend(messages.items.into_iter().map(|message| HeldDeliveryResponse {
+        kind: "task_message_reconciliation".into(),
+        subject: message.message_id.clone(),
+        worker_name: Some("Queen".into()),
+        reason: format!("{}: {} delivery. Queen must inspect task {} and message {} before resolving or explicitly retrying. No automatic replay.{}",
+            message.task_title, message.state, message.task_id, message.message_id,
+            if message.superseded { " This review request is superseded and cannot be retried." } else { "" }),
+        first_observed_at: message.updated_at,
+        last_observed_at: message.updated_at,
+        observations: 1,
+    }));
+    Ok(held)
 }
 
 pub(super) async fn queen_autonomy_policy(

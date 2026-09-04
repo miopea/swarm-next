@@ -1281,6 +1281,7 @@ impl TaskStore {
         let worker_id = worker_id.ok_or(TaskStoreError::WorkerNotFound)?;
         let worker_id = WorkerId::from_str(&worker_id)
             .map_err(|_| TaskStoreError::IntegrityFailure("invalid review assignee".to_owned()))?;
+        crate::message_delivery::cancel_queued_review(&transaction, task_id)?;
         transaction.execute(
             "INSERT INTO task_returned_reviews (task_id, request, returned_at, answered_at)
              VALUES (?1, ?2, ?3, NULL)

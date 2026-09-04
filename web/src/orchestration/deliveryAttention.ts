@@ -4,5 +4,6 @@ import type { HeldDelivery } from "../api";
 export function isQueuedDeliveryObservation(held: HeldDelivery): boolean {
   return held.kind === "delivery_held_open_prompt"
     || held.kind === "delivery_held_unsent_text"
+    || held.kind === "task_message_reconciliation"
     || held.kind === "delivery_held";
 }

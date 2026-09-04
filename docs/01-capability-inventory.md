@@ -53,7 +53,7 @@ Decision meanings:
 | Capability | Decision | Rationale and intended direction |
 |---|---|---|
 | Agent-facing MCP coordination | Redesign | Implemented task and decision foundation: scoped per-worker credentials, role-specific discovery, shared application services, and a typed operator inbox. Add guarded Queen delivery rather than a broad legacy catalog. |
-| Inter-worker messages | Redesign | Preserve findings, blockers, and directed handoffs; merge with decision/activity model where possible. |
+| Inter-worker messages | Redesign | Queen-mediated task messages use the bounded durable outbox in ADR 0067: exact claims, no automatic replay of uncertain writes, explicit Queen reconciliation, and cancellation of obsolete queued review questions without erasing history. Queues owns delivery exceptions, not timer-driven Needs You. Live provider and crash/rolling-update acceptance remain open. |
 | File ownership claims | Investigate | Modern agents and worktrees may reduce value; evaluate actual conflict prevention evidence. |
 | Cross-project tasks | Investigate | Validate use before adding cross-workspace complexity. |
 | Worker slash commands and injected skills | Redesign | Minimize; prefer stable MCP/application protocol where providers support it. |

@@ -2295,6 +2295,31 @@ impl TaskService {
         )?)
     }
 
+    /// Queen reconciles a specific uncertain delivery after inspecting its content.
+    ///
+    /// # Errors
+    /// Denies workers and propagates persistence or reason validation errors.
+    pub fn reconcile_task_message(
+        &self,
+        principal: AgentPrincipal,
+        message_id: &str,
+        claim_id: &str,
+        retry_may_duplicate: bool,
+        reason: &str,
+        now: i64,
+    ) -> Result<bool, ApplicationError> {
+        if principal.role != WorkerRole::Queen {
+            return Err(ApplicationError::NotAuthorized);
+        }
+        Ok(self.store.reconcile_task_message(
+            message_id,
+            claim_id,
+            retry_may_duplicate,
+            reason,
+            now,
+        )?)
+    }
+
     /// Reads the current review request for Queen or its assigned worker.
     ///
     /// # Errors

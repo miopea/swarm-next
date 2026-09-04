@@ -86,9 +86,14 @@ pub use migration::{
 };
 mod conversation_recovery;
 mod dogfood_evidence;
+mod message_delivery;
 mod operator_statements;
 mod operator_submissions;
 mod review_answers;
+pub use message_delivery::{
+    ClaimedTaskMessage, TASK_MESSAGE_BATCH_LIMIT, TASK_MESSAGE_QUEUE_LIMIT,
+    TaskMessageAttentionPage, TaskMessageResult,
+};
 pub use operator_statements::{OperatorStatementError, VerifiedOperatorStatement};
 pub use operator_submissions::{AuthoredOperatorSubmission, OperatorSubmissionIndexEntry};
 pub use review_answers::ReturnedReviewRequest;
@@ -218,7 +223,8 @@ const OPERATOR_STATEMENTS_SCHEMA_VERSION: i64 = 130;
 const OPERATOR_STATEMENT_RESOLUTIONS_SCHEMA_VERSION: i64 = 131;
 const OPERATOR_SUBMISSIONS_SCHEMA_VERSION: i64 = 132;
 const REVIEW_ANSWERS_SCHEMA_VERSION: i64 = 133;
-const CURRENT_SCHEMA_VERSION: i64 = REVIEW_ANSWERS_SCHEMA_VERSION;
+const MESSAGE_DELIVERY_SCHEMA_VERSION: i64 = 134;
+const CURRENT_SCHEMA_VERSION: i64 = MESSAGE_DELIVERY_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -554,6 +560,10 @@ pub enum TaskStoreError {
     DuplicateWorkerName,
     #[error("a task message must be 1 to {max} bytes and name a recipient")]
     InvalidTaskMessage { max: usize },
+    #[error(
+        "task message queue is full; Queen must reconcile pending deliveries before new messages can be admitted"
+    )]
+    TaskMessageQueueFull,
     /// Refused by rule, not by accident.
     ///
     /// A worker's claim about authority reaching another worker with no board
@@ -3737,7 +3747,8 @@ fn migrate_maturity_schema_steps(
     operator_statements::migrate(transaction, schema_version)?;
     operator_statements::migrate_resolutions(transaction, schema_version)?;
     operator_submissions::migrate(transaction, schema_version)?;
-    review_answers::migrate(transaction, schema_version)
+    review_answers::migrate(transaction, schema_version)?;
+    message_delivery::migrate(transaction, schema_version)
 }
 
 /// Work closed for a reason other than success gets its own state.

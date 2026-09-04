@@ -17,7 +17,7 @@ export default function DeliveryWaitList({ held }: { held: HeldDelivery[] }) {
     {[...groups].map(([owner, entries]) => <section key={owner}>
       <h3>{owner}</h3>
       <ul>{entries.map((entry) => <li key={`${entry.kind}:${entry.subject}`}>
-        <span className="queue-task-title">{entry.kind === "delivery_held_unsent_text" ? "Last observed hold: unsent text" : "Last observed hold: prompt not ready"}</span>
+        <span className="queue-task-title">{entry.kind === "task_message_reconciliation" ? "Queen: reconcile message delivery" : entry.kind === "delivery_held_unsent_text" ? "Last observed hold: unsent text" : "Last observed hold: prompt not ready"}</span>
         <details><summary>Recorded details</summary>
           <p>{entry.reason}</p>
           <p>First observed {new Date(entry.first_observed_at * 1000).toLocaleString()} · {entry.observations} observations</p>

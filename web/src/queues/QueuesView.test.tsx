@@ -13,6 +13,18 @@ function task(overrides: Partial<Task>): Task {
 }
 
 describe("QueuesView", () => {
+  test("assigns uncertain message reconciliation to Queen without claiming a stopped prompt", () => {
+    const props = { tasks: [], workers: [], onOpenTask: vi.fn() };
+    const { rerender } = render(<QueuesView {...props} heldDeliveries={[{
+      kind: "task_message_reconciliation", subject: "message-1", worker_name: "Queen",
+      reason: "Inspect the saved message before retrying", first_observed_at: 1, last_observed_at: 1, observations: 1,
+    }]} />);
+    expect(screen.getByRole("heading", { name: "Queen" })).toBeInTheDocument();
+    expect(screen.getByText("Queen: reconcile message delivery")).toBeInTheDocument();
+    expect(screen.queryByText("Last observed hold: prompt not ready")).not.toBeInTheDocument();
+    rerender(<QueuesView {...props} heldDeliveries={[]} />);
+    expect(screen.queryByText("Queen: reconcile message delivery")).not.toBeInTheDocument();
+  });
   test("retains delivery evidence without claiming the Queen has stopped, then clears it", () => {
     const props = { tasks: [], workers: [], onOpenTask: vi.fn() };
     const { rerender } = render(<QueuesView {...props} heldDeliveries={[{
