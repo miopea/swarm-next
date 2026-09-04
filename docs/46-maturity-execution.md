@@ -515,6 +515,31 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 - No live provider invocation, worker restart, schema change, release, push,
   or deployment.
 
+### P3c: opt-in five-renderer pool experiment
+
+- Confirmed the browser registry retains every visited renderer/controller/socket
+  until explicit close or logout. Added the approved opt-in LRU policy: five
+  retained browser views, with attached and incoming views protected. Worker
+  processes and canonical history remain engine-owned and are not stopped.
+- Developer Dogfood exposes a reversible switch and content-free retained,
+  attached, inactive, and eviction counts. No new polling or storage is added.
+  Default behavior is unchanged; reload/logout resets the experiment. Disabling
+  it does not eagerly recreate cold views. Updated ADR 0004 for policy ownership.
+- Late output to disposed renderers is ignored. A pending snapshot cannot refit
+  after disposal/detachment, and geometry ownership is re-read after async fit.
+- 205 terminal/Dogfood tests passed. TypeScript then caught an ownership-property
+  narrowing across await; the check now reads current ownership via a helper.
+  Final TypeScript checking and 30 affected controller/Dogfood tests passed.
+  Production web build passed; the existing over-500-kB terminal chunk warning
+  remains (544.45 kB uncompressed), not waived as an efficiency result.
+- Chrome/Edge skill used a separate local isolated fixture tab to inspect the
+  rendered control and verify enable/disable. No live Swarm tab or provider was
+  touched. Added a reusable Developer Dogfood fixture for subsequent visual work.
+- The experiment is NOT adopted as normal policy. Representative p95 cold-restore
+  timing, CPU/resource comparisons, sustained output fidelity, and real-device
+  cutover remain required. Pool counts and synthetic checks do not prove savings.
+- No push, release, deployment, or live-worker restart.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

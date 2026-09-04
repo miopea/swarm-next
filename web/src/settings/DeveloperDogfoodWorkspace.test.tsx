@@ -2,8 +2,9 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import type { DevelopmentRuntime } from "../api";
 import DeveloperDogfoodWorkspace from "./DeveloperDogfoodWorkspace";
+import { terminalWorkspace } from "../terminal/TerminalWorkspace";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); terminalWorkspace.logout(); });
 const runtime = { enabled: true, version: "dev-test", source_revision: "abc123", source_dirty: false } as DevelopmentRuntime;
 
 test("uses development detection without another enable toggle", () => {
@@ -29,4 +30,18 @@ test("qualifies unavailable status and only previews evidence on request", () =>
   expect(evidence.browser.current.schema).toBe(1);
   fireEvent.click(screen.getByRole("button", { name: "Preview browser evidence" }));
   expect(container.querySelector("pre")).toBeNull();
+});
+
+test("warm pool is explicit, reversible, and disabled when development mode ends", () => {
+  const { rerender } = render(<DeveloperDogfoodWorkspace runtime={runtime} version="test" reachable />);
+  const toggle = screen.getByRole("button", { name: "Try five-renderer pool" });
+  expect(toggle).toHaveAttribute("aria-pressed", "false");
+  fireEvent.click(toggle);
+  expect(terminalWorkspace.rendererRetention.limit).toBe(5);
+  fireEvent.click(screen.getByRole("button", { name: "Stop warm-pool experiment" }));
+  expect(terminalWorkspace.rendererRetention.limit).toBeUndefined();
+  fireEvent.click(screen.getByRole("button", { name: "Try five-renderer pool" }));
+  rerender(<DeveloperDogfoodWorkspace runtime={{ ...runtime, enabled: false }} version="test" reachable />);
+  expect(terminalWorkspace.rendererRetention.limit).toBeUndefined();
+  expect(screen.queryByRole("button", { name: "Stop warm-pool experiment" })).not.toBeInTheDocument();
 });

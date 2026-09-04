@@ -223,6 +223,83 @@ test("switching between sessions keeps both transports attached", async () => {
   expect(registry.size).toBe(2);
 });
 
+test("warm-pool experiment evicts least recent inactive browser views only", () => {
+  const registry = new TerminalControllerRegistry();
+  const entries = Array.from({ length: 7 }, (_, index) => {
+    const surface = fakeSurface();
+    const connection = fakeConnection();
+    const controller = registry.getOrCreate(`session-${index}`, () => surface, () => connection);
+    return { surface, connection, controller };
+  });
+  // Default behavior remains unchanged until the experiment is explicitly enabled.
+  expect(registry.size).toBe(7);
+  entries[0].controller.attach(document.createElement("div"));
+  registry.getOrCreate("session-1", fakeSurface, fakeConnection);
+  registry.setRetainedLimit(5);
+  expect(registry.size).toBe(5);
+  expect(entries[0].surface.dispose).not.toHaveBeenCalled();
+  expect(entries[1].surface.dispose).not.toHaveBeenCalled();
+  for (const index of [2, 3]) {
+    expect(entries[index].surface.dispose).toHaveBeenCalledOnce();
+    expect(entries[index].connection.dispose).toHaveBeenCalledOnce();
+    expect(registry.get(`session-${index}`)).toBeUndefined();
+  }
+  expect(registry.retention).toEqual({ limit: 5, retained: 5, attached: 1, inactive: 4, evictions: 2 });
+  const cold = registry.getOrCreate("session-2", fakeSurface, fakeConnection);
+  expect(cold).not.toBe(entries[2].controller);
+  expect(registry.size).toBe(5);
+  registry.setRetainedLimit(undefined);
+  registry.getOrCreate("new-session", fakeSurface, fakeConnection);
+  expect(registry.size).toBe(6);
+  registry.closeAll();
+});
+
+test("warm-pool handoff protects both the attached and requested controllers", () => {
+  const registry = new TerminalControllerRegistry();
+  registry.setRetainedLimit(1);
+  const first = registry.getOrCreate("first", fakeSurface, fakeConnection);
+  first.attach(document.createElement("div"));
+  const second = registry.getOrCreate("second", fakeSurface, fakeConnection);
+  expect(registry.size).toBe(2);
+  first.detach();
+  second.attach(document.createElement("div"));
+  expect(registry.size).toBe(1);
+  expect(registry.get("second")).toBe(second);
+  expect(registry.get("first")).toBeUndefined();
+  registry.closeAll();
+});
+
+test("warm-pool rejects invalid limits without changing its policy", () => {
+  const registry = new TerminalControllerRegistry();
+  for (const limit of [0, -1, 1.5, NaN, Infinity, 65]) {
+    expect(() => registry.setRetainedLimit(limit)).toThrow();
+  }
+  expect(registry.retention.limit).toBeUndefined();
+});
+
+test("an evicted renderer cannot resize after a pending snapshot finishes", async () => {
+  const registry = new TerminalControllerRegistry();
+  registry.setRetainedLimit(1);
+  const surface = fakeSurface();
+  const connection = fakeConnection();
+  const first = registry.getOrCreate("first", () => surface, () => connection);
+  first.attach(document.createElement("div"));
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledOnce());
+  const handlers = vi.mocked(connection.start).mock.calls[0][0];
+  let finishRestore!: () => void;
+  vi.mocked(surface.restore).mockImplementationOnce(() => new Promise<void>((resolve) => { finishRestore = resolve; }));
+  const restoring = handlers.onSnapshot({ sequence: 1, rows: 24, columns: 80, truncated: false, reason: "attached", bytes: new Uint8Array() });
+  first.detach();
+  registry.getOrCreate("second", fakeSurface, fakeConnection);
+  vi.mocked(connection.resize).mockClear();
+  finishRestore();
+  await restoring;
+  expect(connection.resize).not.toHaveBeenCalled();
+  await handlers.onOutput(new Uint8Array([65]));
+  expect(surface.write).not.toHaveBeenCalled();
+  registry.closeAll();
+});
+
 test("reattaching a started terminal refits after its new container layout", async () => {
   const surface = fakeSurface();
   vi.mocked(surface.fit)

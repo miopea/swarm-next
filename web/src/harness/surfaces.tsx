@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import TerminalQuestionsFixture from "./TerminalQuestionsFixture";
 import TerminalView from "../terminal/TerminalView";
+import DeveloperDogfoodWorkspace from "../settings/DeveloperDogfoodWorkspace";
 
 import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
 import { App } from "../App";
@@ -207,6 +208,12 @@ export type Surface = { id: string; title: string; why: string; render: () => Re
 const FILED = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
 
 export const SURFACES: Surface[] = [
+  {
+    id: "developer-dogfood",
+    title: "Developer Dogfood",
+    why: "Isolated diagnostics and opt-in warm-pool controls; no live workers or Hive requests.",
+    render: () => <DeveloperDogfoodWorkspace runtime={{ enabled: true, version: "fixture-dev", state: "idle", reload_available: false, source_revision: "fixture-revision", source_dirty: false, deployed_source_published: false }} version="fixture-dev" reachable />,
+  },
   {
     id: "terminal-handoff",
     title: "Terminal Resume Here",

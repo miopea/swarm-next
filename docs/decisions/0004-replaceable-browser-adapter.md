@@ -28,8 +28,18 @@ React components may attach to terminal controllers, but they do not own:
 - committed terminal dimensions.
 
 Those resources live behind framework-independent TypeScript controllers and
-versioned Rust contracts. Component cleanup detaches a view. Only an explicit
-session-lifecycle operation disposes its controller.
+versioned Rust contracts. Component cleanup detaches a view. An explicit
+session-lifecycle operation or the application-owned renderer retention policy
+may dispose a browser controller; neither is permission to stop its worker.
+
+The daily-driver plan authorizes an opt-in five-renderer retention experiment
+under existing Developer Dogfood detection. It is off by default and resets on
+reload/logout. The registry evicts least-recently-used inactive controllers,
+disposing browser renderers and sockets only. Attached and incoming controllers
+are protected, so a handoff may temporarily exceed the cap. Cold views restore
+the bounded engine snapshot rather than keeping a second browser snapshot cache.
+Production adoption requires the plan's restore-speed, fidelity, and measured
+resource gates; tests of the eviction algorithm alone do not satisfy them.
 
 ## Consequences
 

@@ -104,8 +104,10 @@ export class TerminalController {
   #focusOnConnect: "container" | "input" | undefined;
   #lastRequestedFocus: "container" | "input" | undefined;
   #atBottom = true;
+  readonly #onAttach: (() => void) | undefined;
 
-  constructor(surfaceFactory: TerminalSurfaceFactory, connectionFactory: TerminalConnectionFactory) {
+  constructor(surfaceFactory: TerminalSurfaceFactory, connectionFactory: TerminalConnectionFactory, onAttach?: () => void) {
+    this.#onAttach = onAttach;
     this.#surface = surfaceFactory();
     this.#connection = connectionFactory();
     this.#host.className = "terminal-surface";
@@ -128,6 +130,7 @@ export class TerminalController {
       this.#opened = true;
     }
     this.#attached = true;
+    this.#onAttach?.();
     this.#updateRendering();
     if (this.#started) {
       this.#applyPendingFocus();
@@ -146,6 +149,8 @@ export class TerminalController {
     this.#updateRendering();
     this.#host.remove();
   }
+
+  get attached(): boolean { return this.#attached; }
 
   /** Told when the operator asks to search this terminal. */
   #updateRendering(): void {
@@ -288,6 +293,10 @@ export class TerminalController {
     return this.#surface.fit();
   }
 
+  #mayResizeNow(): boolean {
+    return !this.#disposed && this.#attached && this.#connection.ownsGeometry !== false;
+  }
+
   async #refitAttachedSurface(intent: "operator" | "echo" = "operator"): Promise<void> {
     // A phone hides and shows its address bar as the operator scrolls, which
     // resizes the container and wakes the observer. The old comment claiming
@@ -308,23 +317,26 @@ export class TerminalController {
     // once attached, passive views only measure and accept engine dimensions.
     const measured = await this.#measureForResize();
     if (!measured) return;
-    if (!measured) return;
     const { rows, columns } = measured;
     if (this.#disposed || this.#started || !this.#host.parentElement) return;
     // Connecting is not a claim; the resume frame carries that intent.
     this.#connection.resize(rows, columns, "echo");
     this.#connection.start({
-      onOutput: (bytes) => this.#surface.write(bytes),
+      onOutput: (bytes) => this.#disposed ? Promise.resolve() : this.#surface.write(bytes),
       onSnapshot: async (snapshot) => {
+        if (this.#disposed) return;
         const restoreFocus = document.activeElement === this.#host
           || Boolean(document.activeElement && this.#host.contains(document.activeElement));
         await this.#surface.restore(snapshot);
+        if (this.#disposed || !this.#attached) return;
         // Passive views always accept canonical geometry. Neither a snapshot
         // nor a viewport resize is an implicit request to take control.
         if (documentHasFocus() && this.#connection.ownsGeometry !== false) {
           try {
             const fitted = await this.#measureForResize();
-            if (fitted) this.#connection.resize(fitted.rows, fitted.columns, "echo");
+            if (fitted && this.#mayResizeNow()) {
+              this.#connection.resize(fitted.rows, fitted.columns, "echo");
+            }
           } catch {
             // Keep the canonical screen when a transient layout cannot fit.
           }
@@ -384,6 +396,22 @@ export class TerminalController {
 
 export class TerminalControllerRegistry {
   readonly #controllers = new Map<string, TerminalController>();
+  #retainedLimit: number | undefined;
+  #evictions = 0;
+
+  /** Experimental browser-only retention. Undefined preserves the current behavior. */
+  setRetainedLimit(limit: number | undefined): void {
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 64)) {
+      throw new Error("Terminal renderer limit must be an integer between 1 and 64");
+    }
+    this.#retainedLimit = limit;
+    this.#trim();
+  }
+
+  get retention() {
+    const attached = [...this.#controllers.values()].filter((controller) => controller.attached).length;
+    return { limit: this.#retainedLimit, retained: this.size, attached, inactive: this.size - attached, evictions: this.#evictions };
+  }
 
   getOrCreate(
     sessionId: string,
@@ -391,9 +419,18 @@ export class TerminalControllerRegistry {
     connectionFactory: TerminalConnectionFactory,
   ): TerminalController {
     const existing = this.#controllers.get(sessionId);
-    if (existing) return existing;
-    const controller = new TerminalController(surfaceFactory, connectionFactory);
+    if (existing) {
+      this.#touch(sessionId);
+      return existing;
+    }
+    const controller = new TerminalController(surfaceFactory, connectionFactory, () => {
+      this.#touch(sessionId);
+      this.#trim();
+    });
     this.#controllers.set(sessionId, controller);
+    // Keep the requested controller alive until its view can attach. During a
+    // handoff the previous view may still be mounted; attachment trims again.
+    this.#trim(sessionId);
     return controller;
   }
 
@@ -411,10 +448,28 @@ export class TerminalControllerRegistry {
   closeAll(): void {
     for (const controller of this.#controllers.values()) controller.dispose();
     this.#controllers.clear();
+    this.#evictions = 0;
   }
 
   get size(): number {
     return this.#controllers.size;
+  }
+
+  #touch(sessionId: string): void {
+    const controller = this.#controllers.get(sessionId);
+    if (!controller) return;
+    this.#controllers.delete(sessionId);
+    this.#controllers.set(sessionId, controller);
+  }
+
+  #trim(protectedSession?: string): void {
+    if (this.#retainedLimit === undefined) return;
+    for (const [id, controller] of this.#controllers) {
+      if (this.size <= this.#retainedLimit) break;
+      if (id === protectedSession || controller.attached) continue;
+      this.closeSession(id);
+      this.#evictions += 1;
+    }
   }
 }
 

@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { DevelopmentRuntime } from "../api";
 import { BROWSER_METRICS, readBrowserPerformance } from "../runtime/browserPerformance";
+import { terminalWorkspace } from "../terminal/TerminalWorkspace";
 
 const labels = {
   long_task: "Main-thread blocks", interaction: "Interaction latency", route: "Navigation paint",
@@ -12,6 +13,13 @@ export default function DeveloperDogfoodWorkspace({ runtime, version, reachable 
 }) {
   const [evidence, setEvidence] = useState(readBrowserPerformance);
   const [preview, setPreview] = useState(false);
+  const [retention, setRetention] = useState(() => terminalWorkspace.rendererRetention);
+  useEffect(() => {
+    if (!runtime?.enabled) {
+      terminalWorkspace.setWarmPoolExperiment(false);
+      setRetention(terminalWorkspace.rendererRetention);
+    }
+  }, [runtime?.enabled]);
   if (!runtime?.enabled) return null;
   return <section id="settings-dogfood" className="settings-card" aria-labelledby="dogfood-heading">
     <div><p className="eyebrow">Developer Dogfood</p><h3 id="dogfood-heading">Evidence from your daily Hive</h3></div>
@@ -32,8 +40,17 @@ export default function DeveloperDogfoodWorkspace({ runtime, version, reachable 
       return <li key={metric}>{labels[metric]}: {count ? `${count} samples · mean ${Math.round(total / count)} ms · max ${Math.round(maximum)} ms` : "No samples"}</li>;
     })}</ul>
     <p>Means and maxima are not percentiles. Missing samples do not establish a healthy session.</p>
+    <h4>Terminal warm-pool experiment</h4>
+    <p>Off by default. Retain the active terminal and four recent renderers; colder views reconnect to the engine’s newest snapshot. Workers keep running. This browser only; reload resets the experiment.</p>
+    <p>Evaluate repeated cold restores against the 500 ms p95 target before adopting this policy. These counts do not prove restore speed or resource savings.</p>
+    <button type="button" aria-pressed={retention.limit !== undefined} onClick={() => {
+      terminalWorkspace.setWarmPoolExperiment(retention.limit === undefined);
+      setRetention(terminalWorkspace.rendererRetention);
+    }}>{retention.limit === undefined ? "Try five-renderer pool" : "Stop warm-pool experiment"}</button>
+    <p>{retention.retained} retained · {retention.attached} attached · {retention.inactive} inactive · {retention.evictions} evicted</p>
+    <small>Stopping keeps already-evicted views cold until opened. Attached views are never evicted; a handoff can briefly exceed the limit.</small>
     <p>{evidence.current.incidents.length} retained incidents. {evidence.before_reload ? "Before-reload evidence is available." : "No before-reload evidence available."}</p>
-    <button type="button" onClick={() => setEvidence(readBrowserPerformance())}>Refresh evidence</button>
+    <button type="button" onClick={() => { setEvidence(readBrowserPerformance()); setRetention(terminalWorkspace.rendererRetention); }}>Refresh evidence</button>
     <button type="button" aria-expanded={preview} onClick={() => setPreview(!preview)}>Preview browser evidence</button>
     {preview && <pre>{JSON.stringify({ running_version: version ?? runtime.version, checkout_revision: runtime.source_revision, source_dirty: runtime.source_dirty, browser: evidence }, null, 2)}</pre>}
     <small>Long-term revision comparisons and instrumentation-overhead validation are still pending. This panel does not publish or cut releases.</small>

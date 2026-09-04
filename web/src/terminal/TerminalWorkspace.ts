@@ -17,6 +17,13 @@ export class TerminalWorkspace {
     this.#operatorToken = operatorToken;
   }
 
+  /** Opt-in experiment; applies only to this browser application's renderers. */
+  setWarmPoolExperiment(enabled: boolean): void {
+    this.#controllers.setRetainedLimit(enabled ? 5 : undefined);
+  }
+
+  get rendererRetention() { return this.#controllers.retention; }
+
   controllerFor(
     sessionId: string,
     surfaceFactory: TerminalSurfaceFactory,
@@ -65,6 +72,7 @@ export class TerminalWorkspace {
 
   logout(): void {
     this.#controllers.closeAll();
+    this.#controllers.setRetainedLimit(undefined);
     this.#pendingFocus.clear();
     this.#operatorToken = undefined;
   }
