@@ -31,6 +31,14 @@ A crash or transport failure after claim becomes **uncertain** and is never
 silently replayed. The operator UI reports completed actions, avoided Queen
 calls, queued actions, and uncertainty without exposing task content.
 
+Ordinary autostart admission applies this same provider policy before recording
+a recovery attempt. Coordination applies it again at the shared pre-submission
+boundary for briefings, decisions, messages, broadcasts, outcomes, and Queen runs.
+A policy hold is a durable deferral, not a terminal failure or operator alert.
+Unavailable presence cannot authorize automation. This does not stop work already
+submitted. Maintenance revival intent expiry and claim-to-write presence races
+remain separate unresolved implementation work in the maturity ledger.
+
 ## Consequences
 
 The approved daily-driver maturity policy excludes experimental providers from

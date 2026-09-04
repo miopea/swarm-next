@@ -1155,7 +1155,11 @@ impl AppState {
             .into_iter()
             .filter(|profile| profile.autostart && profile.active_session_id.is_none())
         {
-            if self.worker_errors.read().await.contains_key(&profile.id) {
+            // Policy deferral precedes recovery accounting. A Night Watch hold
+            // must not spend the worker's one safe automatic recovery attempt.
+            if !worker_runtime::automation_admitted(self, profile.provider)
+                || self.worker_errors.read().await.contains_key(&profile.id)
+            {
                 continue;
             }
             let attempted_recovery = self

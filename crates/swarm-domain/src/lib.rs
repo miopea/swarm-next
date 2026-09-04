@@ -718,6 +718,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn night_watch_provider_policy_requires_builder_promotion() {
+        for provider in [ProviderKind::ClaudeCode, ProviderKind::Codex] {
+            assert!(provider.permits_automation_in(PresenceMode::NightWatch));
+        }
+        for provider in [
+            ProviderKind::Gemini,
+            ProviderKind::Grok,
+            ProviderKind::OpenCode,
+            ProviderKind::Unsupported,
+        ] {
+            assert!(!provider.permits_automation_in(PresenceMode::NightWatch));
+            assert!(provider.permits_automation_in(PresenceMode::AtHive));
+            assert!(provider.permits_automation_in(PresenceMode::Away));
+        }
+    }
+
+    #[test]
     fn federation_retry_backoff_is_bounded() {
         let delays = (0..=8)
             .map(federation_retry_delay_seconds)

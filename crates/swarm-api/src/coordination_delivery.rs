@@ -46,6 +46,8 @@ pub(super) enum DeferralReason {
     /// is being saved up so it arrives with whatever else accumulates instead of
     /// interrupting again.
     RecentDelivery,
+    /// Builder policy holds experimental providers during unattended operation.
+    ProviderPolicy,
 }
 
 impl DeferralReason {
@@ -67,7 +69,7 @@ impl DeferralReason {
             Self::PromptHoldsUnsentText => {
                 Some(swarm_persistence::REFUSAL_DELIVERY_HELD_UNSENT_TEXT)
             }
-            Self::RecentDelivery => None,
+            Self::RecentDelivery | Self::ProviderPolicy => None,
         }
     }
 
@@ -79,6 +81,9 @@ impl DeferralReason {
             }
             Self::PromptHoldsUnsentText => format!(
                 "{subject} is waiting because this terminal's prompt holds text that was typed but never sent — clear the line to release it"
+            ),
+            Self::ProviderPolicy => format!(
+                "{subject} is queued until this provider is eligible for automation; experimental providers wait until Night Watch ends"
             ),
             Self::RecentDelivery => format!(
                 "{subject} is waiting so this terminal is not written to twice in a few minutes; it arrives with anything else that accumulates"
@@ -333,6 +338,14 @@ pub(super) async fn submit_coordination_message(
             });
         }
     };
+    // All coordination channels share this last pre-submission policy check.
+    // Unavailable presence is not permission to send; deferral retains the outbox.
+    if !store
+        .operator_presence(unix_timestamp())
+        .is_ok_and(|presence| provider.permits_automation_in(presence.mode))
+    {
+        return Ok(TerminalSubmission::Deferred(DeferralReason::ProviderPolicy));
+    }
     let submission =
         submit_terminal_message(client, session_id, provider, message.bytes, &message.marker)
             .await?;
@@ -1324,6 +1337,47 @@ mod tests {
     use swarm_domain::{PresenceMode, QueenAutomationTrigger, TaskId, WorkerId};
     use swarm_persistence::{QueenAutomationDelivery, TaskMessageDispatch};
     use swarm_terminal::{CanonicalTerminalState, JournalLimits, TerminalSize, TerminalSnapshot};
+
+    #[tokio::test]
+    async fn experimental_coordination_is_deferred_before_contacting_terminal() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Experimental",
+                ProviderKind::Gemini,
+                "/workspace/experimental",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        store
+            .set_manual_presence(Some(PresenceMode::NightWatch), unix_timestamp())
+            .unwrap();
+        let result = submit_coordination_message(
+            &store,
+            &HostClient::new("/unreachable/terminal.sock"),
+            session,
+            CoordinationMessage {
+                cadence: Cadence::Cooled,
+                bytes: b"test\r".to_vec(),
+                marker: b"test".to_vec(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            result,
+            TerminalSubmission::Deferred(DeferralReason::ProviderPolicy)
+        );
+        assert_eq!(DeferralReason::ProviderPolicy.refusal_kind(), None);
+        assert!(
+            !store
+                .coordination_is_cooling_down(session, unix_timestamp())
+                .unwrap()
+        );
+    }
 
     #[test]
     fn a_delivery_is_confirmed_while_the_provider_keeps_working() {

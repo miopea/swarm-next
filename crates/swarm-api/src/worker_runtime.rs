@@ -65,6 +65,20 @@ const fn provider_reaches_the_board(provider: ProviderKind) -> bool {
     matches!(provider, ProviderKind::ClaudeCode | ProviderKind::Codex)
 }
 
+pub(super) fn automation_admitted(state: &AppState, provider: ProviderKind) -> bool {
+    match task_store(state).and_then(|store| {
+        store
+            .operator_presence(crate::unix_timestamp())
+            .map_err(|error| task_store_error(&error))
+    }) {
+        Ok(presence) => provider.permits_automation_in(presence.mode),
+        Err(error) => {
+            tracing::warn!(message = %error.message, "automatic startup deferred: presence unavailable");
+            false
+        }
+    }
+}
+
 pub(super) async fn start_worker_process(
     state: &AppState,
     worker_id: WorkerId,

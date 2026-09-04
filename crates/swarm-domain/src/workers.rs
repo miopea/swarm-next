@@ -149,6 +149,12 @@ impl ProviderKind {
         Self::NIGHT_WATCH_APPROVED.contains(&self)
     }
 
+    /// Presence can restrict automation, never promote an experimental provider.
+    #[must_use]
+    pub fn permits_automation_in(self, presence: crate::PresenceMode) -> bool {
+        presence != crate::PresenceMode::NightWatch || self.night_watch_approved()
+    }
+
     /// Reads a stored provider, tolerating a value this build does not know.
     ///
     /// Use for anything coming OUT of the database. Use `from_str` for anything

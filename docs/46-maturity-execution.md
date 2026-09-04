@@ -759,6 +759,25 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   after claim still need policy reconciliation. Full provider maturity remains
   incomplete. No schema change, push, release, or live worker interruption.
 
+### P5h: autostart and shared coordination admission
+
+- Ordinary autostart checks provider eligibility before recovery-attempt
+  accounting. Unavailable presence defers startup and emits a diagnostic.
+  Shared coordination submission applies the same domain policy before terminal
+  submission, covering decisions, messages, broadcasts, outcomes and Queen runs
+  as well as task briefs. Policy holds use existing durable deferral paths and
+  do not create operator attention or start a delivery cooldown.
+- All 74 domain tests passed, including approved/experimental/unknown provider
+  policy across presence modes. Strict Linux-target API all-target/all-feature
+  Clippy passed after extracting the startup lookup to respect function limits.
+  A no-terminal-contact integration test compiled but was not executed on Linux.
+- Maintenance revival is still open: existing intents expire after 15 minutes,
+  so simply skipping an experimental worker overnight would silently lose its
+  promised return. Do not claim that path guarded or repaired. Manual starts,
+  rolling restart paths, and presence changes during admission/submission also
+  remain to be reconciled. No running work was stopped or modified.
+- No schema change, push, deployment, release, or live acceptance claim.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has
