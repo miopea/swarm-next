@@ -23,6 +23,7 @@ export class TerminalWorkspace {
   }
 
   get rendererRetention() { return this.#controllers.retention; }
+  get coldRestoreEvidence() { return this.#controllers.coldRestoreEvidence; }
 
   controllerFor(
     sessionId: string,

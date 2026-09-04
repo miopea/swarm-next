@@ -4,6 +4,13 @@ import type {
   TerminalSnapshot,
   TerminalControlView,
 } from "./TerminalConnection";
+import { TerminalRestoreEvidence } from "./TerminalRestoreEvidence";
+
+interface ControllerLifecycle {
+  attached(): void;
+  inactive(): void;
+  stateChanged(state: TerminalConnectionState): void;
+}
 
 export interface Disposable {
   dispose(): void;
@@ -104,10 +111,10 @@ export class TerminalController {
   #focusOnConnect: "container" | "input" | undefined;
   #lastRequestedFocus: "container" | "input" | undefined;
   #atBottom = true;
-  readonly #onAttach: (() => void) | undefined;
+  readonly #lifecycle: ControllerLifecycle | undefined;
 
-  constructor(surfaceFactory: TerminalSurfaceFactory, connectionFactory: TerminalConnectionFactory, onAttach?: () => void) {
-    this.#onAttach = onAttach;
+  constructor(surfaceFactory: TerminalSurfaceFactory, connectionFactory: TerminalConnectionFactory, lifecycle?: ControllerLifecycle) {
+    this.#lifecycle = lifecycle;
     this.#surface = surfaceFactory();
     this.#connection = connectionFactory();
     this.#host.className = "terminal-surface";
@@ -117,6 +124,7 @@ export class TerminalController {
       this.#surface.onScroll((atBottom) => this.#setAtBottom(atBottom)),
       this.#surface.onRenderable?.((renderable) => {
         this.#visible = renderable;
+        if (!renderable) this.#lifecycle?.inactive();
         this.#updateRendering();
       }) ?? { dispose: () => undefined },
     ];
@@ -125,12 +133,12 @@ export class TerminalController {
   attach(container: HTMLElement): void {
     if (this.#disposed) throw new Error("Cannot attach a disposed terminal");
     container.replaceChildren(this.#host);
+    this.#lifecycle?.attached();
     if (!this.#opened) {
       this.#surface.open(this.#host);
       this.#opened = true;
     }
     this.#attached = true;
-    this.#onAttach?.();
     this.#updateRendering();
     if (this.#started) {
       this.#applyPendingFocus();
@@ -145,6 +153,7 @@ export class TerminalController {
     // render into a detached element, so frames arriving now would queue behind
     // a write that cannot finish and replay on return.
     this.#attached = false;
+    this.#lifecycle?.inactive();
     this.#connection.releaseControl?.();
     this.#updateRendering();
     this.#host.remove();
@@ -366,7 +375,9 @@ export class TerminalController {
   }
 
   #setState(state: TerminalConnectionState, detail?: string): void {
+    if (this.#disposed) return;
     this.#state = state;
+    this.#lifecycle?.stateChanged(state);
     this.#stateDetail = detail;
     if (state === "connected" && this.#focusOnConnect) {
       this.#pendingFocus = this.#focusOnConnect;
@@ -398,11 +409,21 @@ export class TerminalControllerRegistry {
   readonly #controllers = new Map<string, TerminalController>();
   #retainedLimit: number | undefined;
   #evictions = 0;
+  readonly #recentlyEvicted = new Set<string>();
+  readonly #restoreEvidence = new TerminalRestoreEvidence();
 
   /** Experimental browser-only retention. Undefined preserves the current behavior. */
   setRetainedLimit(limit: number | undefined): void {
     if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 64)) {
       throw new Error("Terminal renderer limit must be an integer between 1 and 64");
+    }
+    if (limit !== this.#retainedLimit) {
+      if (limit === undefined) this.#restoreEvidence.stop();
+      else {
+        this.#restoreEvidence.reset();
+        this.#evictions = 0;
+      }
+      this.#recentlyEvicted.clear();
     }
     this.#retainedLimit = limit;
     this.#trim();
@@ -412,6 +433,8 @@ export class TerminalControllerRegistry {
     const attached = [...this.#controllers.values()].filter((controller) => controller.attached).length;
     return { limit: this.#retainedLimit, retained: this.size, attached, inactive: this.size - attached, evictions: this.#evictions };
   }
+
+  get coldRestoreEvidence() { return this.#restoreEvidence.snapshot(); }
 
   getOrCreate(
     sessionId: string,
@@ -423,9 +446,29 @@ export class TerminalControllerRegistry {
       this.#touch(sessionId);
       return existing;
     }
-    const controller = new TerminalController(surfaceFactory, connectionFactory, () => {
-      this.#touch(sessionId);
-      this.#trim();
+    const cold = this.#recentlyEvicted.delete(sessionId);
+    let completed = false;
+    let finish: ReturnType<TerminalRestoreEvidence["begin"]> | undefined;
+    const controller = new TerminalController(surfaceFactory, connectionFactory, {
+      attached: () => {
+        if (cold && !completed && !finish && this.#retainedLimit !== undefined && document.visibilityState === "visible") {
+          finish = this.#restoreEvidence.begin();
+        }
+        this.#touch(sessionId);
+        this.#trim(sessionId);
+      },
+      inactive: () => { finish?.("interrupted"); finish = undefined; },
+      stateChanged: (state) => {
+        if (state === "connected") {
+          finish?.(document.visibilityState === "visible" ? "rendered" : "interrupted");
+          completed = true;
+          finish = undefined;
+        } else if (state === "error" || state === "closed" || state === "recovery_required") {
+          finish?.("failed");
+          completed = true;
+          finish = undefined;
+        }
+      },
     });
     this.#controllers.set(sessionId, controller);
     // Keep the requested controller alive until its view can attach. During a
@@ -449,6 +492,8 @@ export class TerminalControllerRegistry {
     for (const controller of this.#controllers.values()) controller.dispose();
     this.#controllers.clear();
     this.#evictions = 0;
+    this.#recentlyEvicted.clear();
+    this.#restoreEvidence.reset();
   }
 
   get size(): number {
@@ -469,6 +514,8 @@ export class TerminalControllerRegistry {
       if (id === protectedSession || controller.attached) continue;
       this.closeSession(id);
       this.#evictions += 1;
+      this.#recentlyEvicted.add(id);
+      if (this.#recentlyEvicted.size > 64) this.#recentlyEvicted.delete(this.#recentlyEvicted.values().next().value!);
     }
   }
 }

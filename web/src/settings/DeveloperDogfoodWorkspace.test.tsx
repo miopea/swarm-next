@@ -28,6 +28,9 @@ test("qualifies unavailable status and only previews evidence on request", () =>
   expect(evidence.running_version).toBe("running-version");
   expect(evidence.checkout_revision).toBe("abc123");
   expect(evidence.browser.current.schema).toBe(1);
+  expect(evidence.cold_view_restores.samples).toBe(0);
+  expect(evidence.cold_view_restores.p95_ms).toBeNull();
+  expect(evidence.renderer_pool.retained).toBe(0);
   fireEvent.click(screen.getByRole("button", { name: "Preview browser evidence" }));
   expect(container.querySelector("pre")).toBeNull();
 });

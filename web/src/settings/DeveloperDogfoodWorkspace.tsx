@@ -14,10 +14,12 @@ export default function DeveloperDogfoodWorkspace({ runtime, version, reachable 
   const [evidence, setEvidence] = useState(readBrowserPerformance);
   const [preview, setPreview] = useState(false);
   const [retention, setRetention] = useState(() => terminalWorkspace.rendererRetention);
+  const [coldRestores, setColdRestores] = useState(() => terminalWorkspace.coldRestoreEvidence);
   useEffect(() => {
     if (!runtime?.enabled) {
       terminalWorkspace.setWarmPoolExperiment(false);
       setRetention(terminalWorkspace.rendererRetention);
+      setColdRestores(terminalWorkspace.coldRestoreEvidence);
     }
   }, [runtime?.enabled]);
   if (!runtime?.enabled) return null;
@@ -46,13 +48,18 @@ export default function DeveloperDogfoodWorkspace({ runtime, version, reachable 
     <button type="button" aria-pressed={retention.limit !== undefined} onClick={() => {
       terminalWorkspace.setWarmPoolExperiment(retention.limit === undefined);
       setRetention(terminalWorkspace.rendererRetention);
+      setColdRestores(terminalWorkspace.coldRestoreEvidence);
     }}>{retention.limit === undefined ? "Try five-renderer pool" : "Stop warm-pool experiment"}</button>
     <p>{retention.retained} retained · {retention.attached} attached · {retention.inactive} inactive · {retention.evictions} evicted</p>
+    <p>Cold view rendered: {coldRestores.samples ? `${coldRestores.samples} ${coldRestores.samples === 1 ? "sample" : "samples"} · p95 ${Math.round(coldRestores.p95_ms!)} ms · max ${Math.round(coldRestores.max_ms!)} ms` : "No completed samples"}.</p>
+    {coldRestores.samples > 0 && coldRestores.samples < 20 && <small>Small sample set — not enough for a rollout decision.</small>}
+    <p>{coldRestores.started} attempted · {coldRestores.pending} pending · {coldRestores.interrupted} hidden or abandoned · {coldRestores.failed} failed</p>
+    <small>Nearest-rank p95 of up to 200 completed cold returns from the last hour. Measures view attachment through rendered connection, not input ownership. Tracks only the last 64 evicted sessions; first visits are excluded. Failures and interrupted attempts are not included in p95. A new experiment resets these results.</small>
     <small>Stopping keeps already-evicted views cold until opened. Attached views are never evicted; a handoff can briefly exceed the limit.</small>
     <p>{evidence.current.incidents.length} retained incidents. {evidence.before_reload ? "Before-reload evidence is available." : "No before-reload evidence available."}</p>
-    <button type="button" onClick={() => { setEvidence(readBrowserPerformance()); setRetention(terminalWorkspace.rendererRetention); }}>Refresh evidence</button>
+    <button type="button" onClick={() => { setEvidence(readBrowserPerformance()); setRetention(terminalWorkspace.rendererRetention); setColdRestores(terminalWorkspace.coldRestoreEvidence); }}>Refresh evidence</button>
     <button type="button" aria-expanded={preview} onClick={() => setPreview(!preview)}>Preview browser evidence</button>
-    {preview && <pre>{JSON.stringify({ running_version: version ?? runtime.version, checkout_revision: runtime.source_revision, source_dirty: runtime.source_dirty, browser: evidence }, null, 2)}</pre>}
+    {preview && <pre>{JSON.stringify({ running_version: version ?? runtime.version, checkout_revision: runtime.source_revision, source_dirty: runtime.source_dirty, browser: evidence, renderer_pool: retention, cold_view_restores: coldRestores }, null, 2)}</pre>}
     <small>Long-term revision comparisons and instrumentation-overhead validation are still pending. This panel does not publish or cut releases.</small>
   </section>;
 }

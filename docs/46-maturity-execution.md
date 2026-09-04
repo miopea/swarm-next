@@ -540,6 +540,32 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   cutover remain required. Pool counts and synthetic checks do not prove savings.
 - No push, release, deployment, or live-worker restart.
 
+### P3d: bounded cold-return timing evidence
+
+- Added content-free experiment timing from cold view attachment to the
+  connection's rendered-snapshot confirmation. Only returns from the last 64
+  known evictions qualify; first visits and ordinary warm returns do not.
+  This is view-render readiness, explicitly not proof of input ownership.
+- At most 200 completed samples from the last hour are retained. Nearest-rank
+  p95/max, pending, failed, and hidden/abandoned attempts are exposed in Dogfood
+  and its manual evidence preview. Small sample sets are labeled insufficient
+  for rollout decisions. No timer, terminal content, worker ID export, or
+  persistent storage was added.
+- Stopping retains results and invalidates pending completions; a new experiment
+  resets evidence. Late/duplicate completions cannot alter a later experiment.
+  Remounts can start a new attempt before initial rendering completes, without
+  counting subsequent warm remounts as cold samples.
+- 210 terminal/Dogfood tests passed and production web build passed. The terminal
+  bundle remains over the existing warning threshold; no size improvement claimed.
+- Edge lifecycle smoke fixture: visited six synthetic workers, then returned to
+  the first. The UI reported five retained renderers, one attached, four inactive,
+  two evictions, and one completed cold-return sample. This validates wiring only:
+  fixture transport is synthetic and rendering uses the harness DOM fallback,
+  not production transport/WebGL, representative workload, or real mobile hardware.
+- Full cold-input-readiness gate, production p95/resource comparison, and normal
+  soak remain open. The warm-pool experiment stays off by default.
+- No push, release, deployment, or live-worker changes.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

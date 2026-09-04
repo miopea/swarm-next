@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import TerminalQuestionsFixture from "./TerminalQuestionsFixture";
 import TerminalView from "../terminal/TerminalView";
 import DeveloperDogfoodWorkspace from "../settings/DeveloperDogfoodWorkspace";
+import TerminalPoolFixture from "./TerminalPoolFixture";
 
 import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
 import { App } from "../App";
@@ -208,6 +209,12 @@ export type Surface = { id: string; title: string; why: string; render: () => Re
 const FILED = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
 
 export const SURFACES: Surface[] = [
+  {
+    id: "terminal-pool",
+    title: "Terminal renderer pool lifecycle",
+    why: "Eight synthetic workers for cold-return evidence wiring; not a production performance benchmark.",
+    render: () => <TerminalPoolFixture />,
+  },
   {
     id: "developer-dogfood",
     title: "Developer Dogfood",

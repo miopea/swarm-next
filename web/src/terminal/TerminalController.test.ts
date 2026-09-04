@@ -277,6 +277,30 @@ test("warm-pool rejects invalid limits without changing its policy", () => {
   expect(registry.retention.limit).toBeUndefined();
 });
 
+test("cold-return measurements exclude first visits and survive a view remount", async () => {
+  const registry = new TerminalControllerRegistry();
+  registry.setRetainedLimit(1);
+  registry.getOrCreate("cold", fakeSurface, fakeConnection);
+  registry.getOrCreate("other", fakeSurface, fakeConnection);
+  expect(registry.coldRestoreEvidence.started).toBe(0);
+  const connection = fakeConnection();
+  const cold = registry.getOrCreate("cold", fakeSurface, () => connection);
+  const mount = document.createElement("div");
+  cold.attach(mount);
+  cold.detach();
+  cold.attach(mount);
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledOnce());
+  const handlers = vi.mocked(connection.start).mock.calls[0][0];
+  handlers.onState("connected");
+  handlers.onState("connected");
+  expect(registry.coldRestoreEvidence).toMatchObject({ started: 2, interrupted: 1, pending: 0, samples: 1 });
+  cold.detach();
+  cold.attach(mount);
+  expect(registry.coldRestoreEvidence.started).toBe(2);
+  registry.closeAll();
+  expect(registry.coldRestoreEvidence.started).toBe(0);
+});
+
 test("an evicted renderer cannot resize after a pending snapshot finishes", async () => {
   const registry = new TerminalControllerRegistry();
   registry.setRetainedLimit(1);
