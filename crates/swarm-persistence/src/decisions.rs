@@ -7,9 +7,7 @@ use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
     ControlRoomEventKind, DecisionDeliveryState, DecisionDischarge, DecisionQuestion,
     DecisionRequest, DecisionRequestId, DecisionRequestKind, DecisionRequestState, DecisionUrgency,
-    MAX_DECISION_QUESTION_HEADER_BYTES, MAX_DECISION_QUESTION_OPTION_BYTES,
-    MAX_DECISION_QUESTION_OPTIONS, MAX_DECISION_QUESTION_TEXT_BYTES, MAX_DECISION_QUESTIONS,
-    MAX_DECISION_SUMMARY_BYTES, MIN_DECISION_QUESTION_OPTIONS, TaskId, WorkerId, WorkerSessionId,
+    MAX_DECISION_SUMMARY_BYTES, TaskId, WorkerId, WorkerSessionId, valid_decision_questions,
 };
 
 use super::{
@@ -955,27 +953,8 @@ fn validate_new_request(request: &NewDecisionRequest<'_>) -> Result<(), TaskStor
 /// they key the answers: two questions sharing one would lose an answer
 /// silently.
 fn validate_questions(questions: &[DecisionQuestion]) -> Result<(), TaskStoreError> {
-    if questions.len() > MAX_DECISION_QUESTIONS {
+    if !valid_decision_questions(questions) {
         return Err(TaskStoreError::InvalidDecisionQuestions);
-    }
-    let mut headers = HashSet::new();
-    for question in questions {
-        let mut options = HashSet::new();
-        if question.header.trim().is_empty()
-            || question.header.len() > MAX_DECISION_QUESTION_HEADER_BYTES
-            || !headers.insert(question.header.as_str())
-            || question.question.trim().is_empty()
-            || question.question.len() > MAX_DECISION_QUESTION_TEXT_BYTES
-            || question.options.len() < MIN_DECISION_QUESTION_OPTIONS
-            || question.options.len() > MAX_DECISION_QUESTION_OPTIONS
-            || question.options.iter().any(|option| {
-                option.trim().is_empty()
-                    || option.len() > MAX_DECISION_QUESTION_OPTION_BYTES
-                    || !options.insert(option.as_str())
-            })
-        {
-            return Err(TaskStoreError::InvalidDecisionQuestions);
-        }
     }
     Ok(())
 }

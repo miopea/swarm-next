@@ -1,7 +1,9 @@
 //! Exact answer correlation, not authentication or semantic approval inference.
 //! The application must establish first-party origin before using these rules.
 
-use crate::{DecisionQuestion, DecisionRequestId, WorkerId, WorkerSessionId};
+use crate::{
+    DecisionQuestion, DecisionRequestId, WorkerId, WorkerSessionId, valid_decision_questions,
+};
 
 /// A complete question snapshot prevents a reused header from matching changed
 /// options or wording. Session identity prevents a replacement worker receiving
@@ -52,7 +54,10 @@ impl OperatorAnswerEvidence {
         text: String,
         consumption: OperatorAnswerConsumption,
     ) -> Option<Self> {
-        if text.trim().is_empty() || text.len() > MAX_OPERATOR_ANSWER_BYTES {
+        if text.trim().is_empty()
+            || text.len() > MAX_OPERATOR_ANSWER_BYTES
+            || !valid_decision_questions(std::slice::from_ref(&target.question))
+        {
             return None;
         }
         Some(Self {
@@ -99,6 +104,43 @@ pub enum OperatorAnswerCorrelation {
     NotConfirmed,
 }
 
+/// A request resolves only after every declared question has confirmed evidence.
+/// Reconciliation consumes a bounded snapshot; persistence owns partial answers.
+/// It must rerun this check inside the resolution transaction, not before it.
+#[must_use]
+pub fn confirmed_operator_interview(
+    decision_id: DecisionRequestId,
+    worker_id: WorkerId,
+    session_id: WorkerSessionId,
+    questions: &[DecisionQuestion],
+    evidence: &[OperatorAnswerEvidence],
+) -> Option<std::collections::BTreeMap<String, Vec<String>>> {
+    if questions.is_empty()
+        || !valid_decision_questions(questions)
+        || questions.len() != evidence.len()
+    {
+        return None;
+    }
+    let mut answers = std::collections::BTreeMap::new();
+    for question in questions {
+        let target = OperatorAnswerTarget {
+            decision_id,
+            worker_id,
+            session_id,
+            question: question.clone(),
+        };
+        let mut matches = evidence.iter().filter(|answer| {
+            answer.correlate(&target, None) == OperatorAnswerCorrelation::ResolveConsumed
+        });
+        let answer = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        answers.insert(question.header.clone(), vec![answer.text().to_owned()]);
+    }
+    Some(answers)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,6 +157,64 @@ mod tests {
                 multi_select: false,
             },
         }
+    }
+
+    #[test]
+    fn an_interview_requires_every_question_once_and_in_any_receipt_order() {
+        let first = target();
+        let mut second = first.clone();
+        second.question.header = "Timing".into();
+        second.question.question = "When?".into();
+        let questions = vec![first.question.clone(), second.question.clone()];
+        let one = OperatorAnswerEvidence::new(
+            first.clone(),
+            "Narrow".into(),
+            OperatorAnswerConsumption::Confirmed,
+        )
+        .unwrap();
+        let two = OperatorAnswerEvidence::new(
+            second,
+            "After lunch".into(),
+            OperatorAnswerConsumption::Confirmed,
+        )
+        .unwrap();
+        let collect = |entries: &[OperatorAnswerEvidence]| {
+            confirmed_operator_interview(
+                first.decision_id,
+                first.worker_id,
+                first.session_id,
+                &questions,
+                entries,
+            )
+        };
+        assert!(collect(std::slice::from_ref(&one)).is_none());
+        assert!(collect(&[one.clone(), one.clone()]).is_none());
+        let answers = collect(&[two.clone(), one.clone()]).unwrap();
+        assert_eq!(answers["Timing"], ["After lunch"]);
+        assert!(collect(&[one.clone(), two.clone(), two]).is_none());
+        let mut unconfirmed = one.clone();
+        unconfirmed.consumption = OperatorAnswerConsumption::Unconfirmed;
+        assert!(collect(&[one, unconfirmed]).is_none());
+    }
+
+    #[test]
+    fn malformed_or_unbounded_question_snapshots_are_not_evidence() {
+        let mut target = target();
+        target.question.options = vec!["same".into(), "same".into()];
+        assert!(
+            OperatorAnswerEvidence::new(
+                target.clone(),
+                "same".into(),
+                OperatorAnswerConsumption::Confirmed
+            )
+            .is_none()
+        );
+        target.question.options = vec!["One".into(), "Two".into()];
+        target.question.question = "q".repeat(crate::MAX_DECISION_QUESTION_TEXT_BYTES + 1);
+        assert!(
+            OperatorAnswerEvidence::new(target, "One".into(), OperatorAnswerConsumption::Confirmed)
+                .is_none()
+        );
     }
 
     #[test]

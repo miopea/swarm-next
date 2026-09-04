@@ -46,6 +46,14 @@ record that fact separately from notifications to Queen or other recipients: do
 not inject the answer into that worker a second time. Ambiguous matches remain
 available for Queen to reconcile without silently closing unrelated requests.
 
+The initial domain contract compares the complete bounded question snapshot,
+including header, wording, option order, and multi-select behavior. An interview
+requires exactly one confirmed answer per declared question before resolution;
+partial receipts cannot close the whole request. Receipt arrival order does not
+matter. Individual answer text is capped at 16 KiB without trimming or truncation.
+This is a payload bound, not the remaining durable retention budget. Shared domain
+question validation also governs the existing persistence creation path.
+
 Verification reads return the statement and its scope, evidence status, and exact
 decision link when present. A full ID is required; no prefix lookup. Verified
 origin never expands the action authorized by the actual words. Preserve ADR 0054's

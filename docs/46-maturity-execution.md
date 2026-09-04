@@ -6,6 +6,20 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: complete interviews, not individual answers, permit resolution
+
+- Added bounded complete-interview reconciliation: all current questions require
+  exactly one confirmed receipt, independent of arrival order. Missing, duplicate,
+  surplus or nonmatching receipts cannot close the request. This complements the
+  individual-answer match rather than interpreting one answer as the whole request.
+- Moved existing question-shape limits into a shared domain predicate used by
+  persistence and new evidence construction. Exact answer evidence now bounds its
+  question snapshot too, rejecting duplicate options and oversized text.
+- All 93 domain tests and 27 decision-persistence tests passed on Windows GNU;
+  strict all-target/all-feature Clippy for both crates passed. No schema change.
+  Durable receipt storage, transactional consumption, provider/composer source
+  authentication and real terminal-answer acceptance remain unimplemented.
+
 ### P4: exact operator-answer correlation domain rules
 
 - Added a domain-only answer correlation contract. Matching requires the full

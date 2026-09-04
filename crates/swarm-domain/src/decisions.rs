@@ -220,3 +220,27 @@ pub const MAX_DECISION_QUESTION_OPTION_BYTES: usize = 200;
 /// reason, risk and evidence are each capped at ten thousand characters and
 /// routinely run to thousands.
 pub const MAX_DECISION_SUMMARY_BYTES: usize = 400;
+
+/// Shared interview bounds. Empty means a ruling rather than an interview.
+#[must_use]
+pub fn valid_decision_questions(questions: &[DecisionQuestion]) -> bool {
+    if questions.len() > MAX_DECISION_QUESTIONS {
+        return false;
+    }
+    let mut headers = std::collections::HashSet::new();
+    questions.iter().all(|question| {
+        let mut options = std::collections::HashSet::new();
+        !question.header.trim().is_empty()
+            && question.header.len() <= MAX_DECISION_QUESTION_HEADER_BYTES
+            && headers.insert(question.header.as_str())
+            && !question.question.trim().is_empty()
+            && question.question.len() <= MAX_DECISION_QUESTION_TEXT_BYTES
+            && (MIN_DECISION_QUESTION_OPTIONS..=MAX_DECISION_QUESTION_OPTIONS)
+                .contains(&question.options.len())
+            && question.options.iter().all(|option| {
+                !option.trim().is_empty()
+                    && option.len() <= MAX_DECISION_QUESTION_OPTION_BYTES
+                    && options.insert(option.as_str())
+            })
+    })
+}
