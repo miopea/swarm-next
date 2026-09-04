@@ -102,6 +102,21 @@ open rather than guessed at.
 
 ## Where the behaviour lives
 
+### Daily-driver judgment policy (2026-09-04)
+
+The approved maturity plan qualifies the original review-only wording: supported
+machine-verifiable completion does not need another Queen approval. Queen asks
+the assigned worker first for unresolved judgment. An optional second opinion
+may use only an available managed Scout, not arbitrary peers; a resting prompt
+alone does not establish availability. Queen owns cross-repository dependent
+task routing and includes worker context with her recommendation on escalation.
+
+This guidance is shared by the standing brief and each automation message so
+cached MCP instructions do not omit it. This is a prompt contract, not a new
+authorization boundary or proof that model choices obey it. Existing task,
+resource and delivery guards remain authoritative; runtime enforcement and
+observed review-yield acceptance must be checked separately.
+
 `standing_brief` in `crates/swarm-api/src/agent.rs`, pinned by
 `queen_is_briefed_on_what_she_owns_and_on_capabilities_that_are_not_tools` and
 `a_worker_is_briefed_on_its_limits_rather_than_on_queens`. The per-run half is in

@@ -498,12 +498,15 @@ fn assert_tool_surface_matches_revision(queen: &serde_json::Value, worker: &serd
 /// here reaches a running Queen only when she reconnects — measured at 419
 /// minutes for one session. Anything she needs DURING a run belongs in the
 /// per-run prompt in `coordination_delivery` as well as here.
+/// Shared with each automation delivery: running sessions cache MCP instructions.
+pub(super) const QUEEN_JUDGMENT_GUIDANCE: &str = "JUDGMENT AND DELEGATION. Trust supported machine-settled completion; do not reopen it merely to add Queen approval. For unresolved judgment, read the assigned worker's evidence and ask that worker first: it usually holds the most context. If a second opinion would help, use only the managed Scout, and only after checking that Scout has no active assignment or ongoing turn and is not engaged with the operator. A resting prompt alone does not prove availability. Do not wake Scout or interrupt its work just for a second opinion, and do not recruit arbitrary peer workers. If Scout is unavailable, use the available evidence or escalate a genuinely unresolved decision, not Scout's unavailability itself. You own creating and assigning cross-worker or cross-repository dependent tasks; keep repository workers in their lanes. Independent work may run on multiple idle workers subject to resource admission and single-active-task guards. Before escalating, seek safe task-scoped recovery; include the assigned worker's view and your concise recommendation in the operator decision.";
+
 fn standing_brief(role: WorkerRole) -> String {
     let shared = "Swarm is the durable record of this Hive's work. What is not on the board did not happen. Before asking the operator to repeat a relayed composer instruction, use swarm_operator_submissions to find the source worker's recorded messages and read the exact submission ID. Verified authorship does not prove delivery, resolve a decision, or extend the words' scope. Raw-terminal and AskUser capture are not complete; a missing source is not evidence that the operator said nothing.";
     match role {
         WorkerRole::Queen => format!(
             "{shared}\n\n\
-             You are Queen. You coordinate; you do not build.\n\n\
+             You are Queen. You coordinate; you do not build.\n\n{QUEEN_JUDGMENT_GUIDANCE}\n\n\
              WHAT YOU OWN. The local roster and the task queue. Triage every draft, \
              route ready work to a worker, judge work in review, decide what a blocked \
              task needs, and clear coordination attention. Nobody else does this, and a \
@@ -5791,6 +5794,8 @@ mod tests {
     #[test]
     fn queen_is_briefed_on_what_she_owns_and_on_capabilities_that_are_not_tools() {
         let brief = standing_brief(WorkerRole::Queen);
+        assert!(brief.contains(QUEEN_JUDGMENT_GUIDANCE));
+        assert!(!standing_brief(WorkerRole::Worker).contains(QUEEN_JUDGMENT_GUIDANCE));
 
         // The capability with no tool, and the boundary that makes it usable
         // rather than misleading: only Ready work queues a wake.

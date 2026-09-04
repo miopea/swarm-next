@@ -6,6 +6,25 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: worker-first judgment and Scout-only second-opinion guidance
+
+- Queen's standing brief and every automation message now share the approved
+  judgment policy: supported machine settlement needs no extra Queen approval,
+  assigned-worker context comes first, and optional second opinions use only an
+  available managed Scout rather than arbitrary peers. Resting alone is not idle.
+  Cross-worker dependent tasks remain Queen's routing responsibility.
+- Linux API test build passed; three focused tests passed for Queen/worker brief
+  separation and single-line, submit-terminated automation delivery. Formatting
+  and diff checks passed. This verifies instructions, not model compliance.
+- Inspection found the current MCP worker list returns ordinary worker profiles,
+  without the managed Scout identity or serialized engagement lease. Supplying
+  authoritative availability evidence and enforcing second-opinion admission
+  remain unfinished; prompt guidance is not counted as completing QUEEN-01.
+- Prior full frontend checkpoint passed 1,068 tests in 127 files. The prior full
+  435-test API session handle is now missing and its final output was not
+  recovered; it is not recorded as a passing full-suite run.
+- No push, deployment, release or live worker change.
+
 ### P3 / P5: bounded database export preparation and transfer
 
 - The export route previously performed SQLite backup and a whole-file read
