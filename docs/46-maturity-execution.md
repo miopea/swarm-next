@@ -6,6 +6,25 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P1g: bounded durable browser evidence persistence
+
+- Schema 126 adds an isolated hourly evidence table. Transactional writes enforce
+  cumulative replacement, retry idempotence, identity conflicts, a 24-hour upload
+  window, 4,096-capture capacity and 90-day age retention. Reads prune and return
+  at most 100 captures; payloads have a database-enforced 4,096-byte ceiling.
+- Four focused tests passed: replacement/retry/conflict preservation, invalid
+  uploads, schema-125 migration and file reopen, and capacity/read/age limits.
+  Strict all-target/all-feature persistence Clippy passed.
+- Broader `migration` filter: 14 passed, four legacy-import tests failed with
+  `InvalidWorkspace` while creating worker fixtures using home-derived paths on
+  Windows, before exercising the new evidence methods. This is not an all-green
+  migration suite or Linux execution proof.
+- API authentication/development gating, browser uploads, comparison UI, eviction
+  visibility and instrumentation-cost validation remain open. No live database
+  was opened or migrated. A future install advances schema to 126; an older
+  binary alone is not a safe rollback. No push, deployment, release or worker
+  interruption occurred.
+
 ### P1f: durable browser evidence contract
 
 - ADR 0063 specifies content-free hourly, build-linked aggregates with 90-day
