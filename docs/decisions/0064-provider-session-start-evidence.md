@@ -41,6 +41,16 @@ does not guarantee delivery before the helper deadline under a stalled spawn.
 Session summaries now expose the optional retained observation without capability
 material. Evidence survives repeated reads and does not itself establish current
 liveness or authorize changing the worker's durable default.
-Hook installation, durable reconciliation,
-missing-context detection and provider acceptance remain open. This ADR does not
-install hooks or complete P2.
+Schema 127 records one startup receipt per worker in the session-binding
+transaction, including the originally selected conversation. New bindings replace
+the receipt; old sessions are not backfilled from a potentially newer selection.
+Explicit operator selection cancels pending evidence even when selecting the same
+ID, so A-to-B-to-A changes cannot be undone by delayed startup callbacks.
+The API's existing lifecycle-locked binding reconciliation consumes accepted
+engine observations. Persistence checks the active session, provider and unchanged
+selection, applies the domain recovery result and commits the receipt, resulting
+pin and activity event together. Repeated observations do not rewrite settled
+results. Only engine-owned authenticated attempts are eligible for rehydration;
+impossible ladder positions are rejected. No task input is replayed.
+Hook installation, outcome presentation, missing-context detection and provider
+acceptance remain open. This ADR does not install hooks or complete P2.

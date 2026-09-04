@@ -6,6 +6,30 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2: durable startup conversation reconciliation
+
+- Schema 127 adds one current startup receipt per worker, bounded by the worker
+  roster with a 1 KiB outcome cap. Session binding snapshots the chosen conversation
+  in the same transaction. Existing sessions are not backfilled from today's pin.
+  Explicit selection cancels pending evidence, including same-ID and A/B/A choices.
+- The existing lifecycle-locked API binding reconciliation now consumes accepted
+  engine observations. Persistence verifies the still-active session, Claude
+  provider and unchanged selection; domain rules settle the attempt. Receipt,
+  restored/fresh default and activity commit atomically. Manual outcomes do not
+  change the pin; duplicate/obsolete callbacks do not rewrite settled outcomes.
+  No automatic task replay or provider switch is introduced.
+- Twelve native domain recovery tests, four new persistence recovery/migration
+  tests and four Dogfood persistence regression tests passed. They cover reopen,
+  event-failure rollback, replaced sessions, operator A/B/A choice, unexpected new
+  context and schema-126 migration without guessing existing-session context.
+- Final strict Linux-target domain/persistence/API all-target/all-feature Clippy
+  passed after fixing duplicate-test and test field-order issues. Linux runtime
+  integration was not executed; native tests used disposable databases only.
+- Hook configuration, outcome presentation, provider-authoritative Continue-to-
+  Fresh execution and real Linux/provider acceptance remain open. This migration
+  requires a compatible database backup/restore plan for older-binary rollback;
+  no live database was migrated and no worker, deployment or release changed.
+
 ### P2: retain startup evidence for API reconciliation
 
 - Verified registry locking spans process spawn through insertion and callback

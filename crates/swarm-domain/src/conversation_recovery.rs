@@ -81,6 +81,24 @@ pub struct ConversationRecovery {
 }
 
 impl ConversationRecovery {
+    /// Rehydrates an engine-owned attempt after API replacement. The adapter
+    /// must authenticate its source and match the immutable process binding.
+    /// Impossible ladder positions are rejected instead of creating retries.
+    #[must_use]
+    pub const fn from_attempt(attempt: ConversationRecoveryAttempt) -> Option<Self> {
+        let valid = match attempt.step {
+            ConversationRecoveryStep::Exact { .. } => attempt.number == 1,
+            ConversationRecoveryStep::Continue => matches!(attempt.number, 1 | 2),
+            ConversationRecoveryStep::Fresh => matches!(attempt.number, 2 | 3),
+        };
+        if valid {
+            Some(Self {
+                state: ConversationRecoveryState::Attempt { attempt },
+            })
+        } else {
+            None
+        }
+    }
     /// Applies authenticated startup evidence only to its bound engine session.
     /// Non-startup lifecycle events cannot settle or advance the recovery ladder.
     pub fn observe_provider_start(
@@ -208,6 +226,43 @@ impl ConversationRecovery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rehydrated_attempts_keep_identity_and_reject_impossible_ladder_positions() {
+        let ConversationRecoveryState::Attempt { attempt } =
+            ConversationRecovery::new(None, true).state()
+        else {
+            panic!("attempt");
+        };
+        assert_eq!(
+            ConversationRecovery::from_attempt(attempt).unwrap().state(),
+            ConversationRecoveryState::Attempt { attempt }
+        );
+        for step in [
+            ConversationRecoveryStep::Exact {
+                conversation: ProviderConversationId::new(),
+            },
+            ConversationRecoveryStep::Continue,
+            ConversationRecoveryStep::Fresh,
+        ] {
+            for number in 0..=4 {
+                let valid = match step {
+                    ConversationRecoveryStep::Exact { .. } => number == 1,
+                    ConversationRecoveryStep::Continue => matches!(number, 1 | 2),
+                    ConversationRecoveryStep::Fresh => matches!(number, 2 | 3),
+                };
+                assert_eq!(
+                    ConversationRecovery::from_attempt(ConversationRecoveryAttempt {
+                        number,
+                        step,
+                        ..attempt
+                    })
+                    .is_some(),
+                    valid
+                );
+            }
+        }
+    }
 
     fn attempt(recovery: ConversationRecovery) -> ConversationRecoveryAttempt {
         let ConversationRecoveryState::Attempt { attempt } = recovery.state() else {

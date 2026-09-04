@@ -604,6 +604,23 @@ async fn reconcile_worker_bindings_unlocked(state: &AppState) -> Result<LiveSess
             "terminal host returned an unexpected response",
         ));
     };
+    for session in &sessions {
+        if session.running
+            && let (Some(attempt), Some(observation)) =
+                (session.recovery_attempt, session.provider_start)
+            && task_store(state)?
+                .reconcile_provider_start(
+                    session.session_id,
+                    attempt,
+                    observation.kind,
+                    observation.conversation,
+                )
+                .map_err(|error| task_store_error(&error))?
+                .is_some()
+        {
+            state.control_room_notify.notify_waiters();
+        }
+    }
     let live = sessions
         .into_iter()
         .filter(|session| session.running)

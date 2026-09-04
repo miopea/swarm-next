@@ -229,7 +229,7 @@ mod tests {
             let store = TaskStore::open(&path).unwrap();
             let connection = store.connection().unwrap();
             connection
-                .execute_batch("DROP TABLE browser_evidence; PRAGMA user_version = 125;")
+                .execute_batch("DROP TABLE worker_startup_context; DROP TABLE browser_evidence; PRAGMA user_version = 125;")
                 .unwrap();
         }
         {
@@ -248,7 +248,7 @@ mod tests {
             .unwrap()
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, crate::DOGFOOD_EVIDENCE_SCHEMA_VERSION);
+        assert_eq!(version, crate::CURRENT_SCHEMA_VERSION);
     }
 
     #[test]

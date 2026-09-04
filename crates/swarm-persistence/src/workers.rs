@@ -1041,6 +1041,13 @@ impl TaskStore {
             "INSERT INTO worker_sessions (session_id, worker_id) VALUES (?1, ?2)",
             params![session_id.to_string(), worker_id.to_string()],
         )?;
+        transaction.execute(
+            "INSERT INTO worker_startup_context(worker_id, session_id, selected_conversation, status)
+             SELECT id, ?2, provider_conversation_id, 'pending' FROM worker_profiles WHERE id = ?1
+             ON CONFLICT(worker_id) DO UPDATE SET session_id = excluded.session_id,
+                 selected_conversation = excluded.selected_conversation, status = 'pending', outcome = NULL",
+            params![worker_id.to_string(), session_id.to_string()],
+        )?;
         let owned_tasks = {
             let mut statement = transaction.prepare(
                 "SELECT task.id, task.state
@@ -1143,7 +1150,14 @@ impl TaskStore {
             |row| row.get::<_, Option<String>>(0),
         ).optional()?.ok_or(TaskStoreError::WorkerNotFound)?;
         let selected = conversation_id.to_string();
+        // An explicit selection supersedes pending startup evidence, including
+        // selecting the existing pin or an A -> B -> A sequence.
+        transaction.execute(
+            "UPDATE worker_startup_context SET status = 'canceled' WHERE worker_id = ?1 AND status = 'pending'",
+            [worker_id.to_string()],
+        )?;
         if previous.as_deref() == Some(selected.as_str()) {
+            transaction.commit()?;
             return Ok(());
         }
         transaction.execute(

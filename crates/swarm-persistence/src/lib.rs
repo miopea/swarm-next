@@ -84,6 +84,7 @@ pub use migration::{
     LegacyWorkerMigrationReceipt, LegacyWorkerMigrationRollback, LegacyWorkerPreview,
     LegacyWorkerRecord,
 };
+mod conversation_recovery;
 mod dogfood_evidence;
 mod night_watch;
 pub use dogfood_evidence::{EvidenceError, EvidenceWrite};
@@ -204,7 +205,8 @@ const CLAIM_WITHDRAWAL_SCHEMA_VERSION: i64 = 123;
 const TERMINAL_CONTROL_PROJECTION_SCHEMA_VERSION: i64 = 124;
 const NIGHT_WATCH_SCHEMA_VERSION: i64 = 125;
 const DOGFOOD_EVIDENCE_SCHEMA_VERSION: i64 = 126;
-const CURRENT_SCHEMA_VERSION: i64 = DOGFOOD_EVIDENCE_SCHEMA_VERSION;
+const CONVERSATION_RECOVERY_SCHEMA_VERSION: i64 = 127;
+const CURRENT_SCHEMA_VERSION: i64 = CONVERSATION_RECOVERY_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -3699,7 +3701,8 @@ fn migrate_maturity_schema_steps(
 ) -> rusqlite::Result<()> {
     terminal_control_projection::migrate(transaction, schema_version)?;
     night_watch::migrate(transaction, schema_version)?;
-    dogfood_evidence::migrate(transaction, schema_version)
+    dogfood_evidence::migrate(transaction, schema_version)?;
+    conversation_recovery::migrate(transaction, schema_version)
 }
 
 /// Work closed for a reason other than success gets its own state.
