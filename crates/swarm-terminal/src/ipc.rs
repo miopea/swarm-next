@@ -29,7 +29,8 @@ use crate::{
 // version-matched to itself and a newer checkout cannot break the update that
 // carries it.
 // Protocol 14 fences interactive selection against explicit operator choices.
-pub const PROTOCOL_VERSION: u16 = 14;
+// Protocol 15 retains stopped-session evidence until the API persists it.
+pub const PROTOCOL_VERSION: u16 = 15;
 pub const TERMINAL_CONTROL_PROTOCOL_VERSION: u16 = 11;
 pub const MAX_CONTROL_INPUT_BYTES: usize = 64 * 1024;
 pub const MAX_REQUEST_BYTES: u64 = 256 * 1024;
@@ -274,6 +275,9 @@ pub enum HostRequest {
     Stop {
         session_id: WorkerSessionId,
     },
+    StopRetained {
+        session_id: WorkerSessionId,
+    },
     ProviderSessionStart {
         session_id: WorkerSessionId,
         capability: ProviderLifecycleCapability,
@@ -346,6 +350,8 @@ impl TerminalControlStatus {
 pub struct HostSessionSummary {
     pub session_id: WorkerSessionId,
     pub running: bool,
+    #[serde(default)]
+    pub stop_pending_release: bool,
     #[serde(default)]
     pub resources: Option<ProcessResourceSample>,
     /// Wall-clock second of this terminal's most recent output. Absent from a
@@ -585,6 +591,7 @@ mod tests {
             "control",
             "wait_controlled",
             "stop",
+            "stop_retained",
             "provider_session_start",
             "provider_resume_end",
             "fence_provider_selection",
@@ -609,8 +616,8 @@ mod tests {
              anyone -- bump it, then update this list."
         );
         assert_eq!(
-            PROTOCOL_VERSION, 14,
-            "the pinned surface above belongs to protocol 14; if you changed \
+            PROTOCOL_VERSION, 15,
+            "the pinned surface above belongs to protocol 15; if you changed \
              the requests, this number moves with them"
         );
     }
@@ -702,7 +709,7 @@ mod tests {
             variants,
             ["status", "claim", "renew", "release", "input", "resize"]
         );
-        assert_eq!(PROTOCOL_VERSION, 14);
+        assert_eq!(PROTOCOL_VERSION, 15);
     }
 
     #[test]

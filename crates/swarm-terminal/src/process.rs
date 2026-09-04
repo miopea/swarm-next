@@ -117,6 +117,7 @@ pub enum SessionRegistryError {
 pub struct SessionResourceState {
     pub session_id: WorkerSessionId,
     pub running: bool,
+    pub stop_pending_release: bool,
     pub resources: Option<crate::ProcessResourceSample>,
     /// Wall-clock second of this terminal's most recent output.
     pub last_output_at: i64,
@@ -135,6 +136,7 @@ fn unix_seconds() -> i64 {
 
 pub struct ProcessTerminalSession {
     id: WorkerSessionId,
+    stop_pending_release: AtomicBool,
     recovery_attempt: OnceLock<ConversationRecoveryAttempt>,
     provider_lifecycle: Mutex<Option<crate::ProviderLifecycleGate>>,
     control: TerminalControlGate,
@@ -205,21 +207,7 @@ impl ProcessTerminalSession {
         command_builder.args(&command.arguments);
         command_builder.cwd(&command.working_directory);
         let provider_lifecycle = configure_provider_lifecycle(id, provider, &mut command_builder)?;
-        // Provider CLIs inspect terminal capabilities before emitting styled output.
-        // The terminal host commonly runs under systemd without TERM, even though it
-        // gives the child a real PTY. Declare the xterm contract rendered by the web
-        // client so live output and canonical snapshots retain ANSI styling.
-        command_builder.env("TERM", "xterm-256color");
-        command_builder.env("COLORTERM", "truecolor");
-        command_builder.env("FORCE_COLOR", "3");
-        command_builder.env("CLICOLOR_FORCE", "1");
-        command_builder.env_remove("NO_COLOR");
-        // Claude's flicker-free renderer otherwise selects the alternate screen,
-        // where xterm intentionally has no scrollback. Keep Claude in the main
-        // buffer so operators can review bounded history and restored snapshots.
-        if is_claude_executable(&command.executable) {
-            command_builder.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "1");
-        }
+        configure_terminal_environment(&mut command_builder, &command.executable);
         let child = pair
             .slave
             .spawn_command(command_builder)
@@ -291,6 +279,7 @@ impl ProcessTerminalSession {
 
         Ok(Self {
             id,
+            stop_pending_release: AtomicBool::new(false),
             control: TerminalControlGate::default(),
             recovery_attempt: OnceLock::new(),
             provider_lifecycle: Mutex::new(provider_lifecycle),
@@ -420,6 +409,11 @@ impl ProcessTerminalSession {
 
     fn write_input_unchecked(&self, bytes: &[u8]) -> Result<(), SessionRegistryError> {
         let mut writer = lock(&self.writer)?;
+        if self.stop_pending_release.load(Ordering::Acquire) {
+            return Err(SessionRegistryError::Terminal(
+                "session is stopped pending context release".into(),
+            ));
+        }
         writer.write_all(bytes).map_err(terminal_error)?;
         writer.flush().map_err(terminal_error)
     }
@@ -667,11 +661,18 @@ impl ProcessTerminalSession {
         self.last_output_at.load(Ordering::Acquire)
     }
 
-    /// Stops the child process explicitly.
-    ///
+    /// Stops execution but retains final evidence until its owner acknowledges it.
     /// # Errors
-    ///
-    /// Returns an error when the child lock is poisoned or termination fails.
+    /// Returns the same process/lock failures as stop; failed stops are not ready.
+    pub fn stop_retained(&self) -> Result<(), SessionRegistryError> {
+        self.stop()?;
+        self.stop_pending_release.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    /// Revokes lifecycle admission and terminates the child if it still runs.
+    /// # Errors
+    /// Returns process or poisoned-lock failures.
     pub fn stop(&self) -> Result<(), SessionRegistryError> {
         let mut child = lock(&self.child)?;
         if let Some(gate) = lock(&self.provider_lifecycle)?.as_mut() {
@@ -686,6 +687,19 @@ impl ProcessTerminalSession {
     #[must_use]
     pub fn reader_running(&self) -> bool {
         self.reader_running.load(Ordering::Acquire)
+    }
+}
+
+fn configure_terminal_environment(command: &mut CommandBuilder, executable: &std::path::Path) {
+    // Match the browser's xterm contract even when the host service has no TERM.
+    command.env("TERM", "xterm-256color");
+    command.env("COLORTERM", "truecolor");
+    command.env("FORCE_COLOR", "3");
+    command.env("CLICOLOR_FORCE", "1");
+    command.env_remove("NO_COLOR");
+    // Keep Claude in the main buffer so bounded scrollback remains available.
+    if is_claude_executable(executable) {
+        command.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "1");
     }
 }
 
@@ -1253,6 +1267,7 @@ impl SessionRegistry {
                 Ok(SessionResourceState {
                     session_id: session.id(),
                     running: session.is_running()?,
+                    stop_pending_release: session.stop_pending_release.load(Ordering::Acquire),
                     resources: session.resource_sample()?,
                     last_output_at: session.last_output_at(),
                     recovery_attempt: session.recovery_attempt(),

@@ -595,6 +595,119 @@ pub(super) async fn reconcile_worker_bindings(state: &AppState) -> Result<LiveSe
     reconcile_worker_bindings_unlocked(state).await
 }
 
+fn reconcile_worker_context(
+    state: &AppState,
+    session: &swarm_terminal::HostSessionSummary,
+) -> Result<(), ApiError> {
+    if let (Some(attempt), Some(observation)) = (session.recovery_attempt, session.provider_start)
+        && task_store(state)?
+            .reconcile_provider_start(
+                session.session_id,
+                attempt,
+                observation.kind,
+                observation.conversation,
+            )
+            .map_err(|error| task_store_error(&error))?
+            .is_some()
+    {
+        state.control_room_notify.notify_waiters();
+    }
+    if let Some(selection) = session.provider_selection
+        && task_store(state)?
+            .reconcile_provider_selection(session.session_id, selection)
+            .map_err(|error| task_store_error(&error))?
+    {
+        state.control_room_notify.notify_waiters();
+    }
+    Ok(())
+}
+
+async fn stop_context_request(
+    state: &AppState,
+    request: HostRequest,
+) -> Result<HostResponse, ApiError> {
+    tokio::time::timeout(std::time::Duration::from_secs(3), request_host(state, request))
+        .await
+        .map_err(|_| ApiError::new(StatusCode::GATEWAY_TIMEOUT, "worker_stop_unconfirmed", "Worker stop or context preservation could not be confirmed; retained evidence is not discarded."))?
+}
+
+/// Stops a worker without discarding its final engine-owned context evidence.
+/// Callers keep their lifecycle/maintenance ownership until releasing the binding.
+pub(super) async fn stop_worker_session_preserving_context(
+    state: &AppState,
+    session_id: WorkerSessionId,
+) -> Result<(), ApiError> {
+    let HostResponse::Pong { protocol_version } =
+        stop_context_request(state, HostRequest::Ping).await?
+    else {
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "unexpected_host_response",
+            "Worker engine did not identify its stop protocol.",
+        ));
+    };
+    if !(swarm_terminal::TERMINAL_CONTROL_PROTOCOL_VERSION..=swarm_terminal::PROTOCOL_VERSION)
+        .contains(&protocol_version)
+    {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "worker_engine_incompatible",
+            "Worker engine version is not supported for context-preserving stop.",
+        ));
+    }
+    let retained = protocol_version >= 15;
+    if retained
+        && !matches!(
+            stop_context_request(state, HostRequest::StopRetained { session_id }).await?,
+            HostResponse::Acknowledged
+        )
+    {
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "worker_stop_unconfirmed",
+            "Worker engine did not confirm retained stop.",
+        ));
+    }
+    let HostResponse::Sessions { sessions } =
+        stop_context_request(state, HostRequest::ListSessions).await?
+    else {
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "unexpected_host_response",
+            "Worker engine did not return final context evidence.",
+        ));
+    };
+    let session = sessions
+        .iter()
+        .find(|session| session.session_id == session_id)
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::CONFLICT,
+                "worker_context_unavailable",
+                "Worker context was not available; no saved-context claim was made.",
+            )
+        })?;
+    if retained && !session.stop_pending_release {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "worker_stop_unconfirmed",
+            "Worker engine has not frozen final context evidence.",
+        ));
+    }
+    reconcile_worker_context(state, session)?;
+    if !retained {
+        tracing::warn!(%session_id, protocol_version, "legacy engine stop can preserve only the pre-stop conversation snapshot");
+    }
+    match stop_context_request(state, HostRequest::Stop { session_id }).await? {
+        HostResponse::Acknowledged => Ok(()),
+        _ => Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "worker_stop_unconfirmed",
+            "Worker engine did not acknowledge stop cleanup.",
+        )),
+    }
+}
+
 async fn reconcile_worker_bindings_unlocked(state: &AppState) -> Result<LiveSessions, ApiError> {
     let response = request_host(state, HostRequest::ListSessions).await?;
     let HostResponse::Sessions { sessions } = response else {
@@ -608,31 +721,29 @@ async fn reconcile_worker_bindings_unlocked(state: &AppState) -> Result<LiveSess
         // The engine authenticated this evidence while the child was alive.
         // It can exit before our next read; retain its final conversation before
         // releasing the binding. Persistence still rejects replaced/manual pins.
-        if let (Some(attempt), Some(observation)) =
-            (session.recovery_attempt, session.provider_start)
-            && task_store(state)?
-                .reconcile_provider_start(
-                    session.session_id,
-                    attempt,
-                    observation.kind,
-                    observation.conversation,
+        reconcile_worker_context(state, session)?;
+        if session.stop_pending_release
+            && !matches!(
+                stop_context_request(
+                    state,
+                    HostRequest::Stop {
+                        session_id: session.session_id,
+                    },
                 )
-                .map_err(|error| task_store_error(&error))?
-                .is_some()
+                .await?,
+                HostResponse::Acknowledged
+            )
         {
-            state.control_room_notify.notify_waiters();
-        }
-        if let Some(selection) = session.provider_selection
-            && task_store(state)?
-                .reconcile_provider_selection(session.session_id, selection)
-                .map_err(|error| task_store_error(&error))?
-        {
-            state.control_room_notify.notify_waiters();
+            return Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "worker_stop_unconfirmed",
+                "Worker engine did not acknowledge retained-session cleanup.",
+            ));
         }
     }
     let live = sessions
         .into_iter()
-        .filter(|session| session.running)
+        .filter(|session| session.running && !session.stop_pending_release)
         .map(|session| (session.session_id, session.last_output_at))
         .collect::<LiveSessions>();
     let live_ids = live.keys().copied().collect::<HashSet<_>>();
@@ -658,6 +769,181 @@ async fn reconcile_worker_bindings_unlocked(state: &AppState) -> Result<LiveSess
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    async fn serve_stop_handshake(
+        listener: tokio::net::UnixListener,
+        snapshot: swarm_terminal::HostSessionSummary,
+        version: u16,
+        expected: &[&str],
+        verify: Option<(
+            swarm_persistence::TaskStore,
+            WorkerId,
+            swarm_domain::ProviderConversationId,
+        )>,
+    ) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        for expected in expected {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            let mut request = String::new();
+            stream.read_line(&mut request).await.unwrap();
+            let request: HostRequest = serde_json::from_str(&request).unwrap();
+            assert_eq!(serde_json::to_value(&request).unwrap()["type"], *expected);
+            let response = match request {
+                HostRequest::Ping => HostResponse::Pong {
+                    protocol_version: version,
+                },
+                HostRequest::ListSessions => HostResponse::Sessions {
+                    sessions: vec![snapshot.clone()],
+                },
+                HostRequest::Stop { .. } => {
+                    if let Some((store, worker, conversation)) = &verify {
+                        assert_eq!(
+                            store
+                                .get_worker_profile(*worker)
+                                .unwrap()
+                                .provider_conversation_id,
+                            Some(*conversation),
+                            "context must commit before removal"
+                        );
+                    }
+                    HostResponse::Acknowledged
+                }
+                HostRequest::StopRetained { .. } => HostResponse::Acknowledged,
+                _ => panic!("unexpected stop request"),
+            };
+            let mut response = serde_json::to_vec(&response).unwrap();
+            response.push(b'\n');
+            stream.get_mut().write_all(&response).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn retained_stop_commits_context_before_cleanup_and_recovers_after_api_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("stop.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let worker = store.ensure_queen("/workspace").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let resumed = swarm_domain::ProviderConversationId::new();
+        let snapshot = swarm_terminal::HostSessionSummary {
+            session_id: session,
+            running: false,
+            stop_pending_release: true,
+            resources: None,
+            last_output_at: None,
+            recovery_attempt: None,
+            provider_start: None,
+            provider_selection: Some(swarm_domain::ProviderConversationSelection {
+                revision: 2,
+                conversation: resumed,
+            }),
+        };
+        let unavailable = AppState::default()
+            .with_terminal_host(swarm_terminal::HostClient::new(&socket), "fixture");
+        let restored = AppState::default()
+            .with_task_store(store.clone())
+            .with_terminal_host(swarm_terminal::HostClient::new(&socket), "fixture");
+        let serve = serve_stop_handshake(
+            listener,
+            snapshot,
+            15,
+            &[
+                "ping",
+                "stop_retained",
+                "list_sessions",
+                "list_sessions",
+                "stop",
+            ],
+            Some((store.clone(), worker.id, resumed)),
+        );
+        let recover = async {
+            assert!(
+                stop_worker_session_preserving_context(&unavailable, session)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(store.active_worker_sessions().unwrap().len(), 1);
+            let live = reconcile_worker_bindings(&restored).await.unwrap();
+            assert!(live.is_empty());
+            assert!(store.active_worker_sessions().unwrap().is_empty());
+            assert_eq!(
+                store
+                    .get_worker_profile(worker.id)
+                    .unwrap()
+                    .provider_conversation_id,
+                Some(resumed)
+            );
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(serve, recover)
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn stop_preserves_context_and_refuses_unfrozen_or_unknown_engines() {
+        for (version, frozen, succeeds) in [
+            (14, false, true),
+            (15, true, true),
+            (15, false, false),
+            (16, false, false),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let socket = directory.path().join("stop.sock");
+            let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+            let store = swarm_persistence::TaskStore::in_memory().unwrap();
+            let worker = store.ensure_queen("/workspace").unwrap();
+            let session = WorkerSessionId::new();
+            store.bind_worker_session(worker.id, session).unwrap();
+            let resumed = swarm_domain::ProviderConversationId::new();
+            let snapshot = swarm_terminal::HostSessionSummary {
+                session_id: session,
+                running: version == 14,
+                stop_pending_release: frozen,
+                resources: None,
+                last_output_at: None,
+                recovery_attempt: None,
+                provider_start: None,
+                provider_selection: Some(swarm_domain::ProviderConversationSelection {
+                    revision: 2,
+                    conversation: resumed,
+                }),
+            };
+            let state = Arc::new(
+                AppState::default()
+                    .with_task_store(store.clone())
+                    .with_terminal_host(swarm_terminal::HostClient::new(&socket), "fixture"),
+            );
+            let expected: &[&str] = match (version, frozen) {
+                (14, _) => &["ping", "list_sessions", "stop"],
+                (15, true) => &["ping", "stop_retained", "list_sessions", "stop"],
+                (15, false) => &["ping", "stop_retained", "list_sessions"],
+                _ => &["ping"],
+            };
+            let serve = serve_stop_handshake(
+                listener,
+                snapshot,
+                version,
+                expected,
+                Some((store.clone(), worker.id, resumed)),
+            );
+            let ((), stopped) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                tokio::join!(
+                    serve,
+                    crate::workers::stand_worker_down(&state, worker.id, None)
+                )
+            })
+            .await
+            .unwrap();
+            assert_eq!(stopped.is_ok(), succeeds);
+            assert_eq!(store.active_worker_sessions().unwrap().is_empty(), succeeds);
+        }
+    }
+
     async fn serve_session_snapshot(
         listener: tokio::net::UnixListener,
         sessions: Vec<swarm_terminal::HostSessionSummary>,
@@ -709,6 +995,7 @@ mod tests {
             let mut summaries = vec![HostSessionSummary {
                 session_id: session,
                 running: false,
+                stop_pending_release: false,
                 resources: None,
                 last_output_at: None,
                 recovery_attempt: Some(attempt),
@@ -737,6 +1024,7 @@ mod tests {
                 summaries.push(HostSessionSummary {
                     session_id: replacement,
                     running: true,
+                    stop_pending_release: false,
                     resources: None,
                     last_output_at: None,
                     recovery_attempt: None,

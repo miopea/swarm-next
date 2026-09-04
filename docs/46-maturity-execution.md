@@ -6,6 +6,34 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2/P5: retained-stop handoff protects context across API interruption
+
+- Engine protocol 15 adds StopRetained: revoke lifecycle admission and terminate
+  the child while keeping its session/evidence under the existing registry cap.
+  Further input is refused. The marker remains in ListSessions until ordinary
+  Stop removes it; repeated retained stops are idempotent.
+- Operator Stop, Queen sleep, and maintenance stopping share a context-preserving
+  adapter. It saves the final snapshot before cleanup, then callers release the
+  binding as before. Each handshake request has a three-second deadline. On a
+  failed save the retained entry remains; normal API reconciliation can finish
+  the handoff after recovery. Unsupported protocols and unconfirmed stop markers
+  are errors, not claims that context was saved.
+- Protocol 11-14 compatibility preserves available pre-stop evidence and logs
+  weaker protection; it cannot guarantee capture of a switch racing legacy Stop.
+  ADR 0064 assigns ownership/removal condition. Protocol helpers/pins advance to
+  15, while ordinary terminal control retains its supported older-version floor.
+- Thirteen worker-runtime tests passed in local Ubuntu, including interrupted
+  persistence, normal/legacy stop, unknown protocol, and missing stop marker.
+  All 21 host-library tests passed, including real disposable PTYs, retained
+  evidence, input refusal, registry capacity, idempotency, and cleanup. Final
+  strict Linux API/terminal/host Clippy passed, including the cleanup-ack guard.
+  All 109 terminal-library tests also executed successfully in local Ubuntu,
+  including the protocol-15 pins, lifecycle gates, bounded history, resources,
+  and real-PTY ownership/resize regressions.
+- No live worker interruption or deployment. This protects accepted conversation
+  evidence; it does not yet add graceful provider termination, durable recovery
+  across engine loss, native Continue-to-Fresh completion, or device acceptance.
+
 ### P2: retain accepted conversation evidence after provider exit
 
 - Fixed binding reconciliation discarding startup/selection evidence when the

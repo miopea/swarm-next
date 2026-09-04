@@ -15,7 +15,7 @@ use swarm_terminal::{
 };
 
 const DEADLINE: Duration = Duration::from_secs(3);
-const STARTUP_PROTOCOL: u16 = 14;
+const STARTUP_PROTOCOL: u16 = 15;
 
 fn unavailable() -> io::Error {
     io::Error::other("provider startup evidence unavailable")

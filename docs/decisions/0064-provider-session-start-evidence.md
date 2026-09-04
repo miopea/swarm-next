@@ -112,3 +112,18 @@ does not erase an already-authenticated conversation identity. Persistence still
 requires the exact current binding and honors manual-selection fences. A replaced
 or already-released binding cannot update the new session's default. This does
 not accept new callbacks from dead providers or infer restoration from exit.
+
+Protocol 15 adds StopRetained. It revokes provider lifecycle admission and stops
+the child, but leaves the bounded engine session entry available with a pending
+release marker. The API saves its final evidence before the existing Stop command
+removes the entry. After API interruption, ordinary binding reconciliation saves
+that same retained evidence and finishes cleanup. No new timer, history store,
+or unbounded pending queue is introduced; entries count against the registry cap.
+Persistence failure must leave the entry retained, not acknowledge saved context.
+
+The API stop adapter owns compatibility with protocol 11-14: save their available
+pre-stop evidence and then use legacy Stop, reporting the weaker protection in
+diagnostics. This cannot guarantee capture of a switch racing that legacy Stop.
+Remove this compatibility branch when the supported engine floor reaches 15.
+Unknown future protocols are not assumed to implement this handshake. This
+change does not turn abrupt process termination into graceful provider shutdown.

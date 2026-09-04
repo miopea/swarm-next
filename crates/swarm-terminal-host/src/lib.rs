@@ -694,6 +694,7 @@ fn dispatch_blocking(
                     .map(|state| HostSessionSummary {
                         session_id: state.session_id,
                         running: state.running,
+                        stop_pending_release: state.stop_pending_release,
                         resources: state.resources,
                         last_output_at: Some(state.last_output_at),
                         recovery_attempt: state.recovery_attempt,
@@ -786,6 +787,11 @@ fn dispatch_blocking(
         } => {
             return swarm_terminal::dispatch_terminal_control(registry, session_id, command);
         }
+        HostRequest::StopRetained { session_id } => registry
+            .get(session_id)
+            .and_then(|session| session.stop_retained())
+            .map(|()| HostResponse::Acknowledged)
+            .map_err(|error| error.to_string()),
         HostRequest::Stop { session_id } => registry
             .stop(session_id)
             .map(|()| HostResponse::Acknowledged)
@@ -845,6 +851,62 @@ mod tests {
 
     use swarm_terminal::{HostClient, JournalLimits, ProviderCommand, Resume, TerminalSize};
     use tempfile::TempDir;
+
+    #[test]
+    fn retained_stop_keeps_bounded_evidence_and_refuses_input_until_cleanup() {
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry =
+            SessionRegistry::new(JournalLimits::new(4096, 64), 1, [workspace.clone()]).unwrap();
+        let command = ProviderCommand {
+            executable: PathBuf::from("/bin/sh"),
+            arguments: vec!["-c".into(), "read value".into()],
+            working_directory: workspace,
+        };
+        let session = registry.spawn(&command, TerminalSize::default()).unwrap();
+        let recovery = ConversationRecovery::new(None, true);
+        let ConversationRecoveryState::Attempt { attempt } = recovery.state() else {
+            panic!("expected native continuation");
+        };
+        session.record_recovery_attempt(attempt);
+        for _ in 0..2 {
+            assert!(matches!(
+                dispatch_blocking(
+                    &registry,
+                    "test",
+                    "test",
+                    HostRequest::StopRetained {
+                        session_id: session.id()
+                    }
+                ),
+                HostResponse::Acknowledged
+            ));
+        }
+        assert!(session.write_input(b"must not be sent\n").is_err());
+        let HostResponse::Sessions { sessions } =
+            dispatch_blocking(&registry, "test", "test", HostRequest::ListSessions)
+        else {
+            panic!("expected retained evidence");
+        };
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions[0].stop_pending_release);
+        assert_eq!(sessions[0].recovery_attempt, Some(attempt));
+        assert!(matches!(
+            registry.spawn(&command, TerminalSize::default()),
+            Err(swarm_terminal::SessionRegistryError::SessionLimitReached { limit: 1 })
+        ));
+        assert!(matches!(
+            dispatch_blocking(
+                &registry,
+                "test",
+                "test",
+                HostRequest::Stop {
+                    session_id: session.id()
+                }
+            ),
+            HostResponse::Acknowledged
+        ));
+        assert!(registry.is_empty().unwrap());
+    }
 
     use super::*;
 

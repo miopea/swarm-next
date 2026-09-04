@@ -699,13 +699,8 @@ async fn stop_running_sessions(
     running: &[swarm_terminal::HostSessionSummary],
 ) -> Result<(), ApiError> {
     for session in running {
-        request_host(
-            state,
-            HostRequest::Stop {
-                session_id: session.session_id,
-            },
-        )
-        .await?;
+        crate::worker_runtime::stop_worker_session_preserving_context(state, session.session_id)
+            .await?;
         task_store(state)?
             .release_worker_session(session.session_id)
             .map_err(|error| task_store_error(&error))?;

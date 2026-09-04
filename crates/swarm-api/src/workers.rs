@@ -516,7 +516,7 @@ async fn conversation_choice_fence(
     if !matches!(
         request_host(state, HostRequest::Ping).await,
         Ok(swarm_terminal::HostResponse::Pong {
-            protocol_version: 14
+            protocol_version: swarm_terminal::PROTOCOL_VERSION
         })
     ) {
         return Ok(None);
@@ -1104,7 +1104,7 @@ pub(super) async fn stand_worker_down(
         .clear_worker_revival_intent(worker_id)
         .map_err(|error| task_store_error(&error))?;
     if let Some(session_id) = profile.active_session_id {
-        request_host(state, HostRequest::Stop { session_id }).await?;
+        crate::worker_runtime::stop_worker_session_preserving_context(state, session_id).await?;
         task_store(state)?
             .release_worker_session_because(session_id, ended)
             .map_err(|error| task_store_error(&error))?;
