@@ -6,6 +6,19 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: assignment-scoped task-brief observations
+
+- New task-brief holds and successful clears use the immutable assignment ID,
+  while the queue projection checks its exact worker/session and pending state.
+  Late results from an earlier assignment cannot replace or clear the new row.
+- A valid scoped observation clears the corresponding legacy task-wide row in
+  the same transaction. No schema migration, task mutation, or terminal input.
+- The same-session reassignment regression passed, including legacy replacement,
+  late old refusal and old clear. Strict Linux-target API/persistence lint passed;
+  all 18 dispatch tests and 10 refusal-filtered tests passed (one overlaps).
+- Rearming returned work under an unchanged assignment and the other delivery
+  families remain open. No live acceptance, push, deployment or release claimed.
+
 ### P4: task-brief holds follow authoritative dispatch applicability
 
 - New task-brief refusals now carry their actual immutable session rather than

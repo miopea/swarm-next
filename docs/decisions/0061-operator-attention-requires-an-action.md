@@ -45,8 +45,14 @@ and a matching unreleased assignment has a Queued/Dispatching briefing. Recorded
 worker/session identity must match when available; new task-brief observations
 always include the immutable session. Completed dispatches and tasks that moved
 past briefing therefore remove old holds, including late repeated observations.
-Unknown legacy subjects remain unconfirmed. Assignment-generation identity for
-same-session reassignment and other delivery families still require integration.
+Unknown legacy subjects remain unconfirmed. New task-brief observations and
+successful clears use `task-dispatch:<assignment-id>` subjects, preventing an old
+assignment result from altering a new assignment's row even within one session.
+The projection verifies that exact pending assignment. A valid scoped observation
+atomically clears the corresponding legacy task-wide observation. Persistence owns
+that compatibility path until task-wide observations are no longer present; no
+schema migration or legacy identity inference is required. Returned work that
+rearms the same assignment and other delivery families still require review.
 
 ## Consequences and verification
 

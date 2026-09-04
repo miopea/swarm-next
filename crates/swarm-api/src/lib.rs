@@ -1970,7 +1970,7 @@ impl AppState {
                 Ok(TerminalSubmission::Acknowledged) => {
                     clear_held_delivery_refusals(
                         store,
-                        &format!("task-brief:{}", delivery.task_id),
+                        &format!("task-dispatch:{}", delivery.assignment_id),
                     );
                     store.complete_task_dispatch(&delivery.assignment_id, unix_timestamp())
                 }
@@ -1981,7 +1981,7 @@ impl AppState {
                     if let Some(kind) = reason.refusal_kind() {
                         let _ = store.record_coordinator_refusal(
                             kind,
-                            &format!("task-brief:{}", delivery.task_id),
+                            &format!("task-dispatch:{}", delivery.assignment_id),
                             Some(delivery.worker_id),
                             Some(delivery.session_id),
                             &reason.describe("A briefing"),

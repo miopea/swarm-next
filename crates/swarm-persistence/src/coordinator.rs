@@ -5768,6 +5768,26 @@ impl TaskStore {
             kind,
             REFUSAL_DELIVERY_HELD | REFUSAL_DELIVERY_HELD_UNSENT_TEXT
         ) {
+            if let Some(assignment_id) = subject.strip_prefix("task-dispatch:") {
+                // A scoped observation replaces the legacy task-wide hold only
+                // while that exact assignment still owns this delivery.
+                transaction.execute(
+                    "UPDATE coordinator_refusals SET cleared_at = ?4
+                     WHERE kind IN ('delivery_held_open_prompt', 'delivery_held_unsent_text')
+                       AND cleared_at IS NULL AND subject = (
+                         SELECT 'task-brief:' || dispatch.task_id FROM task_dispatches dispatch
+                         JOIN task_assignments assignment ON assignment.id = dispatch.assignment_id
+                         WHERE dispatch.assignment_id = ?1 AND dispatch.worker_id = ?2
+                           AND assignment.worker_session_id = ?3 AND assignment.released_at IS NULL
+                           AND dispatch.state IN ('queued','dispatching'))",
+                    params![
+                        assignment_id,
+                        worker_id.map(|id| id.to_string()),
+                        session_id.map(|id| id.to_string()),
+                        now
+                    ],
+                )?;
+            }
             // A newer observation replaces the other prompt condition for the
             // same delivery. Never clear unrelated subjects or wake recovery.
             transaction.execute(
@@ -5858,6 +5878,18 @@ impl TaskStore {
              FROM coordinator_refusals refusal
              LEFT JOIN worker_profiles worker ON worker.id = refusal.worker_id
              WHERE refusal.cleared_at IS NULL
+               AND (refusal.kind NOT IN ('delivery_held_open_prompt', 'delivery_held_unsent_text')
+                    OR refusal.subject NOT LIKE 'task-dispatch:%'
+                    OR EXISTS (
+                        SELECT 1 FROM task_dispatches dispatch
+                        JOIN task_assignments assignment ON assignment.id = dispatch.assignment_id
+                        JOIN tasks task ON task.id = dispatch.task_id
+                        WHERE dispatch.assignment_id = substr(refusal.subject, 15)
+                          AND task.removed_at IS NULL AND task.state IN ('ready', 'active')
+                          AND dispatch.state IN ('queued', 'dispatching') AND assignment.released_at IS NULL
+                          AND dispatch.worker_id = refusal.worker_id
+                          AND assignment.worker_session_id = refusal.session_id
+                    ))
                -- A known task's briefing hold is obsolete once its live
                -- assignment no longer has a pending dispatch. Keep unknown
                -- legacy subjects as unresolved rather than guessing recovery.

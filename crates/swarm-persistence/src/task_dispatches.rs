@@ -669,6 +669,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn assignment_scoped_refusals_cannot_replace_or_clear_a_new_assignment() {
+        let (store, task, session) = assigned_task();
+        let old = store
+            .claim_task_dispatches(100, &std::collections::HashSet::new())
+            .unwrap()
+            .remove(0);
+        let old_subject = format!("task-dispatch:{}", old.assignment_id);
+        store
+            .record_coordinator_refusal(
+                crate::REFUSAL_DELIVERY_HELD,
+                &old_subject,
+                Some(old.worker_id),
+                Some(session),
+                "old",
+                100,
+            )
+            .unwrap();
+        store.assign_task(task, session).unwrap();
+        let new = store
+            .claim_task_dispatches(101, &std::collections::HashSet::new())
+            .unwrap()
+            .remove(0);
+        assert_ne!(old.assignment_id, new.assignment_id);
+        let new_subject = format!("task-dispatch:{}", new.assignment_id);
+        store
+            .record_coordinator_refusal(
+                crate::REFUSAL_DELIVERY_HELD,
+                &format!("task-brief:{task}"),
+                Some(new.worker_id),
+                Some(session),
+                "legacy",
+                101,
+            )
+            .unwrap();
+        store
+            .record_coordinator_refusal(
+                crate::REFUSAL_DELIVERY_HELD_UNSENT_TEXT,
+                &new_subject,
+                Some(new.worker_id),
+                Some(session),
+                "new",
+                102,
+            )
+            .unwrap();
+        store
+            .record_coordinator_refusal(
+                crate::REFUSAL_DELIVERY_HELD,
+                &old_subject,
+                Some(old.worker_id),
+                Some(session),
+                "late old",
+                103,
+            )
+            .unwrap();
+        store
+            .clear_coordinator_refusal(crate::REFUSAL_DELIVERY_HELD, &old_subject, 104)
+            .unwrap();
+        let standing = store.standing_coordinator_refusals(10_000, 0).unwrap();
+        assert_eq!(standing.len(), 1);
+        assert_eq!(standing[0].subject, new_subject);
+        assert_eq!(standing[0].reason, "new");
+    }
+
+    #[test]
     fn prompt_hold_projection_follows_dispatch_resolution_not_retry_age() {
         for resolve_by_completion in [true, false] {
             let (store, task, session) = assigned_task();
