@@ -155,6 +155,13 @@ async fn start_worker_process_unlocked(
             },
         ));
     }
+    if profile.active_session_id.is_some() {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "worker_recovery_pending",
+            "This worker has unresolved startup recovery. Its existing session is preserved; inspect recovery before starting another process.",
+        ));
+    }
     let mcp_config = if provider_reaches_the_board(profile.provider) {
         state
             .agent_bridge
@@ -786,7 +793,7 @@ pub(super) async fn stop_worker_session_preserving_context(
     }
 }
 
-fn reconcile_recovery_successors(
+async fn reconcile_recovery_successors(
     state: &AppState,
     sessions: &[swarm_terminal::HostSessionSummary],
 ) -> Result<(), ApiError> {
@@ -811,6 +818,9 @@ fn reconcile_recovery_successors(
         if previous.running || previous.stop_pending_release {
             continue;
         }
+        let owner = task_store(state)?
+            .pending_continuation_owner(previous.session_id)
+            .map_err(|error| task_store_error(&error))?;
         if task_store(state)?
             .reconcile_continuation_successor(
                 previous.session_id,
@@ -820,6 +830,9 @@ fn reconcile_recovery_successors(
             )
             .map_err(|error| task_store_error(&error))?
         {
+            if let Some(owner) = owner {
+                state.worker_errors.write().await.remove(&owner);
+            }
             state.control_room_notify.notify_waiters();
         }
     }
@@ -828,16 +841,17 @@ fn reconcile_recovery_successors(
 
 async fn reconcile_worker_bindings_unlocked(state: &AppState) -> Result<LiveSessions, ApiError> {
     let response = request_host(state, HostRequest::ListSessions).await?;
-    let HostResponse::Sessions { sessions } = response else {
+    let HostResponse::Sessions { mut sessions } = response else {
         return Err(ApiError::new(
             StatusCode::BAD_GATEWAY,
             "unexpected_host_response",
             "terminal host returned an unexpected response",
         ));
     };
+    let retained = advance_failed_continuations(state, &mut sessions).await?;
     // Session order is arbitrary. Transfer the receipt before consuming the
     // successor's startup evidence or retiring the original dead binding.
-    reconcile_recovery_successors(state, &sessions)?;
+    reconcile_recovery_successors(state, &sessions).await?;
     for session in &sessions {
         // The engine authenticated this evidence while the child was alive.
         // It can exit before our next read; retain its final conversation before
@@ -868,7 +882,10 @@ async fn reconcile_worker_bindings_unlocked(state: &AppState) -> Result<LiveSess
         .filter(|session| session.running && !session.stop_pending_release)
         .map(|session| (session.session_id, session.last_output_at))
         .collect::<LiveSessions>();
-    let live_ids = live.keys().copied().collect::<HashSet<_>>();
+    let mut live_ids = live.keys().copied().collect::<HashSet<_>>();
+    // Retaining recovery ownership is not evidence of a running child. The
+    // returned live map remains truthful while deferred recovery keeps its pin.
+    live_ids.extend(retained);
     let released = task_store(state)?
         .release_missing_worker_sessions(&live_ids)
         .map_err(|error| task_store_error(&error))?;
@@ -887,6 +904,102 @@ async fn reconcile_worker_bindings_unlocked(state: &AppState) -> Result<LiveSess
         state.control_room_notify.notify_waiters();
     }
     Ok(live)
+}
+
+async fn advance_failed_continuations(
+    state: &AppState,
+    sessions: &mut Vec<swarm_terminal::HostSessionSummary>,
+) -> Result<HashSet<WorkerSessionId>, ApiError> {
+    use swarm_domain::{ConversationRecovery, ConversationRecoveryStep};
+    use swarm_terminal::ContinuationRecoveryOutcome;
+    let mut retained = HashSet::new();
+    let mut next = None;
+    for session in sessions.iter() {
+        let Some(attempt) = session.recovery_attempt else {
+            continue;
+        };
+        if session.running
+            || session.stop_pending_release
+            || !session.continuation_unavailable
+            || !matches!(attempt.step, ConversationRecoveryStep::Continue)
+            || ConversationRecovery::from_attempt(attempt).is_none()
+            || matches!(
+                session.continuation_recovery,
+                Some(ContinuationRecoveryOutcome::SessionCreated { .. })
+            )
+        {
+            continue;
+        }
+        let Some(owner) = task_store(state)?
+            .pending_continuation_owner(session.session_id)
+            .map_err(|error| task_store_error(&error))?
+        else {
+            continue;
+        };
+        retained.insert(session.session_id);
+        let message = if session.continuation_recovery
+            == Some(ContinuationRecoveryOutcome::LaunchFailed)
+        {
+            "Continuation could not restore context and the final fresh startup failed. Manual recovery is required; no task was replayed."
+        } else {
+            if next.is_none() {
+                next = Some((session.session_id, attempt, owner));
+            }
+            "Continuation could not restore context. Recovery is pending; the previous conversation choice is preserved."
+        };
+        state
+            .worker_errors
+            .write()
+            .await
+            .insert(owner, message.into());
+    }
+    let Some((session_id, attempt, owner)) = next else {
+        return Ok(retained);
+    };
+    // One process operation per reconciliation, with a shared deadline for
+    // protocol negotiation, launch and refresh. Expiry defers, never proves loss.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    let operation = async {
+        if !matches!(request_host(state, HostRequest::Ping).await?, HostResponse::Pong { protocol_version } if protocol_version == swarm_terminal::PROTOCOL_VERSION)
+        {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "recovery_engine_version",
+                "Automatic recovery requires a compatible worker engine. The existing binding is preserved.",
+            ));
+        }
+        let result = request_host(
+            state,
+            HostRequest::RecoverContinuation {
+                session_id,
+                attempt,
+            },
+        )
+        .await;
+        // Even an error can mean an acknowledgement was lost after creation.
+        // Re-read the engine's immutable relationship before considering retry.
+        if let HostResponse::Sessions {
+            sessions: refreshed,
+        } = request_host(state, HostRequest::ListSessions).await?
+        {
+            *sessions = refreshed;
+        }
+        result
+    };
+    match tokio::time::timeout_at(deadline, operation).await {
+        Ok(Ok(HostResponse::SessionStarted { .. })) => {
+            state.worker_errors.write().await.remove(&owner);
+        }
+        Ok(Err(error)) => {
+            state
+                .worker_errors
+                .write()
+                .await
+                .insert(owner, error.message);
+        }
+        Ok(Ok(_)) | Err(_) => {}
+    }
+    Ok(retained)
 }
 
 async fn cleanup_recovery_parents(
@@ -1175,6 +1288,211 @@ mod tests {
         let mut response = serde_json::to_vec(&HostResponse::Acknowledged).unwrap();
         response.push(b'\n');
         stream.get_mut().write_all(&response).await.unwrap();
+    }
+
+    async fn reply_to_recovery_request(
+        listener: &tokio::net::UnixListener,
+        expected: HostRequest,
+        response: Option<HostResponse>,
+    ) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut stream = BufReader::new(stream);
+        let mut request = String::new();
+        stream.read_line(&mut request).await.unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&request).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+        if let Some(response) = response {
+            let mut response = serde_json::to_vec(&response).unwrap();
+            response.push(b'\n');
+            stream.get_mut().write_all(&response).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn automatic_continuation_recovery_reconciles_success_and_lost_launch_reply() {
+        use swarm_terminal::{
+            ContinuationRecoveryOutcome, HostClient, ProviderSessionStartObservation,
+        };
+        for lost_reply in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let socket = directory.path().join("automatic.sock");
+            let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+            let store = swarm_persistence::TaskStore::in_memory().unwrap();
+            let worker = store.ensure_queen("/workspace").unwrap();
+            let previous = WorkerSessionId::new();
+            let successor = WorkerSessionId::new();
+            let chosen = swarm_domain::ProviderConversationId::new();
+            let (continuation, fresh) = continuation_and_fresh_attempts();
+            store.bind_worker_session(worker.id, previous).unwrap();
+            let mut parent = swarm_terminal::HostSessionSummary {
+                recovery_attempt: Some(continuation),
+                continuation_unavailable: true,
+                ..bare_session_summary(previous, false)
+            };
+            let child = swarm_terminal::HostSessionSummary {
+                recovery_attempt: Some(fresh),
+                provider_start: Some(ProviderSessionStartObservation {
+                    conversation: chosen,
+                    kind: swarm_domain::ProviderSessionStartKind::New,
+                }),
+                ..bare_session_summary(successor, true)
+            };
+            let state = AppState::default()
+                .with_task_store(store.clone())
+                .with_terminal_host(HostClient::new(&socket), "fixture");
+            let server = async {
+                serve_session_snapshot(&listener, vec![parent.clone()]).await;
+                reply_to_recovery_request(
+                    &listener,
+                    HostRequest::Ping,
+                    Some(HostResponse::Pong {
+                        protocol_version: swarm_terminal::PROTOCOL_VERSION,
+                    }),
+                )
+                .await;
+                reply_to_recovery_request(
+                    &listener,
+                    HostRequest::RecoverContinuation {
+                        session_id: previous,
+                        attempt: continuation,
+                    },
+                    (!lost_reply).then_some(HostResponse::SessionStarted {
+                        session_id: successor,
+                    }),
+                )
+                .await;
+                parent.continuation_recovery = Some(ContinuationRecoveryOutcome::SessionCreated {
+                    session_id: successor,
+                });
+                serve_session_snapshot(&listener, vec![child, parent]).await;
+                acknowledge_recovery_cleanup(
+                    &listener, &store, worker.id, previous, successor, chosen,
+                )
+                .await;
+            };
+            let ((), result) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                tokio::join!(server, reconcile_worker_bindings(&state))
+            })
+            .await
+            .unwrap();
+            let live = result.unwrap();
+            assert!(live.contains_key(&successor));
+            assert!(!live.contains_key(&previous));
+            assert_eq!(
+                store
+                    .get_worker_profile(worker.id)
+                    .unwrap()
+                    .active_session_id,
+                Some(successor)
+            );
+            assert!(!state.worker_errors.read().await.contains_key(&worker.id));
+        }
+    }
+
+    #[tokio::test]
+    async fn automatic_recovery_on_older_engine_preserves_binding_and_blocks_duplicate_wake() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("older.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let worker = store.ensure_queen("/workspace").unwrap();
+        let previous = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, previous).unwrap();
+        let (continuation, _) = continuation_and_fresh_attempts();
+        let snapshot = swarm_terminal::HostSessionSummary {
+            recovery_attempt: Some(continuation),
+            continuation_unavailable: true,
+            ..bare_session_summary(previous, false)
+        };
+        let state = AppState::default()
+            .with_task_store(store.clone())
+            .with_terminal_host(swarm_terminal::HostClient::new(&socket), "fixture");
+        let server = async {
+            for _ in 0..2 {
+                serve_session_snapshot(&listener, vec![snapshot.clone()]).await;
+                reply_to_recovery_request(
+                    &listener,
+                    HostRequest::Ping,
+                    Some(HostResponse::Pong {
+                        protocol_version: 15,
+                    }),
+                )
+                .await;
+            }
+        };
+        let client = async {
+            assert!(reconcile_worker_bindings(&state).await.unwrap().is_empty());
+            assert_eq!(
+                store
+                    .get_worker_profile(worker.id)
+                    .unwrap()
+                    .active_session_id,
+                Some(previous)
+            );
+            assert!(
+                state.worker_errors.read().await[&worker.id].contains("compatible worker engine")
+            );
+            assert!(
+                start_worker_process_unlocked(
+                    &state,
+                    worker.id,
+                    TerminalSize {
+                        columns: 80,
+                        rows: 24
+                    }
+                )
+                .await
+                .is_err()
+            );
+            assert_eq!(
+                store
+                    .get_worker_profile(worker.id)
+                    .unwrap()
+                    .active_session_id,
+                Some(previous)
+            );
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(server, client)
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn automatic_recovery_preserves_exhausted_binding_without_retry_or_fake_liveness() {
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let worker = store.ensure_queen("/workspace").unwrap();
+        let previous = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, previous).unwrap();
+        let (continuation, _) = continuation_and_fresh_attempts();
+        let mut snapshots = vec![swarm_terminal::HostSessionSummary {
+            recovery_attempt: Some(continuation),
+            continuation_unavailable: true,
+            continuation_recovery: Some(swarm_terminal::ContinuationRecoveryOutcome::LaunchFailed),
+            ..bare_session_summary(previous, false)
+        }];
+        // No engine configured: an accidental retry would be observable.
+        let state = AppState::default().with_task_store(store.clone());
+        assert!(
+            advance_failed_continuations(&state, &mut snapshots)
+                .await
+                .unwrap()
+                .contains(&previous)
+        );
+        assert!(state.worker_errors.read().await[&worker.id].contains("Manual recovery"));
+        store
+            .repoint_provider_conversation(worker.id, &swarm_domain::ProviderConversationId::new())
+            .unwrap();
+        assert!(
+            advance_failed_continuations(&state, &mut snapshots)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]

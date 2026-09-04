@@ -29,6 +29,33 @@ pub(super) fn migrate(tx: &Transaction<'_>, version: i64) -> rusqlite::Result<()
 }
 
 impl TaskStore {
+    /// Returns the current owner only while startup recovery may still advance.
+    /// A manual choice, completed startup, archive or replacement cancels it.
+    /// Engine evidence and the recovery attempt must be validated by the caller.
+    /// # Errors
+    /// Returns storage errors rather than authorizing recovery without evidence.
+    pub fn pending_continuation_owner(
+        &self,
+        session: WorkerSessionId,
+    ) -> Result<Option<swarm_domain::WorkerId>, TaskStoreError> {
+        let owner: Option<String> = self.connection()?.query_row(
+            "SELECT context.worker_id FROM worker_startup_context context
+             JOIN worker_profiles worker ON worker.id = context.worker_id
+             JOIN worker_sessions session ON session.worker_id = worker.id AND session.session_id = context.session_id
+             WHERE context.session_id = ?1 AND context.status = 'pending'
+               AND context.selection_suspended = 0 AND worker.archived_at IS NULL
+               AND session.ended_at IS NULL AND worker.provider = 'claude_code'
+               AND worker.provider_conversation_id IS context.selected_conversation",
+            [session.to_string()], |row| row.get(0)).optional()?;
+        owner
+            .map(|owner| {
+                owner
+                    .parse()
+                    .map_err(|_| TaskStoreError::IntegrityFailure("invalid recovery owner".into()))
+            })
+            .transpose()
+    }
+
     /// Rebinds an engine-confirmed final successor without replaying assignments.
     /// The caller must authenticate the parent/successor relationship at the
     /// engine boundary. A changed choice, settled startup or replaced binding

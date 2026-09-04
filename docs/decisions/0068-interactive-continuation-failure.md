@@ -58,6 +58,28 @@ be retried through this attempt. Neither outcome claims restored conversation.
 Session summaries expose a mutually exclusive SessionCreated/LaunchFailed result,
 not raw command configuration. Lifecycle helpers preflight exactly protocol 16;
 older engines must be detected before using this recovery request. This does not
-authorize an engine replacement or deployment. API binding reconciliation,
-manual-choice fencing across API interruption, fresh-context presentation, and
-prior-task replay protection are still required before automatic use is complete.
+authorize an engine replacement or deployment. The application contract below
+owns binding reconciliation, manual-choice protection, fresh-context evidence,
+and prior-task replay protection. Real-provider acceptance remains separate.
+
+## Application recovery ownership
+
+The API reconciles engine-confirmed successors before consuming startup evidence
+or retiring dead bindings. The persistence boundary permits handoff only for the
+unchanged current pending receipt. Delivered or uncertain task briefings retain
+their delivery records; normal assignment repair cannot manufacture replay.
+Parent cleanup follows durable handoff and targets only the old immutable ID.
+
+Automatic continuation advancement requires exact normalized failure evidence,
+a valid Continue attempt, the current pending durable owner, and a compatible
+protocol. Each reconciliation may initiate at most one process operation within
+a shared three-second IPC deadline. Expiry is deferral, not context-loss evidence.
+After either a launch result or transport error, the API attempts to reread the
+engine's successor relationship; a later reconciliation can recover a lost reply.
+
+Deferred and exhausted attempts retain their binding but are not reported as
+running. Normal wake cannot launch another process over that unresolved binding.
+An engine-confirmed final launch failure is shown as requiring manual recovery
+and does not trigger another automatic attempt. Resolved handoff clears its
+temporary worker error. These mechanics still require real-provider and operator
+acceptance before REC-01 is complete.

@@ -6,6 +6,29 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2/P5: automatic continuation-to-fresh recovery wiring
+
+- Normal worker reconciliation now advances an engine-confirmed failed Continue
+  only for a valid attempt and unchanged current pending durable owner. Manual
+  selections, completed startup, archived/replaced bindings, live processes,
+  retained stops and inconclusive startup evidence cannot authorize a launch.
+- A compatible-protocol check precedes the operation. At most one launch is
+  requested per reconciliation, within a shared three-second IPC deadline.
+  Deferred recovery retains its binding without reporting a live child; normal
+  wake refuses to create another process over that unresolved binding.
+- The engine is reread after launch success or error to recover lost replies.
+  Existing atomic handoff consumes fresh startup evidence before old-entry
+  cleanup; successful handoff clears the temporary worker error. Final engine
+  launch failure is shown as manual recovery and is not automatically retried.
+- All 431 Linux API tests passed in 137.15 seconds, including 21 worker-runtime
+  tests. New IPC coverage exercises automatic success, lost launch replies,
+  older-engine deferral and duplicate-wake prevention. Exhausted recovery is
+  retained without a launch; a newer manual choice cancels eligibility. Strict
+  API all-target/all-feature Linux Clippy, formatting and diff checks passed.
+- Real-provider acceptance, engine drain/capacity integration and timeout UI
+  acceptance remain open. No phase completion or measured performance gain is
+  claimed. No push, deployment, release or live worker interruption.
+
 ### P2/P5: cleanup after durable recovery handoff
 
 - API reconciliation now releases the dead parent engine entry only after its
