@@ -204,6 +204,33 @@ test("shows continuation provenance without claiming restoration and clears it f
   expect(screen.queryByText(/Recovery attempt 2/)).not.toBeInTheDocument();
 });
 
+test("settled recovery replaces startup uncertainty and does not follow another terminal", () => {
+  const { rerender } = render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{
+    session_id: "recovery-session", running: true,
+    recovery_attempt: { recovery_id: "recovery-1", number: 2, step: { kind: "continue" } },
+    recovery_outcome: { state: "restored", conversation: "restored-context", via_continue: true },
+  }} />);
+  expect(screen.getByText(/Provider context was restored at startup/)).toBeInTheDocument();
+  expect(screen.getByText("restored-context").closest("details")).not.toHaveAttribute("open");
+  expect(screen.queryByText(/Swarm has not verified/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Continuation fallback/)).not.toBeInTheDocument();
+  rerender(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "another", running: true }} />);
+  expect(screen.queryByText(/Conversation recovery result/)).not.toBeInTheDocument();
+});
+
+test("manual and fresh outcomes never claim restored context", () => {
+  const { rerender } = render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{
+    session_id: "manual", running: true, recovery_outcome: { state: "manual", reason: "unexpected_conversation" },
+  }} />);
+  expect(screen.getByText("Check conversation · see Session details")).toBeVisible();
+  expect(screen.getByText(/The saved default was not changed/)).toBeInTheDocument();
+  rerender(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{
+    session_id: "fresh", running: true, recovery_outcome: { state: "fresh", conversation: "new-context" },
+  }} />);
+  expect(screen.getByText("Fresh conversation · previous context not restored")).toBeVisible();
+  expect(screen.queryByText(/Provider context was restored/)).not.toBeInTheDocument();
+});
+
 test("copies the internal terminal id only when the operator asks", async () => {
   const writeText = vi.fn().mockResolvedValue(undefined);
   vi.stubGlobal("navigator", { clipboard: { writeText } });

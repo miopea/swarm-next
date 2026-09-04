@@ -6,7 +6,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Response,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use swarm_terminal::{HistoryCursor, HostRequest, HostResponse};
 
 use crate::{
@@ -20,10 +20,25 @@ pub(super) struct HistoryQuery {
     record: Option<u32>,
 }
 
+#[derive(Serialize)]
+pub(super) struct LiveSessionsResponse {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    sessions: Vec<LiveSessionView>,
+}
+
+#[derive(Serialize)]
+struct LiveSessionView {
+    #[serde(flatten)]
+    session: swarm_terminal::HostSessionSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery_outcome: Option<swarm_domain::ConversationRecoveryState>,
+}
+
 pub(super) async fn list_live_sessions(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-) -> Result<Json<HostResponse>, ApiError> {
+) -> Result<Json<LiveSessionsResponse>, ApiError> {
     authorize(&state, &headers)?;
     let response = request_host(&state, HostRequest::ListSessions).await?;
     let HostResponse::Sessions { sessions } = response else {
@@ -33,10 +48,27 @@ pub(super) async fn list_live_sessions(
             "terminal host returned an unexpected response",
         ));
     };
-    Ok(Json(HostResponse::Sessions {
+    let ids = sessions
+        .iter()
+        .filter(|session| session.running)
+        .map(|session| session.session_id)
+        .collect::<Vec<_>>();
+    let mut outcomes = state
+        .task_store
+        .as_ref()
+        .map(|store| store.provider_recovery_outcomes(&ids))
+        .transpose()
+        .map_err(|error| crate::task_store_error(&error))?
+        .unwrap_or_default();
+    Ok(Json(LiveSessionsResponse {
+        kind: "sessions",
         sessions: sessions
             .into_iter()
             .filter(|session| session.running)
+            .map(|session| LiveSessionView {
+                recovery_outcome: outcomes.remove(&session.session_id),
+                session,
+            })
             .collect(),
     }))
 }

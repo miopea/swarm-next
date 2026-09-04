@@ -29,6 +29,49 @@ pub(super) fn migrate(tx: &Transaction<'_>, version: i64) -> rusqlite::Result<()
 }
 
 impl TaskStore {
+    /// Reads settled startup outcomes only for the requested still-bound sessions.
+    /// This is a bounded projection, not a scan of historical worker activity.
+    ///
+    /// # Errors
+    /// Returns an error for more than 256 sessions, corrupt outcomes or storage failure.
+    pub fn provider_recovery_outcomes(
+        &self,
+        sessions: &[WorkerSessionId],
+    ) -> Result<std::collections::HashMap<WorkerSessionId, ConversationRecoveryState>, TaskStoreError>
+    {
+        if sessions.len() > 256 {
+            return Err(TaskStoreError::IntegrityFailure(
+                "recovery projection limit exceeded".into(),
+            ));
+        }
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT context.outcome FROM worker_startup_context context
+             JOIN worker_profiles worker ON worker.id = context.worker_id
+             JOIN worker_sessions session ON session.worker_id = worker.id AND session.session_id = context.session_id
+             WHERE context.session_id = ?1 AND context.status = 'settled'
+               AND worker.archived_at IS NULL AND session.ended_at IS NULL")?;
+        let mut outcomes = std::collections::HashMap::new();
+        for session in sessions {
+            let payload: Option<String> = statement
+                .query_row([session.to_string()], |row| row.get(0))
+                .optional()?;
+            if let Some(payload) = payload {
+                let outcome: ConversationRecoveryState =
+                    serde_json::from_str(&payload).map_err(|_| {
+                        TaskStoreError::IntegrityFailure("invalid stored recovery outcome".into())
+                    })?;
+                if matches!(outcome, ConversationRecoveryState::Attempt { .. }) {
+                    return Err(TaskStoreError::IntegrityFailure(
+                        "unsettled recovery outcome".into(),
+                    ));
+                }
+                outcomes.insert(*session, outcome);
+            }
+        }
+        Ok(outcomes)
+    }
+
     /// Settles authenticated startup evidence against the current durable binding.
     /// Returns None for missing, canceled, obsolete, duplicate or invalid evidence.
     /// No task is replayed and no provider is changed by this transaction.
@@ -97,6 +140,57 @@ mod tests {
             panic!("attempt");
         };
         attempt
+    }
+
+    #[test]
+    fn outcome_projection_is_bounded_and_rejects_corruption_or_ended_binding() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Poppy", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        assert!(
+            store
+                .provider_recovery_outcomes(&[session])
+                .unwrap()
+                .is_empty()
+        );
+        store
+            .reconcile_provider_start(
+                session,
+                attempt(),
+                ProviderSessionStartKind::Resumed,
+                ProviderConversationId::new(),
+            )
+            .unwrap();
+        assert!(
+            store
+                .provider_recovery_outcomes(&[WorkerSessionId::new()])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .provider_recovery_outcomes(&vec![session; 257])
+                .is_err()
+        );
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE worker_startup_context SET outcome = 'invalid' WHERE session_id = ?1",
+                [session.to_string()],
+            )
+            .unwrap();
+        assert!(store.provider_recovery_outcomes(&[session]).is_err());
+        store.release_worker_session(session).unwrap();
+        assert!(
+            store
+                .provider_recovery_outcomes(&[session])
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -175,6 +269,13 @@ mod tests {
                 .provider_conversation_id,
             Some(chosen)
         );
+        assert!(matches!(
+            store
+                .provider_recovery_outcomes(&[session])
+                .unwrap()
+                .get(&session),
+            Some(ConversationRecoveryState::Restored { .. })
+        ));
         assert_eq!(
             store
                 .get_worker_profile(worker.id)

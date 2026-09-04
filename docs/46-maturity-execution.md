@@ -6,6 +6,30 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2: distinguish saved recovery outcomes from startup attempts
+
+- Added a bounded persistence projection for up to 256 requested session IDs;
+  ended/unbound/archived sessions are excluded and corrupt or nonterminal stored
+  outcomes fail rather than being presented as restored. The API enriches its live
+  session response without adding engine-owned persistence fields or a new poll.
+- Terminal details distinguish confirmed-at-startup restoration, fresh context
+  and manual recovery. Settled outcomes replace the unverified-startup copy;
+  success stays in details, while fresh/manual outcomes have concise notices.
+  Recovery details remain available on mobile rather than pointing at a hidden
+  control. No automatic task replay, alert timer or new Needs You item was added.
+- Five native persistence recovery tests passed, including projection bounds,
+  wrong/ended session and corrupt-result refusal. Twenty-three TerminalView tests
+  passed, including result replacement and switching to a different terminal.
+- Final production web build and strict Linux-target API/persistence all-target/
+  all-feature Clippy passed. The existing terminal chunk-size warning remains.
+- Chrome/Edge skill used a separate isolated synthetic fixture tab on port 5201.
+  Desktop manual-outcome notice and expanded details were inspected in Edge. This
+  is rendered-component evidence, not live recovery or Android/iOS acceptance.
+  Added a reusable fixture for manual and restored startup results.
+- Interactive conversation switching, actionable recovery reconciliation beyond
+  startup, full fallback execution and real provider/device acceptance remain open.
+  No live workers, deployment, push or release changed.
+
 ### P2: engine-owned hook configuration for future starts
 
 - The current engine adds a separate startup-settings overlay for Claude workers

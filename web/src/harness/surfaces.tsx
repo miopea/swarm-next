@@ -211,6 +211,19 @@ export type Surface = { id: string; title: string; why: string; render: () => Re
 const FILED = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
 
 export const SURFACES: Surface[] = [
+  {
+    id: "terminal-recovery", title: "Terminal recovery outcome", why: "Synthetic saved recovery result; no provider or Hive.",
+    render: () => <main style={{ padding: 16, height: "100dvh", display: "flex", flexDirection: "column" }}>
+      <h1>Recovery result fixture</h1>
+      <p>Synthetic recovery evidence. Not a live provider test.</p>
+      <div style={{ flex: 1, minHeight: 0 }}><TerminalView busy={false} operatorToken="fixture-only" session={{
+        session_id: "fixture-terminal-recovery", running: true,
+        recovery_outcome: new URLSearchParams(location.search).get("outcome") === "restored"
+          ? { state: "restored", conversation: "fixture-restored-conversation", via_continue: true }
+          : { state: "manual", reason: "unexpected_conversation" },
+      }} /></div>
+    </main>,
+  },
   { id: "performance-evidence", title: "Browser and server performance evidence", why: "Synthetic simultaneous, stale and unavailable evidence; no live profiling", render: () => <PerformanceEvidenceFixture /> },
   { id: "night-watch", title: "Night Watch schedule", why: "isolated schedule editor; saves are fixture responses only", render: () => <section className="settings-card"><NightWatchSettings operatorToken="fixture" /></section> },
   {

@@ -2344,6 +2344,9 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .command-palette { max-height: calc(100dvh - 20px); padding: 16px; }
   .command-results > button, .command-results > button[data-group="Work"] { display: flex; align-items: flex-start; flex-direction: column; gap: 3px; }
   .terminal-connection-summary .terminal-session-details { display: none; }
+  .terminal-connection-summary .terminal-session-details.has-recovery { display: block; }
+  .terminal-session-details.has-recovery summary { display: flex; align-items: center; min-height: 44px; }
+  .terminal-session-details.has-recovery .terminal-session-popover { position: fixed; left: 12px; right: 12px; top: auto; width: auto; max-height: 60dvh; overflow: auto; }
   .decision-inbox { padding: 16px; }
   .apiary-attention-card, .queen-attention-card { align-items: stretch; flex-direction: column; gap: 11px; padding: 14px; }
   .apiary-attention-card button { width: 100%; min-height: 44px; }
