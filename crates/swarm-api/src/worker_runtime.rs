@@ -862,6 +862,7 @@ async fn reconcile_worker_bindings_unlocked(state: &AppState) -> Result<LiveSess
             ));
         }
     }
+    cleanup_recovery_parents(state, &sessions).await?;
     let live = sessions
         .into_iter()
         .filter(|session| session.running && !session.stop_pending_release)
@@ -886,6 +887,47 @@ async fn reconcile_worker_bindings_unlocked(state: &AppState) -> Result<LiveSess
         state.control_room_notify.notify_waiters();
     }
     Ok(live)
+}
+
+async fn cleanup_recovery_parents(
+    state: &AppState,
+    sessions: &[swarm_terminal::HostSessionSummary],
+) -> Result<(), ApiError> {
+    for previous in sessions {
+        let Some(swarm_terminal::ContinuationRecoveryOutcome::SessionCreated { session_id }) =
+            previous.continuation_recovery
+        else {
+            continue;
+        };
+        if previous.running || previous.stop_pending_release || previous.session_id == session_id {
+            continue;
+        }
+        if !task_store(state)?
+            .continuation_successor_bound(previous.session_id, session_id)
+            .map_err(|error| task_store_error(&error))?
+        {
+            continue;
+        }
+        // Only the ended parent's immutable identity is released. The durable
+        // successor receipt survives an API failure or a lost cleanup reply.
+        if !matches!(
+            stop_context_request(
+                state,
+                HostRequest::Stop {
+                    session_id: previous.session_id
+                }
+            )
+            .await?,
+            HostResponse::Acknowledged
+        ) {
+            return Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "worker_recovery_cleanup_unconfirmed",
+                "Worker engine did not acknowledge recovered-session cleanup.",
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1094,7 +1136,7 @@ mod tests {
     }
 
     async fn serve_session_snapshot(
-        listener: tokio::net::UnixListener,
+        listener: &tokio::net::UnixListener,
         sessions: Vec<swarm_terminal::HostSessionSummary>,
     ) {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -1111,11 +1153,129 @@ mod tests {
         stream.get_mut().write_all(&response).await.unwrap();
     }
 
+    async fn acknowledge_recovery_cleanup(
+        listener: &tokio::net::UnixListener,
+        store: &swarm_persistence::TaskStore,
+        worker: WorkerId,
+        previous: WorkerSessionId,
+        successor: WorkerSessionId,
+        chosen: swarm_domain::ProviderConversationId,
+    ) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut stream = BufReader::new(stream);
+        let mut request = String::new();
+        stream.read_line(&mut request).await.unwrap();
+        assert!(
+            matches!(serde_json::from_str::<HostRequest>(&request).unwrap(), HostRequest::Stop { session_id } if session_id == previous)
+        );
+        let profile = store.get_worker_profile(worker).unwrap();
+        assert_eq!(profile.active_session_id, Some(successor));
+        assert_eq!(profile.provider_conversation_id, Some(chosen));
+        let mut response = serde_json::to_vec(&HostResponse::Acknowledged).unwrap();
+        response.push(b'\n');
+        stream.get_mut().write_all(&response).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn recovery_cleanup_lost_reply_preserves_successor_and_reconciles_again() {
+        use swarm_terminal::{ContinuationRecoveryOutcome, HostClient};
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        for removed in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let socket = directory.path().join("cleanup.sock");
+            let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+            let store = swarm_persistence::TaskStore::in_memory().unwrap();
+            let worker = store.ensure_queen("/workspace").unwrap();
+            let chosen = swarm_domain::ProviderConversationId::new();
+            store
+                .repoint_provider_conversation(worker.id, &chosen)
+                .unwrap();
+            let previous = WorkerSessionId::new();
+            let successor = WorkerSessionId::new();
+            let (continuation, fresh) = continuation_and_fresh_attempts();
+            store.bind_worker_session(worker.id, previous).unwrap();
+            assert!(
+                store
+                    .reconcile_continuation_successor(previous, continuation, successor, fresh)
+                    .unwrap()
+            );
+            let parent = swarm_terminal::HostSessionSummary {
+                recovery_attempt: Some(continuation),
+                continuation_recovery: Some(ContinuationRecoveryOutcome::SessionCreated {
+                    session_id: successor,
+                }),
+                ..bare_session_summary(previous, false)
+            };
+            let child = swarm_terminal::HostSessionSummary {
+                recovery_attempt: Some(fresh),
+                ..bare_session_summary(successor, true)
+            };
+            let state = AppState::default()
+                .with_task_store(store.clone())
+                .with_terminal_host(HostClient::new(&socket), "fixture");
+            let server = async {
+                serve_session_snapshot(&listener, vec![parent.clone(), child.clone()]).await;
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut stream = BufReader::new(stream);
+                let mut request = String::new();
+                stream.read_line(&mut request).await.unwrap();
+                assert!(
+                    matches!(serde_json::from_str::<HostRequest>(&request).unwrap(), HostRequest::Stop { session_id } if session_id == previous)
+                );
+                // Drop the connection without any response, both when cleanup
+                // happened and when the engine retained the parent.
+            };
+            let ((), first) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                tokio::join!(server, reconcile_worker_bindings(&state))
+            })
+            .await
+            .unwrap();
+            assert!(first.is_err());
+            assert_eq!(
+                store
+                    .get_worker_profile(worker.id)
+                    .unwrap()
+                    .active_session_id,
+                Some(successor)
+            );
+            let server = async {
+                let snapshots = if removed {
+                    vec![child]
+                } else {
+                    vec![parent, child]
+                };
+                serve_session_snapshot(&listener, snapshots).await;
+                if !removed {
+                    acknowledge_recovery_cleanup(
+                        &listener, &store, worker.id, previous, successor, chosen,
+                    )
+                    .await;
+                }
+            };
+            let replacement_api = AppState::default()
+                .with_task_store(store.clone())
+                .with_terminal_host(HostClient::new(&socket), "replacement");
+            let ((), second) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                tokio::join!(server, reconcile_worker_bindings(&replacement_api))
+            })
+            .await
+            .unwrap();
+            assert!(second.unwrap().contains_key(&successor));
+            assert_eq!(
+                store
+                    .get_worker_profile(worker.id)
+                    .unwrap()
+                    .active_session_id,
+                Some(successor)
+            );
+        }
+    }
+
     #[tokio::test]
     async fn successor_reconciliation_precedes_startup_and_dead_binding_release() {
         use swarm_domain::{
-            ConversationRecovery, ConversationRecoveryEvidence, ConversationRecoveryState,
-            ProviderConversationId, ProviderSessionStartKind,
+            ConversationRecoveryState, ProviderConversationId, ProviderSessionStartKind,
         };
         use swarm_terminal::{
             ContinuationRecoveryOutcome, HostClient, ProviderSessionStartObservation,
@@ -1128,20 +1288,7 @@ mod tests {
             let worker = store.ensure_queen("/workspace").unwrap();
             let previous = WorkerSessionId::new();
             let successor = WorkerSessionId::new();
-            let mut recovery = ConversationRecovery::new(None, true);
-            let ConversationRecoveryState::Attempt {
-                attempt: continuation,
-            } = recovery.state()
-            else {
-                panic!("continue");
-            };
-            recovery.observe(
-                continuation,
-                ConversationRecoveryEvidence::ContextUnavailable,
-            );
-            let ConversationRecoveryState::Attempt { attempt: fresh } = recovery.state() else {
-                panic!("fresh");
-            };
+            let (continuation, fresh) = continuation_and_fresh_attempts();
             store.bind_worker_session(worker.id, previous).unwrap();
             if scenario == "reopened" {
                 assert!(
@@ -1185,7 +1332,15 @@ mod tests {
                 .with_terminal_host(HostClient::new(&socket), "fixture");
             let ((), result) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 tokio::join!(
-                    serve_session_snapshot(listener, summaries),
+                    async {
+                        serve_session_snapshot(&listener, summaries).await;
+                        if matches!(scenario, "normal" | "reopened") {
+                            acknowledge_recovery_cleanup(
+                                &listener, &store, worker.id, previous, successor, chosen,
+                            )
+                            .await;
+                        }
+                    },
                     reconcile_worker_bindings(&state)
                 )
             })
@@ -1211,6 +1366,30 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn continuation_and_fresh_attempts() -> (
+        swarm_domain::ConversationRecoveryAttempt,
+        swarm_domain::ConversationRecoveryAttempt,
+    ) {
+        use swarm_domain::{
+            ConversationRecovery, ConversationRecoveryEvidence, ConversationRecoveryState,
+        };
+        let mut recovery = ConversationRecovery::new(None, true);
+        let ConversationRecoveryState::Attempt {
+            attempt: continuation,
+        } = recovery.state()
+        else {
+            panic!("continue");
+        };
+        recovery.observe(
+            continuation,
+            ConversationRecoveryEvidence::ContextUnavailable,
+        );
+        let ConversationRecoveryState::Attempt { attempt: fresh } = recovery.state() else {
+            panic!("fresh");
+        };
+        (continuation, fresh)
     }
 
     #[tokio::test]
@@ -1273,7 +1452,7 @@ mod tests {
             let state = AppState::default()
                 .with_task_store(store.clone())
                 .with_terminal_host(HostClient::new(socket), "fixture-operator");
-            let serve = serve_session_snapshot(listener, summaries);
+            let serve = serve_session_snapshot(&listener, summaries);
             let ((), reconciled) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 tokio::join!(serve, reconcile_worker_bindings(&state))
             })

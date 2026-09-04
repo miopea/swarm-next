@@ -6,6 +6,26 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2/P5: cleanup after durable recovery handoff
+
+- API reconciliation now releases the dead parent engine entry only after its
+  successor is durably bound and startup evidence has been consumed. Cleanup
+  names only the parent's immutable session ID and requires acknowledgement.
+  A live parent, retained-stop parent, self-reference, or uncommitted handoff
+  does not qualify. Existing scratch sessions remain untouched.
+- The recovery IPC regression checks the committed successor binding and fresh
+  conversation at the instant the cleanup request arrives, for both an initial
+  handoff and a handoff saved before API interruption. All 17 Linux worker-runtime
+  tests and strict API all-target/all-feature Linux Clippy passed; formatting
+  and diff checks passed.
+- A lost-reply regression covers both actual parent removal and retained parent
+  state. After a failed request, a replacement API preserves the successor and
+  either observes completed cleanup or retries only the old immutable identity.
+  Final verification passed all 18 Linux worker-runtime tests plus strict API
+  all-target/all-feature Linux Clippy, formatting and diff checks.
+- Automatic fallback initiation and final failure presentation still remain.
+  No deployment, release, live worker changes, or phase completion claimed.
+
 ### P2/P5: transactional successor binding and API reconciliation
 
 - Added a persistence handoff for an engine-authenticated Continue-to-Fresh
