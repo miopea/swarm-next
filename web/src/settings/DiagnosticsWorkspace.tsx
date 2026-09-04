@@ -24,6 +24,8 @@ import {
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 import { serializeDiagnosticReport, type RuntimeDiagnostics } from "./diagnosticReport";
 import { runtimeVersionIdentity } from "./runtimeVersion";
+import { assessPerformance, computePressure } from "./performanceAssessment";
+import PerformanceEvidence from "./PerformanceEvidence";
 
 type Props = {
   feedbackRevision: number;
@@ -225,8 +227,9 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
       {/* Fourteen rows of equal weight under a heading promising to say which
           layer needs attention did not answer it. What is wrong leads; what is
           fine collapses. When nothing is wrong the honest page is one line. */}
+      <PerformanceEvidence evidence={assessPerformance(browserTiming, runtime.resources)} />
       {needsAttention.length === 0 ? (
-        <p className="diagnostic-verdict healthy" role="status">Nothing needs attention.</p>
+        <p className="diagnostic-verdict healthy" role="status">No faults reported by the available checks.</p>
       ) : (
         <p className="diagnostic-verdict attention" role="status">
           {needsAttention.length === 1 ? "One check needs attention: " : `${needsAttention.length} checks need attention: `}
@@ -397,7 +400,7 @@ function machineHeadline(machine: MachineResources | undefined): string {
     ? "under memory pressure"
     : machine.pressure === "advisory"
       ? "starting to feel memory pressure"
-      : "not under pressure";
+      : machine.pressure === "normal" ? "not under memory pressure" : "memory pressure unavailable";
   return `${formatBytes(machine.memory_total_bytes)} of memory · ${cpus} · ${verdict}`;
 }
 
@@ -408,21 +411,6 @@ function machineHeadline(machine: MachineResources | undefined): string {
  * of processors, because a load of four means idle on forty cores and saturated
  * on four.
  */
-function computePressure(machine: MachineResources | undefined): ResourcePressure | undefined {
-  if (!machine) return undefined;
-  if (machine.cpu_pressure_avg10 != null) {
-    if (machine.cpu_pressure_avg10 >= 10) return "critical";
-    if (machine.cpu_pressure_avg10 >= 2) return "advisory";
-    return "normal";
-  }
-  const [oneMinute] = machine.load_average ?? [];
-  if (oneMinute == null || !machine.logical_cpus) return undefined;
-  const perCpu = oneMinute / machine.logical_cpus;
-  if (perCpu >= 2) return "critical";
-  if (perCpu >= 1) return "advisory";
-  return "normal";
-}
-
 /** Unavailable is not unhealthy: it is a measurement that could not be taken. */
 function healthyPressure(pressure: ResourcePressure | undefined): boolean {
   return pressure !== "advisory" && pressure !== "critical";

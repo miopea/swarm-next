@@ -2849,3 +2849,16 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
    when the build ids match, because that is the case that reads as a problem. */
 .engine-same-build { margin: 0; color: var(--muted); font-size: .72rem; line-height: 1.45; }
 .engine-same-build code { font-size: .95em; }
+.performance-evidence .diagnostic-list > div {
+  display: grid;
+  grid-template-columns: 5rem minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+.performance-evidence .diagnostic-list dd {
+  text-align: left;
+  font-size: 0.875rem;
+}
+.performance-evidence > p {
+  font-size: 0.8rem;
+}

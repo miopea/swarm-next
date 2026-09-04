@@ -18,6 +18,14 @@ teardown; unsupported performance entry types report unavailable. Page-hide save
 a bounded content-free snapshot in session storage for before/after reload
 comparison. Storage failure is nonfatal. This is not long-term Dogfood storage.
 
+Diagnostics compares the recorder's last 30 seconds with the latest server
+resource sample. Samples older than 30 seconds, absent readings, and server
+timestamps more than five seconds ahead are explicitly stale/unknown, not healthy.
+Concurrent browser delays and server pressure are observations, never proof of
+causality or a measurement of browser CPU. The same content-free assessment is
+included in copied reports. It adds no collector, timer, or operator escalation;
+old incident windows and pre-reload evidence cannot keep a current delay active.
+
 Reports expose historical incidents separately from current health. A past slow
 sample cannot keep Needs You active. Timing evidence is not a claim of Edge CPU
 utilization, database integrity, or provider delivery acknowledgment.

@@ -796,6 +796,25 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   identity across process crashes, and real maintenance recovery acceptance remain
   open. No engine update, live restart, push, deployment, or release performed.
 
+### P1d: distinguish browser delay from server evidence
+
+- Diagnostics and copied reports now assess recent browser timing separately
+  from server pressure, including stale/incomplete readings and clock mismatch.
+  They explicitly avoid inferring cause, Edge CPU utilization, or health from
+  missing measurements. Historical incidents do not remain current faults.
+- Reused the bounded browser recorder and existing diagnostic refresh; no new
+  timer, collector, external telemetry, or Needs You alert. Extracted the existing
+  compute-pressure classifier and rejected non-finite/negative inputs.
+- Eighteen focused diagnostics/report tests and the production web build passed
+  after the final copy/style refinement. The existing terminal chunk warning remains.
+- Chrome/Edge skill rechecked a separate live Swarm tab: still at unlock. Asked
+  the operator to unlock it; did not inspect credentials or their working tab.
+  Separate synthetic Edge fixtures validated simultaneous/stale/missing evidence
+  and caught long explanations pushed away from labels. Scoped left alignment
+  was added and visually rechecked. This is not a live performance measurement.
+- Current-build CPU attribution, real session degradation, mobile acceptance,
+  instrumentation overhead, and long-term Dogfood comparisons remain open.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

@@ -99,7 +99,7 @@ test("states the machine's size and verdict above the rows it makes sense of", a
   const headline = await screen.findByText(/of memory ·/);
   expect(headline).toHaveTextContent("32.0 GiB of memory");
   expect(headline).toHaveTextContent("8 CPUs");
-  expect(headline).toHaveTextContent("not under pressure");
+  expect(headline).toHaveTextContent("not under memory pressure");
   // A machine that is not stalling must not have its layers called critical.
   expect(headline.className).toContain("normal");
 });

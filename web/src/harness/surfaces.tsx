@@ -4,6 +4,7 @@ import TerminalView from "../terminal/TerminalView";
 import DeveloperDogfoodWorkspace from "../settings/DeveloperDogfoodWorkspace";
 import NightWatchSettings from "../settings/NightWatchSettings";
 import TerminalPoolFixture from "./TerminalPoolFixture";
+import PerformanceEvidenceFixture from "./PerformanceEvidenceFixture";
 
 import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
 import { App } from "../App";
@@ -210,6 +211,7 @@ export type Surface = { id: string; title: string; why: string; render: () => Re
 const FILED = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
 
 export const SURFACES: Surface[] = [
+  { id: "performance-evidence", title: "Browser and server performance evidence", why: "Synthetic simultaneous, stale and unavailable evidence; no live profiling", render: () => <PerformanceEvidenceFixture /> },
   { id: "night-watch", title: "Night Watch schedule", why: "isolated schedule editor; saves are fixture responses only", render: () => <section className="settings-card"><NightWatchSettings operatorToken="fixture" /></section> },
   {
     id: "terminal-pool",

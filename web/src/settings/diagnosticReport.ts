@@ -13,6 +13,7 @@ import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 import { readClientFailures } from "../feedback/clientDiagnostics";
 import { readRoutePaints, routePaintSummary } from "../runtime/routePaint";
 import { readBrowserPerformance } from "../runtime/browserPerformance";
+import { assessPerformance } from "./performanceAssessment";
 
 export type RuntimeDiagnostics = {
   terminalHost?: TerminalHostStatus;
@@ -90,6 +91,7 @@ export function buildSanitizedDiagnosticReport({ context, health, hiveIdentity, 
 
   return {
     schema_version: 1,
+    performance_assessment: assessPerformance(readBrowserPerformance(), runtime.resources),
     generated_at: new Date().toISOString(),
     correlation_id: globalThis.crypto?.randomUUID?.() ?? `local-${Date.now()}`,
     privacy: "automatic collection is content-free: no terminal output, task text, paths, credentials, worker names, or raw errors",
