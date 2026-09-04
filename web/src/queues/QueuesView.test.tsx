@@ -21,10 +21,16 @@ describe("QueuesView", () => {
     }]} />);
     expect(screen.queryByText("Nothing is waiting on anyone.")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Queen" })).toBeInTheDocument();
-    expect(screen.getByText("Delivery held: unsent text")).toBeInTheDocument();
+    expect(screen.getByText("Last observed hold: unsent text")).toBeInTheDocument();
+    expect(screen.getByText(/Last observation time unavailable/)).toBeInTheDocument();
     expect(screen.queryByText(/Nothing gets routed/)).not.toBeInTheDocument();
+    rerender(<QueuesView {...props} heldDeliveries={[{
+      kind: "delivery_held_unsent_text", subject: "queen-review", worker_name: null,
+      reason: "The last observed prompt contained text", first_observed_at: 1, last_observed_at: 10, observations: 1503,
+    }]} />);
+    expect(screen.getByText(`Last observed ${new Date(10_000).toLocaleString()}. No resolution has been confirmed.`)).toBeInTheDocument();
     rerender(<QueuesView {...props} heldDeliveries={[]} />);
-    expect(screen.queryByText("Delivery held: unsent text")).not.toBeInTheDocument();
+    expect(screen.queryByText("Last observed hold: unsent text")).not.toBeInTheDocument();
     expect(screen.getByText("Nothing is waiting on anyone.")).toBeInTheDocument();
   });
   /**

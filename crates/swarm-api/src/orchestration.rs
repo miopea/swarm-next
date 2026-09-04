@@ -75,6 +75,7 @@ pub(super) struct HeldDeliveryResponse {
     worker_name: Option<String>,
     reason: String,
     first_observed_at: i64,
+    last_observed_at: i64,
     observations: i64,
 }
 
@@ -296,6 +297,7 @@ fn held_deliveries(state: &Arc<AppState>) -> Result<Vec<HeldDeliveryResponse>, A
             worker_name: refusal.worker_name,
             reason: refusal.reason,
             first_observed_at: refusal.first_observed_at,
+            last_observed_at: refusal.last_observed_at,
             observations: refusal.observations,
         })
         .collect())

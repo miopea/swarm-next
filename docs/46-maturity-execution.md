@@ -6,6 +6,21 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: missing prompt observations are not recovery evidence
+
+- Removed the three-minute disappearance rule for prompt/unsent-text observations.
+  Queues retains and dates last observed holds without claiming current blockage;
+  explicit resolution and known ended-session evidence still remove them. No
+  timer-based Needs You escalation was added. Other refusal kinds are unchanged.
+- The projection reads at most 257 rows, returning unavailable above 256 instead
+  of a misleading partial response. This bounds the read, not ledger retention.
+- Eight focused refusal tests plus explicit age-retention and overflow tests
+  passed. App/Queues regression and production build passed; strict Linux-target
+  API/persistence Clippy passed. Existing terminal bundle warning remains.
+- Source cancellation/supersession and generation-safe late-observation handling
+  remain open; retained evidence is deliberately not proof of a current hold.
+  No push, release, deployment, or live worker change.
+
 ### P2: resolved conversation recovery stops asking for attention
 
 - Session responses now distinguish a later durably confirmed selection from raw

@@ -379,6 +379,7 @@ export type HeldDelivery = {
   worker_name: string | null;
   reason: string;
   first_observed_at: number;
+  last_observed_at?: number;
   observations: number;
 };
 export type ControlRoomEvent = { sequence: number; hive_id: string; kind: ControlRoomEventKind; occurred_at: number };

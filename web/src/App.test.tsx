@@ -1194,14 +1194,14 @@ test("stops showing held work once the coordinator is holding none", async () =>
   await screen.findByRole("heading", { name: "Nothing needs your attention" });
   expect(screen.queryByText(/Queen cannot review/)).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /^Queues/ }));
-  expect(await screen.findByText("Delivery held: unsent text")).toBeInTheDocument();
+  expect(await screen.findByText("Last observed hold: unsent text")).toBeInTheDocument();
 
   // Queen's prompt is cleared and the delivery lands; the coordinator holds
   // nothing. Nothing else in the page changes.
   holding = false;
   await vi.advanceTimersByTimeAsync(21_000);
 
-  await waitFor(() => expect(screen.queryByText("Delivery held: unsent text")).not.toBeInTheDocument());
+  await waitFor(() => expect(screen.queryByText("Last observed hold: unsent text")).not.toBeInTheDocument());
   vi.useRealTimers();
 });
 
@@ -1246,7 +1246,7 @@ test("ordinary held delivery is queue evidence, not Needs you attention", async 
   await waitFor(() => expect(screen.getByRole("button", { name: /^Needs you/ })).toHaveTextContent("0"));
   expect(screen.queryByText(/has work waiting behind a prompt/)).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /^Queues/ }));
-  expect(await screen.findByText("Delivery held: prompt not ready")).toBeInTheDocument();
+  expect(await screen.findByText("Last observed hold: prompt not ready")).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Claude Shared Config" })).toBeInTheDocument();
 });
 

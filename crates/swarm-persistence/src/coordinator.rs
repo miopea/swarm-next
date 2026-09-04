@@ -3300,11 +3300,10 @@ mod tests {
     /// announcing them as work waiting at a prompt, with a retry count frozen
     /// where it had stopped.
     ///
-    /// Success is not the only way a hold ends. Held work is retried every few
-    /// seconds, so what is genuinely held is re-observed constantly; anything
-    /// not seen for minutes has ended, whatever ended it.
+    /// Missing new observations cannot establish recovery. Preserve the recorded
+    /// prompt hold until explicit resolution or ended-session evidence.
     #[test]
-    fn a_refusal_nobody_is_retrying_any_more_is_not_still_standing() {
+    fn an_unobserved_prompt_hold_is_not_assumed_resolved_by_age() {
         let store = TaskStore::in_memory().unwrap();
         store
             .record_coordinator_refusal(
@@ -3326,13 +3325,47 @@ mod tests {
             1
         );
 
-        // Nothing has touched it since. It is not waiting on anything now.
+        // Nothing has touched it since. Current state is unknown, not resolved.
         let stale = 1_000 + TaskStore::STALE_REFUSAL_SECONDS + 1;
+        let retained = store.standing_coordinator_refusals(stale, 120).unwrap();
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained[0].last_observed_at, 1_000);
+        store
+            .clear_coordinator_refusal(REFUSAL_DELIVERY_HELD, "task-brief:abandoned", stale)
+            .unwrap();
         assert!(
             store
                 .standing_coordinator_refusals(stale, 120)
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn refusal_projection_overflow_is_unavailable_not_a_partial_all_clear() {
+        let store = TaskStore::in_memory().unwrap();
+        for subject in 0..257 {
+            store
+                .record_coordinator_refusal(
+                    REFUSAL_DELIVERY_HELD,
+                    &format!("task-brief:{subject}"),
+                    None,
+                    None,
+                    "held",
+                    1_000,
+                )
+                .unwrap();
+        }
+        assert!(store.standing_coordinator_refusals(10_000, 120).is_err());
+        store
+            .clear_coordinator_refusal(REFUSAL_DELIVERY_HELD, "task-brief:0", 10_000)
+            .unwrap();
+        assert_eq!(
+            store
+                .standing_coordinator_refusals(10_000, 120)
+                .unwrap()
+                .len(),
+            256
         );
     }
 
@@ -5803,33 +5836,15 @@ impl TaskStore {
         )? > 0)
     }
 
-    /// Refusals still in force, oldest first, that have been true long enough
-    /// to be worth the operator's attention.
-    ///
-    /// The grace period is what stops a prompt answered in ten seconds from
-    /// becoming an item. Nothing here is a judgment about whether the refusal
-    /// was right — refusing to type into a session with an open question is
-    /// correct, and staying silent about it for a day is not.
-    ///
-    /// # Errors
-    /// Returns a persistence error.
-    /// A refusal stops standing when the coordinator stops re-observing it.
-    ///
-    /// Success clears a refusal, but success is not the only way one ends: a
-    /// dispatch can be cancelled, the task can move, the worker can be taken
-    /// away. None of those clear anything, and the query filtered on
-    /// `cleared_at` alone — so a hold that stopped being retried half an hour
-    /// ago was still reported as waiting, with a retry count frozen at 4.
-    ///
-    /// Held work is retried every few seconds, so anything genuinely held is
-    /// re-observed constantly. Not having been seen for this long means it is
-    /// not held now, whatever ended it.
+    /// Legacy freshness window for non-prompt refusal kinds. Prompt observations
+    /// no longer disappear on this timer: missing evidence is not resolution.
+    /// Remaining wake/refusal kinds require their own recovery reconciliation.
     pub const STALE_REFUSAL_SECONDS: i64 = 180;
 
-    /// The refusals the coordinator is still making, for the operator's queue.
+    /// Last unresolved observations for Queues, not proof of current prompt state.
     ///
     /// # Errors
-    /// Returns an error when the refusal ledger cannot be read.
+    /// Returns an error when the ledger cannot be read or exceeds 256 results.
     pub fn standing_coordinator_refusals(
         &self,
         now: i64,
@@ -5853,8 +5868,9 @@ impl TaskStore {
                           AND session.ended_at IS NOT NULL
                     ))
                AND ?1 - refusal.first_observed_at >= ?2
-               AND ?1 - refusal.last_observed_at <= ?3
-             ORDER BY refusal.first_observed_at",
+               AND (refusal.kind IN ('delivery_held_open_prompt', 'delivery_held_unsent_text')
+                    OR ?1 - refusal.last_observed_at <= ?3)
+             ORDER BY refusal.first_observed_at LIMIT 257",
         )?;
         let rows = statement.query_map(
             params![now, grace_seconds, Self::STALE_REFUSAL_SECONDS],
@@ -5873,6 +5889,12 @@ impl TaskStore {
                 })
             },
         )?;
-        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        let refusals = rows.collect::<Result<Vec<_>, _>>()?;
+        if refusals.len() > 256 {
+            return Err(TaskStoreError::IntegrityFailure(
+                "coordinator refusal projection limit exceeded".into(),
+            ));
+        }
+        Ok(refusals)
     }
 }

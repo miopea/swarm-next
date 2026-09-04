@@ -31,6 +31,15 @@ reported as currently holding input. Unbound or unknown session evidence is not
 silently treated as recovered. This does not replace the remaining need for
 current provider-state reconciliation and generation-safe delivery observations.
 
+Prompt observations no longer expire after three minutes without another retry.
+Silence is not evidence of resolution. Queues labels these as last observed holds,
+with the observation timestamp and unconfirmed resolution. Explicit clearing and
+known ended-session evidence still remove them. Non-prompt refusal freshness is
+unchanged pending its own recovery integration. The read projection is capped at
+256 observations; overflow returns unavailable, never a partial all-clear. The
+coordinator owns future source-state cancellation and generation reconciliation;
+this change does not assert that a historical hold is currently blocking work.
+
 ## Consequences and verification
 
 A failed coordinator read is not evidence that held work resolved. Preserve the
