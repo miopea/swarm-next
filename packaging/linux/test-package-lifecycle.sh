@@ -516,6 +516,9 @@ while [ "$old_backup" -le 11 ]; do
 done
 : > "$HOME/systemctl.log"
 : > "$HOME/swarmctl.log"
+# Future-dated old files cannot evict the rollback for the operation in flight.
+touch -d '2100-01-01' "$SWARM_STATE_ROOT/backups/pre-update-old-9.sqlite3" "$SWARM_STATE_ROOT/backups/pre-update-old-10.sqlite3" "$SWARM_STATE_ROOT/backups/pre-update-old-11.sqlite3"
+printf 'manual recovery\n' > "$SWARM_STATE_ROOT/backups/operator-snapshot.sqlite3"
 "$package" update "$test_root/bundle-2.0.0"
 [ -x "$SWARM_BIN_ROOT/swarm-terminal-host" ]
 [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "2.0.0" ]
@@ -540,7 +543,8 @@ fi
 # rewrote the pre-update backup to the new schema and left the rollback holding
 # a database its own binary refuses. See create_update_backup.
 [ "$(tail -n 1 "$HOME/verify-release.log")" = "1.0.0" ]
-[ "$(find "$SWARM_STATE_ROOT/backups" -maxdepth 1 -type f -name 'pre-update-*.sqlite3' | wc -l)" -eq 10 ]
+[ "$(find "$SWARM_STATE_ROOT/backups" -maxdepth 1 -type f -name 'pre-update-*.sqlite3' | wc -l)" -eq 3 ]
+[ "$(cat "$SWARM_STATE_ROOT/backups/operator-snapshot.sqlite3")" = "manual recovery" ]
 [ ! -e "$SWARM_STATE_ROOT/backups/pre-update-old-1.sqlite3" ]
 
 # A BACKUP THAT CANNOT BE VERIFIED SAYS WHAT TO DO NEXT.

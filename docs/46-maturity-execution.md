@@ -6,6 +6,21 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P5 / REC-02: approved package pre-update retention
+
+- Replaced the package's ten-copy policy with three managed pre-update snapshots.
+  The active operation's verified rollback is always retained, independent of
+  clock rollback or future-dated older files; the other two slots use recency.
+  Manual snapshots remain outside managed pruning.
+- WSL isolated package lifecycle smoke passed with three future-dated old
+  snapshots, an explicitly preserved manual file, exact retained count, and the
+  existing failed-update database rollback cases. No real files were pruned.
+- This covers the package update path only. Development reload's separate
+  pre-migration copies and the seven-daily schedule still need unified ownership
+  and retention. Inspection confirms no daily backup unit/action exists yet;
+  introducing one must handle upgrades and rollback to packages without its unit.
+- No deployment, release, push or live-worker interruption.
+
 ### P5 / REC-02: verify restore rollback instead of suppressing failures
 
 - Restore and its failure rollback now require a successful API stop plus an

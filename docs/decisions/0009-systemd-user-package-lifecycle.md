@@ -63,8 +63,10 @@ restart can make systemd remove the live host socket from beneath its owner.
 An update verifies its checksums and protocol before changing any active link.
 When a Hive database already exists, the package first downloads a consistent
 authenticated online backup from the running API, verifies it with the current
-release, and retains it under the managed state directory. The newest ten
-pre-update backups are kept. A failed API or protocol activation restores that
+release, and retains it under the managed state directory. The approved daily-driver
+policy keeps three managed pre-update backups: the active operation's rollback
+copy plus the two newest others. The current copy is protected even after clock
+rollback or future-dated older files. Manual snapshots are not pruned. A failed API or protocol activation restores that
 exact database snapshot before reviving the previous release, so a successful
 forward migration cannot strand an otherwise valid rollback on a newer schema.
 For an exact protocol match it publishes retained browser assets, switches

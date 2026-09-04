@@ -402,10 +402,13 @@ on_exit() {
 prune_update_backups() {
   backup_root="$state_root/backups"
   [ -d "$backup_root" ] || return 0
-  count=0
+  # The active operation's recovery copy is mandatory even if the wall clock
+  # moved backwards or older files carry future mtimes. Keep two others.
+  count=1
   for candidate in $(find "$backup_root" -maxdepth 1 -type f -name 'pre-update-*.sqlite3' -printf '%T@ %p\n' | sort -nr | sed 's/^[^ ]* //'); do
+    [ "$candidate" != "$update_rollback" ] || continue
     count=$((count + 1))
-    [ "$count" -le 10 ] && continue
+    [ "$count" -le 3 ] && continue
     case "$candidate" in "$backup_root"/pre-update-*.sqlite3) rm -f -- "$candidate";; *) die "backup cleanup path escapes managed state";; esac
   done
 }
