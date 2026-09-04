@@ -76,6 +76,7 @@ export default function QueuesView({
   heldBriefings = [],
   blockedWaits = [],
   heldDeliveries = [],
+  coordinatorUnavailable = false,
   now = Date.now(),
 }: {
   tasks: Task[];
@@ -94,6 +95,7 @@ export default function QueuesView({
   heldBriefings?: HeldBriefing[];
   blockedWaits?: BlockedEscalation[];
   heldDeliveries?: HeldDelivery[];
+  coordinatorUnavailable?: boolean;
   now?: number;
 }) {
   const workerNames = useMemo(
@@ -126,7 +128,8 @@ export default function QueuesView({
   if (total === 0 && extraWaits.length === 0) {
     return (
       <section className="queues" aria-label="Queues">
-        {heldBriefings.length === 0 && heldDeliveries.length === 0 && <p className="queues-empty">Nothing is waiting on anyone.</p>}
+        {coordinatorUnavailable && <p role="status">Coordination status could not refresh. Showing last known work; it may have changed.</p>}
+        {!coordinatorUnavailable && heldBriefings.length === 0 && heldDeliveries.length === 0 && <p className="queues-empty">Nothing is waiting on anyone.</p>}
         <DeliveryWaitList held={heldDeliveries} />
         <HeldBriefingList briefings={heldBriefings} onOpenTask={onOpenTask} />
       </section>
@@ -135,6 +138,7 @@ export default function QueuesView({
 
   return (
     <section className="queues" aria-label="Queues">
+      {coordinatorUnavailable && <p role="status">Coordination status could not refresh. Showing last known work; it may have changed.</p>}
       {groups.map((group) => {
         const hours = oldestAgeHours(group.tasks, now);
         return (

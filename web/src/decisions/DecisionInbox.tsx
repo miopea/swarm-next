@@ -29,6 +29,7 @@ type Props = {
   focusRequest?: number;
   additionalPendingCount?: number;
   attentionCards?: ReactNode;
+  coordinatorUnavailable?: boolean;
   /**
    * Rendered BELOW the requests, for panels that are not asking anything.
    *
@@ -44,7 +45,7 @@ type Props = {
   onAnswer?: (decision: DecisionRequest, answers: Record<string, string[]>, note: string) => Promise<void>;
 };
 
-export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, additionalPendingCount = 0, attentionCards, trailingCards, onOpenTask, onFetchActivity, onResolve, onAnswer }: Props) {
+export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, additionalPendingCount = 0, attentionCards, coordinatorUnavailable = false, trailingCards, onOpenTask, onFetchActivity, onResolve, onAnswer }: Props) {
   const [view, setView] = useState<"attention" | "activity">("attention");
   const [showResolved, setShowResolved] = useState(false);
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -175,9 +176,10 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
         */}
       <div className={visible.length > 0 ? "decision-attention-cards reserved" : "decision-attention-cards"}>
         {attentionCards}
+        {coordinatorUnavailable && <p role="status">Coordination status could not refresh. Showing last known work; it may have changed.</p>}
       </div>
 
-      {visible.length === 0 && additionalPendingCount === 0 ? (
+      {visible.length === 0 && additionalPendingCount === 0 && !coordinatorUnavailable ? (
         <div className="decision-empty">
           <BeeMascot className="empty-bee" expression="available" />
           <p className="eyebrow">All clear</p>

@@ -71,6 +71,21 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 
 ## P3–P7 — Implementation checkpoints (phases remain incomplete)
 
+### P4f: failed coordination reads do not imply resolution
+
+- Preserve held deliveries, briefings, blocked observations, and unsettled review
+  after a failed coordinator read. Successful empty responses still clear them;
+  logout clears retained state. Deadline failures qualify the observation while
+  visibility/unmount cancellations do not manufacture an outage.
+- Needs You and Queues show a concise last-known-work qualification rather than
+  an all-clear during refresh failure. This is status, not an extra attention
+  count, timer escalation, or claim that Queen is stuck.
+- Verification: 61 App/DecisionInbox/Queues tests passed, including retained
+  briefing visibility across failure, zero added badge count, and successful
+  empty recovery. Production web build passed; existing terminal chunk warning
+  remains. No live outage was induced or real worker interrupted. Real-browser
+  visual acceptance and broader decision reconciliation remain outstanding.
+
 ### P4a: age is queue evidence
 
 - ADR 0061 records the approved replacement of timer-only operator escalation.

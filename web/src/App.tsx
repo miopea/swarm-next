@@ -456,6 +456,7 @@ export function App() {
   const [queenAutomation, setQueenAutomation] = useState<QueenAutomationStatus>();
   /** What the coordinator is holding behind an unanswered terminal prompt. */
   const [heldDeliveries, setHeldDeliveries] = useState<HeldDelivery[]>([]);
+  const [coordinatorUnavailable, setCoordinatorUnavailable] = useState(false);
   const [blockedEscalations, setBlockedEscalations] = useState<BlockedEscalation[]>([]);
   const [unsettledReview, setUnsettledReview] = useState<UnsettledReview[]>([]);
   // NOT fed into attentionCount, on purpose. See HeldBriefingList for why a
@@ -562,6 +563,7 @@ export function App() {
   useEffect(() => {
     if (!operatorToken) {
       setHeldDeliveries([]);
+      setCoordinatorUnavailable(false);
       setBlockedEscalations([]);
       setUnsettledReview([]);
       setHeldBriefings([]);
@@ -576,11 +578,11 @@ export function App() {
       setBlockedEscalations(status.blocked_escalations ?? []);
       setUnsettledReview(status.unsettled_review ?? []);
       setHeldBriefings(status.held_briefings ?? []);
+      setCoordinatorUnavailable(false);
     } catch {
-      if (!signal.aborted) {
-        setHeldDeliveries([]);
-        setUnsettledReview([]);
-        setHeldBriefings([]);
+      if (!signal.aborted || (signal.reason instanceof DOMException && signal.reason.name === "TimeoutError")) {
+        // A failed observation is not a resolution. Keep the last known holds.
+        setCoordinatorUnavailable(true);
       }
     }
   }, [operatorToken, heldDeliveryRefresh]);
@@ -2264,6 +2266,7 @@ export function App() {
         ) : surface === "decisions" ? (
           <div className="attention-workspace">
             <DecisionInbox
+              coordinatorUnavailable={coordinatorUnavailable}
               decisions={decisions}
               tasks={tasks}
               workers={workers}
@@ -2313,6 +2316,7 @@ export function App() {
         ) : surface === "queues" ? (
           <Suspense fallback={<WorkspaceLoading label="queues" />}>
             <QueuesView
+              coordinatorUnavailable={coordinatorUnavailable}
               tasks={tasks}
               workers={workers}
               heldBriefings={heldBriefings}

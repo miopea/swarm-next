@@ -33,6 +33,13 @@ current provider-state reconciliation and generation-safe delivery observations.
 
 ## Consequences and verification
 
+A failed coordinator read is not evidence that held work resolved. Preserve the
+last successful observation until a successful replacement or logout. Needs You
+and Queues qualify that evidence as unavailable for refresh, without adding an
+attention badge or claiming an all-clear. Visibility/unmount cancellation is not
+a service failure; request deadline expiry is. A successful empty response clears
+the retained observations and the qualification.
+
 The legacy `blocked_escalations` response name remains a compatibility field for
 now; the maturity UI treats it as waiting-age evidence. The orchestration adapter
 owns eventual renaming when supported clients no longer require the old field.

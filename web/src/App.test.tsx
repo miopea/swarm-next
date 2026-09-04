@@ -662,6 +662,7 @@ test("does not invent a Queen request that was never filed", async () => {
     if (url === "/api/v1/hive") return Promise.resolve(ok(hiveIdentity()));
     if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: [{ session_id: queenSession, running: true }] }));
     if (url === "/api/v1/workers") return Promise.resolve(ok([queen]));
+    if (url === "/api/v1/orchestration/coordinator") return Promise.resolve(ok({ held: [], held_briefings: [], blocked_escalations: [] }));
     if (url === "/api/v1/workspaces" || url === "/api/v1/tasks" || url === "/api/v1/decisions" || url === "/api/v1/integrations/jira/task-links") return Promise.resolve(ok([]));
     if (url === "/api/v1/orchestration/queen-policy") return Promise.resolve(ok({ at_hive: "coordinate", away: "coordinate", night_watch: "local_execution" }));
     if (url === "/api/v1/orchestration/queen-automation") return Promise.resolve(ok({
@@ -1256,6 +1257,7 @@ test("a queued briefing is shown but does not inflate the Needs you count", asyn
   // zero within minutes with nothing done about them. Badging a self-resolving
   // state is how an operator learns to distrust the badge, and the badge only
   // works while they believe it. So it renders, and the count stays 0.
+  let coordinatorState: "ready" | "failed" | "empty" = "ready";
   const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
@@ -1271,6 +1273,8 @@ test("a queued briefing is shown but does not inflate the Needs you count", asyn
     if (url === "/api/v1/apiary/join-links") return Promise.resolve(ok([]));
     if (url.includes("/api/v1/control-room/events")) return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
     if (url.includes("/api/v1/orchestration/queen-policy")) return Promise.resolve(ok({ at_hive: "coordinate", away: "coordinate", night_watch: "local_execution" }));
+    if (url.includes("/api/v1/orchestration/coordinator") && coordinatorState === "failed") return Promise.reject(new Error("offline"));
+    if (url.includes("/api/v1/orchestration/coordinator") && coordinatorState === "empty") return Promise.resolve(ok({ held: [], held_briefings: [], blocked_escalations: [] }));
     if (url.includes("/api/v1/orchestration/coordinator")) return Promise.resolve(ok({
       completed_actions: 0, queen_calls_avoided: 0, uncertain_actions: 0, queued_actions: 0,
       stale_attention_actions: 0, worker_exit_attention_actions: 0, unstarted_attention_actions: 0,
@@ -1303,6 +1307,31 @@ test("a queued briefing is shown but does not inflate the Needs you count", asyn
   // The nav button, not its pop-out sibling, which shares the word.
   fireEvent.click(screen.getAllByRole("button", { name: /Queues/ })[0]);
   expect(await screen.findByText("One briefing is queued")).toBeInTheDocument();
+
+  const refresh = async () => {
+    await act(async () => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+      document.dispatchEvent(new Event("visibilitychange"));
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+  };
+  coordinatorState = "failed";
+  await refresh();
+  expect(await screen.findByText(/Coordination status could not refresh/)).toBeInTheDocument();
+  expect(screen.getByText("One briefing is queued")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /^Needs you/ }));
+  expect(screen.getByText(/Coordination status could not refresh/)).toBeInTheDocument();
+  expect(screen.queryByText("Nothing needs your attention")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^Needs you/ })).toHaveTextContent("0");
+
+  coordinatorState = "empty";
+  await refresh();
+  expect(await screen.findByText("Nothing needs your attention")).toBeInTheDocument();
+  expect(screen.queryByText(/Coordination status could not refresh/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getAllByRole("button", { name: /Queues/ })[0]);
+  expect(await screen.findByText("Nothing is waiting on anyone.")).toBeInTheDocument();
+  expect(screen.queryByText("One briefing is queued")).not.toBeInTheDocument();
 });
 
 /**
