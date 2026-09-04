@@ -33,6 +33,14 @@ guard is package-owned until pre-feature release rollback is no longer supported
 
 ## Verification and remaining work
 
+The package publishes one atomic `daily-backup.status` file under managed state.
+Failures use the existing bounded failure shape (step, sanitized detail, changed);
+success replaces it with `state=ready` and the available UTC snapshot day. A
+same-day no-op reports the existing snapshot, not a new verification. Contending
+jobs do not modify the status. The file is a subsystem observation, not an
+operator decision or proof that older snapshots remain uncorrupted. Runtime UI
+consumption remains required; the package file alone is not operator visibility.
+
 Isolated package smoke covers verification failure without pruning, exact seven
 retained files, manual-file preservation, same-day idempotence, lock contention,
 unit installation and a bundle without the feature. Services/SQLite files are

@@ -27,6 +27,7 @@ restore_auth=
 restore_incoming=
 daily_incoming=
 daily_auth=
+daily_status=
 update_rollback=
 update_schema_before=
 update_auth=
@@ -399,6 +400,10 @@ on_exit() {
     # to report to, and record_failure returns without writing.
     record_failure "$fail_status"
   fi
+  if [ "$result" -ne 0 ] && [ -n "$daily_status" ]; then
+    record_failure "$daily_status.tmp"
+    mv -f "$daily_status.tmp" "$daily_status" 2>/dev/null || true
+  fi
   [ -z "$dev_build_root" ] || clear_managed_directory "$dev_build_root"
   exit "$result"
 }
@@ -618,6 +623,14 @@ prune_superseded_releases() {
   done
 }
 
+record_daily_backup_ready() {
+  {
+    printf 'state=ready\n'
+    printf 'snapshot_day=%s\n' "$daily_day"
+  } > "$daily_status.tmp"
+  mv -f "$daily_status.tmp" "$daily_status"
+}
+
 daily_database_backup() {
   current=$(release_from_link "$install_root/current")
   [ -n "$current" ] || die "no current release is installed"
@@ -627,10 +640,13 @@ daily_database_backup() {
   # A process-owned, nonblocking lock prevents timer/manual duplicate work.
   exec 9>"$state_root/.daily-backup.lock"
   flock -n 9 || return 0
+  daily_status="$state_root/daily-backup.status"
+  fail_step=daily-backup
   trap 'exit 143' TERM
   trap 'exit 130' INT
-  daily_saved="$state_root/backups/daily-$(date -u +%Y%m%d).sqlite3"
-  [ ! -f "$daily_saved" ] || return 0
+  daily_day=$(date -u +%Y%m%d)
+  daily_saved="$state_root/backups/daily-$daily_day.sqlite3"
+  if [ -f "$daily_saved" ]; then record_daily_backup_ready; return 0; fi
   # Fixed, lock-owned staging bounds remnants even after an uncatchable kill.
   daily_incoming="$state_root/.daily-incoming.sqlite3"
   daily_auth="$state_root/.daily-auth"
@@ -657,6 +673,7 @@ daily_database_backup() {
     [ "$count" -le 7 ] && continue
     case "$candidate" in "$state_root"/backups/daily-*.sqlite3) rm -f -- "$candidate";; *) die "daily backup cleanup path escapes managed state";; esac
   done
+  record_daily_backup_ready
   printf 'Daily Hive database backup verified: %s\n' "$daily_saved"
 }
 

@@ -6,6 +6,18 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P5 / REC-02: durable daily backup outcome for runtime presentation
+
+- The daily job now atomically publishes one managed status file. Failure uses
+  the existing bounded, sanitized failure fields; success replaces those fields
+  with the available UTC snapshot day. A same-day no-op reports availability,
+  not a new verification, and lock contention leaves status untouched.
+- WSL isolated package smoke passed, verifying failed verification persists an
+  actionable step and a successful backup removes stale failure detail. No
+  credentials or snapshot contents are included in the record.
+- API/UI projection of this outcome remains the next gap: a status file alone
+  is not operator awareness. No live job, deployment, push or release.
+
 ### P5 / REC-02: package-owned seven-daily snapshot job
 
 - Added a bounded `backup-daily` action and persistent UTC calendar timer. Uses

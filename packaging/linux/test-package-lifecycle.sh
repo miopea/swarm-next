@@ -946,6 +946,8 @@ done
 printf 'manual\n' > "$SWARM_STATE_ROOT/backups/daily-personal.sqlite3"
 : > "$HOME/verify-fails"
 if "$package" backup-daily; then echo "unverified daily backup accepted" >&2; exit 1; fi
+grep -q '^state=failed$' "$SWARM_STATE_ROOT/daily-backup.status"
+grep -q '^step=daily-backup$' "$SWARM_STATE_ROOT/daily-backup.status"
 [ "$(find "$SWARM_STATE_ROOT/backups" -name 'daily-2000*.sqlite3' | wc -l)" -eq 9 ]
 rm "$HOME/verify-fails"
 : > "$HOME/systemctl.log"
@@ -953,6 +955,8 @@ printf 'daily source\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
 "$package" backup-daily
 daily_path="$SWARM_STATE_ROOT/backups/daily-$(date -u +%Y%m%d).sqlite3"
 [ "$(cat "$daily_path")" = 'daily source' ]
+grep -q '^state=ready$' "$SWARM_STATE_ROOT/daily-backup.status"
+if grep -q '^detail=' "$SWARM_STATE_ROOT/daily-backup.status"; then echo "successful backup retained failure detail" >&2; exit 1; fi
 [ "$(find "$SWARM_STATE_ROOT/backups" -name 'daily-[0-9]*.sqlite3' | wc -l)" -eq 7 ]
 [ "$(cat "$SWARM_STATE_ROOT/backups/daily-personal.sqlite3")" = manual ]
 printf 'later source\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
