@@ -466,9 +466,8 @@ test("explicit disposal cancels reconnect ownership", async () => {
 test("output arriving while nothing can draw it is dropped, not replayed", async () => {
   // Reported: "when I leave the worker view and come back it is like the
   // terminal is playing back what happened at a faster speed until it gets back
-  // to live". xterm resolves a write only once it has RENDERED it, and a host
-  // element removed from the document cannot render — so frames queued behind a
-  // write that could not finish, and returning drained them in order.
+  // to live". Hidden views should not parse new output or replay an accumulated
+  // backlog on return. A write callback confirms parsing, not browser paint.
   const { connection, handlers, sockets } = harness();
   connection.start(handlers);
   await vi.waitFor(() => expect(sockets).toHaveLength(1));
@@ -879,6 +878,56 @@ test("a live socket survives the return, having answered", async () => {
   expect(sockets).toHaveLength(1);
   expect(handlers.onSnapshot).toHaveBeenCalledTimes(1);
   vi.useRealTimers();
+});
+
+test.each(["resolve", "reject"] as const)("suspension abandons queued output and ignores a late render %s", async (outcome) => {
+  const { connection, handlers, sockets } = harness();
+  let finish!: () => void;
+  let fail!: (error: Error) => void;
+  handlers.onOutput = vi.fn(() => new Promise<void>((resolve, reject) => { finish = resolve; fail = reject; }));
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(10n, 24, 80, "live"));
+  await vi.waitFor(() => expect(connection.sequence).toBe(10));
+  sockets[0].message(outputFrame(11n, "already parsing"));
+  await vi.waitFor(() => expect(handlers.onOutput).toHaveBeenCalledTimes(1));
+  sockets[0].message(outputFrame(12n, "queued before leaving"));
+  connection.suspendRendering();
+  connection.resumeRendering();
+  expect(sockets[0].close).toHaveBeenCalledWith(4013, "fresh terminal snapshot required");
+  vi.mocked(handlers.onState).mockClear();
+  if (outcome === "resolve") finish();
+  else fail(new Error("retired renderer failed"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(connection.sequence).toBe(0);
+  expect(handlers.onOutput).toHaveBeenCalledTimes(1);
+  expect(handlers.onState).not.toHaveBeenCalled();
+
+  sockets[0].disconnect();
+  await vi.waitFor(() => expect(sockets).toHaveLength(2));
+  sockets[1].open();
+  sockets[1].message(snapshotFrame(12n, 24, 80, "current screen"));
+  await vi.waitFor(() => expect(connection.sequence).toBe(12));
+  expect(handlers.onState).toHaveBeenCalledWith("connected", undefined);
+  connection.dispose();
+});
+
+test("a disposed snapshot completion cannot publish a connected terminal", async () => {
+  const { connection, handlers, sockets } = harness();
+  let finish!: () => void;
+  handlers.onSnapshot = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(10n, 24, 80, "pending"));
+  await vi.waitFor(() => expect(finish).toBeDefined());
+  connection.dispose();
+  vi.mocked(handlers.onState).mockClear();
+  finish();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(connection.sequence).toBe(0);
+  expect(handlers.onState).not.toHaveBeenCalled();
 });
 
 test("an unrelated probe reply cannot confirm a frozen connection", async () => {

@@ -6,6 +6,25 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2/P3: retire terminal work when its view is suspended
+
+- Found a switching race: suspension dropped newly arriving frames but did not
+  retire output already queued. In-flight snapshot/output callbacks could also
+  advance the resume cursor or publish Connected after recovery/disposal.
+- Suspension with pending bytes now retires that render generation and requests
+  canonical recovery on return. Queued retired frames do not enter the surface;
+  late success/failure cannot change connection state. Idle leave/return retains
+  its no-reconnect behavior. Existing byte bounds and sequential parser ownership
+  remain; no worker/process or terminal protocol changes.
+- Three regressions failed before the fix and passed afterward (late success,
+  late rejection, disposed snapshot completion). All 219 terminal tests across
+  13 files and production web build passed; existing chunk warning remains.
+- Checked the installed xterm WriteBuffer implementation: write callbacks confirm
+  parsing, not paint. Corrected misleading lifecycle comments. Existing terminal
+  timing alone therefore does not establish on-screen paint latency; real-browser
+  performance and Android/iOS AskUser acceptance remain open.
+- No push, deployment, release or live worker interruption.
+
 ### P3: bounded temporary-address polling
 
 - Replaced the settings card's independent two-second reads with the shared

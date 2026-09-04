@@ -118,12 +118,10 @@ export class TerminalConnection {
   /**
    * Whether a surface is currently on screen to render into.
    *
-   * xterm resolves a write only once it has RENDERED it, and a host element
-   * removed from the document cannot render — so every frame that arrived while
-   * the operator was elsewhere sat in #renderQueue behind one that could not
-   * finish. Coming back drained them in order, which is the "playing back at a
-   * faster speed until it gets back to live" that was reported. A page reload
-   * looked instant only because a fresh connection asks for a snapshot instead.
+   * xterm's write callback confirms parsing, not browser paint. Retained views
+   * must still avoid parsing a backlog nobody is viewing. On return, a fresh
+   * canonical snapshot supplies the newest screen instead of playback. Pending
+   * callbacks from the prior visible period cannot confirm the restored view.
    */
   #rendering = true;
   /** Whether anything was dropped while detached, so the screen is now stale. */
@@ -468,6 +466,13 @@ export class TerminalConnection {
    * unless they scrolled up themselves.
    */
   suspendRendering(): void {
+    if (this.#rendering && this.#pendingRenderBytes > 0) {
+      // Frames accepted while visible may still be waiting for the parser.
+      // Retire those callbacks as well as dropping newly arriving frames. The
+      // next visible view restores canonical state instead of playing them back.
+      this.#renderGeneration += 1;
+      this.#missedWhileDetached = true;
+    }
     this.#rendering = false;
     this.#unconfirmControl();
   }
@@ -500,12 +505,13 @@ export class TerminalConnection {
     this.#renderQueue = this.#renderQueue
       .then(async () => {
         if (generation !== this.#renderGeneration || this.#disposed) return;
-        await this.#applyBinaryFrame(frame);
+        await this.#applyBinaryFrame(frame, generation);
         if (!this.#disposed && generation === this.#renderGeneration && document.visibilityState === "visible") {
           browserPerformance.record("terminal_render", performance.now() - enqueuedAt);
         }
       })
       .catch((error: unknown) => {
+        if (generation !== this.#renderGeneration || this.#disposed) return;
         this.#fail(error instanceof Error ? error.message : "terminal renderer failed");
       })
       .finally(() => {
@@ -513,7 +519,7 @@ export class TerminalConnection {
       });
   }
 
-  async #applyBinaryFrame(frame: Uint8Array): Promise<void> {
+  async #applyBinaryFrame(frame: Uint8Array, generation: number): Promise<void> {
     if (frame.byteLength < 9) {
       this.#fail("terminal output frame was malformed");
       return;
@@ -548,6 +554,7 @@ export class TerminalConnection {
         reason,
         bytes: frame.slice(14),
       });
+      if (generation !== this.#renderGeneration || this.#disposed) return;
       this.#sequence = sequence;
       this.#hasCanonicalState = true;
       if (truncated) {
@@ -576,6 +583,7 @@ export class TerminalConnection {
       return;
     }
     await this.#handlers?.onOutput(frame.slice(9));
+    if (generation !== this.#renderGeneration || this.#disposed) return;
     this.#sequence = sequence;
     this.#confirmRenderedConnection();
   }

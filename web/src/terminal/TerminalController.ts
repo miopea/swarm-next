@@ -149,9 +149,8 @@ export class TerminalController {
   }
 
   detach(): void {
-    // The surface stays open — only its host leaves the document. xterm cannot
-    // render into a detached element, so frames arriving now would queue behind
-    // a write that cannot finish and replay on return.
+    // Keep the surface, but stop output work while its host is detached. The
+    // connection restores current canonical state if output was abandoned.
     this.#attached = false;
     this.#lifecycle?.inactive();
     this.#connection.releaseControl?.();
