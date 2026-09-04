@@ -1879,7 +1879,7 @@ impl AppState {
                             kind,
                             &format!("decision:{}", delivery.decision_id),
                             Some(delivery.worker_id),
-                            None,
+                            Some(delivery.session_id),
                             &reason.describe("An answer"),
                             unix_timestamp(),
                         );

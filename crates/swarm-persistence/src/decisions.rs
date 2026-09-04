@@ -2148,6 +2148,95 @@ mod tests {
     }
 
     #[test]
+    fn decision_prompt_holds_end_with_delivery_not_with_the_operators_answer() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        let actions = vec!["continue".into()];
+        for uncertain in [false, true] {
+            let decision = store
+                .create_decision_request(&request(queen.id, &actions))
+                .unwrap();
+            store
+                .resolve_decision_request(decision.id, "continue", "", "test")
+                .unwrap();
+            let delivery = store.claim_decision_deliveries(100).unwrap().remove(0);
+            assert_eq!(delivery.decision_id, decision.id);
+            let subject = format!("decision:{}", decision.id);
+            store
+                .record_coordinator_refusal(
+                    crate::REFUSAL_DELIVERY_HELD,
+                    &subject,
+                    Some(queen.id),
+                    Some(WorkerSessionId::new()),
+                    "old session",
+                    100,
+                )
+                .unwrap();
+            assert!(
+                store
+                    .standing_coordinator_refusals(10_000, 0)
+                    .unwrap()
+                    .is_empty()
+            );
+            store
+                .record_coordinator_refusal(
+                    crate::REFUSAL_DELIVERY_HELD,
+                    &subject,
+                    Some(queen.id),
+                    Some(session),
+                    "answer waiting",
+                    101,
+                )
+                .unwrap();
+            store.defer_decision_delivery(decision.id, 102).unwrap();
+            assert_eq!(
+                store
+                    .standing_coordinator_refusals(10_000, 0)
+                    .unwrap()
+                    .len(),
+                1
+            );
+            store.claim_decision_deliveries(103).unwrap();
+            if uncertain {
+                store
+                    .fail_decision_delivery(decision.id, 104, DecisionDeliveryFailure::Uncertain)
+                    .unwrap();
+            } else {
+                store.complete_decision_delivery(decision.id, 104).unwrap();
+            }
+            store
+                .record_coordinator_refusal(
+                    crate::REFUSAL_DELIVERY_HELD,
+                    &subject,
+                    Some(queen.id),
+                    Some(session),
+                    "late",
+                    105,
+                )
+                .unwrap();
+            assert!(
+                store
+                    .standing_coordinator_refusals(10_000, 0)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(
+                store
+                    .get_decision_request(decision.id)
+                    .unwrap()
+                    .delivery_state,
+                Some(if uncertain {
+                    DecisionDeliveryState::Uncertain
+                } else {
+                    DecisionDeliveryState::Delivered
+                })
+            );
+        }
+    }
+
+    #[test]
     fn crash_ambiguity_never_auto_retries_a_terminal_injection() {
         let store = TaskStore::in_memory().unwrap();
         let queen = store.ensure_queen("/workspace/queen").unwrap();

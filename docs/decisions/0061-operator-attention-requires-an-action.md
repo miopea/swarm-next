@@ -70,6 +70,14 @@ cannot revive a hold through a late result. Known legacy task-outcome subjects
 also require applicable pending work. This does not settle uncertain delivery or
 replay a report; those remain distinct outbox states.
 
+Decision-answer holds retain their immutable decision ID and now include the
+actual delivery session. Known requests require a resolved decision with a pending
+matching outbox row. Delivered or uncertain answers are no longer prompt holds;
+the decision's own delivery state remains unchanged and readable. No answer is
+replayed or inferred from queue presentation. Unknown legacy subjects stay unknown.
+The bounded source-applicability query lives in `coordinator_refusals.sql` within
+the persistence boundary so the family-specific checks can be reviewed together.
+
 ## Consequences and verification
 
 A failed coordinator read is not evidence that held work resolved. Preserve the

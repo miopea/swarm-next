@@ -6,6 +6,20 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: decision-answer hold applicability and readable persistence query
+
+- Decision hold observations now carry the delivery session. Known decisions
+  require a matching pending delivery of a resolved answer; completed/uncertain
+  delivery cannot reappear as an open prompt hold. The decision delivery state
+  remains intact, and unknown legacy subjects are not inferred resolved.
+- Added waiting/delivered/uncertain/late-observation coverage, including wrong
+  sessions. All 27 decision tests, 10 refusal-filtered tests and strict Linux
+  lint passed. The growing bounded query was extracted to
+  a persistence-owned SQL file after lint flagged function length; no lint rule
+  was suppressed and no SQL moved into an adapter.
+- This does not reconcile direct terminal answers with decision requests; that
+  broader operator-provenance work remains open. No live mutation or release.
+
 ### P4: worker handoff observations follow their exact outbox identity
 
 - New outcome holds and clears use the handoff ID and recipient session, not the
