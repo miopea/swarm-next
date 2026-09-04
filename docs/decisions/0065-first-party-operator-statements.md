@@ -102,6 +102,31 @@ yet. Transport authentication, engine-owned operator-input correlation, provider
 consumption evidence, and decision identity mapping must precede receipt creation.
 Do not wire `UserPromptSubmit` directly to confirmed operator statements.
 
+### Installed-provider reconciliation, 2026-09-04
+
+Read-only checks on the operator's remote host found Claude Code 2.1.260 at
+`/home/bschleifer/.local/bin/claude`. Its help limits `--input-format` and
+`--output-format` to `--print`; `--replay-user-messages` requires both formats to
+be stream-json. This does not establish an acknowledgement channel for the current
+interactive PTY. No agent session was started, stopped or changed by the checks.
+
+Do not switch workers to print/SDK mode to make evidence collection easier. That
+would change native interactive behavior, including AskUser, and requires its own
+architecture and product acceptance. Likewise, matching a hook's text against the
+most recent input is insufficient: identical prompts may recur, another hook may
+block processing, and automation uses the same PTY interface.
+
+The next integration must separate two independent facts: authenticated operator
+authorship of a complete composer submission, and confirmed provider consumption.
+An authored statement can be verifiable even while delivery is uncertain; it must
+not be represented by the existing confirmed-answer receipt until consumption is
+proved. General operator statements also need not reference an existing decision.
+The current schema 130 receipt store is intentionally the narrower consumed-answer
+side, not the completed general statement model. Add the source-side record and
+correlation without weakening confirmed-answer admission or deriving authority
+from arbitrary terminal bytes. Raw terminal and native AskUser capture remain
+separate required acceptance paths, not silently satisfied by composer support.
+
 Verification reads return the statement and its scope, evidence status, and exact
 decision link when present. A full ID is required; no prefix lookup. Verified
 origin never expands the action authorized by the actual words. Preserve ADR 0054's

@@ -6,6 +6,22 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: installed provider constrains the next capture integration
+
+- Read-only remote version/help checks found Claude 2.1.260. Input/output
+  stream-json and replayed-input acknowledgements require print mode; no native
+  interactive acknowledgement path was established. The first SSH check inherited
+  a configured forwarding attempt and missed the user-local PATH; subsequent
+  checks explicitly disabled all forwarding and used the installed absolute path.
+- Refined ADR 0065: verified authorship and confirmed consumption are separate
+  facts. General authenticated composer statements must be recordable without an
+  existing decision, while consumed-answer receipts retain stricter admission.
+  This changes the next implementation from a guessed prompt-text correlation to
+  a distinct source record. It does not approve a switch to print/SDK workers.
+- Evidence/architecture checkpoint only; no runtime changes, provider session
+  changes, deployments or releases. Raw-terminal and AskUser source capture still
+  require a validated mechanism and remain in scope.
+
 ### P4: provider prompt observation is not confirmed operator evidence
 
 - Checked official Claude hook documentation: submitted prompt text is available
