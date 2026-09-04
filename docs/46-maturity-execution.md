@@ -6,6 +6,23 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2: retain accepted conversation evidence after provider exit
+
+- Fixed binding reconciliation discarding startup/selection evidence when the
+  provider had exited before the next read. Retained engine evidence now reaches
+  persistence before the old binding is released. Capture authentication, exact
+  session matching, manual-choice fences, and replacement-session guards remain.
+- Eleven worker-runtime tests executed successfully in local Ubuntu. The new
+  socket-level fixture covers startup-then-exit, selection-then-exit, manual
+  override, and replaced binding. An initially invalid replacement fixture was
+  rejected with WorkerAlreadyRunning; corrected it to end the prior binding.
+  A subsequent test-helper extraction and unit-pattern cleanup passed strict
+  all-target/all-feature Linux API Clippy and formatting.
+- This closes an exited-session reconciliation race, not all recovery. Explicit
+  Stop/sleep releases bindings through a separate path and needs final-evidence
+  reconciliation too. Continue-to-Fresh execution and actual provider lifecycle
+  ordering remain open. No live worker was started, stopped, or modified.
+
 ### P4: Linux execution closes the agent-source verification gate
 
 - Executed 61 agent, loopback-authentication, and source-HTTP tests in the existing

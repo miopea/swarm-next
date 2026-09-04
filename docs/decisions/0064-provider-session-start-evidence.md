@@ -104,3 +104,11 @@ projection (at most 256 candidates) is separate from immutable startup outcomes.
 Manual fencing alone cannot clear attention. The existing session response carries
 the confirmation without another poll; the terminal keeps earlier startup results
 in Session details, not as an ongoing warning after a confirmed switch.
+
+Engine evidence accepted while a provider was alive remains eligible if that
+provider exits before the API reads it. Reconciliation applies the retained
+startup/selection evidence before releasing missing worker bindings; process exit
+does not erase an already-authenticated conversation identity. Persistence still
+requires the exact current binding and honors manual-selection fences. A replaced
+or already-released binding cannot update the new session's default. This does
+not accept new callbacks from dead providers or infer restoration from exit.
