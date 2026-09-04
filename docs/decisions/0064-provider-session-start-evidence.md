@@ -69,6 +69,11 @@ are capped at 1 MiB; replacement uses a private temporary file and atomic rename
 Failure preserves base settings, not a stale overlay. No provider/user settings
 file is edited in place and this development work installs nothing on live workers.
 Outcome presentation distinguishes persisted startup results from attempts.
+Because providers invoke that absolute command after launch, release pruning keeps
+the release directory of the live host process even after `host-current` advances
+to an identical engine build. The old release becomes removable only after the
+host actually restarts. A mapped `(deleted)` executable is insufficient: the host
+would keep running while every later lifecycle callback failed to execute.
 
 Interactive selection uses a separate bounded state machine. Claude's documented
 SessionEnd(reason=resume) names the conversation being left by interactive /resume;

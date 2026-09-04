@@ -582,31 +582,30 @@ clear_managed_directory() {
   done
 }
 
-# IT CAN DELETE A DIRECTORY A RUNNING PROCESS IS EXECUTING, AND THAT IS SAFE.
-# The reason is written here rather than left to be rediscovered from /proc.
+# A running host owns more than its mapped executable. Future Claude processes
+# receive a private SessionStart/SessionEnd hook whose command is the host's
+# exact current executable. That path is deliberately version-matched to the
+# process and can be invoked minutes or days after the provider starts. Deleting
+# the release beneath a live host therefore leaves every later callback pointing
+# at `(deleted)`, even though Linux quite correctly keeps the host itself alive.
 #
-# This keeps three: current, previous and host-current. A running terminal host
-# can be on a FOURTH, because a reload moves host-current while the reconcile
-# correctly declines to restart an unchanged engine — so the process keeps
-# executing a directory no symlink names any more, and the next prune removes
-# it. Measured on 2026-09-01: the host was running 0a2f75c while host-current
-# read d3bd9d9, and 0a2f75c was gone from disk.
-#
-# WHY IT DOES NOT BREAK ANYTHING, checked rather than assumed:
-#
-#   Nothing is read from the directory at runtime. The host holds no open file
-#   descriptor under releases/ and its only mapping there is its own
-#   executable, which Linux keeps alive on the open inode.
-#
-#   Nothing needs the directory to come back. systemd restarts the host from
-#   ExecStart=.../host-current/bin/swarm-terminal-host, and a new mcp-proxy is
-#   spawned by BARE NAME through PATH to ~/.local/bin -> host-current. Both
-#   resolve through symlinks that always exist.
-#
-# WHAT IT DOES COST is inspectability: the build a process is executing cannot
-# be examined once its directory is gone. The Hive still reports WHICH build
-# that is — swarmctl status carries host_version from the process itself, and
-# the worker engine card shows it as "Running" beside the installed version.
+# Keep four when necessary: current, previous, host-current, and the release the
+# live host process is actually executing. Once the host restarts, the old path
+# stops being reported and the next bounded prune removes it normally.
+release_serves_running_host() {
+  candidate_release=$1
+  if [ -n "${SWARM_RUNNING_HOST_RELEASE:-}" ] \
+    && [ "$candidate_release" = "$SWARM_RUNNING_HOST_RELEASE" ]; then
+    return 0
+  fi
+  for process_executable in /proc/[0-9]*/exe; do
+    running_executable=$(readlink "$process_executable" 2>/dev/null || true)
+    running_executable=${running_executable% (deleted)}
+    [ "$running_executable" != "$candidate_release/bin/swarm-terminal-host" ] || return 0
+  done
+  return 1
+}
+
 prune_superseded_releases() {
   releases_root="$install_root/releases"
   [ -d "$releases_root" ] || return 0
@@ -617,7 +616,10 @@ prune_superseded_releases() {
     [ -d "$candidate" ] || continue
     case "$candidate" in
       "$keep_current"|"$keep_previous"|"$keep_host") continue;;
-      "$releases_root"/*) rm -rf -- "$candidate";;
+      "$releases_root"/*)
+        release_serves_running_host "$candidate" && continue
+        rm -rf -- "$candidate"
+        ;;
       *) die "release cleanup path escapes managed releases";;
     esac
   done

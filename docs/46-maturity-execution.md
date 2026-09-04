@@ -3118,8 +3118,31 @@ Real Android/iOS and normal operator soak remain separate evidence requirements.
   history is false, and resumes the same UUID after the first process exists. A
   focused test pins both sides of that transition. Recovery evidence rules and
   the final fallback implementation are unchanged.
-- Live rebuild, fresh disposable-worker completion, and task evidence remain the
-  acceptance gate. No release is authorized.
+- Development revision `d09d98c` launched disposable worker `Fresh Flight` into
+  a genuinely new Claude conversation after its one-time repository trust prompt.
+  It read task `01a06e6e-37da-7392-8a8b-db67bad0d1ad` through Swarm, moved it
+  Ready-to-Active-to-Review, created and committed the requested one-line artifact
+  as `feb10c9`, recorded exact commit evidence, and the coordinator settled the
+  documentation-only task to Completed. The repository was clean afterwards.
+- Stopping that worker through the authenticated API and starting it again created
+  a new engine session while retaining provider conversation
+  `01a06e6e-37c8-7b13-9ba0-14e9b6585f95`. Its prior task transcript and completion
+  summary were present at the resting prompt. This is live exact-resume evidence,
+  not Android/iOS or missing-context fallback acceptance. No release is authorized.
+
+### Live dogfood: keep provider hooks callable across App/API updates
+
+- The resumed disposable worker exposed a non-blocking Claude `SessionStart` hook
+  failure: its command named the exact `359e27e` terminal-host executable, whose
+  release directory had been pruned while that host process remained alive.
+  Linux retained the mapped executable, but a later hook could not execute the
+  deleted pathname. The worker remained usable, which made the fault easy to miss.
+- Release pruning now discovers the terminal host's actual `/proc/<pid>/exe` and
+  keeps that managed release in addition to current, previous, and `host-current`.
+  It becomes eligible for normal bounded cleanup after the host restarts. An
+  explicit test fixture models an unchanged-engine relink and asserts the running
+  hook release survives pruning. Live rebuild/restart and a clean lifecycle
+  callback remain the acceptance gate.
 
 ### Live dogfood: repair the integrated schema-124 collision
 
