@@ -28,8 +28,8 @@ use crate::{
 // the binary from the release the RUNNING host came from, so the drain stays
 // version-matched to itself and a newer checkout cannot break the update that
 // carries it.
-// Protocol 13 adds authenticated interactive-resume boundaries.
-pub const PROTOCOL_VERSION: u16 = 13;
+// Protocol 14 fences interactive selection against explicit operator choices.
+pub const PROTOCOL_VERSION: u16 = 14;
 pub const TERMINAL_CONTROL_PROTOCOL_VERSION: u16 = 11;
 pub const MAX_CONTROL_INPUT_BYTES: usize = 64 * 1024;
 pub const MAX_REQUEST_BYTES: u64 = 256 * 1024;
@@ -284,6 +284,9 @@ pub enum HostRequest {
         capability: ProviderLifecycleCapability,
         previous: swarm_domain::ProviderConversationId,
     },
+    FenceProviderSelection {
+        session_id: WorkerSessionId,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -407,6 +410,10 @@ impl TerminalHostStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostResponse {
+    ProviderSelectionFenced {
+        session_id: WorkerSessionId,
+        revision: u64,
+    },
     Pong {
         protocol_version: u16,
     },
@@ -580,6 +587,7 @@ mod tests {
             "stop",
             "provider_session_start",
             "provider_resume_end",
+            "fence_provider_selection",
         ];
         let error = serde_json::from_value::<HostRequest>(serde_json::json!({
             "type": "a_request_that_does_not_exist"
@@ -601,8 +609,8 @@ mod tests {
              anyone -- bump it, then update this list."
         );
         assert_eq!(
-            PROTOCOL_VERSION, 13,
-            "the pinned surface above belongs to protocol 13; if you changed \
+            PROTOCOL_VERSION, 14,
+            "the pinned surface above belongs to protocol 14; if you changed \
              the requests, this number moves with them"
         );
     }
@@ -694,7 +702,7 @@ mod tests {
             variants,
             ["status", "claim", "renew", "release", "input", "resize"]
         );
-        assert_eq!(PROTOCOL_VERSION, 13);
+        assert_eq!(PROTOCOL_VERSION, 14);
     }
 
     #[test]

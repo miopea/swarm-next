@@ -121,6 +121,17 @@ impl ProviderLifecycleGate {
             .map(swarm_domain::ConversationSelection::current)
     }
 
+    /// The trusted engine owner orders an explicit operator default choice.
+    /// Before initial evidence, revision zero fences no interactive transitions.
+    pub fn fence_selection(&mut self) -> Option<u64> {
+        if self.revoked {
+            return None;
+        }
+        self.selection
+            .as_mut()
+            .map_or(Some(0), swarm_domain::ConversationSelection::fence)
+    }
+
     pub fn revoke(&mut self) {
         self.revoked = true;
         self.capability.fill(0);
@@ -184,6 +195,37 @@ mod tests {
         );
         gate.revoke();
         assert!(!gate.begin_resume(session, &[7; 32], next.conversation));
+    }
+
+    #[test]
+    fn explicit_choice_fence_cancels_pending_resume_without_publishing_selection() {
+        let session = WorkerSessionId::new();
+        let mut gate = ProviderLifecycleGate::new(session, [7; 32]);
+        assert_eq!(gate.fence_selection(), Some(0));
+        let first = ProviderSessionStartObservation {
+            conversation: ProviderConversationId::new(),
+            kind: ProviderSessionStartKind::Resumed,
+        };
+        gate.observe(session, &[7; 32], first);
+        assert!(gate.begin_resume(session, &[7; 32], first.conversation));
+        assert_eq!(gate.fence_selection(), Some(2));
+        assert_eq!(gate.selection().unwrap().revision, 1);
+        let next = ProviderSessionStartObservation {
+            conversation: ProviderConversationId::new(),
+            ..first
+        };
+        assert_eq!(
+            gate.observe(session, &[7; 32], next),
+            ProviderLifecycleAcceptance::ConflictingStartup
+        );
+        assert!(gate.begin_resume(session, &[7; 32], first.conversation));
+        assert_eq!(
+            gate.observe(session, &[7; 32], next),
+            ProviderLifecycleAcceptance::ConversationChanged
+        );
+        assert_eq!(gate.selection().unwrap().revision, 3);
+        gate.revoke();
+        assert_eq!(gate.fence_selection(), None);
     }
 
     #[test]

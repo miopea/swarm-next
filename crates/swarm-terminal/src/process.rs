@@ -349,6 +349,22 @@ impl ProcessTerminalSession {
             .and_then(crate::ProviderLifecycleGate::selection))
     }
 
+    /// Fences provider selection observations without changing the live context.
+    /// # Errors
+    /// Returns lock/process errors; None means the process cannot be fenced.
+    pub fn fence_provider_selection(&self) -> Result<Option<u64>, SessionRegistryError> {
+        let mut child = lock(&self.child)?;
+        let mut gate = lock(&self.provider_lifecycle)?;
+        let Some(gate) = gate.as_mut() else {
+            return Ok(None);
+        };
+        if child.try_wait().map_err(terminal_error)?.is_some() {
+            gate.revoke();
+            return Ok(None);
+        }
+        Ok(gate.fence_selection())
+    }
+
     /// Arms an interactive-resume boundary only for this still-live process.
     /// # Errors
     /// Returns lock or process-status errors without exposing capability data.

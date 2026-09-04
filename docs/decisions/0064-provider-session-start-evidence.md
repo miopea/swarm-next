@@ -87,5 +87,13 @@ engine revision without moving its live conversation and cancels an incomplete
 resume boundary. Only later paired transitions can supersede that manual choice.
 Unfenced/manual persistence callers suspend automatic following for that binding;
 they must never assume their last observed engine revision is a sufficient fence.
-New session binding resets tracking. The API selection consumer is not enabled
-until the engine fence request and explicit-choice path are integrated together.
+New session binding resets tracking. Protocol 14 adds an engine selection-fence
+request on private IPC. Both lifecycle helpers now preflight exactly version 14.
+The API consumes paired selections under its existing lifecycle lock and fences
+explicit choices under that same lock. A current durable receipt is required
+before requesting a fence; older bindings without a receipt remain manual-only.
+An unavailable or incompatible host does not prevent saving an explicit choice:
+automatic following is suspended for that binding instead. Persistence failures
+remain errors, not evidence that following is safe. The API reports whether
+following was retained. Actual provider ordering and Linux end-to-end acceptance
+remain required; this integration is not a completed recovery acceptance gate.

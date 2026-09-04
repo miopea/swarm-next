@@ -620,6 +620,14 @@ async fn reconcile_worker_bindings_unlocked(state: &AppState) -> Result<LiveSess
         {
             state.control_room_notify.notify_waiters();
         }
+        if session.running
+            && let Some(selection) = session.provider_selection
+            && task_store(state)?
+                .reconcile_provider_selection(session.session_id, selection)
+                .map_err(|error| task_store_error(&error))?
+        {
+            state.control_room_notify.notify_waiters();
+        }
     }
     let live = sessions
         .into_iter()

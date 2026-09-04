@@ -475,8 +475,12 @@ pub(super) async fn repoint_worker_conversation(
     // Serialize with startup's profile read and host launch. Once this change
     // returns, a later start must not launch from an earlier cached selection.
     let _lifecycle = state.worker_lifecycle.lock().await;
+    let profile = task_store(&state)?
+        .get_worker_profile(worker_id)
+        .map_err(|error| task_store_error(&error))?;
+    let fence = conversation_choice_fence(&state, &profile).await?;
     task_store(&state)?
-        .repoint_provider_conversation(worker_id, &conversation_id)
+        .repoint_provider_conversation_fenced(worker_id, &conversation_id, fence)
         .map_err(|error| task_store_error(&error))?;
     state.control_room_notify.notify_waiters();
     Ok((
@@ -487,9 +491,45 @@ pub(super) async fn repoint_worker_conversation(
             // matters: the repair they just made does not touch the terminal
             // they are looking at.
             "applies": "next start",
+            "live_selection_following": fence.is_some(),
         })),
     )
         .into_response())
+}
+
+async fn conversation_choice_fence(
+    state: &AppState,
+    profile: &WorkerProfile,
+) -> Result<Option<(swarm_domain::WorkerSessionId, u64)>, ApiError> {
+    if profile.provider != ProviderKind::ClaudeCode {
+        return Ok(None);
+    }
+    let Some(session_id) = profile.active_session_id else {
+        return Ok(None);
+    };
+    if !task_store(state)?
+        .provider_selection_fence_ready(profile.id, session_id)
+        .map_err(|error| task_store_error(&error))?
+    {
+        return Ok(None);
+    }
+    if !matches!(
+        request_host(state, HostRequest::Ping).await,
+        Ok(swarm_terminal::HostResponse::Pong {
+            protocol_version: 14
+        })
+    ) {
+        return Ok(None);
+    }
+    Ok(
+        match request_host(state, HostRequest::FenceProviderSelection { session_id }).await {
+            Ok(swarm_terminal::HostResponse::ProviderSelectionFenced {
+                session_id: returned,
+                revision,
+            }) if returned == session_id => Some((session_id, revision)),
+            _ => None,
+        },
+    )
 }
 
 pub(super) async fn update_worker(

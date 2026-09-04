@@ -6,6 +6,23 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2: integrate explicit-choice fencing and selection consumption
+
+- Protocol 14 adds a live engine selection fence, without changing the provider
+  conversation or publishing a fictitious selection. The API uses its existing
+  lifecycle lock for both explicit choices and automatic selection reconciliation.
+- Current receipts permit fenced following; older sessions without receipts and
+  unavailable/incompatible engines still permit manual selection, with following
+  suspended. No startup snapshot is manufactured for an older binding.
+- Strict Linux-target Clippy passed across API, persistence, terminal and host.
+  This cross-compiles Unix paths; it does not execute a Linux provider lifecycle.
+- Nine persistence recovery, four lifecycle-gate, and eight IPC tests passed.
+  The initial new persistence fixture incorrectly rebound a running worker;
+  corrected it to release and create a new session before testing ended binding.
+  Remaining work includes API/engine end-to-end ordering coverage,
+  clearing outdated recovery attention after a confirmed switch, and the complete
+  fallback ladder. No live engine update, push, deployment, or release.
+
 ### P2: durable interactive-selection revision and manual-choice fence
 
 - Schema 128 adds a selection revision and suspension flag to the existing one-

@@ -514,6 +514,18 @@ fn dispatch_blocking(
     request: HostRequest,
 ) -> HostResponse {
     let result = match request {
+        HostRequest::FenceProviderSelection { session_id } => registry
+            .get(session_id)
+            .and_then(|session| session.fence_provider_selection())
+            .map_err(|_| "provider selection fence unavailable".to_owned())
+            .and_then(|revision| {
+                revision
+                    .map(|revision| HostResponse::ProviderSelectionFenced {
+                        session_id,
+                        revision,
+                    })
+                    .ok_or_else(|| "provider selection fence refused".to_owned())
+            }),
         HostRequest::ProviderResumeEnd {
             session_id,
             capability,

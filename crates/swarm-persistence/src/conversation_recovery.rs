@@ -29,6 +29,27 @@ pub(super) fn migrate(tx: &Transaction<'_>, version: i64) -> rusqlite::Result<()
 }
 
 impl TaskStore {
+    /// Whether this current binding has a receipt that can order an operator fence.
+    /// Older sessions without a startup receipt must retain manual-only selection.
+    /// # Errors
+    /// Returns storage errors rather than treating unavailable evidence as ready.
+    pub fn provider_selection_fence_ready(
+        &self,
+        worker: swarm_domain::WorkerId,
+        session: WorkerSessionId,
+    ) -> Result<bool, TaskStoreError> {
+        Ok(self.connection()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM worker_startup_context context
+             JOIN worker_profiles worker ON worker.id = context.worker_id
+             JOIN worker_sessions session ON session.worker_id = worker.id AND session.session_id = context.session_id
+             WHERE context.worker_id = ?1 AND context.session_id = ?2
+               AND worker.archived_at IS NULL AND session.ended_at IS NULL
+               AND worker.provider = 'claude_code')",
+            params![worker.to_string(), session.to_string()],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Applies only a newer paired interactive selection to its still-bound worker.
     /// Startup revision one cannot bypass recovery policy. Explicit unfenced
     /// choices suspend this consumer until a new binding or fenced choice.
@@ -182,6 +203,69 @@ pub(super) fn migrate_selection(tx: &Transaction<'_>, version: i64) -> rusqlite:
 mod tests {
     use super::*;
     use swarm_domain::ProviderKind;
+
+    #[test]
+    fn fence_readiness_requires_a_current_receipt_not_just_a_live_binding() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Poppy", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let session = WorkerSessionId::new();
+        assert!(
+            !store
+                .provider_selection_fence_ready(worker.id, session)
+                .unwrap()
+        );
+        store.bind_worker_session(worker.id, session).unwrap();
+        assert!(
+            store
+                .provider_selection_fence_ready(worker.id, session)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .provider_selection_fence_ready(worker.id, WorkerSessionId::new())
+                .unwrap()
+        );
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "DELETE FROM worker_startup_context WHERE worker_id = ?1",
+                [worker.id.to_string()],
+            )
+            .unwrap();
+        assert!(
+            !store
+                .provider_selection_fence_ready(worker.id, session)
+                .unwrap()
+        );
+        let manual = ProviderConversationId::new();
+        store
+            .repoint_provider_conversation(worker.id, &manual)
+            .unwrap();
+        assert_eq!(
+            store
+                .get_worker_profile(worker.id)
+                .unwrap()
+                .provider_conversation_id,
+            Some(manual)
+        );
+        store.release_worker_session(session).unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        assert!(
+            store
+                .provider_selection_fence_ready(worker.id, session)
+                .unwrap()
+        );
+        store.release_worker_session(session).unwrap();
+        assert!(
+            !store
+                .provider_selection_fence_ready(worker.id, session)
+                .unwrap()
+        );
+    }
 
     #[test]
     fn selection_revisions_preserve_manual_fences_and_resume_following_after_them() {
