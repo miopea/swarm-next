@@ -47,6 +47,14 @@ const activity = {
 
 afterEach(() => vi.unstubAllGlobals());
 
+test("recent activity forwards its owner's cancellation signal", async () => {
+  const controller = new AbortController();
+  const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(activity)));
+  vi.stubGlobal("fetch", fetch);
+  await fetchRecentTaskActivity("operator", 100, controller.signal);
+  expect(fetch).toHaveBeenCalledWith("/api/v1/tasks/activity?limit=100", expect.objectContaining({ signal: controller.signal }));
+});
+
 test("owns core task reads, activity, ordering, editing, transitions, and assignment", async () => {
   const responses = [[task], activity, activity, [task], task, task, task, task];
   const fetch = vi.fn().mockImplementation(() => Promise.resolve(

@@ -144,8 +144,8 @@ export async function fetchTaskActivity(operatorToken: string, taskId: string, l
   return response.json() as Promise<TaskActivityPage>;
 }
 
-export async function fetchRecentTaskActivity(operatorToken: string, limit = 100): Promise<TaskActivityPage> {
-  const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/activity?limit=${encodeURIComponent(String(limit))}`);
+export async function fetchRecentTaskActivity(operatorToken: string, limit = 100, signal?: AbortSignal): Promise<TaskActivityPage> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/activity?limit=${encodeURIComponent(String(limit))}`, { signal });
   return response.json() as Promise<TaskActivityPage>;
 }
 

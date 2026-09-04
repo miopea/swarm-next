@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { DecisionRequest, DecisionSurface, Task, TaskActivityPage, Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 import DecisionInterview from "./DecisionInterview";
 import LongText from "./LongText";
 import WorkActivity from "./WorkActivity";
+import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
 /// The repository a person recognises, out of an absolute workspace path.
 function repoName(workspace: string) {
@@ -40,7 +41,7 @@ type Props = {
    */
   trailingCards?: ReactNode;
   onOpenTask?: (taskId: string) => void;
-  onFetchActivity?: () => Promise<TaskActivityPage>;
+  onFetchActivity?: (signal: AbortSignal) => Promise<TaskActivityPage>;
   onResolve: (decision: DecisionRequest, action: string, note: string, surface: DecisionSurface) => Promise<void>;
   onAnswer?: (decision: DecisionRequest, answers: Record<string, string[]>, note: string) => Promise<void>;
 };
@@ -130,24 +131,36 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
     return () => cancelAnimationFrame(frame);
   }, [focusDecisionId, focusRequest, showResolved]);
 
-  const loadActivity = async () => {
+  const readActivity = useCallback(async (signal: AbortSignal) => {
     if (!onFetchActivity) return;
     setActivityLoading(true);
     setActivityFailed(false);
-    try { setActivity(await onFetchActivity()); }
-    catch { setActivityFailed(true); }
-    finally { setActivityLoading(false); }
-  };
-
-  useEffect(() => {
-    if (view === "activity" && !activity && !activityLoading && !activityFailed) void loadActivity();
-  }, [view, activity, activityLoading, activityFailed]);
+    const timedOut = () => {
+      if (signal.reason?.name === "TimeoutError") {
+        setActivityFailed(true);
+        setActivityLoading(false);
+      }
+    };
+    signal.addEventListener("abort", timedOut, { once: true });
+    try {
+      const result = await onFetchActivity(signal);
+      if (!signal.aborted) setActivity(result);
+    } catch {
+      if (!signal.aborted) setActivityFailed(true);
+    } finally {
+      signal.removeEventListener("abort", timedOut);
+      if (!signal.aborted) setActivityLoading(false);
+    }
+  }, [onFetchActivity]);
+  // Fetch on entry/return or explicit refresh, never on an interval. The shared
+  // owner coalesces requests and cancels on hide, navigation, or disposal.
+  const loadActivity = useVisiblePolling(readActivity, view === "activity" && Boolean(onFetchActivity), null);
 
   return (
     <section className="decision-inbox" aria-labelledby="decision-inbox-heading">
       <div className="attention-tabs" role="tablist" aria-label="Attention workspace">
         <button role="tab" aria-selected={view === "attention"} onClick={() => setView("attention")}>Needs you <small>{pendingTotal}</small></button>
-        <button role="tab" aria-selected={view === "activity"} onClick={() => { setView("activity"); if (activity) void loadActivity(); }}>Activity</button>
+        <button role="tab" aria-selected={view === "activity"} onClick={() => { if (view === "activity") void loadActivity(); else setView("activity"); }}>Activity</button>
       </div>
       {view === "activity" ? <WorkActivity activity={activity} tasks={tasks} workers={workers} loading={activityLoading} failed={activityFailed} onRetry={() => void loadActivity()} onOpenTask={onOpenTask} /> : <>
       <div className="decision-inbox-intro">

@@ -454,6 +454,10 @@ export function App() {
   useVisiblePolling(refreshPublicAddress, Boolean(operatorToken) && !detached, 15_000);
 
   const [presence, setPresence] = useState<OperatorPresence>();
+  const readRecentActivity = useCallback((signal: AbortSignal) => {
+    if (!operatorToken) return Promise.reject(new Error("Operator session is unavailable"));
+    return fetchRecentTaskActivity(operatorToken, 100, signal);
+  }, [operatorToken]);
   const [lockDetectionState, setLockDetectionState] = useState<LockDetectionState>("unsupported");
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>();
   const [queenPolicy, setQueenPolicy] = useState<QueenAutonomyPolicy>();
@@ -2314,7 +2318,7 @@ export function App() {
                  themselves that nothing is wrong; they were rendering ahead of
                  questions the operator has to answer before work continues. */
               onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }}
-              onFetchActivity={() => fetchRecentTaskActivity(operatorToken)}
+              onFetchActivity={readRecentActivity}
               onResolve={resolveInboxDecision}
               onAnswer={answerInboxDecision}
             />

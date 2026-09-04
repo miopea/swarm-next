@@ -6,6 +6,29 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P3/P4: own and cancel Activity view reads
+
+- Replaced unowned Activity loads with the existing visible-request helper in
+  on-demand mode, without a polling interval. Entry, visible return, and explicit
+  refresh fetch the latest activity. Repeated refreshes join the current request;
+  leaving the view, hiding the document, changing the authenticated reader, and
+  disposal cancel ownership. Late results cannot replace a newer view.
+- The eight-second deadline presents retry instead of indefinite Loading. The
+  cancellation signal reaches the authenticated HTTP fetch. The App callback is
+  stable across ordinary snapshots and refuses reads without an operator session.
+- All 102 focused decision, App, task API, and visible-request tests passed.
+  New regressions cover overlapping refresh, navigation cancellation, stale
+  completion, timeout/retry, disposal, and HTTP signal forwarding. The first build
+  caught the moved callback's optional-token type; added the explicit session
+  guard, then production build passed. Existing terminal chunk warning remains.
+- Follow-up App verification encountered the queued-briefing navigation test
+  failing to find its card, including one isolated rerun. A later isolated run
+  passed without changing that test or the implementation. This inconsistent
+  navigation test remains a verification caveat, not a confirmed fixed defect.
+- Confirmed the unused legacy twelve-hour escalation component is not wired into
+  Needs You; its data is routed to Queues. This inspection is not live acceptance
+  of all attention contents or proof of whole-app performance improvement.
+
 ### P4: bind interview drafts to the question snapshot
 
 - Needs You interview drafts previously used only question headers as identity.
