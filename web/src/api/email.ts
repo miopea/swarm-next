@@ -239,7 +239,7 @@ export type UnansweredEmailTask = {
   no_reply_reason?: string | null;
 };
 
-export async function fetchEmailTasksAwaitingReply(operatorToken: string): Promise<UnansweredEmailTask[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/email/awaiting-reply");
+export async function fetchEmailTasksAwaitingReply(operatorToken: string, signal?: AbortSignal): Promise<UnansweredEmailTask[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/email/awaiting-reply", { signal });
   return response.json() as Promise<UnansweredEmailTask[]>;
 }

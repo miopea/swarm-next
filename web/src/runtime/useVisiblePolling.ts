@@ -19,7 +19,7 @@ export function useVisiblePolling(
       if (pending) return pending;
       const request = new AbortController();
       controller = request;
-      deadline = window.setTimeout(() => request.abort(), timeoutMs);
+      deadline = window.setTimeout(() => request.abort(new DOMException("Polling request timed out", "TimeoutError")), timeoutMs);
       pending = Promise.resolve().then(() => {
         if (!request.signal.aborted) return task(request.signal);
       }).catch(() => {

@@ -18,6 +18,7 @@ test("deduplicates refreshes and cancels a stalled request at its deadline", asy
   expect(task).toHaveBeenCalledTimes(1);
   await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
   expect(signals[0].aborted).toBe(true);
+  expect(signals[0].reason.name).toBe("TimeoutError");
   expect(task.mock.calls.length).toBeGreaterThan(1);
   unmount();
   expect(signals.at(-1)!.aborted).toBe(true);

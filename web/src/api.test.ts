@@ -2,6 +2,8 @@ import { expect, test, vi } from "vitest";
 
 import {
   assignTask,
+  fetchCoordinatorStatus,
+  fetchEmailTasksAwaitingReply,
   fetchLocalApiaryTaskExecutions,
   fetchFederationJoinInvitations,
   materializeLocalApiaryTaskExecution,
@@ -10,6 +12,17 @@ import {
   renameHive,
   RuntimeRequestError,
 } from "./api";
+
+test("background status requests forward cancellation to fetch", async () => {
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("{}", { status: 200 }));
+  try {
+    const controller = new AbortController();
+    await fetchCoordinatorStatus("token", controller.signal);
+    await fetchEmailTasksAwaitingReply("token", controller.signal);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    for (const [, init] of fetch.mock.calls) expect(init?.signal).toBe(controller.signal);
+  } finally { fetch.mockRestore(); }
+});
 
 test("materializes Keeper work for one private worker through the bounded Apiary API", async () => {
   const execution = {

@@ -336,22 +336,15 @@ export function App() {
   // and a finished task with nobody answered belongs in Needs you regardless of
   // where the operator is standing.
   const [awaitingReply, setAwaitingReply] = useState<UnansweredEmailTask[]>([]);
-  useEffect(() => {
-    if (!operatorToken) {
-      setAwaitingReply([]);
-      return;
-    }
-    let current = true;
-    // Only replaced by something that is actually a list. A malformed answer
-    // during a rolling update should not take the whole attention queue down
-    // with it.
-    const load = () => void fetchEmailTasksAwaitingReply(operatorToken)
-      .then((awaiting) => { if (current && Array.isArray(awaiting)) setAwaitingReply(awaiting); })
-      .catch(() => undefined);
-    load();
-    const interval = window.setInterval(load, 30_000);
-    return () => { current = false; window.clearInterval(interval); };
+  useEffect(() => { if (!operatorToken) setAwaitingReply([]); }, [operatorToken]);
+  const refreshAwaitingReply = useCallback(async (signal: AbortSignal) => {
+    if (!operatorToken) return;
+    try {
+      const awaiting = await fetchEmailTasksAwaitingReply(operatorToken, signal);
+      if (!signal.aborted && Array.isArray(awaiting)) setAwaitingReply(awaiting);
+    } catch { /* Keep the last known queue during an unavailable read. */ }
   }, [operatorToken, feedbackRevision]);
+  useVisiblePolling(refreshAwaitingReply, Boolean(operatorToken), 30_000);
   // WHETHER THIS PAGE IS STILL THE PAGE THE HIVE SERVES. Health is read once
   // at mount, which is fine for starting up and useless for a tab left open
   // across an upgrade — and a tab left open across an upgrade is exactly the
@@ -384,19 +377,19 @@ export function App() {
   // here: silence is indistinguishable from a healthy machine, so a failure
   // becomes `failed` and the header says so.
   const [machineResources, setMachineResources] = useState<MachineResourceState>({ kind: "loading" });
-  useEffect(() => {
-    if (!operatorToken) {
-      setMachineResources({ kind: "loading" });
-      return;
+  useEffect(() => { if (!operatorToken) setMachineResources({ kind: "loading" }); }, [operatorToken]);
+  const refreshMachineResources = useCallback(async (signal: AbortSignal) => {
+    if (!operatorToken) return;
+    try {
+      const resources = await fetchRuntimeResources(operatorToken, signal);
+      if (!signal.aborted) setMachineResources({ kind: "ready", resources });
+    } catch {
+      if (!signal.aborted || (signal.reason instanceof DOMException && signal.reason.name === "TimeoutError")) {
+        setMachineResources({ kind: "failed" });
+      }
     }
-    let current = true;
-    const load = () => void fetchRuntimeResources(operatorToken)
-      .then((resources) => { if (current) setMachineResources({ kind: "ready", resources }); })
-      .catch(() => { if (current) setMachineResources({ kind: "failed" }); });
-    load();
-    const interval = window.setInterval(load, 30_000);
-    return () => { current = false; window.clearInterval(interval); };
   }, [operatorToken]);
+  useVisiblePolling(refreshMachineResources, Boolean(operatorToken), 30_000);
   const machinePressure = machinePressureNotice(machineResources);
   const [repository, setRepository] = useState<RepositoryState | null>();
   const [popoutBlocked, setPopoutBlocked] = useState(false);
@@ -574,24 +567,26 @@ export function App() {
       setBlockedEscalations([]);
       setUnsettledReview([]);
       setHeldBriefings([]);
-      return undefined;
     }
-    let cancelled = false;
-    const load = () => {
-      void fetchCoordinatorStatus(operatorToken)
-        // Defaulted rather than assumed: during an update the page can briefly
-        // be newer than the API answering it, and a missing field should not
-        // take the control room down.
-        .then((status) => { if (!cancelled) { setHeldDeliveries(status.held ?? []); setBlockedEscalations(status.blocked_escalations ?? []); setUnsettledReview(status.unsettled_review ?? []); setHeldBriefings(status.held_briefings ?? []); } })
-        .catch(() => { if (!cancelled) { setHeldDeliveries([]); setUnsettledReview([]); setHeldBriefings([]); } });
-    };
-    load();
-    const interval = window.setInterval(load, HELD_DELIVERY_POLL_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
+  }, [operatorToken]);
+  const refreshHeldDeliveries = useCallback(async (signal: AbortSignal) => {
+    if (!operatorToken) return;
+    try {
+      const status = await fetchCoordinatorStatus(operatorToken, signal);
+      if (signal.aborted) return;
+      setHeldDeliveries(status.held ?? []);
+      setBlockedEscalations(status.blocked_escalations ?? []);
+      setUnsettledReview(status.unsettled_review ?? []);
+      setHeldBriefings(status.held_briefings ?? []);
+    } catch {
+      if (!signal.aborted) {
+        setHeldDeliveries([]);
+        setUnsettledReview([]);
+        setHeldBriefings([]);
+      }
+    }
   }, [operatorToken, heldDeliveryRefresh]);
+  useVisiblePolling(refreshHeldDeliveries, Boolean(operatorToken), HELD_DELIVERY_POLL_MS);
 
   useEffect(() => {
     if (!operatorToken) return;

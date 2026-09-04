@@ -1957,8 +1957,8 @@ export async function fetchNotificationSubscriptionStatus(
   return response.json() as Promise<{ registered: boolean }>;
 }
 
-export async function fetchCoordinatorStatus(operatorToken: string): Promise<CoordinatorStatus> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/orchestration/coordinator");
+export async function fetchCoordinatorStatus(operatorToken: string, signal?: AbortSignal): Promise<CoordinatorStatus> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/orchestration/coordinator", { signal });
   return response.json() as Promise<CoordinatorStatus>;
 }
 

@@ -1056,7 +1056,7 @@ function bootFetch() {
   });
 }
 
-test("hidden windows defer transcript scans and tunnel polling until visible", async () => {
+test("hidden windows defer transcript scans and background status polls until visible", async () => {
   let visibility: DocumentVisibilityState = "hidden";
   const visibilitySpy = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
   const fetch = bootFetch();
@@ -1066,10 +1066,16 @@ test("hidden windows defer transcript scans and tunnel polling until visible", a
     await screen.findByRole("button", { name: "Open quick navigation" });
     expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/workers/conversations"))).toBe(false);
     expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/runtime/tunnel"))).toBe(false);
+    for (const endpoint of ["/runtime/resources", "/orchestration/coordinator", "/integrations/email/awaiting-reply"]) {
+      expect(fetch.mock.calls.some(([url]) => String(url).endsWith(endpoint))).toBe(false);
+    }
     visibility = "visible";
     await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
     expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/workers/conversations"))).toBe(true);
     expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/runtime/tunnel"))).toBe(true);
+    for (const endpoint of ["/runtime/resources", "/orchestration/coordinator", "/integrations/email/awaiting-reply"]) {
+      expect(fetch.mock.calls.some(([url]) => String(url).endsWith(endpoint))).toBe(true);
+    }
   } finally {
     cleanup();
     visibilitySpy.mockRestore();

@@ -815,6 +815,26 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 - Current-build CPU attribution, real session degradation, mobile acceptance,
   instrumentation overhead, and long-term Dogfood comparisons remain open.
 
+### P3e: visible-page ownership for background status reads
+
+- Machine resources, coordinator holds, and unanswered email tasks now use the
+  existing single-flight visible-page polling owner. Requests carry cancellation,
+  have an eight-second deadline, stop on hide/unmount, and refresh on return.
+  Canceled old responses cannot replace current UI state. Timeout is distinct
+  from hide/unmount so unavailable machine metrics are not silently called healthy.
+- Forty-six focused App/API/polling tests passed, including integrated hidden
+  startup/visible return for all three endpoints and signal propagation. Full
+  web regression passed: 119 files, 976 tests. Production build passed with the
+  existing terminal chunk-size warning. No runtime source changed during that run.
+- Read-only SSH `vmstat 1 4` on bgsdev around 2026-09-04 02:28 UTC showed 99%,
+  98%, and 79% idle in the three interval samples, zero I/O wait, and zero swap
+  in/out. The first line is a since-boot aggregate, not an interval observation.
+  This short sample rules out saturation only during those seconds; it does not
+  establish the cause of the operator's intermittent sluggishness or prove a fix.
+- Remaining health-version polling, shared resource-sample ownership, live
+  profiling, and before/after CPU/latency acceptance remain open. No push,
+  deployment, release, service change, or worker interruption.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has
