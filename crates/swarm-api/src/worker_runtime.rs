@@ -304,10 +304,10 @@ fn provider_start_request(
             // then `New` reused a pinned id Claude still held, Claude refused it,
             // and the worker did not start.
             //
-            // A pinned id is now always sent as Resume and the HOST asks Claude,
-            // in the environment Claude actually runs in. Correcting which
-            // directory this read would have fixed the instance and left a check
-            // that can still disagree; the operator chose to remove the class.
+            // A returning pinned id is sent as Resume and the HOST asks Claude,
+            // in the environment Claude actually runs in. A never-launched
+            // profile's preassigned id is different: it is the identity for New,
+            // not evidence that a conversation already exists.
             HostRequest::StartClaude {
                 workspace: worker_workspace.clone(),
                 size,
@@ -315,7 +315,8 @@ fn provider_start_request(
                     profile.provider_conversation_id,
                     profile.has_session_history,
                 ) {
-                    (Some(session_id), _) => ClaudeConversationStart::Resume { session_id },
+                    (Some(session_id), false) => ClaudeConversationStart::New { session_id },
+                    (Some(session_id), true) => ClaudeConversationStart::Resume { session_id },
                     (None, true) => ClaudeConversationStart::Continue,
                     (None, false) => {
                         let session_id = task_store(state)?
@@ -1950,6 +1951,67 @@ mod tests {
             };
             assert_eq!(conversation, expected);
         }
+    }
+
+    #[test]
+    fn claude_uses_its_assigned_identity_as_new_once_then_resumes_it() {
+        use swarm_terminal::{ClaudeConversationStart, HostRequest, TerminalSize};
+
+        let root = tempfile::tempdir().unwrap();
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let profile = store
+            .create_worker(
+                "Daisy",
+                swarm_domain::ProviderKind::ClaudeCode,
+                &root.path().to_string_lossy(),
+                false,
+                1,
+            )
+            .unwrap();
+        let conversation = profile
+            .provider_conversation_id
+            .expect("a new Claude profile owns its future conversation identity");
+        assert!(!profile.has_session_history);
+        let state = crate::AppState::default()
+            .with_workspace_roots(vec![root.path().to_path_buf()])
+            .with_task_store(store.clone());
+
+        let first = super::provider_start_request(
+            &state,
+            profile.id,
+            &profile,
+            TerminalSize::default(),
+            None,
+        )
+        .unwrap();
+        assert!(matches!(
+            first,
+            HostRequest::StartClaude {
+                conversation: ClaudeConversationStart::New { session_id },
+                ..
+            } if session_id == conversation
+        ));
+
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(profile.id, session).unwrap();
+        store.release_worker_session(session).unwrap();
+        let returning = store.get_worker_profile(profile.id).unwrap();
+        assert!(returning.has_session_history);
+        let next = super::provider_start_request(
+            &state,
+            returning.id,
+            &returning,
+            TerminalSize::default(),
+            None,
+        )
+        .unwrap();
+        assert!(matches!(
+            next,
+            HostRequest::StartClaude {
+                conversation: ClaudeConversationStart::Resume { session_id },
+                ..
+            } if session_id == conversation
+        ));
     }
 
     use super::*;

@@ -110,3 +110,12 @@ incarnation before updating the saved choice. Do not infer operator intent from
 arbitrary terminal text, accept an old process's late report as current, or treat
 a background fork as the foreground conversation. These are integration
 requirements, not a claim that a hook has been installed.
+
+Live disposable-worker acceptance on 2026-09-04 found that the API treated the
+preassigned UUID of a never-launched Claude profile as a resume target. That sent
+a first launch through exact-missing and `--continue`; after the repository trust
+prompt, the submitted trust input correctly made absence evidence inconclusive
+and the worker exited. The start selector now follows this ADR literally: a
+preassigned identity with no session history is `New`, and the same identity is
+`Resume` only after a process session has existed. This removes recovery from the
+ordinary first-launch path without weakening the evidence guard.

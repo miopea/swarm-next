@@ -3103,6 +3103,24 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 See the approved plan. No phase is complete solely because a patch was committed.
 Real Android/iOS and normal operator soak remain separate evidence requirements.
 
+### Live dogfood: preserve the first Claude launch as new
+
+- After schema 136 repaired attachment, the separate Edge tab took terminal
+  control successfully and exposed the next acceptance failure. A newly created
+  Claude worker entered the repository trust screen, then printed `No conversation
+  found to continue` and exited; its assigned task remained queued.
+- The profile correctly owned a fresh provider UUID and had no prior session, but
+  API start selection sent every non-null UUID as Resume. The host therefore
+  converted an ordinary first launch into Exact-to-Continue recovery. Trust-screen
+  input made the later absence intentionally inconclusive, so automatic Fresh was
+  correctly forbidden but the worker was stranded.
+- The selector now sends the profile's preassigned UUID as New while session
+  history is false, and resumes the same UUID after the first process exists. A
+  focused test pins both sides of that transition. Recovery evidence rules and
+  the final fallback implementation are unchanged.
+- Live rebuild, fresh disposable-worker completion, and task evidence remain the
+  acceptance gate. No release is authorized.
+
 ### Live dogfood: repair the integrated schema-124 collision
 
 - The first disposable-worker acceptance on the development Hive reached the
