@@ -645,6 +645,23 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   detector events and isolated persistence, not the operator's live machine state.
 - No live settings, worker permissions, deployment, or release changed.
 
+### P5b: explicit Night Watch policy model
+
+- Added a timer-free domain model for daily local-time windows and manual
+  enable/disable/automatic/desktop-return transitions. Overnight windows retain
+  their starting-date identity. Desktop return dismisses the current occurrence
+  without suppressing the next night; heartbeat evaluation cannot undo dismissal.
+- Equal endpoints and out-of-day minutes are rejected. Repeated local-hour input
+  retains the same occurrence, including after a dismissal. This is not yet a
+  real time-zone/DST conversion test; the clock adapter remains to be built.
+- All 73 domain tests passed, including six new schedule/policy tests. The first
+  compile found duplicate module registration from patch application; removed
+  that duplication and reran validation. Strict domain Clippy passed.
+- ADR 0018 records the approved replacement of indefinite Night Watch override.
+  Persistence, explicit-return API events, time-zone conversion, settings controls,
+  and integrated acceptance remain open. No active runtime schedule is claimed.
+- No dependencies, database schema, live configuration, push, or release changed.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

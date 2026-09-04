@@ -46,6 +46,25 @@ expiring per-device observations plus an optional explicit override.
 - Night Watch is initially an explicit mode. Scheduling and lock-driven policy
   may be added later without changing the stored presence contract.
 
+### Approved maturity transition
+
+The daily-driver program supersedes indefinite Night Watch override precedence:
+support a daily schedule in an explicitly configured time zone plus manual
+enable/disable. An explicit desktop app return ends both manual and current
+scheduled Night Watch; mobile activity and background heartbeats do not. Dismiss
+the current schedule occurrence through its end, allowing the next night's
+occurrence. Explicit Automatic may re-enable the current schedule window.
+
+Window starts are inclusive, ends exclusive, and equal endpoints are invalid.
+Overnight windows belong to their starting local date. Repeated local hours share
+that occurrence, preventing DST fallback from undoing a desktop dismissal. The
+clock adapter must use the configured zone, not the server zone, and validate DST
+conversion. Policy owns no timer; adapters evaluate it from current clock evidence.
+
+The domain policy is the first implementation step, not an active schedule:
+durable settings, clock conversion, explicit return events, API/UI wiring, and
+end-to-end verification remain required before this behavior is available.
+
 ## Consequences
 
 Desktop and mobile clients share one durable, privacy-minimal view of operator
