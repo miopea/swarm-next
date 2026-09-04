@@ -2295,6 +2295,24 @@ impl TaskService {
         )?)
     }
 
+    /// Reads the current review request for Queen or its assigned worker.
+    ///
+    /// # Errors
+    /// Denies another worker's task and returns persistence failures.
+    pub fn read_returned_review_request(
+        &self,
+        principal: AgentPrincipal,
+        task_id: TaskId,
+    ) -> Result<Option<swarm_persistence::ReturnedReviewRequest>, ApplicationError> {
+        let task = self.store.get_task(task_id)?;
+        if principal.role != WorkerRole::Queen
+            && task.assigned_worker_id != Some(principal.worker_id)
+        {
+            return Err(ApplicationError::NotAuthorized);
+        }
+        Ok(self.store.returned_review_request(task_id)?)
+    }
+
     /// Reads the Queen-worker exchange recorded on a task.
     ///
     /// Same visibility rule as the history it accompanies. Separate from

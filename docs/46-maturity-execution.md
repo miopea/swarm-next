@@ -6,6 +6,37 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: discover current review identity and keep ownership current
+
+- Task history now includes review_request with exact request/answer message IDs,
+  request worker, and awaiting_answer/answered/superseded/legacy_unlinked status.
+  The MCP round-trip test reads this projection before answering and again after
+  the answer; callers do not need to infer identity from message order or text.
+- The task projection assigns an unanswered-review obligation only to the worker
+  named by the linked request. Legacy/unlinked requests and requests for a former
+  assignee do not become an uninformed current worker's debt.
+- Canonical reassignment, unassignment, and transitions out of Review invalidate
+  an unanswered request's current worker binding in their existing transaction.
+  The request message remains evidence. Assigning back or returning to Review
+  cannot resurrect it; a fresh Queen hand-back establishes a new request. A
+  same-worker rebind alone preserves the question. No schema/protocol change.
+- All 76 local Linux review, messaging, assignment, transition, and migration
+  tests passed. An older fixture built a current database and labeled it v21;
+  it failed when rerunning already-present Dogfood tables. Corrected and renamed
+  it to test its actual Jira transition-table migration step directly, then
+  verify reopen/integrity. It is not presented as a genuine full v21 upgrade.
+- All 84 local Linux MCP/coordination tests passed. Repeated test request plumbing
+  and unchanged dispatch-acknowledgement SQL were extracted into helpers to keep
+  strict lint without suppressing checks. API/application/persistence Linux
+  all-target/all-feature Clippy passed; formatting and diff checks passed.
+- This does not yet cancel previously queued request messages at the transport
+  boundary; late delivery of superseded requests remains a separate lifecycle
+  check. Uncertainty is not described as complete P4/live-provider acceptance.
+- Delivery audit also confirmed that the general task-message queue retries
+  uncertain submissions and has no durable claim state. Bounded ownership and
+  explicit uncertainty/cancellation remain required follow-up, not solved by
+  the current-request projection or answer idempotency.
+
 ### P4: wire exact worker answers back to Queen
 
 - Tracing the return leg found that answer_returned_review had no production

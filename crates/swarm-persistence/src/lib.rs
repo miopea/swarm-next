@@ -91,6 +91,7 @@ mod operator_submissions;
 mod review_answers;
 pub use operator_statements::{OperatorStatementError, VerifiedOperatorStatement};
 pub use operator_submissions::{AuthoredOperatorSubmission, OperatorSubmissionIndexEntry};
+pub use review_answers::ReturnedReviewRequest;
 mod night_watch;
 pub use dogfood_evidence::{EvidenceError, EvidenceWrite};
 mod passkeys;
@@ -1705,6 +1706,7 @@ impl TaskStore {
              WHERE task_id = ?1 AND released_at IS NULL",
             [id.to_string()],
         )?;
+        review_answers::invalidate_pending_request(&transaction, id, None)?;
         transaction.execute(
             "UPDATE tasks SET assigned_worker_id = NULL, updated_at = unixepoch() WHERE id = ?1",
             [id.to_string()],
@@ -1742,7 +1744,9 @@ impl TaskStore {
                           WHERE worked.task_id = t.id AND worked.actor_kind = 'worker'),
                    EXISTS(SELECT 1 FROM task_unverifiable_closures u WHERE u.task_id = t.id),
                    EXISTS(SELECT 1 FROM task_returned_reviews r
-                          WHERE r.task_id = t.id AND r.answered_at IS NULL),
+                          WHERE r.task_id = t.id AND r.answered_at IS NULL
+                            AND r.request_message_id IS NOT NULL
+                            AND r.request_worker_id = t.assigned_worker_id),
                    -- Reviewed work waiting on a ruling is the OPERATOR's, not
                    -- Queen's. Read from the decision rather than stored beside
                    -- it, so it unsets itself the moment they answer.
@@ -2437,6 +2441,9 @@ impl TaskStore {
             ensure_worker_has_no_other_active_task(&transaction, id)?;
         }
         jira::queue_jira_transition(&transaction, id, target)?;
+        if current == TaskState::Review && target != TaskState::Review {
+            review_answers::invalidate_pending_request(&transaction, id, None)?;
+        }
         transaction.execute(
             "DELETE FROM task_outcome_deliveries WHERE task_id = ?1 AND state = 'queued'",
             [id.to_string()],
@@ -2493,16 +2500,7 @@ impl TaskStore {
         // than an ambiguous PTY submit receipt: she could only advance this
         // task after retrieving its authoritative assignment through MCP.
         if reporting_session_id.is_some() {
-            transaction.execute(
-                "UPDATE task_dispatches
-                 SET state = 'delivered', delivered_at = COALESCE(delivered_at, unixepoch()),
-                     updated_at = unixepoch()
-                 WHERE assignment_id IN (
-                     SELECT assignment.id FROM task_assignments assignment
-                     WHERE assignment.task_id = ?1 AND assignment.released_at IS NULL
-                 ) AND state IN ('queued', 'dispatching', 'uncertain')",
-                [id.to_string()],
-            )?;
+            acknowledge_task_dispatch(&transaction, id)?;
         }
         federation_tasks::record_local_apiary_task_lifecycle_intent(&transaction, id, target)?;
         transaction.execute(
@@ -2622,6 +2620,7 @@ impl TaskStore {
              WHERE task_id = ?1 AND released_at IS NULL",
             [id.to_string()],
         )?;
+        review_answers::invalidate_pending_request(&transaction, id, Some(worker_id))?;
         transaction.execute(
             "UPDATE tasks
              SET assigned_worker_id = ?2,
@@ -3305,6 +3304,23 @@ fn migrate_decision_command_grants(
         )?;
     }
     transaction.pragma_update(None, "user_version", DECISION_COMMAND_GRANT_SCHEMA_VERSION)
+}
+
+fn acknowledge_task_dispatch(
+    transaction: &rusqlite::Transaction<'_>,
+    id: TaskId,
+) -> rusqlite::Result<()> {
+    transaction.execute(
+        "UPDATE task_dispatches
+         SET state = 'delivered', delivered_at = COALESCE(delivered_at, unixepoch()),
+             updated_at = unixepoch()
+         WHERE assignment_id IN (
+             SELECT assignment.id FROM task_assignments assignment
+             WHERE assignment.task_id = ?1 AND assignment.released_at IS NULL
+         ) AND state IN ('queued', 'dispatching', 'uncertain')",
+        [id.to_string()],
+    )?;
+    Ok(())
 }
 
 fn migrate_schema(
@@ -6693,18 +6709,24 @@ mod tests {
     }
 
     #[test]
-    fn migrates_schema_v21_to_durable_jira_transition_deliveries() {
+    fn jira_transition_delivery_migration_restores_its_missing_table() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("swarm.sqlite3");
         {
             let store = TaskStore::open(&path).unwrap();
-            let connection = store.connection().unwrap();
-            connection
-                .execute_batch(
-                    "DROP TABLE jira_transition_deliveries;
-                     PRAGMA user_version = 21;",
-                )
+            let mut connection = store.connection().unwrap();
+            let transaction = connection.transaction().unwrap();
+            transaction
+                .execute_batch("DROP TABLE jira_transition_deliveries;")
                 .unwrap();
+            // This is a focused migration-step fixture, not a historical v21
+            // database: every other table is current. Do not rerun unrelated
+            // migrations against their already-present artifacts.
+            migrate_jira_transition_deliveries(&transaction).unwrap();
+            transaction
+                .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)
+                .unwrap();
+            transaction.commit().unwrap();
         }
         let reopened = TaskStore::open(path).unwrap();
         let table_exists = reopened

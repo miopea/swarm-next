@@ -1725,6 +1725,9 @@ impl AgentMcp {
         // events and evidence only, so a documented property of the channel was
         // false from the moment it shipped.
         let messages = self.tasks.read_task_messages(self.principal, task_id)?;
+        let review_request = self
+            .tasks
+            .read_returned_review_request(self.principal, task_id)?;
         structured(json!({
             "task_id": input.task_id,
             "events": page.events,
@@ -1734,6 +1737,7 @@ impl AgentMcp {
             "truncated": page.truncated,
             "evidence": evidence,
             "messages": messages,
+            "review_request": review_request,
             "messages_note": "The Queen-worker exchange on this task, oldest first. Not in `events`: a message is not a state change. A message with no delivered_at has been recorded and has NOT yet reached its recipient's terminal — it waits for a resting prompt rather than interrupting a turn. READ delivered_at TOGETHER WITH reached_the_current_session, because delivered_at alone does not mean anyone still running was told: false there on a delivered message means it was typed into a session that has since exited, so the recipient you can talk to now has never seen it and re-sending is the only way it lands. True means the session it went to is still open. Do not read false as a failure to deliver — the bytes were written — and do not read it on an undelivered message, where it is false because nothing has gone anywhere yet. delivered_session_id names the session, and is null for deliveries recorded before Swarm began keeping it rather than meaning it went nowhere.",
             "evidence_note": "Evidence does not appear in `events` and never has: \
         a claim, its approval and a deployment write their own records, not activity rows. \
@@ -4885,6 +4889,34 @@ mod tests {
         assert!(denied["result"]["isError"].as_bool().unwrap_or(false));
     }
 
+    async fn call_review_test_tool(
+        bridge: AgentBridge,
+        token: &str,
+        name: &str,
+        arguments: Value,
+    ) -> Value {
+        response_json(
+            handle(
+                bridge,
+                plain_state(),
+                mcp_request(
+                    Some(token),
+                    "tools/call",
+                    &json!({"name": name, "arguments": arguments}),
+                ),
+            )
+            .await,
+        )
+        .await
+    }
+
+    fn assert_review_status(response: &Value, expected: &str) {
+        assert_eq!(
+            response["result"]["structuredContent"]["review_request"]["status"],
+            expected
+        );
+    }
+
     #[tokio::test]
     async fn review_handback_commits_one_request_without_losing_review_state() {
         let (bridge, store, queen_id, worker_id, _) = setup();
@@ -4900,23 +4932,19 @@ mod tests {
         store.assign_task_to_worker(task.id, worker_id).unwrap();
         store.transition_task(task.id, TaskState::Active).unwrap();
         store.transition_task(task.id, TaskState::Review).unwrap();
-        let request = |token: &str, body: &str| {
-            mcp_request(
-                Some(token),
-                "tools/call",
-                &json!({
-                    "name": "swarm_return_reviewed_work",
-                    "arguments": {"task_id": task.id.to_string(), "request": body}
-                }),
-            )
-        };
+        let handback_arguments =
+            |body: &str| json!({"task_id": task.id.to_string(), "request": body});
         for (token, body) in [
             (&worker_token, "Which SHA?".to_owned()),
             (&queen_token, "é".repeat(2_001)),
         ] {
-            let refused =
-                response_json(handle(bridge.clone(), plain_state(), request(token, &body)).await)
-                    .await;
+            let refused = call_review_test_tool(
+                bridge.clone(),
+                token,
+                "swarm_return_reviewed_work",
+                handback_arguments(&body),
+            )
+            .await;
             assert_eq!(refused["result"]["isError"], true, "{refused}");
             assert_eq!(
                 store.get_task(task.id).unwrap().next_move_owner,
@@ -4924,13 +4952,11 @@ mod tests {
             );
             assert!(store.task_messages(task.id).unwrap().is_empty());
         }
-        let returned = response_json(
-            handle(
-                bridge.clone(),
-                plain_state(),
-                request(&queen_token, "Which SHA?"),
-            )
-            .await,
+        let returned = call_review_test_tool(
+            bridge.clone(),
+            &queen_token,
+            "swarm_return_reviewed_work",
+            handback_arguments("Which SHA?"),
         )
         .await;
         assert_eq!(returned["result"]["isError"], false, "{returned}");
@@ -4946,26 +4972,25 @@ mod tests {
             .as_str()
             .unwrap();
         assert_eq!(request_id, messages[0].id);
+        let history_arguments = json!({"task_id": task.id.to_string()});
+        let history = call_review_test_tool(
+            bridge.clone(),
+            &worker_token,
+            "swarm_read_task_history",
+            history_arguments.clone(),
+        )
+        .await;
+        assert_eq!(history["result"]["isError"], false, "{history}");
+        assert_eq!(
+            history["result"]["structuredContent"]["review_request"]["request_message_id"],
+            request_id
+        );
+        assert_review_status(&history, "awaiting_answer");
         let mut saved_answer = None;
         for _ in 0..2 {
-            let answer = response_json(
-                handle(
-                    bridge.clone(),
-                    plain_state(),
-                    mcp_request(
-                        Some(&worker_token),
-                        "tools/call",
-                        &json!({
-                            "name": "swarm_message_queen", "arguments": {
-                                "task_id": task.id.to_string(), "body": "abc123",
-                                "reply_to_message_id": request_id
-                            }
-                        }),
-                    ),
-                )
-                .await,
-            )
-            .await;
+            let answer = call_review_test_tool(bridge.clone(), &worker_token, "swarm_message_queen", json!({
+                "task_id": task.id.to_string(), "body": "abc123", "reply_to_message_id": request_id,
+            })).await;
             assert_eq!(answer["result"]["isError"], false, "{answer}");
             let id = answer["result"]["structuredContent"]["message_id"].clone();
             if let Some(saved) = &saved_answer {
@@ -4979,6 +5004,18 @@ mod tests {
         );
         assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Review);
         assert_eq!(store.task_messages(task.id).unwrap().len(), 2);
+        let history = call_review_test_tool(
+            bridge,
+            &worker_token,
+            "swarm_read_task_history",
+            history_arguments,
+        )
+        .await;
+        assert_review_status(&history, "answered");
+        assert_eq!(
+            history["result"]["structuredContent"]["review_request"]["answer_message_id"],
+            saved_answer.unwrap()
+        );
     }
 
     /// A refusal must name the problem the caller actually has.

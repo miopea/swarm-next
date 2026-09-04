@@ -32,6 +32,17 @@ Historical markers have no authenticated request identity. Do not infer links
 from timestamps or text. Queen can reissue a specific hand-back to establish one.
 The API owns this nullable historical compatibility, removable only after all
 legacy open markers are explicitly answered, replaced, or retired with their task.
+Task history exposes the current request ID, request worker, saved answer ID,
+and status (awaiting_answer, answered, superseded, or legacy_unlinked). Queues
+assigns a returned-review obligation to a worker only when the linked request
+belongs to the current assignee; unlinked or differently assigned requests remain
+Queen's coordination responsibility, not a debt inherited by an uninformed worker.
+Reassignment to another worker, unassignment, and leaving Review invalidate an
+unanswered request in the same transaction by clearing its current request-worker
+binding. Its immutable message ID and message recipient remain historical evidence.
+A linked message without that current binding is superseded, not legacy-unlinked.
+Returning to the earlier worker or Review state cannot revive it; Queen must issue
+a new request. A same-worker rebind alone preserves the current question.
 Existing provider sessions need their normal tool refresh to use the optional
 reply selector; ordinary messaging stays available without falsely settling work.
 

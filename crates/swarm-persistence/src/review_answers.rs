@@ -3,6 +3,33 @@ use crate::{MessageEnd, TaskMessage, TaskStore, TaskStoreError, insert_control_r
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{ControlRoomEventKind, TaskId, WorkerId};
 
+/// One current review marker, including whether its reply identity is usable.
+#[derive(serde::Serialize)]
+pub struct ReturnedReviewRequest {
+    pub request_message_id: Option<String>,
+    pub request_worker_id: Option<String>,
+    pub answer_message_id: Option<String>,
+    pub status: &'static str,
+}
+
+/// Invalidate only an outstanding request; keep its message as historical evidence.
+pub(super) fn invalidate_pending_request(
+    tx: &rusqlite::Transaction<'_>,
+    task_id: TaskId,
+    retained_worker: Option<WorkerId>,
+) -> rusqlite::Result<()> {
+    tx.execute(
+        "UPDATE task_returned_reviews SET request_worker_id = NULL
+         WHERE task_id = ?1 AND answered_at IS NULL AND request_message_id IS NOT NULL
+           AND (?2 IS NULL OR request_worker_id != ?2)",
+        params![
+            task_id.to_string(),
+            retained_worker.map(|id| id.to_string())
+        ],
+    )?;
+    Ok(())
+}
+
 /// Fixtures that model pre-133 databases must remove these columns as well.
 #[cfg(test)]
 pub(super) fn remove_schema_for_test(connection: &rusqlite::Connection) -> rusqlite::Result<()> {
@@ -26,6 +53,53 @@ pub(super) fn migrate(tx: &rusqlite::Transaction<'_>, version: i64) -> rusqlite:
 }
 
 impl TaskStore {
+    /// Reads the exact review request without asking a caller to infer it from
+    /// message order, timestamps, or matching text.
+    ///
+    /// # Errors
+    /// Returns persistence failures; no marker is distinct from a failed read.
+    pub fn returned_review_request(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<ReturnedReviewRequest>, TaskStoreError> {
+        self.connection()?
+            .query_row(
+                "SELECT r.request_message_id, r.request_worker_id, r.answer_message_id,
+                    r.answered_at, t.state, t.assigned_worker_id
+             FROM task_returned_reviews r JOIN tasks t ON t.id = r.task_id
+             WHERE r.task_id = ?1 AND t.removed_at IS NULL",
+                [task_id.to_string()],
+                |row| {
+                    let request_message_id: Option<String> = row.get(0)?;
+                    let request_worker_id: Option<String> = row.get(1)?;
+                    let answer_message_id = row.get(2)?;
+                    let answered_at: Option<i64> = row.get(3)?;
+                    let state: String = row.get(4)?;
+                    let assigned: Option<String> = row.get(5)?;
+                    let status = if request_message_id.is_none() {
+                        "legacy_unlinked"
+                    } else if request_worker_id.is_none()
+                        || state != "review"
+                        || request_worker_id != assigned
+                    {
+                        "superseded"
+                    } else if answered_at.is_some() {
+                        "answered"
+                    } else {
+                        "awaiting_answer"
+                    };
+                    Ok(ReturnedReviewRequest {
+                        request_message_id,
+                        request_worker_id,
+                        answer_message_id,
+                        status,
+                    })
+                },
+            )
+            .optional()
+            .map_err(TaskStoreError::from)
+    }
+
     /// Saves a scoped worker message and explicitly correlated review answer.
     ///
     /// # Errors
@@ -128,6 +202,12 @@ mod tests {
     #[test]
     fn only_an_explicit_current_answer_transfers_the_move_and_retries_once() {
         let (store, task, worker, request) = fixture();
+        let current = store.returned_review_request(task).unwrap().unwrap();
+        assert_eq!(
+            current.request_message_id.as_deref(),
+            Some(request.as_str())
+        );
+        assert_eq!(current.status, "awaiting_answer");
         store
             .message_queen_from_worker(task, worker, "Checking", None, 101)
             .unwrap();
@@ -159,6 +239,12 @@ mod tests {
             .message_queen_from_worker(task, worker, "abc123", Some(&request), 104)
             .unwrap();
         assert_eq!(answer.id, retry.id);
+        let answered = store.returned_review_request(task).unwrap().unwrap();
+        assert_eq!(answered.status, "answered");
+        assert_eq!(
+            answered.answer_message_id.as_deref(),
+            Some(answer.id.as_str())
+        );
         assert!(
             store
                 .message_queen_from_worker(task, worker, "different", Some(&request), 104)
@@ -226,14 +312,15 @@ mod tests {
                 2,
             )
             .unwrap();
-        store
-            .connection()
-            .unwrap()
-            .execute(
-                "UPDATE tasks SET assigned_worker_id = ?2 WHERE id = ?1",
-                params![task.to_string(), other.id.to_string()],
-            )
-            .unwrap();
+        store.assign_task_to_worker(task, other.id).unwrap();
+        assert_eq!(
+            store.get_task(task).unwrap().next_move_owner,
+            NextMoveOwner::Queen
+        );
+        assert_eq!(
+            store.returned_review_request(task).unwrap().unwrap().status,
+            "superseded"
+        );
         for sender in [worker, other.id] {
             assert!(
                 store
@@ -246,7 +333,56 @@ mod tests {
                 .message_queen_from_worker(task, worker, "Old worker", None, 101)
                 .is_err()
         );
+        store.assign_task_to_worker(task, worker).unwrap();
+        assert_eq!(
+            store.get_task(task).unwrap().next_move_owner,
+            NextMoveOwner::Queen
+        );
+        assert!(
+            store
+                .message_queen_from_worker(task, worker, "old answer", Some(&request), 102)
+                .is_err()
+        );
         assert_eq!(store.task_messages(task).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn reopened_or_unassigned_work_cannot_resurrect_an_old_request() {
+        for reopen in [false, true] {
+            let (store, task, worker, request) = fixture();
+            // Rebinding the same worker alone preserves their current question.
+            store.assign_task_to_worker(task, worker).unwrap();
+            assert_eq!(
+                store.returned_review_request(task).unwrap().unwrap().status,
+                "awaiting_answer"
+            );
+            if reopen {
+                store.transition_task(task, TaskState::Active).unwrap();
+                store.transition_task(task, TaskState::Review).unwrap();
+            } else {
+                store.unassign_task(task).unwrap();
+                store.assign_task_to_worker(task, worker).unwrap();
+            }
+            assert_eq!(
+                store.get_task(task).unwrap().next_move_owner,
+                NextMoveOwner::Queen
+            );
+            assert_eq!(
+                store.returned_review_request(task).unwrap().unwrap().status,
+                "superseded"
+            );
+            assert!(
+                store
+                    .message_queen_from_worker(task, worker, "old answer", Some(&request), 101)
+                    .is_err()
+            );
+            let next = store
+                .return_review_to_worker(task, "Which SHA now?", 102)
+                .unwrap();
+            store
+                .message_queen_from_worker(task, worker, "new answer", Some(&next.id), 103)
+                .unwrap();
+        }
     }
 
     #[test]
@@ -272,6 +408,34 @@ mod tests {
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
             133
+        );
+    }
+
+    #[test]
+    fn unlinked_history_does_not_make_the_current_worker_owe_an_answer() {
+        let (store, task, worker, request) = fixture();
+        store.connection().unwrap().execute(
+            "UPDATE task_returned_reviews SET request_message_id = NULL, request_worker_id = NULL WHERE task_id = ?1",
+            [task.to_string()],
+        ).unwrap();
+        assert_eq!(
+            store.returned_review_request(task).unwrap().unwrap().status,
+            "legacy_unlinked"
+        );
+        assert_eq!(
+            store.get_task(task).unwrap().next_move_owner,
+            NextMoveOwner::Queen
+        );
+        assert!(
+            store
+                .message_queen_from_worker(task, worker, "abc123", Some(&request), 101)
+                .is_err()
+        );
+        assert!(
+            store
+                .returned_review_request(TaskId::new())
+                .unwrap()
+                .is_none()
         );
     }
 }
