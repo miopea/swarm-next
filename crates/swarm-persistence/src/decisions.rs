@@ -1018,15 +1018,28 @@ const DECISION_COLUMNS: &str =
                     -- BEFORE the ruling; without this comparison it read
                     -- discharged for the twenty-six hours the act sat undone.
                     CASE WHEN d.state <> 'resolved' THEN NULL
-                         WHEN NOT EXISTS (
-                             SELECT 1 FROM tasks x
-                             WHERE x.removed_at IS NULL AND x.id <> COALESCE(d.task_id, '')
-                               AND x.description LIKE '%' || substr(d.id, 1, 13) || '%')
-                             THEN 'unknown'
+                         -- DISCHARGED: evidence recorded after the ruling, on a
+                         -- task that names it OR on the task it was raised on.
+                         --
+                         -- ⚠️ THE ORIGINATING TASK COUNTS. It was excluded at
+                         -- first, reasoning that a decision names the task that
+                         -- RAISED it and not the one that EXECUTES it, so its
+                         -- evidence says nothing about work done elsewhere. True,
+                         -- and it made the query blind to work done WHERE IT WAS
+                         -- RAISED, which is the ordinary case: a ruling to
+                         -- delete nine files was carried out in 110 seconds
+                         -- and closed on an approved exemption on that same
+                         -- ticket, and still read outstanding.
+                         --
+                         -- Excluding it was belt-and-braces against stale
+                         -- evidence, and the strict > below already does that
+                         -- job — the CA case was caught by the timestamp, not by
+                         -- the exclusion.
                          WHEN EXISTS (
                              SELECT 1 FROM tasks x
-                             WHERE x.removed_at IS NULL AND x.id <> COALESCE(d.task_id, '')
-                               AND x.description LIKE '%' || substr(d.id, 1, 13) || '%'
+                             WHERE x.removed_at IS NULL
+                               AND (x.id = COALESCE(d.task_id, '')
+                                 OR x.description LIKE '%' || substr(d.id, 1, 13) || '%')
                                AND (EXISTS (SELECT 1 FROM task_deployments dep
                                             WHERE dep.task_id = x.id
                                               AND dep.recorded_at > d.resolved_at)
@@ -1036,6 +1049,15 @@ const DECISION_COLUMNS: &str =
                                               AND ex.withdrawn_at IS NULL
                                               AND ex.approved_at > d.resolved_at)))
                              THEN 'discharged'
+                         -- OUTSTANDING needs a task that NAMES it — the origin
+                         -- alone is not a link to the act, only to the question.
+                         -- Without one there is nothing to have been outstanding
+                         -- ON, and the honest answer is that we cannot see.
+                         WHEN NOT EXISTS (
+                             SELECT 1 FROM tasks x
+                             WHERE x.removed_at IS NULL AND x.id <> COALESCE(d.task_id, '')
+                               AND x.description LIKE '%' || substr(d.id, 1, 13) || '%')
+                             THEN 'unknown'
                          ELSE 'outstanding' END";
 
 fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionRequest> {
@@ -1410,6 +1432,72 @@ mod tests {
             found.discharge,
             Some(DecisionDischarge::Discharged),
             "evidence recorded once the ruling existed discharges it"
+        );
+    }
+
+    /// ⚠️ WORK DONE WHERE THE RULING WAS RAISED IS STILL WORK DONE, and this is
+    /// the case the first cut was blind to.
+    ///
+    /// The originating task was excluded on the reasoning that a decision names
+    /// the ticket that RAISED it and not the one that EXECUTES it. True, and it
+    /// made the query blind to the ordinary case: a ruling carried out on the
+    /// very ticket that asked for it. A ruling to delete nine files was carried
+    /// out in 110 seconds and closed on an approved exemption on that same
+    /// ticket, and read outstanding until Queen went and checked it by hand.
+    ///
+    /// AND AN APPROVED EXEMPTION IS EVIDENCE. Every read-only investigation,
+    /// docs change and measurement ticket closes on one with no deployment; a
+    /// query that counted only deployments would call the largest class of
+    /// finished work on this board outstanding forever.
+    #[test]
+    fn a_ruling_carried_out_on_the_task_that_raised_it_is_discharged() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let raised_and_done = store
+            .create_task("Delete the nine from production", "/workspace/petal")
+            .unwrap()
+            .id;
+        for state in [TaskState::Ready, TaskState::Active, TaskState::Review] {
+            store.transition_task(raised_and_done, state).unwrap();
+        }
+        let actions = vec!["do it".into(), "do not".into()];
+        let mut asking = request(queen.id, &actions);
+        asking.task_id = Some(raised_and_done);
+        let decision = store.create_decision_request(&asking).unwrap();
+        store
+            .resolve_decision_request(decision.id, "do it", "Go ahead.", "operator")
+            .unwrap();
+        backdate_resolution(&store, decision.id, 60);
+
+        // Nothing names it and its own ticket shows nothing yet.
+        let listed = store.list_decision_requests().unwrap();
+        let found = listed.iter().find(|d| d.id == decision.id).unwrap();
+        assert_eq!(found.discharge, Some(DecisionDischarge::Unknown));
+
+        // Closed on its own ticket, with no deployment anywhere.
+        store
+            .claim_completion_exemption(
+                raised_and_done,
+                "Deleted them; nothing ships.",
+                None,
+                i64::MAX / 4,
+            )
+            .unwrap();
+        store
+            .approve_completion_exemption(
+                raised_and_done,
+                "queen",
+                "Checked all nine 404.",
+                i64::MAX / 4,
+            )
+            .unwrap();
+
+        let listed = store.list_decision_requests().unwrap();
+        let found = listed.iter().find(|d| d.id == decision.id).unwrap();
+        assert_eq!(
+            found.discharge,
+            Some(DecisionDischarge::Discharged),
+            "an approved exemption on the originating ticket discharges the ruling"
         );
     }
 
