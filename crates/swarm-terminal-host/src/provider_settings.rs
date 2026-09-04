@@ -1,0 +1,150 @@
+//! Engine-owned startup hook overlay; never edits provider/user settings in place.
+use serde_json::{Value, json};
+use std::{
+    fs::{self, File, OpenOptions},
+    io::{Read, Write},
+    os::unix::fs::OpenOptionsExt,
+    path::{Path, PathBuf},
+};
+
+const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
+
+fn add_hook(document: &mut Value, executable: &Path) -> Result<(), String> {
+    let executable = executable.to_str().ok_or("helper path is not UTF-8")?;
+    // The provider invokes command hooks through a shell. Single-quote the
+    // complete path, including embedded apostrophes, without interpolating env.
+    let command = format!(
+        "'{}' provider-session-start",
+        executable.replace('\'', "'\\''")
+    );
+    let hooks = document
+        .as_object_mut()
+        .ok_or("settings are not an object")?
+        .entry("hooks")
+        .or_insert_with(|| json!({}));
+    let starts = hooks
+        .as_object_mut()
+        .ok_or("hooks are not an object")?
+        .entry("SessionStart")
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .ok_or("SessionStart is not an array")?;
+    let entry =
+        json!({"matcher": "startup|resume", "hooks": [{"type": "command", "command": command}]});
+    if !starts.contains(&entry) {
+        starts.push(entry);
+    }
+    Ok(())
+}
+
+pub(super) fn read_settings(path: &Path) -> Result<Value, String> {
+    let mut bytes = Vec::new();
+    File::open(path)
+        .map_err(|_| "settings unavailable")?
+        .take(MAX_SETTINGS_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "settings unreadable")?;
+    if bytes.len() as u64 > MAX_SETTINGS_BYTES {
+        return Err("settings exceed limit".into());
+    }
+    serde_json::from_slice(&bytes).map_err(|_| "settings invalid".into())
+}
+
+pub(super) fn startup_settings(
+    base: Option<&Path>,
+    mcp_config: &Path,
+    executable: &Path,
+) -> Result<PathBuf, String> {
+    let mut document = if let Some(base) = base {
+        read_settings(base)?
+    } else {
+        json!({})
+    };
+    add_hook(&mut document, executable)?;
+    let bytes = serde_json::to_vec_pretty(&document).map_err(|_| "settings invalid")?;
+    if bytes.len() as u64 > MAX_SETTINGS_BYTES {
+        return Err("settings exceed limit".into());
+    }
+    let target = mcp_config.with_extension("startup.settings.json");
+    let temporary = target.with_extension(format!("{}.tmp", swarm_domain::WorkerSessionId::new()));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        fs::rename(&temporary, &target)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result.map_err(|_| "startup settings unavailable")?;
+    Ok(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overlay_keeps_operator_hooks_and_permissions_and_is_idempotent() {
+        let mut document = json!({"permissions":{"allow":["Edit"],"deny":["Bash(rm:*)"]},
+            "hooks":{"SessionStart":[{"matcher":"startup","hooks":[{"type":"command","command":"echo existing"}]}],"Stop":[]},
+            "disableAllHooks":true});
+        let original = document.clone();
+        let executable = Path::new("/opt/bee's hive/host");
+        add_hook(&mut document, executable).unwrap();
+        add_hook(&mut document, executable).unwrap();
+        assert_eq!(document["permissions"], original["permissions"]);
+        assert_eq!(document["disableAllHooks"], true);
+        assert_eq!(document["hooks"]["Stop"], original["hooks"]["Stop"]);
+        let starts = document["hooks"]["SessionStart"].as_array().unwrap();
+        assert_eq!(starts.len(), 2);
+        assert_eq!(starts[0], original["hooks"]["SessionStart"][0]);
+        assert_eq!(
+            starts[1]["hooks"][0]["command"],
+            "'/opt/bee'\\''s hive/host' provider-session-start"
+        );
+    }
+
+    #[test]
+    fn no_grants_still_gets_private_hook_overlay_and_bad_input_preserves_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let mcp = root.path().join("worker.json");
+        let target = startup_settings(None, &mcp, Path::new("/host")).unwrap();
+        let before = fs::read(&target).unwrap();
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let invalid = root.path().join("bad.json");
+        fs::write(&invalid, "{broken").unwrap();
+        assert!(startup_settings(Some(&invalid), &mcp, Path::new("/host")).is_err());
+        assert_eq!(fs::read(&target).unwrap(), before);
+        assert_eq!(fs::read_to_string(invalid).unwrap(), "{broken");
+    }
+
+    #[test]
+    fn malformed_hooks_and_oversized_settings_are_not_overwritten() {
+        for mut document in [
+            json!([]),
+            json!({"hooks":[]}),
+            json!({"hooks":{"SessionStart":{}}}),
+        ] {
+            assert!(add_hook(&mut document, Path::new("/host")).is_err());
+        }
+        let root = tempfile::tempdir().unwrap();
+        let base = root.path().join("large.json");
+        fs::write(
+            &base,
+            vec![b' '; usize::try_from(MAX_SETTINGS_BYTES).unwrap() + 1],
+        )
+        .unwrap();
+        let mcp = root.path().join("worker.json");
+        assert!(startup_settings(Some(&base), &mcp, Path::new("/host")).is_err());
+        assert!(!mcp.with_extension("startup.settings.json").exists());
+    }
+}

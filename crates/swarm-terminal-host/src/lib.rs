@@ -25,6 +25,7 @@ use tokio::{
     sync::Semaphore,
 };
 use tracing::{info, warn};
+mod provider_settings;
 
 /// How long Claude gets to answer whether it holds a conversation.
 ///
@@ -1161,13 +1162,31 @@ fn claude_settings_for(mcp_config: Option<&Path>) -> Option<PathBuf> {
     let global = std::env::var_os("SWARM_CLAUDE_SETTINGS_PATH")
         .map(PathBuf::from)
         .filter(|path| path.is_file());
-    let grants = mcp_config.and_then(worker_settings_beside)?;
-    match merged_settings(global.as_deref(), &grants) {
-        Ok(merged) => Some(merged),
-        Err(error) => {
-            eprintln!("swarm-terminal-host: could not apply approved-command grants: {error}");
-            global
-        }
+    let base = match mcp_config.and_then(worker_settings_beside) {
+        Some(grants) => match merged_settings(global.as_deref(), &grants) {
+            Ok(merged) => Some(merged),
+            Err(error) => {
+                eprintln!("swarm-terminal-host: could not apply approved-command grants: {error}");
+                global
+            }
+        },
+        None => global,
+    };
+    let Some(mcp_config) = mcp_config else {
+        return base;
+    };
+    let result = std::env::current_exe()
+        .map_err(|_| "helper executable unavailable".to_owned())
+        .and_then(|executable| {
+            provider_settings::startup_settings(base.as_deref(), mcp_config, &executable)
+        });
+    if let Ok(path) = result {
+        Some(path)
+    } else {
+        eprintln!(
+            "swarm-terminal-host: provider startup hook unavailable; preserving base settings"
+        );
+        base
     }
 }
 
@@ -1181,15 +1200,10 @@ fn worker_settings_beside(mcp_config: &Path) -> Option<PathBuf> {
 /// Writes one file holding the operator's settings with the grants folded in.
 fn merged_settings(global: Option<&Path>, grants: &Path) -> Result<PathBuf, String> {
     let mut document = match global {
-        Some(path) => serde_json::from_str::<serde_json::Value>(
-            &fs::read_to_string(path).map_err(|error| error.to_string())?,
-        )
-        .map_err(|error| error.to_string())?,
+        Some(path) => provider_settings::read_settings(path)?,
         None => serde_json::json!({}),
     };
-    let granted: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(grants).map_err(|error| error.to_string())?)
-            .map_err(|error| error.to_string())?;
+    let granted = provider_settings::read_settings(grants)?;
     let extra = granted
         .get("permissions")
         .and_then(|permissions| permissions.get("allow"))

@@ -6,6 +6,27 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2: engine-owned hook configuration for future starts
+
+- The current engine adds a separate startup-settings overlay for Claude workers
+  with Swarm MCP configuration. Existing grants/global settings are merged first;
+  no-grant starts still receive the hook. Old engines do not generate this overlay.
+  The command uses the engine executable with shell-safe path quoting; capabilities
+  remain inherited process data, not settings or command-line arguments.
+- Existing hooks, permission rules and explicit hook-disable settings survive.
+  Repeated generation does not duplicate the hook. Settings reads (including the
+  grant merge inputs) are bounded to 1 MiB; the final overlay is capped and written
+  through a private mode-0600 temporary file and atomic rename. Failure preserves
+  base settings rather than selecting an old overlay. User files are untouched.
+- Three Unix fixtures cover existing hooks/permissions, apostrophe paths,
+  idempotence, no-grant private output, malformed settings and size refusal.
+  These tests require Linux execution; compilation is not provider acceptance.
+- Strict Linux-target host/API all-target/all-feature Clippy passed, including
+  the three fixtures, after correcting match-style and test conversion lints.
+- Future-start wiring is implemented, but hooks were not installed on any live
+  worker. Outcome presentation, interactive /resume handling, full fallback and
+  real provider acceptance remain open. No deployment, push or release.
+
 ### P2: durable startup conversation reconciliation
 
 - Schema 127 adds one current startup receipt per worker, bounded by the worker

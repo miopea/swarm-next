@@ -52,5 +52,13 @@ selection, applies the domain recovery result and commits the receipt, resulting
 pin and activity event together. Repeated observations do not rewrite settled
 results. Only engine-owned authenticated attempts are eligible for rehydration;
 impossible ladder positions are rejected. No task input is replayed.
-Hook installation, outcome presentation, missing-context detection and provider
-acceptance remain open. This ADR does not install hooks or complete P2.
+The protocol-12 engine generates a separate private startup-settings overlay for
+future Claude starts with Swarm MCP configuration. It merges existing grants first,
+then appends an idempotent SessionStart command hook using the current engine
+executable (shell-quoted), including when there are no grants. Existing hooks,
+permissions and explicit hook-disable settings survive. Input and output settings
+are capped at 1 MiB; replacement uses a private temporary file and atomic rename.
+Failure preserves base settings, not a stale overlay. No provider/user settings
+file is edited in place and this development work installs nothing on live workers.
+Outcome presentation, interactive conversation switching, missing-context detection
+and provider acceptance remain open; P2 is not complete.
