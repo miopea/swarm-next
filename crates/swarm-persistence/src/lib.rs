@@ -97,7 +97,9 @@ pub use notifications::{
     VapidKeyMaterial,
 };
 mod deployment_grants;
+mod ops_tickets;
 mod orchestration;
+pub use ops_tickets::OpsTicketReceipt;
 mod queen_conductor;
 pub use queen_conductor::{QueenAutomationDelivery, QueenAutomationFailure, QueenAutomationFinish};
 mod presentation;
@@ -193,7 +195,8 @@ const BROADCAST_EXPIRY_SCHEMA_VERSION: i64 = 120;
 const MESSAGE_DELIVERY_SESSION_SCHEMA_VERSION: i64 = 121;
 const DELIVERY_COOLDOWN_SCHEMA_VERSION: i64 = 122;
 const CLAIM_WITHDRAWAL_SCHEMA_VERSION: i64 = 123;
-const CURRENT_SCHEMA_VERSION: i64 = CLAIM_WITHDRAWAL_SCHEMA_VERSION;
+const OPS_TICKETS_SCHEMA_VERSION: i64 = 124;
+const CURRENT_SCHEMA_VERSION: i64 = OPS_TICKETS_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -509,6 +512,8 @@ pub enum TaskStoreError {
     EmailReplyQueueFull,
     #[error("task title must contain 1 to {MAX_TASK_TITLE_BYTES} bytes")]
     InvalidTitle,
+    #[error("the Ops request already has a different submitted command")]
+    OpsTicketConflict,
     #[error("task description must not exceed {MAX_TASK_DESCRIPTION_BYTES} bytes")]
     InvalidDescription,
     #[error("task details update must contain at least one field")]
@@ -3706,11 +3711,22 @@ fn migrate_newest_schema_steps(
     if schema_version < DELIVERY_COOLDOWN_SCHEMA_VERSION {
         migrate_delivery_cooldown(transaction)?;
     }
+    migrate_ops_intake_schema_steps(transaction, schema_version)
+}
+
+fn migrate_ops_intake_schema_steps(
+    transaction: &rusqlite::Transaction<'_>,
+    schema_version: i64,
+) -> rusqlite::Result<()> {
+    // Include the immediately preceding step to preserve strict version order.
     // LAST, and it has to stay last. Every migration sets user_version to its
     // own number as its final act, so one running after this one winds the
     // recorded version backwards.
     if schema_version < CLAIM_WITHDRAWAL_SCHEMA_VERSION {
         migrate_claim_withdrawal(transaction)?;
+    }
+    if schema_version < OPS_TICKETS_SCHEMA_VERSION {
+        ops_tickets::migrate_ops_tickets(transaction)?;
     }
     Ok(())
 }
@@ -8544,6 +8560,14 @@ mod tests {
                      BEGIN SELECT RAISE(ABORT, 'An email reply cannot be sent without a recorded deployment or an approved no-deployment exemption'); END;
                  ALTER TABLE task_completion_exemptions DROP COLUMN withdrawn_at",
             probe_sql: "",
+        },
+        // 124. Additive provenance preserves existing task and activity rows.
+        SchemaStep {
+            table: "ops_console_tickets",
+            artifact: "",
+            undo_sql: "DROP TABLE IF EXISTS ops_console_tickets",
+            probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'ops_console_tickets')",
         },
     ];
 

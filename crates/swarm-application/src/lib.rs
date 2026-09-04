@@ -30,6 +30,9 @@ use swarm_domain::{
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
 
+mod ops_tickets;
+pub use ops_tickets::{OpsTicketError, OpsTicketProgress, OpsTicketService};
+
 /// The durable agent identity resolved before an application command is invoked.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AgentPrincipal {

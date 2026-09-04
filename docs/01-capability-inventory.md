@@ -49,6 +49,12 @@ Decision meanings:
 
 ## Coordination
 
+Ops Console ticket intake is an approved addition under ADR 0060, currently in
+development. Explicit app scope and atomic draft/provenance persistence are
+implemented in an isolated worktree with retry, restart, concurrency and rollback
+tests. Scoped MCP authentication, progress adaptation and console outbox delivery
+remain unimplemented; no runtime integration is enabled yet.
+
 | Capability | Decision | Rationale and intended direction |
 |---|---|---|
 | Agent-facing MCP coordination | Redesign | Implemented task and decision foundation: scoped per-worker credentials, role-specific discovery, shared application services, and a typed operator inbox. Add guarded Queen delivery rather than a broad legacy catalog. |
