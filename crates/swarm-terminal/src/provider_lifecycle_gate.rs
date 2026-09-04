@@ -10,6 +10,7 @@ pub struct ProviderLifecycleGate {
     capability: [u8; 32],
     revoked: bool,
     observation: Option<ProviderSessionStartObservation>,
+    selection: Option<swarm_domain::ConversationSelection>,
 }
 
 impl std::fmt::Debug for ProviderLifecycleGate {
@@ -30,6 +31,7 @@ pub enum ProviderLifecycleAcceptance {
     IgnoredLifecycle,
     Denied,
     ConflictingStartup,
+    ConversationChanged,
 }
 
 impl ProviderLifecycleGate {
@@ -42,6 +44,7 @@ impl ProviderLifecycleGate {
             capability,
             revoked: false,
             observation: None,
+            selection: None,
         }
     }
 
@@ -65,14 +68,57 @@ impl ProviderLifecycleGate {
         ) {
             return ProviderLifecycleAcceptance::IgnoredLifecycle;
         }
+        if observation.kind == ProviderSessionStartKind::Resumed
+            && let Some(selection) = self.selection.as_mut()
+            && selection
+                .complete_resume(observation.conversation)
+                .is_some()
+        {
+            return ProviderLifecycleAcceptance::ConversationChanged;
+        }
         match self.observation {
-            Some(previous) if previous == observation => ProviderLifecycleAcceptance::Duplicate,
+            Some(_)
+                if self.selection.as_ref().is_some_and(|selection| {
+                    selection.current().conversation == observation.conversation
+                }) =>
+            {
+                ProviderLifecycleAcceptance::Duplicate
+            }
             Some(_) => ProviderLifecycleAcceptance::ConflictingStartup,
             None => {
                 self.observation = Some(observation);
+                self.selection = Some(swarm_domain::ConversationSelection::new(
+                    observation.conversation,
+                ));
                 ProviderLifecycleAcceptance::Accepted
             }
         }
+    }
+
+    /// Called only for an authenticated provider SessionEnd(reason=resume).
+    /// The process owner must apply the same live-child check as startup reports.
+    pub fn begin_resume(
+        &mut self,
+        session: WorkerSessionId,
+        capability: &[u8; 32],
+        previous: swarm_domain::ProviderConversationId,
+    ) -> bool {
+        if self.revoked
+            || session != self.session
+            || !matches_capability(&self.capability, capability)
+        {
+            return false;
+        }
+        self.selection
+            .as_mut()
+            .is_some_and(|selection| selection.begin_resume(previous))
+    }
+
+    #[must_use]
+    pub fn selection(&self) -> Option<swarm_domain::ProviderConversationSelection> {
+        self.selection
+            .as_ref()
+            .map(swarm_domain::ConversationSelection::current)
     }
 
     pub fn revoke(&mut self) {
@@ -100,6 +146,45 @@ fn matches_capability(expected: &[u8; 32], supplied: &[u8; 32]) -> bool {
 mod tests {
     use super::*;
     use swarm_domain::ProviderConversationId;
+
+    #[test]
+    fn paired_interactive_resume_changes_selection_without_rewriting_startup() {
+        let session = WorkerSessionId::new();
+        let mut gate = ProviderLifecycleGate::new(session, [7; 32]);
+        let first = ProviderSessionStartObservation {
+            conversation: ProviderConversationId::new(),
+            kind: ProviderSessionStartKind::Resumed,
+        };
+        assert!(!gate.begin_resume(session, &[7; 32], first.conversation));
+        assert_eq!(
+            gate.observe(session, &[7; 32], first),
+            ProviderLifecycleAcceptance::Accepted
+        );
+        assert!(!gate.begin_resume(WorkerSessionId::new(), &[7; 32], first.conversation));
+        assert!(!gate.begin_resume(session, &[8; 32], first.conversation));
+        assert!(gate.begin_resume(session, &[7; 32], first.conversation));
+        let next = ProviderSessionStartObservation {
+            conversation: ProviderConversationId::new(),
+            ..first
+        };
+        assert_eq!(
+            gate.observe(session, &[7; 32], next),
+            ProviderLifecycleAcceptance::ConversationChanged
+        );
+        assert_eq!(gate.observation(), Some(first));
+        assert_eq!(gate.selection().unwrap().conversation, next.conversation);
+        assert_eq!(gate.selection().unwrap().revision, 2);
+        assert_eq!(
+            gate.observe(session, &[7; 32], next),
+            ProviderLifecycleAcceptance::Duplicate
+        );
+        assert_eq!(
+            gate.observe(session, &[7; 32], first),
+            ProviderLifecycleAcceptance::ConflictingStartup
+        );
+        gate.revoke();
+        assert!(!gate.begin_resume(session, &[7; 32], next.conversation));
+    }
 
     #[test]
     fn only_current_capability_can_record_and_retries_cannot_rewrite_startup() {

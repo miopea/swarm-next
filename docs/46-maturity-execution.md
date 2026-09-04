@@ -6,6 +6,24 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2: paired interactive conversation selection rules
+
+- Rechecked Claude's official hook reference: interactive /resume supplies a
+  SessionEnd(reason=resume) for the previous conversation and a resumed start.
+  Added a content-minimizing 64 KiB end parser that excludes other exit reasons,
+  child-agent reports and invalid identities. No paths or transcripts are retained.
+- Domain selection owns one current conversation/revision and one pending resume
+  boundary. The authenticated engine gate can pair an end with the next resumed
+  start without rewriting its first startup observation. Unpaired changed starts,
+  wrong identities/capabilities and revoked processes cannot change selection.
+  Returning to a previous conversation advances revision; overflow cannot wrap.
+- Two native selection-domain tests and seven lifecycle/parser/environment tests
+  passed. Strict Linux-target domain/terminal/host all-target/all-feature Clippy
+  passed. These validate rules, not real provider hook order or delivery.
+- End-event IPC/helper/settings transport and durable selection revision handling
+  remain unwired. No claim that /resume is fixed yet; no live workers, deployment,
+  push or release changed. Missing/reordered hook evidence remains unconfirmed.
+
 ### P2: distinguish saved recovery outcomes from startup attempts
 
 - Added a bounded persistence projection for up to 256 requested session IDs;

@@ -52,9 +52,60 @@ pub fn read_claude_session_start(input: &[u8]) -> Option<ProviderSessionStartObs
     Some(ProviderSessionStartObservation { conversation, kind })
 }
 
+#[derive(Deserialize)]
+struct ClaudeResumeEnd<'a> {
+    #[serde(borrow)]
+    hook_event_name: &'a str,
+    #[serde(borrow)]
+    session_id: &'a str,
+    #[serde(borrow)]
+    reason: &'a str,
+    #[serde(default)]
+    agent_id: Option<serde::de::IgnoredAny>,
+}
+
+/// Reads only the previous conversation for an interactive resume boundary.
+/// Logout, clear, ordinary exit and child-agent callbacks are not selection changes.
+#[must_use]
+pub fn read_claude_resume_end(input: &[u8]) -> Option<ProviderConversationId> {
+    if input.len() > MAX_PROVIDER_LIFECYCLE_BYTES {
+        return None;
+    }
+    let parsed: ClaudeResumeEnd<'_> = serde_json::from_slice(input).ok()?;
+    if parsed.hook_event_name != "SessionEnd"
+        || parsed.reason != "resume"
+        || parsed.agent_id.is_some()
+        || parsed.session_id.len() != 36
+        || parsed.session_id == "00000000-0000-0000-0000-000000000000"
+    {
+        return None;
+    }
+    parsed.session_id.parse().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resume_end_rejects_other_events_exits_child_agents_and_oversize() {
+        let mut payload = serde_json::json!({"hook_event_name":"SessionEnd", "reason":"resume", "session_id":"00000000-0000-0000-0000-000000000001", "transcript_path":"/private"});
+        let read = |payload: &serde_json::Value| {
+            read_claude_resume_end(&serde_json::to_vec(payload).unwrap())
+        };
+        assert!(read(&payload).is_some());
+        for reason in ["clear", "logout", "other", "prompt_input_exit"] {
+            payload["reason"] = reason.into();
+            assert_eq!(read(&payload), None);
+        }
+        payload["reason"] = "resume".into();
+        payload["agent_id"] = "child".into();
+        assert_eq!(read(&payload), None);
+        assert_eq!(
+            read_claude_resume_end(&vec![b' '; MAX_PROVIDER_LIFECYCLE_BYTES + 1]),
+            None
+        );
+    }
 
     fn payload(source: &str) -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({

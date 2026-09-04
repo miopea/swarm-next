@@ -43,7 +43,8 @@ pub use provider_activity::{
     ProviderActivity, background_work_running, classify_provider_activity,
 };
 pub use provider_lifecycle::{
-    MAX_PROVIDER_LIFECYCLE_BYTES, ProviderSessionStartObservation, read_claude_session_start,
+    MAX_PROVIDER_LIFECYCLE_BYTES, ProviderSessionStartObservation, read_claude_resume_end,
+    read_claude_session_start,
 };
 pub use provider_lifecycle_gate::{ProviderLifecycleAcceptance, ProviderLifecycleGate};
 pub use resources::{ProcessResourceSample, sample_current_process, sample_process_tree};

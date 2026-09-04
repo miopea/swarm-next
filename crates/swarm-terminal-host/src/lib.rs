@@ -524,6 +524,7 @@ fn dispatch_blocking(
             .map_err(|_| "provider startup observation unavailable".to_owned())
             .and_then(|outcome| match outcome {
                 swarm_terminal::ProviderLifecycleAcceptance::Accepted
+                | swarm_terminal::ProviderLifecycleAcceptance::ConversationChanged
                 | swarm_terminal::ProviderLifecycleAcceptance::Duplicate
                 | swarm_terminal::ProviderLifecycleAcceptance::IgnoredLifecycle => {
                     Ok(HostResponse::Acknowledged)

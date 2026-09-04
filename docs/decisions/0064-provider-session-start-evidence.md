@@ -60,5 +60,19 @@ permissions and explicit hook-disable settings survive. Input and output setting
 are capped at 1 MiB; replacement uses a private temporary file and atomic rename.
 Failure preserves base settings, not a stale overlay. No provider/user settings
 file is edited in place and this development work installs nothing on live workers.
-Outcome presentation, interactive conversation switching, missing-context detection
-and provider acceptance remain open; P2 is not complete.
+Outcome presentation distinguishes persisted startup results from attempts.
+
+Interactive selection uses a separate bounded state machine. Claude's documented
+SessionEnd(reason=resume) names the conversation being left by interactive /resume;
+the next SessionStart(source=resume) names the resumed one. A matching end arms one
+transition, and a subsequent authenticated resume advances the process-local
+selection revision without replacing immutable startup evidence. A mismatched end
+or unpaired different start does not authorize a pin update. Revisions order
+accepted engine evidence, not undocumented provider timestamps. Old-to-new-to-old
+selection is legitimate when each transition has its own matched boundary.
+The 2026-09-04 hook reference documents a default 1.5-second SessionEnd timeout;
+transport integration must fit that bound or explicitly configure it, never rely
+on eventual retries. Missing/reordered lifecycle evidence remains unconfirmed, not
+proof that no switch occurred. End transport, revised selection persistence and
+actual provider ordering acceptance remain open, along with complete fallback.
+The state machine and parser alone do not complete /resume integration or P2.
