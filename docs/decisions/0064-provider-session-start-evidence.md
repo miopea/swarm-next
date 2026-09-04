@@ -25,6 +25,11 @@ Exit, timeout, transport/auth failure and missing callback are not absence.
 Interactive conversation switching after startup is a separate lifecycle; it
 must update future resumption without reopening a completed recovery operation.
 
-Only the domain rule is implemented in this checkpoint. Callback transport,
-authentication, durable reconciliation, missing-context detection and provider
+Engine protocol 12 adds a process-capability startup observation request over
+the existing private IPC channel. Capability debug output is redacted. The engine
+checks the session's liveness and capability gate before retaining evidence.
+Protocol 11 terminal control remains supported, but cannot receive this request.
+
+The command helper and hook configuration must check the target engine protocol
+before sending. Durable reconciliation, missing-context detection and provider
 acceptance remain open. This ADR does not install hooks or complete P2.

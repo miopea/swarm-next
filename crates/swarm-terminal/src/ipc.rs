@@ -28,12 +28,23 @@ use crate::{
 // the binary from the release the RUNNING host came from, so the drain stays
 // version-matched to itself and a newer checkout cannot break the update that
 // carries it.
-pub const PROTOCOL_VERSION: u16 = 11;
+// Protocol 12 adds authenticated, process-scoped provider startup observations.
+pub const PROTOCOL_VERSION: u16 = 12;
 pub const TERMINAL_CONTROL_PROTOCOL_VERSION: u16 = 11;
 pub const MAX_CONTROL_INPUT_BYTES: usize = 64 * 1024;
 pub const MAX_REQUEST_BYTES: u64 = 256 * 1024;
 pub const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 pub const MAX_WRITE_AUDIT_PAGE: u16 = 1_000;
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ProviderLifecycleCapability(pub [u8; 32]);
+
+impl std::fmt::Debug for ProviderLifecycleCapability {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ProviderLifecycleCapability([redacted])")
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -262,6 +273,11 @@ pub enum HostRequest {
     },
     Stop {
         session_id: WorkerSessionId,
+    },
+    ProviderSessionStart {
+        session_id: WorkerSessionId,
+        capability: ProviderLifecycleCapability,
+        observation: crate::ProviderSessionStartObservation,
     },
 }
 
@@ -551,6 +567,7 @@ mod tests {
             "control",
             "wait_controlled",
             "stop",
+            "provider_session_start",
         ];
         let error = serde_json::from_value::<HostRequest>(serde_json::json!({
             "type": "a_request_that_does_not_exist"
@@ -572,9 +589,39 @@ mod tests {
              anyone -- bump it, then update this list."
         );
         assert_eq!(
-            PROTOCOL_VERSION, 11,
-            "the pinned surface above belongs to protocol 11; if you changed \
+            PROTOCOL_VERSION, 12,
+            "the pinned surface above belongs to protocol 12; if you changed \
              the requests, this number moves with them"
+        );
+    }
+
+    #[test]
+    fn startup_capability_round_trips_without_debug_disclosure() {
+        let request = HostRequest::ProviderSessionStart {
+            session_id: WorkerSessionId::new(),
+            capability: ProviderLifecycleCapability([173; 32]),
+            observation: crate::ProviderSessionStartObservation {
+                conversation: swarm_domain::ProviderConversationId::new(),
+                kind: swarm_domain::ProviderSessionStartKind::Resumed,
+            },
+        };
+        let debug = format!("{request:?}");
+        assert!(debug.contains("[redacted]"));
+        assert!(!debug.contains("[173,"));
+        let encoded = serde_json::to_vec(&request).unwrap();
+        let decoded: HostRequest = serde_json::from_slice(&encoded).unwrap();
+        let HostRequest::ProviderSessionStart {
+            capability,
+            observation,
+            ..
+        } = decoded
+        else {
+            panic!("wrong request variant");
+        };
+        assert_eq!(capability.0, [173; 32]);
+        assert_eq!(
+            observation.kind,
+            swarm_domain::ProviderSessionStartKind::Resumed
         );
     }
 
@@ -622,7 +669,7 @@ mod tests {
             variants,
             ["status", "claim", "renew", "release", "input", "resize"]
         );
-        assert_eq!(PROTOCOL_VERSION, 11);
+        assert_eq!(PROTOCOL_VERSION, 12);
     }
 
     #[test]

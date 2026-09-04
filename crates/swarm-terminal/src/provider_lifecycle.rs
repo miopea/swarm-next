@@ -1,10 +1,10 @@
 //! Content-minimizing provider hook boundary. Parsing is not authentication.
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use swarm_domain::{ProviderConversationId, ProviderSessionStartKind};
 
 pub const MAX_PROVIDER_LIFECYCLE_BYTES: usize = 64 * 1024;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProviderSessionStartObservation {
     pub conversation: ProviderConversationId,
     pub kind: ProviderSessionStartKind,

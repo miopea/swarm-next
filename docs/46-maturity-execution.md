@@ -6,6 +6,21 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2: versioned engine startup observation receiver
+
+- Protocol 12 adds ProviderSessionStart over private engine IPC. Its capability
+  type serializes for transport but redacts Debug output; the receiver validates
+  the bound live process gate and returns generic refusals without secret data.
+  Identical retry and ignored non-startup lifecycle reports are acknowledged.
+- Existing protocol-11 terminal control remains supported. The request surface
+  pin and version tests move together; no fallback sends this request to old hosts.
+- Seven native IPC tests passed, including redaction and wire round-trip. Strict
+  Linux-target API/engine all-target/all-feature Clippy passed before the final
+  test-only redaction fixture refinement. Linux socket/PTY execution is not proven.
+- Command helper, protocol preflight, hook installation, persisted conversation
+  identity and completed recovery transitions remain open. No live engine updated,
+  worker interrupted, push, deployment or release.
+
 ### P2: engine-owned lifecycle capability allocation
 
 - Claude process creation now mints 32 bytes using the existing workspace OS

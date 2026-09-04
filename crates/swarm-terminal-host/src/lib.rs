@@ -513,6 +513,25 @@ fn dispatch_blocking(
     request: HostRequest,
 ) -> HostResponse {
     let result = match request {
+        HostRequest::ProviderSessionStart {
+            session_id,
+            capability,
+            observation,
+        } => registry
+            .get(session_id)
+            .and_then(|session| session.observe_provider_start(&capability.0, observation))
+            .map_err(|_| "provider startup observation unavailable".to_owned())
+            .and_then(|outcome| match outcome {
+                swarm_terminal::ProviderLifecycleAcceptance::Accepted
+                | swarm_terminal::ProviderLifecycleAcceptance::Duplicate
+                | swarm_terminal::ProviderLifecycleAcceptance::IgnoredLifecycle => {
+                    Ok(HostResponse::Acknowledged)
+                }
+                swarm_terminal::ProviderLifecycleAcceptance::Denied
+                | swarm_terminal::ProviderLifecycleAcceptance::ConflictingStartup => {
+                    Err("provider startup observation refused".to_owned())
+                }
+            }),
         HostRequest::Ping => {
             return HostResponse::Pong {
                 protocol_version: PROTOCOL_VERSION,

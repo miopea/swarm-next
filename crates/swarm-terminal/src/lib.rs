@@ -21,9 +21,9 @@ pub use history::{
 pub use ipc::HostClient;
 pub use ipc::{
     HostRequest, HostResponse, HostSessionSummary, IpcError, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES,
-    MAX_WRITE_AUDIT_PAGE, PROTOCOL_VERSION, TerminalHostStatus, TerminalInputKind,
-    TerminalTakeoverLease, TerminalWriteActor, TerminalWriteAuditEntry, TerminalWriteProvenance,
-    TerminalWriteResult, default_terminal_socket_path,
+    MAX_WRITE_AUDIT_PAGE, PROTOCOL_VERSION, ProviderLifecycleCapability, TerminalHostStatus,
+    TerminalInputKind, TerminalTakeoverLease, TerminalWriteActor, TerminalWriteAuditEntry,
+    TerminalWriteProvenance, TerminalWriteResult, default_terminal_socket_path,
 };
 pub use ipc::{
     MAX_CONTROL_INPUT_BYTES, TERMINAL_CONTROL_PROTOCOL_VERSION, TerminalControlCommand,

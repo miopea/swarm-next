@@ -36,7 +36,8 @@ pub enum ConversationRecoveryEvidence {
 
 /// Provider-neutral lifecycle evidence, normalized by the provider adapter.
 /// These values do not authenticate a callback or authorize a conversation switch.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProviderSessionStartKind {
     New,
     Resumed,
