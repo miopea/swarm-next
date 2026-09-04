@@ -6,6 +6,20 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2: distinguish attachment control wait from connection wait
+
+- An uploaded image waiting for device ownership previously claimed it was
+  waiting for the connection, even with a connected socket. It now points to
+  the existing Resume Here control when ownership is the missing condition;
+  disconnected/refused socket cases retain their connection explanation.
+- The regression confirms an uploaded file is not reported as added before
+  ownership, requesting ownership alone does not paste, confirmed ownership
+  inserts once, and subsequent ownership changes neither re-upload nor reinsert.
+- All 81 terminal-view, attachment and mobile-composer tests passed. This is
+  state/wiring evidence, not a claim that Android camera/gallery or native
+  provider image-chip rendering has passed real-device acceptance.
+- No push, deployment, release or live worker interruption.
+
 ### P6: browser verification exposes and fixes mobile runtime access
 
 - Reconnected through the supported Edge extension and opened a separate local

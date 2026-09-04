@@ -333,6 +333,28 @@ test("socket refusal wins over a stale connected UI", async () => {
   expect(screen.getByText(/Added screen\.png/i)).toBeInTheDocument();
 });
 
+test("an uploaded attachment names ownership as the wait and inserts once after Resume Here", async () => {
+  upload.mockClear().mockResolvedValueOnce("/tmp/attachments/screen.png");
+  controller.sendInput.mockReturnValue(false);
+  render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
+  act(() => controller.controlListener!("elsewhere"));
+  await act(async () => { await composerProps.current!.onAttachment!(new File(["image"], "screen.png", { type: "image/png" })); });
+  expect(screen.getByText(/uploaded · Resume Here to add it/)).toBeInTheDocument();
+  expect(screen.queryByText(/waiting for the connection/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Added screen\.png/i)).not.toBeInTheDocument();
+  controller.sendInput.mockClear().mockReturnValue(true);
+  fireEvent.click(screen.getByRole("button", { name: "Resume Here" }));
+  // Requesting control is not confirmation; no paste before ownership arrives.
+  expect(controller.sendInput).not.toHaveBeenCalled();
+  act(() => controller.controlListener!("owned"));
+  expect(screen.getByText(/Added screen\.png/i)).toBeInTheDocument();
+  expect(controller.sendInput).toHaveBeenCalledTimes(1);
+  act(() => controller.controlListener!("elsewhere"));
+  act(() => controller.controlListener!("owned"));
+  expect(controller.sendInput).toHaveBeenCalledTimes(1);
+  expect(upload).toHaveBeenCalledTimes(1);
+});
+
 test("finishing an upload after leaving the view cannot inject into its terminal", async () => {
   let finish!: (path: string) => void;
   upload.mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }));

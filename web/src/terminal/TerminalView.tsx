@@ -266,6 +266,9 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   // header instead. The toolbar then has nothing left to say unless something
   // transient is happening, so it reports that and the layout reclaims the row.
   const quiet = connectionState === "connected" && control === "owned" && !detail && attachmentState === "idle";
+  const attachmentWaitReason = connectionState === "connected" && control !== "owned"
+    ? "Resume Here to add it to this terminal"
+    : "waiting for the connection to add it";
 
   return (
     <div
@@ -342,7 +345,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
           {(control === "elsewhere" || control === "available") && <button type="button" className="secondary-button" onClick={() => controller.resumeHere()}>Resume Here</button>}
           {attachmentState !== "idle" && (
             <small className={`attachment-state attachment-${attachmentState}`} role="status">
-              {attachmentState === "uploading" ? `Adding ${attachmentName ?? "file"}…` : attachmentState === "waiting" ? `${attachmentName ?? "File"} uploaded · waiting for the connection to add it` : attachmentState === "ready" ? `Added ${attachmentName ?? "file"} · press Enter to send` : attachmentError ? `Could not add ${attachmentName ?? "file"} — ${attachmentError}. Try again.` : `Could not add ${attachmentName ?? "file"}. Try again.`}
+              {attachmentState === "uploading" ? `Adding ${attachmentName ?? "file"}…` : attachmentState === "waiting" ? `${attachmentName ?? "File"} uploaded · ${attachmentWaitReason}` : attachmentState === "ready" ? `Added ${attachmentName ?? "file"} · press Enter to send` : attachmentError ? `Could not add ${attachmentName ?? "file"} — ${attachmentError}. Try again.` : `Could not add ${attachmentName ?? "file"}. Try again.`}
             </small>
           )}
           {selectedFile && <small className="attachment-selection">Selected file · {Math.max(1, Math.ceil(selectedFile.size / 1024))} KB</small>}
