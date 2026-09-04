@@ -69,9 +69,11 @@ interface MobileTerminalComposerProps {
   attachmentState?: "idle" | "uploading" | "waiting" | "ready" | "error";
   /** Rebuilds this screen's view of the session. Sends the worker nothing. */
   onRefresh?: () => void;
+  /** Holds PTY geometry across software-keyboard viewport changes. */
+  onGeometryHold?: (held: boolean) => void;
 }
 
-export function MobileTerminalComposer({ sessionId, connectionState, inputAvailable = true, onInput, onRecordSubmission, keysExpanded: controlledKeysExpanded, onKeysExpandedChange, onAttachment, attachmentState = "idle", onRefresh }: MobileTerminalComposerProps) {
+export function MobileTerminalComposer({ sessionId, connectionState, inputAvailable = true, onInput, onRecordSubmission, keysExpanded: controlledKeysExpanded, onKeysExpandedChange, onAttachment, attachmentState = "idle", onRefresh, onGeometryHold }: MobileTerminalComposerProps) {
   const saved = useSyncExternalStore(terminalDraft.subscribe, terminalDraft.snapshot);
   const [localDraft, setLocalDraft] = useState("");
   const otherDraft = Boolean(sessionId && saved.draft && saved.draft.sessionId !== sessionId);
@@ -270,7 +272,14 @@ export function MobileTerminalComposer({ sessionId, connectionState, inputAvaila
   }, []);
 
   return (
-    <section className="mobile-terminal-composer" aria-label="Mobile terminal controls">
+    <section
+      className="mobile-terminal-composer"
+      aria-label="Mobile terminal controls"
+      onFocusCapture={() => onGeometryHold?.(true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onGeometryHold?.(false);
+      }}
+    >
       <form onSubmit={submit}>
         <label htmlFor="mobile-terminal-draft">
           Message worker

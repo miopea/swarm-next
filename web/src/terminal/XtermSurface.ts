@@ -79,6 +79,8 @@ export class XtermSurface implements TerminalSurface {
    * the SESSION and this class can only see pixels.
    */
   #ownsGeometry: () => boolean = () => true;
+  /** Software-keyboard viewport motion is presentation, not a PTY resize. */
+  #geometrySuspended: () => boolean = () => false;
   #resizeTimer: ReturnType<typeof setTimeout> | undefined;
   #redrawFrame: number | undefined;
   #redrawRetryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -313,6 +315,10 @@ export class XtermSurface implements TerminalSurface {
     this.#ownsGeometry = owns;
   }
 
+  observeGeometrySuspension(suspended: () => boolean): void {
+    this.#geometrySuspended = suspended;
+  }
+
   focus(): void {
     if (!this.#disposed) this.#terminal.focus();
   }
@@ -338,6 +344,10 @@ export class XtermSurface implements TerminalSurface {
         else stableFrames = 1;
         previous = usable;
         if (stableFrames < STABLE_FIT_FRAMES) continue;
+        if (this.#geometrySuspended()) {
+          this.#refreshViewport();
+          return { rows: this.#terminal.rows, columns: this.#terminal.cols };
+        }
         // Ownership can change while fonts/layout frames are awaited. A
         // passive fit measures only; it cannot reflow the canonical screen.
         if (!this.#ownsGeometry()) return usable;
@@ -646,6 +656,10 @@ export class XtermSurface implements TerminalSurface {
 
   #fitIfUsable(): void {
     if (this.#disposed || !this.#element?.isConnected) return;
+    if (this.#geometrySuspended()) {
+      this.#scheduleRedraw();
+      return;
+    }
     const dimensions = this.#fit.proposeDimensions();
     const usable = usableDimensions(dimensions);
     if (!usable) return;

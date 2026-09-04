@@ -6,6 +6,24 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2 / TERM-02: hold terminal geometry while the mobile composer is active
+
+- The mobile composer's focus state now explicitly suspends both local xterm
+  fitting and shared PTY resize publication. Software-keyboard viewport changes
+  therefore keep the last acknowledged grid instead of reflowing a provider's
+  relative-cursor question while the operator is answering it.
+- Releasing the composer performs one settled refit through the existing
+  controller path. Detaching first clears the hold without scheduling work for
+  a dead view. The change adds no poll, retry loop or height heuristic.
+- Four focused frontend files pass 121 tests, covering held observer changes,
+  blocked shared resize, release/refit and focus moving within or outside the
+  mobile controls. The production TypeScript/Vite build also passes; its existing
+  advisory notes the terminal chunk remains larger than 500 kB.
+- This addresses one demonstrated overwrite mechanism; it is not yet a claim
+  that Claude AskUser question two is fixed on Android or iOS. A real provider
+  multi-question run with the software keyboard remains TERM-02 acceptance.
+  No live-worker, deployment or release action was performed.
+
 ### P4 / P6: stop reporting active or unknown providers as unanswered questions
 
 - Split delivery deferral into active work, observed input request and unknown

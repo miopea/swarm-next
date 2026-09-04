@@ -105,6 +105,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
       controlSubscription.dispose();
       findSubscription.dispose();
       controller.detach();
+      controller.holdGeometryForMobileComposer(false);
     };
   }, [controller, session.session_id]);
 
@@ -405,7 +406,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
         <div className="terminal-mount" ref={mount} />
         {!atBottom ? <button type="button" className="terminal-jump-latest" onClick={() => controller.scrollToBottom()}>Jump to latest ↓</button> : null}
       </div>
-      <MobileTerminalComposer key={session.session_id} sessionId={session.session_id} connectionState={connectionState} inputAvailable={control === "owned"} onInput={(text) => { const accepted = controller.sendInput(text); if (accepted && text.includes("\r")) dismissAttachmentNotice(); return accepted; }} onRecordSubmission={(text, signal) => recordOperatorSubmission(operatorToken, session.session_id, text, signal)} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onAttachment={acceptChosenFile} attachmentState={attachmentState} onRefresh={onRefresh} />
+      <MobileTerminalComposer key={session.session_id} sessionId={session.session_id} connectionState={connectionState} inputAvailable={control === "owned"} onInput={(text) => { const accepted = controller.sendInput(text); if (accepted && text.includes("\r")) dismissAttachmentNotice(); return accepted; }} onRecordSubmission={(text, signal) => recordOperatorSubmission(operatorToken, session.session_id, text, signal)} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onAttachment={acceptChosenFile} attachmentState={attachmentState} onRefresh={onRefresh} onGeometryHold={(held) => controller.holdGeometryForMobileComposer(held)} />
     </div>
   );
 }

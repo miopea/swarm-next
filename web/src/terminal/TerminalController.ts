@@ -31,6 +31,8 @@ export interface TerminalSurface {
    * Optional so a test double without it keeps working.
    */
   observeGeometryOwnership?(owns: () => boolean): void;
+  /** Prevents software-keyboard viewport changes from mutating or publishing geometry. */
+  observeGeometrySuspension?(suspended: () => boolean): void;
   write(bytes: Uint8Array): Promise<void>;
   restore(snapshot: TerminalSnapshot): Promise<void>;
   onData(listener: (text: string) => void): Disposable;
@@ -111,6 +113,7 @@ export class TerminalController {
   #focusOnConnect: "container" | "input" | undefined;
   #lastRequestedFocus: "container" | "input" | undefined;
   #atBottom = true;
+  #geometrySuspended = false;
   readonly #lifecycle: ControllerLifecycle | undefined;
 
   constructor(surfaceFactory: TerminalSurfaceFactory, connectionFactory: TerminalConnectionFactory, lifecycle?: ControllerLifecycle) {
@@ -156,6 +159,16 @@ export class TerminalController {
     this.#connection.releaseControl?.();
     this.#updateRendering();
     this.#host.remove();
+  }
+
+  /**
+   * Holds terminal geometry while the mobile composer has focus.
+   * The worker keeps its last acknowledged grid; no resize is queued or replayed.
+   */
+  holdGeometryForMobileComposer(held: boolean): void {
+    if (this.#disposed || this.#geometrySuspended === held) return;
+    this.#geometrySuspended = held;
+    if (!held && this.#attached && this.#started) this.#refitWhenAttached();
   }
 
   get attached(): boolean { return this.#attached; }
@@ -295,6 +308,7 @@ export class TerminalController {
    * arrives as a snapshot.
    */
   async #measureForResize(): Promise<{ rows: number; columns: number } | undefined> {
+    if (this.#geometrySuspended) return this.#surface.proposeFit?.();
     if (this.#started && this.#connection.ownsGeometry === false) {
       return this.#surface.proposeFit?.();
     }
@@ -302,10 +316,12 @@ export class TerminalController {
   }
 
   #mayResizeNow(): boolean {
-    return !this.#disposed && this.#attached && this.#connection.ownsGeometry !== false;
+    return !this.#disposed && this.#attached && !this.#geometrySuspended
+      && this.#connection.ownsGeometry !== false;
   }
 
   async #refitAttachedSurface(intent: "operator" | "echo" = "operator"): Promise<void> {
+    if (this.#geometrySuspended) return;
     // A phone hides and shows its address bar as the operator scrolls, which
     // resizes the container and wakes the observer. The old comment claiming
     // the container "never changed" was true of a column-count change and false
@@ -321,6 +337,7 @@ export class TerminalController {
     // predicate rather than a value: ownership changes mid-session when another
     // device takes or releases the claim, and a copied boolean goes stale.
     this.#surface.observeGeometryOwnership?.(() => this.#connection.ownsGeometry !== false);
+    this.#surface.observeGeometrySuspension?.(() => this.#geometrySuspended);
     // No canonical screen exists yet. Initial fit waits for usable metrics;
     // once attached, passive views only measure and accept engine dimensions.
     const measured = await this.#measureForResize();
@@ -360,9 +377,10 @@ export class TerminalController {
       },
     });
     this.#surfaceSubscriptions.push(
-      this.#surface.onResize(({ rows: nextRows, columns: nextColumns, origin }) =>
-        this.#connection.resize(nextRows, nextColumns, origin === "restore" ? "echo" : "operator"),
-      ),
+      this.#surface.onResize(({ rows: nextRows, columns: nextColumns, origin }) => {
+        if (this.#geometrySuspended) return;
+        this.#connection.resize(nextRows, nextColumns, origin === "restore" ? "echo" : "operator");
+      }),
     );
     this.#started = true;
     this.#applyPendingFocus();

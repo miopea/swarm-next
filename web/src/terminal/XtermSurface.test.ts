@@ -970,6 +970,39 @@ test("stops resizing when the new size would undo the last one", async () => {
   vi.useRealTimers();
 });
 
+test("software keyboard geometry hold blocks observer mutation until release", async () => {
+  vi.useFakeTimers();
+  let notify: (() => void) | undefined;
+  vi.stubGlobal("ResizeObserver", class {
+    constructor(callback: () => void) { notify = callback; }
+    observe(): void {}
+    disconnect(): void {}
+  });
+  const surface = new XtermSurface();
+  const host = document.createElement("div");
+  document.body.append(host);
+  surface.open(host);
+  const publish = vi.fn();
+  surface.onResize(publish);
+  let held = true;
+  surface.observeGeometrySuspension(() => held);
+  xterm.propose.mockReset().mockReturnValue({ rows: 12, cols: 40 });
+  const resize = vi.spyOn(xterm.terminal!, "resize" as never);
+
+  notify?.();
+  await vi.advanceTimersByTimeAsync(200);
+  expect(resize).not.toHaveBeenCalled();
+  expect(publish).not.toHaveBeenCalled();
+
+  held = false;
+  notify?.();
+  await vi.advanceTimersByTimeAsync(200);
+  expect(resize).toHaveBeenCalledWith(40, 12);
+  surface.dispose();
+  host.remove();
+  vi.useRealTimers();
+});
+
 /**
  * The operator's screen recording, read back against the geometry ledger:
  * 200 size requests in one minute, 102 size changes, cycling FOUR sizes —

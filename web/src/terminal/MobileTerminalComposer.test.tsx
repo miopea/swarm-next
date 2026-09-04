@@ -12,6 +12,19 @@ import { terminalDraft } from "./TerminalDraft";
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
 beforeEach(() => { terminalDraft.clear(); localStorage.clear(); sessionStorage.clear(); });
 
+test("holds terminal geometry while focus remains inside mobile controls", () => {
+  const hold = vi.fn();
+  render(<MobileTerminalComposer connectionState="connected" onInput={() => true} onGeometryHold={hold} />);
+  const draft = screen.getByLabelText(/Message worker/);
+  const send = screen.getByRole("button", { name: "Send" });
+  fireEvent.focus(draft);
+  expect(hold).toHaveBeenLastCalledWith(true);
+  fireEvent.blur(draft, { relatedTarget: send });
+  expect(hold).not.toHaveBeenCalledWith(false);
+  fireEvent.blur(send, { relatedTarget: null });
+  expect(hold).toHaveBeenLastCalledWith(false);
+});
+
 test("a bound draft survives remount and cannot move into another session", () => {
   const input = vi.fn(() => true);
   const view = render(<MobileTerminalComposer sessionId="a" connectionState="connected" onInput={input} />);

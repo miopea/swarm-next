@@ -33,6 +33,7 @@ const controller = vi.hoisted(() => ({
   }),
   find: vi.fn(() => true),
   requestFocus: vi.fn(),
+  holdGeometryForMobileComposer: vi.fn(),
 }));
 
 vi.mock("./TerminalWorkspace", () => ({

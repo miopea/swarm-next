@@ -38,6 +38,14 @@ Releasing or expiring engagement also removes resize authority. A later input
 from any attached device can acquire it again. This rule does not change input
 authority, takeover authority, worker ownership, or task state.
 
+While the mobile terminal composer is active, its controller temporarily holds
+the acknowledged terminal geometry even if that device owns the engagement.
+Opening and closing a software keyboard changes the browser viewport without
+expressing an operator request to resize the provider. The local xterm grid and
+the shared PTY therefore remain unchanged until composer focus leaves, when one
+settled refit follows the ordinary ownership path. The hold is explicit view
+state; it is not inferred from viewport height or an arbitrary delay.
+
 ## Consequences
 
 - A phone and desktop may observe the same worker without continuously
@@ -46,6 +54,8 @@ authority, takeover authority, worker ownership, or task state.
   happened to attach or resize last.
 - Switching devices produces one deliberate provider resize immediately before
   that device's next input.
+- Software-keyboard viewport changes cannot reflow a provider question while the
+  operator is composing an answer.
 - Passive viewers can reflow their local xterm surface without claiming focus
   or interrupting automation.
 - Older clients that omit a device identity retain the legacy anonymous

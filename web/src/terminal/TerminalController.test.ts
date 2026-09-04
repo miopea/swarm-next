@@ -26,6 +26,7 @@ function fakeSurface(): FakeSurface {
     focus: vi.fn(),
     fit: vi.fn().mockResolvedValue({ rows: 24, columns: 80 }),
     proposeFit: vi.fn(() => ({ rows: 24, columns: 80 })),
+    observeGeometrySuspension: vi.fn(),
     write: vi.fn().mockResolvedValue(undefined),
     restore: vi.fn().mockResolvedValue(undefined),
     onData: vi.fn(() => ({ dispose: vi.fn() })),
@@ -665,4 +666,26 @@ test("a device that owns the geometry still fits its own grid", async () => {
   await vi.waitFor(() => expect(connection.start).toHaveBeenCalledTimes(1));
 
   expect(surface.fit).toHaveBeenCalled();
+});
+
+test("mobile composer focus holds local and shared geometry until focus leaves", async () => {
+  const surface = fakeSurface();
+  const connection = { ...fakeConnection(), ownsGeometry: true };
+  const controller = new TerminalController(() => surface, () => connection);
+  controller.attach(document.createElement("div"));
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledTimes(1));
+  const suspended = vi.mocked(surface.observeGeometrySuspension!).mock.calls[0]?.[0];
+  const resizeListener = vi.mocked(surface.onResize).mock.calls[0]?.[0];
+  expect(suspended).toBeDefined();
+  expect(resizeListener).toBeDefined();
+  vi.mocked(connection.resize).mockClear();
+
+  controller.holdGeometryForMobileComposer(true);
+  expect(suspended!()).toBe(true);
+  resizeListener!({ rows: 12, columns: 40, origin: "viewport" });
+  expect(connection.resize).not.toHaveBeenCalled();
+
+  controller.holdGeometryForMobileComposer(false);
+  expect(suspended!()).toBe(false);
+  await vi.waitFor(() => expect(connection.resize).toHaveBeenCalled());
 });
