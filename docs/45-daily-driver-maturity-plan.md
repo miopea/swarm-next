@@ -1,7 +1,8 @@
 # Swarm daily-driver maturity: scope and delivery plan
 
 Status: scope, delivery sequence, implementation, and local phase commits approved.
-Execution: active goal; no push, deployment, or releases. Operator tests the dev build and chooses releases.
+Execution: active goal; local commits, mainline push, and direct development-Hive
+deployment are authorized. The operator chooses releases; no release is authorized.
 Date: 2026-09-03. Source: the operator's UX, stability, efficiency, and orchestration interview in this Codex task.
 Code baseline: clean `main` fast-forwarded from `a10bf2c` to `36420b3` during planning.
 
@@ -12,10 +13,11 @@ long daily use, including desktop/mobile handoff and unattended work, while
 preserving its cute, feminine-leaning bee/Hive identity and independent worker
 engine. Performance and reliability are at least as important as visual polish.
 
-The operator subsequently approved continuous execution and local commits between
-phases, without routine approval pauses. Historical proposed/authorization wording
-below records planning context; this approval governs execution. No releases or
-deployment are authorized. Track actual evidence in `46-maturity-execution.md`.
+The operator subsequently approved continuous execution, commits between phases,
+mainline push, and direct deployment/testing on the production development Hive
+without routine approval pauses. Historical proposed/authorization wording below
+records planning context; this approval governs execution. No release is
+authorized. Track actual evidence in `46-maturity-execution.md`.
 
 This is one overall maturity program, delivered in multiple independently
 verified phases with commit checkpoints. The operator wants the complete scope

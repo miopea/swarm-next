@@ -604,6 +604,18 @@ pub enum TaskStoreError {
         "task message queue is full; Queen must reconcile pending deliveries before new messages can be admitted"
     )]
     TaskMessageQueueFull,
+    #[error(
+        "a task-scoped worker question must go to that task's current assignee; assign the work first, or explicitly request a managed Scout second opinion"
+    )]
+    QueenMessageRecipientNotAssigned,
+    #[error("a second opinion may be requested only from this Hive's managed Scout")]
+    ScoutSecondOpinionRequiresManagedScout,
+    #[error("Scout has no open session; do not wake Scout solely for a second opinion")]
+    ScoutSecondOpinionScoutSleeping,
+    #[error("Scout is engaged with the operator; wait rather than competing for the terminal")]
+    ScoutSecondOpinionOperatorEngaged,
+    #[error("Scout already owns active work; do not interrupt it for a second opinion")]
+    ScoutSecondOpinionActiveWork,
     /// Refused by rule, not by accident.
     ///
     /// A worker's claim about authority reaching another worker with no board

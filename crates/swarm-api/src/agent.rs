@@ -33,7 +33,7 @@ use swarm_application::{
 use swarm_domain::{
     ApiaryTaskId, DecisionRequestId, DecisionRequestKind, DecisionRequestState, DecisionUrgency,
     HiveId, JiraProjectBindingId, QueenActionClass, QueenAutomationOutcome, QueenAutomationState,
-    TaskId, TaskPriority, TaskState, WorkerId, WorkerRole,
+    TaskId, TaskPriority, TaskState, WorkerId, WorkerMessagePurpose, WorkerRole,
 };
 use swarm_persistence::{
     CompletionEvidence, JiraIssueSnapshot, MAX_TASK_ACTIVITY_NOTE_BYTES, QueenAutomationFinish,
@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 15;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 16;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -401,9 +401,9 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 15;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 15. Update this and the revision together.
+/// The served surface as of revision 16. Update this and the revision together.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "99c19c82f110a4efa1288cdcff244a7aa6ce39543c172266a424f3719edeb35c";
+    "694df4087f57d5561e0fc0f257dde2b2834bdb37589156c832060a46a9c7ab5b";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -1614,10 +1614,11 @@ impl AgentMcp {
         let worker_id = WorkerId::from_str(&input.worker_id)
             .map_err(|_| ApplicationError::MalformedIdentifier("worker id"))?;
         let recipient = swarm_persistence::MessageEnd::worker(worker_id);
-        let message = self.tasks.store().send_task_message(
+        let purpose = input.purpose.unwrap_or_default();
+        let message = self.tasks.store().send_queen_worker_message(
             task_id,
-            swarm_persistence::MessageEnd::queen(),
-            recipient,
+            worker_id,
+            purpose,
             &input.body,
             now_seconds(),
         )?;
@@ -1638,6 +1639,7 @@ impl AgentMcp {
         structured(json!({
             "message_id": message.id,
             "task_id": input.task_id,
+            "purpose": purpose,
             "status": if reachable { "queued" } else { "queued_but_unreachable" },
             "next": if reachable {
                 "Queued, NOT delivered — this returns before delivery, so it is never delivered at this point. It reaches that worker when its terminal is next resting, rather than interrupting a turn. To find out whether it landed, read swarm_read_task_history: the message carries a delivered_at once it arrives, and that is the only live answer."
@@ -2591,9 +2593,12 @@ struct OperatorSubmissionsInput {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct MessageWorkerInput {
     task_id: String,
     worker_id: String,
+    #[serde(default)]
+    purpose: Option<WorkerMessagePurpose>,
     body: String,
 }
 
@@ -3038,12 +3043,13 @@ fn now_seconds() -> i64 {
 fn message_worker_tool() -> Tool {
     tool(
         "swarm_message_worker",
-        "Queen only: ask a worker a question about a task, or tell it what is missing, WITHOUT interrupting it. The message waits until that worker's terminal is resting and then arrives there, so it cannot land mid-turn and take the thread with it. The exchange is recorded on the task AT THE MOMENT YOU SEND IT, and readable with swarm_read_task_history straight away, so a later reader can see why the work changed direction — it appears under `messages`, NOT under `events`, because a message is not a state change, and no amount of reading `events` will ever show one. The reply this call returns is a snapshot taken before delivery: it reports the message as queued because it always is at that instant, and it never updates. Delivery shows as a `delivered_at` on the message in swarm_read_task_history, which is the only live answer. Use it instead of moving a task backwards to get a worker's attention: returning reviewed work to Ready means UNSTARTED to everything that reads it. Workers cannot message each other and this cannot be used to relay an instruction between them.",
+        "Queen only: ask the task's current assignee a question without interrupting it. The only cross-worker exception is purpose=scout_second_opinion addressed to the managed Scout; Swarm admits that only while Scout has an open session, no active assignment, and no operator engagement. Do not wake Scout just for an opinion and never recruit another peer. The message waits until the recipient's terminal is resting and guarded delivery rechecks work and engagement, so it cannot land mid-turn and take the thread with it. The exchange is recorded on the task AT THE MOMENT YOU SEND IT, and readable with swarm_read_task_history straight away, so a later reader can see why the work changed direction — it appears under `messages`, NOT under `events`, because a message is not a state change. The reply is a snapshot taken before delivery and always reports queued at that instant. Delivery shows as `delivered_at` in swarm_read_task_history, which is the only live answer. Use swarm_return_reviewed_work for missing review evidence and create/assign a separate task for dependent work.",
         &json!({
             "type": "object",
             "properties": {
                 "task_id": { "type": "string" },
                 "worker_id": { "type": "string", "description": "The worker to ask. A message naming no worker has no inbox to arrive in and is refused." },
+                "purpose": { "type": "string", "enum": ["assigned_task", "scout_second_opinion"], "default": "assigned_task", "description": "assigned_task requires the current task assignee. scout_second_opinion requires the protected managed Scout to be available." },
                 "body": { "type": "string", "maxLength": 4000, "description": "A question or a request for something missing. Not a second description: anything that changes what the work IS belongs in swarm_amend_task_facts or a new task." }
             },
             "required": ["task_id", "worker_id", "body"],
@@ -4974,6 +4980,60 @@ mod tests {
         assert_eq!(
             response["result"]["structuredContent"]["review_request"]["status"],
             expected
+        );
+    }
+
+    #[tokio::test]
+    async fn queen_message_tool_defaults_to_the_current_assignee() {
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let task = store
+            .create_task("Check the actual work", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(task.id, worker_id).unwrap();
+
+        let admitted = call_review_test_tool(
+            bridge.clone(),
+            &queen_token,
+            "swarm_message_worker",
+            json!({
+                "task_id": task.id,
+                "worker_id": worker_id,
+                "body": "Which evidence supports this conclusion?"
+            }),
+        )
+        .await;
+        assert_eq!(
+            admitted["result"]["structuredContent"]["purpose"],
+            "assigned_task"
+        );
+
+        let other = store
+            .create_worker(
+                "Juniper",
+                ProviderKind::ClaudeCode,
+                "/workspace/juniper",
+                false,
+                2,
+            )
+            .unwrap();
+        let refused = call_review_test_tool(
+            bridge,
+            &queen_token,
+            "swarm_message_worker",
+            json!({
+                "task_id": task.id,
+                "worker_id": other.id,
+                "body": "Take over somebody else's thread."
+            }),
+        )
+        .await;
+        assert_eq!(refused["result"]["isError"], true);
+        assert_eq!(
+            store.task_messages(task.id).unwrap().len(),
+            1,
+            "the rejected public call does not manufacture task history"
         );
     }
 

@@ -124,6 +124,20 @@ impl fmt::Display for TaskState {
     }
 }
 
+/// Why Queen is contacting a worker through the governed task channel.
+///
+/// The distinction is an admission rule, not presentation metadata. Ordinary
+/// questions stay with the task's current assignee. The one deliberate
+/// exception is a second opinion from the managed Scout, whose availability is
+/// checked before the message is recorded and again by guarded delivery.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerMessagePurpose {
+    #[default]
+    AssignedTask,
+    ScoutSecondOpinion,
+}
+
 impl FromStr for TaskState {
     type Err = ParseTaskStateError;
 

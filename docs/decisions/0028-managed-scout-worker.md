@@ -59,10 +59,21 @@ This snapshot is neither a reservation nor a terminal-idle observation. It
 explicitly reports terminal activity as unobserved and grants no dispatch
 authority. Read failure returns an error rather than an optimistic idle state.
 Delivery must still revalidate engagement and live terminal evidence, and
-second-opinion admission must protect ongoing tasks. This projection does not
-complete that separate enforcement work.
+second-opinion admission protects ongoing tasks.
+
+Queen's durable task-message boundary now treats message purpose as an
+admission rule. The default `assigned_task` purpose requires the exact current
+task assignee. The only exception, `scout_second_opinion`, requires the exact
+protected managed Scout identity, an open session, no live operator engagement,
+and no Active assignment in the same database transaction that records the
+message. Swarm does not wake Scout solely for an opinion. A worker merely named
+Scout does not qualify. Guarded delivery rechecks current work and engagement
+before terminal input, so becoming occupied after admission holds the message
+rather than interrupting Scout.
 
 Persistence tests prove exact-only in-place promotion, stable identity and
 conversation, sleeping default, pinned ordering, protected rename/removal, and
-continued provider/description configuration. API and browser tests expose and
-render the managed role without treating it as Queen.
+continued provider/description configuration. Admission tests prove ordinary
+questions cannot be rerouted to peers and exercise every managed-Scout refusal
+before the available path. API and browser tests expose and render the managed
+role without treating it as Queen.

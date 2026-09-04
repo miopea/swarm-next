@@ -8280,6 +8280,15 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "task_message_queue_full",
             error.to_string(),
         ),
+        TaskStoreError::QueenMessageRecipientNotAssigned
+        | TaskStoreError::ScoutSecondOpinionRequiresManagedScout
+        | TaskStoreError::ScoutSecondOpinionScoutSleeping
+        | TaskStoreError::ScoutSecondOpinionOperatorEngaged
+        | TaskStoreError::ScoutSecondOpinionActiveWork => ApiError::new(
+            StatusCode::CONFLICT,
+            "queen_message_routing_refused",
+            error.to_string(),
+        ),
         TaskStoreError::InvalidTaskMessage { .. } => ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_task_message",
@@ -15811,7 +15820,8 @@ mod tests {
             ],
             working_directory: workspace.clone(),
         };
-        let queen_terminal = registry.spawn(&command, TerminalSize::default()).unwrap();
+        let terminal_size = TerminalSize::default();
+        let queen_terminal = registry.spawn(&command, terminal_size).unwrap();
         let socket = runtime.path().join("terminal.sock");
         let server = HostServer::bind(&socket, registry).unwrap();
         let server_task = tokio::spawn(server.run());
@@ -15903,6 +15913,9 @@ mod tests {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
         let mut after_sequence = None;
         let mut output = Vec::new();
+        let mut saw_outcome = false;
+        let mut saw_run = false;
+        let mut saw_external_effect_boundary = false;
         loop {
             let response = HostClient::new(&socket)
                 .request(&HostRequest::Read {
@@ -15926,12 +15939,28 @@ mod tests {
                     output = snapshot.bytes;
                 }
             }
-            let rendered = String::from_utf8_lossy(&output);
-            if rendered.contains("[Swarm worker outcome]")
-                && rendered.contains("Desktop and Android checks passed")
-                && rendered.contains(&format!("[Swarm automation {run_id}]"))
-                && rendered.contains("Do not perform Jira, Apiary, email, deployment")
-            {
+            // Search what is visibly contiguous after terminal wrapping rather
+            // than the ANSI journal bytes that happened to draw it.
+            let rendered = swarm_terminal::snapshot_plain_text(
+                &output,
+                terminal_size.rows,
+                terminal_size.columns,
+            );
+            // A long automation brief scrolls the preceding outcome off a
+            // real 24-row terminal. Remember each visible milestone rather
+            // than requiring mutually exclusive screen contents to coexist.
+            // Removing layout whitespace lets a marker survive PTY wrapping;
+            // its complete UUID still has to match.
+            let compact = rendered
+                .chars()
+                .filter(|character| !character.is_whitespace())
+                .collect::<String>();
+            saw_outcome |= compact.contains("[Swarmworkeroutcome]")
+                && compact.contains("DesktopandAndroidcheckspassed");
+            saw_run |= compact.contains(&format!("[Swarmautomation{run_id}]"));
+            saw_external_effect_boundary |=
+                compact.contains("DonotperformJira,Apiary,email,deployment");
+            if saw_outcome && saw_run && saw_external_effect_boundary {
                 break;
             }
             assert!(tokio::time::Instant::now() < deadline, "{rendered}");

@@ -100,9 +100,17 @@ holds do not create operator attention or a timer-based escalation.
 
 This durable preflight is not a reservation held across asynchronous terminal
 observation and input. The engine still owns live input/engagement protection.
-An atomic task-admission fence across that interval, and explicit Scout-only
-second-opinion admission, remain open; passing these tests does not prove that
-all cross-task races are eliminated.
+An atomic task-admission fence across that interval remains open; passing these
+tests does not prove that all cross-task races are eliminated.
+
+Queen's send path also enforces recipient admission transactionally. Ordinary
+task questions require the task's current assignee. The explicit
+`scout_second_opinion` purpose is admitted only for the protected managed Scout
+while Scout has an open session, no current operator engagement, and no Active
+assignment. Refusal inserts no message. This prevents Queen guidance from
+silently turning an arbitrary peer into a reviewer; the existing guarded
+delivery preflight still rechecks changing work and engagement immediately
+before terminal contact.
 
 Verify transactional admission and rollback, bounded exclusive claims, session
 and claim fencing, deferral, uncertain writes and restart recovery, explicit

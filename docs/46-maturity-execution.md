@@ -2,7 +2,33 @@
 
 Approved program: [scope and acceptance](45-daily-driver-maturity-plan.md).
 Branch: `codex/daily-driver-maturity`. Starting revision: `36420b3`.
-Local commits authorized; no push, deployment, releases, or live worker interruption.
+Local commits, mainline push, and direct development-Hive deployment are now
+authorized. No release is authorized.
+
+## Queen message admission checkpoint — 2026-09-04
+
+- The durable Queen-to-worker send boundary now keeps ordinary questions with
+  the task's current assignee. Cross-worker review requires the explicit
+  `scout_second_opinion` purpose and the exact protected managed Scout identity.
+- Scout second opinions are refused while Scout is sleeping, engaged by the
+  operator, or owns Active work. Admission and message insertion share one
+  database transaction; refusals leave no task-history artifact. Existing
+  guarded delivery rechecks changing work and engagement before terminal input.
+- Focused Linux persistence tests pass for assigned-worker routing and all Scout
+  refusal/recovery paths. The public Queen MCP test passes with the omitted
+  purpose defaulting to `assigned_task`; its schema fingerprint advances with
+  tool-surface revision 16.
+- The complete Linux API suite passes 447 library and five binary tests. The
+  complete persistence suite passes all 526 tests. Strict Clippy passes for all
+  API/persistence targets and features with warnings denied; local formatting
+  and diff checks pass.
+- The broad run also exposed a deterministic false failure in a real-terminal
+  acceptance test: it required an outcome and a long Queen brief to coexist in
+  one 24-row viewport. The test now remembers each rendered milestone across
+  scrolling and still enforces its original three-second deadline; its focused
+  rerun and the subsequent full API run pass.
+- Live deployment and disposable-repository acceptance remain the gates not yet
+  claimed here.
 
 ## Post-reconciliation migration replay closure — 2026-09-04
 

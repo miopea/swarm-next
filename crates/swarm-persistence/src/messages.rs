@@ -8,7 +8,7 @@
 
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use swarm_domain::{TaskId, WorkerId};
+use swarm_domain::{TaskId, WorkerId, WorkerMessagePurpose};
 use uuid::Uuid;
 
 use super::{TaskStore, TaskStoreError};
@@ -180,6 +180,101 @@ pub(super) const MESSAGE_COLUMNS: &str =
             (SELECT resolution_reason FROM task_message_deliveries WHERE message_id = m.id)";
 
 impl TaskStore {
+    /// Records Queen's task-scoped question after atomically enforcing who may
+    /// receive it.
+    ///
+    /// Ordinary questions go only to the current assignee. A deliberate Scout
+    /// second opinion is the sole exception and requires the protected managed
+    /// identity, an open session, no active assignment and no live operator
+    /// engagement. Guarded delivery rechecks work and engagement before input,
+    /// so a Scout that becomes occupied after admission is held rather than
+    /// interrupted.
+    ///
+    /// # Errors
+    /// Returns a specific routing refusal or the normal message validation and
+    /// persistence errors. No message is inserted on refusal.
+    pub fn send_queen_worker_message(
+        &self,
+        task_id: TaskId,
+        worker_id: WorkerId,
+        purpose: WorkerMessagePurpose,
+        body: &str,
+        now: i64,
+    ) -> Result<TaskMessage, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let tx = connection.transaction()?;
+        let assigned_worker: Option<Option<String>> = tx
+            .query_row(
+                "SELECT assigned_worker_id FROM tasks WHERE id = ?1 AND removed_at IS NULL",
+                [task_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(assigned_worker) = assigned_worker else {
+            return Err(TaskStoreError::NotFound);
+        };
+        let worker_id_text = worker_id.to_string();
+        match purpose {
+            WorkerMessagePurpose::AssignedTask => {
+                if assigned_worker.as_deref() != Some(worker_id_text.as_str()) {
+                    return Err(TaskStoreError::QueenMessageRecipientNotAssigned);
+                }
+            }
+            WorkerMessagePurpose::ScoutSecondOpinion => {
+                let scout = tx
+                    .query_row(
+                        "SELECT profile.id, session.session_id,
+                                EXISTS(SELECT 1 FROM worker_engagements engagement
+                                       WHERE engagement.worker_id = profile.id
+                                         AND engagement.expires_at > ?1),
+                                EXISTS(SELECT 1 FROM tasks active_task
+                                       WHERE active_task.assigned_worker_id = profile.id
+                                         AND active_task.state = 'active'
+                                         AND active_task.removed_at IS NULL)
+                         FROM worker_profiles profile
+                         LEFT JOIN worker_sessions session
+                           ON session.worker_id = profile.id AND session.ended_at IS NULL
+                         WHERE profile.system_role = 'scout' AND profile.archived_at IS NULL",
+                        [now],
+                        |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, Option<String>>(1)?,
+                                row.get::<_, bool>(2)?,
+                                row.get::<_, bool>(3)?,
+                            ))
+                        },
+                    )
+                    .optional()?;
+                let Some((scout_id, session_id, operator_engaged, has_active_task)) = scout else {
+                    return Err(TaskStoreError::ScoutSecondOpinionRequiresManagedScout);
+                };
+                if scout_id != worker_id_text {
+                    return Err(TaskStoreError::ScoutSecondOpinionRequiresManagedScout);
+                }
+                if session_id.is_none() {
+                    return Err(TaskStoreError::ScoutSecondOpinionScoutSleeping);
+                }
+                if operator_engaged {
+                    return Err(TaskStoreError::ScoutSecondOpinionOperatorEngaged);
+                }
+                if has_active_task {
+                    return Err(TaskStoreError::ScoutSecondOpinionActiveWork);
+                }
+            }
+        }
+        let message = Self::insert_task_message(
+            &tx,
+            task_id,
+            MessageEnd::queen(),
+            MessageEnd::worker(worker_id),
+            body,
+            now,
+        )?;
+        tx.commit()?;
+        Ok(message)
+    }
+
     /// Records a message from Queen to a worker, or from a worker to Queen.
     ///
     /// # Errors
@@ -738,6 +833,156 @@ mod tests {
         assert!(
             store.task_messages(task).unwrap().is_empty(),
             "and nothing is recorded, so a refusal cannot be read later as an exchange"
+        );
+    }
+
+    #[test]
+    fn queen_questions_stay_with_the_tasks_current_assignee() {
+        let (store, task, worker) = hive();
+        store.assign_task_to_worker(task, worker).unwrap();
+        let other = store
+            .create_worker(
+                "Juniper",
+                ProviderKind::ClaudeCode,
+                "/workspace/juniper",
+                false,
+                2,
+            )
+            .unwrap();
+
+        store
+            .send_queen_worker_message(
+                task,
+                worker,
+                WorkerMessagePurpose::AssignedTask,
+                "Which evidence is still missing?",
+                1_000,
+            )
+            .unwrap();
+        let refused = store.send_queen_worker_message(
+            task,
+            other.id,
+            WorkerMessagePurpose::AssignedTask,
+            "Take over this worker's thread.",
+            1_001,
+        );
+
+        assert!(matches!(
+            refused,
+            Err(TaskStoreError::QueenMessageRecipientNotAssigned)
+        ));
+        assert_eq!(
+            store.task_messages(task).unwrap().len(),
+            1,
+            "a refused reroute leaves no misleading exchange in task history"
+        );
+    }
+
+    #[test]
+    fn a_second_opinion_reaches_only_an_available_managed_scout() {
+        let (store, task, worker) = hive();
+        store.assign_task_to_worker(task, worker).unwrap();
+        let lookalike = store
+            .create_worker(
+                "Scout",
+                ProviderKind::ClaudeCode,
+                "/workspace/lookalike",
+                false,
+                2,
+            )
+            .unwrap();
+        assert!(matches!(
+            store.send_queen_worker_message(
+                task,
+                lookalike.id,
+                WorkerMessagePurpose::ScoutSecondOpinion,
+                "Give this a second look.",
+                10,
+            ),
+            Err(TaskStoreError::ScoutSecondOpinionRequiresManagedScout)
+        ));
+        store
+            .update_worker_profile(lookalike.id, Some("Fern"), None, None, None, None)
+            .unwrap();
+
+        let project_root = store
+            .create_worker(
+                "Project Root",
+                ProviderKind::ClaudeCode,
+                "/projects",
+                false,
+                3,
+            )
+            .unwrap();
+        let scout = store
+            .promote_project_root_to_scout("/projects")
+            .unwrap()
+            .unwrap();
+        assert_eq!(scout.id, project_root.id);
+        assert!(matches!(
+            store.send_queen_worker_message(
+                task,
+                scout.id,
+                WorkerMessagePurpose::ScoutSecondOpinion,
+                "Give this a second look.",
+                11,
+            ),
+            Err(TaskStoreError::ScoutSecondOpinionScoutSleeping)
+        ));
+
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(scout.id, session).unwrap();
+        store
+            .renew_worker_engagement(session, None, 12, 20)
+            .unwrap();
+        assert!(matches!(
+            store.send_queen_worker_message(
+                task,
+                scout.id,
+                WorkerMessagePurpose::ScoutSecondOpinion,
+                "Give this a second look.",
+                13,
+            ),
+            Err(TaskStoreError::ScoutSecondOpinionOperatorEngaged)
+        ));
+
+        let scout_task = store.create_task("Scout owns this", "/projects").unwrap();
+        store
+            .assign_task_to_worker(scout_task.id, scout.id)
+            .unwrap();
+        store
+            .transition_task(scout_task.id, TaskState::Ready)
+            .unwrap();
+        store
+            .transition_task(scout_task.id, TaskState::Active)
+            .unwrap();
+        assert!(matches!(
+            store.send_queen_worker_message(
+                task,
+                scout.id,
+                WorkerMessagePurpose::ScoutSecondOpinion,
+                "Give this a second look.",
+                33,
+            ),
+            Err(TaskStoreError::ScoutSecondOpinionActiveWork)
+        ));
+
+        store
+            .transition_task(scout_task.id, TaskState::Review)
+            .unwrap();
+        store
+            .send_queen_worker_message(
+                task,
+                scout.id,
+                WorkerMessagePurpose::ScoutSecondOpinion,
+                "Give this a second look.",
+                34,
+            )
+            .unwrap();
+        assert_eq!(
+            store.task_messages(task).unwrap().len(),
+            1,
+            "only the admitted second opinion is recorded"
         );
     }
 
