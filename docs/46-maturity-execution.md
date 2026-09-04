@@ -6,6 +6,24 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2: ordinary resume starts carry recovery provenance
+
+- The host previously attached a recovery attempt only when the exact-context
+  probe triggered fallback to Continue. Ordinary exact Resume and direct Continue
+  had no attempt, so the API's attempt-plus-provider-start reconciliation could
+  not verify those starts. Both now carry their first attempt under the existing
+  engine/session ownership contract. Explicit New remains outside recovery.
+- Missing exact context still advances to Continue attempt two. An inconclusive
+  probe retains exact attempt one; direct Continue gains no new preflight or
+  delay. All paths preserve provider arguments and settings. No successful
+  process launch alone is reported as restored context.
+- All 23 host-library tests executed successfully in local Ubuntu, including
+  ordinary exact/continue attempt identity through resumed-evidence acceptance,
+  deliberate-new exclusion, existing absence/timeout safeguards, and disposable
+  PTY/IPC regressions. Strict all-target/all-feature Linux host Clippy passed.
+- No protocol/schema change, deployment, release, or live worker restart.
+  Continue-to-Fresh execution and real provider/device acceptance remain open.
+
 ### P2: incremental question repaint verification
 
 - The browser question fixture previously cleared the whole screen for every

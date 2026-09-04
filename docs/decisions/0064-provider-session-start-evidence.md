@@ -25,6 +25,14 @@ Exit, timeout, transport/auth failure and missing callback are not absence.
 Interactive conversation switching after startup is a separate lifecycle; it
 must update future resumption without reopening a completed recovery operation.
 
+Every Claude recovery launch carries its engine-owned attempt, including an
+ordinary exact resume and a direct native continuation. Attempt recording is not
+conditional on the missing-exact fallback probe: otherwise normal SessionStart
+evidence has no recovery identity for API reconciliation. Explicitly requested
+new conversations remain outside the recovery ladder. No extra probe is added
+for direct continuation, and an inconclusive exact probe still retains the exact
+attempt. This does not claim context restoration before the provider callback.
+
 Engine protocol 12 adds a process-capability startup observation request over
 the existing private IPC channel. Capability debug output is redacted. The engine
 checks the session's liveness and capability gate before retaining evidence.

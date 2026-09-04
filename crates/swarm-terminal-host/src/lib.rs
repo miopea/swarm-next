@@ -62,35 +62,47 @@ fn conversation_claude_can_open(
     conversation: ClaudeConversationStart,
     holds_no_such_conversation: impl Fn(ProviderConversationId) -> bool,
 ) -> ClaudeStartSelection {
-    let ClaudeConversationStart::Resume { session_id } = conversation else {
-        return ClaudeStartSelection {
-            conversation,
-            recovery_attempt: None,
-        };
+    let selected = match conversation {
+        ClaudeConversationStart::Resume { session_id } => Some(session_id),
+        ClaudeConversationStart::Continue => None,
+        ClaudeConversationStart::New { .. } => {
+            return ClaudeStartSelection {
+                conversation,
+                recovery_attempt: None,
+            };
+        }
     };
-    if holds_no_such_conversation(session_id) {
-        let mut recovery = ConversationRecovery::new(Some(session_id), true);
+    let mut recovery = ConversationRecovery::new(selected, true);
+    if let Some(session_id) = selected
+        && holds_no_such_conversation(session_id)
+    {
         if let ConversationRecoveryState::Attempt { attempt } = recovery.state() {
             recovery.observe(attempt, ConversationRecoveryEvidence::ContextUnavailable);
         }
-        if let ConversationRecoveryState::Attempt { attempt } = recovery.state()
-            && attempt.step == ConversationRecoveryStep::Continue
-        {
+        if let ConversationRecoveryState::Attempt { attempt } = recovery.state() {
             warn!(
                 %session_id,
                 recovery_id = %attempt.recovery_id,
                 attempt = attempt.number,
                 "Claude cannot restore the saved conversation; attempting native continuation, context not yet verified"
             );
-            return ClaudeStartSelection {
-                conversation: ClaudeConversationStart::Continue,
-                recovery_attempt: Some(attempt),
-            };
         }
     }
+    let ConversationRecoveryState::Attempt { attempt } = recovery.state() else {
+        // Construction and one explicit absence observation only produce an
+        // attempt. Never manufacture recovery evidence if that contract changes.
+        return ClaudeStartSelection {
+            conversation,
+            recovery_attempt: None,
+        };
+    };
     ClaudeStartSelection {
-        conversation,
-        recovery_attempt: None,
+        conversation: if attempt.step == ConversationRecoveryStep::Continue {
+            ClaudeConversationStart::Continue
+        } else {
+            conversation
+        },
+        recovery_attempt: Some(attempt),
     }
 }
 
@@ -1515,6 +1527,60 @@ mod conversation_oracle_tests {
             ClaudeConversationStart::Resume { session_id },
             "an unanswered question is not an answer"
         );
+    }
+
+    #[test]
+    fn ordinary_resume_and_continue_carry_verifiable_attempt_identity() {
+        let conversation = pinned();
+        for (start, expected_step, via_continue) in [
+            (
+                ClaudeConversationStart::Resume {
+                    session_id: conversation,
+                },
+                ConversationRecoveryStep::Exact { conversation },
+                false,
+            ),
+            (
+                ClaudeConversationStart::Continue,
+                ConversationRecoveryStep::Continue,
+                true,
+            ),
+        ] {
+            let selection = conversation_claude_can_open(start, |_| false);
+            assert_eq!(selection.conversation, start);
+            let attempt = selection
+                .recovery_attempt
+                .expect("every recovery start has provenance");
+            assert_eq!(attempt.number, 1);
+            assert_eq!(attempt.step, expected_step);
+            let mut recovery = ConversationRecovery::from_attempt(attempt).unwrap();
+            let session = WorkerSessionId::new();
+            assert!(recovery.observe_provider_start(
+                session,
+                session,
+                attempt,
+                swarm_domain::ProviderSessionStartKind::Resumed,
+                conversation,
+            ));
+            assert_eq!(
+                recovery.state(),
+                ConversationRecoveryState::Restored {
+                    conversation,
+                    via_continue
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn deliberate_new_context_is_not_labeled_as_recovery() {
+        let selection = conversation_claude_can_open(
+            ClaudeConversationStart::New {
+                session_id: pinned(),
+            },
+            |_| panic!("new context must not be probed"),
+        );
+        assert!(selection.recovery_attempt.is_none());
     }
 
     /// The oracle is asked about a resume and nothing else. A worker starting a
