@@ -12,6 +12,15 @@ use super::{TaskStore, TaskStoreError, insert_control_room_event};
 
 const MAX_OUTCOME_CLAIMS: i64 = 16;
 const MAX_OUTCOME_ATTEMPTS: i64 = 3;
+const MAX_REVIEW_SETTLEMENT_CANDIDATES: usize = 64;
+
+/// One bounded coordinator page. The owner resumes at `next_cursor`, or wraps
+/// to the beginning when it is None. Unresolved candidates still advance it.
+pub struct ReviewedSettlementPage {
+    pub closed: Vec<TaskId>,
+    pub checked: usize,
+    pub next_cursor: Option<TaskId>,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TaskOutcomeDispatch {
@@ -2138,6 +2147,49 @@ mod settlement_tests {
     }
 
     #[test]
+    fn settlement_pages_advance_past_unresolved_work_and_wrap() {
+        let store = TaskStore::in_memory().unwrap();
+        let mut ids: Vec<_> = (0..=MAX_REVIEW_SETTLEMENT_CANDIDATES)
+            .map(|index| reviewed_task(&store, &format!("Candidate {index}")))
+            .collect();
+        ids.sort_by_key(ToString::to_string);
+        let last = *ids.last().unwrap();
+        store
+            .record_task_commits(
+                last,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                1_000,
+            )
+            .unwrap();
+        let first = store
+            .settle_reviewed_work_without_deployment_page(2_000, None)
+            .unwrap();
+        assert_eq!(first.checked, MAX_REVIEW_SETTLEMENT_CANDIDATES);
+        assert!(first.closed.is_empty());
+        assert!(first.next_cursor.is_some());
+        let second = store
+            .settle_reviewed_work_without_deployment_page(2_001, first.next_cursor)
+            .unwrap();
+        assert_eq!(second.checked, 1);
+        assert_eq!(second.closed, vec![last]);
+        assert!(second.next_cursor.is_none());
+        assert_eq!(store.get_task(ids[0]).unwrap().state, TaskState::Review);
+        let wrapped = store
+            .settle_reviewed_work_without_deployment_page(2_002, second.next_cursor)
+            .unwrap();
+        assert_eq!(wrapped.checked, MAX_REVIEW_SETTLEMENT_CANDIDATES);
+        assert!(wrapped.closed.is_empty());
+        // An exhausted cursor returns a bounded empty page, not a restart loop.
+        let end = store
+            .settle_reviewed_work_without_deployment_page(2_003, wrapped.next_cursor)
+            .unwrap();
+        assert_eq!(end.checked, 0);
+        assert!(end.next_cursor.is_none());
+    }
+
+    #[test]
     fn work_that_built_nothing_closes_without_a_human() {
         let store = TaskStore::in_memory().unwrap();
         let task = reviewed_task(&store, "Investigate a report");
@@ -2542,15 +2594,17 @@ impl TaskStore {
     ///
     /// # Errors
     /// Returns an error when persistence is unavailable.
-    pub fn settle_reviewed_work_without_deployment(
+    pub fn settle_reviewed_work_without_deployment_page(
         &self,
         now: i64,
-    ) -> Result<Vec<TaskId>, TaskStoreError> {
+        after: Option<TaskId>,
+    ) -> Result<ReviewedSettlementPage, TaskStoreError> {
         let candidates = {
             let connection = self.connection()?;
             let mut statement = connection.prepare(
                 "SELECT task.id FROM tasks task
                  WHERE task.state = ?1
+                   AND (?2 IS NULL OR task.id > ?2)
                    AND task.removed_at IS NULL
                    -- Work carrying a deployment is the OTHER sweep's business.
                    AND NOT EXISTS (
@@ -2573,19 +2627,34 @@ impl TaskStore {
                              WHERE reply.task_id = task.id
                          )
                    )
-                 ORDER BY task.updated_at",
+                 ORDER BY task.id LIMIT ?3",
             )?;
-            let rows = statement.query_map([TaskState::Review.to_string()], |row| {
-                row.get::<_, String>(0)
-            })?;
+            let rows = statement.query_map(
+                params![
+                    TaskState::Review.to_string(),
+                    after.map(|id| id.to_string()),
+                    i64::try_from(MAX_REVIEW_SETTLEMENT_CANDIDATES).map_err(|_| {
+                        TaskStoreError::IntegrityFailure(
+                            "invalid review candidate bound".to_owned(),
+                        )
+                    })?
+                ],
+                |row| {
+                    TaskId::from_str(&row.get::<_, String>(0)?)
+                        .map_err(|_| rusqlite::Error::InvalidQuery)
+                },
+            )?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
 
+        let checked = candidates.len();
+        let next_cursor = if checked == MAX_REVIEW_SETTLEMENT_CANDIDATES {
+            candidates.last().copied()
+        } else {
+            None
+        };
         let mut closed = Vec::new();
-        for id in candidates {
-            let Ok(task_id) = TaskId::from_str(&id) else {
-                continue;
-            };
+        for task_id in candidates {
             let settlement = commit_settlement(self.task_commit_report(task_id)?.as_ref());
             // ONLY THESE TWO. `Unknown` is left alone -- it is the state of a
             // task nobody reported, and closing on it would be closing on a
@@ -2627,7 +2696,21 @@ impl TaskStore {
                 Err(error) => return Err(error),
             }
         }
-        Ok(closed)
+        Ok(ReviewedSettlementPage {
+            closed,
+            checked,
+            next_cursor,
+        })
+    }
+
+    #[cfg(test)]
+    fn settle_reviewed_work_without_deployment(
+        &self,
+        now: i64,
+    ) -> Result<Vec<TaskId>, TaskStoreError> {
+        Ok(self
+            .settle_reviewed_work_without_deployment_page(now, None)?
+            .closed)
     }
 }
 

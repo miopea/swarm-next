@@ -28,8 +28,12 @@ shared application services.
 - Queen and worker tool discovery is role-scoped. Queen may inspect the roster,
   create and assign tasks, and apply lifecycle transitions. A worker may inspect
   only its current assignment and report Active, Blocked, or Review.
-- Workers cannot approve completion, create durable work, message peers, or
-  broadcast. Completion remains a Queen/operator decision.
+- Workers cannot self-approve completion, message peers, or broadcast. Under the
+  approved daily-driver plan, reliable machine-checkable evidence settles routine
+  completion without mandatory Queen review. Queen/operator judgment is for
+  exceptions and conflicts; an unsupported worker assertion remains insufficient.
+  Current authority checks still require workers to report Review rather than
+  directly certify Completed; the coordinator owns automatic settlement.
 - HTTP and MCP adapters call the same application services. MCP does not call
   HTTP internally and adapters do not duplicate authority rules.
 - Claude receives the generated configuration through `--mcp-config`; Swarm does

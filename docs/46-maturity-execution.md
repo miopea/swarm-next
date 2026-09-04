@@ -566,6 +566,29 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   soak remain open. The warm-pool experiment stays off by default.
 - No push, release, deployment, or live-worker changes.
 
+### P4c: bounded routine settlement and consistent worker guidance
+
+- The existing non-deployment completion sweep now evaluates at most 64 review
+  candidates per pass. An AppState-owned cursor advances past unresolved work,
+  wraps after exhaustion, and uses a nonblocking lock to avoid duplicate page
+  scans. No additional timer or worker interruption was introduced.
+- Existing completion evidence rules are unchanged. Worker brief/refusal text
+  now directs workers to Review with evidence and describes automatic routine
+  settlement, rather than incorrectly requiring Queen approval of every result.
+  Unsupported self-approval remains refused. ADR 0013 records this distinction.
+- Eight focused persistence settlement tests passed on Windows, including page
+  bounds, unresolved candidates, wrap/exhaustion, missing evidence, code changes,
+  and work owing an email reply. Two focused application authority/refusal tests
+  also passed. Final strict Linux-target API/persistence all-target/all-feature
+  Clippy passed; the added API cursor/ownership test compiled but was not executed
+  on Linux. This is not a full workspace or live Queen acceptance result.
+- The candidate bound limits materialization and per-task evidence processing,
+  not all SQLite query cost. The deployment sweep remains a separate optimization
+  item. No server CPU improvement or full completion-trust audit is claimed.
+- The cursor is process-local and restarts from the beginning after API restart;
+  task evidence remains durable. Existing sessions were not restarted to reload
+  standing guidance. No push, deployment, release, or live task mutation.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

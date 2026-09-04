@@ -2680,7 +2680,7 @@ fn require_completion_evidence(
 fn worker_transition_refusal(target: TaskState) -> String {
     match target {
         TaskState::Ready => "Returning work to Ready is Queen's, not yours: Ready means UNSTARTED to everything that reads it, so moving finished work there erases that it was done. If you need it re-routed or picked up by somebody else, say so with swarm_message_queen. If you cannot continue, use Blocked with the reason.".to_owned(),
-        TaskState::Completed => "You cannot complete your own work — that is the one rule the whole evidence model rests on, and it is not about trust: it is that somebody OTHER than the author checked. Move it to Review with your handoff, record a deployment or a no-deployment claim, and Queen closes it.".to_owned(),
+        TaskState::Completed => "You cannot self-certify completion: evidence must be checked by machinery or someone OTHER than the author. Move it to Review with your handoff and record the evidence. The deterministic coordinator settles supported evidence without another Queen approval. Queen handles exceptions, conflicting evidence, and genuine judgment; an unsupported no-deployment claim is not approval.".to_owned(),
         TaskState::AwaitingRelease => "Awaiting Release is for work Queen has ACCEPTED and that is merely unshipped, so it is hers to set. Move it to Review with your handoff; if it is finished and waiting on a merge, say that in the handoff and she can park it there.".to_owned(),
         TaskState::Abandoned => "Abandoning work is Queen's. If you believe it is superseded or should not continue, move it to Review and say so in the handoff, or raise it with swarm_message_queen.".to_owned(),
         TaskState::Draft => "Nothing goes back to Draft. Work does not become unfiled again; if it was filed wrongly, say so with swarm_message_queen.".to_owned(),
@@ -3820,6 +3820,8 @@ mod tests {
         );
 
         let completed = worker_transition_refusal(TaskState::Completed);
+        assert!(completed.contains("deterministic coordinator"));
+        assert!(completed.contains("without another Queen approval"));
         assert!(
             completed.contains("OTHER than the author"),
             "the completion rule is about a second pair of eyes, not about trust: {completed}"

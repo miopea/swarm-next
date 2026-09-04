@@ -196,6 +196,7 @@ pub struct AppState {
     task_store: Option<TaskStore>,
     agent_bridge: Option<agent::AgentBridge>,
     worker_lifecycle: Arc<Mutex<()>>,
+    review_settlement_cursor: Arc<Mutex<Option<swarm_domain::TaskId>>>,
     worker_description_improvement_limit: Arc<Semaphore>,
     development_reload: Arc<Mutex<()>>,
     coordination_delivery: Arc<Mutex<()>>,
@@ -320,6 +321,7 @@ impl AppState {
             task_store: None,
             agent_bridge: None,
             worker_lifecycle: Arc::new(Mutex::new(())),
+            review_settlement_cursor: Arc::new(Mutex::new(None)),
             worker_description_improvement_limit: Arc::new(Semaphore::new(
                 MAX_WORKER_DESCRIPTION_IMPROVEMENTS,
             )),
@@ -1373,8 +1375,16 @@ impl AppState {
         // select disjoint sets -- that one requires a deployment, this one
         // requires the absence of one -- and a single query answering both
         // would be a query about neither.
-        match store.settle_reviewed_work_without_deployment(unix_timestamp()) {
-            Ok(settled) => {
+        let Ok(mut settlement_cursor) = self.review_settlement_cursor.try_lock() else {
+            // Another pass owns this page; do not duplicate its evidence scan.
+            return;
+        };
+        match store
+            .settle_reviewed_work_without_deployment_page(unix_timestamp(), *settlement_cursor)
+        {
+            Ok(page) => {
+                *settlement_cursor = page.next_cursor;
+                let settled = page.closed;
                 for task_id in &settled {
                     tracing::info!(
                         task = %task_id,
@@ -1390,6 +1400,7 @@ impl AppState {
                 "deterministic coordinator could not settle work without a deployment"
             ),
         }
+        drop(settlement_cursor);
     }
 
     /// Tells Queen when a decision has gone unanswered past its deadline.
@@ -14729,6 +14740,44 @@ mod tests {
         let stored = store.list_worker_profiles().unwrap();
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].description, created["description"]);
+    }
+
+    #[test]
+    fn coordinator_settlement_cursor_advances_and_does_not_duplicate_an_owned_scan() {
+        let store = TaskStore::in_memory().unwrap();
+        let state = AppState::default().with_task_store(store.clone());
+        let mut ids = Vec::new();
+        for index in 0..65 {
+            let task = store
+                .create_task(&format!("Review {index}"), "/workspace")
+                .unwrap();
+            for target in [TaskState::Ready, TaskState::Active, TaskState::Review] {
+                store.transition_task(task.id, target).unwrap();
+            }
+            ids.push(task.id);
+        }
+        ids.sort_by_key(ToString::to_string);
+        let last = *ids.last().unwrap();
+        store
+            .record_task_commits(
+                last,
+                "/workspace",
+                swarm_domain::CommitRepositoryState::Read,
+                &[],
+                1_000,
+            )
+            .unwrap();
+        let guard = state.review_settlement_cursor.try_lock().unwrap();
+        state.close_reviewed_work_that_shipped(&store);
+        assert!(guard.is_none());
+        assert_eq!(store.get_task(last).unwrap().state, TaskState::Review);
+        drop(guard);
+        state.close_reviewed_work_that_shipped(&store);
+        assert!(state.review_settlement_cursor.try_lock().unwrap().is_some());
+        assert_eq!(store.get_task(last).unwrap().state, TaskState::Review);
+        state.close_reviewed_work_that_shipped(&store);
+        assert!(state.review_settlement_cursor.try_lock().unwrap().is_none());
+        assert_eq!(store.get_task(last).unwrap().state, TaskState::Completed);
     }
 
     /// THE REPAIR THE PRODUCT COULD NOT MAKE.
