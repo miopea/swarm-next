@@ -6,6 +6,22 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: exact operator-answer correlation domain rules
+
+- Added a domain-only answer correlation contract. Matching requires the full
+  decision ID, worker/session, and complete question snapshot, including option
+  order and multi-select behavior. Only confirmed consumption can resolve;
+  repeated identical answers are idempotent and conflicting answers cannot replace
+  a resolution. Text remains exact, capped at 16 KiB, and Debug output is redacted.
+- Four focused tests and all 91 domain tests passed on isolated Windows GNU;
+  strict all-target/all-feature domain Clippy passed after fixing a documentation
+  lint. No API, provider authentication, storage or terminal consumer is wired
+  yet. This is a tested domain foundation, not a live double-answering fix.
+- Application integration must authenticate origin rather than deserialize a
+  caller's claim into evidence. Persistence must apply correlation and resolution
+  atomically and separately record already-consumed delivery. Raw terminal and
+  AskUser evidence, retention bounds, and full lifecycle tests remain open.
+
 ### P4: distinguish operator activity from verifiable answers
 
 - Inspected ADR 0054, terminal write provenance, engine audit recording, and the
