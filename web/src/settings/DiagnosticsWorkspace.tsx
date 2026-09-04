@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useVisiblePolling } from "../runtime/useVisiblePolling";
 import { readRoutePaints, routePaintSummary } from "../runtime/routePaint";
 import { readBrowserPerformance } from "../runtime/browserPerformance";
 
@@ -42,7 +43,6 @@ type Props = {
 
 export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, health, hiveIdentity, liveFeedState, recentEvents, sessions, workers, jiraReadiness, jiraUnavailable }: Props) {
   const [runtime, setRuntime] = useState<RuntimeDiagnostics>({ loaded: false });
-  const [runtimeRevision, setRuntimeRevision] = useState(0);
   const [preview, setPreview] = useState<string>();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "unavailable">("idle");
   const [savedReports, setSavedReports] = useState<DogfoodReport[]>();
@@ -53,47 +53,21 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
   const [showEveryCheck, setShowEveryCheck] = useState(false);
   const [unavailableAttachmentId, setUnavailableAttachmentId] = useState<string>();
 
-  useEffect(() => {
-    let cancelled = false;
-    let inFlight: AbortController | undefined;
-    let deadline: number | undefined;
-    async function refreshRuntime() {
-      if (cancelled || inFlight || document.visibilityState !== "visible") return;
-      const controller = new AbortController();
-      inFlight = controller;
-      // A slow endpoint cannot accumulate work or hold a refresh forever.
-      deadline = window.setTimeout(() => controller.abort(), 8_000);
-      const [host, history, resources] = await Promise.allSettled([
-        fetchTerminalHostStatus(operatorToken, controller.signal),
-        fetchHistoryDiagnostics(operatorToken, controller.signal),
-        fetchRuntimeResources(operatorToken, controller.signal),
-      ]);
-      window.clearTimeout(deadline);
-      deadline = undefined;
-      inFlight = undefined;
-      if (cancelled) return;
-      setRuntime({
-        terminalHost: host.status === "fulfilled" ? host.value : undefined,
-        history: history.status === "fulfilled" ? history.value : undefined,
-        resources: resources.status === "fulfilled" ? resources.value : undefined,
-        loaded: true,
-      });
-    }
-    void refreshRuntime();
-    const timer = window.setInterval(() => void refreshRuntime(), 10_000);
-    const visibilityChanged = () => {
-      if (document.visibilityState === "visible") void refreshRuntime();
-      else inFlight?.abort();
-    };
-    document.addEventListener("visibilitychange", visibilityChanged);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-      window.clearTimeout(deadline);
-      inFlight?.abort();
-      document.removeEventListener("visibilitychange", visibilityChanged);
-    };
-  }, [operatorToken, runtimeRevision]);
+  const loadRuntime = useCallback(async (signal: AbortSignal) => {
+    const [host, history, resources] = await Promise.allSettled([
+      fetchTerminalHostStatus(operatorToken, signal),
+      fetchHistoryDiagnostics(operatorToken, signal),
+      fetchRuntimeResources(operatorToken, signal),
+    ]);
+    if (signal.aborted && !(signal.reason instanceof DOMException && signal.reason.name === "TimeoutError")) return;
+    setRuntime({
+      terminalHost: host.status === "fulfilled" ? host.value : undefined,
+      history: history.status === "fulfilled" ? history.value : undefined,
+      resources: resources.status === "fulfilled" ? resources.value : undefined,
+      loaded: true,
+    });
+  }, [operatorToken]);
+  const refreshRuntime = useVisiblePolling(loadRuntime, Boolean(operatorToken), 10_000);
 
   useEffect(() => {
     let cancelled = false;
@@ -216,7 +190,7 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
       <p>The report is previewed before copying and never includes terminal text, task content, workspace paths, credentials, or raw errors.</p>
       <div className="diagnostic-live-status" role="status">
         <span><span className={`presence ${runtime.loaded ? "online" : ""}`} /><span><strong>{runtime.loaded ? "Live metrics" : "Checking metrics"}</strong><small>{runtime.resources ? `Sampled ${formatSampleTime(runtime.resources.sampled_at)} · refreshes every 10 seconds` : "Waiting for the runtime and terminal host"}</small></span></span>
-        <button type="button" className="secondary-button" onClick={() => setRuntimeRevision((current) => current + 1)}>Refresh now</button>
+        <button type="button" className="secondary-button" onClick={() => void refreshRuntime()}>Refresh now</button>
       </div>
       {/* What everything below is relative to. Six gigabytes of workers means
           something different on a machine with thirty-two than on one with

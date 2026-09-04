@@ -6,7 +6,9 @@ export function useVisiblePolling(
   enabled: boolean,
   intervalMs: number,
   timeoutMs = 8_000,
+  options: { initialRefresh?: boolean } = {},
 ) {
+  const initialRefresh = options.initialRefresh ?? true;
   const refreshRef = useRef<() => Promise<void>>(async () => undefined);
   useEffect(() => {
     let disposed = false;
@@ -45,7 +47,7 @@ export function useVisiblePolling(
       else void refresh();
     };
     if (enabled) {
-      void refresh();
+      if (initialRefresh) void refresh();
       document.addEventListener("visibilitychange", visibility);
     }
     const timer = enabled ? window.setInterval(() => void refresh(), intervalMs) : undefined;
@@ -57,6 +59,6 @@ export function useVisiblePolling(
       document.removeEventListener("visibilitychange", visibility);
       refreshRef.current = async () => undefined;
     };
-  }, [task, enabled, intervalMs, timeoutMs]);
+  }, [task, enabled, intervalMs, timeoutMs, initialRefresh]);
   return useCallback(() => refreshRef.current(), []);
 }

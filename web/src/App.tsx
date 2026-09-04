@@ -354,16 +354,14 @@ export function App() {
   // unauthenticated health call, which this page already makes.
   const [serverVersion, setServerVersion] = useState<string | null>(null);
   const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
-  useEffect(() => {
-    let current = true;
-    // RE-reads only. The version at mount already arrived with the health call
-    // that decides whether the Hive is reachable at all, and asking twice on
-    // startup would be a second request for something already in hand.
-    const interval = window.setInterval(() => void fetchHealth()
-      .then((health) => { if (current) setServerVersion(health.version); })
-      .catch(() => undefined), 30_000);
-    return () => { current = false; window.clearInterval(interval); };
+  const refreshServerVersion = useCallback(async (signal: AbortSignal) => {
+    try {
+      const health = await fetchHealth(signal);
+      if (!signal.aborted) setServerVersion(health.version);
+    } catch { /* An unavailable version read does not invalidate the loaded UI. */ }
   }, []);
+  // Startup already reads health; returning to the tab must still refresh immediately.
+  useVisiblePolling(refreshServerVersion, true, 30_000, 8_000, { initialRefresh: false });
   // WHETHER THE MACHINE UNDERNEATH CAN TAKE ANY MORE. Swarm starts processes,
   // and a Hive that quietly exhausts a box takes the operator's machine with
   // it. The server has computed this for some time and ADR 0040 already

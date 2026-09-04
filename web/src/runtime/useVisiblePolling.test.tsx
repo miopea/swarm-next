@@ -52,6 +52,23 @@ test("replaces ownership on task changes and never starts a disposed microtask",
   expect(second).not.toHaveBeenCalled();
 });
 
+test("startup-owned data skips the initial read but refreshes on visible return", async () => {
+  vi.useFakeTimers();
+  let visibility: DocumentVisibilityState = "visible";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+  const task = vi.fn(async (_signal: AbortSignal) => undefined);
+  renderHook(() => useVisiblePolling(task, true, 30_000, 8_000, { initialRefresh: false }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(29_000); });
+  expect(task).not.toHaveBeenCalled();
+  visibility = "hidden";
+  document.dispatchEvent(new Event("visibilitychange"));
+  await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+  expect(task).not.toHaveBeenCalled();
+  visibility = "visible";
+  await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+  expect(task).toHaveBeenCalledTimes(1);
+});
+
 test("a failed request does not stop later polling", async () => {
   vi.useFakeTimers();
   const task = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue(undefined);

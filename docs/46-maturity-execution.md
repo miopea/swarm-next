@@ -835,6 +835,21 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   profiling, and before/after CPU/latency acceptance remain open. No push,
   deployment, release, service change, or worker interruption.
 
+### P3f: finish health polling ownership and diagnostic return recovery
+
+- Health/version rechecks now share visible-page ownership with no duplicate
+  initial health request. Returning from hidden state still refreshes immediately.
+- Diagnostics replaces its parallel polling implementation with the same helper.
+  A quick hide/show waits for cancellation then refreshes immediately; abandoned
+  results cannot overwrite the view. Repeated Refresh now clicks join the current
+  request instead of tearing down ownership and launching another request group.
+- Sixty-four focused App/Settings/Diagnostics/polling tests passed, including
+  rapid return, repeated manual refresh, timeout recovery, and deferred initial
+  reads. Production web build passed; terminal chunk warning remains.
+- Remaining one-shot saved-report/download ownership, shared resource snapshots,
+  control-feed refresh cost and measured live performance acceptance remain open.
+  No push, deployment, release, or worker interruption.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

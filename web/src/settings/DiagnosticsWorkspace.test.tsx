@@ -22,6 +22,7 @@ test("bounds diagnostic requests, aborts on unmount, and recovers after timeout"
     });
   }));
   const view = render(<DiagnosticsWorkspace feedbackRevision={0} operatorToken="secret" health={undefined} hiveIdentity={undefined} liveFeedState="connected" recentEvents={[]} sessions={[]} workers={[]} jiraReadiness={undefined} jiraUnavailable={true} />);
+  await act(async () => { await Promise.resolve(); });
   expect(signals).toHaveLength(3);
   await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
   expect(signals.every((signal) => signal.aborted)).toBe(true);
@@ -31,6 +32,30 @@ test("bounds diagnostic requests, aborts on unmount, and recovers after timeout"
   expect(signals.every((signal) => signal.aborted)).toBe(true);
   await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
   expect(signals).toHaveLength(6);
+});
+
+test("diagnostics coalesces refresh clicks and refreshes immediately after canceled work settles", async () => {
+  let visibility: DocumentVisibilityState = "visible";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+  const requests: { signal: AbortSignal; finish: () => void }[] = [];
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("feedback/reports")) return Promise.resolve(new Response("[]"));
+    return new Promise<Response>((resolve) => requests.push({ signal: init!.signal as AbortSignal, finish: () => resolve(new Response("unavailable", { status: 503 })) }));
+  }));
+  const view = render(<DiagnosticsWorkspace feedbackRevision={0} operatorToken="secret" health={undefined} hiveIdentity={undefined} liveFeedState="connected" recentEvents={[]} sessions={[]} workers={[]} jiraReadiness={undefined} jiraUnavailable={true} />);
+  await act(async () => { await Promise.resolve(); });
+  for (let i = 0; i < 5; i++) fireEvent.click(screen.getByRole("button", { name: "Refresh now" }));
+  expect(requests).toHaveLength(3);
+  visibility = "hidden";
+  document.dispatchEvent(new Event("visibilitychange"));
+  expect(requests.every(({ signal }) => signal.aborted)).toBe(true);
+  visibility = "visible";
+  document.dispatchEvent(new Event("visibilitychange"));
+  await act(async () => { requests.slice(0, 3).forEach(({ finish }) => finish()); });
+  expect(requests).toHaveLength(6);
+  view.unmount();
+  expect(requests.every(({ signal }) => signal.aborted)).toBe(true);
+  await act(async () => { requests.slice(3).forEach(({ finish }) => finish()); });
 });
 
 test("hidden diagnostics do not poll and become fresh when visible", async () => {
