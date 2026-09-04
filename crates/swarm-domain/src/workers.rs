@@ -141,6 +141,9 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
+    /// Builder-owned Night Watch promotion list; availability is not approval.
+    pub const NIGHT_WATCH_APPROVED: [Self; 2] = [Self::ClaudeCode, Self::Codex];
+
     /// Reads a stored provider, tolerating a value this build does not know.
     ///
     /// Use for anything coming OUT of the database. Use `from_str` for anything

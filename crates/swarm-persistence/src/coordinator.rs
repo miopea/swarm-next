@@ -1724,6 +1724,11 @@ impl TaskStore {
     ) -> Result<Vec<CoordinatorWorkerWake>, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
+        let night_watch = super::presence::operator_presence_from_connection(&transaction, now)?
+            .mode
+            == swarm_domain::PresenceMode::NightWatch;
+        let approved =
+            swarm_domain::ProviderKind::NIGHT_WATCH_APPROVED.map(|provider| provider.to_string());
         transaction.execute(
             "UPDATE coordinator_actions SET state = 'cancelled', updated_at = ?1
              WHERE state = 'queued' AND (
@@ -1745,6 +1750,7 @@ impl TaskStore {
                  JOIN worker_profiles worker ON worker.id = action.worker_id AND worker.archived_at IS NULL
                  JOIN tasks task ON task.id = action.task_id
                  WHERE action.kind = 'wake_assigned_worker' AND action.state = 'queued'
+                   AND (NOT ?2 OR worker.provider IN (?3, ?4))
                    AND task.state = 'ready' AND task.assigned_worker_id = action.worker_id
                    AND NOT EXISTS (
                        SELECT 1 FROM worker_sessions session
@@ -1753,19 +1759,22 @@ impl TaskStore {
                  ORDER BY action.created_at, action.id LIMIT ?1",
             )?;
             statement
-                .query_map([MAX_WAKE_CLAIMS], |row| {
-                    Ok(CoordinatorWorkerWake {
-                        action_id: row.get(0)?,
-                        worker_id: row
-                            .get::<_, String>(1)?
-                            .parse()
-                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
-                        task_id: row
-                            .get::<_, String>(2)?
-                            .parse()
-                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
-                    })
-                })?
+                .query_map(
+                    params![MAX_WAKE_CLAIMS, night_watch, approved[0], approved[1]],
+                    |row| {
+                        Ok(CoordinatorWorkerWake {
+                            action_id: row.get(0)?,
+                            worker_id: row
+                                .get::<_, String>(1)?
+                                .parse()
+                                .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                            task_id: row
+                                .get::<_, String>(2)?
+                                .parse()
+                                .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                        })
+                    },
+                )?
                 .collect::<Result<Vec<_>, _>>()?
         };
         for action in &candidates {
@@ -3740,6 +3749,57 @@ mod tests {
         let status = store.coordinator_status().unwrap();
         assert_eq!(status.completed_actions, 1);
         assert_eq!(status.queen_calls_avoided, 1);
+    }
+
+    #[test]
+    fn night_watch_defers_experimental_wakes_and_resumes_without_losing_work() {
+        for provider in [
+            ProviderKind::Gemini,
+            ProviderKind::Grok,
+            ProviderKind::OpenCode,
+        ] {
+            let store = TaskStore::in_memory().unwrap();
+            let queen = store.ensure_queen("/workspace/queen").unwrap();
+            let mut workers = Vec::new();
+            for (name, kind, workspace) in [
+                ("Experimental", provider, "/workspace/experimental"),
+                ("Approved", ProviderKind::ClaudeCode, "/workspace/approved"),
+            ] {
+                let worker = store
+                    .create_worker(name, kind, workspace, false, 1)
+                    .unwrap();
+                let task = store.create_task(name, workspace).unwrap();
+                store
+                    .transition_task(task.id, swarm_domain::TaskState::Ready)
+                    .unwrap();
+                store
+                    .assign_task_to_worker_as(
+                        task.id,
+                        worker.id,
+                        &TaskActivityActor::worker(queen.id),
+                    )
+                    .unwrap();
+                workers.push(worker.id);
+            }
+            store
+                .set_manual_presence(Some(swarm_domain::PresenceMode::NightWatch), 100)
+                .unwrap();
+            let admitted = store.claim_coordinator_worker_wakes(100).unwrap();
+            assert_eq!(admitted.len(), 1);
+            assert_eq!(admitted[0].worker_id, workers[1]);
+            assert!(
+                store
+                    .claim_coordinator_worker_wakes(101)
+                    .unwrap()
+                    .is_empty()
+            );
+            store
+                .set_manual_presence(Some(swarm_domain::PresenceMode::AtHive), 102)
+                .unwrap();
+            let resumed = store.claim_coordinator_worker_wakes(102).unwrap();
+            assert_eq!(resumed.len(), 1);
+            assert_eq!(resumed[0].worker_id, workers[0]);
+        }
     }
 
     #[test]

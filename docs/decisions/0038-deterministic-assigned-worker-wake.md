@@ -33,6 +33,15 @@ calls, queued actions, and uncertainty without exposing task content.
 
 ## Consequences
 
+The approved daily-driver maturity policy excludes experimental providers from
+Night Watch wake admission. Filter before the bounded claim so deferred work
+stays queued and eligible work can pass it. Leaving Night Watch makes deferred
+work eligible again under the existing assignment and resource guards. Promotion
+is builder-owned: the existing non-alpha Claude and Codex catalog is retained;
+Gemini, Grok, OpenCode, and unknown stored providers are not admitted. Installation
+or model availability cannot promote a provider. This wake boundary does not by
+itself enforce the policy on other startup or delivery paths.
+
 - Queen can assign local work overnight without a second model call or operator
   wake action.
 - Sleeping workers remain unloaded until Queen gives them Ready work.

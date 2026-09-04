@@ -69,7 +69,7 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 - These fix demonstrated code races, not all camera/gallery/AskUser problems.
   Real-device reproduction and full attachment preview/retry lifecycle remain open.
 
-## P3–P7 — Pending
+## P3–P7 — Implementation checkpoints (phases remain incomplete)
 
 ### P4a: age is queue evidence
 
@@ -728,6 +728,21 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   semantics, and stale desktop-return ordering remain open. This completes the
   schedule editing path, not P5 or the overall maturity goal.
 - No live schedule, database, worker, release, push, or deployment changed.
+
+### P5f: experimental-provider automatic wake admission
+
+- Night Watch filters automatic wake candidates against the builder-owned
+  non-alpha provider list before the bounded claim. Deferred work remains queued;
+  eligible workers can pass it, and leaving Night Watch restores eligibility.
+- One focused recovery test passed with Gemini, Grok, and OpenCode cases, each
+  checking approved-worker admission, continued deferral, and later resumption.
+  Strict persistence all-target/all-feature Clippy passed. Patch application
+  duplicated a test and removed the constant twice; inspected and corrected both
+  before compilation. No live provider was started or stopped.
+- Other startup and task-delivery paths, explicit experimental opt-in, full
+  provider readiness validation, and late presence-change ordering remain open.
+  This is not complete Night Watch provider-policy enforcement.
+- No schema change, push, deployment, or release.
 
 ### Verification environment update
 
