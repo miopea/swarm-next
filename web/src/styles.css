@@ -1915,8 +1915,9 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
    legible on every state: measured 4.76:1 light and 5.90:1 dark on buzzing. */
 .worker-silence { color: inherit; opacity: .85; font-weight: 400; font-variant-numeric: tabular-nums; }
 .brand-lockup { position: relative; }
-.brand-diagnostics { position: absolute; top: 0; right: 0; width: 28px; height: 28px; color: var(--quiet); }
-.brand-diagnostics:hover { color: var(--text); background: var(--panel-raised); }
+.runtime-diagnostics { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 10px; color: var(--text); background: transparent; border-color: var(--line); font-size: .78rem; }
+.runtime-diagnostics svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; }
+.runtime-diagnostics:hover:not(:disabled) { background: var(--panel-raised); border-color: var(--quiet); }
 /* Takes the worker back for this screen. Beside the badge naming the device
    that holds it, because that badge is where the operator asks the question. */
 .worker-claim { min-height: var(--pill-height); flex: 0 0 auto; padding: 0 10px; border: 1px solid var(--accent-strong); border-radius: 999px; color: var(--text); background: var(--accent-soft); font-size: .69rem; font-weight: 600; }

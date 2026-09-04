@@ -71,6 +71,20 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 
 ## P3–P7 — Implementation checkpoints (phases remain incomplete)
 
+### P6a: diagnostics belongs with runtime status
+
+- Removed the duplicate-location diagnostics shortcut from the brand header and
+  placed the single shortcut in the existing runtime footer beside system status.
+  It has visible Diagnostics text, a 44px minimum height, and the existing
+  diagnostics destination. Branding and bee artwork are unchanged; no polling,
+  animation, notification count, or new backend work is added.
+- Verified the real App against isolated synthetic fixtures in a separate Edge
+  tab: screenshot reviewed, footer control present, click opens diagnostics.
+  All 31 App tests passed, including unique control placement and navigation;
+  production web build passed after correcting a test-only TypeScript option.
+  Existing terminal bundle warning remains. Mobile runtime access and the broader
+  mockup-gated visual redesign remain open; this is not P6 completion.
+
 ### P2r: Codex honors a saved conversation before its first Swarm session
 
 - Fixed Codex startup selecting New despite a saved conversation when the

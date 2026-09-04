@@ -1753,15 +1753,6 @@ export function App() {
               made the header read as just another bee. */}
           <div className="brand-mark"><BeeMascot role="queen" expression="available" /></div>
           <div className="brand-copy"><p className="eyebrow">Swarm</p><h1>Control room</h1><HiveContextIndicator identity={hiveIdentity} /></div>
-          {operatorToken ? (
-            <button
-              type="button"
-              className="icon-button brand-diagnostics"
-              aria-label="Open diagnostics"
-              title="Browser, API, database, terminal, provider and integration health"
-              onClick={() => openSettings("settings-maintenance")}
-            ><DiagnosticsIcon /></button>
-          ) : null}
         </div>}
 
         {operatorToken ? (
@@ -1949,8 +1940,17 @@ export function App() {
             version it sits next to is about, and the lockup is a row the
             operator reaches for often enough that a rarely-used control there
             is mostly a misclick risk. */}
-        {detached ? null : <div className="rail-footer">
+        {detached ? null : <div className="rail-footer" role="region" aria-label="Runtime and system status">
           <RuntimeStatus state={loadState} developmentMode={developmentMode} />
+          {operatorToken ? (
+            <button
+              type="button"
+              className="runtime-diagnostics"
+              aria-label="Open diagnostics"
+              title="Browser and server evidence"
+              onClick={() => openSettings("settings-maintenance")}
+            ><DiagnosticsIcon /><span>Diagnostics</span></button>
+          ) : null}
           {/* Beside the runtime line because it is about the machine that line
               is running on. Silent when the machine is fine — a header that
               shows something most of the day stops being read, which is the

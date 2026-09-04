@@ -1105,6 +1105,24 @@ test("hidden windows defer transcript scans and background status polls until vi
   }
 });
 
+test("diagnostics is a single labeled control in the runtime area", async () => {
+  const baseFetch = bootFetch();
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) =>
+    String(input).endsWith("/runtime/resources")
+      ? Promise.reject(new Error("Metrics unavailable in this fixture"))
+      : String(input).includes("/feedback/reports")
+        ? Promise.resolve(ok([]))
+        : baseFetch(input)));
+  render(<App />);
+  const diagnostics = await screen.findByRole("button", { name: "Open diagnostics" });
+  expect(screen.getAllByRole("button", { name: "Open diagnostics" })).toHaveLength(1);
+  expect(within(screen.getByRole("region", { name: "Runtime and system status" }))
+    .getByRole("button", { name: "Open diagnostics" })).toBe(diagnostics);
+  expect(diagnostics).toHaveTextContent("Diagnostics");
+  fireEvent.click(diagnostics);
+  expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
+});
+
 test("a detached window keeps the controls belonging to what it shows", async () => {
   // The operator: "while secondary screens don't need to show the control areas
   // (needs you, tasks, etc) it still needs the filters, worker picker, etc.
