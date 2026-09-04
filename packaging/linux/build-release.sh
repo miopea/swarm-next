@@ -73,7 +73,15 @@ mkdir -p "$bundle/bin" "$bundle/web" "$bundle/systemd-user"
 # The REFERENCE is not a secret — it is an item name — so it lives in the tree
 # where a reader can see which item a release draws from, and is overridable for
 # anyone packaging from a different vault.
-: "${SWARM_FEEDBACK_TOKEN_REFERENCE:=op://BFG/Swarm feedback token/credential}"
+# ⚠️ THE ITEM NAME IS "swarm-next GitHub issues token", AND THIS LINE HAD IT
+# WRONG SINCE THE FEATURE SHIPPED. It read "Swarm feedback token", which has
+# never been an item in this vault -- so `op read` failed on every release
+# build, the failure only warned, and v1.2.0 through v1.4.1 all shipped with no
+# credential at all. The item was there the whole time; nothing ever pointed at
+# it. Verified 2026-09-04: this reference resolves to a 93-character credential
+# whose sibling `repository` field reads miopea/swarm-next, matching
+# BUNDLED_FEEDBACK_REPOSITORY in bundled_feedback.rs.
+: "${SWARM_FEEDBACK_TOKEN_REFERENCE:=op://BFG/swarm-next GitHub issues token/credential}"
 # ⚠️ A MISSING TOKEN FAILS THE BUILD. IT USED TO WARN, AND EVERY RELEASE EVER
 # CUT SHIPPED WITHOUT THE CREDENTIAL.
 #
