@@ -375,6 +375,7 @@ export function App() {
   // here: silence is indistinguishable from a healthy machine, so a failure
   // becomes `failed` and the header says so.
   const [machineResources, setMachineResources] = useState<MachineResourceState>({ kind: "loading" });
+  const [diagnosticsActive, setDiagnosticsActive] = useState(false);
   useEffect(() => { if (!operatorToken) setMachineResources({ kind: "loading" }); }, [operatorToken]);
   const refreshMachineResources = useCallback(async (signal: AbortSignal) => {
     if (!operatorToken) return;
@@ -387,7 +388,8 @@ export function App() {
       }
     }
   }, [operatorToken]);
-  useVisiblePolling(refreshMachineResources, Boolean(operatorToken), 30_000);
+  const refreshSharedMachineResources = useVisiblePolling(refreshMachineResources, Boolean(operatorToken), diagnosticsActive ? 10_000 : 30_000);
+  const sharedMachineResources = useMemo(() => ({ state: machineResources, refresh: refreshSharedMachineResources, setDiagnosticsActive }), [machineResources, refreshSharedMachineResources]);
   const machinePressure = machinePressureNotice(machineResources);
   const [repository, setRepository] = useState<RepositoryState | null>();
   const [popoutBlocked, setPopoutBlocked] = useState(false);
@@ -2353,6 +2355,7 @@ export function App() {
               workerEngineProgress={workerEngineProgress}
               colorTheme={colorTheme}
               feedbackRevision={feedbackRevision}
+              sharedMachineResources={sharedMachineResources}
               hiveIdentity={hiveIdentity}
               liveFeedState={liveFeedState}
               health={loadState.kind === "ready" ? loadState.health : undefined}

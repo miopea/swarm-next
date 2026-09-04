@@ -3,12 +3,29 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
 import { workerTreePressure } from "./DiagnosticsWorkspace";
+import type { SharedMachineResources } from "../runtime/machinePressure";
 
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+test("uses the App resource owner and releases diagnostic sampling on unmount", async () => {
+  const fetch = vi.fn(async (input: RequestInfo | URL) => String(input).includes("feedback/reports")
+    ? new Response("[]") : new Response("unavailable", { status: 503 }));
+  vi.stubGlobal("fetch", fetch);
+  const shared: SharedMachineResources = { state: { kind: "failed" }, refresh: vi.fn(async () => undefined), setDiagnosticsActive: vi.fn() };
+  const view = render(<DiagnosticsWorkspace sharedMachineResources={shared} feedbackRevision={0} operatorToken="secret" health={undefined} hiveIdentity={undefined} liveFeedState="connected" recentEvents={[]} sessions={[]} workers={[]} jiraReadiness={undefined} jiraUnavailable={true} />);
+  await screen.findByText("No reports saved yet.");
+  expect(shared.setDiagnosticsActive).toHaveBeenCalledWith(true);
+  expect(fetch.mock.calls.some(([url]) => String(url).includes("runtime/resources"))).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Refresh now" }));
+  expect(shared.refresh).toHaveBeenCalledOnce();
+  expect(screen.getByText("Machine capacity unavailable")).toBeInTheDocument();
+  view.unmount();
+  expect(shared.setDiagnosticsActive).toHaveBeenLastCalledWith(false);
 });
 
 test("bounds diagnostic requests, aborts on unmount, and recovers after timeout", async () => {

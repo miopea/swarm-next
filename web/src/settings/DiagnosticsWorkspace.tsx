@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 import { readRoutePaints, routePaintSummary } from "../runtime/routePaint";
 import { readBrowserPerformance } from "../runtime/browserPerformance";
@@ -27,8 +27,10 @@ import { runtimeVersionIdentity } from "./runtimeVersion";
 import { assessPerformance, computePressure } from "./performanceAssessment";
 import PerformanceEvidence from "./PerformanceEvidence";
 import { useScreenshotDownload } from "./useScreenshotDownload";
+import type { SharedMachineResources } from "../runtime/machinePressure";
 
 type Props = {
+  sharedMachineResources?: SharedMachineResources;
   feedbackRevision: number;
   operatorToken: string;
   health: Health | undefined;
@@ -41,8 +43,18 @@ type Props = {
   jiraUnavailable: boolean;
 };
 
-export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, health, hiveIdentity, liveFeedState, recentEvents, sessions, workers, jiraReadiness, jiraUnavailable }: Props) {
-  const [runtime, setRuntime] = useState<RuntimeDiagnostics>({ loaded: false });
+export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, health, hiveIdentity, liveFeedState, recentEvents, sessions, workers, jiraReadiness, jiraUnavailable, sharedMachineResources }: Props) {
+  const [localRuntime, setRuntime] = useState<RuntimeDiagnostics>({ loaded: false });
+  const shared = sharedMachineResources !== undefined;
+  const setDiagnosticsActive = sharedMachineResources?.setDiagnosticsActive;
+  useEffect(() => {
+    setDiagnosticsActive?.(true);
+    return () => setDiagnosticsActive?.(false);
+  }, [setDiagnosticsActive]);
+  const runtime: RuntimeDiagnostics = sharedMachineResources ? {
+    ...localRuntime,
+    resources: sharedMachineResources.state.kind === "ready" ? sharedMachineResources.state.resources : undefined,
+  } : localRuntime;
   const [preview, setPreview] = useState<string>();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "unavailable">("idle");
   const [savedReports, setSavedReports] = useState<DogfoodReport[]>();
@@ -55,7 +67,7 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
     const [host, history, resources] = await Promise.allSettled([
       fetchTerminalHostStatus(operatorToken, signal),
       fetchHistoryDiagnostics(operatorToken, signal),
-      fetchRuntimeResources(operatorToken, signal),
+      shared ? Promise.resolve(undefined) : fetchRuntimeResources(operatorToken, signal),
     ]);
     if (signal.aborted && !(signal.reason instanceof DOMException && signal.reason.name === "TimeoutError")) return;
     setRuntime({
@@ -64,7 +76,7 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
       resources: resources.status === "fulfilled" ? resources.value : undefined,
       loaded: true,
     });
-  }, [operatorToken]);
+  }, [operatorToken, shared]);
   const refreshRuntime = useVisiblePolling(loadRuntime, Boolean(operatorToken), 10_000);
 
   // A new feedback revision replaces any in-flight read of the previous list.
@@ -176,7 +188,7 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
       <p>The report is previewed before copying and never includes terminal text, task content, workspace paths, credentials, or raw errors.</p>
       <div className="diagnostic-live-status" role="status">
         <span><span className={`presence ${runtime.loaded ? "online" : ""}`} /><span><strong>{runtime.loaded ? "Live metrics" : "Checking metrics"}</strong><small>{runtime.resources ? `Sampled ${formatSampleTime(runtime.resources.sampled_at)} · refreshes every 10 seconds` : "Waiting for the runtime and terminal host"}</small></span></span>
-        <button type="button" className="secondary-button" onClick={() => void refreshRuntime()}>Refresh now</button>
+        <button type="button" className="secondary-button" onClick={() => { void refreshRuntime(); void sharedMachineResources?.refresh(); }}>Refresh now</button>
       </div>
       {/* What everything below is relative to. Six gigabytes of workers means
           something different on a machine with thirty-two than on one with

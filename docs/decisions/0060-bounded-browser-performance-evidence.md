@@ -30,6 +30,15 @@ Reports expose historical incidents separately from current health. A past slow
 sample cannot keep Needs You active. Timing evidence is not a claim of Edge CPU
 utilization, database integrity, or provider delivery acknowledgment.
 
+Within one App window, the App owns the server resource sample used by both
+runtime pressure status and Diagnostics. Its visible-page, single-flight owner
+samples every thirty seconds normally and every ten while Diagnostics is mounted.
+Manual diagnostic refresh joins that same owner. Diagnostics retains its own
+host/history reads but does not duplicate the resource endpoint. Standalone
+diagnostic views without an App owner retain a bounded local resource read.
+This shares evidence within a window; it is not a cross-device cache or proof of
+server health. Failed samples remain unavailable in both consumers.
+
 Tests must prove count/age bounds, invalid input rejection, privacy projection,
 incident coalescing, storage-failure recovery, and observer disposal before the
 slice is accepted. Subsequent server correlation and Dogfood views extend this

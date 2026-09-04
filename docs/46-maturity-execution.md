@@ -6,6 +6,24 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P3k: App and Diagnostics share one resource-sampling owner
+
+- Diagnostics now consumes App's machine resource state instead of fetching a
+  second copy. The App-owned visible-page poll runs every thirty seconds normally
+  and ten seconds while Diagnostics is mounted; departure restores the ordinary
+  cadence. Manual Refresh joins that same bounded request owner.
+- Standalone Diagnostics retains its existing bounded local read when no App
+  owner is supplied. Host/history polling remains separate. Failed resource
+  readings stay unavailable rather than reusing a successful result as current.
+- All 67 affected App, Settings, Diagnostics and polling tests plus the production
+  web build passed. The App integration test counts one resource read on entering
+  Diagnostics and one on manual refresh, without a duplicate child request. The
+  component test verifies sampling registration/cleanup and unavailable evidence.
+- No cross-window cache, live CPU reduction, or real-device acceptance claim.
+  Existing terminal bundle warning remains. No push, deployment, or release.
+
+### Full browser checkpoint at `67eefee`
+
 - Verified clean implementation revision `67eefee`; refreshed origin refs.
   `origin/main` remains `7b02058` and has no commits missing from this branch.
   No unrelated remote branch was merged and no ref was pushed.

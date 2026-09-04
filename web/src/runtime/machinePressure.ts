@@ -49,6 +49,13 @@ export type MachineResourceState =
   | { kind: "failed" }
   | { kind: "ready"; resources: RuntimeResources };
 
+/** App-owned sampling shared with the mounted diagnostics view. */
+export type SharedMachineResources = {
+  state: MachineResourceState;
+  refresh: () => Promise<void>;
+  setDiagnosticsActive: (active: boolean) => void;
+};
+
 function percent(value: number | null | undefined): string | null {
   if (value === null || value === undefined || !Number.isFinite(value)) return null;
   return `${Math.round(value)}%`;

@@ -22,6 +22,7 @@ import type { TunnelStatus } from "../api";
 import ProviderReleaseAction from "./ProviderReleaseAction";
 import { useDevelopmentRuntime } from "./useDevelopmentRuntime";
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
+import type { SharedMachineResources } from "../runtime/machinePressure";
 import DeveloperDogfoodWorkspace from "./DeveloperDogfoodWorkspace";
 import EmailSettings from "./EmailSettings";
 import ConnectionsSettings from "./ConnectionsSettings";
@@ -40,6 +41,7 @@ type Props = {
   workerEngineProgress?: string;
   colorTheme: ColorTheme;
   feedbackRevision: number;
+  sharedMachineResources?: SharedMachineResources;
   health: Health | undefined;
   hiveIdentity: HiveIdentity | undefined;
   liveFeedState: LiveFeedState;
@@ -88,7 +90,7 @@ type Props = {
 };
 
 export default function SettingsWorkspace({ section, query = "", busy, workerEngineProgress, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, publicAddress, onPublicAddressChange, presence, startSurface, onStartSurfaceChange, onLock, providers, providerCapabilitiesUnavailable = false, lockDetectionState, notificationSettings, queenPolicy, pendingQueenDecisionCount = 0, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onOpenQueenDecisions, onOpenTasks, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker,
-  onChooseWorkerMark, onRemoveWorker, onReorderWorkers, onRestartProviders, onUpdateWorkerEngine, onForceWorkerReload, onReloadDevelopment, onHiveIdentityChange }: Props) {
+  onChooseWorkerMark, onRemoveWorker, onReorderWorkers, onRestartProviders, onUpdateWorkerEngine, onForceWorkerReload, onReloadDevelopment, onHiveIdentityChange, sharedMachineResources }: Props) {
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
   const [terminalHostLoaded, setTerminalHostLoaded] = useState(false);
@@ -701,7 +703,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
       )}
 
       {shows("settings-diagnostics") && (
-        <DiagnosticsWorkspace feedbackRevision={feedbackRevision} operatorToken={operatorToken} health={health} hiveIdentity={hiveIdentity} liveFeedState={liveFeedState} recentEvents={recentEvents} sessions={sessions} workers={workers} jiraReadiness={jiraReadiness} jiraUnavailable={jiraUnavailable} />
+        <DiagnosticsWorkspace sharedMachineResources={sharedMachineResources} feedbackRevision={feedbackRevision} operatorToken={operatorToken} health={health} hiveIdentity={hiveIdentity} liveFeedState={liveFeedState} recentEvents={recentEvents} sessions={sessions} workers={workers} jiraReadiness={jiraReadiness} jiraUnavailable={jiraUnavailable} />
       )}
 
       {shows("settings-dogfood") && (

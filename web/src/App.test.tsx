@@ -1107,9 +1107,10 @@ test("hidden windows defer transcript scans and background status polls until vi
 
 test("diagnostics is a single labeled control in the runtime area", async () => {
   const baseFetch = bootFetch();
+  let resourceReads = 0;
   vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) =>
     String(input).endsWith("/runtime/resources")
-      ? Promise.reject(new Error("Metrics unavailable in this fixture"))
+      ? (resourceReads++, Promise.reject(new Error("Metrics unavailable in this fixture")))
       : String(input).includes("/feedback/reports")
         ? Promise.resolve(ok([]))
         : baseFetch(input)));
@@ -1119,8 +1120,13 @@ test("diagnostics is a single labeled control in the runtime area", async () => 
   expect(within(screen.getByRole("region", { name: "Runtime and system status" }))
     .getByRole("button", { name: "Open diagnostics" })).toBe(diagnostics);
   expect(diagnostics).toHaveTextContent("Diagnostics");
+  await waitFor(() => expect(resourceReads).toBe(1));
   fireEvent.click(diagnostics);
   expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
+  await screen.findByRole("heading", { name: "Know which layer needs attention" });
+  await waitFor(() => expect(resourceReads).toBe(2)); // One owner changes to the diagnostic cadence.
+  fireEvent.click(screen.getByRole("button", { name: "Refresh now" }));
+  await waitFor(() => expect(resourceReads).toBe(3)); // No second read inside Diagnostics.
 });
 
 test("a detached window keeps the controls belonging to what it shows", async () => {
