@@ -871,6 +871,19 @@ fn record_answers(
     note: &str,
     surface: &str,
 ) -> Result<(), TaskStoreError> {
+    write_answer_resolution(&transaction, id, answers, note, surface, None)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+pub(super) fn write_answer_resolution(
+    transaction: &rusqlite::Transaction<'_>,
+    id: DecisionRequestId,
+    answers: &BTreeMap<String, Vec<String>>,
+    note: &str,
+    surface: &str,
+    consumed: Option<(WorkerId, WorkerSessionId)>,
+) -> Result<(), TaskStoreError> {
     let recorded = serde_json::to_string(answers)
         .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
     let updated = transaction.execute(
@@ -890,12 +903,19 @@ fn record_answers(
         return Err(TaskStoreError::DecisionAlreadyResolved);
     }
     transaction.execute(
-        "INSERT INTO decision_deliveries (decision_id, worker_id, state)
-         SELECT id, requesting_worker_id, 'queued' FROM decision_requests WHERE id = ?1",
-        [id.to_string()],
+        "INSERT INTO decision_deliveries (decision_id, worker_id, state, session_id, delivered_at)
+         SELECT id, requesting_worker_id,
+                CASE WHEN requesting_worker_id = ?2 THEN 'delivered' ELSE 'queued' END,
+                CASE WHEN requesting_worker_id = ?2 THEN ?3 ELSE NULL END,
+                CASE WHEN requesting_worker_id = ?2 THEN unixepoch() ELSE NULL END
+         FROM decision_requests WHERE id = ?1",
+        params![
+            id.to_string(),
+            consumed.map(|value| value.0.to_string()),
+            consumed.map(|value| value.1.to_string())
+        ],
     )?;
-    insert_control_room_event(&transaction, ControlRoomEventKind::DecisionsChanged)?;
-    transaction.commit()?;
+    insert_control_room_event(transaction, ControlRoomEventKind::DecisionsChanged)?;
     Ok(())
 }
 

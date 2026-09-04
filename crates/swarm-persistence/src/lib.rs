@@ -211,7 +211,8 @@ const CONVERSATION_RECOVERY_SCHEMA_VERSION: i64 = 127;
 const CONVERSATION_SELECTION_SCHEMA_VERSION: i64 = 128;
 const TASK_DISPATCH_GENERATION_SCHEMA_VERSION: i64 = 129;
 const OPERATOR_STATEMENTS_SCHEMA_VERSION: i64 = 130;
-const CURRENT_SCHEMA_VERSION: i64 = OPERATOR_STATEMENTS_SCHEMA_VERSION;
+const OPERATOR_STATEMENT_RESOLUTIONS_SCHEMA_VERSION: i64 = 131;
+const CURRENT_SCHEMA_VERSION: i64 = OPERATOR_STATEMENT_RESOLUTIONS_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -3710,7 +3711,8 @@ fn migrate_maturity_schema_steps(
     conversation_recovery::migrate(transaction, schema_version)?;
     conversation_recovery::migrate_selection(transaction, schema_version)?;
     task_dispatches::migrate_generation(transaction, schema_version)?;
-    operator_statements::migrate(transaction, schema_version)
+    operator_statements::migrate(transaction, schema_version)?;
+    operator_statements::migrate_resolutions(transaction, schema_version)
 }
 
 /// Work closed for a reason other than success gets its own state.

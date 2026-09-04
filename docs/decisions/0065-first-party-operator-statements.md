@@ -66,6 +66,17 @@ Exact ID retries are idempotent, even after a session ends. This store is not
 exposed to agents; authenticating source and consuming evidence remain separate
 integration work. Downgrade requires a compatible pre-migration database backup.
 
+Schema 131 links the exact consumed receipt IDs to a resolution. A bounded set
+of at most four receipts is reread and matched inside the resolution transaction;
+the active worker session is revalidated before a pending request can close.
+Identical linked-set retries are no-ops, not new deliveries. Resolution, links,
+the decision-changed event, and delivery state commit together. When the receiving
+worker is the requester, its confirmed consumption records delivered state without
+another injection. A different requester (for example Queen) still receives the
+existing queued answer notification. This is persistence integration, not proof
+of authenticated end-to-end provider capture. Partial evidence leaves Needs You
+pending until every question has a matching confirmed receipt.
+
 Verification reads return the statement and its scope, evidence status, and exact
 decision link when present. A full ID is required; no prefix lookup. Verified
 origin never expands the action authorized by the actual words. Preserve ADR 0054's

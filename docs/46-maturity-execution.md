@@ -6,6 +6,25 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: receipt-based resolution commits attention and delivery together
+
+- Schema 131 records exact consumed receipt links. Bounded resolution rereads
+  receipts and the complete current interview inside one transaction, validates
+  the active session, then commits answer, evidence links, event and delivery
+  state together. Identical receipt-set retries do not repeat the operation.
+- Extracted the existing answer-write transaction body for reuse. When the
+  requesting worker already consumed the answer, its delivery is recorded as
+  delivered without another injection. When Queen requested it and a different
+  worker consumed it, Queen still receives the normal queued notification.
+- Eight receipt tests plus the added two-question Queen/worker lifecycle test
+  passed, including partial-answer rejection, order-independent retries, stale
+  sessions and injected link-write failure rolling back the entire resolution.
+  All 27 existing decision tests and strict persistence lint passed. v129 upgrade
+  and reopen are covered; a historical v130 production database is not exercised.
+- No provider-facing capture/authentication or API trigger is wired yet. This
+  proves persistence reconciliation, not a live mobile/terminal double-answering
+  fix. No deployment, release, worker interruption or live database migration.
+
 ### P4: durable bounded operator statement storage
 
 - Schema 130 adds private confirmed-answer receipts with immutable ID, local

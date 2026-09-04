@@ -1,6 +1,10 @@
 //! Private first-party evidence, never automatic diagnostic content.
 use rusqlite::{OptionalExtension, Transaction, params};
-use swarm_domain::{OperatorAnswerConsumption, OperatorAnswerEvidence, OperatorStatementId};
+use swarm_domain::{
+    DecisionQuestion, DecisionRequestId, MAX_DECISION_QUESTIONS, OperatorAnswerConsumption,
+    OperatorAnswerEvidence, OperatorAnswerTarget, OperatorStatementId, WorkerId, WorkerSessionId,
+    confirmed_operator_interview,
+};
 use thiserror::Error;
 
 use crate::{TaskStore, TaskStoreError};
@@ -8,6 +12,21 @@ use crate::{TaskStore, TaskStoreError};
 const MAX_RECORDS: i64 = 4096;
 const MAX_BYTES: i64 = 16 * 1024 * 1024;
 const RETENTION: i64 = 90 * 86_400;
+
+pub(super) fn migrate_resolutions(tx: &Transaction<'_>, version: i64) -> rusqlite::Result<()> {
+    if version >= crate::OPERATOR_STATEMENT_RESOLUTIONS_SCHEMA_VERSION {
+        return Ok(());
+    }
+    tx.execute_batch("CREATE TABLE operator_statement_resolutions (
+        statement_id TEXT PRIMARY KEY REFERENCES operator_statements(id) ON DELETE CASCADE,
+        decision_id TEXT NOT NULL REFERENCES decision_requests(id) ON DELETE CASCADE
+    ); CREATE INDEX operator_statement_resolution_decision ON operator_statement_resolutions(decision_id);")?;
+    tx.pragma_update(
+        None,
+        "user_version",
+        crate::OPERATOR_STATEMENT_RESOLUTIONS_SCHEMA_VERSION,
+    )
+}
 
 #[derive(Debug, Error)]
 pub enum OperatorStatementError {
@@ -48,6 +67,108 @@ pub(super) fn migrate(tx: &Transaction<'_>, version: i64) -> rusqlite::Result<()
 }
 
 impl TaskStore {
+    /// Resolves an interview from a complete set of stored, confirmed receipts.
+    /// Revalidates question and session identities in the same transaction as
+    /// resolution and delivery bookkeeping. No terminal input is written here.
+    /// Returns false for the identical already-consumed receipt set.
+    ///
+    /// # Errors
+    /// Rejects incomplete, mismatched, stale, conflicting or unavailable evidence.
+    pub fn resolve_operator_statement_interview(
+        &self,
+        decision: DecisionRequestId,
+        worker: WorkerId,
+        session: WorkerSessionId,
+        ids: &[OperatorStatementId],
+    ) -> Result<bool, OperatorStatementError> {
+        if ids.is_empty()
+            || ids.len() > MAX_DECISION_QUESTIONS
+            || ids.iter().collect::<std::collections::HashSet<_>>().len() != ids.len()
+        {
+            return Err(OperatorStatementError::Invalid);
+        }
+        let mut connection = self.connection()?;
+        let tx = connection.transaction()?;
+        let (state, questions): (String, String) = tx
+            .query_row(
+                "SELECT d.state, d.questions FROM decision_requests d
+             JOIN local_hive_identity l ON l.hive_id=d.hive_id AND l.singleton=1 WHERE d.id=?1",
+                [decision.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(OperatorStatementError::Invalid)?;
+        let questions: Vec<DecisionQuestion> =
+            serde_json::from_str(&questions).map_err(|_| OperatorStatementError::Invalid)?;
+        let mut evidence = Vec::with_capacity(ids.len());
+        for id in ids {
+            let (question, answer): (String, String) = tx
+                .query_row(
+                    "SELECT question, answer FROM operator_statements
+                 WHERE id=?1 AND decision_id=?2 AND worker_id=?3 AND session_id=?4",
+                    params![
+                        id.to_string(),
+                        decision.to_string(),
+                        worker.to_string(),
+                        session.to_string()
+                    ],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?
+                .ok_or(OperatorStatementError::Invalid)?;
+            evidence.push(
+                OperatorAnswerEvidence::new(
+                    OperatorAnswerTarget {
+                        decision_id: decision,
+                        worker_id: worker,
+                        session_id: session,
+                        question: serde_json::from_str(&question)
+                            .map_err(|_| OperatorStatementError::Invalid)?,
+                    },
+                    answer,
+                    OperatorAnswerConsumption::Confirmed,
+                )
+                .ok_or(OperatorStatementError::Invalid)?,
+            );
+        }
+        let answers =
+            confirmed_operator_interview(decision, worker, session, &questions, &evidence)
+                .ok_or(OperatorStatementError::Invalid)?;
+        if state != "pending" {
+            let linked: Vec<String> = {
+                let mut query = tx.prepare("SELECT statement_id FROM operator_statement_resolutions WHERE decision_id=?1 LIMIT 5")?;
+                query
+                    .query_map([decision.to_string()], |row| row.get(0))?
+                    .collect::<Result<_, _>>()?
+            };
+            return if linked.len() == ids.len()
+                && ids.iter().all(|id| linked.contains(&id.to_string()))
+            {
+                Ok(false)
+            } else {
+                Err(OperatorStatementError::Conflict)
+            };
+        }
+        let active: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM worker_sessions WHERE session_id=?1 AND worker_id=?2 AND ended_at IS NULL)",
+            params![session.to_string(), worker.to_string()], |row| row.get(0))?;
+        if !active {
+            return Err(OperatorStatementError::Invalid);
+        }
+        crate::decisions::write_answer_resolution(
+            &tx,
+            decision,
+            &answers,
+            "",
+            "verified_terminal",
+            Some((worker, session)),
+        )?;
+        for id in ids {
+            tx.execute("INSERT INTO operator_statement_resolutions(statement_id, decision_id) VALUES(?1,?2)", params![id.to_string(), decision.to_string()])?;
+        }
+        tx.commit()?;
+        Ok(true)
+    }
+
     /// Persists caller-authenticated, provider-consumed answer evidence.
     /// This is not an agent-facing write API. The application must authenticate
     /// the human source; the evidence type itself is not an authentication token.
@@ -199,6 +320,219 @@ mod tests {
     }
 
     #[test]
+    fn confirmed_resolution_clears_attention_without_redelivery() {
+        let (store, evidence) = fixture();
+        let id = OperatorStatementId::new();
+        let target = evidence.target();
+        store.record_operator_statement(id, &evidence, 100).unwrap();
+        let resolve = || {
+            store.resolve_operator_statement_interview(
+                target.decision_id,
+                target.worker_id,
+                target.session_id,
+                &[id],
+            )
+        };
+        assert!(resolve().unwrap());
+        assert!(!resolve().unwrap());
+        let decision = store.get_decision_request(target.decision_id).unwrap();
+        assert_eq!(decision.state, swarm_domain::DecisionRequestState::Resolved);
+        assert_eq!(
+            decision.delivery_state,
+            Some(swarm_domain::DecisionDeliveryState::Delivered)
+        );
+        assert_eq!(decision.resolution_answers["Scope"], ["Narrow"]);
+        assert!(store.claim_decision_deliveries(101).unwrap().is_empty());
+        assert!(
+            !store
+                .workers_awaiting_operator()
+                .unwrap()
+                .contains(&target.worker_id)
+        );
+    }
+
+    #[test]
+    fn stale_receipts_leave_attention_pending() {
+        let (store, evidence) = fixture();
+        let id = OperatorStatementId::new();
+        let target = evidence.target();
+        store.record_operator_statement(id, &evidence, 100).unwrap();
+        assert!(
+            store
+                .resolve_operator_statement_interview(
+                    target.decision_id,
+                    target.worker_id,
+                    target.session_id,
+                    &[]
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .resolve_operator_statement_interview(
+                    target.decision_id,
+                    target.worker_id,
+                    target.session_id,
+                    &[id, id]
+                )
+                .is_err()
+        );
+        store
+            .connection()
+            .unwrap()
+            .execute("UPDATE worker_sessions SET ended_at=101", [])
+            .unwrap();
+        assert!(
+            store
+                .resolve_operator_statement_interview(
+                    target.decision_id,
+                    target.worker_id,
+                    target.session_id,
+                    &[id]
+                )
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .get_decision_request(target.decision_id)
+                .unwrap()
+                .state,
+            swarm_domain::DecisionRequestState::Pending
+        );
+    }
+
+    #[test]
+    fn worker_answers_complete_queens_interview_and_queue_only_her_notification() {
+        let (store, first) = fixture();
+        let queen = first.target().worker_id;
+        let worker = store
+            .create_worker(
+                "Petal",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let mut target = first.target().clone();
+        target.worker_id = worker.id;
+        target.session_id = session;
+        let one = OperatorAnswerEvidence::new(
+            target.clone(),
+            "Narrow".into(),
+            OperatorAnswerConsumption::Confirmed,
+        )
+        .unwrap();
+        target.question.header = "Timing".into();
+        target.question.question = "When?".into();
+        let two = OperatorAnswerEvidence::new(
+            target.clone(),
+            "After lunch".into(),
+            OperatorAnswerConsumption::Confirmed,
+        )
+        .unwrap();
+        let questions =
+            serde_json::to_string(&[one.target().question.clone(), two.target().question.clone()])
+                .unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE decision_requests SET questions=?2 WHERE id=?1",
+                params![target.decision_id.to_string(), questions],
+            )
+            .unwrap();
+        let first_id = OperatorStatementId::new();
+        let second_id = OperatorStatementId::new();
+        store
+            .record_operator_statement(first_id, &one, 100)
+            .unwrap();
+        assert!(
+            store
+                .resolve_operator_statement_interview(
+                    target.decision_id,
+                    worker.id,
+                    session,
+                    &[first_id]
+                )
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .get_decision_request(target.decision_id)
+                .unwrap()
+                .state,
+            swarm_domain::DecisionRequestState::Pending
+        );
+        store
+            .record_operator_statement(second_id, &two, 101)
+            .unwrap();
+        assert!(
+            store
+                .resolve_operator_statement_interview(
+                    target.decision_id,
+                    worker.id,
+                    session,
+                    &[second_id, first_id]
+                )
+                .unwrap()
+        );
+        assert!(
+            !store
+                .resolve_operator_statement_interview(
+                    target.decision_id,
+                    worker.id,
+                    session,
+                    &[first_id, second_id]
+                )
+                .unwrap()
+        );
+        let deliveries = store.claim_decision_deliveries(102).unwrap();
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].worker_id, queen);
+        assert_eq!(deliveries[0].answers["Timing"], ["After lunch"]);
+    }
+
+    #[test]
+    fn failed_evidence_link_rolls_back_resolution_and_delivery() {
+        let (store, evidence) = fixture();
+        let id = OperatorStatementId::new();
+        let target = evidence.target();
+        store.record_operator_statement(id, &evidence, 100).unwrap();
+        store.connection().unwrap().execute_batch("CREATE TRIGGER reject_link BEFORE INSERT ON operator_statement_resolutions BEGIN SELECT RAISE(ABORT, 'fixture failure'); END;").unwrap();
+        assert!(
+            store
+                .resolve_operator_statement_interview(
+                    target.decision_id,
+                    target.worker_id,
+                    target.session_id,
+                    &[id]
+                )
+                .is_err()
+        );
+        let decision = store.get_decision_request(target.decision_id).unwrap();
+        assert_eq!(decision.state, swarm_domain::DecisionRequestState::Pending);
+        assert!(decision.delivery_state.is_none());
+        store
+            .connection()
+            .unwrap()
+            .execute_batch("DROP TRIGGER reject_link;")
+            .unwrap();
+        assert!(
+            store
+                .resolve_operator_statement_interview(
+                    target.decision_id,
+                    target.worker_id,
+                    target.session_id,
+                    &[id]
+                )
+                .unwrap()
+        );
+    }
+
+    #[test]
     fn immutable_receipt_is_idempotent_and_does_not_resolve_or_deliver() {
         let (store, evidence) = fixture();
         let id = OperatorStatementId::new();
@@ -288,7 +622,7 @@ mod tests {
         store
             .connection()
             .unwrap()
-            .execute_batch("DROP TABLE operator_statements; PRAGMA user_version = 129;")
+            .execute_batch("DROP TABLE operator_statement_resolutions; DROP TABLE operator_statements; PRAGMA user_version = 129;")
             .unwrap();
         drop(store);
         let reopened = TaskStore::open(&path).unwrap();
