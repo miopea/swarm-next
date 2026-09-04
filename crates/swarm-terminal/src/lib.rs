@@ -9,6 +9,7 @@ mod provider_activity;
 mod provider_lifecycle;
 mod provider_lifecycle_gate;
 mod resources;
+mod startup_failure;
 mod state;
 
 pub use control_protocol::dispatch_terminal_control;

@@ -124,6 +124,7 @@ pub struct SessionResourceState {
     pub recovery_attempt: Option<ConversationRecoveryAttempt>,
     pub provider_start: Option<crate::ProviderSessionStartObservation>,
     pub provider_selection: Option<swarm_domain::ProviderConversationSelection>,
+    pub continuation_unavailable: bool,
 }
 
 /// Seconds since the Unix epoch, saturating rather than panicking on a clock
@@ -138,6 +139,7 @@ pub struct ProcessTerminalSession {
     id: WorkerSessionId,
     stop_pending_release: AtomicBool,
     recovery_attempt: OnceLock<ConversationRecoveryAttempt>,
+    startup_failure: Arc<Mutex<crate::startup_failure::StartupFailureCapture>>,
     provider_lifecycle: Mutex<Option<crate::ProviderLifecycleGate>>,
     control: TerminalControlGate,
     control_changes: watch::Sender<()>,
@@ -181,6 +183,28 @@ impl ReaderHistoryOwner {
             session_id,
             history,
         })
+    }
+
+    fn append(&self, sequence: u64, output: &[u8], state: &Mutex<CanonicalTerminalState>) -> bool {
+        let Some(history) = &self.history else {
+            return true;
+        };
+        match history.append(self.session_id, sequence, output) {
+            Ok(HistoryAppendOutcome::CheckpointRequired) => {
+                let snapshot = match state.lock() {
+                    Ok(state) => state.snapshot(),
+                    Err(_) => return false,
+                };
+                if let Err(error) = history.append_checkpoint(self.session_id, &snapshot) {
+                    warn!(session_id = %self.session_id, %error, "terminal history checkpoint failed");
+                }
+            }
+            Ok(_) => {}
+            Err(error) => {
+                warn!(session_id = %self.session_id, %error, "terminal history append failed");
+            }
+        }
+        true
     }
 }
 
@@ -248,22 +272,35 @@ impl ProcessTerminalSession {
             history.append_checkpoint(id, &lock(&terminal_state)?.snapshot())?;
         }
         let reader_terminal_state = Arc::clone(&terminal_state);
-        let reader_history = history.as_ref().map(Arc::clone);
         let (output_state, _) = watch::channel(true);
         let reader_output_state = output_state.clone();
         let reader_running = Arc::new(AtomicBool::new(true));
         let reader_state = Arc::clone(&reader_running);
         let last_output_at = Arc::new(AtomicI64::new(unix_seconds()));
         let reader_last_output_at = Arc::clone(&last_output_at);
+        let startup_failure = Arc::new(Mutex::new(
+            crate::startup_failure::StartupFailureCapture::new(
+                provider == Some(ProviderKind::ClaudeCode),
+            ),
+        ));
+        let reader_startup_failure = Arc::clone(&startup_failure);
         let reader_thread = thread::Builder::new()
             .name(format!("terminal-reader-{id:?}"))
             .spawn(move || {
                 let mut buffer = vec![0_u8; 8192];
+                let mut stream_complete = false;
                 loop {
                     match reader.read(&mut buffer) {
-                        Ok(0) | Err(_) => break,
+                        Ok(0) => {
+                            stream_complete = true;
+                            break;
+                        }
+                        Err(_) => break,
                         Ok(read) => {
                             let output = &buffer[..read];
+                            if let Ok(mut capture) = reader_startup_failure.lock() {
+                                capture.push(output);
+                            }
                             reader_last_output_at.store(unix_seconds(), Ordering::Release);
                             let sequence =
                                 if let Ok(mut terminal_state) = reader_terminal_state.lock() {
@@ -271,27 +308,15 @@ impl ProcessTerminalSession {
                                 } else {
                                     break;
                                 };
-                            if let Some(history) = &reader_history {
-                                match history.append(id, sequence, output) {
-                                    Ok(HistoryAppendOutcome::CheckpointRequired) => {
-                                        let snapshot = match reader_terminal_state.lock() {
-                                            Ok(terminal_state) => terminal_state.snapshot(),
-                                            Err(_) => break,
-                                        };
-                                        if let Err(error) = history.append_checkpoint(id, &snapshot)
-                                        {
-                                            warn!(session_id = %id, %error, "terminal history checkpoint failed");
-                                        }
-                                    }
-                                    Ok(_) => {}
-                                    Err(error) => {
-                                        warn!(session_id = %id, %error, "terminal history append failed");
-                                    }
-                                }
+                            if !history_owner.append(sequence, output, &reader_terminal_state) {
+                                break;
                             }
                             reader_output_state.send_replace(true);
                         }
                     }
+                }
+                if let Ok(mut capture) = reader_startup_failure.lock() {
+                    capture.finish(stream_complete);
                 }
                 drop(history_owner);
                 reader_state.store(false, Ordering::Release);
@@ -314,6 +339,7 @@ impl ProcessTerminalSession {
             stop_pending_release: AtomicBool::new(false),
             control: TerminalControlGate::default(),
             recovery_attempt: OnceLock::new(),
+            startup_failure,
             provider_lifecycle: Mutex::new(provider_lifecycle),
             control_changes: watch::channel(()).0,
             child: Mutex::new(child),
@@ -338,7 +364,42 @@ impl ProcessTerminalSession {
     /// Owned by this process incarnation and retained across browser/API reloads.
     /// Returns false if a caller tries to replace already recorded provenance.
     pub fn record_recovery_attempt(&self, attempt: ConversationRecoveryAttempt) -> bool {
-        self.recovery_attempt.set(attempt).is_ok()
+        let recorded = self.recovery_attempt.set(attempt).is_ok();
+        if recorded
+            && !matches!(
+                attempt.step,
+                swarm_domain::ConversationRecoveryStep::Continue
+            )
+            && let Ok(mut capture) = self.startup_failure.lock()
+        {
+            capture.disarm();
+        }
+        recorded
+    }
+
+    /// Positive evidence from this attempt's actual interactive startup, never
+    /// from a timeout, transcript scan or a live prompt. This does not authorize
+    /// replacing a worker binding or launching a successor on its own.
+    /// # Errors
+    /// Returns lock/process errors rather than claiming missing context.
+    pub fn continuation_unavailable(&self) -> Result<bool, SessionRegistryError> {
+        let Some(attempt) = self.recovery_attempt() else {
+            return Ok(false);
+        };
+        if !matches!(
+            attempt.step,
+            swarm_domain::ConversationRecoveryStep::Continue
+        ) || swarm_domain::ConversationRecovery::from_attempt(attempt).is_none()
+            || self.reader_running()
+        {
+            return Ok(false);
+        }
+        let Some(exit) = lock(&self.child)?.try_wait().map_err(terminal_error)? else {
+            return Ok(false);
+        };
+        Ok(exit.signal().is_none()
+            && exit.exit_code() == 1
+            && lock(&self.startup_failure)?.missing_continuation())
     }
 
     #[must_use]
@@ -375,6 +436,7 @@ impl ProcessTerminalSession {
     /// Returns lock/process errors; None means the process cannot be fenced.
     pub fn fence_provider_selection(&self) -> Result<Option<u64>, SessionRegistryError> {
         let mut child = lock(&self.child)?;
+        lock(&self.startup_failure)?.disarm();
         let mut gate = lock(&self.provider_lifecycle)?;
         let Some(gate) = gate.as_mut() else {
             return Ok(None);
@@ -424,7 +486,16 @@ impl ProcessTerminalSession {
             gate.revoke();
             return Ok(crate::ProviderLifecycleAcceptance::Denied);
         }
-        Ok(gate.observe(self.id, capability, observation))
+        let acceptance = gate.observe(self.id, capability, observation);
+        if matches!(
+            acceptance,
+            crate::ProviderLifecycleAcceptance::Accepted
+                | crate::ProviderLifecycleAcceptance::Duplicate
+                | crate::ProviderLifecycleAcceptance::ConversationChanged
+        ) {
+            lock(&self.startup_failure)?.disarm();
+        }
+        Ok(acceptance)
     }
 
     /// Writes input directly to the PTY master.
@@ -446,6 +517,8 @@ impl ProcessTerminalSession {
                 "session is stopped pending context release".into(),
             ));
         }
+        // Disarm before attempting bytes: a failed write may have been partial.
+        lock(&self.startup_failure)?.disarm();
         writer.write_all(bytes).map_err(terminal_error)?;
         writer.flush().map_err(terminal_error)
     }
@@ -707,6 +780,7 @@ impl ProcessTerminalSession {
     /// Returns process or poisoned-lock failures.
     pub fn stop(&self) -> Result<(), SessionRegistryError> {
         let mut child = lock(&self.child)?;
+        lock(&self.startup_failure)?.disarm();
         if let Some(gate) = lock(&self.provider_lifecycle)?.as_mut() {
             gate.revoke();
         }
@@ -1305,6 +1379,7 @@ impl SessionRegistry {
                     recovery_attempt: session.recovery_attempt(),
                     provider_start: session.provider_start()?,
                     provider_selection: session.provider_selection()?,
+                    continuation_unavailable: session.continuation_unavailable()?,
                 })
             })
             .collect()
@@ -2174,6 +2249,120 @@ mod tests {
                 .unwrap(),
             crate::ProviderLifecycleAcceptance::Denied
         );
+    }
+
+    fn continuation_fixture(
+        script: &str,
+        provider: Option<ProviderKind>,
+    ) -> ProcessTerminalSession {
+        let session = ProcessTerminalSession::spawn_with_history(
+            WorkerSessionId::new(),
+            &shell_command(script),
+            JournalLimits::new(4096, 64),
+            TerminalSize::default(),
+            None,
+            provider,
+        )
+        .unwrap();
+        let swarm_domain::ConversationRecoveryState::Attempt { attempt } =
+            swarm_domain::ConversationRecovery::new(None, true).state()
+        else {
+            panic!("attempt");
+        };
+        assert!(session.record_recovery_attempt(attempt));
+        session
+    }
+
+    fn wait_for_fixture_exit(session: &ProcessTerminalSession) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while session.is_running().unwrap() || session.reader_running() {
+            assert!(Instant::now() < deadline, "fixture did not finish");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn continuation_failure_requires_exact_actual_startup_and_unsignalled_exit_one() {
+        for (script, expected) in [
+            (
+                "printf 'No conversation found to continue\\n'; exit 1",
+                true,
+            ),
+            (
+                "printf 'No conversation found to continue\\n'; exit 0",
+                false,
+            ),
+            (
+                "printf 'No conversation found to continue\\n'; kill -TERM $$",
+                false,
+            ),
+            (
+                "printf 'Error: Invalid MCP configuration\\n'; exit 1",
+                false,
+            ),
+            (
+                "printf 'Old transcript: No conversation found to continue\\n'; exit 1",
+                false,
+            ),
+        ] {
+            let session = continuation_fixture(script, Some(ProviderKind::ClaudeCode));
+            wait_for_fixture_exit(&session);
+            assert_eq!(
+                session.continuation_unavailable().unwrap(),
+                expected,
+                "{script}"
+            );
+            assert_eq!(session.continuation_unavailable().unwrap(), expected);
+        }
+        let shell = continuation_fixture(
+            "printf 'No conversation found to continue\\n'; exit 1",
+            None,
+        );
+        wait_for_fixture_exit(&shell);
+        assert!(!shell.continuation_unavailable().unwrap());
+    }
+
+    #[test]
+    fn input_startup_manual_fence_and_stop_disarm_continuation_absence() {
+        for action in ["input", "startup", "fence", "stop"] {
+            let session = continuation_fixture(
+                "printf 'No conversation found to continue\\n'; read value; exit 1",
+                Some(ProviderKind::ClaudeCode),
+            );
+            output_until(&session, "No conversation found to continue");
+            assert!(!session.continuation_unavailable().unwrap(), "live child");
+            if action == "input" {
+                session.write_input(b"\n").unwrap();
+            } else {
+                if action == "startup" {
+                    *session.provider_lifecycle.lock().unwrap() =
+                        Some(crate::ProviderLifecycleGate::new(session.id(), [42; 32]));
+                    assert_eq!(
+                        session
+                            .observe_provider_start(
+                                &[42; 32],
+                                crate::ProviderSessionStartObservation {
+                                    conversation: swarm_domain::ProviderConversationId::new(),
+                                    kind: swarm_domain::ProviderSessionStartKind::Resumed,
+                                }
+                            )
+                            .unwrap(),
+                        crate::ProviderLifecycleAcceptance::Accepted
+                    );
+                } else if action == "fence" {
+                    assert!(session.fence_provider_selection().unwrap().is_some());
+                }
+                // Fixture-only write bypasses input observation to isolate the
+                // lifecycle/fence/stop guard. Production uses the guarded method.
+                session.writer.lock().unwrap().write_all(b"\n").unwrap();
+            }
+            wait_for_fixture_exit(&session);
+            if action == "stop" {
+                assert!(session.continuation_unavailable().unwrap());
+                session.stop().unwrap();
+            }
+            assert!(!session.continuation_unavailable().unwrap(), "{action}");
+        }
     }
 
     #[test]

@@ -367,6 +367,10 @@ pub struct HostSessionSummary {
     pub provider_start: Option<crate::ProviderSessionStartObservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_selection: Option<swarm_domain::ProviderConversationSelection>,
+    /// Exact interactive Continue failure for this attempt; not an authorization
+    /// to change the worker binding. Older engines supply no positive evidence.
+    #[serde(default)]
+    pub continuation_unavailable: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -689,6 +693,23 @@ mod tests {
         assert!(current.supports_terminal_control());
         current.protocol_version = PROTOCOL_VERSION + 1;
         assert!(!current.supports_terminal_control());
+    }
+
+    #[test]
+    fn continuation_absence_is_explicit_and_old_summaries_cannot_invent_it() {
+        let wire = serde_json::json!({
+            "session_id": WorkerSessionId::new(),
+            "running": false,
+        });
+        let mut summary: HostSessionSummary = serde_json::from_value(wire).unwrap();
+        assert!(!summary.continuation_unavailable);
+        summary.continuation_unavailable = true;
+        let wire = serde_json::to_value(&summary).unwrap();
+        assert_eq!(wire["continuation_unavailable"], true);
+        assert_eq!(
+            serde_json::from_value::<HostSessionSummary>(wire).unwrap(),
+            summary
+        );
     }
 
     #[test]

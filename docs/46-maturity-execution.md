@@ -6,6 +6,36 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2/P5: observe actual interactive continuation failure
+
+- ADR 0068 records the provider-specific failure evidence contract. The official
+  Claude common-workflows page confirms the native Continue missing-context
+  message and exit behavior; the installed binary also contains that literal.
+  This does not replace the still-missing real-provider acceptance run.
+- Engine-owned startup capture is capped at 4 KiB and discarded on overflow,
+  input (including potentially partial failed writes), accepted startup, manual
+  selection fencing, and explicit stop. A completed reader reduces it to a
+  boolean and releases raw bytes. Normal diagnostics never parse it repeatedly.
+- Positive absence requires the exact message, valid Continue attempt, completed
+  stream, and unsignalled exit code 1. Extra prose, screen rewrite controls,
+  configuration/authentication errors, signal exits and incomplete reads cannot
+  prove absence. Shells/non-Claude providers do not capture startup bytes.
+- ListSessions carries only normalized continuation_unavailable alongside the
+  immutable attempt/session identity. Missing older-host fields default false.
+  Reconnecting reads the same evidence; it neither sends terminal contents nor
+  starts a successor. No new request or protocol version is introduced yet.
+- All 120 Linux terminal tests and 24 Linux host tests passed. New cases cover
+  every byte-chunk boundary, cap/disarm cleanup, incomplete streams, real PTY
+  exit/input/lifecycle/fence/stop guards, old-summary compatibility, and the actual
+  private IPC round trip through replacement clients. Strict Linux terminal,
+  host, and API all-target/all-feature Clippy passed; final formatting and diff
+  checks passed. API changes here only initialize the new field in fixtures.
+- Remaining execution work: validate the current durable worker binding, create
+  and retain an idempotent fresh successor with its own session identity, preserve
+  newer manual selections across API interruption, and prevent prior-task replay
+  into fresh context. Detection alone does not complete REC-01 or P2/P5.
+- No push, deployment, release, or live worker interruption.
+
 ### P2/P5: failed startup cannot orphan a provider during setup
 
 - The startup audit found child creation preceding fallible PTY reader/writer,

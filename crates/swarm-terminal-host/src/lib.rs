@@ -712,6 +712,7 @@ fn dispatch_blocking(
                         recovery_attempt: state.recovery_attempt,
                         provider_start: state.provider_start,
                         provider_selection: state.provider_selection,
+                        continuation_unavailable: state.continuation_unavailable,
                     })
                     .collect(),
             })
@@ -1109,6 +1110,64 @@ mod tests {
             })
             .await
             .unwrap();
+        server_task.abort();
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn continuation_failure_survives_ipc_reconnect_without_output_or_respawn() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 1, [workspace.clone()]).unwrap(),
+        );
+        let command = ProviderCommand {
+            executable: PathBuf::from("/bin/sh"),
+            arguments: vec![
+                "-c".into(),
+                "printf 'No conversation found to continue\\n'; exit 1".into(),
+            ],
+            working_directory: workspace,
+        };
+        let session = registry
+            .spawn_provider_session(
+                &command,
+                TerminalSize::default(),
+                false,
+                Some(ProviderKind::ClaudeCode),
+            )
+            .unwrap();
+        let ConversationRecoveryState::Attempt { attempt } =
+            ConversationRecovery::new(None, true).state()
+        else {
+            panic!("expected Continue");
+        };
+        assert!(session.record_recovery_attempt(attempt));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        while session.is_running().unwrap() || session.reader_running() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "fixture did not exit"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind(&socket, Arc::clone(&registry)).unwrap();
+        let server_task = tokio::spawn(server.run());
+        for _ in 0..2 {
+            let client = HostClient::new(&socket);
+            let response = client.request(&HostRequest::ListSessions).await.unwrap();
+            let wire = serde_json::to_string(&response).unwrap();
+            assert!(!wire.contains("No conversation found"));
+            let HostResponse::Sessions { sessions } = response else {
+                panic!("sessions");
+            };
+            assert_eq!(sessions.len(), 1);
+            assert_eq!(sessions[0].session_id, session.id());
+            assert_eq!(sessions[0].recovery_attempt, Some(attempt));
+            assert!(!sessions[0].running);
+            assert!(sessions[0].continuation_unavailable);
+        }
         server_task.abort();
         let _ = server_task.await;
     }
