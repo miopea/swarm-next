@@ -108,6 +108,7 @@ import ApiaryAttentionCard from "./apiary/ApiaryAttentionCard";
 import QueenAutomationAttentionCard from "./orchestration/QueenAutomationAttentionCard";
 import UnansweredEmailAttentionCard from "./tasks/UnansweredEmailAttentionCard";
 import HeldDeliveryAttentionCard from "./orchestration/HeldDeliveryAttentionCard";
+import { isQueuedDeliveryObservation } from "./orchestration/deliveryAttention";
 import { passkeysSupported, signInWithPasskey } from "./settings/passkeys";
 import { configureTerminalImageLimit } from "./terminal/TerminalAttachments";
 import { queenAutomationNeedsAttention } from "./orchestration/queenAutomationPresentation";
@@ -1494,7 +1495,9 @@ export function App() {
   // It was in the queue and in neither count, so "Needs you" read 0 with a card
   // plainly on the page. A badge that disagrees with the page teaches the
   // operator to stop believing the badge, which is the one thing it has to do.
-  const heldDeliveryAttentionCount = heldDeliveries.length > 0 ? 1 : 0;
+  const actionableHeldDeliveries = heldDeliveries.filter((held) => !isQueuedDeliveryObservation(held));
+  const queuedDeliveryObservations = heldDeliveries.filter(isQueuedDeliveryObservation);
+  const heldDeliveryAttentionCount = actionableHeldDeliveries.length > 0 ? 1 : 0;
   // ONE CARD, ONE COUNT, like held deliveries and blocked escalations above.
   // The card carries the number itself, so the operator sees how much without
   // opening anything; the badge counts things to deal with, not rows.
@@ -2282,7 +2285,7 @@ export function App() {
                 <ConversationDriftCard workers={workerConversations} onOpenWorker={openWorker} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
                 <HeldDeliveryAttentionCard
-                  held={heldDeliveries}
+                  held={actionableHeldDeliveries}
                   workerIsAwake={(name) => Boolean(workers.find((candidate) => candidate.name === name)?.active_session_id)}
                   /* TWO BUGS LIVED ON ONE LINE HERE, and the card they broke is
                      the one that exists for a worker that never started.
@@ -2322,6 +2325,7 @@ export function App() {
               workers={workers}
               heldBriefings={heldBriefings}
               blockedWaits={blockedEscalations}
+              heldDeliveries={queuedDeliveryObservations}
               onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }}
             />
           </Suspense>

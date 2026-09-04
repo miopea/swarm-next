@@ -406,7 +406,9 @@ export const SURFACES: Surface[] = [
     id: "queues",
     title: "Queues",
     why: "waiting work from the operator screenshot, separate from actionable Needs You requests; not publishable",
-    render: () => <QueuesView tasks={[]} workers={[]} blockedWaits={agedBlock} heldBriefings={briefings} onOpenTask={() => undefined} />,
+    render: () => <QueuesView tasks={[]} workers={[]} blockedWaits={agedBlock} heldBriefings={briefings} heldDeliveries={[
+      { kind: "delivery_held_unsent_text", subject: "queen-review", worker_name: null, reason: "The last observed prompt contained unsent text.", first_observed_at: 1_787_402_241, observations: 172 },
+    ]} onOpenTask={() => undefined} />,
   },
   {
     id: "machine-pressure",

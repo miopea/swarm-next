@@ -28,6 +28,7 @@ import { terminalWorkspace } from "./terminal/TerminalWorkspace";
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   terminalWorkspace.logout();
   window.sessionStorage.clear();
   window.localStorage.clear();
@@ -1136,26 +1137,27 @@ test("stops showing held work once the coordinator is holding none", async () =>
   vi.stubGlobal("fetch", fetch);
   render(<App />);
 
-  expect(await screen.findByText(/Queen cannot review/)).toBeInTheDocument();
+  await screen.findByRole("heading", { name: "Nothing needs your attention" });
+  expect(screen.queryByText(/Queen cannot review/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /^Queues/ }));
+  expect(await screen.findByText("Delivery held: unsent text")).toBeInTheDocument();
 
   // Queen's prompt is cleared and the delivery lands; the coordinator holds
   // nothing. Nothing else in the page changes.
   holding = false;
   await vi.advanceTimersByTimeAsync(21_000);
 
-  await waitFor(() => expect(screen.queryByText(/Queen cannot review/)).not.toBeInTheDocument());
+  await waitFor(() => expect(screen.queryByText("Delivery held: unsent text")).not.toBeInTheDocument());
   vi.useRealTimers();
 });
 
 /**
  * "It says (0) needs you items when that is on the page."
  *
- * Held work was rendered into the attention queue and counted by neither the
- * rail badge nor the tab, so the page showed a card above a badge reading zero.
- * A badge that disagrees with the page teaches the operator to stop believing
- * the badge, which is the only thing it has to do.
+ * Ordinary held work now belongs to Queues. It must leave both the attention
+ * page and its badge, without disappearing from the system's waiting evidence.
  */
-test("counts held work in the Needs you badge", async () => {
+test("ordinary held delivery is queue evidence, not Needs you attention", async () => {
   const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
@@ -1186,8 +1188,12 @@ test("counts held work in the Needs you badge", async () => {
   vi.stubGlobal("fetch", fetch);
   render(<App />);
 
-  expect(await screen.findByText(/has work waiting behind a prompt/)).toBeInTheDocument();
-  await waitFor(() => expect(screen.getByRole("button", { name: /^Needs you/ })).toHaveTextContent("1"));
+  await screen.findByRole("heading", { name: "Nothing needs your attention" });
+  await waitFor(() => expect(screen.getByRole("button", { name: /^Needs you/ })).toHaveTextContent("0"));
+  expect(screen.queryByText(/has work waiting behind a prompt/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /^Queues/ }));
+  expect(await screen.findByText("Delivery held: prompt not ready")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Claude Shared Config" })).toBeInTheDocument();
 });
 
 test("a blocked task's age stays in Queues without operator attention", async () => {

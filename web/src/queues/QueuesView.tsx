@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import HeldBriefingList from "../orchestration/HeldBriefingList";
-import type { BlockedEscalation, HeldBriefing } from "../api";
+import type { BlockedEscalation, HeldBriefing, HeldDelivery } from "../api";
+import DeliveryWaitList from "./DeliveryWaitList";
 import type { NextMoveOwner, Task } from "../api/tasks";
 import { isOpenTaskState } from "../api/tasks";
 import type { Worker } from "../api/workers";
@@ -74,6 +75,7 @@ export default function QueuesView({
   onOpenTask,
   heldBriefings = [],
   blockedWaits = [],
+  heldDeliveries = [],
   now = Date.now(),
 }: {
   tasks: Task[];
@@ -91,6 +93,7 @@ export default function QueuesView({
    */
   heldBriefings?: HeldBriefing[];
   blockedWaits?: BlockedEscalation[];
+  heldDeliveries?: HeldDelivery[];
   now?: number;
 }) {
   const workerNames = useMemo(
@@ -123,7 +126,8 @@ export default function QueuesView({
   if (total === 0 && extraWaits.length === 0) {
     return (
       <section className="queues" aria-label="Queues">
-        {heldBriefings.length === 0 && <p className="queues-empty">Nothing is waiting on anyone.</p>}
+        {heldBriefings.length === 0 && heldDeliveries.length === 0 && <p className="queues-empty">Nothing is waiting on anyone.</p>}
+        <DeliveryWaitList held={heldDeliveries} />
         <HeldBriefingList briefings={heldBriefings} onOpenTask={onOpenTask} />
       </section>
     );
@@ -162,6 +166,7 @@ export default function QueuesView({
           </article>
         );
       })}
+      <DeliveryWaitList held={heldDeliveries} />
       {extraWaits.length > 0 && <article className="queue-group" data-owner="blocked">
         <header><h2>Blocked work awaiting reconciliation <span className="queue-count">{extraWaits.length}</span></h2>
           <p className="queue-meaning">Reported by the coordinator but absent from the current task list. Age alone does not require your approval.</p></header>

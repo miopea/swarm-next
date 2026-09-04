@@ -17,6 +17,13 @@ When independently refreshed observations overlap, present one task once. A task
 known to be closed takes precedence over an older blocked observation. Unknown
 next ownership is explicitly unknown, never an empty queue or an invented owner.
 
+Ordinary prompt/unsent-text delivery holds are coordination observations, not
+operator escalations. Show them in Queues with their recorded reason and target;
+do not infer that Queen stopped working or that nothing can route. An explicit
+decision can still request operator help. Unconfirmed wakes retain their existing
+manual recovery attention until the safe recovery lifecycle replaces that path.
+Unknown hold kinds are not silently discarded by this routing change.
+
 ## Consequences and verification
 
 The legacy `blocked_escalations` response name remains a compatibility field for

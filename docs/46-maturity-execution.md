@@ -589,6 +589,27 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   task evidence remains durable. Existing sessions were not restarted to reload
   standing guidance. No push, deployment, release, or live task mutation.
 
+### P4d: delivery observations are not operator escalations
+
+- Ordinary prompt/unsent-text delivery holds now appear in Queues, grouped by
+  their target, with recorded details collapsed. They no longer create a Needs
+  You card or increment its count. Unconfirmed wakes and unknown hold kinds
+  retain the existing recovery-attention path; explicit decisions are unchanged.
+- Replaced the blanket claim that Queen cannot review or nothing can route with
+  a description of last recorded delivery evidence. A hold is not proof that the
+  worker stopped. Empty queue copy no longer hides a delivery-only wait.
+- 48 focused App/queue/attention tests passed, including clearing refreshed holds,
+  routing/count consistency, and preserving recovery-card behavior. Production
+  TypeScript/Vite build passed; the existing terminal chunk warning remains.
+- The first test run clicked navigation before saved-surface initialization had
+  completed. Tests now wait for the actual inbox and restore real timers during
+  cleanup; the corrected run passed without changing production initialization.
+- Chrome/Edge skill inspected the isolated local Queues fixture in a separate
+  tab and expanded the details. Existing styles remain; no broad redesign was
+  adopted. The initial root URL was refused; the harness-only entry succeeded.
+- This does not clear stale persistence records or complete Queen recovery and
+  escalation. Those remain P4 work. No live Hive mutation, push, or release.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

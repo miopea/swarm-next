@@ -13,6 +13,20 @@ function task(overrides: Partial<Task>): Task {
 }
 
 describe("QueuesView", () => {
+  test("retains delivery evidence without claiming the Queen has stopped, then clears it", () => {
+    const props = { tasks: [], workers: [], onOpenTask: vi.fn() };
+    const { rerender } = render(<QueuesView {...props} heldDeliveries={[{
+      kind: "delivery_held_unsent_text", subject: "queen-review", worker_name: null,
+      reason: "The last observed prompt contained text", first_observed_at: 1, observations: 1503,
+    }]} />);
+    expect(screen.queryByText("Nothing is waiting on anyone.")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Queen" })).toBeInTheDocument();
+    expect(screen.getByText("Delivery held: unsent text")).toBeInTheDocument();
+    expect(screen.queryByText(/Nothing gets routed/)).not.toBeInTheDocument();
+    rerender(<QueuesView {...props} heldDeliveries={[]} />);
+    expect(screen.queryByText("Delivery held: unsent text")).not.toBeInTheDocument();
+    expect(screen.getByText("Nothing is waiting on anyone.")).toBeInTheDocument();
+  });
   /**
    * The whole point: a pile is attributable. Grouping by mechanism would put
    * one stall in several places and answer "why is nothing moving" with a
