@@ -155,7 +155,11 @@ fi
 if [ -n "$bundled_feedback_token" ]; then
   api_binary="$repo_root/target/release/swarm-api"
   [ -f "$api_binary" ] || { echo "swarm-package: $api_binary is missing after the build" >&2; exit 1; }
-  if printf '%s\n' "$bundled_feedback_token" | grep -qFf - "$api_binary"; then
+  # -a IS LOAD-BEARING: without it ugrep (and grep -I) skip binary content and
+  # exit 1 even when the bytes ARE present, so the guard would fail a perfectly
+  # good release and blame option_env!. Measured on this box, ugrep 7.8.4:
+  # without -a exit 1, with -a exit 0, same pattern and same binary.
+  if printf '%s\n' "$bundled_feedback_token" | grep -qaFf - "$api_binary"; then
     echo "swarm-package: the bundled feedback credential is present in swarm-api" >&2
   else
     echo "swarm-package: THE BUILD DID NOT BAKE IN THE FEEDBACK CREDENTIAL." >&2
