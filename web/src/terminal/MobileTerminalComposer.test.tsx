@@ -11,6 +11,51 @@ import {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
 beforeEach(() => { localStorage.clear(); sessionStorage.clear(); });
 
+test("source recording never waits before Enter and is aborted on disposal", async () => {
+  vi.useFakeTimers();
+  const onInput = vi.fn(() => true);
+  const record = vi.fn((_text: string, _signal: AbortSignal) => new Promise<void>(() => {}));
+  const view = render(<MobileTerminalComposer connectionState="connected" onInput={onInput} onRecordSubmission={record} />);
+  fireEvent.change(screen.getByLabelText(/Message worker/), { target: { value: " Exact 🐝 " } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  expect(record.mock.calls[0][0]).toBe(" Exact 🐝 ");
+  expect(onInput).toHaveBeenCalledTimes(1);
+  await act(async () => { vi.advanceTimersByTime(75); });
+  expect(onInput.mock.calls[1]).toEqual(["\r"]);
+  expect(screen.getByLabelText(/Message worker/)).toHaveValue("");
+  view.unmount();
+  expect(record.mock.calls[0][1].aborted).toBe(true);
+});
+
+test("source recording has a four-request cap and timeout without replaying terminal input", async () => {
+  vi.useFakeTimers();
+  const onInput = vi.fn(() => true);
+  const record = vi.fn((_text: string, _signal: AbortSignal) => new Promise<void>(() => {}));
+  render(<MobileTerminalComposer connectionState="connected" onInput={onInput} onRecordSubmission={record} />);
+  for (let index = 0; index < 5; index++) {
+    fireEvent.change(screen.getByLabelText(/Message worker/), { target: { value: `Message ${index}` } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await act(async () => { vi.advanceTimersByTime(75); });
+  }
+  expect(record).toHaveBeenCalledTimes(4);
+  expect(onInput).toHaveBeenCalledTimes(10);
+  expect(screen.getByText(/operator-source record could not be confirmed/)).toBeVisible();
+  await act(async () => { vi.advanceTimersByTime(8_000); });
+  expect(record.mock.calls.every((call) => call[1].aborted)).toBe(true);
+  expect(onInput).toHaveBeenCalledTimes(10);
+});
+
+test("source failures are visible but rejected terminal text is not recorded", async () => {
+  const record = vi.fn().mockRejectedValue(new Error("unavailable"));
+  const view = render(<MobileTerminalComposer connectionState="connected" onInput={() => false} onRecordSubmission={record} />);
+  fireEvent.change(screen.getByLabelText(/Message worker/), { target: { value: "Message" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  expect(record).not.toHaveBeenCalled();
+  view.rerender(<MobileTerminalComposer connectionState="connected" onInput={() => true} onRecordSubmission={record} />);
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  expect(await screen.findByText(/operator-source record could not be confirmed/)).toBeVisible();
+});
+
 test("passive control preserves editable drafts and disables Send and terminal keys", () => {
   const onInput = vi.fn(() => true);
   const view = render(<MobileTerminalComposer connectionState="connected" inputAvailable={false} keysExpanded onInput={onInput} />);

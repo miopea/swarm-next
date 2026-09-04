@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import TerminalQuestionsFixture from "./TerminalQuestionsFixture";
 import TerminalView from "../terminal/TerminalView";
+import { MobileTerminalComposer } from "../terminal/MobileTerminalComposer";
 import DeveloperDogfoodWorkspace from "../settings/DeveloperDogfoodWorkspace";
 import NightWatchSettings from "../settings/NightWatchSettings";
 import TerminalPoolFixture from "./TerminalPoolFixture";
@@ -211,6 +212,15 @@ export type Surface = { id: string; title: string; why: string; render: () => Re
 const FILED = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
 
 export const SURFACES: Surface[] = [
+  {
+    id: "composer-source", title: "Composer source recording failure", why: "Synthetic narrow layout; no terminal or API writes.",
+    render: () => <main className="composer-source-fixture" style={{ maxWidth: 390, padding: 16 }}>
+      <style>{".composer-source-fixture .mobile-terminal-composer { display: block; }"}</style>
+      <h1>Composer source fixture</h1>
+      <p>Isolated narrow layout. Send simulates accepted input and failed source recording; no worker receives text.</p>
+      <MobileTerminalComposer connectionState="connected" onInput={() => true} onRecordSubmission={async () => { throw new Error("fixture unavailable"); }} />
+    </main>,
+  },
   {
     id: "terminal-recovery", title: "Terminal recovery outcome", why: "Synthetic saved recovery result; no provider or Hive.",
     render: () => <main style={{ padding: 16, height: "100dvh", display: "flex", flexDirection: "column" }}>

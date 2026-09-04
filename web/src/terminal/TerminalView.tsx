@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 
 import { MobileTerminalComposer } from "./MobileTerminalComposer";
+import { recordOperatorSubmission } from "./OperatorSubmission";
 import { TerminalConnection, type TerminalConnectionState, type TerminalControlView } from "./TerminalConnection";
 import type { TerminalController } from "./TerminalController";
 import { terminalWorkspace } from "./TerminalWorkspace";
@@ -396,7 +397,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
         <div className="terminal-mount" ref={mount} />
         {!atBottom ? <button type="button" className="terminal-jump-latest" onClick={() => controller.scrollToBottom()}>Jump to latest ↓</button> : null}
       </div>
-      <MobileTerminalComposer key={session.session_id} connectionState={connectionState} inputAvailable={control === "owned"} onInput={(text) => { const accepted = controller.sendInput(text); if (accepted && text.includes("\r")) dismissAttachmentNotice(); return accepted; }} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onAttachment={acceptChosenFile} attachmentState={attachmentState} onRefresh={onRefresh} />
+      <MobileTerminalComposer key={session.session_id} connectionState={connectionState} inputAvailable={control === "owned"} onInput={(text) => { const accepted = controller.sendInput(text); if (accepted && text.includes("\r")) dismissAttachmentNotice(); return accepted; }} onRecordSubmission={(text, signal) => recordOperatorSubmission(operatorToken, session.session_id, text, signal)} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onAttachment={acceptChosenFile} attachmentState={attachmentState} onRefresh={onRefresh} />
     </div>
   );
 }

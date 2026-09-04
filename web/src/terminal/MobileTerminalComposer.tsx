@@ -59,6 +59,8 @@ interface MobileTerminalComposerProps {
   connectionState: TerminalConnectionState;
   inputAvailable?: boolean;
   onInput: (text: string) => boolean;
+  /** Records authored text separately; never waits before terminal input. */
+  onRecordSubmission?: (text: string, signal: AbortSignal) => Promise<void>;
   keysExpanded?: boolean;
   onKeysExpandedChange?: (expanded: boolean) => void;
   onAttachment?: (file: File) => Promise<void>;
@@ -67,10 +69,13 @@ interface MobileTerminalComposerProps {
   onRefresh?: () => void;
 }
 
-export function MobileTerminalComposer({ connectionState, inputAvailable = true, onInput, keysExpanded: controlledKeysExpanded, onKeysExpandedChange, onAttachment, attachmentState = "idle", onRefresh }: MobileTerminalComposerProps) {
+export function MobileTerminalComposer({ connectionState, inputAvailable = true, onInput, onRecordSubmission, keysExpanded: controlledKeysExpanded, onKeysExpandedChange, onAttachment, attachmentState = "idle", onRefresh }: MobileTerminalComposerProps) {
   const [draft, setDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submissionWarning, setSubmissionWarning] = useState<string>();
+  const [sourceWarning, setSourceWarning] = useState<string>();
+  const sourceRequests = useRef(new Map<AbortController, number>());
+  const sourceGeneration = useRef(0);
   const submitTimer = useRef<number | undefined>(undefined);
   const currentInput = useRef(onInput);
   const connectedRef = useRef(connectionState === "connected" && inputAvailable);
@@ -106,7 +111,32 @@ export function MobileTerminalComposer({ connectionState, inputAvailable = true,
   useEffect(() => () => {
     window.clearTimeout(submitTimer.current);
     submitTimer.current = undefined;
+    sourceGeneration.current += 1;
+    for (const [request, timer] of sourceRequests.current) {
+      window.clearTimeout(timer);
+      request.abort();
+    }
+    sourceRequests.current.clear();
   }, []);
+
+  async function recordSource(text: string) {
+    if (!onRecordSubmission) return;
+    const generation = ++sourceGeneration.current;
+    setSourceWarning(undefined);
+    const warn = () => {
+      if (generation === sourceGeneration.current) setSourceWarning("Your message's operator-source record could not be confirmed. Terminal sending is separate; do not resend just to fix this record.");
+    };
+    if (sourceRequests.current.size >= 4) { warn(); return; }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => { controller.abort(); warn(); }, 8_000);
+    sourceRequests.current.set(controller, timer);
+    try { await onRecordSubmission(text, controller.signal); }
+    catch { if (!controller.signal.aborted) warn(); }
+    finally {
+      window.clearTimeout(timer);
+      sourceRequests.current.delete(controller);
+    }
+  }
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -122,6 +152,7 @@ export function MobileTerminalComposer({ connectionState, inputAvailable = true,
       setSubmissionWarning("The connection did not accept your text. Your draft is still here.");
       return;
     }
+    void recordSource(draft);
     setSubmitting(true);
     // Existing provider paste pacing is not proof of delivery. Every write
     // still checks the current socket, and disposal cancels this pending key.
@@ -239,6 +270,7 @@ export function MobileTerminalComposer({ connectionState, inputAvailable = true,
         <button type="submit" disabled={!connected || submitting || draft.length === 0 || attachmentState === "uploading" || attachmentState === "waiting" || attachmentState === "error"}>{submitting ? "Sending…" : "Send"}</button>
         {!inputAvailable && draft.length > 0 && <p role="status">Your draft stays here while this terminal is viewing only.</p>}
         {submissionWarning ? <p role="status">{submissionWarning}</p> : null}
+        {sourceWarning ? <p role="status">{sourceWarning}</p> : null}
       </form>
       <div className="mobile-terminal-key-heading">
         <span>Terminal tools</span>

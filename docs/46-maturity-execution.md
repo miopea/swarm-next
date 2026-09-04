@@ -6,6 +6,25 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: composer Send records authored source without waiting on HTTP
+
+- Connected composer Send to the explicit-credential source endpoint after local
+  acceptance of the initial paste frame. Exact draft text is recorded separately;
+  no appended instructions, no provider-consumption claim, and no input replay.
+  Four requests maximum, eight-second abort deadlines, disposal cancellation,
+  and generation-guarded local warnings bound the recording work.
+- Fifty-two focused composer, submission-client and TerminalView tests passed.
+  Tests cover stalled HTTP not delaying Enter, disposal, capacity, timeout,
+  rejected input, failed recording and mismatched acknowledgement. Production
+  web build passed; existing terminal chunk warning remains (546.53 KiB).
+- Chrome/Edge skill used with a separate local composer-source fixture. Settled
+  DOM/screenshot showed cleared draft and visible recording-failure explanation.
+  This was a 390px synthetic container in a desktop browser, not a real mobile
+  viewport or Android/iOS acceptance; no live worker/API writes occurred.
+- General-source verification/discovery and mapping to consumed answers remain
+  open, as do raw terminal and AskUser capture. Composer source failure never
+  claims terminal failure or asks the operator to repeat the command.
+
 ### P4: authenticated authored submissions without consumption claims
 
 - Schema 132 stores immutable general submissions without requiring a decision:

@@ -143,6 +143,16 @@ response states authored source and unconfirmed provider consumption and is not
 cacheable. No raw text is echoed or added to general activity events. UI recording,
 source verification reads and consumption correlation remain integration steps.
 
+The composer now records the exact authored draft alongside Send after the first
+terminal frame is accepted locally. This is not a provider acknowledgement.
+Recording does not delay the Enter frame, append metadata to the prompt, retry
+input, or clear a decision. Each mounted composer owns at most four source
+requests with eight-second abort deadlines and cancels them on disposal. Capacity
+or recording failure produces a local warning explicitly discouraging resend;
+stale completions cannot overwrite the latest submission status. Nothing is
+persisted in browser storage. A canceled request may already have committed on
+the server, so absence of an acknowledgement is stated as unconfirmed, not lost.
+
 Verification reads return the statement and its scope, evidence status, and exact
 decision link when present. A full ID is required; no prefix lookup. Verified
 origin never expands the action authorized by the actual words. Preserve ADR 0054's
