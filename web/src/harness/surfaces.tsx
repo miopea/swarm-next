@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import TerminalQuestionsFixture from "./TerminalQuestionsFixture";
+import TerminalBurstFixture from "./TerminalBurstFixture";
 import TerminalView from "../terminal/TerminalView";
 import { MobileTerminalComposer } from "../terminal/MobileTerminalComposer";
 import DeveloperDogfoodWorkspace from "../settings/DeveloperDogfoodWorkspace";
@@ -237,6 +238,7 @@ export const SURFACES: Surface[] = [
     </main>,
   },
   { id: "performance-evidence", title: "Browser and server performance evidence", why: "Synthetic simultaneous, stale and unavailable evidence; no live profiling", render: () => <PerformanceEvidenceFixture /> },
+  { id: "terminal-burst", title: "Terminal burst application", why: "Bounded synthetic packets through the real parser; no live workers", render: () => <TerminalBurstFixture /> },
   { id: "night-watch", title: "Night Watch schedule", why: "isolated schedule editor; saves are fixture responses only", render: () => <section className="settings-card"><NightWatchSettings operatorToken="fixture" /></section> },
   {
     id: "terminal-pool",

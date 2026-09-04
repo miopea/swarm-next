@@ -204,6 +204,17 @@ export class FixtureWebSocket extends EventTarget {
     });
   }
 
+  /** Disposable performance fixture only; never writes to a network socket. */
+  emitOutput(bytes: Uint8Array): void {
+    if (this.readyState !== FixtureWebSocket.OPEN || !this.#resumed) throw new Error("Fixture is not attached");
+    if (bytes.byteLength > 65_536) throw new Error("Fixture packet exceeds its bound");
+    const frame = new Uint8Array(9 + bytes.byteLength);
+    frame[0] = 1;
+    new DataView(frame.buffer).setBigUint64(1, BigInt(++this.#sequence));
+    frame.set(bytes, 9);
+    this.dispatchEvent(new MessageEvent("message", { data: frame.buffer }));
+  }
+
   #control() {
     return { supported: true, generation: String(this.#generation), owned: this.#owned, occupied: this.#occupied, lease_remaining_ms: this.#occupied ? 90_000 : 0 };
   }

@@ -2,6 +2,27 @@ import { expect, test } from "vitest";
 import { FixtureWebSocket } from "./terminalFixture";
 import { hiveFixture } from "./hiveFixture";
 
+test("synthetic output preserves bytes and advances the snapshot sequence", async () => {
+  const socket = new FixtureWebSocket("/fixture", ["swarm-terminal.v4"], false);
+  const frames: Uint8Array[] = [];
+  socket.addEventListener("message", (event) => {
+    const data = (event as MessageEvent).data;
+    if (typeof data !== "string") frames.push(new Uint8Array(data));
+  });
+  await Promise.resolve();
+  socket.send(JSON.stringify({ type: "resume", rows: 24, columns: 36 }));
+  await Promise.resolve();
+  const initial = new DataView(frames[0].buffer).getBigUint64(1);
+  const bytes = new Uint8Array([27, 91, 50, 75, 240, 159, 144, 157]);
+  socket.emitOutput(bytes);
+  socket.emitOutput(bytes);
+  expect(frames.slice(1).map((frame) => new DataView(frame.buffer).getBigUint64(1))).toEqual([initial + 1n, initial + 2n]);
+  expect(Array.from(frames[1].subarray(9))).toEqual(Array.from(bytes));
+  expect(() => socket.emitOutput(new Uint8Array(65_537))).toThrow("bound");
+  socket.close();
+  expect(() => socket.emitOutput(bytes)).toThrow("not attached");
+});
+
 test("the visual harness advertises the controlled browser protocol", () => {
   expect(hiveFixture("/api/v1/terminal/sessions/fixture/attach-grants")).toMatchObject({ protocol: "swarm-terminal.v4" });
 });

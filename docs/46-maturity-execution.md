@@ -6,6 +6,26 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P3/P7: exercise output bursts in a real browser without a Hive
+
+- Added a terminal-burst harness surface using production TerminalConnection and
+  XtermSurface with injected in-memory grant/socket adapters. A manual run emits
+  256 synthetic lines (10,258 bytes) in 321 small packets, including split ANSI
+  and UTF-8. It reports parser submissions and application time, with an owned
+  eight-second deadline and teardown. No networked worker/provider/API operations.
+- Edge DOM-renderer observations: first run reported one parser write and 100 ms;
+  a later 390x844 run reported one write and 13 ms. After three bursts the exposed
+  serialized buffer held 768 correctly ordered numbered lines, completion text,
+  no replacement characters and no document horizontal overflow. Only numeric
+  results and synthetic text were inspected. Viewport reset; owned tab closed.
+- These few local dev-browser samples establish batching/text-integrity behavior,
+  not p95, paint latency, WebGL/mobile-device acceptance, a before/after benchmark
+  or whole-app CPU improvement. The fixture explicitly states those limits.
+- Four fixture transport tests passed, including output sequence/byte preservation,
+  packet-size bound and closed-socket refusal. Final production web build passed;
+  the existing terminal chunk warning remains.
+- No push, deployment, release or live worker interruption.
+
 ### P3: coalesce queued terminal deltas before parsing
 
 - Installed xterm schedules a new parser turn when its write queue is empty.
