@@ -6,6 +6,31 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2: durable interactive-selection revision and manual-choice fence
+
+- Schema 128 adds a selection revision and suspension flag to the existing one-
+  receipt-per-worker table. New bindings reset tracking; migration suspends all
+  existing receipts because their earlier operator-choice ordering is unknown.
+- Added transactional selection reconciliation: only revision >1 and newer than
+  the saved fence can update the still-bound Claude worker. Pin, revision and
+  activity roll back together. Stale/duplicate/replaced-session evidence is ignored.
+  Explicit unfenced pin writes suspend following; fenced writes validate the active
+  session and record their revision with the pin, including same-ID choices.
+- Domain fences cancel an incomplete resume pair but do not publish a new selected
+  conversation. Their ordering counter is separate from the last actual selection
+  revision, so a fence alone cannot masquerade as provider context evidence.
+- Three native domain selection and eight recovery persistence tests passed,
+  including the final migration refinement. Persistence tests cover monotonic
+  following, manual fences, later resume, unfenced suspension, binding reset,
+  wrong-session refusal, rollback and schema-127 preservation. Four Dogfood
+  persistence regression tests passed. Strict Linux-target domain/persistence/API
+  Clippy passed before the final conservative migration/test refinement.
+- Automatic selection consumption in the API remains deliberately unwired until
+  the engine fence request and explicit operator-choice path are connected in the
+  same integration. No claim of completed /resume behavior. No live database,
+  engine, worker, deployment, push or release changed. Older-binary rollback needs
+  a compatible database restore after this schema migration.
+
 ### P2: versioned interactive-resume transport
 
 - Engine protocol 13 adds the authenticated ProviderResumeEnd request and exposes

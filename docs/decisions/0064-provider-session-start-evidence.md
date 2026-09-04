@@ -79,3 +79,13 @@ preflight protocol 13 and refuse older/unknown versions before sending secrets.
 Missing/reordered lifecycle evidence remains unconfirmed, not proof that no switch
 occurred. Revised selection persistence and actual provider ordering acceptance
 remain open, along with complete fallback; P2 is not complete.
+
+Durable interactive selection uses a monotonic per-session revision. Explicit
+operator pin changes must first fence the engine selection stream, then commit
+that fence and pin under the existing API lifecycle lock. A fence advances the
+engine revision without moving its live conversation and cancels an incomplete
+resume boundary. Only later paired transitions can supersede that manual choice.
+Unfenced/manual persistence callers suspend automatic following for that binding;
+they must never assume their last observed engine revision is a sufficient fence.
+New session binding resets tracking. The API selection consumer is not enabled
+until the engine fence request and explicit-choice path are integrated together.

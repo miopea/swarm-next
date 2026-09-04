@@ -1045,7 +1045,8 @@ impl TaskStore {
             "INSERT INTO worker_startup_context(worker_id, session_id, selected_conversation, status)
              SELECT id, ?2, provider_conversation_id, 'pending' FROM worker_profiles WHERE id = ?1
              ON CONFLICT(worker_id) DO UPDATE SET session_id = excluded.session_id,
-                 selected_conversation = excluded.selected_conversation, status = 'pending', outcome = NULL",
+                 selected_conversation = excluded.selected_conversation, status = 'pending', outcome = NULL,
+                 selection_revision = 0, selection_suspended = 0",
             params![worker_id.to_string(), session_id.to_string()],
         )?;
         let owned_tasks = {
@@ -1142,6 +1143,19 @@ impl TaskStore {
         worker_id: WorkerId,
         conversation_id: &ProviderConversationId,
     ) -> Result<(), TaskStoreError> {
+        self.repoint_provider_conversation_fenced(worker_id, conversation_id, None)
+    }
+
+    /// Commits an explicit default together with an engine-issued revision fence.
+    /// Without a fence, automatic selection following is suspended for this binding.
+    /// # Errors
+    /// Returns errors for stale bindings, invalid fences or persistence failures.
+    pub fn repoint_provider_conversation_fenced(
+        &self,
+        worker_id: WorkerId,
+        conversation_id: &ProviderConversationId,
+        fence: Option<(WorkerSessionId, u64)>,
+    ) -> Result<(), TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         let previous = transaction.query_row(
@@ -1150,6 +1164,26 @@ impl TaskStore {
             |row| row.get::<_, Option<String>>(0),
         ).optional()?.ok_or(TaskStoreError::WorkerNotFound)?;
         let selected = conversation_id.to_string();
+        if let Some((session, revision)) = fence {
+            let revision = i64::try_from(revision)
+                .map_err(|_| TaskStoreError::IntegrityFailure("invalid selection fence".into()))?;
+            let updated = transaction.execute(
+                "UPDATE worker_startup_context SET selection_revision = ?3, selection_suspended = 0
+                 WHERE worker_id = ?1 AND session_id = ?2 AND selection_revision <= ?3
+                   AND EXISTS (SELECT 1 FROM worker_sessions WHERE worker_id = ?1 AND session_id = ?2 AND ended_at IS NULL)",
+                params![worker_id.to_string(), session.to_string(), revision],
+            )?;
+            if updated != 1 {
+                return Err(TaskStoreError::IntegrityFailure(
+                    "worker selection binding changed".into(),
+                ));
+            }
+        } else {
+            transaction.execute(
+                "UPDATE worker_startup_context SET selection_suspended = 1 WHERE worker_id = ?1",
+                [worker_id.to_string()],
+            )?;
+        }
         // An explicit selection supersedes pending startup evidence, including
         // selecting the existing pin or an A -> B -> A sequence.
         transaction.execute(

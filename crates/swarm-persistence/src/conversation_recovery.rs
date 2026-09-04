@@ -29,6 +29,42 @@ pub(super) fn migrate(tx: &Transaction<'_>, version: i64) -> rusqlite::Result<()
 }
 
 impl TaskStore {
+    /// Applies only a newer paired interactive selection to its still-bound worker.
+    /// Startup revision one cannot bypass recovery policy. Explicit unfenced
+    /// choices suspend this consumer until a new binding or fenced choice.
+    /// # Errors
+    /// Returns errors for invalid revisions or persistence/event failures.
+    pub fn reconcile_provider_selection(
+        &self,
+        session: WorkerSessionId,
+        selection: swarm_domain::ProviderConversationSelection,
+    ) -> Result<bool, TaskStoreError> {
+        let revision = i64::try_from(selection.revision)
+            .map_err(|_| TaskStoreError::IntegrityFailure("invalid selection revision".into()))?;
+        if revision <= 1 {
+            return Ok(false);
+        }
+        let mut connection = self.connection()?;
+        let tx = connection.transaction()?;
+        let worker: Option<String> = tx.query_row(
+            "SELECT context.worker_id FROM worker_startup_context context
+             JOIN worker_profiles worker ON worker.id = context.worker_id
+             JOIN worker_sessions session ON session.worker_id = worker.id AND session.session_id = context.session_id
+             WHERE context.session_id = ?1 AND context.selection_revision < ?2
+               AND context.selection_suspended = 0 AND worker.archived_at IS NULL
+               AND session.ended_at IS NULL AND worker.provider = 'claude_code'",
+            params![session.to_string(), revision], |row| row.get(0)).optional()?;
+        let Some(worker) = worker else {
+            return Ok(false);
+        };
+        tx.execute("UPDATE worker_startup_context SET selection_revision = ?2,
+                    status = CASE WHEN status = 'pending' THEN 'canceled' ELSE status END WHERE worker_id = ?1", params![worker, revision])?;
+        tx.execute("UPDATE worker_profiles SET provider_conversation_id = ?2, updated_at = unixepoch() WHERE id = ?1", params![worker, selection.conversation.to_string()])?;
+        insert_control_room_event(&tx, ControlRoomEventKind::WorkersChanged)?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     /// Reads settled startup outcomes only for the requested still-bound sessions.
     /// This is a bounded projection, not a scan of historical worker activity.
     ///
@@ -128,10 +164,151 @@ impl TaskStore {
     }
 }
 
+pub(super) fn migrate_selection(tx: &Transaction<'_>, version: i64) -> rusqlite::Result<()> {
+    if version >= crate::CONVERSATION_SELECTION_SCHEMA_VERSION {
+        return Ok(());
+    }
+    tx.execute_batch("ALTER TABLE worker_startup_context ADD COLUMN selection_revision INTEGER NOT NULL DEFAULT 0 CHECK(selection_revision >= 0);
+        ALTER TABLE worker_startup_context ADD COLUMN selection_suspended INTEGER NOT NULL DEFAULT 0 CHECK(selection_suspended IN (0,1));
+        UPDATE worker_startup_context SET selection_suspended = 1;")?;
+    tx.pragma_update(
+        None,
+        "user_version",
+        crate::CONVERSATION_SELECTION_SCHEMA_VERSION,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use swarm_domain::ProviderKind;
+
+    #[test]
+    fn selection_revisions_preserve_manual_fences_and_resume_following_after_them() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Poppy", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let selected = |revision| swarm_domain::ProviderConversationSelection {
+            revision,
+            conversation: ProviderConversationId::new(),
+        };
+        assert!(
+            !store
+                .reconcile_provider_selection(session, selected(1))
+                .unwrap()
+        );
+        let first = selected(2);
+        assert!(store.reconcile_provider_selection(session, first).unwrap());
+        assert!(
+            !store
+                .reconcile_provider_selection(session, selected(2))
+                .unwrap()
+        );
+        let manual = ProviderConversationId::new();
+        store
+            .repoint_provider_conversation_fenced(worker.id, &manual, Some((session, 4)))
+            .unwrap();
+        assert!(
+            !store
+                .reconcile_provider_selection(session, selected(3))
+                .unwrap()
+        );
+        assert!(
+            !store
+                .reconcile_provider_selection(session, selected(4))
+                .unwrap()
+        );
+        assert_eq!(
+            store
+                .get_worker_profile(worker.id)
+                .unwrap()
+                .provider_conversation_id,
+            Some(manual)
+        );
+        let later = selected(5);
+        assert!(store.reconcile_provider_selection(session, later).unwrap());
+        assert_eq!(
+            store
+                .get_worker_profile(worker.id)
+                .unwrap()
+                .provider_conversation_id,
+            Some(later.conversation)
+        );
+        store
+            .repoint_provider_conversation(worker.id, &manual)
+            .unwrap();
+        assert!(
+            !store
+                .reconcile_provider_selection(session, selected(6))
+                .unwrap()
+        );
+        store.release_worker_session(session).unwrap();
+        let next = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, next).unwrap();
+        assert!(
+            !store
+                .reconcile_provider_selection(session, selected(7))
+                .unwrap()
+        );
+        assert!(
+            store
+                .reconcile_provider_selection(next, selected(2))
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn failed_selection_event_and_wrong_session_fence_do_not_change_the_default() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Poppy", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let initial = store
+            .get_worker_profile(worker.id)
+            .unwrap()
+            .provider_conversation_id;
+        let selection = swarm_domain::ProviderConversationSelection {
+            revision: 2,
+            conversation: ProviderConversationId::new(),
+        };
+        assert!(
+            store
+                .repoint_provider_conversation_fenced(
+                    worker.id,
+                    &selection.conversation,
+                    Some((WorkerSessionId::new(), 3))
+                )
+                .is_err()
+        );
+        store.connection().unwrap().execute_batch("CREATE TRIGGER reject_selection_event BEFORE INSERT ON control_room_events BEGIN SELECT RAISE(ABORT, 'test'); END;").unwrap();
+        assert!(
+            store
+                .reconcile_provider_selection(session, selection)
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .get_worker_profile(worker.id)
+                .unwrap()
+                .provider_conversation_id,
+            initial
+        );
+        store
+            .connection()
+            .unwrap()
+            .execute_batch("DROP TRIGGER reject_selection_event;")
+            .unwrap();
+        assert!(
+            store
+                .reconcile_provider_selection(session, selection)
+                .unwrap()
+        );
+    }
 
     fn attempt() -> ConversationRecoveryAttempt {
         let ConversationRecoveryState::Attempt { attempt } =
@@ -140,6 +317,51 @@ mod tests {
             panic!("attempt");
         };
         attempt
+    }
+
+    #[test]
+    fn selection_migration_preserves_prior_manual_override() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("selection.sqlite");
+        let store = TaskStore::open(&path).unwrap();
+        let worker = store
+            .create_worker("Poppy", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        store
+            .reconcile_provider_start(
+                session,
+                attempt(),
+                ProviderSessionStartKind::Resumed,
+                ProviderConversationId::new(),
+            )
+            .unwrap();
+        let manual = ProviderConversationId::new();
+        store
+            .repoint_provider_conversation(worker.id, &manual)
+            .unwrap();
+        store.connection().unwrap().execute_batch("ALTER TABLE worker_startup_context DROP COLUMN selection_revision; ALTER TABLE worker_startup_context DROP COLUMN selection_suspended; PRAGMA user_version = 127;").unwrap();
+        drop(store);
+        let store = TaskStore::open(&path).unwrap();
+        assert!(
+            !store
+                .reconcile_provider_selection(
+                    session,
+                    swarm_domain::ProviderConversationSelection {
+                        revision: 2,
+                        conversation: ProviderConversationId::new()
+                    }
+                )
+                .unwrap()
+        );
+        assert_eq!(
+            store
+                .get_worker_profile(worker.id)
+                .unwrap()
+                .provider_conversation_id,
+            Some(manual)
+        );
     }
 
     #[test]
