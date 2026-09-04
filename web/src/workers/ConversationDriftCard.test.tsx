@@ -25,10 +25,31 @@ test("names the workers that would resume an older conversation", () => {
  * The operator's own requirement: "We need a way to notify if we don't know."
  * A worker Swarm cannot check must appear, not be quietly counted as healthy.
  */
-test("reports workers it could not check rather than assuming they are fine", () => {
-  render(<ConversationDriftCard workers={[unknown, current]} onOpenWorker={vi.fn()} />);
-  expect(screen.getByText("ShotCraft")).toBeInTheDocument();
-  expect(screen.getByText(/could not tell which conversation is newest/i)).toBeInTheDocument();
+/**
+ * ⚠️ THIS TEST ASSERTED THE OPPOSITE UNTIL THE OPERATOR SAW THE PAGE. It required
+ * unknown workers to be listed here — "reported rather than assumed healthy" —
+ * and that was the right instinct on the wrong surface.
+ *
+ * They were shown eight rows under "What needs you" and said "there is nothing I
+ * can do about it". Five were unknown, and every one of those five has ZERO
+ * transcripts in its workspace: they have never run there. "Swarm could not tell
+ * which conversation is newest" is the ORDINARY state of a worker that has never
+ * started, and there is no second thread for anyone to choose between.
+ *
+ * Nothing assumes them healthy. The server still reports Unknown and still
+ * refuses to call it current; it simply stopped being filed as the operator's
+ * move on a page that promises only their own work.
+ */
+test("a worker that has never run is not the operator's to act on", () => {
+  const { container } = render(<ConversationDriftCard workers={[unknown, current]} onOpenWorker={vi.fn()} />);
+  expect(container).toBeEmptyDOMElement();
+});
+
+test("a stale worker still brings the card back, with the unknown ones left out", () => {
+  render(<ConversationDriftCard workers={[stale, unknown, current]} onOpenWorker={vi.fn()} />);
+  expect(screen.getByText(/would resume an older conversation/i)).toBeInTheDocument();
+  expect(screen.queryByText(/could not tell which conversation is newest/i)).not.toBeInTheDocument();
+  expect(screen.queryByText("ShotCraft")).not.toBeInTheDocument();
 });
 
 test("says nothing when every conversation is the newest", () => {

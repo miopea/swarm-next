@@ -38,8 +38,29 @@ export default function ConversationDriftCard({
   onOpenWorker: (workerId: string) => void;
 }) {
   const stale = workers.filter((worker) => worker.freshness.state === "stale");
-  const unknown = workers.filter((worker) => worker.freshness.state === "unknown");
-  if (stale.length === 0 && unknown.length === 0) return null;
+  // ⚠️ "UNKNOWN" IS NOT ON THIS PAGE, AND THE OPERATOR IS WHY.
+  //
+  // They were shown eight rows under "What needs you" and said "there is nothing
+  // I can do about it". Five were unknown — Wifi Portal, ShotCraft, Aria,
+  // Operations Report, Silly Tavern — and every one has ZERO transcripts in its
+  // workspace, because those workers have never run there. "Swarm could not tell
+  // which conversation is newest" is the ORDINARY state of a worker that has
+  // never started, not a fault, and there is no second thread to choose between.
+  //
+  // The card's own closing line only makes sense for stale: which thread is the
+  // right one is a judgement about your work. An unknown worker has no thread to
+  // judge.
+  //
+  // THIS DOES NOT ASSUME THEM HEALTHY. The server still reports Unknown and
+  // still refuses to call it current, and worker start handles a pin Claude has
+  // never held by starting fresh under the same id. What changed is that it
+  // stopped being filed as the operator's move.
+  //
+  // One Unknown reason IS a real fault — "the Claude project directory could not
+  // be read" is a permissions problem rather than a never-run worker. It needs
+  // its own signal rather than riding along with five benign rows, and is
+  // deliberately not smuggled back by matching on reason text.
+  if (stale.length === 0) return null;
 
   return (
     <article className="attention-card conversation-drift" aria-label="Worker conversations">
@@ -69,22 +90,6 @@ export default function ConversationDriftCard({
                 </li>
               );
             })}
-          </ul>
-        </>
-      ) : null}
-      {unknown.length > 0 ? (
-        <>
-          <p className="conversation-drift-unknown">
-            Swarm could not tell which conversation is newest for {unknown.length} worker
-            {unknown.length === 1 ? "" : "s"}. That is reported rather than assumed healthy.
-          </p>
-          <ul>
-            {unknown.map((worker) => (
-              <li key={worker.worker_id}>
-                <button type="button" onClick={() => onOpenWorker(worker.worker_id)}>{worker.name}</button>
-                <small>{(worker.freshness as Extract<ConversationFreshness, { state: "unknown" }>).reason}.</small>
-              </li>
-            ))}
           </ul>
         </>
       ) : null}

@@ -1524,8 +1524,13 @@ export function App() {
   // worker and resume the one you want." It rendered on Needs You and counted
   // nothing, which is the same badge-disagrees-with-page defect fixed twice
   // above for held deliveries and blocked escalations. Third instance.
+  // STALE ONLY, matching the card. It counted anything not "current", which
+  // included "unknown" — and unknown no longer renders, so the badge would have
+  // counted a card that is not on the page. Same badge-disagrees-with-page
+  // defect as the three above, arriving from the other side: a count without a
+  // card rather than a card without a count.
   const conversationDriftAttentionCount =
-    workerConversations.some((worker) => worker.freshness.state !== "current") ? 1 : 0;
+    workerConversations.some((worker) => worker.freshness.state === "stale") ? 1 : 0;
   // blockedEscalationAttentionCount BELONGS HERE and was missing, which is the
   // same defect the paragraph above describes and fixes for held deliveries.
   // It was computed, passed to the inbox as additionalPendingCount, and left
