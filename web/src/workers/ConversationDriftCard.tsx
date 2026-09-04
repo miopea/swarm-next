@@ -1,14 +1,12 @@
 /**
- * Workers whose next start would resume a conversation Swarm cannot vouch for.
+ * Conversation defaults with positive evidence worth reviewing.
  *
  * Confirmed provider selections take precedence on the server. These remaining
  * rows come from the older transcript-recency check and are reasons to review
  * a default, not proof that a newer transcript is the operator's intended one.
  *
- * BOTH CASES ARE SHOWN, and the second is the operator's own requirement: "We
- * need a way to notify if we don't know." An unknown that reads as healthy is
- * the failure this Hive keeps rediscovering, so a worker Swarm cannot check is
- * listed here rather than quietly assumed fine.
+ * Unknown histories remain visible in runtime details. They are not evidence
+ * of a wrong default and must not manufacture an operator action here.
  *
  * It does NOT offer to switch. Picking the newest thread on the operator's
  * behalf is a guess about which one they wanted, and a wrong guess is the same
@@ -36,16 +34,13 @@ export default function ConversationDriftCard({
   onOpenWorker: (workerId: string) => void;
 }) {
   const stale = workers.filter((worker) => worker.freshness.state === "stale");
-  const unknown = workers.filter((worker) => worker.freshness.state === "unknown");
-  if (stale.length === 0 && unknown.length === 0) return null;
+  if (stale.length === 0) return null;
 
   return (
     <article className="attention-card conversation-drift" aria-label="Worker conversations">
       <header>
         <strong>
-          {stale.length > 0
-            ? `${stale.length} conversation default${stale.length === 1 ? "" : "s"} to review`
-            : "Some worker conversations could not be checked"}
+          {`${stale.length} conversation default${stale.length === 1 ? "" : "s"} to review`}
         </strong>
       </header>
       {stale.length > 0 ? (
@@ -66,22 +61,6 @@ export default function ConversationDriftCard({
                 </li>
               );
             })}
-          </ul>
-        </>
-      ) : null}
-      {unknown.length > 0 ? (
-        <>
-          <p className="conversation-drift-unknown">
-            Swarm could not tell which conversation is newest for {unknown.length} worker
-            {unknown.length === 1 ? "" : "s"}. That is reported rather than assumed healthy.
-          </p>
-          <ul>
-            {unknown.map((worker) => (
-              <li key={worker.worker_id}>
-                <button type="button" onClick={() => onOpenWorker(worker.worker_id)}>{worker.name}</button>
-                <small>{(worker.freshness as Extract<ConversationFreshness, { state: "unknown" }>).reason}.</small>
-              </li>
-            ))}
           </ul>
         </>
       ) : null}

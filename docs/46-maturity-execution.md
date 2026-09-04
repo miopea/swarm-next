@@ -6,6 +6,22 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4/P6: unknown conversation history is diagnostic, not a decision
+
+- Needs You now shares a stale-default-only subset between its conversation
+  review card and count. A missing/unreadable history is not proof of lost context
+  or an instruction for the operator to choose another conversation.
+- Unknown histories remain visible with worker names and original reasons in
+  collapsed runtime details, with the existing bounded retry action. They clear
+  when a subsequent check resolves them; no acknowledgement or new notification
+  is required. Scan request failures retain their existing runtime warning.
+- The card itself refuses unknown-only input and excludes unknown rows from a
+  mixed result. Confirmed stale defaults retain the preceding navigation fix.
+  All 40 App/card tests and the production web build passed; diff checks passed.
+  The existing terminal chunk-size warning remains. Browser/device visual
+  acceptance is not established by these component/integration tests.
+- No push, deployment, release, live worker interruption or phase completion.
+
 ### P4/P6: conversation-review action opens the intended terminal
 
 - The Needs You conversation-review card emitted a durable worker ID directly

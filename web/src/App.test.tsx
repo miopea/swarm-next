@@ -1105,6 +1105,29 @@ test.each(["busy", "malformed"])("conversation scan %s stays in runtime status a
   expect(reads).toBe(2);
 });
 
+test("unknown conversation history stays in runtime details and clears without acknowledgement", async () => {
+  const baseFetch = bootFetch();
+  let recovered = false;
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => {
+    const url = String(input);
+    if (url.endsWith("/preferences/start-surface")) return Promise.resolve(ok({ start_surface: "decisions" }));
+    if (url.endsWith("/workers/conversations")) return Promise.resolve(ok({ workers: recovered ? [] : [{ worker_id: "new-worker", name: "Petal", freshness: { state: "unknown", reason: "No readable conversation entry" } }] }));
+    return baseFetch(input);
+  }));
+  render(<App />);
+  const summary = await screen.findByText("Conversation history unconfirmed · 1");
+  const details = summary.closest("details")!;
+  expect(details).not.toHaveAttribute("open");
+  expect(screen.getByRole("region", { name: "Runtime and system status" })).toContainElement(details);
+  expect(screen.getByRole("button", { name: /^Needs you/ })).toHaveTextContent("0");
+  expect(screen.queryByRole("article", { name: "Worker conversations" })).not.toBeInTheDocument();
+  fireEvent.click(summary);
+  expect(within(details).getByText(/No readable conversation entry/)).toBeInTheDocument();
+  recovered = true;
+  fireEvent.click(within(details).getByRole("button", { name: "Retry conversation checks" }));
+  await waitFor(() => expect(screen.queryByText("Conversation history unconfirmed · 1")).not.toBeInTheDocument());
+});
+
 test("hidden windows defer transcript scans and background status polls until visible", async () => {
   let visibility: DocumentVisibilityState = "hidden";
   const visibilitySpy = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);

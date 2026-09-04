@@ -1531,14 +1531,12 @@ export function App() {
   // The card carries the number itself, so the operator sees how much without
   // opening anything; the badge counts things to deal with, not rows.
   const unsettledReviewAttentionCount = unsettledReview.length > 0 ? 1 : 0;
-  // A WORKER ABOUT TO RESUME THE WRONG THREAD IS THE OPERATOR'S, AND ONLY
-  // THEIRS. ConversationDriftCard says so itself — "Swarm does not switch for
-  // you: which thread is the right one is a judgement about your work. Open the
-  // worker and resume the one you want." It rendered on Needs You and counted
-  // nothing, which is the same badge-disagrees-with-page defect fixed twice
-  // above for held deliveries and blocked escalations. Third instance.
-  const conversationDriftAttentionCount =
-    workerConversations.some((worker) => worker.freshness.state !== "current") ? 1 : 0;
+  // A reviewable default is distinct from a scan that cannot establish history.
+  // Share the same actionable subset between the card and badge; unknowns stay
+  // visible in runtime diagnostics without manufacturing a human decision.
+  const conversationDefaultsToReview = workerConversations.filter((worker) => worker.freshness.state === "stale");
+  const uncheckedConversations = workerConversations.filter((worker) => worker.freshness.state === "unknown");
+  const conversationDriftAttentionCount = conversationDefaultsToReview.length > 0 ? 1 : 0;
   // ⚠️ unsettledReviewAttentionCount IS DELIBERATELY ABSENT, and so is its card.
   // QueuesView's own docstring names it as the anti-pattern: "a card there
   // reading 'N pieces of finished work are waiting on Queen' is Queen's backlog
@@ -1996,6 +1994,18 @@ export function App() {
               <button type="button" className="runtime-update-run" onClick={() => void retryConversationChecks()}>Retry conversation checks</button>
             </div>
           ) : null}
+          {operatorToken && uncheckedConversations.length > 0 ? (
+            <details className="runtime-update-card">
+              <summary>Conversation history unconfirmed · {uncheckedConversations.length}</summary>
+              <p className="runtime-update-detail">Swarm could not verify these histories. This does not prove context was lost or require a conversation change.</p>
+              <ul>
+                {uncheckedConversations.map((worker) => <li key={worker.worker_id}>
+                  <strong>{worker.name}</strong>: {worker.freshness.state === "unknown" ? worker.freshness.reason : ""}
+                </li>)}
+              </ul>
+              <button type="button" className="runtime-update-run" onClick={() => void retryConversationChecks()}>Retry conversation checks</button>
+            </details>
+          ) : null}
           {/* One per subsystem rather than only the most severe: they are
               independent and can all be true at once, and ranking them into a
               single pill hid the others until the first was dealt with.
@@ -2319,7 +2329,7 @@ export function App() {
               attentionCards={<>
                 <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onReviseReply={reviseAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
-                <ConversationDriftCard workers={workerConversations} onOpenWorker={openWorkerProfile} />
+                <ConversationDriftCard workers={conversationDefaultsToReview} onOpenWorker={openWorkerProfile} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
                 <HeldDeliveryAttentionCard
                   held={actionableHeldDeliveries}

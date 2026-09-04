@@ -24,14 +24,16 @@ test("names the workers that would resume an older conversation", () => {
   expect(screen.queryByText(/loses whatever happened/)).not.toBeInTheDocument();
 });
 
-/**
- * The operator's own requirement: "We need a way to notify if we don't know."
- * A worker Swarm cannot check must appear, not be quietly counted as healthy.
- */
-test("reports workers it could not check rather than assuming they are fine", () => {
-  render(<ConversationDriftCard workers={[unknown, current]} onOpenWorker={vi.fn()} />);
-  expect(screen.getByText("ShotCraft")).toBeInTheDocument();
-  expect(screen.getByText(/could not tell which conversation is newest/i)).toBeInTheDocument();
+test("unknown histories do not manufacture an attention card", () => {
+  const { container } = render(<ConversationDriftCard workers={[unknown, current]} onOpenWorker={vi.fn()} />);
+  expect(container).toBeEmptyDOMElement();
+});
+
+test("mixed results only ask for review of confirmed stale defaults", () => {
+  render(<ConversationDriftCard workers={[stale, unknown, current]} onOpenWorker={vi.fn()} />);
+  expect(screen.getByText("Scout")).toBeInTheDocument();
+  expect(screen.queryByText("ShotCraft")).not.toBeInTheDocument();
+  expect(screen.getByText("1 conversation default to review")).toBeInTheDocument();
 });
 
 test("says nothing when every conversation is the newest", () => {
