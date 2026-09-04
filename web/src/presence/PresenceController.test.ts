@@ -81,6 +81,75 @@ test("mobile devices never request desktop lock-detection permission", async () 
   controller.stop();
 });
 
+test("stale observations cannot replace a newer device state or mode", async () => {
+  const replies: ((presence: OperatorPresence) => void)[] = [];
+  const observe = vi.fn().mockImplementation(() => new Promise<OperatorPresence>((resolve) => replies.push(resolve)));
+  const onPresence = vi.fn();
+  const controller = new PresenceController(observe);
+  controller.start("secret", onPresence, vi.fn());
+  Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+  document.dispatchEvent(new Event("visibilitychange"));
+  replies[0](atHive);
+  await vi.runAllTicks();
+  expect(onPresence).not.toHaveBeenCalled();
+  expect(observe).toHaveBeenCalledTimes(2);
+  controller.setPresenceMode("night_watch");
+  replies[1]({ mode: "away", manual_mode: null, source: "inactive_device" });
+  await vi.runAllTicks();
+  expect(onPresence).not.toHaveBeenCalled();
+  Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+  document.dispatchEvent(new Event("visibilitychange"));
+  expect(observe.mock.lastCall?.[4]).toBe(true);
+  replies[2](atHive);
+  await vi.runAllTicks();
+  expect(onPresence).toHaveBeenCalledOnce();
+  expect(onPresence).toHaveBeenCalledWith(atHive);
+  controller.stop();
+});
+
+test("desktop return survives a heartbeat queued behind another observation", async () => {
+  const replies: ((presence: OperatorPresence) => void)[] = [];
+  const observe = vi.fn().mockImplementation(() => new Promise<OperatorPresence>((resolve) => replies.push(resolve)));
+  const controller = new PresenceController(observe);
+  controller.start("secret", vi.fn(), vi.fn());
+  controller.setPresenceMode("night_watch");
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(observe).toHaveBeenCalledTimes(1);
+  replies[0](atHive);
+  await vi.runAllTicks();
+  expect(observe.mock.lastCall?.[4]).toBe(true);
+  controller.stop();
+  replies[1](atHive);
+  await vi.runAllTicks();
+});
+
+test("permission requests coalesce and a late grant cannot resurrect a stopped controller", async () => {
+  let grant!: (permission: string) => void;
+  const start = vi.fn().mockResolvedValue(undefined);
+  class FakeIdleDetector extends EventTarget {
+    static requestPermission = vi.fn(() => new Promise<string>((resolve) => { grant = resolve; }));
+    start = start;
+  }
+  vi.stubGlobal("IdleDetector", FakeIdleDetector);
+  const oldStates = vi.fn();
+  const newStates = vi.fn();
+  const controller = new PresenceController(vi.fn().mockResolvedValue(atHive));
+  controller.start("old", vi.fn(), oldStates);
+  const first = controller.enableLockDetection();
+  const second = controller.enableLockDetection();
+  expect(FakeIdleDetector.requestPermission).toHaveBeenCalledOnce();
+  expect(first).toBe(second);
+  controller.stop();
+  controller.start("new", vi.fn(), newStates);
+  grant("granted");
+  await expect(first).resolves.toBe(false);
+  expect(start).not.toHaveBeenCalled();
+  expect(newStates).toHaveBeenCalledTimes(1);
+  expect(oldStates).not.toHaveBeenCalledWith("enabled");
+  controller.stop();
+});
+
 test("desktop entry and deliberate return are distinct from background heartbeats", async () => {
   const observe = vi.fn().mockResolvedValue(atHive);
   const controller = new PresenceController(observe);

@@ -4,6 +4,22 @@ Approved program: [scope and acceptance](45-daily-driver-maturity-plan.md).
 Branch: `codex/daily-driver-maturity`. Starting revision: `36420b3`.
 Local commits authorized; no push, deployment, releases, or live worker interruption.
 
+### P5m: stale browser presence responses and permission completions
+
+- The presence controller suppresses a response superseded by a queued device
+  observation or an independently supplied mode. It still sends the latest
+  pending observation, and a queued desktop-return flag survives a later ordinary
+  heartbeat. These are browser publication guards, not server mutation fencing.
+- Lock permission requests coalesce. A delayed grant after stop/restart cannot
+  install a detector or publish status into the replacement controller. An
+  aborted detector startup returns false instead of claiming successful setup.
+- Passed 42 controller/App tests, then all 11 controller tests after final abort
+  handling refinement; production web build passed. Corrected overly narrow mock
+  call tuple types found by TypeScript. Existing terminal chunk warning remains.
+- Network request deadlines, cross-client/server ordering, and atomic ordering
+  with manual-mode writes remain open. No live lock permission was requested,
+  service changed, deployment performed, or full presence acceptance claimed.
+
 ### P5l: Reachable distinguishes phone use from desktop engagement
 
 - Automatic At Hive now requires fresh desktop evidence. Phone activity remains

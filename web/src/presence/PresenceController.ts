@@ -23,6 +23,9 @@ export class PresenceController {
   #pendingReturn = false;
   #nightWatch = false;
   #generation = 0;
+  #observationRevision = 0;
+  #policyRevision = 0;
+  #lockRequest?: Promise<boolean>;
   #idleAbort?: AbortController;
   #screenLocked = false;
   #userIdle = false;
@@ -61,6 +64,7 @@ export class PresenceController {
     this.#generation += 1;
     this.#idleAbort?.abort();
     this.#idleAbort = undefined;
+    this.#lockRequest = undefined;
     this.#screenLocked = false;
     this.#userIdle = false;
     if (this.#timer !== undefined) window.clearInterval(this.#timer);
@@ -76,7 +80,17 @@ export class PresenceController {
     this.#sending = false;
   }
 
-  async enableLockDetection(): Promise<boolean> {
+  enableLockDetection(): Promise<boolean> {
+    if (this.#lockRequest) return this.#lockRequest;
+    const generation = this.#generation;
+    const pending = this.#enableLockDetection(generation).finally(() => {
+      if (this.#lockRequest === pending) this.#lockRequest = undefined;
+    });
+    this.#lockRequest = pending;
+    return pending;
+  }
+
+  async #enableLockDetection(generation: number): Promise<boolean> {
     if (!this.#token || this.#deviceClass !== "desktop" || !("IdleDetector" in window)) {
       this.#onLockState("unsupported");
       return false;
@@ -84,19 +98,20 @@ export class PresenceController {
     this.#onLockState("enabling");
     try {
       const permission = await IdleDetector.requestPermission();
+      if (generation !== this.#generation || !this.#token) return false;
       if (permission !== "granted") {
         this.#onLockState("denied");
         return false;
       }
-      await this.#startIdleDetector();
-      return true;
+      return await this.#startIdleDetector();
     } catch {
-      if (!controllerAborted(this.#idleAbort)) this.#onLockState("error");
+      if (generation === this.#generation && !controllerAborted(this.#idleAbort)) this.#onLockState("error");
       return false;
     }
   }
 
   setPresenceMode(mode: OperatorPresence["mode"] | undefined) {
+    this.#policyRevision += 1;
     this.#nightWatch = mode === "night_watch";
   }
 
@@ -129,10 +144,16 @@ export class PresenceController {
       this.#queue(this.#state);
     };
     detector.addEventListener("change", update, { signal: controller.signal });
-    await detector.start({ threshold: 60_000, signal: controller.signal });
-    if (controller.signal.aborted) return;
+    try {
+      await detector.start({ threshold: 60_000, signal: controller.signal });
+    } catch (error) {
+      if (controller.signal.aborted) return false;
+      throw error;
+    }
+    if (controller.signal.aborted) return false;
     this.#onLockState("enabled");
     update();
+    return true;
   }
 
   #handleVisibility = () => {
@@ -150,6 +171,7 @@ export class PresenceController {
 
   #queue(state: PresenceObservationState, desktopReturn = false) {
     if (!this.#token) return;
+    this.#observationRevision += 1;
     this.#pending = state;
     this.#pendingReturn = state === "active" && this.#deviceClass === "desktop" && (desktopReturn || this.#pendingReturn);
     if (!this.#sending) void this.#flush();
@@ -164,9 +186,14 @@ export class PresenceController {
       this.#pendingReturn = false;
       this.#pending = undefined;
       const token = this.#token;
+      const observationRevision = this.#observationRevision;
+      const policyRevision = this.#policyRevision;
       try {
         const presence = await this.observe(token, this.#deviceId, this.#deviceClass, state, desktopReturn);
         if (generation !== this.#generation) return;
+        // A newer device observation or independently read/manual mode owns the UI.
+        // Keep flushing the latest pending state without publishing old evidence.
+        if (observationRevision !== this.#observationRevision || policyRevision !== this.#policyRevision) continue;
         if (state === "active") this.#lastActiveSentAt = this.now();
         this.#nightWatch = presence.mode === "night_watch";
         this.#onPresence(presence);
