@@ -6,6 +6,30 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P6: browser verification exposes and fixes mobile runtime access
+
+- Reconnected through the supported Edge extension and opened a separate local
+  harness tab. Its dedicated Vite configuration has no Hive proxy and refuses
+  the production entry; all displayed data was synthetic. Added an opt-in
+  unknown-history fixture and a correctly shaped empty conversation response.
+- Desktop at an observed 1454x975 showed the one decision counted once and
+  unknown history collapsed in runtime status, with no horizontal overflow.
+  At 390x844, browser inspection exposed that CSS hid the runtime area entirely
+  except for machine-pressure warnings, leaving its other diagnostics unreachable.
+- Added a mobile-only System toggle controlling the same runtime region. The
+  panel is vertically bounded to 40dvh with internal scrolling; machine-pressure
+  warnings still show when collapsed. No duplicate incident or message state.
+- Verified actual Edge viewports 390x844 and 320x740: System was 44px high,
+  no document horizontal overflow, and history details were reachable. Expanded
+  runtime at 390px measured 366px wide and about 278px tall. Closing System hid
+  the region; resetting the viewport restored the desktop footer and hid the
+  toggle. These are responsive desktop-browser checks, not Android/iOS acceptance.
+- All 36 App tests passed, including disclosure state; TypeScript subsequently
+  caught a test-only unsupported locator option, which was removed. The final
+  production web build passed; existing terminal chunk warning remains. Browser viewport was reset, the
+  test tab closed, and the owned port-5202 fixture server stopped. No live tab,
+  worker, deployment or release was changed.
+
 ### P4/P6: unknown conversation history is diagnostic, not a decision
 
 - Needs You now shares a stale-default-only subset between its conversation

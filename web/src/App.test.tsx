@@ -1121,11 +1121,19 @@ test("unknown conversation history stays in runtime details and clears without a
   expect(screen.getByRole("region", { name: "Runtime and system status" })).toContainElement(details);
   expect(screen.getByRole("button", { name: /^Needs you/ })).toHaveTextContent("0");
   expect(screen.queryByRole("article", { name: "Worker conversations" })).not.toBeInTheDocument();
+  const system = screen.getByRole("button", { name: "System" });
+  expect(system).toHaveAttribute("aria-expanded", "false");
+  fireEvent.click(system);
+  expect(system).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByRole("region", { name: "Runtime and system status" })).toHaveClass("mobile-open");
   fireEvent.click(summary);
   expect(within(details).getByText(/No readable conversation entry/)).toBeInTheDocument();
   recovered = true;
   fireEvent.click(within(details).getByRole("button", { name: "Retry conversation checks" }));
   await waitFor(() => expect(screen.queryByText("Conversation history unconfirmed · 1")).not.toBeInTheDocument());
+  fireEvent.click(system);
+  expect(system).toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByRole("region", { name: "Runtime and system status" })).not.toHaveClass("mobile-open");
 });
 
 test("hidden windows defer transcript scans and background status polls until visible", async () => {

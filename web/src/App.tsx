@@ -281,6 +281,7 @@ export function App() {
   const [feedbackRevision, setFeedbackRevision] = useState(0);
   const [showCommands, setShowCommands] = useState(false);
   const [showMobileWorkers, setShowMobileWorkers] = useState(false);
+  const [showMobileRuntime, setShowMobileRuntime] = useState(false);
   // No search field on the phone, and so no initial focus to give one. Opening
   // the picker used to focus a text input, which raised the keyboard over the
   // list the operator had just asked to see. Focus falls to the first control
@@ -1819,6 +1820,9 @@ export function App() {
               <button className={surface === "settings" ? "selected" : ""} aria-current={surface === "settings" ? "page" : undefined} onClick={() => openSettings()}>
                 <span><SettingsIcon /> Settings</span>
               </button>
+              <button type="button" className="mobile-runtime-toggle" aria-expanded={showMobileRuntime} aria-controls="runtime-system-status" onClick={() => setShowMobileRuntime((open) => !open)}>
+                <span><DiagnosticsIcon /> System</span>
+              </button>
 
               <PublicAddressWarning
                 status={publicAddress}
@@ -1971,7 +1975,7 @@ export function App() {
             version it sits next to is about, and the lockup is a row the
             operator reaches for often enough that a rarely-used control there
             is mostly a misclick risk. */}
-        {detached ? null : <div className="rail-footer" role="region" aria-label="Runtime and system status">
+        {detached ? null : <div id="runtime-system-status" className={`rail-footer${showMobileRuntime ? " mobile-open" : ""}`} role="region" aria-label="Runtime and system status">
           <RuntimeStatus state={loadState} developmentMode={developmentMode} />
           {operatorToken ? (
             <button

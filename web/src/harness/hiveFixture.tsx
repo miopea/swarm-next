@@ -55,6 +55,10 @@ export function hiveFixture(path: string): unknown | undefined {
       };
     case "/api/v1/workers":
       return demoWorkers;
+    case "/api/v1/workers/conversations":
+      return { workers: new URLSearchParams(window.location.search).get("history") === "unknown"
+        ? [{ worker_id: "demo-history-worker", name: "Petal", freshness: { state: "unknown", reason: "No readable conversation entry in this synthetic workspace" } }]
+        : [] };
     case "/api/v1/tasks":
       return demoTasks;
     case "/api/v1/decisions":

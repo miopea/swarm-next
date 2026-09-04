@@ -474,6 +474,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
    the column, so where the runtime lived depended on which screen you were on. */
 .rail-footer { display: flex; min-width: 0; flex-wrap: wrap; flex-direction: column; align-items: flex-start; gap: 7px; margin-top: auto; padding: 13px 8px 2px; border-top: 1px solid var(--line); }
 .rail-footer .runtime-status { min-width: 0; }
+.surface-nav .mobile-runtime-toggle { display: none; }
 .rail-footer .runtime-update { max-width: 100%; }
 .runtime-status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .72rem; }
 .runtime-status.error { color: var(--bad); }
@@ -2070,8 +2071,11 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
      read Swarm on a phone. A warning that only reaches the desktop is not the
      warning they asked for. Everything else in the footer stays hidden, so the
      phone gains exactly the one line worth its screen. */
-  .rail-footer:has(.machine-pressure) { display: flex; flex-direction: row; padding: 8px 12px; border-top: 0; }
-  .rail-footer:has(.machine-pressure) > *:not(.machine-pressure) { display: none; }
+  .rail-footer:has(.machine-pressure):not(.mobile-open) { display: flex; flex-direction: row; padding: 8px 12px; border-top: 0; }
+  .rail-footer:has(.machine-pressure):not(.mobile-open) > *:not(.machine-pressure) { display: none; }
+  .surface-nav .mobile-runtime-toggle { display: flex; }
+  .rail-footer.mobile-open { display: flex; flex-wrap: nowrap; max-height: 40dvh; overflow-y: auto; padding-bottom: 10px; }
+  .rail-footer.mobile-open > * { flex-shrink: 0; max-width: 100%; }
   /* A phone cannot usefully open a second window, so detaching is not offered
      there at all. Making these permanently visible because touch has no hover
      was the wrong answer to the right observation — it put five controls in the
