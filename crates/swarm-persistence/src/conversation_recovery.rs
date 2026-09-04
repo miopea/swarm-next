@@ -564,7 +564,7 @@ mod tests {
         store
             .repoint_provider_conversation(worker.id, &manual)
             .unwrap();
-        store.connection().unwrap().execute_batch("ALTER TABLE worker_startup_context DROP COLUMN selection_revision; ALTER TABLE worker_startup_context DROP COLUMN selection_suspended; PRAGMA user_version = 127;").unwrap();
+        store.connection().unwrap().execute_batch("ALTER TABLE task_dispatches DROP COLUMN generation; ALTER TABLE worker_startup_context DROP COLUMN selection_revision; ALTER TABLE worker_startup_context DROP COLUMN selection_suspended; PRAGMA user_version = 127;").unwrap();
         drop(store);
         let store = TaskStore::open(&path).unwrap();
         assert!(
@@ -655,7 +655,7 @@ mod tests {
         store
             .connection()
             .unwrap()
-            .execute_batch("DROP TABLE worker_startup_context; PRAGMA user_version = 126;")
+            .execute_batch("ALTER TABLE task_dispatches DROP COLUMN generation; DROP TABLE worker_startup_context; PRAGMA user_version = 126;")
             .unwrap();
         drop(store);
         let store = TaskStore::open(&path).unwrap();

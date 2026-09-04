@@ -56,6 +56,16 @@ sleeping, her next session binding creates the first dispatch atomically.
 
 ## Consequences
 
+Schema 129 adds a nonnegative integer briefing generation, initially zero for
+existing assignments. Returning Review/Blocked work to Active increments it in
+the same task transition transaction. Overflow fails that transaction rather
+than wrapping. Claims carry the generation; completion, deferral and failure
+must match it before changing the outbox. Task/session identity alone cannot
+authorize a result from an earlier briefing of the same returned assignment.
+Prompt-hold subjects carry assignment plus generation and are projected against
+that exact pending row. No provider process or conversation is restarted by this
+transition. Rollback across this schema requires a compatible database backup.
+
 The daily-driver maturity policy also gates new task briefings during Night
 Watch using the builder-owned provider promotion list. Experimental and unknown
 providers retain their queued briefings without consuming attempts; filtering

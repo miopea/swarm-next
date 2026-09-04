@@ -6,6 +6,22 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: returned work has a distinct durable briefing generation
+
+- Schema 129 adds an integer generation to each task dispatch, starting at zero.
+  Returning Review/Blocked work increments it in the task transaction. Completion,
+  deferral and failure require the claimed generation; old results return false
+  without touching the newer briefing. Hold subjects carry the same generation.
+- All 20 dispatch tests passed before the final overflow test, which also passed:
+  exhausted generation rolls back the task transition. Migration from schema 128
+  preserves an existing pending briefing. Strict Linux-target API/persistence lint
+  passed with updated callers and fixtures. Adjacent recovery/Dogfood upgrade
+  fixtures now remove the generation column when constructing older schemas;
+  all 10 recovery tests and four Dogfood tests passed.
+- No worker or conversation restart, delivery replay, or live database migration.
+  Rollback across this schema requires a compatible database backup. Live combined
+  task/Queen/operator acceptance remains open; no push, deployment or release.
+
 ### P4: decision-answer hold applicability and readable persistence query
 
 - Decision hold observations now carry the delivery session. Known decisions

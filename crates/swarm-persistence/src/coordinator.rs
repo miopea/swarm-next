@@ -4074,7 +4074,7 @@ mod tests {
             .remove(0);
         assert!(
             store
-                .complete_task_dispatch(&dispatch.assignment_id, 101)
+                .complete_task_dispatch(&dispatch.assignment_id, dispatch.generation, 101)
                 .unwrap()
         );
         store
@@ -4166,7 +4166,7 @@ mod tests {
             .remove(0);
         assert!(
             store
-                .complete_task_dispatch(&dispatch.assignment_id, 101)
+                .complete_task_dispatch(&dispatch.assignment_id, dispatch.generation, 101)
                 .unwrap()
         );
         let candidate = store
@@ -4250,7 +4250,7 @@ mod tests {
             .remove(0);
         assert!(
             store
-                .complete_task_dispatch(&dispatch.assignment_id, 101)
+                .complete_task_dispatch(&dispatch.assignment_id, dispatch.generation, 101)
                 .unwrap()
         );
 
@@ -4331,7 +4331,7 @@ mod tests {
             .remove(0);
         assert!(
             store
-                .complete_task_dispatch(&dispatch.assignment_id, 101)
+                .complete_task_dispatch(&dispatch.assignment_id, dispatch.generation, 101)
                 .unwrap()
         );
         store
@@ -5144,7 +5144,11 @@ mod tests {
             "re-assigning Active work must send the brief again"
         );
         store
-            .complete_task_dispatch(&redelivered[0].assignment_id, 2_001)
+            .complete_task_dispatch(
+                &redelivered[0].assignment_id,
+                redelivered[0].generation,
+                2_001,
+            )
             .unwrap();
 
         // And the attention clears itself once the brief lands, rather than
@@ -5777,7 +5781,7 @@ impl TaskStore {
                        AND cleared_at IS NULL AND subject = (
                          SELECT 'task-brief:' || dispatch.task_id FROM task_dispatches dispatch
                          JOIN task_assignments assignment ON assignment.id = dispatch.assignment_id
-                         WHERE dispatch.assignment_id = ?1 AND dispatch.worker_id = ?2
+                         WHERE dispatch.assignment_id || ':' || dispatch.generation = ?1 AND dispatch.worker_id = ?2
                            AND assignment.worker_session_id = ?3 AND assignment.released_at IS NULL
                            AND dispatch.state IN ('queued','dispatching'))",
                     params![

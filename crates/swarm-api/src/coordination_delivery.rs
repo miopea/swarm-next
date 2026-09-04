@@ -1989,6 +1989,7 @@ mod tests {
             (
                 "task brief",
                 task_dispatch_message(&TaskDispatch {
+                    generation: 0,
                     assignment_id: "assignment-1".to_owned(),
                     task_id: task,
                     worker_id: WorkerId::new(),
@@ -2108,6 +2109,7 @@ mod tests {
             (
                 "task brief",
                 task_dispatch_message(&TaskDispatch {
+                    generation: 0,
                     assignment_id: "assignment-1".to_owned(),
                     task_id: task,
                     worker_id: WorkerId::new(),

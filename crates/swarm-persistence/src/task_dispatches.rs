@@ -19,6 +19,21 @@ const MAX_PENDING_DISPATCHES: i64 = 256;
 const ABANDONED_BRIEF_SECONDS: i64 = 30 * 60;
 const MAX_DISPATCH_ATTEMPTS: i64 = 3;
 
+pub(super) fn migrate_generation(
+    transaction: &rusqlite::Transaction<'_>,
+    version: i64,
+) -> rusqlite::Result<()> {
+    if version >= super::TASK_DISPATCH_GENERATION_SCHEMA_VERSION {
+        return Ok(());
+    }
+    transaction.execute_batch("ALTER TABLE task_dispatches ADD COLUMN generation INTEGER NOT NULL DEFAULT 0 CHECK(typeof(generation) = 'integer' AND generation >= 0);")?;
+    transaction.pragma_update(
+        None,
+        "user_version",
+        super::TASK_DISPATCH_GENERATION_SCHEMA_VERSION,
+    )
+}
+
 /// One operator ruling, sized for a terminal line.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TaskRuling {
@@ -33,6 +48,7 @@ pub struct TaskRuling {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TaskDispatch {
     pub assignment_id: String,
+    pub generation: i64,
     pub task_id: TaskId,
     pub worker_id: WorkerId,
     pub session_id: WorkerSessionId,
@@ -359,9 +375,10 @@ impl TaskStore {
     pub fn complete_task_dispatch(
         &self,
         assignment_id: &str,
+        generation: i64,
         now: i64,
     ) -> Result<bool, TaskStoreError> {
-        self.finish_task_dispatch(assignment_id, now, None)
+        self.finish_task_dispatch(assignment_id, generation, now, None)
     }
 
     /// Records a definitive retryable failure or an ambiguous outcome.
@@ -371,10 +388,11 @@ impl TaskStore {
     pub fn fail_task_dispatch(
         &self,
         assignment_id: &str,
+        generation: i64,
         now: i64,
         failure: TaskDispatchFailure,
     ) -> Result<bool, TaskStoreError> {
-        self.finish_task_dispatch(assignment_id, now, Some(failure))
+        self.finish_task_dispatch(assignment_id, generation, now, Some(failure))
     }
 
     /// Returns a claimed briefing to its durable queue without consuming an
@@ -385,6 +403,7 @@ impl TaskStore {
     pub fn defer_task_dispatch(
         &self,
         assignment_id: &str,
+        generation: i64,
         now: i64,
     ) -> Result<bool, TaskStoreError> {
         let mut connection = self.connection()?;
@@ -392,8 +411,8 @@ impl TaskStore {
         let changed = transaction.execute(
             "UPDATE task_dispatches
              SET state = 'queued', attempts = MAX(attempts - 1, 0), updated_at = ?2
-             WHERE assignment_id = ?1 AND state = 'dispatching'",
-            params![assignment_id, now],
+             WHERE assignment_id = ?1 AND state = 'dispatching' AND generation = ?3",
+            params![assignment_id, now, generation],
         )? == 1;
         if changed {
             insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
@@ -405,11 +424,19 @@ impl TaskStore {
     fn finish_task_dispatch(
         &self,
         assignment_id: &str,
+        generation: i64,
         now: i64,
         failure: Option<TaskDispatchFailure>,
     ) -> Result<bool, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
+        let current: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM task_dispatches WHERE assignment_id = ?1 AND generation = ?2 AND state = 'dispatching')",
+            params![assignment_id, generation], |row| row.get(0),
+        )?;
+        if !current {
+            return Ok(false);
+        }
         let (state, delivered_at) = match failure {
             None => (TaskDispatchState::Delivered.to_string(), Some(now)),
             Some(TaskDispatchFailure::Uncertain) => {
@@ -557,7 +584,7 @@ fn deliverable_briefings(
                     (SELECT COALESCE(NULLIF(link.sender_name, ''), link.sender_address)
                      FROM email_message_links link
                      WHERE link.task_id = t.id
-                     ORDER BY link.received_at LIMIT 1)
+                     ORDER BY link.received_at LIMIT 1), td.generation
              FROM task_dispatches td
              JOIN task_assignments a ON a.id = td.assignment_id AND a.released_at IS NULL
              JOIN tasks t ON t.id = td.task_id
@@ -640,6 +667,7 @@ fn task_dispatch_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskDispa
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
     Ok(TaskDispatch {
         assignment_id: row.get(0)?,
+        generation: row.get(10)?,
         task_id: row
             .get::<_, String>(1)?
             .parse()
@@ -669,13 +697,146 @@ mod tests {
     use super::*;
 
     #[test]
+    fn returned_work_rejects_results_and_holds_from_the_prior_briefing() {
+        let (store, task, session) = assigned_task();
+        let old = store
+            .claim_task_dispatches(100, &HashSet::new())
+            .unwrap()
+            .remove(0);
+        store
+            .transition_task(task, swarm_domain::TaskState::Active)
+            .unwrap();
+        store
+            .transition_task(task, swarm_domain::TaskState::Review)
+            .unwrap();
+        store
+            .transition_task(task, swarm_domain::TaskState::Active)
+            .unwrap();
+        let new = store
+            .claim_task_dispatches(101, &HashSet::new())
+            .unwrap()
+            .remove(0);
+        assert_eq!(old.assignment_id, new.assignment_id);
+        assert_eq!(new.generation, old.generation + 1);
+        assert!(
+            !store
+                .complete_task_dispatch(&old.assignment_id, old.generation, 102)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .defer_task_dispatch(&old.assignment_id, old.generation, 102)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .fail_task_dispatch(
+                    &old.assignment_id,
+                    old.generation,
+                    102,
+                    TaskDispatchFailure::Retryable
+                )
+                .unwrap()
+        );
+        let old_subject = format!("task-dispatch:{}:{}", old.assignment_id, old.generation);
+        store
+            .record_coordinator_refusal(
+                crate::REFUSAL_DELIVERY_HELD,
+                &old_subject,
+                Some(old.worker_id),
+                Some(session),
+                "old",
+                102,
+            )
+            .unwrap();
+        assert!(
+            store
+                .standing_coordinator_refusals(10_000, 0)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .complete_task_dispatch(&new.assignment_id, new.generation, 103)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn generation_migration_preserves_existing_pending_briefing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("generation.sqlite3");
+        let store = TaskStore::open(&path).unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store.create_task("Existing work", "/workspace").unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store.assign_task(task.id, session).unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute_batch(
+                "ALTER TABLE task_dispatches DROP COLUMN generation; PRAGMA user_version = 128;",
+            )
+            .unwrap();
+        drop(store);
+        let reopened = TaskStore::open(&path).unwrap();
+        let dispatch = reopened
+            .claim_task_dispatches(100, &HashSet::new())
+            .unwrap()
+            .remove(0);
+        assert_eq!(dispatch.generation, 0);
+        assert_eq!(dispatch.task_id, task.id);
+        assert_eq!(reopened.schema_version().unwrap(), 129);
+    }
+
+    #[test]
+    fn briefing_generation_exhaustion_rolls_back_the_task_transition() {
+        let (store, task, _) = assigned_task();
+        store
+            .transition_task(task, swarm_domain::TaskState::Active)
+            .unwrap();
+        store
+            .transition_task(task, swarm_domain::TaskState::Review)
+            .unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE task_dispatches SET generation = ?1 WHERE task_id = ?2",
+                params![i64::MAX, task.to_string()],
+            )
+            .unwrap();
+        assert!(
+            store
+                .transition_task(task, swarm_domain::TaskState::Active)
+                .is_err()
+        );
+        assert_eq!(
+            store.get_task(task).unwrap().state,
+            swarm_domain::TaskState::Review
+        );
+    }
+
+    #[test]
     fn assignment_scoped_refusals_cannot_replace_or_clear_a_new_assignment() {
         let (store, task, session) = assigned_task();
         let old = store
             .claim_task_dispatches(100, &std::collections::HashSet::new())
             .unwrap()
             .remove(0);
-        let old_subject = format!("task-dispatch:{}", old.assignment_id);
+        let old_subject = format!("task-dispatch:{}:{}", old.assignment_id, old.generation);
         store
             .record_coordinator_refusal(
                 crate::REFUSAL_DELIVERY_HELD,
@@ -692,7 +853,7 @@ mod tests {
             .unwrap()
             .remove(0);
         assert_ne!(old.assignment_id, new.assignment_id);
-        let new_subject = format!("task-dispatch:{}", new.assignment_id);
+        let new_subject = format!("task-dispatch:{}:{}", new.assignment_id, new.generation);
         store
             .record_coordinator_refusal(
                 crate::REFUSAL_DELIVERY_HELD,
@@ -776,7 +937,7 @@ mod tests {
             );
             if resolve_by_completion {
                 store
-                    .complete_task_dispatch(&delivery.assignment_id, 101)
+                    .complete_task_dispatch(&delivery.assignment_id, delivery.generation, 101)
                     .unwrap();
             } else {
                 store
@@ -824,7 +985,7 @@ mod tests {
             .unwrap();
         assert_eq!(first.len(), 1, "the original briefing");
         store
-            .complete_task_dispatch(&first[0].assignment_id, 100)
+            .complete_task_dispatch(&first[0].assignment_id, first[0].generation, 100)
             .unwrap();
         store
             .transition_task(task_id, swarm_domain::TaskState::Active)
@@ -865,7 +1026,7 @@ mod tests {
             .unwrap();
         assert_eq!(first.len(), 1);
         store
-            .complete_task_dispatch(&first[0].assignment_id, 100)
+            .complete_task_dispatch(&first[0].assignment_id, first[0].generation, 100)
             .unwrap();
 
         store
@@ -983,7 +1144,7 @@ mod tests {
 
         assert!(
             store
-                .complete_task_dispatch(&dispatches[0].assignment_id, 402)
+                .complete_task_dispatch(&dispatches[0].assignment_id, dispatches[0].generation, 402)
                 .unwrap()
         );
         assert_eq!(
@@ -1054,7 +1215,11 @@ mod tests {
         assert_eq!(first_dispatch[0].task_id, first_id);
         let worker_id = first_dispatch[0].worker_id;
         store
-            .complete_task_dispatch(&first_dispatch[0].assignment_id, 101)
+            .complete_task_dispatch(
+                &first_dispatch[0].assignment_id,
+                first_dispatch[0].generation,
+                101,
+            )
             .unwrap();
         assert!(
             store
@@ -1102,6 +1267,7 @@ mod tests {
         store
             .fail_task_dispatch(
                 &claimed[0].assignment_id,
+                claimed[0].generation,
                 101,
                 TaskDispatchFailure::Uncertain,
             )
@@ -1172,7 +1338,7 @@ mod tests {
             .claim_task_dispatches(100, &std::collections::HashSet::new())
             .unwrap();
         store
-            .complete_task_dispatch(&first[0].assignment_id, 101)
+            .complete_task_dispatch(&first[0].assignment_id, first[0].generation, 101)
             .unwrap();
 
         store
@@ -1482,7 +1648,7 @@ mod tests {
             .unwrap();
         assert_eq!(delivered.len(), 1);
         store
-            .complete_task_dispatch(&delivered[0].assignment_id, 402)
+            .complete_task_dispatch(&delivered[0].assignment_id, delivered[0].generation, 402)
             .unwrap();
 
         let behind = ready_task_assigned_to(&store, session, "Behind it");

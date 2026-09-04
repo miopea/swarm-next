@@ -1688,7 +1688,7 @@ mod tests {
             .unwrap()
             .remove(0);
         store
-            .complete_task_dispatch(&dispatch.assignment_id, 101)
+            .complete_task_dispatch(&dispatch.assignment_id, dispatch.generation, 101)
             .unwrap();
         store
             .connection()

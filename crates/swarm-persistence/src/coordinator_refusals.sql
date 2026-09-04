@@ -69,7 +69,7 @@ SELECT refusal.kind, refusal.subject, refusal.worker_id, worker.name,
                         SELECT 1 FROM task_dispatches dispatch
                         JOIN task_assignments assignment ON assignment.id = dispatch.assignment_id
                         JOIN tasks task ON task.id = dispatch.task_id
-                        WHERE dispatch.assignment_id = substr(refusal.subject, 15)
+                        WHERE dispatch.assignment_id || ':' || dispatch.generation = substr(refusal.subject, 15)
                           AND task.removed_at IS NULL AND task.state IN ('ready', 'active')
                           AND dispatch.state IN ('queued', 'dispatching') AND assignment.released_at IS NULL
                           AND dispatch.worker_id = refusal.worker_id

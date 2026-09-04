@@ -1970,9 +1970,16 @@ impl AppState {
                 Ok(TerminalSubmission::Acknowledged) => {
                     clear_held_delivery_refusals(
                         store,
-                        &format!("task-dispatch:{}", delivery.assignment_id),
+                        &format!(
+                            "task-dispatch:{}:{}",
+                            delivery.assignment_id, delivery.generation
+                        ),
                     );
-                    store.complete_task_dispatch(&delivery.assignment_id, unix_timestamp())
+                    store.complete_task_dispatch(
+                        &delivery.assignment_id,
+                        delivery.generation,
+                        unix_timestamp(),
+                    )
                 }
                 Ok(TerminalSubmission::Deferred(reason)) => {
                     tracing::info!(task_id = %delivery.task_id, worker_id = %delivery.worker_id, ?reason, "task briefing is held at this worker's prompt");
@@ -1981,25 +1988,34 @@ impl AppState {
                     if let Some(kind) = reason.refusal_kind() {
                         let _ = store.record_coordinator_refusal(
                             kind,
-                            &format!("task-dispatch:{}", delivery.assignment_id),
+                            &format!(
+                                "task-dispatch:{}:{}",
+                                delivery.assignment_id, delivery.generation
+                            ),
                             Some(delivery.worker_id),
                             Some(delivery.session_id),
                             &reason.describe("A briefing"),
                             unix_timestamp(),
                         );
                     }
-                    store.defer_task_dispatch(&delivery.assignment_id, unix_timestamp())
+                    store.defer_task_dispatch(
+                        &delivery.assignment_id,
+                        delivery.generation,
+                        unix_timestamp(),
+                    )
                 }
                 Ok(TerminalSubmission::Rejected { code, message }) => {
                     tracing::warn!(task_id = %delivery.task_id, worker_id = %delivery.worker_id, %code, %message, "task briefing was rejected by terminal host");
                     store.fail_task_dispatch(
                         &delivery.assignment_id,
+                        delivery.generation,
                         unix_timestamp(),
                         TaskDispatchFailure::Retryable,
                     )
                 }
                 Ok(TerminalSubmission::Uncertain) => store.fail_task_dispatch(
                     &delivery.assignment_id,
+                    delivery.generation,
                     unix_timestamp(),
                     TaskDispatchFailure::Uncertain,
                 ),
@@ -2007,6 +2023,7 @@ impl AppState {
                     tracing::warn!(task_id = %delivery.task_id, worker_id = %delivery.worker_id, message = %error, "task briefing result is uncertain");
                     store.fail_task_dispatch(
                         &delivery.assignment_id,
+                        delivery.generation,
                         unix_timestamp(),
                         TaskDispatchFailure::Uncertain,
                     )
@@ -8999,6 +9016,7 @@ mod tests {
     #[test]
     fn a_brief_carries_the_operator_ruling_on_that_task() {
         let dispatch = TaskDispatch {
+            generation: 0,
             assignment_id: "assignment-2".into(),
             task_id: TaskId::new(),
             worker_id: WorkerId::new(),
@@ -9060,6 +9078,7 @@ mod tests {
     #[test]
     fn a_brief_carries_every_ruling_when_a_task_has_more_than_one() {
         let dispatch = swarm_persistence::TaskDispatch {
+            generation: 0,
             assignment_id: "assignment-3".into(),
             task_id: TaskId::new(),
             worker_id: WorkerId::new(),
@@ -9115,6 +9134,7 @@ mod tests {
     #[test]
     fn a_brief_never_quotes_the_placeholder_as_the_operators_words() {
         let dispatch = TaskDispatch {
+            generation: 0,
             assignment_id: "assignment-3".into(),
             task_id: TaskId::new(),
             worker_id: WorkerId::new(),
@@ -9153,6 +9173,7 @@ mod tests {
     #[test]
     fn a_brief_without_a_ruling_is_unchanged() {
         let dispatch = TaskDispatch {
+            generation: 0,
             assignment_id: "assignment-4".into(),
             task_id: TaskId::new(),
             worker_id: WorkerId::new(),
@@ -9181,6 +9202,7 @@ mod tests {
         // worker that is never told a person is waiting cannot know to answer
         // them, so the brief says so and names the tools that do it.
         let dispatch = TaskDispatch {
+            generation: 0,
             assignment_id: "assignment-1".into(),
             task_id: TaskId::new(),
             worker_id: WorkerId::new(),
@@ -9210,6 +9232,7 @@ mod tests {
     #[test]
     fn a_task_that_did_not_come_from_email_says_nothing_about_replies() {
         let dispatch = TaskDispatch {
+            generation: 0,
             assignment_id: "assignment-1".into(),
             task_id: TaskId::new(),
             worker_id: WorkerId::new(),
@@ -9233,6 +9256,7 @@ mod tests {
     #[test]
     fn task_dispatch_is_one_sanitized_terminal_submission() {
         let dispatch = TaskDispatch {
+            generation: 0,
             assignment_id: "assignment-1".into(),
             task_id: TaskId::new(),
             worker_id: WorkerId::new(),
@@ -12723,7 +12747,7 @@ mod tests {
             .remove(0);
         assert!(
             store
-                .complete_task_dispatch(&dispatch.assignment_id, 2)
+                .complete_task_dispatch(&dispatch.assignment_id, dispatch.generation, 2)
                 .unwrap()
         );
         let state = AppState::default().with_task_store(store.clone());
@@ -13052,7 +13076,7 @@ mod tests {
             .remove(0);
         assert!(
             store
-                .complete_task_dispatch(&dispatch.assignment_id, 2)
+                .complete_task_dispatch(&dispatch.assignment_id, dispatch.generation, 2)
                 .unwrap()
         );
 
@@ -13138,7 +13162,7 @@ mod tests {
             .remove(0);
         assert!(
             store
-                .complete_task_dispatch(&dispatch.assignment_id, 2)
+                .complete_task_dispatch(&dispatch.assignment_id, dispatch.generation, 2)
                 .unwrap()
         );
         let state = AppState::default().with_task_store(store.clone());

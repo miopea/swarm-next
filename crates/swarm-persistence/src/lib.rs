@@ -207,7 +207,8 @@ const NIGHT_WATCH_SCHEMA_VERSION: i64 = 125;
 const DOGFOOD_EVIDENCE_SCHEMA_VERSION: i64 = 126;
 const CONVERSATION_RECOVERY_SCHEMA_VERSION: i64 = 127;
 const CONVERSATION_SELECTION_SCHEMA_VERSION: i64 = 128;
-const CURRENT_SCHEMA_VERSION: i64 = CONVERSATION_SELECTION_SCHEMA_VERSION;
+const TASK_DISPATCH_GENERATION_SCHEMA_VERSION: i64 = 129;
+const CURRENT_SCHEMA_VERSION: i64 = TASK_DISPATCH_GENERATION_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -624,7 +625,7 @@ fn rearm_briefing_for_returned_work(
     // insert. Both halves of the delivered CHECK move together.
     transaction.execute(
         "UPDATE task_dispatches
-         SET state = 'queued', delivered_at = NULL, attempts = 0,
+         SET state = 'queued', delivered_at = NULL, attempts = 0, generation = generation + 1,
              updated_at = unixepoch()
          WHERE task_id = ?1
            AND assignment_id IN (
@@ -3704,7 +3705,8 @@ fn migrate_maturity_schema_steps(
     night_watch::migrate(transaction, schema_version)?;
     dogfood_evidence::migrate(transaction, schema_version)?;
     conversation_recovery::migrate(transaction, schema_version)?;
-    conversation_recovery::migrate_selection(transaction, schema_version)
+    conversation_recovery::migrate_selection(transaction, schema_version)?;
+    task_dispatches::migrate_generation(transaction, schema_version)
 }
 
 /// Work closed for a reason other than success gets its own state.

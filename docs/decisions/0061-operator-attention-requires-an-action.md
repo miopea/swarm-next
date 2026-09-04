@@ -46,13 +46,14 @@ worker/session identity must match when available; new task-brief observations
 always include the immutable session. Completed dispatches and tasks that moved
 past briefing therefore remove old holds, including late repeated observations.
 Unknown legacy subjects remain unconfirmed. New task-brief observations and
-successful clears use `task-dispatch:<assignment-id>` subjects, preventing an old
+successful clears use `task-dispatch:<assignment-id>:<generation>` subjects, preventing an old
 assignment result from altering a new assignment's row even within one session.
 The projection verifies that exact pending assignment. A valid scoped observation
 atomically clears the corresponding legacy task-wide observation. Persistence owns
 that compatibility path until task-wide observations are no longer present; no
-schema migration or legacy identity inference is required. Returned work that
-rearms the same assignment and other delivery families still require review.
+legacy identity inference is required. Schema 129 adds the briefing generation
+so returned work on an unchanged assignment also has distinct observation and
+result ownership. Other delivery families retain their own identities below.
 
 Queen automation delivery holds use `queen-run:<run-id>`, not the singleton
 `queen-review` subject. Only the exact queued/delivering run in the recorded

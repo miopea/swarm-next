@@ -229,7 +229,7 @@ mod tests {
             let store = TaskStore::open(&path).unwrap();
             let connection = store.connection().unwrap();
             connection
-                .execute_batch("DROP TABLE worker_startup_context; DROP TABLE browser_evidence; PRAGMA user_version = 125;")
+                .execute_batch("ALTER TABLE task_dispatches DROP COLUMN generation; DROP TABLE worker_startup_context; DROP TABLE browser_evidence; PRAGMA user_version = 125;")
                 .unwrap();
         }
         {
