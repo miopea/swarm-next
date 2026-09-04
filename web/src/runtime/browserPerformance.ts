@@ -21,11 +21,20 @@ function copyBucket(bucket: Bucket): Bucket {
 export class BrowserPerformanceRecorder {
   #buckets: Bucket[] = [];
   #incidents: Incident[] = [];
+  #hourlySink: ((metric: BrowserMetric, duration: number, at: number) => void) | undefined;
   constructor(private readonly now: () => number = Date.now) {}
+
+  /** One optional Dogfood owner; it receives only validated numeric samples. */
+  attachHourlySink(sink: (metric: BrowserMetric, duration: number, at: number) => void): () => void {
+    if (this.#hourlySink) throw new Error("Browser evidence already has an owner");
+    this.#hourlySink = sink;
+    return () => { if (this.#hourlySink === sink) this.#hourlySink = undefined; };
+  }
 
   record(metric: BrowserMetric, durationMs: number): void {
     if (!validMetric(metric) || !Number.isFinite(durationMs) || durationMs < 0 || durationMs > EXPIRY_MS) return;
     const now = this.now();
+    this.#hourlySink?.(metric, Math.round(durationMs), now);
     const at = Math.floor(now / BUCKET_MS) * BUCKET_MS;
     let bucket = this.#buckets.at(-1);
     if (!bucket || bucket.at !== at) {

@@ -6,6 +6,21 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P1i: bounded hourly browser accumulation
+
+- Added one detachable numeric sink to the existing recorder without a second
+  performance observer. A build-scoped accumulator owns at most 24 hourly
+  captures; retries preserve identity and late acknowledgements cannot erase
+  samples collected during an upload. Expired/overflow evidence and invalid or
+  backward-clock samples increment loss counters. Identity-generation failure
+  is contained rather than interrupting terminal rendering.
+- Fourteen focused recorder/accumulator tests passed. The production build passed
+  before the final identity-failure guard; the existing chunk warning remains.
+- No per-event storage writes, timers or uploads. App-level ownership is still
+  required: development detection currently belongs to Settings. Upload lifecycle,
+  reload persistence, status/comparison UI and overhead measurements remain open.
+  Automatic collection is not yet enabled; no deployment or release.
+
 ### P1h: authenticated development evidence API
 
 - Added GET/POST browser-evidence endpoints with operator authentication and the
