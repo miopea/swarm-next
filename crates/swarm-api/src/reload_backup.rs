@@ -185,14 +185,17 @@ mod tests {
     /// silently downgrading every reload to "no migration".
     #[test]
     fn this_repository_declares_a_version_this_guard_can_read() {
-        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .unwrap();
+        // Use the actual source compiled with this test, but read it through
+        // the production checkout guard in a native temporary directory. A
+        // build-machine path is not necessarily valid on the execution host.
+        let checkout = checkout_declaring(include_str!("../../swarm-persistence/src/lib.rs"));
 
-        let declared = checkout_schema_version(checkout)
-            .expect("CURRENT_SCHEMA_VERSION must stay readable, or every reload skips its backup");
-        assert!(declared >= 93, "{declared}");
+        let declared = checkout_schema_version(checkout.path())
+            .expect("CURRENT_SCHEMA_VERSION must stay readable by the reload backup guard");
+        assert_eq!(
+            declared,
+            TaskStore::in_memory().unwrap().schema_version().unwrap()
+        );
     }
 
     #[test]

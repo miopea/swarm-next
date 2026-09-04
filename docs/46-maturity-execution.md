@@ -6,6 +6,29 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### Full web and Linux API regression execution
+
+- Ran the complete web suite with two workers: 125 files and 1,033 tests passed
+  in 99.83 seconds. This includes the App navigation test that had failed
+  intermittently in the earlier focused run; that history remains recorded.
+- Ran the complete API library executable in local Ubuntu with two test threads.
+  The first run passed 420 of 421 tests. The only failure used a compile-time
+  Windows CARGO_MANIFEST_DIR as a runtime Linux path, failing before it could read
+  the migration declaration. No product failure was inferred from that path error.
+- The test now embeds the real persistence source compiled with it, writes that
+  source into its existing temporary-checkout fixture, and invokes the unchanged
+  production checkout-schema reader. Its assertion is stronger: the declaration
+  must equal the actual in-memory database schema version, not merely be >= 93.
+  No production backup, migration, or release behavior changed.
+- Rebuilt and reran the complete API library suite: all 421 tests passed, none
+  ignored, in 126.68 seconds. Strict all-target/all-feature Linux API Clippy and
+  formatting passed. This supersedes earlier compile-only/focused-only caveats
+  for this API library snapshot, not unexecuted CLI binaries or other crates.
+- This is local regression evidence, not a live performance baseline, Android/
+  iOS acceptance, database corruption drill, or operator overnight soak. All
+  remaining implementation and acceptance requirements in the approved plan stay
+  open. No push, deployment, release, or live worker interruption.
+
 ### P2/P4: confirmed selection takes precedence over timestamp drift
 
 - Conversation checks now read live engine selections with a two-second bound
