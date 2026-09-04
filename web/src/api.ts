@@ -1820,6 +1820,34 @@ export async function fetchDogfoodReports(
   return response.json() as Promise<DogfoodReport[]>;
 }
 
+export type EvidenceTiming = { count: number; total_ms: number; max_ms: number };
+export type BrowserEvidenceHour = {
+  capture_id: string;
+  build: string;
+  hour: number;
+  revision: number;
+  long_task: EvidenceTiming;
+  interaction: EvidenceTiming;
+  route: EvidenceTiming;
+  terminal_render: EvidenceTiming;
+  terminal_reconnect: EvidenceTiming;
+};
+
+export async function fetchBrowserEvidence(operatorToken: string, signal: AbortSignal): Promise<BrowserEvidenceHour[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/diagnostics/browser-evidence?limit=100", { signal });
+  return response.json() as Promise<BrowserEvidenceHour[]>;
+}
+
+export async function recordBrowserEvidence(
+  operatorToken: string, evidence: BrowserEvidenceHour, signal: AbortSignal,
+): Promise<{ updated: boolean; pruned: number }> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/diagnostics/browser-evidence", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(evidence), signal,
+  });
+  return response.json() as Promise<{ updated: boolean; pruned: number }>;
+}
+
 export async function downloadDogfoodScreenshot(
   operatorToken: string,
   attachmentName: string,

@@ -11,6 +11,7 @@ use coordination_delivery::{
     submit_coordination_message, task_dispatch_message, task_outcome_message,
 };
 mod decisions;
+mod dogfood_evidence;
 mod email_attachments;
 mod email_reply_ai;
 pub mod federation_http;
@@ -3699,6 +3700,12 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/migrations/legacy/workers/rollback",
             post(migration::rollback_legacy_workers),
+        )
+        .route(
+            "/api/v1/diagnostics/browser-evidence",
+            get(dogfood_evidence::list)
+                .post(dogfood_evidence::record)
+                .layer(DefaultBodyLimit::max(4_096)),
         )
         .route(
             "/api/v1/feedback/reports",

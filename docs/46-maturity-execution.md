@@ -6,6 +6,22 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P1h: authenticated development evidence API
+
+- Added GET/POST browser-evidence endpoints with operator authentication and the
+  same development-mode authority used by runtime status. Upload bodies are
+  capped at 4 KiB; successful reads/writes are no-store. Invalid evidence and
+  identity/revision conflicts return distinct safe errors without private SQL
+  details. Existing domain and persistence rules remain authoritative.
+- Added cancellable browser client functions; no collector or extra polling is
+  enabled by this slice. Ten API-client tests and the production web build passed.
+  Existing terminal bundle-size warning remains.
+- Linux-target, all-target/all-feature API and persistence strict Clippy passed,
+  including compilation of route authentication, dev gating, body-size and retry
+  tests. These Rust route tests were compiled, not executed on Linux.
+- Automatic bounded collection, retention/eviction visibility, comparisons and
+  measured overhead remain open. No live requests, deployment or release.
+
 ### P1g: bounded durable browser evidence persistence
 
 - Schema 126 adds an isolated hourly evidence table. Transactional writes enforce

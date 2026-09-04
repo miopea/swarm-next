@@ -2,6 +2,8 @@ import { expect, test, vi } from "vitest";
 
 import {
   assignTask,
+  fetchBrowserEvidence,
+  recordBrowserEvidence,
   fetchCoordinatorStatus,
   fetchEmailTasksAwaitingReply,
   fetchLocalApiaryTaskExecutions,
@@ -12,6 +14,24 @@ import {
   renameHive,
   RuntimeRequestError,
 } from "./api";
+
+test("browser evidence uses authenticated cancellable requests without adding retry samples", async () => {
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("{}", { status: 200 }));
+  const timing = { count: 0, total_ms: 0, max_ms: 0 };
+  const evidence = { capture_id: "capture", build: "build", hour: 3600, revision: 1,
+    long_task: timing, interaction: timing, route: timing, terminal_render: timing, terminal_reconnect: timing };
+  try {
+    const controller = new AbortController();
+    await fetchBrowserEvidence("token", controller.signal);
+    await recordBrowserEvidence("token", evidence, controller.signal);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    for (const [, init] of fetch.mock.calls) {
+      expect(init?.signal).toBe(controller.signal);
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer token");
+    }
+    expect(fetch.mock.calls[1][1]?.body).toBe(JSON.stringify(evidence));
+  } finally { fetch.mockRestore(); }
+});
 
 test("background status requests forward cancellation to fetch", async () => {
   const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("{}", { status: 200 }));
