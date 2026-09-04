@@ -229,7 +229,11 @@ const MESSAGE_DELIVERY_SCHEMA_VERSION: i64 = 134;
 // Upstream introduced Ops tickets as schema 124 while this branch already
 // owned 124-134. Keep every migration identity unique in the combined history.
 const OPS_TICKETS_SCHEMA_VERSION: i64 = 135;
-const CURRENT_SCHEMA_VERSION: i64 = OPS_TICKETS_SCHEMA_VERSION;
+// A database which ran upstream's original schema 124 could already claim the
+// maturity migration's number without carrying its terminal-control table.
+// Repair that published collision explicitly rather than trusting user_version.
+const TERMINAL_CONTROL_PROJECTION_REPAIR_SCHEMA_VERSION: i64 = 136;
+const CURRENT_SCHEMA_VERSION: i64 = TERMINAL_CONTROL_PROJECTION_REPAIR_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -3795,7 +3799,10 @@ fn migrate_ops_intake_schema_steps(
     if schema_version < OPS_TICKETS_SCHEMA_VERSION {
         ops_tickets::migrate_ops_tickets(transaction)?;
     }
-    Ok(())
+    // LAST. This repairs databases which received upstream's former schema 124
+    // before the maturity branch was combined and therefore skipped the other
+    // schema-124 artifact while still advancing through schema 135.
+    terminal_control_projection::repair_version_collision(transaction, schema_version)
 }
 
 fn migrate_maturity_schema_steps(
@@ -8735,6 +8742,16 @@ mod tests {
             probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
                  WHERE type = 'table' AND name = 'ops_console_tickets')",
         },
+        // 136 repairs the published schema-124 collision. The same table is
+        // intentionally named twice: 124 introduced it for maturity databases;
+        // 136 guarantees it for upstream databases that had already claimed 124.
+        SchemaStep {
+            table: "worker_terminal_control",
+            artifact: "",
+            undo_sql: "DROP TABLE IF EXISTS worker_terminal_control",
+            probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'worker_terminal_control')",
+        },
     ];
 
     /// The step that introduced a named artifact, rather than whichever is newest.
@@ -9224,6 +9241,66 @@ mod tests {
             CURRENT_SCHEMA_VERSION
         );
         drop(connection);
+        migrated.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn repairs_terminal_control_when_upstream_schema_124_was_already_recorded() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm.sqlite3");
+        let worker_id;
+        {
+            let store = TaskStore::open(&path).unwrap();
+            let worker = store
+                .create_worker(
+                    "Collision Canary",
+                    swarm_domain::ProviderKind::ClaudeCode,
+                    "/workspace/collision-canary",
+                    false,
+                    1,
+                )
+                .unwrap();
+            worker_id = worker.id;
+            let connection = store.connection().unwrap();
+            connection
+                .execute_batch(&format!(
+                    "DROP TABLE worker_terminal_control;
+                     PRAGMA user_version = {OPS_TICKETS_SCHEMA_VERSION};"
+                ))
+                .unwrap();
+        }
+
+        let migrated = TaskStore::open(&path).expect("the collided schema is repaired");
+        let connection = migrated.connection().unwrap();
+        let terminal_control_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'worker_terminal_control')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(terminal_control_exists);
+        let ops_tickets_survived: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'ops_console_tickets')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(ops_tickets_survived);
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            TERMINAL_CONTROL_PROJECTION_REPAIR_SCHEMA_VERSION
+        );
+        drop(connection);
+        assert_eq!(
+            migrated.get_worker_profile(worker_id).unwrap().name,
+            "Collision Canary"
+        );
         migrated.verify_integrity().unwrap();
     }
 

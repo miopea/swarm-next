@@ -3103,6 +3103,23 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 See the approved plan. No phase is complete solely because a patch was committed.
 Real Android/iOS and normal operator soak remain separate evidence requirements.
 
+### Live dogfood: repair the integrated schema-124 collision
+
+- The first disposable-worker acceptance on the development Hive reached the
+  deployed API and engine, but terminal attachment returned 503. Bounded API
+  diagnostics identified `no such table: worker_terminal_control`; the live
+  database reported schema 135 and retained the other maturity and Ops tables.
+- Root cause is a published migration-number collision: upstream Ops tickets and
+  the maturity branch both originally used 124. Renumbering Ops to 135 preserved
+  forward order for fresh databases but could not make an already-stamped
+  database rerun the skipped terminal-control migration.
+- Schema 136 is a final idempotent repair. It creates the missing projection after
+  all combined migrations, preserves existing workers/tasks/sessions/Ops tickets,
+  and has a regression fixture modeling the exact schema-135-without-table state.
+- Deployment of this repair is a database migration and must use the existing
+  verified pre-update backup path. Live repair, integrity verification, terminal
+  reconnection, and completion of the disposable task remain required evidence.
+
 ### Local Linux test execution recipe — 2026-09-04
 
 The existing Ubuntu WSL distribution can execute Linux tests built by the isolated

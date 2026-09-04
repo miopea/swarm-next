@@ -91,6 +91,14 @@ additional coordination guard, never permission to write to the PTY. Repeated
 typing observations are coalesced; handoff/expiry changes are not. Projection
 failure after a successful PTY operation must not claim the input was unsent.
 
+Combined schema 136 repairs an integration collision discovered in live dogfood:
+upstream Ops tickets and the maturity branch had both published schema 124. A
+database that received the upstream step could therefore advance through 135
+while lacking `worker_terminal_control`. The final, idempotent repair creates the
+projection when missing and advances the version only after the Ops migration.
+The repair preserves workers, sessions, tasks, and Ops tickets; rollback requires
+the verified pre-update database backup.
+
 ## Verification
 
 Domain tests cover passive reads, competing views, compare-and-swap takeover,

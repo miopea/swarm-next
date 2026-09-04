@@ -5,22 +5,17 @@ use rusqlite::{OptionalExtension, params};
 use swarm_domain::{ControlRoomEventKind, TerminalControlIdentity, WorkerSessionId};
 
 use crate::{
-    TERMINAL_CONTROL_PROJECTION_SCHEMA_VERSION, TaskStore, TaskStoreError,
-    insert_control_room_event,
+    TERMINAL_CONTROL_PROJECTION_REPAIR_SCHEMA_VERSION, TERMINAL_CONTROL_PROJECTION_SCHEMA_VERSION,
+    TaskStore, TaskStoreError, insert_control_room_event,
 };
 
-pub(super) fn migrate(
-    transaction: &rusqlite::Transaction<'_>,
-    schema_version: i64,
-) -> rusqlite::Result<()> {
-    if schema_version >= TERMINAL_CONTROL_PROJECTION_SCHEMA_VERSION {
-        return Ok(());
-    }
-    let exists: bool = transaction.query_row(
+fn create_table(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let worker_profiles_exists: bool = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'worker_profiles')",
-        [], |row| row.get(0),
+        [],
+        |row| row.get(0),
     )?;
-    if exists {
+    if worker_profiles_exists {
         transaction.execute_batch(
             "CREATE TABLE IF NOT EXISTS worker_terminal_control (
             worker_id TEXT PRIMARY KEY REFERENCES worker_profiles(id) ON DELETE CASCADE,
@@ -33,10 +28,40 @@ pub(super) fn migrate(
         );",
         )?;
     }
+    Ok(())
+}
+
+pub(super) fn migrate(
+    transaction: &rusqlite::Transaction<'_>,
+    schema_version: i64,
+) -> rusqlite::Result<()> {
+    if schema_version >= TERMINAL_CONTROL_PROJECTION_SCHEMA_VERSION {
+        return Ok(());
+    }
+    create_table(transaction)?;
     transaction.pragma_update(
         None,
         "user_version",
         TERMINAL_CONTROL_PROJECTION_SCHEMA_VERSION,
+    )
+}
+
+/// Repair the historical schema-124 identity collision after all combined
+/// migrations have run. `CREATE IF NOT EXISTS` makes this safe both for an
+/// affected upstream database and for a maturity database that already has the
+/// projection.
+pub(super) fn repair_version_collision(
+    transaction: &rusqlite::Transaction<'_>,
+    schema_version: i64,
+) -> rusqlite::Result<()> {
+    if schema_version >= TERMINAL_CONTROL_PROJECTION_REPAIR_SCHEMA_VERSION {
+        return Ok(());
+    }
+    create_table(transaction)?;
+    transaction.pragma_update(
+        None,
+        "user_version",
+        TERMINAL_CONTROL_PROJECTION_REPAIR_SCHEMA_VERSION,
     )
 }
 
