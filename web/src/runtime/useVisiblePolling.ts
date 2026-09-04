@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef } from "react";
 export function useVisiblePolling(
   task: (signal: AbortSignal) => Promise<void>,
   enabled: boolean,
-  intervalMs: number,
+  intervalMs: number | null,
   timeoutMs = 8_000,
   options: { initialRefresh?: boolean } = {},
 ) {
@@ -50,7 +50,8 @@ export function useVisiblePolling(
       if (initialRefresh) void refresh();
       document.addEventListener("visibilitychange", visibility);
     }
-    const timer = enabled ? window.setInterval(() => void refresh(), intervalMs) : undefined;
+    // A null interval owns on-demand reads without adding periodic traffic.
+    const timer = enabled && intervalMs !== null ? window.setInterval(() => void refresh(), intervalMs) : undefined;
     return () => {
       disposed = true;
       controller?.abort();

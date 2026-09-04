@@ -1810,10 +1810,12 @@ export async function saveDogfoodReport(
 export async function fetchDogfoodReports(
   operatorToken: string,
   limit = 5,
+  signal?: AbortSignal,
 ): Promise<DogfoodReport[]> {
   const response = await authenticatedFetch(
     operatorToken,
     `/api/v1/feedback/reports?limit=${encodeURIComponent(String(limit))}`,
+    { signal },
   );
   return response.json() as Promise<DogfoodReport[]>;
 }

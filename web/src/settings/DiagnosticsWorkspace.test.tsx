@@ -67,7 +67,7 @@ test("hidden diagnostics do not poll and become fresh when visible", async () =>
   vi.stubGlobal("fetch", fetch);
   render(<DiagnosticsWorkspace feedbackRevision={0} operatorToken="secret" health={undefined} hiveIdentity={undefined} liveFeedState="connected" recentEvents={[]} sessions={[]} workers={[]} jiraReadiness={undefined} jiraUnavailable={true} />);
   await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
-  expect(fetch).toHaveBeenCalledTimes(1); // saved reports only
+  expect(fetch).not.toHaveBeenCalled();
   visibility = "visible";
   await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
   expect(fetch).toHaveBeenCalledTimes(4);
@@ -91,6 +91,42 @@ test("retries saved dogfood reports without disturbing live diagnostics", async 
   fireEvent.click(screen.getByRole("button", { name: "Retry saved reports" }));
   await waitFor(() => expect(screen.getByText("No reports saved yet.")).toBeInTheDocument());
   expect(reportAttempts).toBe(2);
+});
+
+test("saved report reads time out, retry once, and cancel on departure", async () => {
+  vi.useFakeTimers();
+  const requests: { signal: AbortSignal; finish: () => void }[] = [];
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    if (!String(input).includes("feedback/reports")) return Promise.resolve(new Response("unavailable", { status: 503 }));
+    return new Promise<Response>((resolve, reject) => {
+      const signal = init!.signal as AbortSignal;
+      requests.push({ signal, finish: () => resolve(new Response("[]")) });
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  }));
+  const view = render(<DiagnosticsWorkspace feedbackRevision={0} operatorToken="secret" health={undefined} hiveIdentity={undefined} liveFeedState="connected" recentEvents={[]} sessions={[]} workers={[]} jiraReadiness={undefined} jiraUnavailable={true} />);
+  await act(async () => { await Promise.resolve(); });
+  expect(requests).toHaveLength(1);
+  await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+  expect(requests[0].signal.reason.name).toBe("TimeoutError");
+  expect(screen.getByText("Saved reports are unavailable right now.")).toBeInTheDocument();
+  await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+  expect(requests).toHaveLength(1); // No periodic report reads or automatic retry.
+  for (let index = 0; index < 4; index++) fireEvent.click(screen.getByRole("button", { name: "Retry saved reports" }));
+  await act(async () => { await Promise.resolve(); });
+  expect(requests).toHaveLength(2);
+  await act(async () => { requests[1].finish(); });
+  expect(screen.getByText("No reports saved yet.")).toBeInTheDocument();
+  view.rerender(<DiagnosticsWorkspace feedbackRevision={1} operatorToken="secret" health={undefined} hiveIdentity={undefined} liveFeedState="connected" recentEvents={[]} sessions={[]} workers={[]} jiraReadiness={undefined} jiraUnavailable={true} />);
+  await act(async () => { await Promise.resolve(); });
+  expect(requests).toHaveLength(3);
+  view.rerender(<DiagnosticsWorkspace feedbackRevision={2} operatorToken="secret" health={undefined} hiveIdentity={undefined} liveFeedState="connected" recentEvents={[]} sessions={[]} workers={[]} jiraReadiness={undefined} jiraUnavailable={true} />);
+  await act(async () => { await Promise.resolve(); });
+  expect(requests[2].signal.aborted).toBe(true);
+  expect(requests).toHaveLength(4);
+  expect(screen.queryByText("Saved reports are unavailable right now.")).not.toBeInTheDocument();
+  view.unmount();
+  expect(requests[3].signal.aborted).toBe(true);
 });
 
 /**

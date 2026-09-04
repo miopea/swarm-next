@@ -4,6 +4,20 @@ Approved program: [scope and acceptance](45-daily-driver-maturity-plan.md).
 Branch: `codex/daily-driver-maturity`. Starting revision: `36420b3`.
 Local commits authorized; no push, deployment, releases, or live worker interruption.
 
+### P3i: saved diagnostic reports own bounded, cancellable reads
+
+- Saved-report reads now share the visible-page request owner with an explicit
+  no-periodic-polling mode. Eight-second deadlines expose a retryable unavailable
+  state; repeated retries coalesce, hidden pages do not start reads, and departure
+  cancels the request. Visible return refreshes the five-report list. Superseded
+  results cannot publish after cancellation.
+- Sixteen focused diagnostics/request-owner tests and the production web build
+  passed. The integrated report test covers timeout, no automatic retry traffic,
+  repeated Retry, successful recovery, feedback refresh, and unmount cancellation.
+  The existing terminal bundle-size warning remains.
+- Screenshot download ownership and shared server sample ownership remain open.
+  No live CPU improvement, mobile acceptance, push, deployment, or release claim.
+
 ## P6 visual proposal — awaiting operator review
 
 - Prepared an interactive, sample-only Needs You/Queues composition for review

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 import { readRoutePaints, routePaintSummary } from "../runtime/routePaint";
 import { readBrowserPerformance } from "../runtime/browserPerformance";
@@ -47,7 +47,6 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
   const [copyState, setCopyState] = useState<"idle" | "copied" | "unavailable">("idle");
   const [savedReports, setSavedReports] = useState<DogfoodReport[]>();
   const [savedReportsUnavailable, setSavedReportsUnavailable] = useState(false);
-  const [savedReportsAttempt, setSavedReportsAttempt] = useState(0);
   const [copiedReportId, setCopiedReportId] = useState<string>();
   const [downloadingReportId, setDownloadingReportId] = useState<string>();
   const [showEveryCheck, setShowEveryCheck] = useState(false);
@@ -69,13 +68,20 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
   }, [operatorToken]);
   const refreshRuntime = useVisiblePolling(loadRuntime, Boolean(operatorToken), 10_000);
 
-  useEffect(() => {
-    let cancelled = false;
-    void fetchDogfoodReports(operatorToken)
-      .then((reports) => { if (!cancelled) { setSavedReports(reports); setSavedReportsUnavailable(false); } })
-      .catch(() => { if (!cancelled) setSavedReportsUnavailable(true); });
-    return () => { cancelled = true; };
-  }, [operatorToken, feedbackRevision, savedReportsAttempt]);
+  // A new feedback revision replaces any in-flight read of the previous list.
+  const loadSavedReports = useCallback(async (signal: AbortSignal) => {
+    try {
+      const reports = await fetchDogfoodReports(operatorToken, 5, signal);
+      if (signal.aborted) return;
+      setSavedReports(reports);
+      setSavedReportsUnavailable(false);
+    } catch {
+      if (!signal.aborted || (signal.reason instanceof DOMException && signal.reason.name === "TimeoutError")) {
+        setSavedReportsUnavailable(true);
+      }
+    }
+  }, [operatorToken, feedbackRevision]);
+  const refreshSavedReports = useVisiblePolling(loadSavedReports, Boolean(operatorToken), null);
 
   const launchFailures = workers.filter((worker) => Boolean(worker.runtime_error)).length;
   const providerStatus = launchFailures > 0 ? "Needs attention" : "Healthy";
@@ -242,7 +248,7 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
       {preview ? <pre className="diagnostic-preview" aria-label="Sanitized diagnostic report">{preview}</pre> : null}
       <div className="saved-feedback" aria-labelledby="saved-feedback-heading">
         <div><h4 id="saved-feedback-heading">Saved dogfood reports</h4><small>Private to this Hive · newest first</small></div>
-        {savedReportsUnavailable ? <div className="saved-feedback-error" role="status"><span>Saved reports are unavailable right now.</span><button type="button" className="secondary-button" onClick={() => setSavedReportsAttempt((attempt) => attempt + 1)}>Retry saved reports</button></div> : savedReports === undefined ? <p>Loading saved reports…</p> : savedReports.length === 0 ? <p>No reports saved yet.</p> : (
+        {savedReportsUnavailable ? <div className="saved-feedback-error" role="status"><span>Saved reports are unavailable right now.</span><button type="button" className="secondary-button" onClick={() => void refreshSavedReports()}>Retry saved reports</button></div> : savedReports === undefined ? <p>Loading saved reports…</p> : savedReports.length === 0 ? <p>No reports saved yet.</p> : (
           <div className="saved-feedback-list">
             {savedReports.map((report) => (
               <details key={report.id}>
