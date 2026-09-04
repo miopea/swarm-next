@@ -6,6 +6,21 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P1j: app-owned development collection and bounded upload
+
+- Reused the App runtime-update hook's development flag; no additional status
+  poll. Collection uses the compiled browser build, not a newer API version, and
+  stays alive outside Settings. Hidden views do not add samples.
+- Visible polling owns one upload per minute/return, an eight-second deadline,
+  cancellation and retry identity. Dogfood displays collection/unavailable status,
+  loss/prune counters, retention, and the limitation that reload currently discards
+  unsaved in-memory evidence.
+- Passed 55 App/Settings/Dogfood tests and production build, plus nine focused
+  collection/polling tests covering disabled mode, ownership release, same-capture
+  retry/recovery and late completion after cancellation.
+- Reload persistence, comparison UI, Linux route-test execution, live validation
+  and measured instrumentation overhead remain open. No push, deploy or release.
+
 ### P1i: bounded hourly browser accumulation
 
 - Added one detachable numeric sink to the existing recorder without a second

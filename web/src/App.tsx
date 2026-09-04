@@ -3,6 +3,7 @@ import BroadcastToWorkers from "./workers/BroadcastToWorkers";
 import ConversationDriftCard, { type WorkerConversation } from "./workers/ConversationDriftCard";
 import PublicAddressWarning from "./PublicAddressWarning";
 import StaleBundleNotice from "./StaleBundleNotice";
+import { useDogfoodCollection } from "./runtime/useDogfoodCollection";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 
 import {
@@ -289,6 +290,7 @@ export function App() {
   const [workerQuery, setWorkerQuery] = useState("");
   const [terminalConnection, setTerminalConnection] = useState<string>();
   const { runtimeUpdates, developmentMode, refreshRuntimeUpdate } = useRuntimeUpdate(operatorToken || undefined);
+  const dogfoodCollection = useDogfoodCollection(operatorToken, developmentMode, import.meta.env.VITE_SWARM_BUILD_VERSION);
   const [whatsNew, setWhatsNew] = useState<ReleaseVersionNotes[]>([]);
   const [whatsNewTruncated, setWhatsNewTruncated] = useState(false);
   const [whatsNewEarlier, setWhatsNewEarlier] = useState<ReleaseVersionNotes[]>([]);
@@ -2356,6 +2358,7 @@ export function App() {
               colorTheme={colorTheme}
               feedbackRevision={feedbackRevision}
               sharedMachineResources={sharedMachineResources}
+              dogfoodCollection={dogfoodCollection}
               hiveIdentity={hiveIdentity}
               liveFeedState={liveFeedState}
               health={loadState.kind === "ready" ? loadState.health : undefined}

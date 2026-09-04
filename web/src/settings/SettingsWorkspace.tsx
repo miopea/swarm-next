@@ -25,6 +25,7 @@ import { useDevelopmentRuntime } from "./useDevelopmentRuntime";
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
 import type { SharedMachineResources } from "../runtime/machinePressure";
 import DeveloperDogfoodWorkspace from "./DeveloperDogfoodWorkspace";
+import type { DogfoodCollectionStatus } from "../runtime/useDogfoodCollection";
 import EmailSettings from "./EmailSettings";
 import ConnectionsSettings from "./ConnectionsSettings";
 import JiraSettings from "./JiraSettings";
@@ -43,6 +44,7 @@ type Props = {
   colorTheme: ColorTheme;
   feedbackRevision: number;
   sharedMachineResources?: SharedMachineResources;
+  dogfoodCollection?: DogfoodCollectionStatus;
   health: Health | undefined;
   hiveIdentity: HiveIdentity | undefined;
   liveFeedState: LiveFeedState;
@@ -91,7 +93,7 @@ type Props = {
 };
 
 export default function SettingsWorkspace({ section, query = "", busy, workerEngineProgress, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, publicAddress, onPublicAddressChange, presence, startSurface, onStartSurfaceChange, onLock, providers, providerCapabilitiesUnavailable = false, lockDetectionState, notificationSettings, queenPolicy, pendingQueenDecisionCount = 0, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onOpenQueenDecisions, onOpenTasks, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker,
-  onChooseWorkerMark, onRemoveWorker, onReorderWorkers, onRestartProviders, onUpdateWorkerEngine, onForceWorkerReload, onReloadDevelopment, onHiveIdentityChange, sharedMachineResources }: Props) {
+  onChooseWorkerMark, onRemoveWorker, onReorderWorkers, onRestartProviders, onUpdateWorkerEngine, onForceWorkerReload, onReloadDevelopment, onHiveIdentityChange, sharedMachineResources, dogfoodCollection }: Props) {
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
   const [terminalHostLoaded, setTerminalHostLoaded] = useState(false);
@@ -705,7 +707,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
       )}
 
       {shows("settings-dogfood") && (
-        <DeveloperDogfoodWorkspace runtime={developmentRuntime} version={health?.version} reachable={developmentReachable} />
+        <DeveloperDogfoodWorkspace runtime={developmentRuntime} version={health?.version} reachable={developmentReachable} collection={dogfoodCollection} />
       )}
 
       {shows("settings-shortcuts") && (

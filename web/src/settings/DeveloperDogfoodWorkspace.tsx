@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { DevelopmentRuntime } from "../api";
+import type { DogfoodCollectionStatus } from "../runtime/useDogfoodCollection";
 import { BROWSER_METRICS, readBrowserPerformance } from "../runtime/browserPerformance";
 import { terminalWorkspace } from "../terminal/TerminalWorkspace";
 
@@ -8,8 +9,9 @@ const labels = {
   terminal_render: "Terminal paint", terminal_reconnect: "Terminal connection",
 };
 
-export default function DeveloperDogfoodWorkspace({ runtime, version, reachable }: {
+export default function DeveloperDogfoodWorkspace({ runtime, version, reachable, collection }: {
   runtime: DevelopmentRuntime | undefined; version: string | undefined; reachable: boolean;
+  collection?: DogfoodCollectionStatus;
 }) {
   const [evidence, setEvidence] = useState(readBrowserPerformance);
   const [preview, setPreview] = useState(false);
@@ -42,6 +44,10 @@ export default function DeveloperDogfoodWorkspace({ runtime, version, reachable 
       return <li key={metric}>{labels[metric]}: {count ? `${count} samples · mean ${Math.round(total / count)} ms · max ${Math.round(maximum)} ms` : "No samples"}</li>;
     })}</ul>
     <p>Means and maxima are not percentiles. Missing samples do not establish a healthy session.</p>
+    <h4>Private hourly history</h4>
+    <p>{collection?.state === "collecting" ? "Collecting while this page is visible, including outside Settings. Uploads use this browser bundle’s build identity." : collection?.state === "unavailable" ? "History upload is unavailable. Pending evidence is bounded and will retry while visible." : "History collection is not enabled; it requires a development Hive and a stamped browser build."}</p>
+    <p>{collection?.dropped_samples ?? 0} samples dropped · {collection?.pruned_captures ?? 0} server captures pruned during this collection.</p>
+    <small>Up to 24 hourly captures pending in memory; reload currently discards unsaved samples. Private Hive storage retains up to 4,096 captures for 90 days. No external publishing.</small>
     <h4>Terminal warm-pool experiment</h4>
     <p>Off by default. Retain the active terminal and four recent renderers; colder views reconnect to the engine’s newest snapshot. Workers keep running. This browser only; reload resets the experiment.</p>
     <p>Evaluate repeated cold restores against the 500 ms p95 target before adopting this policy. These counts do not prove restore speed or resource savings.</p>
