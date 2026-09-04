@@ -119,7 +119,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   // Section navigation lives in the rail now, with every other surface's, and
   // is covered at that level. This file covers what the workspace itself does.
 
-  expect(screen.getByRole("status", { name: "Current presence" })).toHaveTextContent("AwayComputer lock detected");
+  expect(screen.getByRole("status", { name: "Current presence" })).toHaveTextContent("ReachableComputer lock detected");
   fireEvent.change(screen.getByLabelText("Presence policy"), { target: { value: "night_watch" } });
   expect(onPresenceChange).toHaveBeenCalledWith("night_watch");
   fireEvent.click(screen.getByRole("button", { name: "Enable" }));
@@ -141,7 +141,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
 
   // Queen's autonomy ceiling sits with the workers it governs.
   rerender(<SettingsWorkspace {...props} section="settings-workers" onQueenPolicyChange={onQueenPolicyChange} />);
-  fireEvent.change(screen.getByLabelText("Away"), { target: { value: "advisory" } });
+  fireEvent.change(screen.getByLabelText("Reachable"), { target: { value: "advisory" } });
   expect(onQueenPolicyChange).toHaveBeenCalledWith({ at_hive: "coordinate", away: "advisory", night_watch: "local_execution" });
 
   // Who this Hive is, and what it is connected to.

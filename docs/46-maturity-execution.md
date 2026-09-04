@@ -4,6 +4,32 @@ Approved program: [scope and acceptance](45-daily-driver-maturity-plan.md).
 Branch: `codex/daily-driver-maturity`. Starting revision: `36420b3`.
 Local commits authorized; no push, deployment, releases, or live worker interruption.
 
+### P5l: Reachable distinguishes phone use from desktop engagement
+
+- Automatic At Hive now requires fresh desktop evidence. Phone activity remains
+  Reachable, cannot override a reported desktop lock, and does not silence the
+  existing away-policy notifications. Manual/scheduled Night Watch precedence
+  and desktop-return dismissal remain intact. Explicit manual At Hive is still
+  operator intent. Reachable is availability policy, not proof a phone is online.
+- Moved device precedence from SQL into the domain over a bounded evidence list.
+  Lock/idle overrides that device's recent activity; hidden activity bridging
+  shares the existing active lease; expired and future recent-activity evidence
+  cannot establish engagement. Reads detect over-capacity instead of truncating
+  an authoritative set silently.
+- Domain and UI name the middle mode Reachable. The installed `away` API/storage
+  token and saved Queen autonomy field remain stable, with explicit serialization
+  regression coverage and ADR 0018 ownership. No database migration or preference
+  reset is needed. Capability inventory updated.
+- Passed 76 domain tests before the final serialization test addition, then all
+  three focused presence-policy tests; 11 presence persistence tests, nine Night
+  Watch tests, nine notification tests, 58 web tests, and production web build.
+  Final strict Linux-target API/persistence all-target/all-feature Clippy passed
+  after replacing an unchecked count cast. Linux API tests compile but were not
+  executed. Existing terminal bundle-size warning remains.
+- Late device-observation ordering, real lock detection on Android/iOS/desktop,
+  and actual notification delivery remain acceptance work. No live worker change,
+  push, deployment, release, or full P5 completion claim.
+
 ### P3j: screenshot downloads have an owned transfer lifetime
 
 - Diagnostics admits one screenshot transfer at a time and disables other

@@ -1029,7 +1029,7 @@ mod tests {
             .set_notification_policy(NotificationPolicy::AllDecisions, 11)
             .unwrap();
         store
-            .set_manual_presence(Some(PresenceMode::Away), 12)
+            .set_manual_presence(Some(PresenceMode::Reachable), 12)
             .unwrap();
         let task = seed_unanswered_email(&store, 100);
         // The tick, which is the only thing that catches work arriving after
@@ -1069,7 +1069,7 @@ mod tests {
         // They read the queue at the Hive, then walked away.
         store.record_attention_seen(150).unwrap();
         store
-            .set_manual_presence(Some(PresenceMode::Away), 160)
+            .set_manual_presence(Some(PresenceMode::Reachable), 160)
             .unwrap();
         // Swept explicitly, so this cannot pass merely because nothing ran.
         assert_eq!(store.sweep_attention_notifications(170).unwrap(), 0);
@@ -1105,7 +1105,7 @@ mod tests {
             .set_notification_policy(NotificationPolicy::AllDecisions, 11)
             .unwrap();
         store
-            .set_manual_presence(Some(PresenceMode::Away), 12)
+            .set_manual_presence(Some(PresenceMode::Reachable), 12)
             .unwrap();
         let task = seed_unanswered_email(&store, 100);
         store.sweep_attention_notifications(150).unwrap();
@@ -1189,7 +1189,7 @@ mod tests {
         assert!(store.claim_notification_deliveries(21).unwrap().is_empty());
 
         store
-            .set_manual_presence(Some(PresenceMode::Away), 22)
+            .set_manual_presence(Some(PresenceMode::Reachable), 22)
             .unwrap();
         let queued = store.claim_notification_deliveries(22).unwrap();
         assert_eq!(queued.len(), 1);

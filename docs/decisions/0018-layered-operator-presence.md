@@ -48,6 +48,21 @@ expiring per-device observations plus an optional explicit override.
 
 ### Approved maturity transition
 
+The middle mode is Reachable: the operator may answer on a phone without being
+engaged at the desktop. Automatic At Hive requires fresh desktop activity; fresh
+mobile activity cannot override a desktop lock or suppress Reachable notification
+policy. Reachable without fresh evidence is an availability policy, not proof
+that a phone is online. Existing explicit At Hive overrides remain explicit intent.
+Device precedence is a domain policy over at most sixteen observations, not SQL
+business logic. Desktop activity wins, then lock evidence, then mobile activity,
+then inactivity; expired observations supply no evidence.
+
+For installed-client/database continuity, Reachable retains the existing `away`
+wire/storage token and `away` autonomy-policy field. The presence adapter owns
+this stable mapping; it is not a fourth mode or a new permission level. A future
+versioned contract migration may rename those keys only when supported clients
+and stored preferences migrate together. No parallel compatibility path is added.
+
 The daily-driver program supersedes indefinite Night Watch override precedence:
 support a daily schedule in an explicitly configured time zone plus manual
 enable/disable. An explicit desktop app return ends both manual and current

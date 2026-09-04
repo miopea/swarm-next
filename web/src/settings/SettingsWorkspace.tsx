@@ -293,7 +293,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
             >
               <option value="auto">Automatic</option>
               <option value="at_hive">At the Hive</option>
-              <option value="away">Away</option>
+              <option value="away">Reachable</option>
               <option value="night_watch">Night Watch</option>
             </select>
           </label>
@@ -423,7 +423,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
       {shows("settings-notifications") && (
     <section id="settings-notifications" className="settings-card notification-settings" aria-labelledby="notification-heading">
           <div><p className="eyebrow">Mobile attention</p><h3 id="notification-heading">Let urgent work find you</h3></div>
-          <p>Notifications are quiet while you are At the Hive. Away and Night Watch can deliver generic, private prompts when a worker needs a decision.</p>
+          <p>Notifications are quiet while you are At the Hive. Reachable and Night Watch can deliver generic, private prompts when a worker needs a decision.</p>
           {!mobile ? <label htmlFor="notification-policy"><span>Notify me</span>
             <select
               id="notification-policy"
@@ -777,7 +777,7 @@ function notificationStateDetail(state: NotificationCapabilityState, count: numb
 function presenceLabel(mode: PresenceMode | undefined) {
   if (mode === "at_hive") return "At the Hive";
   if (mode === "night_watch") return "Night Watch";
-  return mode === "away" ? "Away" : "Connecting…";
+  return mode === "away" ? "Reachable" : "Connecting…";
 }
 
 function presenceSourceLabel(presence: OperatorPresence | undefined) {
@@ -791,7 +791,7 @@ function presenceSourceLabel(presence: OperatorPresence | undefined) {
 }
 
 function lockDetectionLabel(state: LockDetectionState) {
-  if (state === "enabled") return "Locking this computer moves Automatic presence to Away.";
+  if (state === "enabled") return "Locking this computer moves Automatic presence to Reachable.";
   if (state === "enabling") return "Waiting for the browser to finish enabling lock detection.";
   if (state === "available") return "Supported; enabling requires one browser permission.";
   if (state === "denied") return "Not granted; activity and visibility fallback remain active.";

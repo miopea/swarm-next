@@ -7,6 +7,7 @@ mod control_room;
 mod conversation_recovery;
 mod decisions;
 mod night_watch;
+mod presence_policy;
 mod release;
 mod tasks;
 mod terminal_control;
@@ -18,6 +19,7 @@ pub use control_room::*;
 pub use conversation_recovery::*;
 pub use decisions::*;
 pub use night_watch::*;
+pub use presence_policy::*;
 pub use release::*;
 pub use tasks::*;
 pub use terminal_control::*;
@@ -260,7 +262,9 @@ impl std::error::Error for ParseSharedWorkBackendError {}
 #[serde(rename_all = "snake_case")]
 pub enum PresenceMode {
     AtHive,
-    Away,
+    /// Reachable retains the existing storage/wire token and saved autonomy policy.
+    #[serde(rename = "away")]
+    Reachable,
     NightWatch,
 }
 
@@ -468,7 +472,7 @@ impl QueenAutonomyPolicy {
     ) -> bool {
         let level = match presence {
             PresenceMode::AtHive => self.at_hive,
-            PresenceMode::Away => self.away,
+            PresenceMode::Reachable => self.away,
             PresenceMode::NightWatch => self.night_watch,
         };
         match action {
@@ -488,7 +492,7 @@ impl fmt::Display for PresenceMode {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::AtHive => "at_hive",
-            Self::Away => "away",
+            Self::Reachable => "away",
             Self::NightWatch => "night_watch",
         })
     }
@@ -499,7 +503,7 @@ impl FromStr for PresenceMode {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "at_hive" => Ok(Self::AtHive),
-            "away" => Ok(Self::Away),
+            "away" => Ok(Self::Reachable),
             "night_watch" => Ok(Self::NightWatch),
             _ => Err(ParsePresenceModeError),
         }
@@ -766,7 +770,7 @@ mod tests {
         ] {
             assert!(!provider.permits_automation_in(PresenceMode::NightWatch));
             assert!(provider.permits_automation_in(PresenceMode::AtHive));
-            assert!(provider.permits_automation_in(PresenceMode::Away));
+            assert!(provider.permits_automation_in(PresenceMode::Reachable));
         }
     }
 
@@ -1199,8 +1203,12 @@ mod tests {
     #[test]
     fn queen_autonomy_is_presence_bounded_and_external_actions_fail_closed() {
         let policy = QueenAutonomyPolicy::default();
-        assert!(policy.permits(PresenceMode::Away, QueenActionClass::Coordinate, false));
-        assert!(!policy.permits(PresenceMode::Away, QueenActionClass::ModifyWorkspace, false));
+        assert!(policy.permits(PresenceMode::Reachable, QueenActionClass::Coordinate, false));
+        assert!(!policy.permits(
+            PresenceMode::Reachable,
+            QueenActionClass::ModifyWorkspace,
+            false
+        ));
         assert!(policy.permits(
             PresenceMode::NightWatch,
             QueenActionClass::ModifyWorkspace,

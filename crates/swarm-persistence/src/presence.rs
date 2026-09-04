@@ -11,7 +11,7 @@ use super::{
 };
 
 const MAX_PRESENCE_DEVICES: i64 = 16;
-const ACTIVE_TTL_SECONDS: i64 = 150;
+const ACTIVE_TTL_SECONDS: i64 = swarm_domain::PRESENCE_ACTIVE_TTL_SECONDS;
 const INACTIVE_TTL_SECONDS: i64 = 300;
 // A locked desktop keeps reporting: measured on the dogfood host, a locked
 // browser heartbeats every sixty seconds. A day-long lifetime therefore did not
@@ -252,57 +252,38 @@ pub(super) fn operator_presence_from_connection(
             source: PresenceSource::Scheduled,
         });
     }
-    let state = connection
-        .query_row(
-            // A device interacted with inside the active window still counts as
-            // active. Backgrounding an app reports hidden, which describes the
-            // screen rather than the person holding it, and treating the two as
-            // the same made presence flip every time an operator changed apps.
-            // The window is the existing active lifetime rather than a new
-            // number: an active observation is already treated as meaningful
-            // for exactly that long.
-            "SELECT CASE
-                 WHEN state = 'hidden' AND last_active_at IS NOT NULL
-                      AND last_active_at + ?3 > ?2 THEN 'active'
-                 ELSE state
-             END AS state
-             FROM operator_presence_devices
-             WHERE operator_id = ?1 AND expires_at > ?2
-             ORDER BY CASE state
-                 WHEN 'active' THEN 0 WHEN 'locked' THEN 1
-                 WHEN 'idle' THEN 2 ELSE 3 END,
-                 updated_at DESC LIMIT 1",
-            params![operator_id.to_string(), now, ACTIVE_TTL_SECONDS],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?
-        .map(|value| PresenceObservationState::from_str(&value))
-        .transpose()
-        .map_err(|_| TaskStoreError::IntegrityFailure("invalid device presence state".into()))?;
-    Ok(match state {
-        Some(PresenceObservationState::Active) => OperatorPresence {
-            mode: PresenceMode::AtHive,
-            manual_mode: None,
-            source: PresenceSource::ActiveDevice,
-        },
-        Some(PresenceObservationState::Locked) => OperatorPresence {
-            mode: PresenceMode::Away,
-            manual_mode: None,
-            source: PresenceSource::ScreenLocked,
-        },
-        Some(PresenceObservationState::Idle | PresenceObservationState::Hidden) => {
-            OperatorPresence {
-                mode: PresenceMode::Away,
-                manual_mode: None,
-                source: PresenceSource::InactiveDevice,
-            }
-        }
-        None => OperatorPresence {
-            mode: PresenceMode::Away,
-            manual_mode: None,
-            source: PresenceSource::TimedOut,
-        },
-    })
+    let mut statement = connection.prepare(
+        "SELECT device_class, state, expires_at, last_active_at
+         FROM operator_presence_devices WHERE operator_id = ?1 AND expires_at > ?2
+         LIMIT 17",
+    )?;
+    let rows = statement.query_map(params![operator_id.to_string(), now], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, Option<i64>>(3)?,
+        ))
+    })?;
+    let mut devices = Vec::new();
+    for row in rows {
+        let (class, state, expires_at, last_active_at) = row?;
+        devices.push(swarm_domain::PresenceDeviceEvidence {
+            device_class: PresenceDeviceClass::from_str(&class).map_err(|_| {
+                TaskStoreError::IntegrityFailure("invalid device presence class".into())
+            })?,
+            state: PresenceObservationState::from_str(&state).map_err(|_| {
+                TaskStoreError::IntegrityFailure("invalid device presence state".into())
+            })?,
+            expires_at,
+            last_active_at,
+        });
+    }
+    let count = i64::try_from(devices.len()).map_err(|_| TaskStoreError::PresenceDeviceLimit)?;
+    if count > MAX_PRESENCE_DEVICES {
+        return Err(TaskStoreError::PresenceDeviceLimit);
+    }
+    Ok(swarm_domain::derive_device_presence(&devices, now))
 }
 
 pub(super) fn local_operator_id(connection: &Connection) -> Result<OperatorId, TaskStoreError> {
@@ -339,7 +320,7 @@ mod tests {
             let away = store
                 .record_presence_observation(device, PresenceDeviceClass::Desktop, state, 1_001)
                 .unwrap();
-            assert_eq!(away.presence.mode, PresenceMode::Away);
+            assert_eq!(away.presence.mode, PresenceMode::Reachable);
             assert!(away.changed);
             let back = store
                 .record_presence_observation(
@@ -369,7 +350,7 @@ mod tests {
                 1_000,
             )
             .unwrap();
-        assert_eq!(locked.presence.mode, PresenceMode::Away);
+        assert_eq!(locked.presence.mode, PresenceMode::Reachable);
         assert_eq!(locked.presence.source, PresenceSource::ScreenLocked);
 
         // Still within the lifetime: the report stands.
@@ -386,8 +367,53 @@ mod tests {
         let stale = store
             .operator_presence(1_000 + LOCKED_TTL_SECONDS + 1)
             .unwrap();
-        assert_eq!(stale.mode, PresenceMode::Away);
+        assert_eq!(stale.mode, PresenceMode::Reachable);
         assert_eq!(stale.source, PresenceSource::TimedOut);
+    }
+
+    #[test]
+    fn phone_use_preserves_reachable_after_desktop_lock() {
+        let store = TaskStore::in_memory().unwrap();
+        let desktop = PresenceDeviceId::new();
+        let phone = PresenceDeviceId::new();
+        store
+            .record_presence_observation(
+                desktop,
+                PresenceDeviceClass::Desktop,
+                PresenceObservationState::Active,
+                100,
+            )
+            .unwrap();
+        store
+            .record_presence_observation(
+                desktop,
+                PresenceDeviceClass::Desktop,
+                PresenceObservationState::Locked,
+                101,
+            )
+            .unwrap();
+        let reachable = store
+            .record_presence_observation(
+                phone,
+                PresenceDeviceClass::Mobile,
+                PresenceObservationState::Active,
+                102,
+            )
+            .unwrap();
+        assert_eq!(reachable.presence.mode, PresenceMode::Reachable);
+        assert_eq!(reachable.presence.source, PresenceSource::ScreenLocked);
+        assert!(!reachable.changed);
+        let back = store
+            .record_presence_observation_with_return(
+                desktop,
+                PresenceDeviceClass::Desktop,
+                PresenceObservationState::Active,
+                true,
+                103,
+            )
+            .unwrap();
+        assert_eq!(back.presence.mode, PresenceMode::AtHive);
+        assert!(back.changed);
     }
 
     #[test]
@@ -409,7 +435,7 @@ mod tests {
                 1_000,
             )
             .unwrap();
-        assert_eq!(active.presence.mode, PresenceMode::AtHive);
+        assert_eq!(active.presence.mode, PresenceMode::Reachable);
 
         // Switching apps a few seconds later.
         let hidden = store
@@ -422,7 +448,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             hidden.presence.mode,
-            PresenceMode::AtHive,
+            PresenceMode::Reachable,
             "a device active moments ago is still the operator's device"
         );
         assert!(
@@ -439,7 +465,7 @@ mod tests {
                 1_000 + ACTIVE_TTL_SECONDS + 1,
             )
             .unwrap();
-        assert_eq!(gone.presence.mode, PresenceMode::Away);
+        assert_eq!(gone.presence.mode, PresenceMode::Reachable);
     }
 
     #[test]
@@ -449,7 +475,7 @@ mod tests {
         let mobile = PresenceDeviceId::new();
         assert_eq!(
             store.operator_presence(100).unwrap().mode,
-            PresenceMode::Away
+            PresenceMode::Reachable
         );
 
         let active = store
@@ -476,7 +502,7 @@ mod tests {
             PresenceMode::AtHive
         );
         let away = store.operator_presence(251).unwrap();
-        assert_eq!(away.mode, PresenceMode::Away);
+        assert_eq!(away.mode, PresenceMode::Reachable);
         assert_eq!(away.source, PresenceSource::ScreenLocked);
     }
 

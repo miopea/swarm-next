@@ -1,5 +1,6 @@
 import { authenticatedFetch } from "./request";
 
+// Reachable retains the installed API/storage token "away" (ADR 0018).
 export type PresenceMode = "at_hive" | "away" | "night_watch";
 export type PresenceSource = "manual" | "scheduled" | "active_device" | "screen_locked" | "inactive_device" | "timed_out";
 export type PresenceDeviceClass = "desktop" | "mobile";

@@ -2491,7 +2491,7 @@ function workerAttentionLabel(worker: Worker): string {
 function presenceModeLabel(mode: PresenceMode) {
   if (mode === "at_hive") return "At Hive";
   if (mode === "night_watch") return "Night Watch";
-  return "Away";
+  return "Reachable";
 }
 
 function RuntimeStatus({ state, developmentMode }: { state: LoadState; developmentMode?: boolean }) {
