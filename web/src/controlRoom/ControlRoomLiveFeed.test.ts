@@ -88,6 +88,46 @@ test("reconnecting cancels old invalidation and prevents a late Connected state"
   feed.stop();
 });
 
+test("settles ordinary worker and task bursts before rebuilding the snapshot", async () => {
+  let release!: () => void;
+  const settle = new Promise<void>((resolve) => { release = resolve; });
+  const delay = vi.fn(() => settle);
+  const invalidated = vi.fn();
+  const feed = new ControlRoomLiveFeed(async () => ({
+    events: [
+      { sequence: 7, hive_id: "hive-1", kind: "workers_changed", occurred_at: 1 },
+      { sequence: 8, hive_id: "hive-1", kind: "tasks_changed", occurred_at: 1 },
+    ],
+    next_cursor: 8,
+    reset_required: false,
+  }), delay);
+  invalidated.mockImplementation(async () => feed.stop());
+
+  feed.start("secret", invalidated);
+  await vi.waitFor(() => expect(delay).toHaveBeenCalledWith(250, expect.any(AbortSignal)));
+  expect(invalidated).not.toHaveBeenCalled();
+  release();
+  await vi.waitFor(() => expect(invalidated).toHaveBeenCalledOnce());
+});
+
+test.each(["decisions_changed", "runtime_changed", "sessions_changed", "presence_changed", "notifications_changed"] as const)(
+  "%s remains an immediate invalidation",
+  async (kind) => {
+    const delay = vi.fn(async () => undefined);
+    const invalidated = vi.fn();
+    const feed = new ControlRoomLiveFeed(async () => ({
+      events: [{ sequence: 7, hive_id: "hive-1", kind, occurred_at: 1 }],
+      next_cursor: 7,
+      reset_required: false,
+    }), delay);
+    invalidated.mockImplementation(async () => feed.stop());
+
+    feed.start("secret", invalidated);
+    await vi.waitFor(() => expect(invalidated).toHaveBeenCalledOnce());
+    expect(delay).not.toHaveBeenCalled();
+  },
+);
+
 test("a poll that never answers cannot wedge the feed", async () => {
   // Reported from a phone: the roster kept showing every worker resting while
   // they were plainly working, kicking them changed nothing, and the pill still

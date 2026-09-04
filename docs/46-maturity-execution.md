@@ -6,6 +6,23 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P3 / PERF-02: pace ordinary control-room snapshot rebuilds
+
+- The single browser-owned live feed now gives worker/task-only pages one
+  250-millisecond settling window before rebuilding the complete control-room
+  snapshot. Decisions, runtime/session state, presence, notifications, cursor
+  resets and unfamiliar event kinds remain immediate.
+- The delay is owned by the feed and aborts on hide, stop, restart or credential
+  replacement. The durable cursor still advances only after refresh succeeds;
+  failures retry from the prior cursor instead of losing invalidations.
+- ADR 0071 records the boundary. Three focused frontend files pass 58 tests,
+  including held ordinary invalidation, all immediate event families, cursor
+  retry, cancellation and a hung long-poll. The production TypeScript/Vite build
+  passes with the existing terminal-chunk size advisory.
+- This removes one demonstrated amplification path but does not claim a measured
+  CPU reduction, long-session plateau or completion of PERF-02. No live Hive,
+  push, deployment or release action was performed.
+
 ### P2 / TERM-02: hold terminal geometry while the mobile composer is active
 
 - The mobile composer's focus state now explicitly suspends both local xterm

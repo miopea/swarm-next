@@ -5,6 +5,7 @@ type FetchPage = (operatorToken: string, after: number, signal: AbortSignal) => 
 type Delay = (milliseconds: number, signal: AbortSignal) => Promise<void>;
 
 const RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 5_000] as const;
+const ORDINARY_INVALIDATION_SETTLE_MS = 250;
 
 /// How long one poll may take before it is treated as hung rather than slow.
 ///
@@ -62,7 +63,20 @@ export class ControlRoomLiveFeed {
       try {
         const page = await this.fetchPage(operatorToken, cursor, poll.signal);
         if (signal.aborted) return;
-        if (page.reset_required || page.events.length > 0) await onInvalidate(page, poll.signal);
+        if (page.reset_required || page.events.length > 0) {
+          // Worker and task changes can arrive several times during one provider
+          // turn. The resulting snapshot is authoritative and includes every
+          // change that lands during this short window, so refreshing it once
+          // after the window avoids making the browser and API rebuild the same
+          // roster repeatedly. Decisions, runtime/session state, presence and
+          // notifications remain immediate because they can change available
+          // operator actions or input safety.
+          if (settlesBeforeRefresh(page)) {
+            await this.delay(ORDINARY_INVALIDATION_SETTLE_MS, signal);
+          }
+          if (signal.aborted) return;
+          await onInvalidate(page, poll.signal);
+        }
         if (signal.aborted) return;
         if (poll.signal.aborted) throw new DOMException("Refresh deadline exceeded", "TimeoutError");
         cursor = page.next_cursor;
@@ -83,6 +97,12 @@ export class ControlRoomLiveFeed {
       }
     }
   }
+}
+
+function settlesBeforeRefresh(page: ControlRoomEventPage): boolean {
+  return !page.reset_required
+    && page.events.length > 0
+    && page.events.every(({ kind }) => kind === "tasks_changed" || kind === "workers_changed");
 }
 
 function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
