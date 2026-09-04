@@ -3,7 +3,7 @@ import { expect, test, vi } from "vitest";
 
 import { BROWSER_SESSION_AUTH, type ControlRoomEventPage } from "../api";
 import type { ControlRoomSnapshot } from "./useControlRoomModel";
-import { mergeRecentEvents, useControlRoomModel } from "./useControlRoomModel";
+import { loadControlRoomSnapshot, mergeRecentEvents, useControlRoomModel } from "./useControlRoomModel";
 
 const populated = {
   hiveIdentity: { operator: { id: "operator", display_name: "Operator" }, hive: { id: "hive", name: "Hive", operator_id: "operator", apiary_id: null } },
@@ -54,7 +54,7 @@ test("restores the trusted browser session and snapshot through one model operat
   await act(async () => { await result.current.restoreBrowserSession(); });
 
   expect(validateSession).toHaveBeenCalledOnce();
-  expect(loadSnapshot).toHaveBeenCalledWith(BROWSER_SESSION_AUTH);
+  expect(loadSnapshot).toHaveBeenCalledWith(BROWSER_SESSION_AUTH, undefined);
   expect(result.current.workers).toEqual(populated.workers);
   expect(result.current.tasks).toEqual(populated.tasks);
 });
@@ -73,6 +73,40 @@ test("does not apply a live-feed refresh after its owning effect is cancelled", 
 
   expect(result.current.workers).toEqual([]);
   expect(result.current.recentEvents).toEqual([]);
+});
+
+test("presence-only pages preserve the snapshot but reset and task events reload it", async () => {
+  const loadSnapshot = vi.fn().mockResolvedValue(populated);
+  const { result } = renderHook(() => useControlRoomModel({ loadSnapshot }));
+  act(() => result.current.replace(populated));
+  const page = eventPage(2, false);
+  page.events[0].kind = "presence_changed";
+  await act(async () => { await result.current.refreshFromEvents("operator", page); });
+  expect(loadSnapshot).not.toHaveBeenCalled();
+  expect(result.current.tasks).toBe(populated.tasks);
+  expect(result.current.recentEvents).toEqual(page.events);
+  await act(async () => { await result.current.refreshFromEvents("operator", { ...page, reset_required: true }); });
+  expect(loadSnapshot).toHaveBeenCalledTimes(1);
+  await act(async () => { await result.current.refreshFromEvents("operator", eventPage(3, false)); });
+  expect(loadSnapshot).toHaveBeenCalledTimes(2);
+  act(() => result.current.clear());
+  await act(async () => { await result.current.refreshFromEvents("operator", page); });
+  expect(loadSnapshot).toHaveBeenCalledTimes(3);
+});
+
+test("snapshot reads propagate their owner cancellation to every endpoint", async () => {
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const path = String(input);
+    const payload = path.endsWith("/hive") ? { ...populated.hiveIdentity, hive: { ...populated.hiveIdentity!.hive, apiary_id: "apiary" } }
+      : path.endsWith("/sessions") ? { sessions: [] } : [];
+    return new Response(JSON.stringify(payload), { status: 200 });
+  });
+  try {
+    const controller = new AbortController();
+    await loadControlRoomSnapshot("operator", controller.signal);
+    expect(fetch).toHaveBeenCalledTimes(8);
+    for (const [, init] of fetch.mock.calls) expect(init?.signal).toBe(controller.signal);
+  } finally { fetch.mockRestore(); }
 });
 
 test("deduplicates, bounds, and resets recent control-room evidence", () => {

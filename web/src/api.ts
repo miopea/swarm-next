@@ -1031,8 +1031,8 @@ export async function fetchControlRoomEvents(
   return response.json() as Promise<ControlRoomEventPage>;
 }
 
-export async function fetchNotificationSettings(operatorToken: string): Promise<NotificationSettings> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/notifications/settings");
+export async function fetchNotificationSettings(operatorToken: string, signal?: AbortSignal): Promise<NotificationSettings> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/notifications/settings", { signal });
   return response.json() as Promise<NotificationSettings>;
 }
 
@@ -1136,8 +1136,8 @@ export async function fetchHistoryDiagnostics(operatorToken: string, signal?: Ab
   return payload.diagnostics;
 }
 
-export async function fetchHive(operatorToken: string): Promise<HiveIdentity> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/hive");
+export async function fetchHive(operatorToken: string, signal?: AbortSignal): Promise<HiveIdentity> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/hive", { signal });
   return response.json() as Promise<HiveIdentity>;
 }
 
@@ -1381,8 +1381,9 @@ export async function queueFederationStewardTask(
 
 export async function fetchFederationStewardAssists(
   operatorToken: string,
+  signal?: AbortSignal,
 ): Promise<FederationStewardAssistLocalState> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/steward/assists");
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/steward/assists", { signal });
   return response.json() as Promise<FederationStewardAssistLocalState>;
 }
 
@@ -1653,14 +1654,14 @@ export async function promoteApiaryJiraProject(
   return response.json() as Promise<ApiaryJiraProject>;
 }
 
-export async function fetchSessions(operatorToken: string): Promise<SessionSummary[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/terminal/sessions");
+export async function fetchSessions(operatorToken: string, signal?: AbortSignal): Promise<SessionSummary[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/terminal/sessions", { signal });
   const payload = (await response.json()) as SessionsResponse;
   return payload.sessions;
 }
 
-export async function fetchDecisions(operatorToken: string): Promise<DecisionRequest[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/decisions");
+export async function fetchDecisions(operatorToken: string, signal?: AbortSignal): Promise<DecisionRequest[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/decisions", { signal });
   return response.json() as Promise<DecisionRequest[]>;
 }
 
@@ -1898,8 +1899,9 @@ export async function fetchProviderCapabilities(operatorToken: string, signal?: 
 export async function fetchPresentationPreferences(
   operatorToken: string,
   deviceClass: PresentationDeviceClass,
+  signal?: AbortSignal,
 ): Promise<PresentationPreferences> {
-  const response = await authenticatedFetch(operatorToken, `/api/v1/preferences/presentation/${deviceClass}`);
+  const response = await authenticatedFetch(operatorToken, `/api/v1/preferences/presentation/${deviceClass}`, { signal });
   return response.json() as Promise<PresentationPreferences>;
 }
 
@@ -1922,8 +1924,8 @@ export async function setPresentationPreferences(
   return response.json() as Promise<PresentationPreferences>;
 }
 
-export async function fetchQueenAutonomyPolicy(operatorToken: string): Promise<QueenAutonomyPolicy> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/orchestration/queen-policy");
+export async function fetchQueenAutonomyPolicy(operatorToken: string, signal?: AbortSignal): Promise<QueenAutonomyPolicy> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/orchestration/queen-policy", { signal });
   return response.json() as Promise<QueenAutonomyPolicy>;
 }
 
@@ -1941,8 +1943,9 @@ export async function setQueenAutonomyPolicy(
 
 export async function fetchQueenAutomationStatus(
   operatorToken: string,
+  signal?: AbortSignal,
 ): Promise<QueenAutomationStatus> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/orchestration/queen-automation");
+  const response = await authenticatedFetch(operatorToken, "/api/v1/orchestration/queen-automation", { signal });
   return response.json() as Promise<QueenAutomationStatus>;
 }
 

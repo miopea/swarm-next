@@ -32,8 +32,8 @@ export async function saveNightWatchConfiguration(operatorToken: string, configu
   return response.json() as Promise<NightWatchConfiguration>;
 }
 
-export async function fetchPresence(operatorToken: string): Promise<OperatorPresence> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/presence");
+export async function fetchPresence(operatorToken: string, signal?: AbortSignal): Promise<OperatorPresence> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/presence", { signal });
   return response.json() as Promise<OperatorPresence>;
 }
 

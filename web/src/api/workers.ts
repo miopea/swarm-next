@@ -140,13 +140,13 @@ export async function fetchWorkerRepository(
   return response.json() as Promise<RepositoryState | null>;
 }
 
-export async function fetchWorkers(operatorToken: string): Promise<Worker[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/workers");
+export async function fetchWorkers(operatorToken: string, signal?: AbortSignal): Promise<Worker[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/workers", { signal });
   return response.json() as Promise<Worker[]>;
 }
 
-export async function fetchWorkspaces(operatorToken: string): Promise<WorkspaceChoice[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/workspaces");
+export async function fetchWorkspaces(operatorToken: string, signal?: AbortSignal): Promise<WorkspaceChoice[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/workspaces", { signal });
   return response.json() as Promise<WorkspaceChoice[]>;
 }
 

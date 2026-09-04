@@ -116,8 +116,8 @@ export type TaskUpdateInput = Partial<Omit<TaskDraftInput, "worker_id">> & {
 };
 export type TaskCreateInput = Omit<TaskDraftInput, "worker_id"> & { workspace: string };
 
-export async function fetchTasks(operatorToken: string): Promise<Task[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/tasks");
+export async function fetchTasks(operatorToken: string, signal?: AbortSignal): Promise<Task[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/tasks", { signal });
   return response.json() as Promise<Task[]>;
 }
 

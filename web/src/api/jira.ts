@@ -129,8 +129,8 @@ export async function fetchJiraBindings(operatorToken: string): Promise<JiraProj
   return response.json() as Promise<JiraProjectBinding[]>;
 }
 
-export async function fetchJiraTaskLinks(operatorToken: string): Promise<JiraTaskLink[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/task-links");
+export async function fetchJiraTaskLinks(operatorToken: string, signal?: AbortSignal): Promise<JiraTaskLink[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/task-links", { signal });
   const links = await response.json() as unknown;
   return Array.isArray(links) ? links as JiraTaskLink[] : [];
 }

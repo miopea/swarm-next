@@ -850,6 +850,26 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   control-feed refresh cost and measured live performance acceptance remain open.
   No push, deployment, release, or worker interruption.
 
+### P3g: avoid unrelated snapshots and cancel superseded feed refreshes
+
+- Once a control-room snapshot exists, presence/notification-only pages retain
+  it and refresh their own auxiliary state instead of rereading seven core
+  endpoints (eight for an Apiary Hive). Startup, reset, mixed task/worker/session/
+  runtime events and unknown event kinds retain the full-refresh path. Bounded
+  recent-event evidence is still updated. No task or decision notification delay.
+- Feed invalidation carries the poll's owned cancellation through snapshot and
+  auxiliary reads. Reconnect cancels the previous run; its late completion cannot
+  publish Connected or replace current App state. Cursor reset now refreshes
+  auxiliary settings too. The existing feed deadline also bounds these reads.
+- Fifty-eight focused model/feed/App/API tests and the production web build
+  passed, including snapshot preservation, reset, cancellation propagation to all
+  eight endpoints and late invalidation after reconnect. Terminal chunk warning
+  remains. Earlier tests expected Connected after explicitly stopping the feed;
+  corrected those expectations to forbid that stale status publication.
+- No measured CPU improvement is claimed. High-volume worker-event coalescing,
+  live profiles, field-level snapshot cost and long-session acceptance remain
+  open. No push, deployment, release, or worker interruption.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

@@ -20,7 +20,7 @@ test("resumes from the durable cursor and invalidates snapshots", async () => {
   await vi.waitFor(() => expect(invalidated).toHaveBeenCalledOnce());
 
   expect(cursors).toEqual([0]);
-  expect(states).toEqual(["connecting", "connected"]);
+  expect(states).toEqual(["connecting"]); // Stopped inside invalidation; no late Connected.
 });
 
 test("retries with capped owned backoff and refreshes after a cursor reset", async () => {
@@ -42,7 +42,7 @@ test("retries with capped owned backoff and refreshes after a cursor reset", asy
   await vi.waitFor(() => expect(invalidated).toHaveBeenCalledOnce());
 
   expect(delay).toHaveBeenCalledWith(250, expect.any(AbortSignal));
-  expect(states).toEqual(["connecting", "retrying", "connected"]);
+  expect(states).toEqual(["connecting", "retrying"]);
 });
 test("does not acknowledge an event until snapshot invalidation succeeds", async () => {
   const cursors: number[] = [];
@@ -72,6 +72,22 @@ test("does not acknowledge an event until snapshot invalidation succeeds", async
   expect(cursors).toEqual([0, 0]);
   expect(delay).toHaveBeenCalledWith(250, expect.any(AbortSignal));
 });
+test("reconnecting cancels old invalidation and prevents a late Connected state", async () => {
+  let oldSignal: AbortSignal | undefined;
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => { finish = resolve; });
+  const states: LiveFeedState[] = [];
+  const feed = new ControlRoomLiveFeed(async () => ({ events: [], next_cursor: 0, reset_required: true }));
+  feed.start("operator", async (_page, signal) => { oldSignal = signal; await gate; }, (state) => states.push(state));
+  await vi.waitFor(() => expect(oldSignal).toBeDefined());
+  feed.start("operator", async () => { feed.stop(); }, (state) => states.push(state));
+  expect(oldSignal!.aborted).toBe(true);
+  finish();
+  await gate;
+  await vi.waitFor(() => expect(states).toEqual(["connecting", "connecting"]));
+  feed.stop();
+});
+
 test("a poll that never answers cannot wedge the feed", async () => {
   // Reported from a phone: the roster kept showing every worker resting while
   // they were plainly working, kicking them changed nothing, and the pill still
@@ -107,5 +123,5 @@ test("a poll that never answers cannot wedge the feed", async () => {
   // It gave up on the hung poll and got a real answer on the next one, rather
   // than sitting on "connected" forever.
   expect(attempt).toBe(2);
-  expect(states).toEqual(["connecting", "retrying", "connected"]);
+  expect(states).toEqual(["connecting", "retrying"]);
 });

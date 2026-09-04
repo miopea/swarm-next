@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import {
   BROWSER_SESSION_AUTH,
@@ -50,18 +50,18 @@ type Dependencies = {
   validateSession?: typeof validateBrowserSession;
 };
 
-export async function loadControlRoomSnapshot(operatorToken: string): Promise<ControlRoomSnapshot> {
+export async function loadControlRoomSnapshot(operatorToken: string, signal?: AbortSignal): Promise<ControlRoomSnapshot> {
   const [hiveIdentity, sessions, workers, workspaces, tasks, decisions, jiraTaskLinks] = await Promise.all([
-    fetchHive(operatorToken),
-    fetchSessions(operatorToken),
-    fetchWorkers(operatorToken),
-    fetchWorkspaces(operatorToken),
-    fetchTasks(operatorToken),
-    fetchDecisions(operatorToken),
-    fetchJiraTaskLinks(operatorToken).catch(() => []),
+    fetchHive(operatorToken, signal),
+    fetchSessions(operatorToken, signal),
+    fetchWorkers(operatorToken, signal),
+    fetchWorkspaces(operatorToken, signal),
+    fetchTasks(operatorToken, signal),
+    fetchDecisions(operatorToken, signal),
+    fetchJiraTaskLinks(operatorToken, signal).catch(() => []),
   ]);
   const stewardAssists = hiveIdentity.hive.apiary_id
-    ? await fetchFederationStewardAssists(operatorToken).catch(() => ({ incoming: [], sent: [], outbox: [] }))
+    ? await fetchFederationStewardAssists(operatorToken, signal).catch(() => ({ incoming: [], sent: [], outbox: [] }))
     : { incoming: [], sent: [], outbox: [] };
   return { hiveIdentity, sessions, workers, workspaces, tasks, jiraTaskLinks, decisions, stewardAssists };
 }
@@ -78,16 +78,18 @@ export function useControlRoomModel({
 }: Dependencies = {}) {
   const [snapshot, setSnapshot] = useState<ControlRoomSnapshot>(emptySnapshot);
   const [recentEvents, setRecentEvents] = useState<ControlRoomEvent[]>([]);
+  const initialized = useRef(false);
 
   const load = useCallback(loadSnapshot, [loadSnapshot]);
-  const replace = useCallback((next: ControlRoomSnapshot) => setSnapshot(next), []);
+  const replace = useCallback((next: ControlRoomSnapshot) => { initialized.current = true; setSnapshot(next); }, []);
   const clear = useCallback(() => {
+    initialized.current = false;
     setSnapshot(emptySnapshot);
     setRecentEvents([]);
   }, []);
   const restoreBrowserSession = useCallback(async (signal?: AbortSignal) => {
     await validateSession();
-    const next = await load(BROWSER_SESSION_AUTH);
+    const next = await load(BROWSER_SESSION_AUTH, signal);
     if (signal?.aborted) return undefined;
     replace(next);
     return next;
@@ -97,7 +99,14 @@ export function useControlRoomModel({
     page: ControlRoomEventPage,
     signal?: AbortSignal,
   ) => {
-    const next = await load(operatorToken);
+    if (signal?.aborted) return undefined;
+    // These events have their own App-level reads; they do not invalidate the
+    // roster/task snapshot. Reset, startup and unfamiliar event kinds refresh fully.
+    if (initialized.current && !page.reset_required && page.events.every((event) => event.kind === "presence_changed" || event.kind === "notifications_changed")) {
+      setRecentEvents((current) => mergeRecentEvents(current, page));
+      return undefined;
+    }
+    const next = await load(operatorToken, signal);
     if (signal?.aborted) return undefined;
     replace(next);
     setRecentEvents((current) => mergeRecentEvents(current, page));

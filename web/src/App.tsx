@@ -666,38 +666,37 @@ export function App() {
       setLiveFeedState("connecting");
       return;
     }
-    const controller = new AbortController();
     const feed = new ControlRoomLiveFeed();
     const connect = () => feed.start(
       operatorToken,
-      async (page) => {
-        const runtimeChanged = page.events.some((event) => event.kind === "runtime_changed");
-        const refreshQueenAutomation = page.events.some((event) => event.kind === "workers_changed");
+      async (page, signal) => {
+        const runtimeChanged = page.reset_required || page.events.some((event) => event.kind === "runtime_changed");
+        const refreshQueenAutomation = page.reset_required || page.events.some((event) => event.kind === "workers_changed");
         const [controlRoom, refreshedPresence, refreshedNotifications, refreshedQueenPolicy, refreshedQueenAutomation, refreshedPresentation, refreshedProviders] = await Promise.all([
-          controlRoomModel.refreshFromEvents(operatorToken, page, controller.signal),
-          page.events.some((event) => event.kind === "presence_changed")
-            ? fetchPresence(operatorToken)
+          controlRoomModel.refreshFromEvents(operatorToken, page, signal),
+          page.reset_required || page.events.some((event) => event.kind === "presence_changed")
+            ? fetchPresence(operatorToken, signal)
             : Promise.resolve(undefined),
-          page.events.some((event) => event.kind === "notifications_changed")
-            ? fetchNotificationSettings(operatorToken)
+          page.reset_required || page.events.some((event) => event.kind === "notifications_changed")
+            ? fetchNotificationSettings(operatorToken, signal)
             : Promise.resolve(undefined),
           runtimeChanged
-            ? fetchQueenAutonomyPolicy(operatorToken)
+            ? fetchQueenAutonomyPolicy(operatorToken, signal)
             : Promise.resolve(undefined),
           refreshQueenAutomation
-            ? fetchQueenAutomationStatus(operatorToken).catch(() => undefined)
+            ? fetchQueenAutomationStatus(operatorToken, signal).catch(() => undefined)
             : Promise.resolve(undefined),
           runtimeChanged
-            ? fetchPresentationPreferences(operatorToken, presentationDevice)
+            ? fetchPresentationPreferences(operatorToken, presentationDevice, signal)
             : Promise.resolve(undefined),
           runtimeChanged
-            ? fetchProviderCapabilities(operatorToken).catch(() => {
-                setProviderCapabilitiesUnavailable(true);
+            ? fetchProviderCapabilities(operatorToken, signal).catch(() => {
+                if (!signal.aborted) setProviderCapabilitiesUnavailable(true);
                 return undefined;
               })
             : Promise.resolve(undefined),
         ]);
-        if (controller.signal.aborted || !controlRoom) return;
+        if (signal.aborted) return;
         if (refreshedPresence) setPresence(refreshedPresence);
         if (refreshedNotifications) setNotificationSettings(refreshedNotifications);
         if (refreshedQueenPolicy) setQueenPolicy(refreshedQueenPolicy);
@@ -711,7 +710,7 @@ export function App() {
           setMobileKeysVisible(refreshedPresentation.terminal_keys_visible);
           rememberMobileKeysVisibility(refreshedPresentation.terminal_keys_visible);
         }
-        setActiveSessionId((current) =>
+        if (controlRoom) setActiveSessionId((current) =>
           current && controlRoom.sessions.some((session) => session.session_id === current)
             ? current
             : preferredSessionId(controlRoom.workers, controlRoom.sessions),
@@ -732,7 +731,6 @@ export function App() {
     document.addEventListener("visibilitychange", reconnectOnReturn);
     return () => {
       document.removeEventListener("visibilitychange", reconnectOnReturn);
-      controller.abort();
       feed.stop();
     };
   }, [operatorToken, presentationDevice]);

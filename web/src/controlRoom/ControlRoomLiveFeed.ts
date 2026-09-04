@@ -27,7 +27,7 @@ export class ControlRoomLiveFeed {
 
   start(
     operatorToken: string,
-    onInvalidate: (page: ControlRoomEventPage) => Promise<void>,
+    onInvalidate: (page: ControlRoomEventPage, signal: AbortSignal) => Promise<void>,
     onStateChange: (state: LiveFeedState) => void = () => undefined,
   ) {
     this.stop();
@@ -44,7 +44,7 @@ export class ControlRoomLiveFeed {
   async #run(
     operatorToken: string,
     signal: AbortSignal,
-    onInvalidate: (page: ControlRoomEventPage) => Promise<void>,
+    onInvalidate: (page: ControlRoomEventPage, signal: AbortSignal) => Promise<void>,
     onStateChange: (state: LiveFeedState) => void,
   ) {
     let cursor = 0;
@@ -62,7 +62,9 @@ export class ControlRoomLiveFeed {
       try {
         const page = await this.fetchPage(operatorToken, cursor, poll.signal);
         if (signal.aborted) return;
-        if (page.reset_required || page.events.length > 0) await onInvalidate(page);
+        if (page.reset_required || page.events.length > 0) await onInvalidate(page, poll.signal);
+        if (signal.aborted) return;
+        if (poll.signal.aborted) throw new DOMException("Refresh deadline exceeded", "TimeoutError");
         cursor = page.next_cursor;
         failures = 0;
         onStateChange("connected");
