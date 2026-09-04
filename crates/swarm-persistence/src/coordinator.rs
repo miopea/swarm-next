@@ -5788,6 +5788,17 @@ impl TaskStore {
                     ],
                 )?;
             }
+            if let Some(run_id) = subject.strip_prefix("queen-run:") {
+                transaction.execute(
+                    "UPDATE coordinator_refusals SET cleared_at = ?3
+                     WHERE subject = 'queen-review' AND cleared_at IS NULL
+                       AND kind IN ('delivery_held_open_prompt','delivery_held_unsent_text')
+                       AND EXISTS (SELECT 1 FROM queen_automation WHERE id = 1
+                         AND run_id = ?1 AND delivery_session_id = ?2
+                         AND state IN ('queued','delivering'))",
+                    params![run_id, session_id.map(|id| id.to_string()), now],
+                )?;
+            }
             // A newer observation replaces the other prompt condition for the
             // same delivery. Never clear unrelated subjects or wake recovery.
             transaction.execute(
@@ -5878,6 +5889,19 @@ impl TaskStore {
              FROM coordinator_refusals refusal
              LEFT JOIN worker_profiles worker ON worker.id = refusal.worker_id
              WHERE refusal.cleared_at IS NULL
+               AND (refusal.kind NOT IN ('delivery_held_open_prompt', 'delivery_held_unsent_text')
+                    OR refusal.subject != 'queen-review'
+                    OR EXISTS (SELECT 1 FROM queen_automation WHERE id = 1 AND
+                        (run_id IS NULL OR state IN ('queued','delivering'))))
+               AND (refusal.kind NOT IN ('delivery_held_open_prompt', 'delivery_held_unsent_text')
+                    OR refusal.subject NOT LIKE 'queen-run:%'
+                    OR EXISTS (
+                        SELECT 1 FROM queen_automation automation
+                        JOIN worker_profiles queen ON queen.role = 'queen' AND queen.id = refusal.worker_id
+                        WHERE automation.id = 1 AND automation.run_id = substr(refusal.subject, 11)
+                          AND automation.state IN ('queued','delivering')
+                          AND automation.delivery_session_id = refusal.session_id
+                    ))
                AND (refusal.kind NOT IN ('delivery_held_open_prompt', 'delivery_held_unsent_text')
                     OR refusal.subject NOT LIKE 'task-dispatch:%'
                     OR EXISTS (

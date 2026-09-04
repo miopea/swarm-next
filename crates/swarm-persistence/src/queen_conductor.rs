@@ -940,6 +940,86 @@ mod tests {
     use super::*;
     use swarm_domain::{ProviderKind, TaskActivityActor, TaskPriority, TaskState};
 
+    #[test]
+    fn review_hold_tracks_its_run_not_the_queens_general_activity() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        store.request_queen_automation_run(100).unwrap();
+        let first = store.claim_queen_automation(101).unwrap().unwrap();
+        let subject = format!("queen-run:{}", first.run_id);
+        store
+            .record_coordinator_refusal(
+                crate::REFUSAL_DELIVERY_HELD,
+                "queen-review",
+                Some(queen.id),
+                Some(session),
+                "legacy",
+                102,
+            )
+            .unwrap();
+        store
+            .record_coordinator_refusal(
+                crate::REFUSAL_DELIVERY_HELD,
+                &subject,
+                Some(queen.id),
+                Some(session),
+                "first run",
+                102,
+            )
+            .unwrap();
+        store
+            .defer_queen_automation_delivery(&first.run_id, 103)
+            .unwrap();
+        assert_eq!(
+            store.standing_coordinator_refusals(1_000, 0).unwrap().len(),
+            1
+        );
+        store.claim_queen_automation(104).unwrap().unwrap();
+        store
+            .complete_queen_automation_delivery(&first.run_id, 105)
+            .unwrap();
+        assert!(
+            store
+                .standing_coordinator_refusals(1_000, 0)
+                .unwrap()
+                .is_empty()
+        );
+        store
+            .finish_queen_automation_run(&first.run_id, QueenAutomationOutcome::Completed, 106)
+            .unwrap();
+        store.request_queen_automation_run(107).unwrap();
+        let next = store.claim_queen_automation(108).unwrap().unwrap();
+        let next_subject = format!("queen-run:{}", next.run_id);
+        store
+            .record_coordinator_refusal(
+                crate::REFUSAL_DELIVERY_HELD_UNSENT_TEXT,
+                &next_subject,
+                Some(queen.id),
+                Some(session),
+                "next run",
+                109,
+            )
+            .unwrap();
+        store
+            .record_coordinator_refusal(
+                crate::REFUSAL_DELIVERY_HELD,
+                &subject,
+                Some(queen.id),
+                Some(session),
+                "late old",
+                110,
+            )
+            .unwrap();
+        store
+            .clear_coordinator_refusal(crate::REFUSAL_DELIVERY_HELD, &subject, 111)
+            .unwrap();
+        let holds = store.standing_coordinator_refusals(1_000, 0).unwrap();
+        assert_eq!(holds.len(), 1);
+        assert_eq!(holds[0].subject, next_subject);
+    }
+
     /// "She has been idle for the last 30 minutes when we have workers with
     /// work they could start on and reviews that need to be done."
     ///
@@ -1394,9 +1474,7 @@ mod tests {
         // databases gained it and installed ones did not, so it was queried in
         // production before it existed and every Queen automation read failed
         // until a forward step was added. Only a step reaches both.
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm.sqlite3");
-        let store = TaskStore::open(&path).unwrap();
+        let store = TaskStore::in_memory().unwrap();
         store
             .connection()
             .unwrap()
@@ -1405,11 +1483,22 @@ mod tests {
                  PRAGMA user_version = 72;",
             )
             .unwrap();
-        drop(store);
+        // Exercise this forward step directly: relabeling today's complete
+        // schema as v72 is not a v72 fixture and replays unrelated migrations
+        // against tables that already exist.
+        {
+            let mut connection = store.connection().unwrap();
+            let transaction = connection.transaction().unwrap();
+            migrate_queen_delivery_session(&transaction).unwrap();
+            migrate_queen_delivery_session(&transaction).unwrap();
+            let version: i64 = transaction
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            assert_eq!(version, QUEEN_DELIVERY_SESSION_SCHEMA_VERSION);
+            transaction.commit().unwrap();
+        }
 
-        let migrated = TaskStore::open(path).unwrap();
-
-        let has_column: bool = migrated
+        let has_column: bool = store
             .connection()
             .unwrap()
             .query_row(
@@ -1420,7 +1509,7 @@ mod tests {
             .unwrap();
         assert!(has_column, "an installed database must gain the column too");
         // And the query that failed in production now works.
-        assert!(migrated.queen_automation_status(10).is_ok());
+        assert!(store.queen_automation_status(10).is_ok());
     }
 
     #[test]

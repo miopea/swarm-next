@@ -54,6 +54,14 @@ that compatibility path until task-wide observations are no longer present; no
 schema migration or legacy identity inference is required. Returned work that
 rearms the same assignment and other delivery families still require review.
 
+Queen automation delivery holds use `queen-run:<run-id>`, not the singleton
+`queen-review` subject. Only the exact queued/delivering run in the recorded
+Queen session remains a delivery hold; running/completed/uncertain is not that
+same condition. Its existing automation status remains authoritative for those
+states. A valid scoped observation replaces the legacy singleton observation
+atomically. The legacy projection also stops displaying a hold once a known run
+has progressed beyond delivery. This says nothing about other work Queen can do.
+
 ## Consequences and verification
 
 A failed coordinator read is not evidence that held work resolved. Preserve the

@@ -6,6 +6,22 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: Queen delivery observations belong to an exact review run
+
+- Replaced singleton Queen-review subjects for new observations/clears with the
+  run ID. Projection requires that exact queued/delivering run and recorded Queen
+  session. Running, completed, replaced or uncertain runs are not prompt holds;
+  their automation status remains intact. Current scoped evidence atomically
+  replaces the legacy singleton row. No general claim that Queen stopped working.
+- Exact-run regression and Linux-target API/persistence Clippy passed. Broader
+  tests exposed an existing artificial migration fixture: a current schema was
+  relabeled v72 while retaining newer tables. Corrected it to exercise the missing
+  delivery-session forward migration directly and idempotently; this is a focused
+  migration test, not a historical full-database upgrade test. Production migration
+  code is unchanged. All 27 Queen tests and 10 refusal-filtered tests passed.
+- Other delivery families and returned-work identity remain open. No live worker,
+  deployment, push or release changes.
+
 ### P4: assignment-scoped task-brief observations
 
 - New task-brief holds and successful clears use the immutable assignment ID,

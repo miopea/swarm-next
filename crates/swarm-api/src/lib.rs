@@ -2272,9 +2272,8 @@ impl AppState {
     }
     /// Defers a claimed Queen run whose terminal is not at a fresh resting prompt.
     ///
-    /// The one that stopped the whole Hive for twelve hours. Queen reviews
-    /// nothing while this holds, so nothing reaches Needs you and nothing gets
-    /// routed — which is why the refusal is recorded rather than only logged.
+    /// This review delivery is waiting, not proof that Queen stopped working.
+    /// The run identity keeps an earlier delivery result out of a later run.
     fn hold_queen_automation_until_resting(
         &self,
         store: &TaskStore,
@@ -2283,7 +2282,7 @@ impl AppState {
         tracing::info!(run_id = %delivery.run_id, "Queen automation is waiting for a fresh resting prompt");
         let _ = store.record_coordinator_refusal(
             REFUSAL_DELIVERY_HELD,
-            "queen-review",
+            &format!("queen-run:{}", delivery.run_id),
             Some(delivery.worker_id),
             Some(delivery.session_id),
             &coordination_delivery::DeferralReason::ProviderBusy.describe("Queen's review"),
@@ -2338,7 +2337,7 @@ impl AppState {
         .await
         {
             Ok(TerminalSubmission::Acknowledged) => {
-                clear_held_delivery_refusals(store, "queen-review");
+                clear_held_delivery_refusals(store, &format!("queen-run:{}", delivery.run_id));
                 store.complete_queen_automation_delivery(&delivery.run_id, unix_timestamp())
             }
             Ok(TerminalSubmission::Deferred(reason)) => {
@@ -2348,7 +2347,7 @@ impl AppState {
                 if let Some(kind) = reason.refusal_kind() {
                     let _ = store.record_coordinator_refusal(
                         kind,
-                        "queen-review",
+                        &format!("queen-run:{}", delivery.run_id),
                         Some(delivery.worker_id),
                         Some(delivery.session_id),
                         &reason.describe("Queen's review"),
