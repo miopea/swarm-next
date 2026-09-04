@@ -38,11 +38,14 @@ describe("QueuesView", () => {
       task({ id: "b", title: "Judge me too", next_move_owner: "queen" }),
       task({ id: "c", title: "Mine", state: "active", next_move_owner: "worker" }),
       task({ id: "d", title: "Stuck", state: "blocked", next_move_owner: "blocked" }),
+      task({ id: "e", title: "Needs a ruling", next_move_owner: "operator" }),
     ]} />);
 
     expect(screen.getByRole("heading", { name: /Waiting on Queen 2/ })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /Waiting on a worker 1/ })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /Blocked on something else 1/ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Waiting on you 1/ })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /Next owner not recorded/ })).not.toBeInTheDocument();
   });
 
   /**

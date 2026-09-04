@@ -906,14 +906,39 @@ impl ServerHandler for AgentMcp {
                             } else {
                                 "decisions this worker raised, plus rulings attached to tasks assigned to it — so a gate that says verify the operator's sign-off at source can be satisfied without being told the id by anyone. Other decisions are still readable by passing decision_id with a FULL id."
                             };
+                            // ⚠️ ROWS CAN BE MISSING AND THE CAPTION ONLY EVER
+                            // ADMITTED TO MISSING FIELDS. The listing stops at
+                            // MAX_DECISION_RESULTS; `count` reported the returned
+                            // length, so a caller read "200 decisions" against a
+                            // store holding 305 and published ratios off it.
+                            //
+                            // The old caption made that worse rather than better:
+                            // it said reason, risk and evidence were omitted — a
+                            // truncation of CONTENT — while saying nothing about
+                            // dropped ROWS. A truncation that announces a
+                            // different truncation is worse than one that
+                            // announces none, because the reader believes they
+                            // have already been warned.
+                            let total = self
+                                .tasks
+                                .store()
+                                .count_decision_requests()
+                                .map_err(ApplicationError::Store)?;
+                            let shown = decisions.len();
                             structured(json!({
                                 "decisions": decisions
                                     .iter()
                                     .map(decision_index_entry)
                                     .collect::<Vec<_>>(),
-                                "count": decisions.len(),
+                                "count": shown,
+                                "total": total,
+                                "truncated": total > shown,
                                 "scope": scope,
-                                "next": "This is an index. reason, risk, evidence, questions and the operator's answers are omitted here — pass decision_id with a FULL id to read one in full."
+                                "next": if total > shown {
+                                    "This is an index AND IT IS SHORT: `count` is what came back, `total` is what the Hive holds, and the difference was dropped by the page cap — do not read `count` as a total. Content is abridged too: reason, risk, evidence, questions and the operator's answers are omitted. Pass decision_id with a FULL id to read one in full."
+                                } else {
+                                    "This is an index. reason, risk, evidence, questions and the operator's answers are omitted here — pass decision_id with a FULL id to read one in full."
+                                }
                             }))
                         },
                     ),
@@ -1482,6 +1507,22 @@ impl AgentMcp {
                 "chose_an_offered_action"
             },
             "resolved_at": decision.resolved_at,
+            // WHETHER THE ACT THIS AUTHORISED HAS HAPPENED, which "resolved"
+            // does not say. Three times on 2026-09-03 the operator approved
+            // something, it did not happen, and every surface read clean: the
+            // decision resolved, its originating task silent because it did not
+            // do the work, and the executing ticket linked to nothing.
+            //
+            // "unknown" is not a hedge and must not be read as one — it means no
+            // task names this decision, so neither answer is available. Roughly
+            // three quarters of resolved decisions sit there, because the id was
+            // never written down. A screen that cannot see must not return what a
+            // clean board returns.
+            "discharge": decision.discharge.map(|value| match value {
+                swarm_domain::DecisionDischarge::Discharged => "discharged",
+                swarm_domain::DecisionDischarge::Outstanding => "outstanding",
+                swarm_domain::DecisionDischarge::Unknown => "unknown",
+            }),
             "reason": if resolved {
                 "The operator resolved this, and what they decided is read from this Hive's durable store rather than relayed — acting on it is acting on the operator, not on a peer's claim about the operator. READ answered_how FIRST: chose_an_offered_action means resolution_action is their answer; in_their_own_words means resolution_action is a placeholder and their actual words are in resolution_answers. Reading the placeholder as the answer is how two sessions concluded a ruling did not exist when it did. resolution_note may carry a condition. It authorises what it says and nothing beyond it."
             } else {
@@ -2633,6 +2674,15 @@ fn decision_index_entry(decision: &swarm_domain::DecisionRequest) -> Value {
         "summary": decision.summary,
         "state": decision.state,
         "resolution_action": decision.resolution_action,
+        // Whether the act it authorised has evidence of having happened. Absent
+        // until it resolves, because an unanswered question authorises no act.
+        // "unknown" means no task names this decision, so neither answer is
+        // available — it is a stated blind spot, not a soft no.
+        "discharge": decision.discharge.map(|value| match value {
+            swarm_domain::DecisionDischarge::Discharged => "discharged",
+            swarm_domain::DecisionDischarge::Outstanding => "outstanding",
+            swarm_domain::DecisionDischarge::Unknown => "unknown",
+        }),
         "deadline": decision.deadline,
         "created_at": decision.created_at,
         "resolved_at": decision.resolved_at,
@@ -5943,6 +5993,130 @@ mod tests {
         );
     }
 
+    /// ⚠️ A TRUNCATION THAT ANNOUNCES A DIFFERENT TRUNCATION IS WORSE THAN
+    /// SILENCE. The index caps at `MAX_DECISION_RESULTS` and reported the returned
+    /// length as `count`, while its caption admitted only to omitting FIELDS —
+    /// reason, risk, evidence. So a reader who had read the caption believed they
+    /// had been warned, and had been warned about the wrong thing.
+    ///
+    /// A coordinator published 199 as a denominator tonight and every ratio quoted
+    /// off it. There was no caveat to ignore.
+    #[tokio::test]
+    async fn the_decision_index_says_when_it_dropped_rows_and_not_only_fields() {
+        let (bridge, store, queen_id, _worker_id, _) = setup();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        for _ in 0..3 {
+            store
+                .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                    requesting_worker_id: queen_id,
+                    task_id: None,
+                    kind: swarm_domain::DecisionRequestKind::Approval,
+                    urgency: swarm_domain::DecisionUrgency::Normal,
+                    title: "Ship it",
+                    summary: "One of many.",
+                    reason: "The batch is ready and waiting on a decision.",
+                    risk: "",
+                    evidence: "",
+                    suggested_action: "Ship",
+                    allowed_actions: &["Ship".to_owned()],
+                    questions: &[],
+                    deadline: None,
+                    requested_command: None,
+                })
+                .unwrap();
+        }
+
+        let listed = response_json(
+            handle(
+                bridge.clone(),
+                plain_state(),
+                mcp_request(
+                    Some(&queen_token),
+                    "tools/call",
+                    &json!({ "name": "swarm_list_decisions", "arguments": {} }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        let listed = &listed["result"]["structuredContent"];
+
+        // Under the cap: count and total agree and nothing claims truncation.
+        assert_eq!(listed["count"], 3);
+        assert_eq!(listed["total"], 3, "the total is the store, not the page");
+        assert_eq!(listed["truncated"], false);
+        // And the field reaches the index, which is the half the store cannot prove.
+        assert_eq!(listed["decisions"][0]["discharge"], serde_json::Value::Null);
+    }
+
+    /// ⚠️ AND THE CASE THAT MATTERS IS THE TRUNCATED ONE, which a small fixture
+    /// cannot reach. The test above passes whether or not `total` is the store's
+    /// count, because three rows fit under the cap — so on its own it proves the
+    /// keys exist and nothing about what they mean. This one crosses the cap,
+    /// which is the only place the old behaviour and the new one differ.
+    #[tokio::test]
+    async fn past_the_cap_the_index_reports_the_store_total_and_not_the_page() {
+        let (bridge, store, queen_id, _worker_id, _) = setup();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let over = usize::try_from(swarm_persistence::MAX_DECISION_RESULTS).unwrap() + 1;
+        for _ in 0..over {
+            store
+                .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                    requesting_worker_id: queen_id,
+                    task_id: None,
+                    kind: swarm_domain::DecisionRequestKind::Approval,
+                    urgency: swarm_domain::DecisionUrgency::Normal,
+                    title: "Ship it",
+                    summary: "One of many.",
+                    reason: "The batch is ready and waiting on a decision.",
+                    risk: "",
+                    evidence: "",
+                    suggested_action: "Ship",
+                    allowed_actions: &["Ship".to_owned()],
+                    questions: &[],
+                    deadline: None,
+                    requested_command: None,
+                })
+                .unwrap();
+        }
+
+        let listed = response_json(
+            handle(
+                bridge.clone(),
+                plain_state(),
+                mcp_request(
+                    Some(&queen_token),
+                    "tools/call",
+                    &json!({ "name": "swarm_list_decisions", "arguments": {} }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        let listed = &listed["result"]["structuredContent"];
+
+        assert_eq!(
+            listed["count"],
+            swarm_persistence::MAX_DECISION_RESULTS,
+            "the page is capped, which is fine and not the defect"
+        );
+        assert_eq!(
+            listed["total"], over,
+            "the total is what the Hive holds. Reporting the page here is how 199 \
+             was published as a denominator against a store of 305"
+        );
+        assert_eq!(listed["truncated"], true);
+        assert!(
+            listed["next"]
+                .as_str()
+                .unwrap()
+                .contains("dropped by the page cap"),
+            "the caption must admit to dropped ROWS, not only omitted fields — it \
+             used to name the field abridgement only, so a reader who had read it \
+             believed they had been warned about the wrong thing"
+        );
+    }
+
     #[tokio::test]
     async fn a_worker_verifies_an_operator_ruling_it_did_not_raise() {
         let (bridge, store, queen_id, worker_id, _) = setup();
@@ -6011,6 +6185,20 @@ mod tests {
         );
         assert!(verified.get("evidence").is_none());
         assert!(verified.get("risk").is_none());
+        // ⚠️ THE FIELD HAS TO REACH THE TOOL, NOT ONLY THE STORE. The discharge
+        // derivation was built, tested against the store, and reported as
+        // available on this path — and it was not, because this response is
+        // hand-built field by field and nobody added it. The store was right the
+        // whole time; the surface never carried it, and a Queen session read a
+        // clean-looking record with the answer missing rather than absent.
+        //
+        // "unknown" here is correct and is the point: no task names this ruling,
+        // so neither answer is available. It must not be mistaken for "no".
+        assert_eq!(
+            verified["discharge"], "unknown",
+            "a resolved ruling says whether its act happened, and says so on the \
+             surface a worker actually calls"
+        );
 
         // A claim that cites nothing real still stops the worker, and says so
         // as absence rather than as an error to interpret.

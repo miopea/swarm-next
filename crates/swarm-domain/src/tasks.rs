@@ -545,6 +545,20 @@ pub enum NextMoveOwner {
     /// line: blocked is "a harder reason than back and forth with worker or
     /// queen", such as a task waiting on another task.
     Blocked,
+    /// The operator, because a decision they have not answered is open on it.
+    ///
+    /// REVIEWED WORK WAITING ON A RULING HAD NO HONEST OWNER. It sat as Queen's
+    /// to judge while Queen was the one who could not judge it — she was waiting
+    /// too. Twice in one day she tried to move such a task to Blocked and could
+    /// not: Review has no Blocked exit, and the detour through Active is refused
+    /// whenever the assignee holds any other task.
+    ///
+    /// DERIVED FROM THE DECISION, NOT STORED. An unresolved decision request
+    /// against the task already IS the fact, so nothing new is written down and
+    /// the two cannot drift. It also means this UNSETS ITSELF: the moment the
+    /// operator answers, ownership returns to Queen with no transition, no
+    /// second trip through Active, and nothing for anyone to remember.
+    Operator,
     /// An event, not a person: the work is waiting to ship and settles itself.
     Release,
     /// Nobody. The work is closed.
@@ -845,13 +859,23 @@ const fn default_next_move_owner() -> NextMoveOwner {
 impl NextMoveOwner {
     /// Derives who owes the next move from the facts already on the task.
     ///
-    /// `review_returned` is the single stored input: Queen has handed reviewed
+    /// `review_returned` is the one stored input: Queen has handed reviewed
     /// work back and named what is missing, so the worker owes an answer. It is
     /// stored because it is a decision somebody made, not a consequence of the
     /// state — everything else here follows from state and assignment, and
     /// deriving those means they cannot drift apart.
+    ///
+    /// `awaiting_operator_decision` is NOT a second stored input. It is read
+    /// from whether an unresolved decision request names this task, which is a
+    /// fact the board already holds. Storing it again would create exactly the
+    /// drift this function exists to prevent.
     #[must_use]
-    pub const fn derive(state: TaskState, assigned: bool, review_returned: bool) -> Self {
+    pub const fn derive(
+        state: TaskState,
+        assigned: bool,
+        review_returned: bool,
+        awaiting_operator_decision: bool,
+    ) -> Self {
         match state {
             TaskState::Active => Self::Worker,
             // Assigned work is the worker's to start, so "N tasks ready" was
@@ -860,6 +884,13 @@ impl NextMoveOwner {
             // Queen has handed this back and named what is missing. The task
             // did not move; the debt did.
             TaskState::Review if review_returned => Self::Worker,
+            // AFTER the hand-back, because that is an explicit act by Queen
+            // naming what the worker owes, and a decision left open beside it
+            // does not cancel the debt she named.
+            TaskState::Review if awaiting_operator_decision => Self::Operator,
+            // AFTER the hand-back, because that is an explicit act by Queen
+            // naming what the worker owes, and a decision left open beside it
+            // does not cancel the debt she named.
             // NOT Queen. The operator drew this line: blocked is a harder
             // reason than back-and-forth, such as a task waiting on another
             // task. Naming Queen here would bury the hard cases in her queue.

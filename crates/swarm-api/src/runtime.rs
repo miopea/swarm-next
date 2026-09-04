@@ -52,11 +52,19 @@ struct TerminalRuntimeLimits {
 /// A host that cannot be reached answers None rather than false: not knowing
 /// and being up to date are different facts, and collapsing them is how a
 /// staleness check becomes a check that cannot fail.
-async fn engine_update_required(state: &Arc<AppState>) -> Option<bool> {
-    crate::maintenance::host_status_snapshot(state)
-        .await
-        .ok()
-        .map(|status| crate::maintenance::worker_engine_update_required(&status))
+async fn engine_update_required(state: &Arc<AppState>) -> (Option<bool>, Option<usize>) {
+    let Ok(status) = crate::maintenance::host_status_snapshot(state).await else {
+        return (None, None);
+    };
+    // BOTH FACTS FROM ONE SNAPSHOT. The session count is what turns "the engine
+    // is behind" into a sentence an operator can weigh: a swap that stops eleven
+    // sessions and a swap that stops none read identically without it, and the
+    // difference is the whole cost. Asking the host twice for one screen would
+    // also let the two answers disagree.
+    (
+        Some(crate::maintenance::worker_engine_update_required(&status)),
+        Some(status.running_sessions),
+    )
 }
 
 /// Whether the CHECKOUT changes the terminal-host protocol.
@@ -124,6 +132,13 @@ struct DevelopmentRuntimeResponse {
     /// up to date, and saying "current" because nothing answered is the failure
     /// this Hive keeps removing.
     worker_engine_update_required: Option<bool>,
+    /// How many worker sessions are running, from the same host snapshot.
+    ///
+    /// A PLAIN COUNT, not a judgement. The card decides how to phrase what it
+    /// costs; this only says how many there are, so the number cannot drift from
+    /// the staleness flag it is shown beside. None means the host could not be
+    /// asked, which is the same silence the flag itself reports.
+    running_worker_sessions: Option<usize>,
     /// Whether the checkout changes the terminal-host protocol, which a reload
     /// cannot install. None means the host could not be asked, or there is no
     /// development checkout to compare against.
@@ -303,6 +318,9 @@ pub(super) async fn development(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let source = development_source_status(&state);
+    // One host snapshot serves both the staleness flag and the session count, so
+    // the two cannot disagree on the screen that shows them together.
+    let engine_update = engine_update_required(&state).await;
     let source_aligned = source.as_ref().is_some_and(|status| status.aligned);
     let state_name = if source.is_some() && !source_aligned {
         "source_mismatch"
@@ -325,7 +343,8 @@ pub(super) async fn development(
             source_revision: source.as_ref().map(|status| status.revision.clone()),
             source_dirty: source.as_ref().is_some_and(|status| status.dirty),
             deployed_source_published: source.is_some_and(|status| status.published),
-            worker_engine_update_required: engine_update_required(&state).await,
+            worker_engine_update_required: engine_update.0,
+            running_worker_sessions: engine_update.1,
             protocol_migration_required: protocol_migration_required(&state).await,
             failure_reason: development_status_field(&state, "reason="),
             failure_detail: development_status_field(&state, "detail="),

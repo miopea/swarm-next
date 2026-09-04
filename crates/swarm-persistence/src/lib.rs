@@ -118,7 +118,9 @@ pub use messages::{
 mod task_outcomes;
 pub use task_outcomes::{TaskOutcomeDispatch, TaskOutcomeFailure};
 mod workers;
-pub use decisions::{HeldForAnswer, INTERVIEW_ANSWERED_ACTION, OPERATOR_ANSWER_HEADER};
+pub use decisions::{
+    HeldForAnswer, INTERVIEW_ANSWERED_ACTION, MAX_DECISION_RESULTS, OPERATOR_ANSWER_HEADER,
+};
 use events::insert_control_room_event;
 #[cfg(test)]
 use events::{MAX_CONTROL_ROOM_EVENT_PAGE, MAX_CONTROL_ROOM_EVENTS};
@@ -1722,7 +1724,12 @@ impl TaskStore {
                           WHERE worked.task_id = t.id AND worked.actor_kind = 'worker'),
                    EXISTS(SELECT 1 FROM task_unverifiable_closures u WHERE u.task_id = t.id),
                    EXISTS(SELECT 1 FROM task_returned_reviews r
-                          WHERE r.task_id = t.id AND r.answered_at IS NULL)
+                          WHERE r.task_id = t.id AND r.answered_at IS NULL),
+                   -- Reviewed work waiting on a ruling is the OPERATOR's, not
+                   -- Queen's. Read from the decision rather than stored beside
+                   -- it, so it unsets itself the moment they answer.
+                   EXISTS(SELECT 1 FROM decision_requests dr
+                          WHERE dr.task_id = t.id AND dr.state = 'pending')
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
@@ -1811,33 +1818,15 @@ impl TaskStore {
     /// Returns an error when persistence cannot be read safely.
     pub fn list_removed_local_tasks(&self) -> Result<Vec<Task>, TaskStoreError> {
         let connection = self.connection()?;
-        let mut statement = connection.prepare(
-            "
-            SELECT t.id, t.hive_id, t.title, t.description, t.priority, t.workspace, t.state,
-                   t.assigned_worker_id, a.worker_session_id,
-                   (SELECT state FROM task_dispatches td WHERE td.assignment_id = a.id),
-                   (SELECT state FROM task_outcome_deliveries outcome WHERE outcome.task_id = t.id
-                    AND outcome.target_state = t.state
-                    ORDER BY outcome.activity_sequence DESC LIMIT 1),
-                   t.position, t.created_at, t.updated_at, t.operator_instruction,
-                   EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = t.id),
-                   EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = t.id)
-                     OR EXISTS(SELECT 1 FROM task_completion_exemptions e
-                               WHERE e.task_id = t.id AND e.approved_at IS NOT NULL AND e.withdrawn_at IS NULL),
-                   EXISTS(SELECT 1 FROM task_activity worked
-                          WHERE worked.task_id = t.id AND worked.actor_kind = 'worker'),
-                   EXISTS(SELECT 1 FROM task_unverifiable_closures u WHERE u.task_id = t.id),
-                   EXISTS(SELECT 1 FROM task_returned_reviews r
-                          WHERE r.task_id = t.id AND r.answered_at IS NULL)
-            FROM tasks t
-            LEFT JOIN task_assignments a
-              ON a.task_id = t.id AND a.released_at IS NULL
+        let sql = format!(
+            "{projection}
             WHERE t.removed_at IS NOT NULL
               AND NOT EXISTS (SELECT 1 FROM jira_issue_links jira WHERE jira.task_id = t.id)
             ORDER BY t.removed_at DESC, t.id
-            LIMIT 100
-            ",
-        )?;
+            LIMIT 100",
+            projection = Self::TASK_PROJECTION,
+        );
+        let mut statement = connection.prepare(&sql)?;
         statement
             .query_map([], task_from_row)?
             .collect::<Result<Vec<_>, _>>()
@@ -1850,33 +1839,12 @@ impl TaskStore {
     /// Returns `NotFound` for an unknown task or a persistence error.
     pub fn get_task(&self, id: TaskId) -> Result<Task, TaskStoreError> {
         let connection = self.connection()?;
+        let sql = format!(
+            "{projection}\n            WHERE t.id = ?1 AND t.removed_at IS NULL",
+            projection = Self::TASK_PROJECTION,
+        );
         connection
-            .query_row(
-                "
-                SELECT t.id, t.hive_id, t.title, t.description, t.priority, t.workspace, t.state,
-                       t.assigned_worker_id, a.worker_session_id,
-                   (SELECT state FROM task_dispatches td WHERE td.assignment_id = a.id),
-                   (SELECT state FROM task_outcome_deliveries outcome WHERE outcome.task_id = t.id
-                    AND outcome.target_state = t.state
-                    ORDER BY outcome.activity_sequence DESC LIMIT 1),
-                       t.position, t.created_at, t.updated_at, t.operator_instruction,
-                   EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = t.id),
-                   EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = t.id)
-                     OR EXISTS(SELECT 1 FROM task_completion_exemptions e
-                               WHERE e.task_id = t.id AND e.approved_at IS NOT NULL AND e.withdrawn_at IS NULL),
-                   EXISTS(SELECT 1 FROM task_activity worked
-                          WHERE worked.task_id = t.id AND worked.actor_kind = 'worker'),
-                   EXISTS(SELECT 1 FROM task_unverifiable_closures u WHERE u.task_id = t.id),
-                   EXISTS(SELECT 1 FROM task_returned_reviews r
-                          WHERE r.task_id = t.id AND r.answered_at IS NULL)
-                FROM tasks t
-                LEFT JOIN task_assignments a
-                  ON a.task_id = t.id AND a.released_at IS NULL
-                WHERE t.id = ?1 AND t.removed_at IS NULL
-                ",
-                [id.to_string()],
-                task_from_row,
-            )
+            .query_row(&sql, [id.to_string()], task_from_row)
             .optional()?
             .ok_or(TaskStoreError::NotFound)
     }
@@ -5770,14 +5738,26 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
                 )
             })?,
         operator_instruction: row.get(14)?,
-        deployment_recorded: row.get(15).unwrap_or(false),
-        closed_on_evidence: row.get(16).unwrap_or(false),
-        worked_here: row.get(17).unwrap_or(false),
-        closed_unverifiable: row.get(18).unwrap_or(false),
+        // STRICT, LIKE EVERY OTHER COLUMN HERE. These were lenient, and the
+        // leniency could only ever hide a mistake: a projection that forgets one
+        // of them returned `false`, which is a plausible value meaning "this task
+        // is not in that state". A caller could not tell a missing column from a
+        // genuine negative, which is the failure family this repository keeps
+        // paying for — an instrument whose broken state reads as a real answer.
+        //
+        // Nothing legitimate produces a missing column: these are expressions in
+        // the projection, not table columns, so they are present whenever the
+        // query is right and absent only when it is wrong. Failing loudly turns a
+        // silent wrong answer into an error naming the row.
+        deployment_recorded: row.get(15)?,
+        closed_on_evidence: row.get(16)?,
+        worked_here: row.get(17)?,
+        closed_unverifiable: row.get(18)?,
         next_move_owner: swarm_domain::NextMoveOwner::derive(
             TaskState::from_str(&state).unwrap_or(TaskState::Draft),
             has_assignee,
-            row.get(19).unwrap_or(false),
+            row.get(19)?,
+            row.get(20)?,
         ),
         outcome_delivery_state: outcome_delivery_state
             .map(|value| TaskOutcomeDeliveryState::from_str(&value))
@@ -9111,5 +9091,54 @@ mod tests {
         // Only screens this product actually opens on.
         assert!(store.set_start_surface("elsewhere").is_err());
         assert_eq!(store.start_surface().unwrap(), "decisions");
+    }
+}
+
+/// ONE PROJECTION, AND THIS IS WHAT KEEPS IT ONE.
+///
+/// There were three byte-identical copies feeding `task_from_row`, and every
+/// column added had to be added to all three. The failure mode was not the
+/// duplication itself but what a MISS cost: `row.get` was `unwrap_or(false)`, so
+/// a copy that forgot a column returned `false` — a plausible value meaning "this
+/// task is not in that state" — and no caller could tell that from a genuine
+/// negative.
+///
+/// Both halves are fixed: the copies are gone, and the reads are strict so a
+/// fourth that forgets one errors instead of lying. This test guards the first
+/// half, because a future reader in a hurry writes a new SELECT rather than
+/// reusing a constant, and nothing else would notice.
+#[cfg(test)]
+mod the_task_projection_stays_singular {
+    const SOURCE: &str = include_str!("lib.rs");
+
+    /// Split so the scanner does not match its own needle — this module is
+    /// inside the file it reads, and written as one literal it counted itself.
+    /// That mistake was made twice in one day before it was written down.
+    const PROJECTION_HEAD: &str = concat!("SELECT t.id,", " t.hive_id");
+
+    #[test]
+    fn there_is_exactly_one_task_projection() {
+        let copies = SOURCE.matches(PROJECTION_HEAD).count();
+        assert_eq!(
+            copies, 1,
+            "the task projection appears {copies} times. Every column has to be \
+             added to each one, and a copy that forgets one is not an error — it \
+             reads as a genuine negative. Use TaskStore::TASK_PROJECTION and add \
+             only a WHERE."
+        );
+    }
+
+    /// The lenient read is what made a missed column silent rather than loud.
+    #[test]
+    fn the_projection_columns_are_read_strictly() {
+        let lenient = SOURCE.matches(concat!("row.get(", "15).unwrap_or")).count()
+            + SOURCE.matches(concat!("row.get(", "19).unwrap_or")).count()
+            + SOURCE.matches(concat!("row.get(", "20).unwrap_or")).count();
+        assert_eq!(
+            lenient, 0,
+            "a task projection column is read with unwrap_or again. A missing \
+             column then reads as `false`, which is indistinguishable from the \
+             task genuinely not being in that state."
+        );
     }
 }

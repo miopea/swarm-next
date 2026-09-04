@@ -263,7 +263,7 @@ test("says the worker engine is behind even when the app matches the checkout", 
   }} />);
 
   expect(screen.getByText(/The worker engine is behind this build/)).toBeInTheDocument();
-  expect(screen.getByText(/A reload does not restart it/)).toBeInTheDocument();
+  expect(screen.getByText(/a background check will install it without asking/)).toBeInTheDocument();
 });
 
 test("says the worker engine is behind while a reload is also available", () => {
@@ -376,4 +376,90 @@ test("a checkout on the same protocol says nothing about migrating", () => {
   }} />);
 
   expect(screen.queryByText(/changes the terminal-host protocol/)).not.toBeInTheDocument();
+});
+
+/**
+ * ⚠️ THE SENTENCE THAT COST NINETY MINUTES SAID EVERY TRUE THING AND STILL MISLED.
+ *
+ * "A reload does not restart it — that is what keeps worker terminals alive — so
+ * run the worker engine update when your workers are idle." Each clause correct.
+ * Together they invite the operator to do something later that a background timer
+ * does for them, on exactly the trigger the sentence names: idleness.
+ *
+ * On 2026-09-03 the timer deferred three times while workers were mid-turn and
+ * swapped at the first moment all ten were resting, stopping every session. The
+ * operator WAS told the engine was behind. Nothing told them a timer would act on
+ * it, or that the workers would not come back.
+ *
+ * These guard the three things the sentence must now carry, because an edit for
+ * brevity would drop exactly those.
+ */
+test("the engine-behind notice says the swap happens without being asked", () => {
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-123456789abc-20260815040000-10",
+    state: "idle",
+    reload_available: false,
+    deployed_source_revision: "76543210fedc",
+    source_revision: "76543210fedc",
+    source_dirty: false,
+    deployed_source_published: true,
+    worker_engine_update_required: true,
+    running_worker_sessions: 11,
+  }} />);
+  expect(screen.getByText(/install it without asking/)).toBeInTheDocument();
+  expect(screen.getByText(/first moment no worker is mid-turn/)).toBeInTheDocument();
+});
+
+test("it names how many sessions the swap will stop", () => {
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-123456789abc-20260815040000-10",
+    state: "idle",
+    reload_available: false,
+    deployed_source_revision: "76543210fedc",
+    source_revision: "76543210fedc",
+    source_dirty: false,
+    deployed_source_published: true,
+    worker_engine_update_required: true,
+    running_worker_sessions: 11,
+  }} />);
+  expect(screen.getByText(/all 11 running worker sessions/)).toBeInTheDocument();
+});
+
+test("it says the workers do not come back on their own", () => {
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-123456789abc-20260815040000-10",
+    state: "idle",
+    reload_available: false,
+    deployed_source_revision: "76543210fedc",
+    source_revision: "76543210fedc",
+    source_dirty: false,
+    deployed_source_published: true,
+    worker_engine_update_required: true,
+    running_worker_sessions: 11,
+  }} />);
+  expect(screen.getByText(/the rest wait to be started by hand/)).toBeInTheDocument();
+});
+
+/**
+ * A count the host could not supply must not render "all null sessions" and must
+ * not quietly read as zero. Not knowing and knowing none are different facts —
+ * the rule the staleness flag beside it already follows.
+ */
+test("an unknown session count degrades to a sentence rather than a number", () => {
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-123456789abc-20260815040000-10",
+    state: "idle",
+    reload_available: false,
+    deployed_source_revision: "76543210fedc",
+    source_revision: "76543210fedc",
+    source_dirty: false,
+    deployed_source_published: true,
+    worker_engine_update_required: true,
+  }} />);
+  expect(screen.getByText(/every running worker session/)).toBeInTheDocument();
+  expect(screen.queryByText(/all null/)).not.toBeInTheDocument();
 });

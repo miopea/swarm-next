@@ -6,6 +6,24 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## P0 — Reconciliation and baseline (in progress)
 
+### Upstream integration through `7b02058`
+
+- Refreshed origin/main and integrated eight commits since `36420b3`, preserving
+  upstream decision discharge evidence, strict shared task/decision projections,
+  operator next-move ownership, and engine-update consequence reporting.
+- Resolved the Queues conflict by retaining both operator ownership and explicit
+  unknown ownership, plus this branch's held-delivery and refresh-failure behavior.
+  Added an operator-group assertion beside existing unknown-owner coverage.
+- Verification before merge: full web suite, 119 files / 982 tests passed.
+  Combined branch: 71 affected web tests and production build passed; 74 domain
+  and 31 decision-related persistence tests passed; native persistence strict
+  Clippy and Linux-target API all-target/all-feature strict Clippy passed.
+  Linux API tests compiled, not executed. Existing terminal bundle warning remains.
+- This is a local integration only, not a release or live acceptance. The package
+  reconcile timer still restarts the engine outside the API revival path; reliable
+  return of its formerly running workers remains P5 work. Upstream's warning
+  about that consequence is retained, not mistaken for the approved final behavior.
+
 - Read charter, architecture, resource/diagnostic boundaries and relevant decision records.
 - Refreshed origin/main: no newer commits at execution start.
 - Recorded recent patches as unverified against reported live failures, not closed defects.

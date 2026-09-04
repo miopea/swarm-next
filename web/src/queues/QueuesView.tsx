@@ -30,10 +30,11 @@ type Group = {
   tasks: Task[];
 };
 
-const GROUP_ORDER: readonly Group["owner"][] = ["queen", "worker", "blocked", "release", "unknown"];
+const GROUP_ORDER: readonly Group["owner"][] = ["operator", "queen", "worker", "blocked", "release", "unknown"];
 
 const GROUP_TITLES: Record<Group["owner"], string> = {
   unknown: "Next owner not recorded",
+  operator: "Waiting on you",
   queen: "Waiting on Queen",
   worker: "Waiting on a worker",
   blocked: "Blocked on something else",
@@ -44,6 +45,7 @@ const GROUP_TITLES: Record<Group["owner"], string> = {
 const GROUP_MEANINGS: Record<Group["owner"], string> = {
   unknown: "Open work without a known next owner. This is missing evidence, not a healthy queue.",
   queen: "Work whose next recorded move belongs to Queen.",
+  operator: "Reviewed work with a decision open on it. Nobody in the Hive can move these — answering the decision releases them.",
   worker: "Work a worker owns — in progress, or handed back for something missing.",
   blocked: "Nothing here can move these. A hard reason, such as waiting on another task.",
   release: "Finished and accepted. These close themselves when the work ships.",

@@ -416,6 +416,13 @@ export type DevelopmentRuntime = {
    */
   worker_engine_update_required?: boolean | null;
   /**
+   * How many worker sessions are running, from the same host snapshot.
+   *
+   * A plain count. The card phrases what it costs; this only says how many there
+   * are, so the number cannot drift from the flag it is shown beside.
+   */
+  running_worker_sessions?: number | null;
+  /**
    * Whether the checkout changes the terminal-host protocol.
    *
    * A reload CANNOT install this. It leaves the terminal host running on

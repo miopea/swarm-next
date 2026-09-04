@@ -63,10 +63,35 @@ export default function DevelopmentReloadAction({ busy, runtime, reachable = tru
       so run the protocol migration when your workers are idle.
     </p>
   ) : null;
+  /**
+   * ⚠️ THIS SENTENCE USED TO INVITE AN ACTION A TIMER WAS ALREADY TAKING.
+   *
+   * It read "so run the worker engine update when your workers are idle" — every
+   * clause true, and together an invitation to do something later that a
+   * background check does FOR you, on exactly the trigger the sentence names.
+   *
+   * On 2026-09-03 that cost ninety minutes: a reload at 13:22 left the engine
+   * behind, the reconcile timer deferred three times while workers were
+   * mid-turn, and swapped at 13:51 the first moment all ten were resting. The
+   * operator WAS told the engine was behind. They were never told what would
+   * happen next, or that it would happen without them.
+   *
+   * The count is what makes it weighable — a swap that stops eleven sessions and
+   * one that stops none read identically without it. The non-return is what
+   * turns a restart into an afternoon: autostart is off on every profile but
+   * Queen, deliberately, so the rest wait to be started by hand.
+   */
+  const runningSessions = runtime.running_worker_sessions;
   const engineBehind = runtime.worker_engine_update_required === true ? (
     <p className="runtime-engine-behind">
-      The worker engine is behind this build. A reload does not restart it — that is what keeps
-      worker terminals alive — so run the worker engine update when your workers are idle.
+      <strong>The worker engine is behind this build, and a background check will install it
+      without asking.</strong> It swaps at the first moment no worker is mid-turn — which may be
+      minutes or an hour — and that stops{" "}
+      {typeof runningSessions === "number"
+        ? `all ${runningSessions} running worker session${runningSessions === 1 ? "" : "s"}`
+        : "every running worker session"}
+      . Only workers set to stay active automatically come back on their own; the rest wait to be
+      started by hand. Use the worker engine update below if you would rather choose the moment.
     </p>
   ) : null;
   const uncommittedOnly = runtime.source_dirty
