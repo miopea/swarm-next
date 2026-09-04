@@ -6,6 +6,30 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2: incremental question repaint verification
+
+- The browser question fixture previously cleared the whole screen for every
+  transition, bypassing relative-cursor overwrite behavior. Next question now
+  erases the previous physical rows and writes the next prompt in seven-byte
+  chunks, including split CSI/UTF-8 sequences. Explicit replay/reset still uses a
+  full screen snapshot. Width counting is limited to this fixture's fixed text,
+  not introduced as a production Unicode implementation.
+- Added an engine replay regression for three prompts at 36/100 columns and
+  4/24 rows, including content taller than the viewport. Each transition compares
+  uninterrupted parsing with snapshot-plus-incremental output, including cursor
+  position. All 110 terminal library tests executed successfully in local Ubuntu.
+- In a separate Edge tab on the isolated no-Hive harness, second-question CLOVER
+  replaced APPLE at 36 columns. After explicit snapshot replay, third-question
+  HONEY replaced CLOVER. The exposed serialized buffer and screenshot showed only
+  the expected current prompt. This was a narrow terminal in a desktop browser,
+  not an Android/iOS viewport or a captured Claude AskUser trace.
+- Production web build passed with the existing terminal chunk warning. No
+  production renderer behavior changed: the synthetic case did not reproduce the
+  reported bug. Actual provider/device reproduction remains required before
+  claiming it fixed. No live worker input, deployment, or release.
+- Strict all-target/all-feature Linux terminal Clippy passed after replacing an
+  unnecessary temporary string allocation in the new test.
+
 ### P3/P4: own and cancel Activity view reads
 
 - Replaced unowned Activity loads with the existing visible-request helper in

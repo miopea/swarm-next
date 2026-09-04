@@ -12,6 +12,13 @@ function screenBytes(question: number) {
   return new TextEncoder().encode(`${CSI}0m${CSI}H${CSI}2J${questions[question].join("\r\n")}`);
 }
 
+function repaintBytes(previous: number, next: number, columns: number) {
+  // These fixed strings use ASCII, a single-width check mark, and a two-cell
+  // bee (two UTF-16 units). This is fixture-specific, not a Unicode width API.
+  const physicalRows = questions[previous].reduce((total, line) => total + Math.max(1, Math.ceil(line.length / columns)), 0);
+  return new TextEncoder().encode(`\r${CSI}${physicalRows - 1}A${CSI}J${questions[next].join("\r\n")}`);
+}
+
 /** Synthetic ANSI only: not a capture of Claude's AskUser output or proof of that bug. */
 export default function TerminalQuestionsFixture() {
   const mount = useRef<HTMLDivElement>(null);
@@ -43,7 +50,14 @@ export default function TerminalQuestionsFixture() {
     setSerialized(undefined);
     try {
       if (snapshot) await renderer.restore({ sequence: next + 1, rows: 24, columns: width, truncated: false, reason: "attached", bytes: screenBytes(next) });
-      else await renderer.write(screenBytes(next));
+      else {
+        const bytes = repaintBytes(question, next, columns);
+        // Split control sequences as a WebSocket/PTY stream is allowed to do.
+        for (let offset = 0; offset < bytes.length; offset += 7) {
+          await renderer.write(bytes.subarray(offset, offset + 7));
+          if (surface.current !== renderer) return;
+        }
+      }
       if (surface.current !== renderer) return;
       setQuestion(next);
       setColumns(width);
@@ -55,7 +69,7 @@ export default function TerminalQuestionsFixture() {
 
   return <main style={{ padding: 20, maxWidth: 1100, margin: "auto" }}>
     <h1>Terminal question transitions</h1>
-    <p>Synthetic rendering fixture. No provider, worker, socket, or Hive. Passing this does not establish that Claude AskUser is fixed.</p>
+    <p>Synthetic relative-cursor repaint with wrapped text and split control sequences. No provider, worker, socket, or Hive. Passing this does not establish that Claude AskUser is fixed.</p>
     <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
       <label>Canonical width <select value={columns} disabled={busy} onChange={(event) => void paint(question, Number(event.target.value), true)}>
         <option value={36}>Phone · 36 columns</option><option value={100}>Desktop · 100 columns</option>

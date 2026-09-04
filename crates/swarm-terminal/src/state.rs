@@ -524,6 +524,60 @@ mod tests {
     }
 
     #[test]
+    fn wrapped_question_repaints_converge_after_snapshot_recovery() {
+        // Synthetic relative-cursor repaint, not a captured provider trace.
+        // Unlike a clear-screen fixture, the next question must erase the old
+        // physical lines, including wrapped descriptions and a short viewport.
+        for columns in [36_u16, 100] {
+            for rows in [4_u16, 24] {
+                let mut state = CanonicalTerminalState::new(
+                    JournalLimits::new(16 * 1024, 128),
+                    TerminalSize::new(rows, columns),
+                );
+                let mut prior_lines = 0;
+                for (index, marker) in ["APPLE", "CLOVER", "HONEY"].iter().enumerate() {
+                    let snapshot = state.snapshot();
+                    let mut restored = vt100::Parser::new(rows, columns, CANONICAL_SCROLLBACK_ROWS);
+                    restored.process(&snapshot.bytes);
+                    let mut repaint = if prior_lines > 0 {
+                        format!("\r\x1b[{}A\x1b[J", prior_lines - 1)
+                    } else {
+                        String::new()
+                    };
+                    let lines = [
+                        format!("Question {}: {marker}", index + 1),
+                        "A long explanation that wraps across several physical rows on a narrow phone terminal while remaining one logical line.".to_owned(),
+                        "  1. Continue the existing task".to_owned(),
+                        "  2. Leave the worker waiting".to_owned(),
+                        format!("Choose {marker}:"),
+                    ];
+                    prior_lines = lines
+                        .iter()
+                        .map(|line| line.len().div_ceil(usize::from(columns)))
+                        .sum::<usize>();
+                    repaint.push_str(&lines.join("\r\n"));
+                    // Deliberately split CSI and text across transport frames.
+                    for chunk in repaint.as_bytes().chunks(7) {
+                        state.push(chunk.to_vec());
+                        restored.process(chunk);
+                    }
+                    assert_eq!(
+                        restored.screen().contents(),
+                        state.parser.screen().contents(),
+                        "question {} at {columns}x{rows}",
+                        index + 1,
+                    );
+                    assert_eq!(
+                        restored.screen().cursor_position(),
+                        state.parser.screen().cursor_position()
+                    );
+                    assert!(restored.screen().contents().contains(marker));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn pathological_cell_growth_compacts_to_a_bounded_visible_state() {
         let mut state =
             CanonicalTerminalState::new(JournalLimits::new(8 * 1024, 32), TerminalSize::new(4, 20));
