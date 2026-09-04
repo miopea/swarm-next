@@ -6,6 +6,25 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2: bounded provider startup hook sender
+
+- Added the `provider-session-start` host command before normal logging/server
+  initialization. It validates inherited process identity/capability, accepts at
+  most 64 KiB of provider input, preflights protocol 12 and sends only the parsed
+  startup observation. Older/unknown protocols are refused before sending the
+  capability. No stdout, payload-bearing errors, retry loop or provider changes.
+- One three-second deadline covers stdin and IPC. Direct descriptor reads with
+  bounded poll avoid uncancelable Tokio stdin reads and buffered-stdin readiness
+  mismatches without changing inherited descriptor flags. Enabled nix poll support.
+- Strict Linux-target API/host all-target/all-feature Clippy passed; final host
+  recheck also passed after adding successful-delivery and input-boundary fixtures.
+  Five tests compile covering identity validation/redaction, size/held-pipe bounds,
+  incompatible protocol refusal, successful delivery and unresponsive IPC. These
+  Unix tests were not executed on this Windows host; no live acceptance claimed.
+- Hook installation, callback-versus-session-registration ordering, persisted
+  conversation reconciliation and full fallback execution remain open. No live
+  workers, provider settings, push, deployment or release changed.
+
 ### P2: versioned engine startup observation receiver
 
 - Protocol 12 adds ProviderSessionStart over private engine IPC. Its capability

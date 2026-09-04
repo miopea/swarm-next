@@ -30,6 +30,11 @@ the existing private IPC channel. Capability debug output is redacted. The engin
 checks the session's liveness and capability gate before retaining evidence.
 Protocol 11 terminal control remains supported, but cannot receive this request.
 
-The command helper and hook configuration must check the target engine protocol
-before sending. Durable reconciliation, missing-context detection and provider
-acceptance remain open. This ADR does not install hooks or complete P2.
+The command helper checks the target engine protocol before sending, refuses
+unknown versions, reads at most 64 KiB, and shares a three-second deadline across
+stdin and IPC. It emits no stdout or diagnostic payloads and does not retry.
+The helper reads the stdin descriptor directly with bounded polling, avoiding an
+uncancelable background stdin read or changes to inherited descriptor flags.
+Hook installation, startup registration ordering, durable reconciliation,
+missing-context detection and provider acceptance remain open. This ADR does not
+install hooks or complete P2.
