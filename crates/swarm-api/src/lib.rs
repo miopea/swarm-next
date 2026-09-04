@@ -198,6 +198,7 @@ pub struct AppState {
     worker_lifecycle: Arc<Mutex<()>>,
     review_settlement_cursor: Arc<Mutex<Option<swarm_domain::TaskId>>>,
     worker_description_improvement_limit: Arc<Semaphore>,
+    conversation_scan_limit: Arc<Semaphore>,
     development_reload: Arc<Mutex<()>>,
     coordination_delivery: Arc<Mutex<()>>,
     jira_delivery: Arc<Mutex<()>>,
@@ -325,6 +326,7 @@ impl AppState {
             worker_description_improvement_limit: Arc::new(Semaphore::new(
                 MAX_WORKER_DESCRIPTION_IMPROVEMENTS,
             )),
+            conversation_scan_limit: Arc::new(Semaphore::new(1)),
             development_reload: Arc::new(Mutex::new(())),
             coordination_delivery: Arc::new(Mutex::new(())),
             jira_delivery: Arc::new(Mutex::new(())),

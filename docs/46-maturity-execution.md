@@ -6,6 +6,27 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P3: isolate and serialize transcript freshness scans
+
+- Conversation freshness previously performed synchronous filesystem scanning on
+  an async API request thread. Each tab could launch its own scan. The API now
+  admits one blocking scan per AppState and returns an explicit busy error for
+  concurrent callers; it does not queue more filesystem jobs.
+- The blocking job owns its semaphore permit. Canceling/disconnecting the HTTP
+  reader cannot release admission while that job still runs. A failed blocking
+  job returns an error and releases admission; no empty/healthy result is inferred.
+  Browser refresh scheduling and transcript selection semantics are unchanged.
+- Fifteen local Linux API tests passed: the two new cancellation/failure ownership
+  tests and all thirteen worker-runtime regressions. The cancellation test uses
+  explicit channels on a current-thread runtime, not sleeps, to prove a second
+  request is refused while the blocking scan continues and admitted after finish.
+- Strict all-target/all-feature Linux API Clippy and formatting passed.
+- This removes a concrete async-thread contention and duplicate-I/O path, not
+  measured proof of the live CPU complaint. The single job still uses the legacy
+  transcript scan; total scan work and uninterruptible filesystem latency remain
+  limitations. Timestamp drift alone also remains weaker than provider evidence.
+  No deployment, release, transcript mutation, or worker interruption.
+
 ### P2: ordinary resume starts carry recovery provenance
 
 - The host previously attached a recovery attempt only when the exact-context

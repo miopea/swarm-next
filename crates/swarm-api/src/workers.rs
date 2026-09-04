@@ -362,19 +362,99 @@ pub(super) async fn conversation_freshness(
     let projects = std::env::var_os("CLAUDE_CONFIG_DIR")
         .map_or_else(|| home.join(".claude"), PathBuf::from)
         .join("projects");
-    let workers = profiles
-        .iter()
-        .map(|profile| {
+    let workers = run_conversation_scan(Arc::clone(&state.conversation_scan_limit), move || {
+        profiles.iter().map(|profile| {
             serde_json::json!({
                 "worker_id": profile.id.to_string(),
                 "name": profile.name,
-                "freshness": crate::worker_runtime::conversation_freshness(
-                    profile, &projects, &home,
-                ),
+                "freshness": crate::worker_runtime::conversation_freshness(profile, &projects, &home),
             })
-        })
-        .collect::<Vec<_>>();
+        }).collect::<Vec<_>>()
+    }).await?;
     Ok(Json(serde_json::json!({ "workers": workers })).into_response())
+}
+
+async fn run_conversation_scan(
+    limit: Arc<tokio::sync::Semaphore>,
+    scan: impl FnOnce() -> Vec<serde_json::Value> + Send + 'static,
+) -> Result<Vec<serde_json::Value>, ApiError> {
+    let permit = limit.try_acquire_owned().map_err(|_| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "conversation_scan_busy",
+            "Conversation checks are already running; try again after they finish.",
+        )
+    })?;
+    // The blocking job owns the permit, not the HTTP future. Disconnecting a
+    // browser cannot free admission while its filesystem work is still running.
+    // No queued waiters or duplicate scans accumulate across browser tabs.
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        scan()
+    })
+    .await
+    .map_err(|_| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "conversation_scan_failed",
+            "Conversation checks could not finish; no healthy result was inferred.",
+        )
+    })
+}
+
+#[cfg(test)]
+mod conversation_scan_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn canceled_reader_does_not_admit_an_overlapping_scan() {
+        let limit = Arc::new(tokio::sync::Semaphore::new(1));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (finish_tx, finish_rx) = std::sync::mpsc::channel();
+        let first = tokio::spawn(run_conversation_scan(Arc::clone(&limit), move || {
+            started_tx.send(()).unwrap();
+            finish_rx.recv().unwrap();
+            vec![]
+        }));
+        started_rx.await.unwrap();
+        // This runs on a current-thread runtime while filesystem work waits on
+        // a blocking thread. A second request must return, not queue behind it.
+        assert!(
+            run_conversation_scan(Arc::clone(&limit), || panic!("overlap"))
+                .await
+                .is_err()
+        );
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        assert!(
+            run_conversation_scan(Arc::clone(&limit), || panic!("canceled reader overlap"))
+                .await
+                .is_err()
+        );
+        finish_tx.send(()).unwrap();
+        let permit = tokio::time::timeout(std::time::Duration::from_secs(2), limit.acquire())
+            .await
+            .unwrap()
+            .unwrap();
+        drop(permit);
+        assert_eq!(
+            run_conversation_scan(limit, || vec![serde_json::json!("ready")])
+                .await
+                .unwrap(),
+            vec![serde_json::json!("ready")]
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_job_releases_scan_admission() {
+        let limit = Arc::new(tokio::sync::Semaphore::new(1));
+        assert!(
+            run_conversation_scan(Arc::clone(&limit), || panic!("fixture failure"))
+                .await
+                .is_err()
+        );
+        assert!(run_conversation_scan(limit, Vec::new).await.is_ok());
+    }
 }
 
 pub(super) async fn create_worker(
