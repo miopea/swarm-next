@@ -24,6 +24,13 @@ decision can still request operator help. Unconfirmed wakes retain their existin
 manual recovery attention until the safe recovery lifecycle replaces that path.
 Unknown hold kinds are not silently discarded by this routing change.
 
+Prompt hold observations belong to the worker/session that produced them. A
+different binding starts a new occurrence; incompatible prompt reasons for the
+same delivery replace each other atomically. A known ended session cannot be
+reported as currently holding input. Unbound or unknown session evidence is not
+silently treated as recovered. This does not replace the remaining need for
+current provider-state reconciliation and generation-safe delivery observations.
+
 ## Consequences and verification
 
 The legacy `blocked_escalations` response name remains a compatibility field for

@@ -3378,6 +3378,152 @@ mod tests {
         assert_eq!(standing[0].first_observed_at, 1_000);
     }
 
+    #[test]
+    fn refusal_session_change_starts_a_new_occurrence() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Poppy",
+                ProviderKind::ClaudeCode,
+                "/workspace/poppy",
+                false,
+                1,
+            )
+            .unwrap();
+        let first = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, first).unwrap();
+        for at in [1_000, 1_030] {
+            store
+                .record_coordinator_refusal(
+                    REFUSAL_DELIVERY_HELD,
+                    "brief",
+                    Some(worker.id),
+                    Some(first),
+                    "held",
+                    at,
+                )
+                .unwrap();
+        }
+        store.release_worker_session(first).unwrap();
+        assert!(
+            store
+                .standing_coordinator_refusals(1_035, 0)
+                .unwrap()
+                .is_empty()
+        );
+        let second = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, second).unwrap();
+        store
+            .record_coordinator_refusal(
+                REFUSAL_DELIVERY_HELD,
+                "brief",
+                Some(worker.id),
+                Some(second),
+                "new session",
+                1_040,
+            )
+            .unwrap();
+        let standing = store.standing_coordinator_refusals(1_040, 0).unwrap();
+        assert_eq!(standing.len(), 1);
+        assert_eq!(standing[0].first_observed_at, 1_040);
+        assert_eq!(standing[0].observations, 1);
+    }
+
+    #[test]
+    fn refusal_prompt_reason_replaces_only_its_own_delivery_condition() {
+        let store = TaskStore::in_memory().unwrap();
+        for (kind, subject) in [
+            (REFUSAL_DELIVERY_HELD, "queen-review"),
+            (REFUSAL_DELIVERY_HELD, "another-brief"),
+            (REFUSAL_WAKE_UNCERTAIN, "queen-review"),
+        ] {
+            store
+                .record_coordinator_refusal(kind, subject, None, None, "held", 1_000)
+                .unwrap();
+        }
+        store
+            .record_coordinator_refusal(
+                REFUSAL_DELIVERY_HELD_UNSENT_TEXT,
+                "queen-review",
+                None,
+                None,
+                "unsent",
+                1_010,
+            )
+            .unwrap();
+        let standing = store.standing_coordinator_refusals(1_010, 0).unwrap();
+        assert_eq!(standing.len(), 3);
+        assert!(
+            !standing
+                .iter()
+                .any(|r| r.subject == "queen-review" && r.kind == REFUSAL_DELIVERY_HELD)
+        );
+        assert!(standing.iter().any(|r| r.subject == "another-brief"));
+        assert!(standing.iter().any(|r| r.kind == REFUSAL_WAKE_UNCERTAIN));
+        store
+            .record_coordinator_refusal(
+                REFUSAL_DELIVERY_HELD,
+                "queen-review",
+                None,
+                None,
+                "question again",
+                1_020,
+            )
+            .unwrap();
+        let again = store.standing_coordinator_refusals(1_020, 0).unwrap();
+        let question = again
+            .iter()
+            .find(|r| r.subject == "queen-review" && r.kind == REFUSAL_DELIVERY_HELD)
+            .unwrap();
+        assert_eq!(question.first_observed_at, 1_020);
+        assert_eq!(question.observations, 1);
+        assert!(
+            !again
+                .iter()
+                .any(|r| r.kind == REFUSAL_DELIVERY_HELD_UNSENT_TEXT)
+        );
+    }
+
+    #[test]
+    fn refusal_replacement_failure_preserves_the_previous_observation() {
+        let store = TaskStore::in_memory().unwrap();
+        store
+            .record_coordinator_refusal(
+                REFUSAL_DELIVERY_HELD,
+                "queen-review",
+                None,
+                None,
+                "question",
+                1_000,
+            )
+            .unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute_batch(
+                "CREATE TEMP TRIGGER reject_refusal BEFORE INSERT ON coordinator_refusals
+             WHEN NEW.kind = 'delivery_held_unsent_text'
+             BEGIN SELECT RAISE(ABORT, 'injected refusal write failure'); END;",
+            )
+            .unwrap();
+        assert!(
+            store
+                .record_coordinator_refusal(
+                    REFUSAL_DELIVERY_HELD_UNSENT_TEXT,
+                    "queen-review",
+                    None,
+                    None,
+                    "unsent",
+                    1_010
+                )
+                .is_err()
+        );
+        let standing = store.standing_coordinator_refusals(1_010, 0).unwrap();
+        assert_eq!(standing.len(), 1);
+        assert_eq!(standing[0].kind, REFUSAL_DELIVERY_HELD);
+        assert_eq!(standing[0].observations, 1);
+    }
+
     /// Answering the prompt clears it, and nothing has to delete the row.
     #[test]
     fn clearing_a_refusal_takes_it_out_of_the_queue() {
@@ -5523,8 +5669,23 @@ impl TaskStore {
         reason: &str,
         now: i64,
     ) -> Result<(), TaskStoreError> {
-        let connection = self.connection()?;
-        connection.execute(
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        if matches!(
+            kind,
+            REFUSAL_DELIVERY_HELD | REFUSAL_DELIVERY_HELD_UNSENT_TEXT
+        ) {
+            // A newer observation replaces the other prompt condition for the
+            // same delivery. Never clear unrelated subjects or wake recovery.
+            transaction.execute(
+                "UPDATE coordinator_refusals SET cleared_at = ?3
+                 WHERE subject = ?1 AND kind != ?2
+                   AND kind IN ('delivery_held_open_prompt', 'delivery_held_unsent_text')
+                   AND cleared_at IS NULL",
+                params![subject, kind, now],
+            )?;
+        }
+        transaction.execute(
             "INSERT INTO coordinator_refusals
                  (kind, subject, worker_id, session_id, reason,
                   first_observed_at, last_observed_at, observations, cleared_at)
@@ -5533,6 +5694,8 @@ impl TaskStore {
                  last_observed_at = excluded.last_observed_at,
                  observations = CASE
                      WHEN coordinator_refusals.cleared_at IS NULL
+                       AND coordinator_refusals.worker_id IS excluded.worker_id
+                       AND coordinator_refusals.session_id IS excluded.session_id
                      THEN coordinator_refusals.observations + 1
                      ELSE 1
                  END,
@@ -5540,6 +5703,8 @@ impl TaskStore {
                  -- occurrence, not a continuation of the old one.
                  first_observed_at = CASE
                      WHEN coordinator_refusals.cleared_at IS NULL
+                       AND coordinator_refusals.worker_id IS excluded.worker_id
+                       AND coordinator_refusals.session_id IS excluded.session_id
                      THEN coordinator_refusals.first_observed_at
                      ELSE excluded.first_observed_at
                  END,
@@ -5556,6 +5721,7 @@ impl TaskStore {
                 now
             ],
         )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -5617,6 +5783,15 @@ impl TaskStore {
              FROM coordinator_refusals refusal
              LEFT JOIN worker_profiles worker ON worker.id = refusal.worker_id
              WHERE refusal.cleared_at IS NULL
+               -- A known ended session cannot still hold terminal input.
+               -- Preserve unbound legacy evidence and non-terminal recovery.
+               AND (refusal.kind NOT IN ('delivery_held_open_prompt', 'delivery_held_unsent_text')
+                    OR refusal.session_id IS NULL
+                    OR NOT EXISTS (
+                        SELECT 1 FROM worker_sessions session
+                        WHERE session.session_id = refusal.session_id
+                          AND session.ended_at IS NOT NULL
+                    ))
                AND ?1 - refusal.first_observed_at >= ?2
                AND ?1 - refusal.last_observed_at <= ?3
              ORDER BY refusal.first_observed_at",

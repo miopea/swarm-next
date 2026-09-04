@@ -610,6 +610,23 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 - This does not clear stale persistence records or complete Queen recovery and
   escalation. Those remain P4 work. No live Hive mutation, push, or release.
 
+### P4e: prompt-hold occurrence and session reconciliation
+
+- Recording an open-question or unsent-text hold now replaces the incompatible
+  prompt reason for that delivery in one transaction. Other subjects and wake
+  recovery records remain intact. Changing worker/session binding resets the
+  occurrence age and observation count rather than inheriting an older session.
+- Standing prompt holds exclude sessions explicitly recorded as ended, without
+  waiting for freshness expiry. Unknown/unbound session evidence is preserved.
+- Nine focused refusal tests passed on Windows, including reason replacement,
+  recurrence, session change/end, and an injected write failure proving rollback
+  preserves the prior observation. Strict persistence all-target/all-feature
+  Clippy passed after the final code change. No full-suite/live acceptance claim.
+- Current provider-activity reconciliation, generation-safe rejection of late
+  observations, and replacement of freshness-based inference remain open. These
+  fixes do not prove the original live Queen-warning incident fully resolved.
+- No schema migration, new timer, live worker mutation, push, or deployment.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has
