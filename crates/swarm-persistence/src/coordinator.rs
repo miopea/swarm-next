@@ -5858,6 +5858,22 @@ impl TaskStore {
              FROM coordinator_refusals refusal
              LEFT JOIN worker_profiles worker ON worker.id = refusal.worker_id
              WHERE refusal.cleared_at IS NULL
+               -- A known task's briefing hold is obsolete once its live
+               -- assignment no longer has a pending dispatch. Keep unknown
+               -- legacy subjects as unresolved rather than guessing recovery.
+               AND (refusal.kind NOT IN ('delivery_held_open_prompt', 'delivery_held_unsent_text')
+                    OR refusal.subject NOT LIKE 'task-brief:%'
+                    OR NOT EXISTS (SELECT 1 FROM tasks task WHERE task.id = substr(refusal.subject, 12))
+                    OR EXISTS (
+                        SELECT 1 FROM task_dispatches dispatch
+                        JOIN task_assignments assignment ON assignment.id = dispatch.assignment_id
+                        JOIN tasks task ON task.id = dispatch.task_id
+                        WHERE task.id = substr(refusal.subject, 12)
+                          AND task.removed_at IS NULL AND task.state IN ('ready', 'active')
+                          AND dispatch.state IN ('queued', 'dispatching') AND assignment.released_at IS NULL
+                          AND (refusal.worker_id IS NULL OR dispatch.worker_id = refusal.worker_id)
+                          AND (refusal.session_id IS NULL OR assignment.worker_session_id = refusal.session_id)
+                    ))
                -- A known ended session cannot still hold terminal input.
                -- Preserve unbound legacy evidence and non-terminal recovery.
                AND (refusal.kind NOT IN ('delivery_held_open_prompt', 'delivery_held_unsent_text')

@@ -40,6 +40,14 @@ unchanged pending its own recovery integration. The read projection is capped at
 coordinator owns future source-state cancellation and generation reconciliation;
 this change does not assert that a historical hold is currently blocking work.
 
+Known task-brief subjects are projected only while their task is Ready/Active
+and a matching unreleased assignment has a Queued/Dispatching briefing. Recorded
+worker/session identity must match when available; new task-brief observations
+always include the immutable session. Completed dispatches and tasks that moved
+past briefing therefore remove old holds, including late repeated observations.
+Unknown legacy subjects remain unconfirmed. Assignment-generation identity for
+same-session reassignment and other delivery families still require integration.
+
 ## Consequences and verification
 
 A failed coordinator read is not evidence that held work resolved. Preserve the

@@ -667,6 +667,86 @@ fn task_dispatch_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskDispa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prompt_hold_projection_follows_dispatch_resolution_not_retry_age() {
+        for resolve_by_completion in [true, false] {
+            let (store, task, session) = assigned_task();
+            let delivery = store
+                .claim_task_dispatches(100, &std::collections::HashSet::new())
+                .unwrap()
+                .remove(0);
+            let subject = format!("task-brief:{task}");
+            store
+                .record_coordinator_refusal(
+                    crate::REFUSAL_DELIVERY_HELD,
+                    &subject,
+                    Some(delivery.worker_id),
+                    Some(WorkerSessionId::new()),
+                    "obsolete session",
+                    99,
+                )
+                .unwrap();
+            assert!(
+                store
+                    .standing_coordinator_refusals(10_000, 0)
+                    .unwrap()
+                    .is_empty()
+            );
+            store
+                .record_coordinator_refusal(
+                    crate::REFUSAL_DELIVERY_HELD,
+                    &subject,
+                    Some(delivery.worker_id),
+                    Some(session),
+                    "question",
+                    100,
+                )
+                .unwrap();
+            assert_eq!(
+                store
+                    .standing_coordinator_refusals(10_000, 0)
+                    .unwrap()
+                    .len(),
+                1
+            );
+            if resolve_by_completion {
+                store
+                    .complete_task_dispatch(&delivery.assignment_id, 101)
+                    .unwrap();
+            } else {
+                store
+                    .transition_task(task, swarm_domain::TaskState::Active)
+                    .unwrap();
+                store
+                    .transition_task(task, swarm_domain::TaskState::Review)
+                    .unwrap();
+            }
+            assert!(
+                store
+                    .standing_coordinator_refusals(10_000, 0)
+                    .unwrap()
+                    .is_empty()
+            );
+            // A late refusal from that old delivery cannot restore the row.
+            store
+                .record_coordinator_refusal(
+                    crate::REFUSAL_DELIVERY_HELD,
+                    &subject,
+                    Some(delivery.worker_id),
+                    Some(session),
+                    "late question",
+                    10_001,
+                )
+                .unwrap();
+            assert!(
+                store
+                    .standing_coordinator_refusals(10_001, 0)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
     use swarm_domain::{PresenceDeviceId, ProviderKind, TaskDispatchState};
 
     /// Queen's only non-completing exit from review used to be Active, and

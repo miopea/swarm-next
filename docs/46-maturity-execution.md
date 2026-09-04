@@ -6,6 +6,21 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: task-brief holds follow authoritative dispatch applicability
+
+- New task-brief refusals now carry their actual immutable session rather than
+  an empty binding. Known task subjects are shown only with a matching pending
+  dispatch, unreleased assignment and Ready/Active task. Unknown subjects remain
+  unresolved, not silently treated as recovered.
+- Completed briefings and tasks moved beyond briefing remove old observations
+  without another successful terminal retry. A late repeated observation cannot
+  revive those obsolete holds. Same-session reassignment still needs assignment
+  generation identity; Queen review and other delivery families remain open.
+- Seventeen task-dispatch tests passed and strict Linux-target API/persistence
+  Clippy passed. The focused test passed again after adding an obsolete-session
+  assertion. No UI/source-state parity or live incident fix is
+  claimed from these tests. No push, release, deployment or worker restart.
+
 ### P4: missing prompt observations are not recovery evidence
 
 - Removed the three-minute disappearance rule for prompt/unsent-text observations.

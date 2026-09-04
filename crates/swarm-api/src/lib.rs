@@ -1983,7 +1983,7 @@ impl AppState {
                             kind,
                             &format!("task-brief:{}", delivery.task_id),
                             Some(delivery.worker_id),
-                            None,
+                            Some(delivery.session_id),
                             &reason.describe("A briefing"),
                             unix_timestamp(),
                         );
