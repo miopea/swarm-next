@@ -81,8 +81,8 @@ export type EmailReply = {
   targets: EmailReplyTarget[];
 };
 
-export async function fetchEmailReadiness(operatorToken: string): Promise<EmailReadiness> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/email/readiness");
+export async function fetchEmailReadiness(operatorToken: string, signal?: AbortSignal): Promise<EmailReadiness> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/email/readiness", { signal });
   return response.json() as Promise<EmailReadiness>;
 }
 

@@ -1879,14 +1879,14 @@ export async function requestDevelopmentReload(operatorToken: string): Promise<v
  * and the in-memory record is emptied by an API restart while the sessions
  * themselves survive it.
  */
-export async function fetchToolSurfaceStatus(operatorToken: string): Promise<{
+export async function fetchToolSurfaceStatus(operatorToken: string, signal?: AbortSignal): Promise<{
   serving_revision: number;
   live_sessions: number;
   current: number;
   stale: number;
   unknown: number;
 }> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/tool-surface");
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/tool-surface", { signal });
   return response.json() as Promise<{
     serving_revision: number; live_sessions: number; current: number; stale: number; unknown: number;
   }>;

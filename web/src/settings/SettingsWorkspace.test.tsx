@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -9,6 +9,7 @@ const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   if (originalScrollIntoView) HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
@@ -157,7 +158,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(screen.getByText("Live updates").parentElement).toHaveTextContent("Live updatesConnected");
   expect(screen.getByText("Running workers").parentElement).toHaveTextContent("Running workers1");
   expect(screen.getByText("Retained sessions").parentElement).toHaveTextContent("Retained sessions3");
-  expect(screen.getByLabelText("Worker engine status")).toHaveTextContent("Worker engineUpdate ready · restart requiredRestart required");
+  await waitFor(() => expect(screen.getByLabelText("Worker engine status")).toHaveTextContent("Worker engineUpdate ready · restart requiredRestart required"));
   expect(screen.getByLabelText("Worker engine status")).toHaveTextContent("briefly stops 1 active worker");
   // This worker is blocked, not mid-command, so the update costs nothing in
   // progress and the card says so rather than warning generically.
@@ -575,6 +576,71 @@ test("names the work a worker engine update would interrupt, before asking", asy
   fireEvent.click(screen.getByRole("button", { name: "Prepare worker engine update" }));
   expect(screen.getByRole("group", { name: "Confirm worker engine update" }))
     .toHaveTextContent("2 workers are running a command right now");
+});
+
+test("status reads belong to visible settings cards and recover after timeout", async () => {
+  vi.useFakeTimers();
+  let visibility: DocumentVisibilityState = "visible";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+  const requests: { url: string; signal: AbortSignal }[] = [];
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("runtime/development")) return Promise.resolve(ok({ enabled: false, version: "0.1.0" }));
+    if (url.includes("presence/night-watch")) return Promise.resolve(ok(null));
+    if (/tool-surface|terminal-host|readiness|queen-automation|coordinator/.test(url)) {
+      const signal = init!.signal as AbortSignal;
+      requests.push({ url, signal });
+      return new Promise<Response>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    }
+    return Promise.resolve(ok({}));
+  }));
+  const props = minimalProps();
+  const view = render(<SettingsWorkspace {...props} />);
+  await act(async () => { await Promise.resolve(); });
+  expect(requests).toHaveLength(0);
+  view.rerender(<SettingsWorkspace {...props} section="settings-updates" />);
+  await act(async () => { await Promise.resolve(); });
+  expect(requests).toHaveLength(2);
+  await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+  expect(requests.every(({ signal }) => signal.aborted)).toBe(true);
+  expect(screen.getByText(/Worker tool availability could not be refreshed/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Retry worker engine status" })).toBeInTheDocument();
+  view.rerender(<SettingsWorkspace {...props} />);
+  await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+  expect(requests).toHaveLength(2);
+  // Filtering uses the same visibility decision as the rendered card.
+  view.rerender(<SettingsWorkspace {...props} query="worker engine" />);
+  await act(async () => { await Promise.resolve(); });
+  expect(requests).toHaveLength(4);
+  visibility = "hidden";
+  await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+  expect(requests.every(({ signal }) => signal.aborted)).toBe(true);
+  visibility = "visible";
+  await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+  expect(requests).toHaveLength(6);
+  view.unmount();
+  expect(requests.every(({ signal }) => signal.aborted)).toBe(true);
+});
+
+test("Queen status bounds a stalled sibling request after the other read fails", async () => {
+  vi.useFakeTimers();
+  let coordinatorSignal: AbortSignal | undefined;
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("queen-automation")) return Promise.resolve(new Response("unavailable", { status: 503 }));
+    if (url.includes("coordinator")) {
+      coordinatorSignal = init!.signal as AbortSignal;
+      return new Promise<Response>((_resolve, reject) => coordinatorSignal!.addEventListener("abort", () => reject(coordinatorSignal!.reason), { once: true }));
+    }
+    return Promise.resolve(ok({ enabled: false, version: "0.1.0" }));
+  }));
+  const view = render(<SettingsWorkspace {...minimalProps()} section="settings-workers" />);
+  await act(async () => { await Promise.resolve(); });
+  expect(coordinatorSignal?.aborted).toBe(false);
+  await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+  expect(coordinatorSignal?.aborted).toBe(true);
+  expect(screen.getByText("Queen automation status is temporarily unavailable.")).toBeInTheDocument();
+  view.unmount();
 });
 
 function minimalProps() {

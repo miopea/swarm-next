@@ -85,8 +85,8 @@ export async function addJiraComment(operatorToken: string, taskId: string, body
   return response.json() as Promise<JiraCommentDispatch>;
 }
 
-export async function fetchJiraReadiness(operatorToken: string): Promise<JiraReadiness> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/readiness");
+export async function fetchJiraReadiness(operatorToken: string, signal?: AbortSignal): Promise<JiraReadiness> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/readiness", { signal });
   return response.json() as Promise<JiraReadiness>;
 }
 

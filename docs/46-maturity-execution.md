@@ -6,6 +6,25 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P3l: Settings status reads follow rendered cards
+
+- Worker-engine/tool-surface, Queen/coordinator, Jira readiness, and email
+  readiness reads now run only for the cards that consume them, including search
+  results. They use the shared visible-page owner, eight-second deadlines,
+  cancellation on hide/section departure, and refresh on visible return.
+- Queen event-triggered refreshes join an existing request rather than abandoning
+  it for every event. Its paired reads settle under one deadline even when one
+  fails first. Tool-surface refresh failures explicitly label retained counts as
+  last known; worker-engine failures do not masquerade as a current engine.
+- Passed 55 affected Settings/App/API tests, then all 21 Settings tests after
+  final paired-timeout coverage. Production web build passed. Updated the broad
+  navigation test to await newly visible engine data instead of assuming hidden
+  cards were already fetched. Tests cover section/search visibility, deadline,
+  hidden return, cleanup, and a failed-plus-stalled Queen read pair.
+- Other child Settings workflows, development-status polling, and explicit
+  mutations/downloads retain their own lifecycles and remain audit work. No live
+  CPU reduction, phase completion, push, deployment, or release is claimed.
+
 ### P3k: App and Diagnostics share one resource-sampling owner
 
 - Diagnostics now consumes App's machine resource state instead of fetching a

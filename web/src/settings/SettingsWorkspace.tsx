@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
 import { SETTINGS_CARDS, filterSettingsCards, type SettingsSection } from "./settingsNavigation";
 
@@ -94,11 +95,25 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
   const [terminalHostLoaded, setTerminalHostLoaded] = useState(false);
-  const terminalHostLoadedRef = useRef(false);
   const [terminalHostAttempt, setTerminalHostAttempt] = useState(0);
   const [backupState, setBackupState] = useState<"idle" | "downloading" | "downloaded" | "error">("idle");
   const { runtime: developmentRuntime, reachable: developmentReachable } =
     useDevelopmentRuntime(operatorToken, health?.version);
+  // One section at a time, or the filter's results across all of them.
+  //
+  // The page used to render all fourteen cards at once behind a rail that
+  // listed ten, so four of them existed only for whoever scrolled past the
+  // right spot. Selecting a section is now the whole answer to "where is it",
+  // and the filter is the answer when the operator does not know which section
+  // to look in.
+  const matched = useMemo(
+    () => new Set(filterSettingsCards(query, developmentRuntime?.enabled ?? false).map((card) => card.id)),
+    [query, developmentRuntime?.enabled],
+  );
+  const filtering = query.trim().length > 0;
+  const shows = (id: string) =>
+    filtering ? matched.has(id) : SETTINGS_CARDS.some((card) => card.id === id && card.section === section);
+
   const [jiraReadiness, setJiraReadiness] = useState<JiraReadiness>();
   const [jiraUnavailable, setJiraUnavailable] = useState(false);
   const [jiraReadinessAttempt, setJiraReadinessAttempt] = useState(0);
@@ -119,16 +134,16 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
    * from what the API has been asked for since it started.
    */
   const [toolSurface, setToolSurface] = useState<{ serving_revision: number; live_sessions: number; current: number; stale: number; unknown: number }>();
-  useEffect(() => {
-    if (!operatorToken) return;
-    let current = true;
-    const load = () => void fetchToolSurfaceStatus(operatorToken)
-      .then((status) => { if (current) setToolSurface(status); })
-      .catch(() => undefined);
-    load();
-    const timer = window.setInterval(load, 30_000);
-    return () => { current = false; window.clearInterval(timer); };
+  const [toolSurfaceUnavailable, setToolSurfaceUnavailable] = useState(false);
+  const loadToolSurface = useCallback(async (signal: AbortSignal) => {
+    try {
+      const status = await fetchToolSurfaceStatus(operatorToken, signal);
+      if (!signal.aborted) { setToolSurface(status); setToolSurfaceUnavailable(false); }
+    } catch {
+      if (reportReadFailure(signal)) setToolSurfaceUnavailable(true);
+    }
   }, [operatorToken]);
+  useVisiblePolling(loadToolSurface, Boolean(operatorToken) && shows("settings-runtime"), 30_000);
   const surfaceUnreachable = (toolSurface?.stale ?? 0) + (toolSurface?.unknown ?? 0);
   const workspaceRef = useRef<HTMLDivElement>(null);
   // Choosing a section puts you at the top of it.
@@ -141,55 +156,51 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
   useEffect(() => {
     workspaceRef.current?.scrollTo?.({ top: 0, behavior: "auto" });
   }, [section]);
-  useEffect(() => {
-    let cancelled = false;
-    void fetchTerminalHostStatus(operatorToken)
-      .then((status) => {
-        if (!cancelled) {
-          setTerminalHostStatus(status);
-          terminalHostLoadedRef.current = true;
-          setTerminalHostLoaded(true);
-        }
-      })
-      .catch(() => {
-        if (!cancelled && !terminalHostLoadedRef.current) {
-          setTerminalHostStatus(undefined);
-          terminalHostLoadedRef.current = true;
-          setTerminalHostLoaded(true);
-        }
-      });
-    return () => { cancelled = true; };
+  const loadTerminalHost = useCallback(async (signal: AbortSignal) => {
+    try {
+      const status = await fetchTerminalHostStatus(operatorToken, signal);
+      if (!signal.aborted) { setTerminalHostStatus(status); setTerminalHostLoaded(true); }
+    } catch {
+      if (reportReadFailure(signal)) { setTerminalHostStatus(undefined); setTerminalHostLoaded(true); }
+    }
   }, [operatorToken, terminalHostAttempt, workerEngineProgress]);
-  useEffect(() => {
-    let cancelled = false;
-    void fetchJiraReadiness(operatorToken)
-      .then((readiness) => { if (!cancelled) { setJiraReadiness(readiness); setJiraUnavailable(false); } })
-      .catch(() => { if (!cancelled) setJiraUnavailable(true); });
-    return () => { cancelled = true; };
+  useVisiblePolling(loadTerminalHost, Boolean(operatorToken) && shows("settings-runtime"), null);
+  const loadJira = useCallback(async (signal: AbortSignal) => {
+    try {
+      const readiness = await fetchJiraReadiness(operatorToken, signal);
+      if (!signal.aborted) { setJiraReadiness(readiness); setJiraUnavailable(false); }
+    } catch {
+      if (reportReadFailure(signal)) setJiraUnavailable(true);
+    }
   }, [jiraReadinessAttempt, operatorToken]);
+  useVisiblePolling(loadJira, Boolean(operatorToken) && (shows("settings-integrations") || shows("settings-diagnostics")), null);
   const latestEventSequence = recentEvents.reduce((latest, event) => Math.max(latest, event.sequence), 0);
-  useEffect(() => {
-    let cancelled = false;
-    void Promise.all([fetchQueenAutomationStatus(operatorToken), fetchCoordinatorStatus(operatorToken)])
-      .then(([status, coordinator]) => {
-        if (!cancelled) {
-          setQueenAutomation(status);
-          setCoordinatorStatus(coordinator);
-          setQueenAutomationError(undefined);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setQueenAutomationError("Queen automation status is temporarily unavailable.");
-      });
-    return () => { cancelled = true; };
-  }, [operatorToken, latestEventSequence]);
-  useEffect(() => {
-    let cancelled = false;
-    void fetchEmailReadiness(operatorToken)
-      .then((readiness) => { if (!cancelled) { setEmailReadiness(readiness); setEmailUnavailable(false); } })
-      .catch(() => { if (!cancelled) setEmailUnavailable(true); });
-    return () => { cancelled = true; };
+  const loadQueen = useCallback(async (signal: AbortSignal) => {
+    try {
+      const [status, coordinator] = await Promise.allSettled([
+        fetchQueenAutomationStatus(operatorToken, signal), fetchCoordinatorStatus(operatorToken, signal),
+      ]);
+      if (status.status !== "fulfilled" || coordinator.status !== "fulfilled") throw new Error("Queen status unavailable");
+      if (!signal.aborted) {
+        setQueenAutomation(status.value);
+        setCoordinatorStatus(coordinator.value);
+        setQueenAutomationError(undefined);
+      }
+    } catch {
+      if (reportReadFailure(signal)) setQueenAutomationError("Queen automation status is temporarily unavailable.");
+    }
+  }, [operatorToken]);
+  const refreshQueen = useVisiblePolling(loadQueen, Boolean(operatorToken) && shows("settings-queen"), 30_000);
+  useEffect(() => { void refreshQueen(); }, [latestEventSequence, refreshQueen]);
+  const loadEmail = useCallback(async (signal: AbortSignal) => {
+    try {
+      const readiness = await fetchEmailReadiness(operatorToken, signal);
+      if (!signal.aborted) { setEmailReadiness(readiness); setEmailUnavailable(false); }
+    } catch {
+      if (reportReadFailure(signal)) setEmailUnavailable(true);
+    }
   }, [emailReadinessAttempt, operatorToken]);
+  useVisiblePolling(loadEmail, Boolean(operatorToken) && shows("settings-email"), null);
   async function downloadBackup() {
     setBackupState("downloading");
     try {
@@ -231,20 +242,6 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
     ? `${pendingQueenDecisionCount} specific Queen decision${pendingQueenDecisionCount === 1 ? " is" : "s are"} waiting in Needs you. Resolve ${pendingQueenDecisionCount === 1 ? "it" : "them"} there; Swarm will not repeat the review.`
     : queenAutomationStateDetail(queenAutomation);
   const queenReviewTone = hasPendingQueenDecision ? "offline" : queenAutomationStateTone(queenAutomation);
-  // One section at a time, or the filter's results across all of them.
-  //
-  // The page used to render all fourteen cards at once behind a rail that
-  // listed ten, so four of them existed only for whoever scrolled past the
-  // right spot. Selecting a section is now the whole answer to "where is it",
-  // and the filter is the answer when the operator does not know which section
-  // to look in.
-  const matched = useMemo(
-    () => new Set(filterSettingsCards(query, developmentRuntime?.enabled ?? false).map((card) => card.id)),
-    [query, developmentRuntime?.enabled],
-  );
-  const filtering = query.trim().length > 0;
-  const shows = (id: string) =>
-    filtering ? matched.has(id) : SETTINGS_CARDS.some((card) => card.id === id && card.section === section);
 
   return (
     <div className="settings-workspace" ref={workspaceRef}>
@@ -618,6 +615,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
                     memory and an API restart empties it while the sessions
                     survive. Saying "13 could not be confirmed" is the whole
                     point; saying nothing is what happened before. */}
+                {toolSurfaceUnavailable && <p className="tool-surface-warning" role="status">Worker tool availability could not be refreshed. Any displayed counts are last known.</p>}
                 {surfaceUnreachable > 0 ? (
                   <p className="tool-surface-warning" role="status">
                     {toolSurface?.stale ? `${toolSurface.stale} session${toolSurface.stale === 1 ? "" : "s"} hold an older tool list` : null}
@@ -776,6 +774,10 @@ function notificationStateDetail(state: NotificationCapabilityState, count: numb
   if (state === "error") return "Your browser permission is unchanged. Swarm will retry at startup, or you can repair this device now.";
   return "Nothing is registered until you explicitly enable it.";
 }
+function reportReadFailure(signal: AbortSignal) {
+  return !signal.aborted || (signal.reason instanceof DOMException && signal.reason.name === "TimeoutError");
+}
+
 function presenceLabel(mode: PresenceMode | undefined) {
   if (mode === "at_hive") return "At the Hive";
   if (mode === "night_watch") return "Night Watch";
