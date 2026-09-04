@@ -27,6 +27,21 @@ configuration; it must never silently copy machine credentials.
 
 ## Consequences
 
+### Bounded export delivery — 2026-09-04
+
+One per-API export permit admits preparation and transfer without an application
+wait queue. SQLite snapshot preparation runs on a blocking executor, not inline
+in an async request. The preparation job owns its permit even after request
+timeout/disconnect, preventing overlapping detached backups. The request waits
+at most 60 seconds; this does not forcibly cancel an in-flight SQLite/filesystem
+operation or remove contention on the shared persistence connection.
+
+Completed snapshots up to 2 GiB stream through two queued 64 KiB chunks rather
+than a whole-file allocation. One producer owns the temporary file and permit
+with a 120-second transfer deadline; disconnect releases its receiver. The body
+checks expected length and reports premature EOF as failure. These bounds apply
+to export delivery, not total API memory, SQLite lock latency or measured CPU.
+
 - The first useful backup is consistent and immediately available to the
   operator without interrupting workers.
 - The downloaded database is sensitive and unencrypted, so the UI warns the

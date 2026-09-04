@@ -6,6 +6,26 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P3 / P5: bounded database export preparation and transfer
+
+- The export route previously performed SQLite backup and a whole-file read
+  inline on the async executor. Preparation now uses a blocking job with one
+  per-API admission permit and no application wait queue. A request timeout or
+  disconnect does not release admission while its SQLite work is still running.
+- Completed snapshots stream with two queued 64 KiB chunks, a 120-second
+  producer deadline and a 2 GiB transfer ceiling. Temporary snapshot and permit
+  remain producer-owned; complete byte length is declared and premature EOF
+  becomes a body error rather than a successfully truncated backup.
+- Preparation has a 60-second request deadline, not forced SQLite cancellation.
+  Shared database-lock contention and stalled filesystem operations are not
+  eliminated by moving preparation off the async executor. No measured whole-API
+  CPU/latency improvement is claimed.
+- Strict Linux API Clippy and the final test build passed. Five focused Linux
+  tests passed, covering admission refusal without queuing, short-body failure,
+  exact completed bytes, private/no-store reopenable SQLite export, and backup
+  outcome parsing. Live transfer cancellation/deadline and load acceptance remain
+  open. No deployment, release, push or live-worker changes.
+
 ### P6 / P7: real Edge check of backup runtime states
 
 - Extended the isolated whole-App fixture with failed/unavailable/ready backup
