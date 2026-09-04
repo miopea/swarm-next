@@ -1823,10 +1823,12 @@ export async function fetchDogfoodReports(
 export async function downloadDogfoodScreenshot(
   operatorToken: string,
   attachmentName: string,
+  signal?: AbortSignal,
 ): Promise<Blob> {
   const response = await authenticatedFetch(
     operatorToken,
     `/api/v1/feedback/attachments/${encodeURIComponent(attachmentName)}`,
+    { signal },
   );
   return response.blob();
 }

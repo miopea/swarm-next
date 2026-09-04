@@ -4,6 +4,22 @@ Approved program: [scope and acceptance](45-daily-driver-maturity-plan.md).
 Branch: `codex/daily-driver-maturity`. Starting revision: `36420b3`.
 Local commits authorized; no push, deployment, releases, or live worker interruption.
 
+### P3j: screenshot downloads have an owned transfer lifetime
+
+- Diagnostics admits one screenshot transfer at a time and disables other
+  download buttons while it is pending. The request has a 30-second deadline;
+  leaving the view or changing authentication cancels it and removes its timer.
+  A late result cannot initiate a browser download or clear a newer transfer.
+- Connection failures no longer assert the screenshot has been deleted. Timeout
+  and failure messages permit explicit retry. Object URLs are released even if
+  browser download initiation throws. No automatic download retries are added.
+- Thirteen focused download/diagnostics tests passed, including timeout/retry,
+  overlap rejection, authentication replacement, late unmount response, successful
+  download, and object URL cleanup. Production web build passed after correcting
+  the React ref's explicit undefined initializer. Terminal chunk warning remains.
+- No live/private screenshot downloaded, worker changes, deployment, or release.
+  Real mobile download behavior and measured long-session performance remain open.
+
 ### P3i: saved diagnostic reports own bounded, cancellable reads
 
 - Saved-report reads now share the visible-page request owner with an explicit

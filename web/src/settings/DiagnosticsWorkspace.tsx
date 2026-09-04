@@ -4,7 +4,6 @@ import { readRoutePaints, routePaintSummary } from "../runtime/routePaint";
 import { readBrowserPerformance } from "../runtime/browserPerformance";
 
 import {
-  downloadDogfoodScreenshot,
   fetchHistoryDiagnostics,
   fetchDogfoodReports,
   fetchRuntimeResources,
@@ -27,6 +26,7 @@ import { serializeDiagnosticReport, type RuntimeDiagnostics } from "./diagnostic
 import { runtimeVersionIdentity } from "./runtimeVersion";
 import { assessPerformance, computePressure } from "./performanceAssessment";
 import PerformanceEvidence from "./PerformanceEvidence";
+import { useScreenshotDownload } from "./useScreenshotDownload";
 
 type Props = {
   feedbackRevision: number;
@@ -48,9 +48,8 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
   const [savedReports, setSavedReports] = useState<DogfoodReport[]>();
   const [savedReportsUnavailable, setSavedReportsUnavailable] = useState(false);
   const [copiedReportId, setCopiedReportId] = useState<string>();
-  const [downloadingReportId, setDownloadingReportId] = useState<string>();
+  const { download: downloadScreenshot, downloadingReportId, failure: screenshotFailure } = useScreenshotDownload(operatorToken);
   const [showEveryCheck, setShowEveryCheck] = useState(false);
-  const [unavailableAttachmentId, setUnavailableAttachmentId] = useState<string>();
 
   const loadRuntime = useCallback(async (signal: AbortSignal) => {
     const [host, history, resources] = await Promise.allSettled([
@@ -125,25 +124,6 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
       setCopiedReportId(report.id);
     } catch {
       setCopiedReportId(undefined);
-    }
-  }
-
-  async function downloadScreenshot(report: DogfoodReport) {
-    if (!report.attachment_name) return;
-    setDownloadingReportId(report.id);
-    setUnavailableAttachmentId(undefined);
-    try {
-      const blob = await downloadDogfoodScreenshot(operatorToken, report.attachment_name);
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = report.attachment_name;
-      anchor.click();
-      URL.revokeObjectURL(url);
-    } catch {
-      setUnavailableAttachmentId(report.id);
-    } finally {
-      setDownloadingReportId(undefined);
     }
   }
 
@@ -260,9 +240,9 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
                 </dl>
                 <div className="saved-feedback-actions">
                   <button type="button" className="secondary-button" onClick={() => void copySavedReport(report)}>{copiedReportId === report.id ? "Copied report" : "Copy report for developer"}</button>
-                  {report.attachment_name ? <button type="button" className="secondary-button" disabled={downloadingReportId === report.id} onClick={() => void downloadScreenshot(report)}>{downloadingReportId === report.id ? "Downloading…" : "Download screenshot"}</button> : null}
+                  {report.attachment_name ? <button type="button" className="secondary-button" disabled={downloadingReportId !== undefined} onClick={() => void downloadScreenshot(report)}>{downloadingReportId === report.id ? "Downloading…" : "Download screenshot"}</button> : null}
                 </div>
-                {unavailableAttachmentId === report.id ? <p role="status" className="saved-feedback-error">Screenshot is no longer available.</p> : null}
+                {screenshotFailure?.reportId === report.id ? <p role="status" className="saved-feedback-error">{screenshotFailure.message}</p> : null}
               </details>
             ))}
           </div>
