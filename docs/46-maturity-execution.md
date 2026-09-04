@@ -4,6 +4,23 @@ Approved program: [scope and acceptance](45-daily-driver-maturity-plan.md).
 Branch: `codex/daily-driver-maturity`. Starting revision: `36420b3`.
 Local commits authorized; no push, deployment, releases, or live worker interruption.
 
+## P6 visual proposal — awaiting operator review
+
+- Prepared an interactive, sample-only Needs You/Queues composition for review
+  in the goal conversation. Honey/sage surfaces, concise decision questions,
+  visible worker and Queen recommendations, expandable evidence, direct answers,
+  owner-grouped queues, and runtime diagnostics preserve the approved direction.
+- Separate Edge preview verified desktop rendering and local answer transitions:
+  both answered cards disappear, the attention count reaches zero, the operator
+  queue disappears while Queen/worker holds remain, and the affected roster entry
+  no longer claims to need the operator. No real task or live API was contacted.
+- The conversation preview is `swarm-attention-proposal.html` in the thread-owned
+  visualization directory. Bee emoji is placeholder artwork, not a replacement
+  for Swarm's production identity. This is a composition proposal, not a complete
+  Workers or Diagnostics redesign. Mobile and dark-theme visual checks remain.
+- Production UI adoption awaits the requested mockup approval. No phase completion,
+  release, deployment, or performance improvement is claimed by this review.
+
 ## P0 — Reconciliation and baseline (in progress)
 
 ### Upstream integration through `7b02058`
