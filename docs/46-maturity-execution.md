@@ -6,6 +6,23 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P3: feedback editing no longer amplifies readiness traffic
+
+- Source inspection confirmed normal diagnostics already share the App resource
+  owner. The feedback dialog still issued two readiness/connection requests on
+  every text-field edit and abandoned rather than aborted its evidence reads.
+- Editing now only invalidates the local preview. Readiness and connection load
+  on open or an explicit connection change, with cancellation and an eight-second
+  deadline. Host/history/resource reads have the same bounded ownership and abort
+  on close. Deadline failures leave available evidence previewable instead of
+  trapping the dialog in Gathering evidence indefinitely.
+- A regression performs 40 edits and observes only the two initial readiness
+  reads. Close/deadline tests verify all five initial reads receive cancellation.
+  All 22 feedback/diagnostics tests, production web build and diff checks passed.
+  Existing terminal chunk warning remains. This removes a demonstrated request
+  amplification path, not proof of whole-app CPU or long-session improvement.
+- No push, deployment, release or live worker interruption.
+
 ### P2: distinguish attachment control wait from connection wait
 
 - An uploaded image waiting for device ownership previously claimed it was

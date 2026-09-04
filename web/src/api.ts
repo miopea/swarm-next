@@ -1730,16 +1730,18 @@ export async function stopClaudeSession(operatorToken: string, sessionId: string
 /** Whether this Hive can file a report anywhere, so the UI never offers what it cannot do. */
 export async function fetchGithubFeedbackReadiness(
   operatorToken: string,
+  signal?: AbortSignal,
 ): Promise<{ configured: boolean; repository: string | null }> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/feedback/github");
+  const response = await authenticatedFetch(operatorToken, "/api/v1/feedback/github", { signal });
   return response.json() as Promise<{ configured: boolean; repository: string | null }>;
 }
 
 /** Which GitHub account this Hive files as, if a person has connected one. */
 export async function fetchGithubConnection(
   operatorToken: string,
+  signal?: AbortSignal,
 ): Promise<{ connected: boolean; lapsed: boolean; login: string | null }> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/github/connection");
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/github/connection", { signal });
   return response.json() as Promise<{ connected: boolean; lapsed: boolean; login: string | null }>;
 }
 

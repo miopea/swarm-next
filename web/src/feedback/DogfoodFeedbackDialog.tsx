@@ -84,6 +84,7 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
   const [screenshotUrl, setScreenshotUrl] = useState<string>();
   const [imageError, setImageError] = useState<string>();
   const [closeConfirm, setCloseConfirm] = useState(false);
+  const [readinessRevision, setReadinessRevision] = useState(0);
   const fileInput = useRef<HTMLInputElement>(null);
   const expectationInput = useRef<HTMLTextAreaElement>(null);
   const dirty = saveState !== "saved" && Boolean(expectation.trim() || observation.trim() || screenshot);
@@ -100,15 +101,6 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
     setSaveState("idle");
     setIssueUrl(undefined);
     setFilingError(undefined);
-    void fetchGithubConnection(operatorToken)
-      .then(setConnection)
-      .catch(() => setConnection({ connected: false, lapsed: false, login: null }));
-    void fetchGithubFeedbackReadiness(operatorToken)
-      .then(setGithub)
-      // A Hive that cannot answer is treated as one that cannot file. Better a
-      // dialog that says reports stay here than one that offers a button which
-      // fails when pressed.
-      .catch(() => setGithub({ configured: false, repository: null }));
   }
 
   // ASKED ON OPEN, NOT ON THE FIRST KEYSTROKE. Readiness used to be fetched
@@ -118,22 +110,34 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
   // project is the first thing they need, not the second.
   useEffect(() => {
     let cancelled = false;
-    void fetchGithubFeedbackReadiness(operatorToken)
+    const request = new AbortController();
+    const deadline = window.setTimeout(() => request.abort(), 8_000);
+    setGithub(undefined);
+    setConnection(undefined);
+    void Promise.all([
+      fetchGithubConnection(operatorToken, request.signal)
+        .then((next) => { if (!cancelled) setConnection(next); })
+        .catch(() => { if (!cancelled) setConnection({ connected: false, lapsed: false, login: null }); }),
+      fetchGithubFeedbackReadiness(operatorToken, request.signal)
       .then((readiness) => { if (!cancelled) setGithub(readiness); })
       // A Hive that cannot answer is treated as one that cannot file. Better a
       // dialog that says reports stay here than one offering a button that
       // fails when pressed.
-      .catch(() => { if (!cancelled) setGithub({ configured: false, repository: null }); });
-    return () => { cancelled = true; };
-  }, [operatorToken]);
+      .catch(() => { if (!cancelled) setGithub({ configured: false, repository: null }); }),
+    ]).finally(() => window.clearTimeout(deadline));
+    return () => { cancelled = true; request.abort(); window.clearTimeout(deadline); };
+  }, [operatorToken, readinessRevision]);
 
   useEffect(() => {
     let cancelled = false;
+    const request = new AbortController();
+    const deadline = window.setTimeout(() => request.abort(), 8_000);
     void Promise.allSettled([
-      fetchTerminalHostStatus(operatorToken),
-      fetchHistoryDiagnostics(operatorToken),
-      fetchRuntimeResources(operatorToken),
+      fetchTerminalHostStatus(operatorToken, request.signal),
+      fetchHistoryDiagnostics(operatorToken, request.signal),
+      fetchRuntimeResources(operatorToken, request.signal),
     ]).then(([host, history, resources]) => {
+      window.clearTimeout(deadline);
       if (cancelled) return;
       setRuntime({
         terminalHost: host.status === "fulfilled" ? host.value : undefined,
@@ -142,7 +146,7 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
         loaded: true,
       });
     });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; request.abort(); window.clearTimeout(deadline); };
   }, [operatorToken]);
 
   useEffect(() => () => { if (screenshotUrl) URL.revokeObjectURL(screenshotUrl); }, [screenshotUrl]);
@@ -292,11 +296,7 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
           <GithubConnectPanel
             operatorToken={operatorToken}
             connection={connection}
-            onChanged={() => {
-              void fetchGithubConnection(operatorToken)
-                .then(setConnection)
-                .catch(() => setConnection({ connected: false, lapsed: false, login: null }));
-            }}
+            onChanged={() => setReadinessRevision((revision) => revision + 1)}
           />
         ) : null}
         {/* CANNOT FILE, SAID BEFORE THE BUTTON IS PRESSED rather than after.

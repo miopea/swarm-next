@@ -1,9 +1,44 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import DogfoodFeedbackDialog, { destinationLabel } from "./DogfoodFeedbackDialog";
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+test("editing feedback does not multiply readiness requests", async () => {
+  stubDialogFetch({ configured: false, repository: null });
+  renderDialog();
+  await screen.findByText(/cannot file to GitHub/);
+  const fetch = vi.mocked(globalThis.fetch);
+  const reads = () => fetch.mock.calls.filter(([input]) => /feedback\/github$|integrations\/github\/connection$/.test(String(input))).length;
+  expect(reads()).toBe(2);
+  for (let index = 1; index <= 20; index += 1) {
+    fireEvent.change(screen.getByLabelText("What did you expect?"), { target: { value: "a".repeat(index) } });
+    fireEvent.change(screen.getByLabelText("What happened instead?"), { target: { value: "b".repeat(index) } });
+  }
+  expect(reads()).toBe(2);
+});
+
+test.each(["close", "deadline"])("feedback evidence reads abort on %s", async (reason) => {
+  vi.useFakeTimers();
+  const signals: AbortSignal[] = [];
+  vi.stubGlobal("fetch", vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+    const signal = init!.signal!;
+    signals.push(signal);
+    return new Promise<Response>((_resolve, reject) => signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
+  }));
+  const view = renderDialog();
+  expect(signals).toHaveLength(5);
+  if (reason === "close") {
+    view.unmount();
+    await act(async () => {});
+  } else {
+    await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+    expect(screen.getByRole("button", { name: "Preview bundle" })).toBeEnabled();
+    expect(screen.getByText(/cannot file to GitHub/)).toBeInTheDocument();
+  }
+  expect(signals.every((signal) => signal.aborted)).toBe(true);
+});
 
 test("previews an explicit dogfood note with content-free runtime context", async () => {
   const onClose = vi.fn();
