@@ -3045,6 +3045,7 @@ dependencies = [
 name = "swarm-terminal"
 version = "1.4.1"
 dependencies = [
+ "getrandom 0.3.4",
  "nix",
  "portable-pty",
  "serde",

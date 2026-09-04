@@ -134,6 +134,7 @@ fn unix_seconds() -> i64 {
 pub struct ProcessTerminalSession {
     id: WorkerSessionId,
     recovery_attempt: OnceLock<ConversationRecoveryAttempt>,
+    provider_lifecycle: Mutex<Option<crate::ProviderLifecycleGate>>,
     control: TerminalControlGate,
     control_changes: watch::Sender<()>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
@@ -201,6 +202,7 @@ impl ProcessTerminalSession {
         let mut command_builder = CommandBuilder::new(&command.executable);
         command_builder.args(&command.arguments);
         command_builder.cwd(&command.working_directory);
+        let provider_lifecycle = configure_provider_lifecycle(id, provider, &mut command_builder)?;
         // Provider CLIs inspect terminal capabilities before emitting styled output.
         // The terminal host commonly runs under systemd without TERM, even though it
         // gives the child a real PTY. Declare the xterm contract rendered by the web
@@ -289,6 +291,7 @@ impl ProcessTerminalSession {
             id,
             control: TerminalControlGate::default(),
             recovery_attempt: OnceLock::new(),
+            provider_lifecycle: Mutex::new(provider_lifecycle),
             control_changes: watch::channel(()).0,
             child: Mutex::new(child),
             writer: Mutex::new(writer),
@@ -318,6 +321,27 @@ impl ProcessTerminalSession {
     #[must_use]
     pub fn recovery_attempt(&self) -> Option<ConversationRecoveryAttempt> {
         self.recovery_attempt.get().copied()
+    }
+
+    /// Accepts startup evidence only while the bound provider process is live.
+    ///
+    /// # Errors
+    /// Returns lock or process-status errors, without exposing the capability.
+    pub fn observe_provider_start(
+        &self,
+        capability: &[u8; 32],
+        observation: crate::ProviderSessionStartObservation,
+    ) -> Result<crate::ProviderLifecycleAcceptance, SessionRegistryError> {
+        let mut child = lock(&self.child)?;
+        let mut gate = lock(&self.provider_lifecycle)?;
+        let Some(gate) = gate.as_mut() else {
+            return Ok(crate::ProviderLifecycleAcceptance::Denied);
+        };
+        if child.try_wait().map_err(terminal_error)?.is_some() {
+            gate.revoke();
+            return Ok(crate::ProviderLifecycleAcceptance::Denied);
+        }
+        Ok(gate.observe(self.id, capability, observation))
     }
 
     /// Writes input directly to the PTY master.
@@ -588,6 +612,9 @@ impl ProcessTerminalSession {
     /// Returns an error when the child lock is poisoned or termination fails.
     pub fn stop(&self) -> Result<(), SessionRegistryError> {
         let mut child = lock(&self.child)?;
+        if let Some(gate) = lock(&self.provider_lifecycle)?.as_mut() {
+            gate.revoke();
+        }
         if child.try_wait().map_err(terminal_error)?.is_none() {
             child.kill().map_err(terminal_error)?;
         }
@@ -604,6 +631,35 @@ fn is_claude_executable(executable: &std::path::Path) -> bool {
     executable
         .file_name()
         .is_some_and(|name| name == "claude" || name == "claude.exe")
+}
+
+fn configure_provider_lifecycle(
+    session: WorkerSessionId,
+    provider: Option<ProviderKind>,
+    command: &mut CommandBuilder,
+) -> Result<Option<crate::ProviderLifecycleGate>, SessionRegistryError> {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    command.env_remove("SWARM_PROVIDER_SESSION");
+    command.env_remove("SWARM_PROVIDER_START_CAPABILITY");
+    if provider != Some(ProviderKind::ClaudeCode) {
+        return Ok(None);
+    }
+    let mut secret = [0_u8; 32];
+    getrandom::fill(&mut secret).map_err(|_| {
+        SessionRegistryError::Terminal("provider startup entropy unavailable".into())
+    })?;
+    let encoded: String = secret
+        .iter()
+        .flat_map(|byte| {
+            [
+                char::from(HEX[usize::from(byte >> 4)]),
+                char::from(HEX[usize::from(byte & 15)]),
+            ]
+        })
+        .collect();
+    command.env("SWARM_PROVIDER_SESSION", session.to_string());
+    command.env("SWARM_PROVIDER_START_CAPABILITY", encoded);
+    Ok(Some(crate::ProviderLifecycleGate::new(session, secret)))
 }
 
 fn resume_has_output(resume: &Resume) -> bool {
@@ -1505,6 +1561,45 @@ pub(crate) mod control_tests {
             registry.install_takeover(session.id(), lease),
             Err(SessionRegistryError::TakeoverConflict)
         ));
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_environment_tests {
+    #[test]
+    fn provider_lifecycle_environment_is_private_to_the_selected_claude_process() {
+        let session = swarm_domain::WorkerSessionId::new();
+        let mut command = portable_pty::CommandBuilder::new("unused");
+        let gate = super::configure_provider_lifecycle(
+            session,
+            Some(swarm_domain::ProviderKind::ClaudeCode),
+            &mut command,
+        )
+        .unwrap();
+        assert!(gate.is_some());
+        assert_eq!(
+            command
+                .get_env("SWARM_PROVIDER_SESSION")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            session.to_string()
+        );
+        let secret = command
+            .get_env("SWARM_PROVIDER_START_CAPABILITY")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(secret.len(), 64);
+        assert!(secret.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(!format!("{gate:?}").contains(secret));
+        assert!(
+            super::configure_provider_lifecycle(session, None, &mut command)
+                .unwrap()
+                .is_none()
+        );
+        assert!(command.get_env("SWARM_PROVIDER_SESSION").is_none());
+        assert!(command.get_env("SWARM_PROVIDER_START_CAPABILITY").is_none());
     }
 }
 

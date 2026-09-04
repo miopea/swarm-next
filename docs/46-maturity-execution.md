@@ -6,6 +6,21 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2: engine-owned lifecycle capability allocation
+
+- Claude process creation now mints 32 bytes using the existing workspace OS
+  entropy dependency, passes the encoded capability and exact engine session in
+  child environment, and owns the gate in the process session. Other providers
+  and shells remove inherited lifecycle variables. No public summary exposes it.
+- The observation entry point checks child liveness under the child lock, then
+  checks the gate. Stop follows the same lock order and revokes before killing;
+  observed exits revoke as well. The IPC callback route is not exposed yet.
+- Five focused lifecycle tests and strict all-target/all-feature terminal Clippy
+  passed. Environment tests run natively without starting a provider. This does
+  not prove Linux PTY stop/callback races; that integration acceptance remains.
+- Callback helper/IPC, hook installation and durable conversation reconciliation
+  remain open. No live workers, deployment or release changed.
+
 ### P2: process-scoped startup capability gate
 
 - Added the engine-side gate primitive: exact engine session plus 32-byte
