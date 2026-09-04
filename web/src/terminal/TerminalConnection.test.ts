@@ -51,6 +51,82 @@ function outputBytesFrame(sequence: bigint, byteLength: number): ArrayBuffer {
   return frame.buffer;
 }
 
+test("a queued burst uses one parser write and commits its cursor only after completion", async () => {
+  const { connection, handlers, sockets } = harness();
+  let finish!: () => void;
+  handlers.onOutput = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(0n, 24, 80, "screen"));
+  await vi.waitFor(() => expect(connection.sequence).toBe(0));
+  const bytes = new TextEncoder().encode("\u001b[2K\rQuestion two 🐝\r\n".repeat(20));
+  // One byte per frame deliberately splits UTF-8 and ANSI sequences.
+  for (let index = 0; index < bytes.length; index++) {
+    const frame = new Uint8Array(outputBytesFrame(BigInt(index + 1), 1));
+    frame[9] = bytes[index];
+    sockets[0].message(frame.buffer);
+  }
+  await vi.waitFor(() => expect(handlers.onOutput).toHaveBeenCalledTimes(1));
+  expect(Array.from(vi.mocked(handlers.onOutput).mock.calls[0][0])).toEqual(Array.from(bytes));
+  expect(connection.sequence).toBe(0);
+  finish();
+  await vi.waitFor(() => expect(connection.sequence).toBe(bytes.length));
+  connection.dispose();
+});
+
+test("output batches stop at snapshots, duplicates and sequence gaps", async () => {
+  const { connection, handlers, sockets } = harness();
+  const order: string[] = [];
+  handlers.onSnapshot = vi.fn((snapshot) => { order.push(`snapshot:${snapshot.sequence}`); });
+  handlers.onOutput = vi.fn((bytes) => { order.push(new TextDecoder().decode(bytes)); });
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(0n, 24, 80, "screen"));
+  sockets[0].message(outputFrame(1n, "a"));
+  sockets[0].message(outputFrame(2n, "b"));
+  sockets[0].message(outputFrame(2n, "duplicate"));
+  sockets[0].message(snapshotFrame(5n, 30, 36, "new geometry"));
+  sockets[0].message(outputFrame(6n, "c"));
+  sockets[0].message(outputFrame(7n, "d"));
+  sockets[0].message(outputFrame(9n, "gap"));
+  await vi.waitFor(() => expect(sockets[0].close).toHaveBeenCalledWith(4013, "fresh terminal snapshot required"));
+  expect(order).toEqual(["snapshot:0", "ab", "snapshot:5", "cd"]);
+  expect(connection.sequence).toBe(0);
+  connection.dispose();
+});
+
+test("output batching caps each combined parser write at 64 KiB", async () => {
+  const { connection, handlers, sockets } = harness();
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(0n, 24, 80, "screen"));
+  for (let sequence = 1; sequence <= 20; sequence++) sockets[0].message(outputBytesFrame(BigInt(sequence), 8192));
+  await vi.waitFor(() => expect(connection.sequence).toBe(20));
+  expect(vi.mocked(handlers.onOutput).mock.calls.map(([bytes]) => bytes.byteLength)).toEqual([65536, 65536, 32768]);
+  connection.dispose();
+});
+
+test("tiny-frame bursts also have a bounded pending packet count", async () => {
+  const { connection, handlers, sockets } = harness();
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(0n, 24, 80, "screen"));
+  await vi.waitFor(() => expect(handlers.onSnapshot).toHaveBeenCalledOnce());
+  for (let sequence = 1; sequence <= 1025; sequence++) sockets[0].message(outputFrame(BigInt(sequence), "x"));
+  expect(sockets[0].close).toHaveBeenCalledWith(4013, "fresh terminal snapshot required");
+  expect(handlers.onOutput).not.toHaveBeenCalled();
+  sockets[0].disconnect();
+  await vi.waitFor(() => expect(sockets).toHaveLength(2));
+  sockets[1].open();
+  sockets[1].message(snapshotFrame(1025n, 24, 80, "current screen"));
+  await vi.waitFor(() => expect(connection.sequence).toBe(1025));
+  connection.dispose();
+});
+
 function snapshotFrame(
   sequence: bigint,
   rows: number,

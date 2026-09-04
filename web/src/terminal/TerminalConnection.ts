@@ -64,6 +64,15 @@ const GRANT_PROTOCOL_PREFIX = "swarm-grant.";
 const OUTPUT_FRAME_TYPE = 1;
 const SNAPSHOT_FRAME_TYPE = 2;
 const MAX_PENDING_RENDER_BYTES = 3 * 1024 * 1024;
+const MAX_PENDING_RENDER_FRAMES = 1_024;
+const MAX_OUTPUT_BATCH_BYTES = 64 * 1024;
+type QueuedRender = { frame: Uint8Array; generation: number; enqueuedAt: number };
+
+function outputSequence(frame: Uint8Array): number | undefined {
+  if (frame.byteLength < 9 || frame[0] !== OUTPUT_FRAME_TYPE) return undefined;
+  const sequence = Number(new DataView(frame.buffer, frame.byteOffset + 1, 8).getBigUint64(0));
+  return Number.isSafeInteger(sequence) ? sequence : undefined;
+}
 // Match the bounded application bootstrap recovery window so an API-only
 // rolling update cannot leave an already-open terminal permanently detached.
 const DEFAULT_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000, 4_000, 8_000] as const;
@@ -133,7 +142,9 @@ export class TerminalConnection {
   #controlView: TerminalControlView = "checking";
   #controlReceived = false;
   #renewTimer: ReturnType<typeof setTimeout> | undefined;
-  #renderQueue = Promise.resolve();
+  #renderFrames: QueuedRender[] = [];
+  #renderDraining = false;
+  #pendingRenderFrames = 0;
   #pendingRenderBytes = 0;
   #renderGeneration = 0;
   #started = false;
@@ -495,31 +506,74 @@ export class TerminalConnection {
       this.#missedWhileDetached = true;
       return;
     }
-    if (this.#pendingRenderBytes + frame.byteLength > MAX_PENDING_RENDER_BYTES) {
+    if (this.#pendingRenderBytes + frame.byteLength > MAX_PENDING_RENDER_BYTES
+      || this.#pendingRenderFrames >= MAX_PENDING_RENDER_FRAMES) {
       this.#recoverFromSnapshot("fell_behind", "terminal renderer fell behind its bounded queue");
       return;
     }
     this.#pendingRenderBytes += frame.byteLength;
-    const enqueuedAt = performance.now();
-    const generation = this.#renderGeneration;
-    this.#renderQueue = this.#renderQueue
-      .then(async () => {
-        if (generation !== this.#renderGeneration || this.#disposed) return;
-        await this.#applyBinaryFrame(frame, generation);
-        if (!this.#disposed && generation === this.#renderGeneration && document.visibilityState === "visible") {
-          browserPerformance.record("terminal_render", performance.now() - enqueuedAt);
-        }
-      })
-      .catch((error: unknown) => {
-        if (generation !== this.#renderGeneration || this.#disposed) return;
-        this.#fail(error instanceof Error ? error.message : "terminal renderer failed");
-      })
-      .finally(() => {
-        this.#pendingRenderBytes -= frame.byteLength;
-      });
+    this.#pendingRenderFrames += 1;
+    this.#renderFrames.push({ frame, generation: this.#renderGeneration, enqueuedAt: performance.now() });
+    if (this.#renderDraining) return;
+    this.#renderDraining = true;
+    queueMicrotask(() => { void this.#drainRenderFrames(); });
   }
 
-  async #applyBinaryFrame(frame: Uint8Array, generation: number): Promise<void> {
+  async #drainRenderFrames(): Promise<void> {
+    try {
+      while (this.#renderFrames.length) {
+        const first = this.#renderFrames.shift()!;
+        const { generation, enqueuedAt } = first;
+        let frame = first.frame;
+        let consumedBytes = frame.byteLength;
+        let consumedFrames = 1;
+        let lastSequence: number | undefined;
+        try {
+          if (generation !== this.#renderGeneration || this.#disposed) continue;
+          const firstSequence = outputSequence(frame);
+          if (this.#hasCanonicalState && firstSequence === this.#sequence + 1) {
+            // Only consecutive deltas can share one parser write. Snapshots,
+            // duplicates, gaps and malformed frames keep their own validation.
+            // Do not wait for more output: batch only what is already queued.
+            lastSequence = firstSequence;
+            const parts = [frame.subarray(9)];
+            let payloadBytes = frame.byteLength - 9;
+            while (this.#renderFrames.length) {
+              const next = this.#renderFrames[0];
+              if (next.generation !== generation || outputSequence(next.frame) !== lastSequence + 1
+                || payloadBytes + next.frame.byteLength - 9 > MAX_OUTPUT_BATCH_BYTES) break;
+              this.#renderFrames.shift();
+              parts.push(next.frame.subarray(9));
+              payloadBytes += next.frame.byteLength - 9;
+              consumedBytes += next.frame.byteLength;
+              consumedFrames += 1;
+              lastSequence += 1;
+            }
+            if (parts.length > 1) {
+              const combined = new Uint8Array(9 + payloadBytes);
+              combined.set(frame.subarray(0, 9));
+              let offset = 9;
+              for (const part of parts) { combined.set(part, offset); offset += part.byteLength; }
+              frame = combined;
+            }
+          }
+          await this.#applyBinaryFrame(frame, generation, lastSequence);
+          if (!this.#disposed && generation === this.#renderGeneration && document.visibilityState === "visible") {
+            browserPerformance.record("terminal_render", performance.now() - enqueuedAt);
+          }
+        } catch (error) {
+          if (generation === this.#renderGeneration && !this.#disposed) {
+            this.#fail(error instanceof Error ? error.message : "terminal renderer failed");
+          }
+        } finally {
+          this.#pendingRenderBytes -= consumedBytes;
+          this.#pendingRenderFrames -= consumedFrames;
+        }
+      }
+    } finally { this.#renderDraining = false; }
+  }
+
+  async #applyBinaryFrame(frame: Uint8Array, generation: number, lastSequence?: number): Promise<void> {
     if (frame.byteLength < 9) {
       this.#fail("terminal output frame was malformed");
       return;
@@ -584,7 +638,7 @@ export class TerminalConnection {
     }
     await this.#handlers?.onOutput(frame.slice(9));
     if (generation !== this.#renderGeneration || this.#disposed) return;
-    this.#sequence = sequence;
+    this.#sequence = lastSequence ?? sequence;
     this.#confirmRenderedConnection();
   }
 

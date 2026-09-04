@@ -6,6 +6,33 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P3: coalesce queued terminal deltas before parsing
+
+- Installed xterm schedules a new parser turn when its write queue is empty.
+  Swarm previously awaited each packet's callback before submitting the next,
+  even when many small packets were already queued. Replaced the per-packet
+  promise chain with one owned drain and bounded queued-output coalescing.
+- Only already-queued, consecutive output frames share a write; there is no
+  batching delay. Combined payloads cap at 64 KiB. Snapshots, duplicate/gapped
+  sequences and malformed frames retain separate validation. Cursor commitment
+  waits for the combined parser callback and still respects render generation.
+- Pending work is bounded by both the existing 3 MiB budget and 1,024 frames,
+  including an in-flight write. Overflow uses existing canonical recovery. A
+  single larger valid frame retains existing behavior; no protocol change.
+- All 223 terminal tests across 13 files and production web build passed. New
+  regressions cover byte-for-byte split UTF-8/ANSI preservation, one write for a
+  queued small-frame burst, parser completion before cursor advancement, snapshot/
+  duplicate/gap boundaries, batch size, packet-count overflow and recovery.
+- Apply-timing samples now describe parser batches rather than individual output
+  packets. Compare equivalent builds/workloads with this changed sampling unit;
+  reduced parser submissions are not a measured whole-app CPU improvement.
+- Edge at 390x844 exercised the isolated synthetic question fixture: second and
+  third question buffers/displayed text were clean. One immediate DOM observation
+  after Ready still showed the prior question before the subsequent observation
+  caught up, consistent with parsing not proving paint. No persistent overlap was
+  reproduced; this is not native Claude AskUser acceptance. Viewport reset and
+  owned tab closed. No push, deployment, release or live worker changes.
+
 ### P1: report the timing boundary actually measured
 
 - Shared labels now call the legacy `terminal_render` aggregate Terminal apply
