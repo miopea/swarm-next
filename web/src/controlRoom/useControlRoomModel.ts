@@ -162,10 +162,24 @@ export function useControlRoomModel({
 }
 
 export function mergeRecentEvents(current: ControlRoomEvent[], page: ControlRoomEventPage) {
-  if (page.reset_required) return page.events.slice(-16);
-  return [...current, ...page.events]
-    .filter((event, index, events) =>
-      events.findIndex((candidate) => candidate.sequence === event.sequence) === index,
-    )
-    .slice(-16);
+  // Retain the newest durable sequences, not the last arrivals: reconnects can
+  // replay an older page. Keep at most 17 entries while admitting an event;
+  // never concatenate a backlog or scan it once per received event.
+  const retained: ControlRoomEvent[] = [];
+  const admit = (event: ControlRoomEvent) => {
+    let low = 0;
+    let high = retained.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (retained[middle].sequence < event.sequence) low = middle + 1;
+      else high = middle;
+    }
+    if (retained[low]?.sequence === event.sequence) return;
+    if (retained.length === 16 && low === 0) return;
+    retained.splice(low, 0, event);
+    if (retained.length > 16) retained.shift();
+  };
+  if (!page.reset_required) for (const event of current) admit(event);
+  for (const event of page.events) admit(event);
+  return retained;
 }

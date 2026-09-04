@@ -6,6 +6,29 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P3: bounded recent-event admission and replay ordering
+
+- Replaced whole-page quadratic duplicate scanning with a sorted sixteen-entry
+  buffer, binary-search admission, and at most seventeen transient entries. Old
+  replayed sequences cannot displace newer evidence; reset still discards the old
+  cursor's evidence. The first retained instance of a duplicate remains stable.
+- Production web build passed; the existing 546.53 KiB terminal chunk warning
+  remains. This patch does not change renderer pooling or worker lifetimes.
+- Fourteen model/feed tests passed, including a 500-event stale replay and a
+  5,000-event mixed/duplicate fixture. A first map-based attempt was rejected
+  after a microbenchmark showed overhead at 500 events; the bounded array avoided
+  that regression. No event delivery, snapshot invalidation, or urgent-event delay
+  was introduced.
+- Isolated Node microbenchmark, 20 warmups and 100 iterations, ordered synthetic
+  pages with equivalent outputs: old/new mean milliseconds were 0.079/0.018 for
+  200 events, 0.116/0.026 for 500, and 9.903/0.178 for 5,000. These measure only
+  this function, not browser CPU, representative page sizes, or whole-app latency.
+- A fresh separate Edge tab at swarm.bfgsolutions.net still showed the unlock
+  screen. Asked the operator to unlock that tab without sharing the token; no
+  credentials were inspected and the working tab was not touched. Live profiling
+  remains pending. Worker events combine multiple meanings, so indiscriminate
+  delay of all worker notifications was not implemented as an optimization.
+
 ### P2/P5: retained-stop handoff protects context across API interruption
 
 - Engine protocol 15 adds StopRetained: revoke lifecycle admission and terminate

@@ -120,6 +120,23 @@ test("deduplicates, bounds, and resets recent control-room evidence", () => {
   expect(mergeRecentEvents(merged, eventPage(40, true)).map((event) => event.sequence)).toEqual([40]);
 });
 
+test("a replayed older backlog cannot displace newer recent evidence", () => {
+  const current = Array.from({ length: 16 }, (_, index) => eventPage(500 + index, false).events[0]);
+  const events = Array.from({ length: 500 }, (_, index) => eventPage(index + 1, false).events[0]);
+  const replay = { events, next_cursor: 500, reset_required: false };
+  expect(mergeRecentEvents(current, replay)).toEqual(current);
+  expect(mergeRecentEvents(current, { ...replay, reset_required: true }).map((event) => event.sequence))
+    .toEqual(Array.from({ length: 16 }, (_, index) => 485 + index));
+});
+
+test("bounded recent evidence deduplicates and orders a large mixed page", () => {
+  const events = Array.from({ length: 5_000 }, (_, index) => eventPage((index * 37) % 1_000, false).events[0]);
+  const first = eventPage(999, false).events[0];
+  const merged = mergeRecentEvents([first], { events, next_cursor: 999, reset_required: false });
+  expect(merged.map((event) => event.sequence)).toEqual(Array.from({ length: 16 }, (_, index) => 984 + index));
+  expect(merged.at(-1)).toBe(first);
+});
+
 function eventPage(sequence: number, resetRequired: boolean): ControlRoomEventPage {
   return {
     events: [{ sequence, hive_id: "hive", kind: "tasks_changed", occurred_at: sequence }],
