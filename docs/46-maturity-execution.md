@@ -6,6 +6,25 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2/P3: bound a parser callback that never completes
+
+- Size-bounded output could still wait indefinitely behind a stalled parser
+  callback, including fresh snapshots on later attachments. Each apply operation
+  now has one owned eight-second continuously-visible deadline. Hidden/detached
+  views disarm it; returning starts a new visible window. Ordinary focus events
+  do not extend an already-running deadline.
+- Expiry retires the browser attachment as recovery-required and frees queued
+  work. It records content-free timing evidence and offers Reload terminal view
+  through the existing refresh action. It does not restart the worker, replay
+  input, create a Needs You item, or claim a server failure. Late success/error
+  remains generation-guarded. Disposal/protocol failure cancels the pending wait.
+- All 227 terminal tests and the final production web build passed. New cases
+  cover stalled snapshots/output, late completion, no reconnect loop, hidden-time
+  exclusion, disposal timer cleanup and the recovery action. Fixed a test-only
+  callback arity error caught by TypeScript. Existing terminal chunk warning remains.
+- Real renderer-hang recovery/visual acceptance and instrumentation overhead
+  remain to verify. No push, deployment, release or live worker interruption.
+
 ### P3/P7: exercise output bursts in a real browser without a Hive
 
 - Added a terminal-burst harness surface using production TerminalConnection and

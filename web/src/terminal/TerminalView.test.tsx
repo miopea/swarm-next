@@ -72,6 +72,15 @@ test("a passive terminal offers Resume Here and keeps its toolbar visible on mob
   expect(screen.queryByRole("button", { name: "Resume Here" })).not.toBeInTheDocument();
 });
 
+test("a terminal requiring recovery offers the existing view reload action", () => {
+  const refresh = vi.fn();
+  render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} onRefresh={refresh} />);
+  expect(screen.queryByRole("button", { name: "Reload terminal view" })).toBeNull();
+  act(() => controller.stateListener!("recovery_required"));
+  fireEvent.click(screen.getByRole("button", { name: "Reload terminal view" }));
+  expect(refresh).toHaveBeenCalledOnce();
+});
+
 afterEach(() => {
   cleanup();
   controller.sendInput.mockReset().mockReturnValue(true);

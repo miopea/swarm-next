@@ -196,6 +196,67 @@ beforeEach(() => {
 
 const documentHasFocus = document.hasFocus.bind(document);
 
+test.each(["snapshot", "output"] as const)("a stalled %s releases its queue and requires view recovery", async (kind) => {
+  vi.useFakeTimers();
+  const { connection, handlers, sockets } = harness([], 20_000);
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => { finish = resolve; });
+  if (kind === "snapshot") handlers.onSnapshot = vi.fn(() => pending);
+  else handlers.onOutput = vi.fn(() => pending);
+  connection.start(handlers);
+  await vi.advanceTimersByTimeAsync(0);
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(0n, 24, 80, "screen"));
+  await vi.advanceTimersByTimeAsync(0);
+  if (kind === "output") sockets[0].message(outputFrame(1n, "stalled"));
+  sockets[0].message(outputFrame(2n, "queued"));
+  await vi.advanceTimersByTimeAsync(8_000);
+  expect(handlers.onState).toHaveBeenCalledWith("recovery_required", expect.stringContaining("parser did not finish"));
+  expect(sockets[0].close).toHaveBeenCalledWith(4008, expect.any(String));
+  expect(connection.sequence).toBe(0);
+  expect(connection.sendInput("must not replay")).toBe(false);
+  const outputCalls = vi.mocked(handlers.onOutput).mock.calls.length;
+  vi.mocked(handlers.onState).mockClear();
+  finish();
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(handlers.onState).not.toHaveBeenCalled();
+  expect(handlers.onOutput).toHaveBeenCalledTimes(outputCalls);
+  expect(connection.sequence).toBe(0);
+  expect(sockets).toHaveLength(1);
+  connection.dispose();
+  vi.useRealTimers();
+});
+
+test("hidden time is excluded from a stalled parser deadline and disposal cancels it", async () => {
+  vi.useFakeTimers();
+  let visibility: DocumentVisibilityState = "visible";
+  const visibilitySpy = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+  const { connection, handlers, sockets } = harness([], 20_000);
+  handlers.onOutput = vi.fn(() => new Promise<void>(() => undefined));
+  connection.start(handlers);
+  await vi.advanceTimersByTimeAsync(0);
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(0n, 24, 80, "screen"));
+  await vi.advanceTimersByTimeAsync(0);
+  sockets[0].message(outputFrame(1n, "stalled"));
+  await vi.advanceTimersByTimeAsync(4_000);
+  visibility = "hidden";
+  document.dispatchEvent(new Event("visibilitychange"));
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(handlers.onState).not.toHaveBeenCalledWith("recovery_required", expect.any(String));
+  visibility = "visible";
+  document.dispatchEvent(new Event("visibilitychange"));
+  await vi.advanceTimersByTimeAsync(7_000);
+  expect(handlers.onState).not.toHaveBeenCalledWith("recovery_required", expect.any(String));
+  connection.dispose();
+  vi.mocked(handlers.onState).mockClear();
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(handlers.onState).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
+  visibilitySpy.mockRestore();
+  vi.useRealTimers();
+});
+
 test("Resume Here binds size and input to the new generation, never a stale reply", async () => {
   const { connection, handlers, sockets } = harness();
   connection.start(handlers);

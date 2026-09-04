@@ -66,6 +66,7 @@ const SNAPSHOT_FRAME_TYPE = 2;
 const MAX_PENDING_RENDER_BYTES = 3 * 1024 * 1024;
 const MAX_PENDING_RENDER_FRAMES = 1_024;
 const MAX_OUTPUT_BATCH_BYTES = 64 * 1024;
+const RENDER_COMPLETION_TIMEOUT_MS = 8_000;
 type QueuedRender = { frame: Uint8Array; generation: number; enqueuedAt: number };
 
 function outputSequence(frame: Uint8Array): number | undefined {
@@ -145,6 +146,7 @@ export class TerminalConnection {
   #renderFrames: QueuedRender[] = [];
   #renderDraining = false;
   #pendingRenderFrames = 0;
+  #renderWait: { refreshVisibility(): void; cancel(): void } | undefined;
   #pendingRenderBytes = 0;
   #renderGeneration = 0;
   #started = false;
@@ -267,6 +269,7 @@ export class TerminalConnection {
     if (this.#disposed) return;
     this.releaseControl();
     this.#disposed = true;
+    this.#renderWait?.cancel();
     if (typeof document !== "undefined") {
       document.removeEventListener("visibilitychange", this.#handleVisibilityChange);
       window.removeEventListener("focus", this.#handleVisibilityChange);
@@ -359,6 +362,7 @@ export class TerminalConnection {
   /// reconnects through the ordinary path. No new recovery machinery, and a
   /// healthy connection pays one message.
   #handleVisibilityChange = (): void => {
+    this.#renderWait?.refreshVisibility();
     if (this.#disposed || this.#fatal) return;
     this.#unconfirmControl();
     if (!this.#foreground()) return;
@@ -485,6 +489,7 @@ export class TerminalConnection {
       this.#missedWhileDetached = true;
     }
     this.#rendering = false;
+    this.#renderWait?.refreshVisibility();
     this.#unconfirmControl();
   }
 
@@ -557,7 +562,7 @@ export class TerminalConnection {
               frame = combined;
             }
           }
-          await this.#applyBinaryFrame(frame, generation, lastSequence);
+          await this.#applyWithDeadline(frame, generation, lastSequence);
           if (!this.#disposed && generation === this.#renderGeneration && document.visibilityState === "visible") {
             browserPerformance.record("terminal_render", performance.now() - enqueuedAt);
           }
@@ -571,6 +576,50 @@ export class TerminalConnection {
         }
       }
     } finally { this.#renderDraining = false; }
+  }
+
+  #applyWithDeadline(frame: Uint8Array, generation: number, lastSequence?: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const finish = (error?: { cause: unknown }) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (this.#renderWait === wait) this.#renderWait = undefined;
+        if (error !== undefined) reject(error.cause);
+        else resolve();
+      };
+      const wait = {
+        cancel: () => finish(),
+        refreshVisibility: () => {
+          if (settled) return;
+          if (!this.#rendering || document.visibilityState !== "visible") {
+            clearTimeout(timer);
+            timer = undefined;
+            return;
+          }
+          if (timer !== undefined) return;
+          timer = setTimeout(() => {
+            if (!this.#rendering || document.visibilityState !== "visible") {
+              timer = undefined;
+              return;
+            }
+            // The old callback may span a reconnect. A fresh snapshot queued
+            // behind it cannot repair a parser that never finishes. Retire the
+            // attachment, not the durable session, and release queued buffers.
+            if (!this.#disposed) {
+              browserPerformance.record("terminal_render", RENDER_COMPLETION_TIMEOUT_MS);
+              this.#fail("The terminal parser did not finish while this view was visible. Reload the terminal view to recover; no worker restart or input replay is requested.");
+            }
+            finish();
+          }, RENDER_COMPLETION_TIMEOUT_MS);
+        },
+      };
+      this.#renderWait = wait;
+      wait.refreshVisibility();
+      void this.#applyBinaryFrame(frame, generation, lastSequence).then(() => finish(), (cause: unknown) => finish({ cause }));
+    });
   }
 
   async #applyBinaryFrame(frame: Uint8Array, generation: number, lastSequence?: number): Promise<void> {
@@ -712,6 +761,7 @@ export class TerminalConnection {
     this.#unconfirmControl();
     this.#fatal = true;
     this.#renderGeneration += 1;
+    this.#renderWait?.cancel();
     this.#clearConfirmationTimer();
     this.#handlers?.onState("recovery_required", detail);
     this.#socket?.close(CLOSE_PROTOCOL_FAILURE, detail.slice(0, 100));

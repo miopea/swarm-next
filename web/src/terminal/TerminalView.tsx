@@ -357,6 +357,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
             the terminal bar is prime space spent on something rarely used, and
             the cost of reaching for it by mistake is a stopped worker. */}
         <div className="terminal-worker-controls">
+          {connectionState === "recovery_required" && onRefresh && <button type="button" disabled={busy} onClick={onRefresh}>Reload terminal view</button>}
           {queenAutonomy && onOpenQueenSettings ? (
             <button type="button" className="queen-autonomy-chip" title={queenAutonomyDetail(queenAutonomy)} onClick={onOpenQueenSettings}>
               {queenAutonomyLabel(queenAutonomy)}
