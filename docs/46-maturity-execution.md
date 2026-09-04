@@ -6,6 +6,19 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: provider prompt observation is not confirmed operator evidence
+
+- Checked official Claude hook documentation: submitted prompt text is available
+  before processing and can still be blocked. Existing engine lifecycle capability
+  authenticates process reports, not the human origin of a terminal prompt.
+- Added a distinct bounded prompt-observation parser, preserving exact escaped
+  multiline/Unicode text while omitting transcript paths and debug content.
+  Wrong events, child agents, invalid IDs, oversized transport/text and bad shapes
+  are rejected. No receipt creation, provider hook installation or new IPC path.
+- Three focused terminal tests and strict Linux-target all-target/all-feature
+  terminal Clippy passed. This remains a parser boundary, not end-to-end capture;
+  engine-origin correlation and confirmed-consumption wiring remain required.
+
 ### P4: first-party statement verification is readable by agents
 
 - Added one-record local-Hive receipt reads with exact text/question, operator,

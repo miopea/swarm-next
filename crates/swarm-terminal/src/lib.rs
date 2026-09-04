@@ -47,6 +47,8 @@ pub use provider_lifecycle::{
     read_claude_session_start,
 };
 pub use provider_lifecycle_gate::{ProviderLifecycleAcceptance, ProviderLifecycleGate};
+mod provider_prompt;
+pub use provider_prompt::{ProviderPromptObservation, read_claude_prompt_submission};
 pub use resources::{ProcessResourceSample, sample_current_process, sample_process_tree};
 pub use state::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, CanonicalTerminalState,

@@ -86,6 +86,22 @@ in the decision is answered. This read adds no agent write capability, general
 statement listing, or control-room invalidation. Existing provider sessions need
 their normal tool-schema refresh before the optional argument becomes visible.
 
+## Provider capture boundary
+
+The [Claude hook reference](https://code.claude.com/docs/en/hooks#userpromptsubmit)
+documents submitted text on `UserPromptSubmit`, before processing; a hook may
+still block that prompt. Its `PostToolUse` event supplies tool input and response,
+whose shapes are tool-specific. These facts do not independently identify a human
+terminal writer or give a stable decision ID for an AskUser response.
+
+The initial prompt parser therefore returns only `ProviderPromptObservation`:
+conversation and exact text, no consumption or human-authorship claim. It drops
+paths/other metadata, rejects child-agent events, caps transport at 64 KiB and
+decoded text at 16 KiB, and redacts Debug output. It is not installed as a hook
+yet. Transport authentication, engine-owned operator-input correlation, provider
+consumption evidence, and decision identity mapping must precede receipt creation.
+Do not wire `UserPromptSubmit` directly to confirmed operator statements.
+
 Verification reads return the statement and its scope, evidence status, and exact
 decision link when present. A full ID is required; no prefix lookup. Verified
 origin never expands the action authorized by the actual words. Preserve ADR 0054's
