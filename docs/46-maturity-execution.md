@@ -6,6 +6,25 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4 / P6: stop reporting active or unknown providers as unanswered questions
+
+- Split delivery deferral into active work, observed input request and unknown
+  state. Only the observed request records an open-question warning. Queen's
+  preliminary readiness check now uses the observed state instead of always
+  recording an unanswered prompt whenever she was not resting.
+- A shared recorder handles Queen runs, task briefings, decision answers and
+  outcome reports. Active work clears previous prompt warnings for that exact
+  delivery while leaving its queued work intact. Unknown observation adds no
+  false question and does not claim a prior observed question has resolved.
+- Tests cover activity mapping, absence of invented warnings, observed-question
+  persistence, recovery when work resumes, and the real-host startup/unknown
+  Queen readiness path. This does not prove all provider classifiers accurate
+  or complete the broader Needs You acceptance. No live-worker or release actions.
+- Final Linux API build and strict Clippy passed. All 32 coordination tests and
+  the focused real-host Queen-readiness test passed on that build. An overlapping
+  verification command waited for the already-running build lock; no process was
+  killed or restarted. Formatting and diff checks passed.
+
 ### P2 / P4: require trustworthy terminal observations before coordination input
 
 - Removed a fallback that treated any other host output as a ready terminal.

@@ -130,6 +130,30 @@ fn clear_held_delivery_refusals(store: &swarm_persistence::TaskStore, subject: &
         let _ = store.clear_coordinator_refusal(kind, subject, unix_timestamp());
     }
 }
+
+/// Records only observed prompt holds. An actively working provider supersedes
+/// earlier prompt warnings; unknown state and policy holds do not invent answers.
+fn record_delivery_hold(
+    store: &swarm_persistence::TaskStore,
+    subject: &str,
+    worker: swarm_domain::WorkerId,
+    session: WorkerSessionId,
+    reason: coordination_delivery::DeferralReason,
+    label: &str,
+) {
+    if reason == coordination_delivery::DeferralReason::ProviderBusy {
+        clear_held_delivery_refusals(store, subject);
+    } else if let Some(kind) = reason.refusal_kind() {
+        let _ = store.record_coordinator_refusal(
+            kind,
+            subject,
+            Some(worker),
+            Some(session),
+            &reason.describe(label),
+            unix_timestamp(),
+        );
+    }
+}
 // The message-content tests build these directly; the delivery that consumes
 // them now lives in `coordination_delivery`.
 #[cfg(test)]
@@ -1892,16 +1916,14 @@ impl AppState {
                     tracing::info!(decision_id = %delivery.decision_id, worker_id = %delivery.worker_id, ?reason, "decision delivery is held at this worker's prompt");
                     // A cooldown is not a refusal anybody must act on, so it does not
                     // become coordinator attention. See DeferralReason::refusal_kind.
-                    if let Some(kind) = reason.refusal_kind() {
-                        let _ = store.record_coordinator_refusal(
-                            kind,
-                            &format!("decision:{}", delivery.decision_id),
-                            Some(delivery.worker_id),
-                            Some(delivery.session_id),
-                            &reason.describe("An answer"),
-                            unix_timestamp(),
-                        );
-                    }
+                    record_delivery_hold(
+                        store,
+                        &format!("decision:{}", delivery.decision_id),
+                        delivery.worker_id,
+                        delivery.session_id,
+                        reason,
+                        "An answer",
+                    );
                     store.defer_decision_delivery(delivery.decision_id, unix_timestamp())
                 }
                 Ok(TerminalSubmission::Rejected { code, message }) => {
@@ -2003,19 +2025,17 @@ impl AppState {
                     tracing::info!(task_id = %delivery.task_id, worker_id = %delivery.worker_id, ?reason, "task briefing is held at this worker's prompt");
                     // A cooldown is not a refusal anybody must act on, so it does not
                     // become coordinator attention. See DeferralReason::refusal_kind.
-                    if let Some(kind) = reason.refusal_kind() {
-                        let _ = store.record_coordinator_refusal(
-                            kind,
-                            &format!(
-                                "task-dispatch:{}:{}",
-                                delivery.assignment_id, delivery.generation
-                            ),
-                            Some(delivery.worker_id),
-                            Some(delivery.session_id),
-                            &reason.describe("A briefing"),
-                            unix_timestamp(),
-                        );
-                    }
+                    record_delivery_hold(
+                        store,
+                        &format!(
+                            "task-dispatch:{}:{}",
+                            delivery.assignment_id, delivery.generation
+                        ),
+                        delivery.worker_id,
+                        delivery.session_id,
+                        reason,
+                        "A briefing",
+                    );
                     store.defer_task_dispatch(
                         &delivery.assignment_id,
                         delivery.generation,
@@ -2223,16 +2243,14 @@ impl AppState {
                     tracing::info!(task_id = %outcome.task_id, reporter_id = %outcome.reporting_worker_id, recipient_id = %outcome.recipient_worker_id, ?reason, "task outcome is held at this worker's prompt");
                     // A cooldown is not a refusal anybody must act on, so it does not
                     // become coordinator attention. See DeferralReason::refusal_kind.
-                    if let Some(kind) = reason.refusal_kind() {
-                        let _ = store.record_coordinator_refusal(
-                            kind,
-                            &format!("outcome-delivery:{}", outcome.id),
-                            Some(outcome.recipient_worker_id),
-                            Some(outcome.session_id),
-                            &reason.describe("An outcome report"),
-                            unix_timestamp(),
-                        );
-                    }
+                    record_delivery_hold(
+                        store,
+                        &format!("outcome-delivery:{}", outcome.id),
+                        outcome.recipient_worker_id,
+                        outcome.session_id,
+                        reason,
+                        "An outcome report",
+                    );
                     store.defer_task_outcome(&outcome.id, unix_timestamp())
                 }
                 Ok(TerminalSubmission::Rejected { code, message }) => {
@@ -2276,15 +2294,17 @@ impl AppState {
         &self,
         store: &TaskStore,
         delivery: &swarm_persistence::QueenAutomationDelivery,
+        activity: ProviderActivity,
     ) {
         tracing::info!(run_id = %delivery.run_id, "Queen automation is waiting for a fresh resting prompt");
-        let _ = store.record_coordinator_refusal(
-            REFUSAL_DELIVERY_HELD,
+        record_delivery_hold(
+            store,
             &format!("queen-run:{}", delivery.run_id),
-            Some(delivery.worker_id),
-            Some(delivery.session_id),
-            &coordination_delivery::DeferralReason::ProviderBusy.describe("Queen's review"),
-            unix_timestamp(),
+            delivery.worker_id,
+            delivery.session_id,
+            coordination_delivery::activity_deferral(activity)
+                .unwrap_or(coordination_delivery::DeferralReason::ProviderStateUnknown),
+            "Queen's review",
         );
         match store.defer_queen_automation_delivery(&delivery.run_id, unix_timestamp()) {
             Ok(true) => self.control_room_notify.notify_waiters(),
@@ -2318,12 +2338,11 @@ impl AppState {
                 return;
             }
         };
-        if provider_activity::observe_session(self, delivery.session_id, provider)
+        let activity = provider_activity::observe_session(self, delivery.session_id, provider)
             .await
-            .map(|signals| signals.activity)
-            != Some(ProviderActivity::Resting)
-        {
-            self.hold_queen_automation_until_resting(store, &delivery);
+            .map_or(ProviderActivity::Unknown, |signals| signals.activity);
+        if activity != ProviderActivity::Resting {
+            self.hold_queen_automation_until_resting(store, &delivery, activity);
             return;
         }
         let result = match submit_coordination_message(
@@ -2342,16 +2361,14 @@ impl AppState {
                 tracing::info!(run_id = %delivery.run_id, ?reason, "Queen automation is held at Queen's prompt");
                 // A cooldown is not a refusal anybody must act on, so it does not
                 // become coordinator attention. See DeferralReason::refusal_kind.
-                if let Some(kind) = reason.refusal_kind() {
-                    let _ = store.record_coordinator_refusal(
-                        kind,
-                        &format!("queen-run:{}", delivery.run_id),
-                        Some(delivery.worker_id),
-                        Some(delivery.session_id),
-                        &reason.describe("Queen's review"),
-                        unix_timestamp(),
-                    );
-                }
+                record_delivery_hold(
+                    store,
+                    &format!("queen-run:{}", delivery.run_id),
+                    delivery.worker_id,
+                    delivery.session_id,
+                    reason,
+                    "Queen's review",
+                );
                 store.defer_queen_automation_delivery(&delivery.run_id, unix_timestamp())
             }
             Ok(TerminalSubmission::Rejected { code, message }) => {
@@ -15730,6 +15747,13 @@ mod tests {
         let deferred = store.queen_automation_status(101).unwrap();
         assert_eq!(deferred.state, swarm_domain::QueenAutomationState::Queued);
         assert_eq!(deferred.attempts, 0);
+        assert!(
+            store
+                .standing_coordinator_refusals(unix_timestamp(), 0)
+                .unwrap()
+                .is_empty(),
+            "provider startup is unknown, not an unanswered operator question"
+        );
 
         queen_terminal.stop().unwrap();
         server_task.abort();

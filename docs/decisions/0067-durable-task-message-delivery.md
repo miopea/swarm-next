@@ -57,6 +57,20 @@ lifetimes remain unchanged.
 
 ## Acceptance
 
+### A busy provider is not an unanswered question
+
+Initial delivery observations distinguish Active, AwaitingOperator and Unknown.
+Only AwaitingOperator records the open-question refusal; an unsent draft retains
+its separate hold. Working and unknown states keep delivery queued without
+inventing a question. Queen's preliminary readiness check follows the same rule.
+
+Observed Active work clears earlier prompt refusals for that delivery subject,
+without completing or cancelling the queued delivery. Unknown state does not
+prove an older observed question resolved, so it neither creates a new question
+warning nor clears the previous observation. Queues presents these records as
+last unresolved observations, not proof of current state. Provider-question
+classification still does not itself authorize a Needs You escalation.
+
 ### Terminal observation is not optional
 
 Before any coordination input, the host must return a full snapshot of the exact

@@ -27,15 +27,16 @@ use crate::{
     AppState, HostClient, TerminalWriteProvenance, provider_activity, task_store, unix_timestamp,
 };
 
-/// Why a write was not attempted. Both mean "not now", and they mean it for
-/// opposite reasons: one wants the operator to answer something, the other
-/// wants them to clear something they typed and never sent. Reporting both as
-/// "an unanswered prompt" sent the operator looking for a question that was not
-/// there while the board sat still for hours.
+/// Why a write was not attempted. Working, unknown, awaiting input, and unsent
+/// drafts are different evidence; none may be inferred merely from deferral.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DeferralReason {
-    /// The provider is working, or is genuinely asking the operator something.
+    /// The provider is actively working; no operator answer is implied.
     ProviderBusy,
+    /// The provider visibly reports that it is waiting for input.
+    ProviderAwaitingInput,
+    /// Observation cannot determine the provider's state.
+    ProviderStateUnknown,
     /// The provider is resting, but its prompt already holds text nobody sent.
     /// Appending to it would merge two unrelated instructions into one Enter.
     PromptHoldsUnsentText,
@@ -58,20 +59,21 @@ impl DeferralReason {
     /// The control room branches on the kind rather than reading the prose, so
     /// the situations can be told apart without matching on a sentence.
     ///
-    /// NONE FOR A COOLDOWN, AND THAT IS THE POINT OF THE OPTION. The other two
-    /// are things a PERSON must fix — answer the prompt, clear the unsent line —
-    /// and they sit in coordinator attention until somebody does. A cooldown is
-    /// normal operation that resolves itself in five minutes. Recording it as
-    /// attention would put a permanent, self-clearing entry in front of the
-    /// operator every time coordination worked correctly, which is how a
-    /// surface that means "something needs you" stops meaning anything.
+    /// Only observed questions and unsent drafts establish a prompt hold.
+    /// Active work, unknown state and policy waits must not invent an operator
+    /// answer. Even a real prompt hold is coordination evidence, not automatic
+    /// permission to escalate to Needs You.
     pub(super) fn refusal_kind(self) -> Option<&'static str> {
         match self {
-            Self::ProviderBusy => Some(swarm_persistence::REFUSAL_DELIVERY_HELD),
+            Self::ProviderAwaitingInput => Some(swarm_persistence::REFUSAL_DELIVERY_HELD),
             Self::PromptHoldsUnsentText => {
                 Some(swarm_persistence::REFUSAL_DELIVERY_HELD_UNSENT_TEXT)
             }
-            Self::RecentDelivery | Self::ProviderPolicy | Self::TaskMessageHold => None,
+            Self::RecentDelivery
+            | Self::ProviderPolicy
+            | Self::TaskMessageHold
+            | Self::ProviderBusy
+            | Self::ProviderStateUnknown => None,
         }
     }
 
@@ -81,9 +83,15 @@ impl DeferralReason {
             Self::TaskMessageHold => format!(
                 "{subject} is queued behind current work or operator engagement; delivery ownership will be rechecked"
             ),
-            Self::ProviderBusy => {
+            Self::ProviderAwaitingInput => {
                 format!("{subject} is waiting for an unanswered prompt in this terminal")
             }
+            Self::ProviderBusy => {
+                format!("{subject} is queued while the provider continues working")
+            }
+            Self::ProviderStateUnknown => format!(
+                "{subject} is queued because the provider's current state could not be determined"
+            ),
             Self::PromptHoldsUnsentText => format!(
                 "{subject} is waiting because this terminal's prompt holds text that was typed but never sent — clear the line to release it"
             ),
@@ -94,6 +102,15 @@ impl DeferralReason {
                 "{subject} is waiting so this terminal is not written to twice in a few minutes; it arrives with anything else that accumulates"
             ),
         }
+    }
+}
+
+pub(super) fn activity_deferral(activity: ProviderActivity) -> Option<DeferralReason> {
+    match activity {
+        ProviderActivity::Active => Some(DeferralReason::ProviderBusy),
+        ProviderActivity::AwaitingOperator => Some(DeferralReason::ProviderAwaitingInput),
+        ProviderActivity::Unknown => Some(DeferralReason::ProviderStateUnknown),
+        ProviderActivity::Resting => None,
     }
 }
 
@@ -502,10 +519,8 @@ fn baseline_from_response(
             ..
         } => {
             let activity = provider_activity::classify_observed_activity(provider, &snapshot);
-            if activity != ProviderActivity::Resting {
-                return Baseline::Refused(TerminalSubmission::Deferred(
-                    DeferralReason::ProviderBusy,
-                ));
+            if let Some(reason) = activity_deferral(activity) {
+                return Baseline::Refused(TerminalSubmission::Deferred(reason));
             }
             if provider_activity::has_open_provider_input(provider, &snapshot) {
                 // OURS, OR SOMEBODY ELSE'S? The refusal below protects the
@@ -1538,6 +1553,90 @@ mod tests {
         (store, worker, session)
     }
 
+    #[test]
+    fn active_work_is_not_an_unanswered_question_and_clears_old_prompt_warnings() {
+        let (store, worker, session) = message_worker_fixture();
+        assert_eq!(activity_deferral(ProviderActivity::Resting), None);
+        assert_eq!(
+            activity_deferral(ProviderActivity::Active),
+            Some(DeferralReason::ProviderBusy)
+        );
+        assert_eq!(
+            activity_deferral(ProviderActivity::Unknown),
+            Some(DeferralReason::ProviderStateUnknown)
+        );
+        assert_eq!(
+            activity_deferral(ProviderActivity::AwaitingOperator),
+            Some(DeferralReason::ProviderAwaitingInput)
+        );
+        for reason in [
+            DeferralReason::ProviderBusy,
+            DeferralReason::ProviderStateUnknown,
+        ] {
+            assert!(reason.refusal_kind().is_none());
+            assert!(!reason.describe("Queen").contains("unanswered"));
+            crate::record_delivery_hold(
+                &store,
+                "test-delivery",
+                worker.id,
+                session,
+                reason,
+                "Queen",
+            );
+        }
+        assert!(
+            store
+                .standing_coordinator_refusals(unix_timestamp(), 0)
+                .unwrap()
+                .is_empty()
+        );
+        crate::record_delivery_hold(
+            &store,
+            "test-delivery",
+            worker.id,
+            session,
+            DeferralReason::ProviderAwaitingInput,
+            "Queen",
+        );
+        assert_eq!(
+            store
+                .standing_coordinator_refusals(unix_timestamp(), 0)
+                .unwrap()
+                .len(),
+            1
+        );
+        // An unavailable observation is not proof that the previously observed question resolved.
+        crate::record_delivery_hold(
+            &store,
+            "test-delivery",
+            worker.id,
+            session,
+            DeferralReason::ProviderStateUnknown,
+            "Queen",
+        );
+        assert_eq!(
+            store
+                .standing_coordinator_refusals(unix_timestamp(), 0)
+                .unwrap()
+                .len(),
+            1
+        );
+        crate::record_delivery_hold(
+            &store,
+            "test-delivery",
+            worker.id,
+            session,
+            DeferralReason::ProviderBusy,
+            "Queen",
+        );
+        assert!(
+            store
+                .standing_coordinator_refusals(unix_timestamp(), 0)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     #[tokio::test]
     async fn task_messages_recheck_unrelated_work_and_engagement_after_claim() {
         use swarm_domain::TaskState;
@@ -2096,7 +2195,7 @@ mod tests {
     /// the operator reads — or one of them silently reintroduces the bug.
     #[test]
     fn the_two_reasons_a_delivery_is_held_do_not_read_the_same() {
-        let busy = DeferralReason::ProviderBusy;
+        let busy = DeferralReason::ProviderAwaitingInput;
         let unsent = DeferralReason::PromptHoldsUnsentText;
 
         assert_ne!(busy.refusal_kind(), unsent.refusal_kind());
