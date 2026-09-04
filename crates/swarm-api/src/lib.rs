@@ -1298,6 +1298,18 @@ impl AppState {
         let (Some(store), Some(client)) = (&self.task_store, &self.terminal_host) else {
             return;
         };
+        // Holding the sole delivery-owner lock proves no prior pass is still
+        // submitting. Any remaining message claim has an unknown outcome; do
+        // not strand the recipient or replay bytes after a cancelled pass or
+        // failed result transaction.
+        match store.recover_task_message_claims(unix_timestamp()) {
+            Ok(0) => {}
+            Ok(_) => self.control_room_notify.notify_waiters(),
+            Err(error) => {
+                tracing::warn!(message = %error, "abandoned message claims could not be recovered");
+                return;
+            }
+        }
         self.run_deterministic_coordinator(store).await;
         self.deliver_decision_outcomes(store, client).await;
         self.deliver_task_briefs(store, client).await;
@@ -2155,6 +2167,7 @@ impl AppState {
             },
         )
         .await;
+        let mut changed = false;
         for (group, submission) in settled {
             use swarm_persistence::TaskMessageResult;
             let result = match submission {
@@ -2164,11 +2177,18 @@ impl AppState {
                 Ok(TerminalSubmission::Uncertain) | Err(_) => TaskMessageResult::Uncertain,
             };
             for claim in group {
-                if let Err(error) = store.finish_task_message(&claim, result, unix_timestamp()) {
-                    tracing::warn!(message = %error, message_id = %claim.message.message_id,
+                match store.finish_task_message(&claim, result, unix_timestamp()) {
+                    Ok(true) => changed |= !matches!(result, TaskMessageResult::Deferred),
+                    Ok(false) => {}
+                    Err(error) => {
+                        tracing::warn!(message = %error, message_id = %claim.message.message_id,
                         "task message claim could not be settled; it must not be replayed");
+                    }
                 }
             }
+        }
+        if changed {
+            self.control_room_notify.notify_waiters();
         }
     }
 

@@ -26,6 +26,19 @@ recorded reason and acknowledgement of duplicate risk. Resolution is not a
 fabricated terminal acknowledgement. The command is fenced by the observed
 claim ID. No elapsed-time threshold promotes this to Needs You; Queen escalates
 only when she cannot move the work within existing authority.
+Uncertain and rejected message deliveries contribute to the existing conductor's
+actionable count and bounded fingerprint (at most 64 delivery identities, never
+their text). A changed claim is new evidence even at the same timestamp. Settled
+deliveries disappear from that input. Existing enablement, active-run, engagement,
+and autonomy gates remain in force; reconciliation requires coordination authority
+during an unattended run. The per-run brief names this recovery responsibility.
+Committed non-deferred delivery results wake control-feed waiters once per batch;
+an unchanged queue or ordinary deferral does not manufacture a refresh event.
+At the beginning of an exclusively owned dispatcher pass, remaining dispatching
+claims are abandoned by the previous owner and become uncertain transactionally
+with a feed event. This also recovers a cancelled pass or failed result save
+without restarting the API. The owner lock, not a timeout, proves the earlier
+pass is no longer submitting. Recovery failure prevents new submissions.
 
 Superseding a linked review request cancels only its queued delivery, in the
 same transaction as the ownership change. Ordinary task questions are not

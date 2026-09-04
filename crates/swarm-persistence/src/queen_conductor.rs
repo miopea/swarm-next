@@ -24,6 +24,7 @@ const MAX_AUTOMATION_ATTEMPTS: i64 = 3;
 /// actionable work, so a genuinely empty board stays quiet.
 const RECHECK_UNCHANGED_BOARD_SECONDS: i64 = 15 * 60;
 const MAX_FINGERPRINT_TASKS: i64 = 256;
+const MAX_FINGERPRINT_MESSAGE_DELIVERIES: i64 = 64;
 const RUN_TIMEOUT_SECONDS: i64 = 60 * 60;
 /// How long an unsettleable uncertain run blocks automation before it is
 /// abandoned in favour of a fresh one.
@@ -701,7 +702,12 @@ fn actionable_count(connection: &rusqlite::Connection) -> Result<i64, rusqlite::
         [],
         |row| row.get(0),
     )?;
-    Ok(task_count + coordination_attention_count)
+    let message_attention_count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM task_message_deliveries WHERE state IN ('uncertain','rejected')",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(task_count + coordination_attention_count + message_attention_count)
 }
 
 fn actionable_fingerprint(
@@ -739,6 +745,23 @@ fn actionable_fingerprint(
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, i64>(3)?
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?,
+    );
+    let mut messages = connection.prepare(
+        "SELECT message_id, claim_id, state, superseded FROM task_message_deliveries
+         WHERE state IN ('uncertain','rejected') ORDER BY updated_at, message_id LIMIT ?1",
+    )?;
+    rows.extend(
+        messages
+            .query_map([MAX_FINGERPRINT_MESSAGE_DELIVERIES], |row| {
+                Ok(format!(
+                    "message:{}:{}:{}:{}",
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, bool>(3)?
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?,
@@ -939,6 +962,113 @@ pub(super) fn migrate_queen_delivery_session(
 mod tests {
     use super::*;
     use swarm_domain::{ProviderKind, TaskActivityActor, TaskPriority, TaskState};
+
+    #[test]
+    fn delivery_exception_alone_requests_queen_review_and_resolution_goes_quiet() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        let worker = store
+            .create_worker("Petal", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        store
+            .bind_worker_session(worker.id, WorkerSessionId::new())
+            .unwrap();
+        let task = store.create_task("Ongoing work", "/workspace").unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(task.id, worker.id).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.set_queen_automation_enabled(true, 100).unwrap();
+        assert_eq!(
+            store.queen_automation_status(100).unwrap().actionable_count,
+            0
+        );
+        let message = store
+            .send_task_message(
+                task.id,
+                crate::MessageEnd::queen(),
+                crate::MessageEnd::worker(worker.id),
+                "Which SHA?",
+                100,
+            )
+            .unwrap();
+        let claim = store.claim_task_messages(100).unwrap().remove(0);
+        store
+            .finish_task_message(&claim, crate::TaskMessageResult::Uncertain, 100)
+            .unwrap();
+        assert_eq!(
+            store.queen_automation_status(100).unwrap().actionable_count,
+            1
+        );
+        assert!(store.observe_queen_automation(100).unwrap());
+        assert!(
+            !store.observe_queen_automation(100).unwrap(),
+            "one run, not a run per observation"
+        );
+        let delivery = store.claim_queen_automation(100).unwrap().unwrap();
+        assert_eq!(delivery.actionable_count, 1);
+        store
+            .complete_queen_automation_delivery(&delivery.run_id, 100)
+            .unwrap();
+        store
+            .reconcile_task_message(&message.id, &claim.claim_id, false, "Read and handled", 100)
+            .unwrap();
+        store
+            .finish_queen_automation_run(&delivery.run_id, QueenAutomationOutcome::Completed, 100)
+            .unwrap();
+        assert_eq!(
+            store.queen_automation_status(100).unwrap().actionable_count,
+            0
+        );
+        assert!(!store.observe_queen_automation(100).unwrap());
+        assert!(
+            !store
+                .observe_queen_automation(100 + RECHECK_UNCHANGED_BOARD_SECONDS)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn delivery_fingerprint_tracks_claim_identity_not_time_or_message_body() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Petal", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        store
+            .bind_worker_session(worker.id, WorkerSessionId::new())
+            .unwrap();
+        let task = store.create_task("Work", "/workspace").unwrap();
+        let message = store
+            .send_task_message(
+                task.id,
+                crate::MessageEnd::queen(),
+                crate::MessageEnd::worker(worker.id),
+                "private message content",
+                100,
+            )
+            .unwrap();
+        let claim = store.claim_task_messages(100).unwrap().remove(0);
+        store
+            .finish_task_message(&claim, crate::TaskMessageResult::Rejected, 100)
+            .unwrap();
+        let first = actionable_fingerprint(&store.connection().unwrap()).unwrap();
+        assert!(!first.0.contains("private message content"));
+        store
+            .reconcile_task_message(&message.id, &claim.claim_id, true, "Retry explicitly", 100)
+            .unwrap();
+        let retry = store.claim_task_messages(100).unwrap().remove(0);
+        store
+            .finish_task_message(&retry, crate::TaskMessageResult::Rejected, 100)
+            .unwrap();
+        let next = actionable_fingerprint(&store.connection().unwrap()).unwrap();
+        assert_eq!(first.1, next.1);
+        assert_ne!(
+            first.0, next.0,
+            "same time and count, different failed attempt"
+        );
+    }
 
     #[test]
     fn review_hold_tracks_its_run_not_the_queens_general_activity() {

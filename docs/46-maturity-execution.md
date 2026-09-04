@@ -6,6 +6,39 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: connect delivery recovery to unattended Queen work
+
+- Delivery exceptions now contribute to the existing conductor's actionable
+  count and bounded fingerprint: up to 64 exact message/claim/state identities,
+  without message bodies. A failure can request review even when no task needs
+  triage; a new failed claim is new evidence at the same timestamp. Resolving
+  the last exception returns an otherwise quiet board to silence.
+- The per-run brief explicitly gives Queen responsibility for inspecting and
+  reconciling these exceptions. The MCP command requires Coordinate authority
+  during unattended runs, rather than falling through to Advise. Existing
+  enablement, active-run, operator engagement, and provider gates remain intact.
+- Successful non-deferred result transactions notify existing control-feed
+  waiters once per batch. Unchanged queues and ordinary deferrals cause no
+  synthetic refresh notification. Reconciliation already notifies on its path.
+- The public dispatcher holds its existing exclusive owner lock before marking
+  abandoned message claims uncertain. This recovers cancellation or failed result
+  saves on the next pass without restarting the API or replaying bytes. Recovery
+  and its feed event commit together; failure prevents further submissions.
+  Another live owner keeps its claim: elapsed time alone authorizes no recovery.
+- All 39 Linux conductor/message persistence tests and 96 Linux API/MCP/
+  coordination/reload-guard tests passed. Coverage includes an exception-only
+  automatic review, resolution returning to quiet, same-time changed claims,
+  advisory refusal versus coordination permission, immediate feed notification,
+  no wakeup for an unchanged queue, and exclusive-owner recovery through the
+  public dispatcher. Strict all-target/all-feature Linux Clippy and formatting
+  passed after correcting a semicolon lint. Diff checks passed.
+- This closes the prior entry's trigger/feed wiring follow-up, not overnight
+  provider acceptance. A test run made before the new persistence harness was
+  rebuilt was not counted as evidence for the new cases; the 39-test final run
+  includes both new conductor regressions.
+- No schema or tool-surface change. No push, deployment, release, or live worker
+  interruption. All phase-level real-device and soak gates remain open.
+
 ### P4: durable task-message ownership and Queen reconciliation
 
 - ADR 0067 / schema 134 adds a transactional message outbox, admission capped at

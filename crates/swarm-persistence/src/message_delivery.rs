@@ -204,16 +204,28 @@ impl TaskStore {
         Ok(changed == 1)
     }
 
-    /// Startup recovery never guesses whether an interrupted write reached a PTY.
+    /// Recovery never guesses whether an interrupted write reached a PTY.
+    /// Call only at startup or while holding the exclusive delivery-owner lock,
+    /// before a new pass submits anything. Never recover a live owner's claim.
     ///
     /// # Errors
     /// Returns database errors; no age-based retry is performed.
     pub fn recover_task_message_claims(&self, now: i64) -> Result<usize, TaskStoreError> {
-        Ok(self.connection()?.execute(
+        let mut connection = self.connection()?;
+        let tx = connection.transaction()?;
+        let changed = tx.execute(
             "UPDATE task_message_deliveries SET state = 'uncertain', updated_at = ?1
              WHERE state = 'dispatching'",
             [now],
-        )?)
+        )?;
+        if changed > 0 {
+            crate::insert_control_room_event(
+                &tx,
+                swarm_domain::ControlRoomEventKind::TasksChanged,
+            )?;
+        }
+        tx.commit()?;
+        Ok(changed)
     }
 
     /// Explicit reconciliation after Queen inspects durable message content.

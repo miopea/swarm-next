@@ -651,9 +651,10 @@ impl ServerHandler for AgentMcp {
         let arguments = Value::Object(request.arguments.unwrap_or_default());
         if self.principal.role == WorkerRole::Queen {
             let action = match request.name.as_ref() {
-                "swarm_create_task" | "swarm_assign_task" | "swarm_transition_task" => {
-                    QueenActionClass::Coordinate
-                }
+                "swarm_create_task"
+                | "swarm_assign_task"
+                | "swarm_transition_task"
+                | "swarm_reconcile_task_message" => QueenActionClass::Coordinate,
                 "swarm_create_apiary_task"
                 | "swarm_claim_apiary_task"
                 | "swarm_send_apiary_task_to_worker"
@@ -5025,6 +5026,70 @@ mod tests {
                 .delivered_at
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn unattended_message_reconciliation_respects_the_coordination_ceiling() {
+        use swarm_domain::{QueenAutonomyLevel, QueenAutonomyPolicy, WorkerSessionId};
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        let now = now_seconds();
+        let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        store
+            .bind_worker_session(queen_id, WorkerSessionId::new())
+            .unwrap();
+        store
+            .bind_worker_session(worker_id, WorkerSessionId::new())
+            .unwrap();
+        let task = store
+            .create_task("Recover message", "/workspace/petal")
+            .unwrap();
+        let message = store
+            .send_task_message(
+                task.id,
+                swarm_persistence::MessageEnd::queen(),
+                swarm_persistence::MessageEnd::worker(worker_id),
+                "Which SHA?",
+                now,
+            )
+            .unwrap();
+        let claim = store.claim_task_messages(now).unwrap().remove(0);
+        store
+            .finish_task_message(&claim, swarm_persistence::TaskMessageResult::Uncertain, now)
+            .unwrap();
+        store.request_queen_automation_run(now).unwrap();
+        let run = store.claim_queen_automation(now).unwrap().unwrap();
+        store
+            .complete_queen_automation_delivery(&run.run_id, now)
+            .unwrap();
+        let args = json!({"message_id": message.id, "claim_id": claim.claim_id,
+            "retry_may_duplicate": false, "reason": "Retrieved and handled"});
+        for (level, allowed) in [
+            (QueenAutonomyLevel::Advisory, false),
+            (QueenAutonomyLevel::Coordinate, true),
+        ] {
+            store
+                .set_queen_autonomy_policy(
+                    QueenAutonomyPolicy {
+                        at_hive: level,
+                        away: level,
+                        night_watch: level,
+                    },
+                    now,
+                )
+                .unwrap();
+            let response = call_review_test_tool(
+                bridge.clone(),
+                &token,
+                "swarm_reconcile_task_message",
+                args.clone(),
+            )
+            .await;
+            assert_eq!(response["result"]["isError"], !allowed);
+            assert_eq!(
+                store.task_message_attention().unwrap().total,
+                usize::from(!allowed)
+            );
+        }
     }
 
     #[tokio::test]
