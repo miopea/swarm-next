@@ -6,6 +6,22 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P1: report the timing boundary actually measured
+
+- Shared labels now call the legacy `terminal_render` aggregate Terminal apply
+  latency, not Terminal paint. Its wire/storage key and historic measurements
+  remain unchanged. The explanation distinguishes queueing/parsing/snapshot
+  setup from confirmed pixels. Navigation is labeled an animation-frame estimate;
+  neither measurement is tab CPU. Cold-return evidence likewise says applied,
+  not painted, and does not establish input ownership.
+- Six focused current/saved-history tests passed and the web build passed before
+  the final cold-return copy-only adjustment. Edge's isolated Developer Dogfood
+  harness verified both current labels and expanded saved history; the final
+  cold-return wording was present at an observed 390x844 with no horizontal
+  overflow. These are DOM/layout checks, not real-device or paint-latency proof.
+- Used the existing no-proxy fixture server, reset the browser viewport and
+  closed the owned test tab. No live worker, push, deployment or release changes.
+
 ### P2/P3: retire terminal work when its view is suspended
 
 - Found a switching race: suspension dropped newly arriving frames but did not

@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { fetchBrowserEvidence, type BrowserEvidenceHour, type EvidenceTiming } from "../api";
 import { BROWSER_METRICS } from "../runtime/browserPerformance";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
+import { browserTimingLabels, browserTimingLimitations } from "./browserTimingLabels";
 
 export function summarizeBrowserEvidence(captures: BrowserEvidenceHour[]) {
   const builds = new Map<string, { build: string; captures: number; first: number; last: number;
@@ -25,9 +26,6 @@ export function summarizeBrowserEvidence(captures: BrowserEvidenceHour[]) {
   }
   return [...builds.values()].sort((a, b) => b.last - a.last);
 }
-
-const labels = { long_task: "Main-thread blocks", interaction: "Interaction latency", route: "Navigation paint",
-  terminal_render: "Terminal paint", terminal_reconnect: "Terminal connection" };
 
 export default function SavedBrowserEvidence({ operatorToken }: { operatorToken: string }) {
   const [captures, setCaptures] = useState<BrowserEvidenceHour[]>();
@@ -55,8 +53,9 @@ export default function SavedBrowserEvidence({ operatorToken }: { operatorToken:
       <p>UTC hours: {new Date(summary.first * 1000).toISOString().slice(0, 16)} to {new Date(summary.last * 1000).toISOString().slice(0, 16)}</p>
       <ul>{BROWSER_METRICS.map((metric) => {
         const timing = summary.metrics[metric];
-        return <li key={metric}>{labels[metric]}: {timing.count ? `${timing.count} samples · mean ${Math.round(timing.total_ms / timing.count)} ms · max ${timing.max_ms} ms` : "No samples"}</li>;
+        return <li key={metric}>{browserTimingLabels[metric]}: {timing.count ? `${timing.count} samples · mean ${Math.round(timing.total_ms / timing.count)} ms · max ${timing.max_ms} ms` : "No samples"}</li>;
       })}</ul>
+      <p>{browserTimingLimitations}</p>
     </details>)}
     <p>These captures may mix devices and workloads. Means and maxima are not p95, and a difference between builds does not establish its cause. Compare equivalent workloads before judging a regression.</p>
     <button type="button" onClick={() => void refresh()}>Refresh saved history</button>

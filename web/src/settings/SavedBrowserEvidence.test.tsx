@@ -22,6 +22,8 @@ test("failed refresh retains saved evidence with unavailable status", async () =
     .mockRejectedValueOnce(new Error("offline"));
   render(<SavedBrowserEvidence operatorToken="token" />);
   expect(await screen.findByText("build-a · 1 capture")).toBeInTheDocument();
+  expect(screen.getByText("Terminal apply latency: No samples")).toBeInTheDocument();
+  expect(screen.getByText(/not confirmed screen paint/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Refresh saved history" }));
   expect(await screen.findByRole("status")).toHaveTextContent("unavailable");
   expect(screen.getByText("build-a · 1 capture")).toBeInTheDocument();

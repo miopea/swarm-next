@@ -4,11 +4,7 @@ import type { DogfoodCollectionStatus } from "../runtime/useDogfoodCollection";
 import SavedBrowserEvidence from "./SavedBrowserEvidence";
 import { BROWSER_METRICS, readBrowserPerformance } from "../runtime/browserPerformance";
 import { terminalWorkspace } from "../terminal/TerminalWorkspace";
-
-const labels = {
-  long_task: "Main-thread blocks", interaction: "Interaction latency", route: "Navigation paint",
-  terminal_render: "Terminal paint", terminal_reconnect: "Terminal connection",
-};
+import { browserTimingLabels, browserTimingLimitations } from "./browserTimingLabels";
 
 export default function DeveloperDogfoodWorkspace({ runtime, version, reachable, collection, operatorToken }: {
   runtime: DevelopmentRuntime | undefined; version: string | undefined; reachable: boolean;
@@ -43,9 +39,10 @@ export default function DeveloperDogfoodWorkspace({ runtime, version, reachable,
       const count = samples.reduce((sum, sample) => sum + sample.count, 0);
       const total = samples.reduce((sum, sample) => sum + sample.total_ms, 0);
       const maximum = samples.reduce((max, sample) => Math.max(max, sample.max_ms), 0);
-      return <li key={metric}>{labels[metric]}: {count ? `${count} samples · mean ${Math.round(total / count)} ms · max ${Math.round(maximum)} ms` : "No samples"}</li>;
+      return <li key={metric}>{browserTimingLabels[metric]}: {count ? `${count} samples · mean ${Math.round(total / count)} ms · max ${Math.round(maximum)} ms` : "No samples"}</li>;
     })}</ul>
     <p>Means and maxima are not percentiles. Missing samples do not establish a healthy session.</p>
+    <p>{browserTimingLimitations}</p>
     <h4>Private hourly history</h4>
     <p>{collection?.state === "collecting" ? "Collecting while this page is visible, including outside Settings. Uploads use this browser bundle’s build identity." : collection?.state === "unavailable" ? "History upload is unavailable. Pending evidence is bounded and will retry while visible." : "History collection is not enabled; it requires a development Hive and a stamped browser build."}</p>
     <p>{collection?.dropped_samples ?? 0} samples dropped · {collection?.pruned_captures ?? 0} server captures pruned during this collection.</p>
@@ -61,10 +58,10 @@ export default function DeveloperDogfoodWorkspace({ runtime, version, reachable,
       setColdRestores(terminalWorkspace.coldRestoreEvidence);
     }}>{retention.limit === undefined ? "Try five-renderer pool" : "Stop warm-pool experiment"}</button>
     <p>{retention.retained} retained · {retention.attached} attached · {retention.inactive} inactive · {retention.evictions} evicted</p>
-    <p>Cold view rendered: {coldRestores.samples ? `${coldRestores.samples} ${coldRestores.samples === 1 ? "sample" : "samples"} · p95 ${Math.round(coldRestores.p95_ms!)} ms · max ${Math.round(coldRestores.max_ms!)} ms` : "No completed samples"}.</p>
+    <p>Cold view applied: {coldRestores.samples ? `${coldRestores.samples} ${coldRestores.samples === 1 ? "sample" : "samples"} · p95 ${Math.round(coldRestores.p95_ms!)} ms · max ${Math.round(coldRestores.max_ms!)} ms` : "No completed samples"}.</p>
     {coldRestores.samples > 0 && coldRestores.samples < 20 && <small>Small sample set — not enough for a rollout decision.</small>}
     <p>{coldRestores.started} attempted · {coldRestores.pending} pending · {coldRestores.interrupted} hidden or abandoned · {coldRestores.failed} failed</p>
-    <small>Nearest-rank p95 of up to 200 completed cold returns from the last hour. Measures view attachment through rendered connection, not input ownership. Tracks only the last 64 evicted sessions; first visits are excluded. Failures and interrupted attempts are not included in p95. A new experiment resets these results.</small>
+    <small>Nearest-rank p95 of up to 200 completed cold returns from the last hour. Measures view attachment through snapshot application, not confirmed screen paint or input ownership. Tracks only the last 64 evicted sessions; first visits are excluded. Failures and interrupted attempts are not included in p95. A new experiment resets these results.</small>
     <small>Stopping keeps already-evicted views cold until opened. Attached views are never evicted; a handoff can briefly exceed the limit.</small>
     <p>{evidence.current.incidents.length} retained incidents. {evidence.before_reload ? "Before-reload evidence is available." : "No before-reload evidence available."}</p>
     <button type="button" onClick={() => { setEvidence(readBrowserPerformance()); setRetention(terminalWorkspace.rendererRetention); setColdRestores(terminalWorkspace.coldRestoreEvidence); }}>Refresh evidence</button>
