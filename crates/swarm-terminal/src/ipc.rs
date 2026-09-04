@@ -28,8 +28,8 @@ use crate::{
 // the binary from the release the RUNNING host came from, so the drain stays
 // version-matched to itself and a newer checkout cannot break the update that
 // carries it.
-// Protocol 12 adds authenticated, process-scoped provider startup observations.
-pub const PROTOCOL_VERSION: u16 = 12;
+// Protocol 13 adds authenticated interactive-resume boundaries.
+pub const PROTOCOL_VERSION: u16 = 13;
 pub const TERMINAL_CONTROL_PROTOCOL_VERSION: u16 = 11;
 pub const MAX_CONTROL_INPUT_BYTES: usize = 64 * 1024;
 pub const MAX_REQUEST_BYTES: u64 = 256 * 1024;
@@ -279,6 +279,11 @@ pub enum HostRequest {
         capability: ProviderLifecycleCapability,
         observation: crate::ProviderSessionStartObservation,
     },
+    ProviderResumeEnd {
+        session_id: WorkerSessionId,
+        capability: ProviderLifecycleCapability,
+        previous: swarm_domain::ProviderConversationId,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -351,6 +356,8 @@ pub struct HostSessionSummary {
     /// the current worker binding and recovery attempt before durable updates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_start: Option<crate::ProviderSessionStartObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_selection: Option<swarm_domain::ProviderConversationSelection>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -572,6 +579,7 @@ mod tests {
             "wait_controlled",
             "stop",
             "provider_session_start",
+            "provider_resume_end",
         ];
         let error = serde_json::from_value::<HostRequest>(serde_json::json!({
             "type": "a_request_that_does_not_exist"
@@ -593,8 +601,8 @@ mod tests {
              anyone -- bump it, then update this list."
         );
         assert_eq!(
-            PROTOCOL_VERSION, 12,
-            "the pinned surface above belongs to protocol 12; if you changed \
+            PROTOCOL_VERSION, 13,
+            "the pinned surface above belongs to protocol 13; if you changed \
              the requests, this number moves with them"
         );
     }
@@ -627,6 +635,19 @@ mod tests {
             observation.kind,
             swarm_domain::ProviderSessionStartKind::Resumed
         );
+    }
+
+    #[test]
+    fn resume_boundary_capability_is_redacted_and_round_trips() {
+        let request = HostRequest::ProviderResumeEnd {
+            session_id: WorkerSessionId::new(),
+            capability: ProviderLifecycleCapability([173; 32]),
+            previous: swarm_domain::ProviderConversationId::new(),
+        };
+        assert!(!format!("{request:?}").contains("[173,"));
+        let wire = serde_json::to_value(&request).unwrap();
+        let decoded: HostRequest = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), wire);
     }
 
     #[test]
@@ -673,7 +694,7 @@ mod tests {
             variants,
             ["status", "claim", "renew", "release", "input", "resize"]
         );
-        assert_eq!(PROTOCOL_VERSION, 12);
+        assert_eq!(PROTOCOL_VERSION, 13);
     }
 
     #[test]

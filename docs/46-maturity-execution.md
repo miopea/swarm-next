@@ -6,6 +6,24 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2: versioned interactive-resume transport
+
+- Engine protocol 13 adds the authenticated ProviderResumeEnd request and exposes
+  optional current selection/revision in session summaries. The process wrapper
+  checks child liveness and revokes stopped/exited capability access before arming
+  a resume boundary. Original startup evidence remains separate and immutable.
+- Future Claude settings now include a resume-only SessionEnd hook alongside
+  SessionStart. The end helper has one second for stdin plus IPC, within the
+  provider's default end-hook budget; both modes preflight protocol 13. Older
+  and unknown hosts receive no speculative capability request. No new retry.
+- Eight native IPC tests passed, including request/version pins, compatibility
+  and capability redaction. Strict Linux-target API/terminal/host all-target/all-
+  feature Clippy passed. Extended Unix fixtures compile for paired selection,
+  revision exposure and stopped-process refusal; real Linux execution is pending.
+- Durable selection-revision reconciliation and provider-order acceptance remain
+  open. This requires a safe engine upgrade when deployed; none was performed.
+  No live hook installation, worker interruption, push, deployment or release.
+
 ### P2: paired interactive conversation selection rules
 
 - Rechecked Claude's official hook reference: interactive /resume supplies a

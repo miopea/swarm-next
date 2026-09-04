@@ -514,6 +514,21 @@ fn dispatch_blocking(
     request: HostRequest,
 ) -> HostResponse {
     let result = match request {
+        HostRequest::ProviderResumeEnd {
+            session_id,
+            capability,
+            previous,
+        } => registry
+            .get(session_id)
+            .and_then(|session| session.observe_resume_end(&capability.0, previous))
+            .map_err(|_| "provider resume boundary unavailable".to_owned())
+            .and_then(|accepted| {
+                if accepted {
+                    Ok(HostResponse::Acknowledged)
+                } else {
+                    Err("provider resume boundary refused".to_owned())
+                }
+            }),
         HostRequest::ProviderSessionStart {
             session_id,
             capability,
@@ -671,6 +686,7 @@ fn dispatch_blocking(
                         last_output_at: Some(state.last_output_at),
                         recovery_attempt: state.recovery_attempt,
                         provider_start: state.provider_start,
+                        provider_selection: state.provider_selection,
                     })
                     .collect(),
             })

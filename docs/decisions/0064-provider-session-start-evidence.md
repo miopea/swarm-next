@@ -52,7 +52,7 @@ selection, applies the domain recovery result and commits the receipt, resulting
 pin and activity event together. Repeated observations do not rewrite settled
 results. Only engine-owned authenticated attempts are eligible for rehydration;
 impossible ladder positions are rejected. No task input is replayed.
-The protocol-12 engine generates a separate private startup-settings overlay for
+The protocol-13 engine generates a separate private startup-settings overlay for
 future Claude starts with Swarm MCP configuration. It merges existing grants first,
 then appends an idempotent SessionStart command hook using the current engine
 executable (shell-quoted), including when there are no grants. Existing hooks,
@@ -70,9 +70,12 @@ selection revision without replacing immutable startup evidence. A mismatched en
 or unpaired different start does not authorize a pin update. Revisions order
 accepted engine evidence, not undocumented provider timestamps. Old-to-new-to-old
 selection is legitimate when each transition has its own matched boundary.
-The 2026-09-04 hook reference documents a default 1.5-second SessionEnd timeout;
-transport integration must fit that bound or explicitly configure it, never rely
-on eventual retries. Missing/reordered lifecycle evidence remains unconfirmed, not
-proof that no switch occurred. End transport, revised selection persistence and
-actual provider ordering acceptance remain open, along with complete fallback.
-The state machine and parser alone do not complete /resume integration or P2.
+Protocol 13 adds ProviderResumeEnd and optional selected-conversation revisions in
+session summaries. The engine validates the same live-child capability boundary.
+Future worker settings include a resume-only SessionEnd hook. Its helper shares
+the bounded stdin/IPC implementation but has a one-second overall deadline, within
+the provider's documented default 1.5-second end-hook budget. Both helper modes
+preflight protocol 13 and refuse older/unknown versions before sending secrets.
+Missing/reordered lifecycle evidence remains unconfirmed, not proof that no switch
+occurred. Revised selection persistence and actual provider ordering acceptance
+remain open, along with complete fallback; P2 is not complete.

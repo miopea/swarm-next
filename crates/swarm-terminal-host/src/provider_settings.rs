@@ -34,6 +34,21 @@ fn add_hook(document: &mut Value, executable: &Path) -> Result<(), String> {
     if !starts.contains(&entry) {
         starts.push(entry);
     }
+    let ends = hooks
+        .as_object_mut()
+        .ok_or("hooks are not an object")?
+        .entry("SessionEnd")
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .ok_or("SessionEnd is not an array")?;
+    let command = format!(
+        "'{}' provider-resume-end",
+        executable.replace('\'', "'\\''")
+    );
+    let entry = json!({"matcher":"resume", "hooks":[{"type":"command","command":command}]});
+    if !ends.contains(&entry) {
+        ends.push(entry);
+    }
     Ok(())
 }
 
@@ -102,6 +117,7 @@ mod tests {
         assert_eq!(document["hooks"]["Stop"], original["hooks"]["Stop"]);
         let starts = document["hooks"]["SessionStart"].as_array().unwrap();
         assert_eq!(starts.len(), 2);
+        assert_eq!(document["hooks"]["SessionEnd"].as_array().unwrap().len(), 1);
         assert_eq!(starts[0], original["hooks"]["SessionStart"][0]);
         assert_eq!(
             starts[1]["hooks"][0]["command"],

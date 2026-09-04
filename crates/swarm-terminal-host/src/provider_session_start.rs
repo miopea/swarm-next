@@ -15,7 +15,7 @@ use swarm_terminal::{
 };
 
 const DEADLINE: Duration = Duration::from_secs(3);
-const STARTUP_PROTOCOL: u16 = 12;
+const STARTUP_PROTOCOL: u16 = 13;
 
 fn unavailable() -> io::Error {
     io::Error::other("provider startup evidence unavailable")
@@ -74,8 +74,15 @@ fn read_input(input: &mut (impl Read + AsFd), deadline: Instant) -> io::Result<V
     }
 }
 
-pub async fn run() -> io::Result<()> {
-    let deadline = Instant::now() + DEADLINE;
+pub async fn run(resume_end: bool) -> io::Result<()> {
+    // SessionEnd has a provider-owned 1.5-second budget. Finish within one
+    // second rather than extending that budget or keeping shutdown waiting.
+    let deadline = Instant::now()
+        + if resume_end {
+            Duration::from_secs(1)
+        } else {
+            DEADLINE
+        };
     let (session_id, capability) = identity(
         &env::var("SWARM_PROVIDER_SESSION").map_err(|_| unavailable())?,
         &env::var("SWARM_PROVIDER_START_CAPABILITY").map_err(|_| unavailable())?,
@@ -87,14 +94,21 @@ pub async fn run() -> io::Result<()> {
         .try_clone_to_owned()
         .map_err(|_| unavailable())?;
     let input = read_input(&mut std::fs::File::from(descriptor), deadline)?;
-    let observation = read_claude_session_start(&input).ok_or_else(unavailable)?;
     let socket = env::var_os("SWARM_TERMINAL_SOCKET")
         .map_or_else(default_terminal_socket_path, PathBuf::from);
     let client = HostClient::new(socket);
-    let request = HostRequest::ProviderSessionStart {
-        session_id,
-        capability,
-        observation,
+    let request = if resume_end {
+        HostRequest::ProviderResumeEnd {
+            session_id,
+            capability,
+            previous: swarm_terminal::read_claude_resume_end(&input).ok_or_else(unavailable)?,
+        }
+    } else {
+        HostRequest::ProviderSessionStart {
+            session_id,
+            capability,
+            observation: read_claude_session_start(&input).ok_or_else(unavailable)?,
+        }
     };
     send_until(&client, &request, deadline).await
 }
@@ -224,7 +238,7 @@ mod tests {
             io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
             net::UnixListener,
         };
-        for protocol_version in [11, 13] {
+        for protocol_version in [11, 12, 14] {
             let directory = tempfile::tempdir().unwrap();
             let socket = directory.path().join("engine.sock");
             let listener = UnixListener::bind(&socket).unwrap();

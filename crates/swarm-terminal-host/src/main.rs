@@ -14,7 +14,10 @@ mod provider_session_start;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if env::args().nth(1).as_deref() == Some("provider-session-start") {
-        return provider_session_start::run().await.map_err(Into::into);
+        return provider_session_start::run(false).await.map_err(Into::into);
+    }
+    if env::args().nth(1).as_deref() == Some("provider-resume-end") {
+        return provider_session_start::run(true).await.map_err(Into::into);
     }
     if env::args().nth(1).as_deref() == Some("mcp-proxy") {
         return mcp_proxy::run().await.map_err(Into::into);

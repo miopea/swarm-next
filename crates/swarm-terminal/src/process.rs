@@ -122,6 +122,7 @@ pub struct SessionResourceState {
     pub last_output_at: i64,
     pub recovery_attempt: Option<ConversationRecoveryAttempt>,
     pub provider_start: Option<crate::ProviderSessionStartObservation>,
+    pub provider_selection: Option<swarm_domain::ProviderConversationSelection>,
 }
 
 /// Seconds since the Unix epoch, saturating rather than panicking on a clock
@@ -335,6 +336,37 @@ impl ProcessTerminalSession {
         Ok(lock(&self.provider_lifecycle)?
             .as_ref()
             .and_then(crate::ProviderLifecycleGate::observation))
+    }
+
+    /// Returns the latest accepted selection revision for this process.
+    /// # Errors
+    /// Returns an error if the lifecycle lock is poisoned.
+    pub fn provider_selection(
+        &self,
+    ) -> Result<Option<swarm_domain::ProviderConversationSelection>, SessionRegistryError> {
+        Ok(lock(&self.provider_lifecycle)?
+            .as_ref()
+            .and_then(crate::ProviderLifecycleGate::selection))
+    }
+
+    /// Arms an interactive-resume boundary only for this still-live process.
+    /// # Errors
+    /// Returns lock or process-status errors without exposing capability data.
+    pub fn observe_resume_end(
+        &self,
+        capability: &[u8; 32],
+        previous: swarm_domain::ProviderConversationId,
+    ) -> Result<bool, SessionRegistryError> {
+        let mut child = lock(&self.child)?;
+        let mut gate = lock(&self.provider_lifecycle)?;
+        let Some(gate) = gate.as_mut() else {
+            return Ok(false);
+        };
+        if child.try_wait().map_err(terminal_error)?.is_some() {
+            gate.revoke();
+            return Ok(false);
+        }
+        Ok(gate.begin_resume(self.id, capability, previous))
     }
 
     /// Accepts startup evidence only while the bound provider process is live.
@@ -1209,6 +1241,7 @@ impl SessionRegistry {
                     last_output_at: session.last_output_at(),
                     recovery_attempt: session.recovery_attempt(),
                     provider_start: session.provider_start()?,
+                    provider_selection: session.provider_selection()?,
                 })
             })
             .collect()
@@ -1958,7 +1991,32 @@ mod tests {
             registry.session_resource_states().unwrap()[0].provider_start,
             Some(observation)
         );
+        assert!(
+            session
+                .observe_resume_end(&[173; 32], observation.conversation)
+                .unwrap()
+        );
+        let switched = crate::ProviderSessionStartObservation {
+            conversation: swarm_domain::ProviderConversationId::new(),
+            ..observation
+        };
+        assert_eq!(
+            session
+                .observe_provider_start(&[173; 32], switched)
+                .unwrap(),
+            crate::ProviderLifecycleAcceptance::ConversationChanged
+        );
+        let selection = registry.session_resource_states().unwrap()[0]
+            .provider_selection
+            .unwrap();
+        assert_eq!(selection.revision, 2);
+        assert_eq!(selection.conversation, switched.conversation);
         registry.stop(session.id()).unwrap();
+        assert!(
+            !session
+                .observe_resume_end(&[173; 32], switched.conversation)
+                .unwrap()
+        );
         assert_eq!(session.provider_start().unwrap(), Some(observation));
         assert_eq!(
             session
