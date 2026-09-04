@@ -12,6 +12,43 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.5.0
+
+⚠️ **This release migrates your database (schema 124).** A tarball install is not
+covered by the backup guard, so copy `swarm.sqlite3` before upgrading.
+
+### New features
+- Reporting a bug about Swarm now works on a fresh install. Every release before
+  this one shipped without the credential that files the report, so the dialog
+  told you to obtain a GitHub token yourself — on a packaged release, which is
+  exactly what it was meant to spare you.
+- Ops tickets: a scoped, durable intake with deployment progress, reachable over
+  MCP under an integration identity.
+- A resolved decision now says whether the thing it authorised has actually
+  happened, so a ruling nobody carried out stops reading like one that was.
+- Work you have reviewed that is waiting on a ruling is filed as yours rather
+  than Queen's, so it stops sitting in a queue nobody owns.
+
+### Fixes
+- "What needs you" no longer lists workers that have never run. Five of eight
+  rows were workers with no conversation history at all, which is the ordinary
+  state of a worker that has never started and nothing you could act on.
+- A project directory Swarm cannot read is now reported as a fault instead of
+  disappearing among those never-run workers. It is a permissions problem and
+  the one case in that group somebody can fix.
+- The queues screen scrolls.
+- Claiming that a task had nothing to deploy now requires saying what it built
+  first — an empty list is a valid answer. Previously reporting your commits was
+  the only way to get that claim refused, and staying silent always passed.
+- Approving such a claim when none was recorded now says the claim is missing
+  rather than blaming the reason you wrote.
+- The engine-behind notice says that a background timer will install it without
+  asking, how many sessions it costs, and that workers do not come back.
+- Decision and task records are each read through one projection, so a missing
+  column fails loudly instead of returning a plausible wrong answer.
+- Both dependency-audit checks now fail on findings rather than on a registry
+  outage or a toolchain that will not build.
+
 ## 1.4.1
 
 **Swarm stopped guessing whether Claude still has a worker's conversation, and
