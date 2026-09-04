@@ -54,6 +54,18 @@ matter. Individual answer text is capped at 16 KiB without trimming or truncatio
 This is a payload bound, not the remaining durable retention budget. Shared domain
 question validation also governs the existing persistence creation path.
 
+Schema 130 introduces the initial private receipt store. Admission is capped at
+4,096 records and 16 MiB of combined question/answer payload; IDs and metadata
+are additionally bounded by the row count. On admission, resolved-decision
+receipts older than 90 days expire. Open-decision evidence remains pinned and
+exhaustion rejects new evidence explicitly without changing terminal delivery.
+This is admission-time retention, not a periodic deletion guarantee. The initial
+write path stores only confirmed consumption, verifies the local decision and
+active worker/session binding, and never resolves or queues another delivery.
+Exact ID retries are idempotent, even after a session ends. This store is not
+exposed to agents; authenticating source and consuming evidence remain separate
+integration work. Downgrade requires a compatible pre-migration database backup.
+
 Verification reads return the statement and its scope, evidence status, and exact
 decision link when present. A full ID is required; no prefix lookup. Verified
 origin never expands the action authorized by the actual words. Preserve ADR 0054's

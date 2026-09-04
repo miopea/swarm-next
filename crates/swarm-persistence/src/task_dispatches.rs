@@ -787,7 +787,7 @@ mod tests {
             .connection()
             .unwrap()
             .execute_batch(
-                "ALTER TABLE task_dispatches DROP COLUMN generation; PRAGMA user_version = 128;",
+                "DROP TABLE operator_statements; ALTER TABLE task_dispatches DROP COLUMN generation; PRAGMA user_version = 128;",
             )
             .unwrap();
         drop(store);
@@ -798,7 +798,10 @@ mod tests {
             .remove(0);
         assert_eq!(dispatch.generation, 0);
         assert_eq!(dispatch.task_id, task.id);
-        assert_eq!(reopened.schema_version().unwrap(), 129);
+        assert_eq!(
+            reopened.schema_version().unwrap(),
+            crate::CURRENT_SCHEMA_VERSION
+        );
     }
 
     #[test]

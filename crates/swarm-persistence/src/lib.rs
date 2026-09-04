@@ -86,6 +86,8 @@ pub use migration::{
 };
 mod conversation_recovery;
 mod dogfood_evidence;
+mod operator_statements;
+pub use operator_statements::OperatorStatementError;
 mod night_watch;
 pub use dogfood_evidence::{EvidenceError, EvidenceWrite};
 mod passkeys;
@@ -208,7 +210,8 @@ const DOGFOOD_EVIDENCE_SCHEMA_VERSION: i64 = 126;
 const CONVERSATION_RECOVERY_SCHEMA_VERSION: i64 = 127;
 const CONVERSATION_SELECTION_SCHEMA_VERSION: i64 = 128;
 const TASK_DISPATCH_GENERATION_SCHEMA_VERSION: i64 = 129;
-const CURRENT_SCHEMA_VERSION: i64 = TASK_DISPATCH_GENERATION_SCHEMA_VERSION;
+const OPERATOR_STATEMENTS_SCHEMA_VERSION: i64 = 130;
+const CURRENT_SCHEMA_VERSION: i64 = OPERATOR_STATEMENTS_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -3706,7 +3709,8 @@ fn migrate_maturity_schema_steps(
     dogfood_evidence::migrate(transaction, schema_version)?;
     conversation_recovery::migrate(transaction, schema_version)?;
     conversation_recovery::migrate_selection(transaction, schema_version)?;
-    task_dispatches::migrate_generation(transaction, schema_version)
+    task_dispatches::migrate_generation(transaction, schema_version)?;
+    operator_statements::migrate(transaction, schema_version)
 }
 
 /// Work closed for a reason other than success gets its own state.

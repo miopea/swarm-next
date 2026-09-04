@@ -72,6 +72,16 @@ impl OperatorAnswerEvidence {
         &self.text
     }
 
+    #[must_use]
+    pub fn target(&self) -> &OperatorAnswerTarget {
+        &self.target
+    }
+
+    #[must_use]
+    pub fn consumption(&self) -> OperatorAnswerConsumption {
+        self.consumption
+    }
+
     /// An existing answer is compared exactly, never semantically. A result of
     /// `ResolveConsumed` must be committed with its evidence in one transaction,
     /// without another answer delivery to the originating worker.

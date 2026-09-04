@@ -6,6 +6,28 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: durable bounded operator statement storage
+
+- Schema 130 adds private confirmed-answer receipts with immutable ID, local
+  operator, worker/session, exact question/answer, and recorded time. Exact retries
+  are idempotent after session end; conflicting IDs, unconfirmed input, changed
+  questions, and inactive bindings are rejected. No decision is resolved or input
+  replayed by this write path. No agent/API write route is exposed yet.
+- Admission is bounded to 4,096 rows and 16 MiB question/answer payload. It prunes
+  resolved receipts older than 90 days, never pending-decision evidence. Capacity
+  returns an explicit error without discarding open evidence. This is admission
+  retention, not a background expiry promise. Rollback needs a compatible backup.
+- Five receipt tests passed, including v129 upgrade/reopen, retry/conflict,
+  rejected evidence, capacity and closed/open retention. Four Dogfood tests and
+  strict Windows GNU all-target/all-feature domain/persistence lint passed.
+  Migration filter: 17 passed, four legacy-import tests failed InvalidWorkspace
+  in this Windows environment; not claimed green. Recovery and dispatch schema
+  upgrade tests passed within that run. Artificial older-schema fixtures now
+  remove the new table before rewinding their schema version.
+- Source authentication, receipt verification reads, partial-answer reconciliation,
+  atomic complete resolution and real provider/composer integration remain open.
+  No live database, worker, deployment or release changed.
+
 ### P4: complete interviews, not individual answers, permit resolution
 
 - Added bounded complete-interview reconciliation: all current questions require

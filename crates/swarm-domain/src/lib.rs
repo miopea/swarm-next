@@ -68,6 +68,7 @@ macro_rules! domain_id {
 }
 
 domain_id!(OperatorId);
+domain_id!(OperatorStatementId);
 domain_id!(HiveId);
 domain_id!(ApiaryId);
 domain_id!(ApiaryInvitationId);
