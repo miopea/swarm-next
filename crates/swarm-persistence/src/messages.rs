@@ -163,7 +163,8 @@ const LIVE_RECIPIENT_SESSION_JOIN: &str = "JOIN worker_sessions session
 /// there are three queries reading this table and they had already drifted
 /// once. `message_from_row` reads these by position, so a query that selects a
 /// different list fails loudly rather than quietly returning the wrong column.
-const MESSAGE_COLUMNS: &str = "m.id, m.task_id, m.sender, m.recipient, m.sender_worker_id,
+pub(super) const MESSAGE_COLUMNS: &str =
+    "m.id, m.task_id, m.sender, m.recipient, m.sender_worker_id,
             m.recipient_worker_id, m.body, m.created_at, m.delivered_at,
             m.delivered_session_id,
             EXISTS(SELECT 1 FROM worker_sessions live
@@ -460,7 +461,7 @@ impl TaskStore {
     }
 }
 
-fn message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskMessage> {
+pub(super) fn message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskMessage> {
     use std::str::FromStr;
     let task_id: String = row.get(1)?;
     let sender: String = row.get(2)?;

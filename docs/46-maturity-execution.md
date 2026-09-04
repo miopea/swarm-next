@@ -6,6 +6,39 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: wire exact worker answers back to Queen
+
+- Tracing the return leg found that answer_returned_review had no production
+  caller: messaging Queen left the review's next mover stuck on the worker.
+  ADR 0066 defines explicit request correlation rather than assuming every
+  progress message answers the pending question.
+- Schema 133 links a returned review to its request message and assigned worker,
+  with the saved answer message for idempotent retries. The Queen hand-back tool
+  returns request_message_id; swarm_message_queen accepts optional
+  reply_to_message_id. The application service checks the worker role and the
+  persistence transaction checks current assignment, Review state, and exact
+  current request before saving the reply, ownership change, and feed event.
+- Ordinary messages do not answer reviews. Exact answer retries return the
+  saved message, including its existing delivery state; conflicting answers,
+  prefixes, superseded requests, and another worker are refused. No task is
+  completed and no operator authority is inferred. The old uncorrelated answer
+  setter is test-only, not an alternative production path.
+- Migration leaves historical markers unlinked, not guessed from time/text.
+  Queen can explicitly reissue one to establish a request identity. Tool-surface
+  revision 14 and its served-schema fingerprint advertise the optional selector;
+  connected providers require their normal tool refresh. No live restart.
+- Initial tests exposed three pre-version migration fixtures that retained the
+  new columns while claiming an older schema. Corrected those fixtures rather
+  than making the production migration accept duplicate columns. The initial
+  MCP round trip passed; the expected tool fingerprint failure was updated to
+  the actual served schema.
+- Final local Linux execution passed 54 persistence/review/messaging/migration
+  tests and 92 MCP/coordination/reload-guard tests, including the complete
+  hand-back/answer/retry round trip and the current schema declaration check.
+  This is fixture evidence, not acceptance with a live provider or phone.
+- Strict all-target/all-feature Linux API/application/persistence Clippy passed
+  after correcting test-module ordering; formatting and diff checks passed.
+
 ### P4: atomic reviewed-work hand-back
 
 - The hand-back persistence operation now reads the current Review state and

@@ -8252,6 +8252,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "connection_revoked",
             error.to_string(),
         ),
+        TaskStoreError::InvalidReviewReply => ApiError::new(
+            StatusCode::CONFLICT,
+            "review_reply_conflict",
+            error.to_string(),
+        ),
         TaskStoreError::InvalidTaskMessage { .. } => ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_task_message",

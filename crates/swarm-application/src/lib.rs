@@ -2271,6 +2271,30 @@ impl TaskService {
         Ok(self.store.list_task_activity(task_id, limit)?)
     }
 
+    /// Sends a worker's own task message, optionally answering one exact review.
+    ///
+    /// # Errors
+    /// Refuses non-worker callers and persistence/correlation failures.
+    pub fn message_queen_from_worker(
+        &self,
+        principal: AgentPrincipal,
+        task_id: TaskId,
+        body: &str,
+        reply_to: Option<&str>,
+        now: i64,
+    ) -> Result<swarm_persistence::TaskMessage, ApplicationError> {
+        if principal.role != WorkerRole::Worker {
+            return Err(ApplicationError::NotAuthorized);
+        }
+        Ok(self.store.message_queen_from_worker(
+            task_id,
+            principal.worker_id,
+            body,
+            reply_to,
+            now,
+        )?)
+    }
+
     /// Reads the Queen-worker exchange recorded on a task.
     ///
     /// Same visibility rule as the history it accompanies. Separate from

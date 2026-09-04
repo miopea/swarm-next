@@ -1257,7 +1257,7 @@ impl TaskStore {
         task_id: TaskId,
         request: &str,
         now: i64,
-    ) -> Result<(), TaskStoreError> {
+    ) -> Result<super::TaskMessage, TaskStoreError> {
         let request = request.trim();
         if request.is_empty() {
             return Err(TaskStoreError::CompletionEvidenceRequired);
@@ -1290,7 +1290,7 @@ impl TaskStore {
                    answered_at = NULL",
             params![task_id.to_string(), request, now],
         )?;
-        Self::insert_task_message(
+        let message = Self::insert_task_message(
             &transaction,
             task_id,
             super::MessageEnd::queen(),
@@ -1298,16 +1298,22 @@ impl TaskStore {
             request,
             now,
         )?;
+        transaction.execute(
+            "UPDATE task_returned_reviews SET request_message_id = ?2,
+                 request_worker_id = ?3, answer_message_id = NULL WHERE task_id = ?1",
+            params![task_id.to_string(), message.id, worker_id.to_string()],
+        )?;
         insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
-        Ok(())
+        Ok(message)
     }
 
     /// Marks a returned review answered, so the next move is Queen's again.
     ///
     /// # Errors
     /// Returns an error when persistence is unavailable.
-    pub fn answer_returned_review(&self, task_id: TaskId, now: i64) -> Result<(), TaskStoreError> {
+    #[cfg(test)]
+    fn answer_returned_review(&self, task_id: TaskId, now: i64) -> Result<(), TaskStoreError> {
         let connection = self.connection()?;
         connection.execute(
             "UPDATE task_returned_reviews SET answered_at = ?2

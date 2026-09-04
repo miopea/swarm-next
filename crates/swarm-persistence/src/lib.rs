@@ -88,6 +88,7 @@ mod conversation_recovery;
 mod dogfood_evidence;
 mod operator_statements;
 mod operator_submissions;
+mod review_answers;
 pub use operator_statements::{OperatorStatementError, VerifiedOperatorStatement};
 pub use operator_submissions::{AuthoredOperatorSubmission, OperatorSubmissionIndexEntry};
 mod night_watch;
@@ -215,7 +216,8 @@ const TASK_DISPATCH_GENERATION_SCHEMA_VERSION: i64 = 129;
 const OPERATOR_STATEMENTS_SCHEMA_VERSION: i64 = 130;
 const OPERATOR_STATEMENT_RESOLUTIONS_SCHEMA_VERSION: i64 = 131;
 const OPERATOR_SUBMISSIONS_SCHEMA_VERSION: i64 = 132;
-const CURRENT_SCHEMA_VERSION: i64 = OPERATOR_SUBMISSIONS_SCHEMA_VERSION;
+const REVIEW_ANSWERS_SCHEMA_VERSION: i64 = 133;
+const CURRENT_SCHEMA_VERSION: i64 = REVIEW_ANSWERS_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -274,6 +276,8 @@ pub struct TaskStore {
 
 #[derive(Debug, Error)]
 pub enum TaskStoreError {
+    #[error("review reply does not match the current request, worker, or saved answer")]
+    InvalidReviewReply,
     #[error("task persistence filesystem failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("task persistence failed: {0}")]
@@ -3716,7 +3720,8 @@ fn migrate_maturity_schema_steps(
     task_dispatches::migrate_generation(transaction, schema_version)?;
     operator_statements::migrate(transaction, schema_version)?;
     operator_statements::migrate_resolutions(transaction, schema_version)?;
-    operator_submissions::migrate(transaction, schema_version)
+    operator_submissions::migrate(transaction, schema_version)?;
+    review_answers::migrate(transaction, schema_version)
 }
 
 /// Work closed for a reason other than success gets its own state.

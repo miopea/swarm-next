@@ -787,7 +787,7 @@ mod tests {
             .connection()
             .unwrap()
             .execute_batch(
-                "DROP TABLE operator_submissions; DROP TABLE operator_statement_resolutions; DROP TABLE operator_statements; ALTER TABLE task_dispatches DROP COLUMN generation; PRAGMA user_version = 128;",
+                "ALTER TABLE task_returned_reviews DROP COLUMN request_message_id; ALTER TABLE task_returned_reviews DROP COLUMN request_worker_id; ALTER TABLE task_returned_reviews DROP COLUMN answer_message_id; DROP TABLE operator_submissions; DROP TABLE operator_statement_resolutions; DROP TABLE operator_statements; ALTER TABLE task_dispatches DROP COLUMN generation; PRAGMA user_version = 128;",
             )
             .unwrap();
         drop(store);

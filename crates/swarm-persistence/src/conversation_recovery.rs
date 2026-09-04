@@ -564,6 +564,7 @@ mod tests {
         store
             .repoint_provider_conversation(worker.id, &manual)
             .unwrap();
+        crate::review_answers::remove_schema_for_test(&store.connection().unwrap()).unwrap();
         store.connection().unwrap().execute_batch("DROP TABLE operator_submissions; DROP TABLE operator_statement_resolutions; DROP TABLE operator_statements; ALTER TABLE task_dispatches DROP COLUMN generation; ALTER TABLE worker_startup_context DROP COLUMN selection_revision; ALTER TABLE worker_startup_context DROP COLUMN selection_suspended; PRAGMA user_version = 127;").unwrap();
         drop(store);
         let store = TaskStore::open(&path).unwrap();
@@ -652,6 +653,7 @@ mod tests {
             .get_worker_profile(worker.id)
             .unwrap()
             .provider_conversation_id;
+        crate::review_answers::remove_schema_for_test(&store.connection().unwrap()).unwrap();
         store
             .connection()
             .unwrap()
