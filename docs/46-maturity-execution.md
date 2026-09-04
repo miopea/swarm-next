@@ -6,6 +6,23 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2: retain startup evidence for API reconciliation
+
+- Verified registry locking spans process spawn through insertion and callback
+  lookup takes that same lock. Documented this existing ordering instead of adding
+  a timer/retry. A stalled spawn can still exceed the bounded helper deadline.
+- Engine session summaries expose optional accepted startup evidence (conversation
+  identity and lifecycle kind only), never capabilities. Repeated reads retain
+  it; historical evidence is not a liveness claim or permission to change a pin.
+  The additive optional field accepts old summaries without inventing evidence.
+- Native IPC compatibility/round-trip test passed. Strict Linux-target terminal,
+  host and API all-target/all-feature Clippy passed. The extended Unix process
+  fixture compiles with repeated-read, retained-after-stop and rejected-after-stop
+  assertions; Linux PTY execution remains unverified.
+- API binding reconciliation currently drops these facts when reducing summaries
+  to live IDs. Its durable consumer, recovery outcome persistence and hook setup
+  remain next integration work. No live changes, push, deployment or release.
+
 ### P2: bounded provider startup hook sender
 
 - Added the `provider-session-start` host command before normal logging/server

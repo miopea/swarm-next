@@ -35,6 +35,12 @@ unknown versions, reads at most 64 KiB, and shares a three-second deadline acros
 stdin and IPC. It emits no stdout or diagnostic payloads and does not retry.
 The helper reads the stdin descriptor directly with bounded polling, avoiding an
 uncancelable background stdin read or changes to inherited descriptor flags.
-Hook installation, startup registration ordering, durable reconciliation,
+The existing registry mutex spans spawn through insertion; callback lookup uses
+the same mutex, so it cannot observe the child before registration. This ordering
+does not guarantee delivery before the helper deadline under a stalled spawn.
+Session summaries now expose the optional retained observation without capability
+material. Evidence survives repeated reads and does not itself establish current
+liveness or authorize changing the worker's durable default.
+Hook installation, durable reconciliation,
 missing-context detection and provider acceptance remain open. This ADR does not
 install hooks or complete P2.

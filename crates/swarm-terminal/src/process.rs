@@ -121,6 +121,7 @@ pub struct SessionResourceState {
     /// Wall-clock second of this terminal's most recent output.
     pub last_output_at: i64,
     pub recovery_attempt: Option<ConversationRecoveryAttempt>,
+    pub provider_start: Option<crate::ProviderSessionStartObservation>,
 }
 
 /// Seconds since the Unix epoch, saturating rather than panicking on a clock
@@ -321,6 +322,19 @@ impl ProcessTerminalSession {
     #[must_use]
     pub fn recovery_attempt(&self) -> Option<ConversationRecoveryAttempt> {
         self.recovery_attempt.get().copied()
+    }
+
+    /// Returns retained startup evidence, not a claim of current process liveness
+    /// or permission to replace a worker's durable conversation binding.
+    ///
+    /// # Errors
+    /// Returns an error if the lifecycle lock is poisoned.
+    pub fn provider_start(
+        &self,
+    ) -> Result<Option<crate::ProviderSessionStartObservation>, SessionRegistryError> {
+        Ok(lock(&self.provider_lifecycle)?
+            .as_ref()
+            .and_then(crate::ProviderLifecycleGate::observation))
     }
 
     /// Accepts startup evidence only while the bound provider process is live.
@@ -816,6 +830,8 @@ impl SessionRegistry {
             ));
         }
 
+        // Held through process spawn and registration. A startup hook's get()
+        // waits for insertion rather than observing an unregistered live child.
         let mut sessions = lock(&self.sessions)?;
         if self.draining.load(Ordering::Acquire) {
             return Err(SessionRegistryError::HostDraining);
@@ -1192,6 +1208,7 @@ impl SessionRegistry {
                     resources: session.resource_sample()?,
                     last_output_at: session.last_output_at(),
                     recovery_attempt: session.recovery_attempt(),
+                    provider_start: session.provider_start()?,
                 })
             })
             .collect()
@@ -1916,14 +1933,39 @@ mod tests {
             })
         );
         assert_eq!(session.recovery_attempt(), Some(attempt));
+        assert_eq!(session.provider_start().unwrap(), None);
+        *session.provider_lifecycle.lock().unwrap() =
+            Some(crate::ProviderLifecycleGate::new(session.id(), [173; 32]));
+        let observation = crate::ProviderSessionStartObservation {
+            conversation: swarm_domain::ProviderConversationId::new(),
+            kind: swarm_domain::ProviderSessionStartKind::Resumed,
+        };
+        assert_eq!(
+            session
+                .observe_provider_start(&[173; 32], observation)
+                .unwrap(),
+            crate::ProviderLifecycleAcceptance::Accepted
+        );
         let listed = registry.session_resource_states().unwrap();
         assert_eq!(listed[0].recovery_attempt, Some(attempt));
+        assert_eq!(listed[0].provider_start, Some(observation));
         // Reading again (as a replacement API would) neither consumes nor resets it.
         assert_eq!(
             registry.session_resource_states().unwrap()[0].recovery_attempt,
             Some(attempt)
         );
+        assert_eq!(
+            registry.session_resource_states().unwrap()[0].provider_start,
+            Some(observation)
+        );
         registry.stop(session.id()).unwrap();
+        assert_eq!(session.provider_start().unwrap(), Some(observation));
+        assert_eq!(
+            session
+                .observe_provider_start(&[173; 32], observation)
+                .unwrap(),
+            crate::ProviderLifecycleAcceptance::Denied
+        );
     }
 
     #[test]

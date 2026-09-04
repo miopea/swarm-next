@@ -347,6 +347,10 @@ pub struct HostSessionSummary {
     /// Startup attempt only. Missing on older hosts; never implies restoration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery_attempt: Option<swarm_domain::ConversationRecoveryAttempt>,
+    /// Accepted process-scoped startup evidence. Consumers must still validate
+    /// the current worker binding and recovery attempt before durable updates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_start: Option<crate::ProviderSessionStartObservation>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -719,6 +723,13 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(summary.recovery_attempt, None);
+        assert_eq!(summary.provider_start, None);
+        assert!(
+            serde_json::to_value(&summary)
+                .unwrap()
+                .get("provider_start")
+                .is_none()
+        );
         assert!(
             serde_json::to_value(&summary)
                 .unwrap()
@@ -730,6 +741,10 @@ mod tests {
             panic!("expected continuation attempt");
         };
         summary.recovery_attempt = Some(attempt);
+        summary.provider_start = Some(crate::ProviderSessionStartObservation {
+            conversation: swarm_domain::ProviderConversationId::new(),
+            kind: swarm_domain::ProviderSessionStartKind::Resumed,
+        });
         assert_eq!(
             serde_json::from_value::<HostSessionSummary>(serde_json::to_value(&summary).unwrap())
                 .unwrap(),

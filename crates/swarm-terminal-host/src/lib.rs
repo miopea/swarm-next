@@ -668,6 +668,7 @@ fn dispatch_blocking(
                         resources: state.resources,
                         last_output_at: Some(state.last_output_at),
                         recovery_attempt: state.recovery_attempt,
+                        provider_start: state.provider_start,
                     })
                     .collect(),
             })
