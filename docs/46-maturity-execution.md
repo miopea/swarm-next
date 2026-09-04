@@ -6,6 +6,20 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2: bounded provider lifecycle input boundary
+
+- Added a 64 KiB Claude SessionStart parser in the terminal provider adapter.
+  It retains only conversation identity and normalized lifecycle kind. Private
+  paths, titles and other provider metadata are ignored rather than logged or
+  passed into the domain. Wrong events, invalid/nil IDs, duplicate fields,
+  malformed/oversized input and child-agent-marked payloads produce no evidence.
+- Two focused terminal tests passed across all lifecycle variants and rejection
+  cases; strict all-target/all-feature terminal Clippy passed after correcting a
+  documentation lint. The reader is not yet installed as a hook handler and does
+  not authenticate callers. Transport, process-scoped capability, durable session
+  reconciliation and live recovery verification remain open.
+- No provider settings, live workers, deployment or release changed.
+
 ### P2: scoped provider lifecycle recovery rules
 
 - Validated the current official SessionStart contract and recorded ADR 0064.
