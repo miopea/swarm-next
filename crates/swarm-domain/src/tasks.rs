@@ -766,10 +766,28 @@ pub enum CommitSettlement {
     /// At least one reachable commit touches something that is not
     /// documentation. A claim of "nothing to deploy" contradicts this.
     BuiltCode,
-    /// Not established. Nobody reported, or something reported could not be
-    /// checked. NOT a synonym for `NothingBuilt`: no automatic close may rest
-    /// on it, and no refusal may either.
-    Unknown,
+    /// ⚠️ NOBODY REPORTED AT ALL. Distinct from `Unestablished`, and the split
+    /// is the whole point of this enum's 2026-09-04 revision.
+    ///
+    /// `TaskCommitReport`'s own doc comment above says "THE ROW EXISTING IS
+    /// ITSELF THE FACT... NO REPORT AT ALL is nobody having said anything".
+    /// This arm honours that. Folded together with `Unestablished`, as it was,
+    /// the incentive ran backwards: reporting your commits was the ONLY way to
+    /// get a no-deployment claim refused, and saying nothing passed. Two
+    /// workers made the same comment-only `.ts` change minutes apart; the one
+    /// who reported was refused and the one who stayed silent was approved.
+    ///
+    /// A worker with nothing built is one call from `NothingBuilt` — an empty
+    /// list is a documented answer — so refusing here costs honesty nothing.
+    NotReported,
+    /// Reported, and the report does not settle the question: a commit nobody
+    /// could check, or one whose paths came back empty. NOT a synonym for
+    /// `NothingBuilt`, and no automatic close may rest on it.
+    ///
+    /// A CLAIM IS STILL ALLOWED ON THIS. It is the case that keeps the refusal
+    /// narrow — a workspace that is not a checkout can never establish
+    /// anything, and refusing here would block those workers permanently.
+    Unestablished,
 }
 
 /// Whether one path is documentation.
@@ -816,7 +834,7 @@ pub fn documentation_path(path: &str) -> bool {
 #[must_use]
 pub fn commit_settlement(report: Option<&TaskCommitReport>) -> CommitSettlement {
     let Some(report) = report else {
-        return CommitSettlement::Unknown;
+        return CommitSettlement::NotReported;
     };
     if report.commits.is_empty() {
         return CommitSettlement::NothingBuilt;
@@ -829,14 +847,14 @@ pub fn commit_settlement(report: Option<&TaskCommitReport>) -> CommitSettlement 
         .iter()
         .any(|commit| commit.verdict != CommitVerdict::Present)
     {
-        return CommitSettlement::Unknown;
+        return CommitSettlement::Unestablished;
     }
     if report
         .commits
         .iter()
         .any(|commit| commit.changed_paths.is_empty())
     {
-        return CommitSettlement::Unknown;
+        return CommitSettlement::Unestablished;
     }
     if report
         .commits

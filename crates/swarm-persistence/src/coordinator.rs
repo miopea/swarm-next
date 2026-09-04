@@ -2491,6 +2491,7 @@ pub(super) fn migrate_reviewed_work_evidence_attention(
 #[cfg(test)]
 mod unattended_block_tests {
     use crate::TaskStore;
+    use swarm_domain::CommitRepositoryState;
     use swarm_domain::{ProviderKind, TaskState, WorkerSessionId};
 
     /// A block that has waited surfaces, and its age is measured from when it
@@ -2555,6 +2556,17 @@ mod unattended_block_tests {
             .unwrap();
         let an_hour = 3_600;
 
+        // A claim needs a commit report to stand on since 2026-09-04;
+        // an empty list is the documented "nothing was built".
+        store
+            .record_task_commits(
+                task.id,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                900,
+            )
+            .unwrap();
         store
             .claim_completion_exemption(task.id, "An investigation with no code.", None, now)
             .unwrap();
@@ -2655,6 +2667,17 @@ mod unattended_block_tests {
         // Properly closed on an approved exemption.
         let closed = make("Closed on an approved exemption");
         store.transition_task(closed.id, TaskState::Review).unwrap();
+        // A claim needs a commit report to stand on since 2026-09-04;
+        // an empty list is the documented "nothing was built".
+        store
+            .record_task_commits(
+                closed.id,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                900,
+            )
+            .unwrap();
         store
             .claim_completion_exemption(closed.id, "A document.", None, now)
             .unwrap();
@@ -2787,6 +2810,7 @@ mod unattended_block_tests {
 #[cfg(test)]
 mod reviewed_work_tests {
     use crate::TaskStore;
+    use swarm_domain::CommitRepositoryState;
     use swarm_domain::{ProviderKind, TaskState, WorkerSessionId};
 
     /// Review was the one task state no attention kind covered, so finished
@@ -2861,6 +2885,17 @@ mod reviewed_work_tests {
         // The worker asks. Asking is not being answered, so Queen keeps seeing
         // it -- this is the assertion whose inverse let eight claims go
         // invisible on 2026-08-31.
+        // A claim needs a commit report to stand on since 2026-09-04;
+        // an empty list is the documented "nothing was built".
+        store
+            .record_task_commits(
+                task.id,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                900,
+            )
+            .unwrap();
         store
             .claim_completion_exemption(task.id, "Read-only investigation", Some(worker.id), now)
             .unwrap();
@@ -2920,6 +2955,17 @@ mod reviewed_work_tests {
         store.transition_task(task.id, TaskState::Review).unwrap();
         let now = i64::MAX / 4;
         let grace = 15 * 60;
+        // A claim needs a commit report to stand on since 2026-09-04;
+        // an empty list is the documented "nothing was built".
+        store
+            .record_task_commits(
+                task.id,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                900,
+            )
+            .unwrap();
         store
             .claim_completion_exemption(task.id, "nothing to deploy", Some(worker.id), now)
             .unwrap();
@@ -2989,6 +3035,17 @@ mod reviewed_work_tests {
             store.assign_task(task.id, session).unwrap();
             store.transition_task(task.id, TaskState::Active).unwrap();
             store.transition_task(task.id, TaskState::Review).unwrap();
+            // A claim needs a commit report to stand on since 2026-09-04;
+            // an empty list is the documented "nothing was built".
+            store
+                .record_task_commits(
+                    task.id,
+                    "/workspace/petal",
+                    CommitRepositoryState::Read,
+                    &[],
+                    900,
+                )
+                .unwrap();
             store
                 .claim_completion_exemption(task.id, "nothing to deploy", Some(worker.id), now)
                 .unwrap();

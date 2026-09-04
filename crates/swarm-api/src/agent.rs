@@ -2314,7 +2314,7 @@ fn review_evidence_next_step(
     }
     match evidence {
         CompletionEvidence::None => Some(
-            "This task is in Review with no completion evidence recorded. If something shipped, record it with swarm_record_deployment. If nothing shipped — a spike, an investigation, a documentation change, a defensible no-change-needed — record that with swarm_record_no_deployment. Both are complete answers, and neither is a lesser one; this cannot be closed until one of them exists, and a handoff that says so in prose is not the record.",
+            "This task is in Review with no completion evidence recorded. Report what it built with swarm_record_task_commits first — an EMPTY list is a valid answer and means it built nothing. Then, if something shipped, record it with swarm_record_deployment; if nothing shipped — a spike, an investigation, a documentation change, a defensible no-change-needed — record that with swarm_record_no_deployment, which needs that commit report to stand on. Both are complete answers, and neither is a lesser one; this cannot be closed until one of them exists, and a handoff that says so in prose is not the record.",
         ),
         // A CLAIM ON FILE IS NOT NECESSARILY A CLAIM ABOUT NOW.
         //
@@ -6277,6 +6277,33 @@ mod tests {
         assert!(prompt.contains("swarm_record_no_deployment"));
         assert!(prompt.contains("swarm_record_deployment"));
         assert!(prompt.contains("prose is not the record"));
+        // ⚠️ AND IT NAMES THE PRECONDITION, which is the whole reason this
+        // prompt exists rather than only the refusal. Since 2026-09-04 a
+        // no-deployment claim needs a commit report to stand on, so a prompt
+        // that sent a worker straight to swarm_record_no_deployment would be
+        // routing thirty workers into a refusal it could have prevented.
+        assert!(prompt.contains("swarm_record_task_commits"));
+        assert!(prompt.contains("EMPTY list"));
+
+        // FOLLOWING THE PROMPT'S OWN INSTRUCTION, rather than testing a path it
+        // does not tell anyone to take. Nothing was built here, and an empty
+        // list is how that is said.
+        let _ = response_json(
+            handle(
+                bridge.clone(),
+                plain_state(),
+                mcp_request(
+                    Some(&worker_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_record_task_commits",
+                        "arguments": {"task_id": task.id.to_string(), "commits": []}
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
 
         // The claim is the worker's to make, and making it does not close the
         // task — the response says who does.

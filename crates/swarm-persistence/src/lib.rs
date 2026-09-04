@@ -432,6 +432,21 @@ pub enum TaskStoreError {
         "the commits recorded for this task touch code, which contradicts a claim that nothing was deployed. Record where it is running with a deployment, or ask the operator to write it off as unverifiable, or close it as abandoned if it was superseded"
     )]
     CommitsContradictNoDeployment,
+    // ⚠️ THE REFUSAL THAT MAKES HONESTY THE CHEAP PATH. Until 2026-09-04 a task
+    // with NO commit report at all could claim "nothing was deployed" freely,
+    // while a worker who reported its commits could be refused on them. So
+    // reporting was the only route to a refusal and silence always passed --
+    // measured on two tasks that made the same comment-only .ts change minutes
+    // apart, where the honest worker was refused and the silent one approved.
+    //
+    // NAMES THE ONE-CALL REMEDY, and it is genuinely one call: record_task_commits
+    // documents an empty list as the way to say nothing was built, which settles
+    // as NothingBuilt and passes. A worker outside a checkout is NOT caught by
+    // this -- a report that cannot be checked is Unestablished and still claims.
+    #[error(
+        "no commits have been reported for this task, so there is nothing for a claim of 'nothing was deployed' to stand on. Report them with swarm_record_task_commits first -- an EMPTY list is a valid answer and means the task built nothing"
+    )]
+    CommitsNotReported,
     #[error("this Hive already has the maximum number of pending Queen handoffs")]
     TaskOutcomeQueueFull,
     #[error("Jira comment content is invalid")]

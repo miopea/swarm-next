@@ -8519,6 +8519,14 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         // not at fault for asking. The claim was refused because the recorded
         // commits disagree with it, and a client that can tell this apart can
         // say so rather than reporting the task as invalid.
+        // Same treatment as the contradiction below and for the same reason: the
+        // caller asked a legitimate question and the answer is about the record,
+        // not about their request being malformed.
+        TaskStoreError::CommitsNotReported => ApiError::new(
+            StatusCode::CONFLICT,
+            "commits_not_reported",
+            error.to_string(),
+        ),
         TaskStoreError::CommitsContradictNoDeployment => ApiError::new(
             StatusCode::CONFLICT,
             "commits_contradict_no_deployment",

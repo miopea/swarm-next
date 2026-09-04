@@ -279,6 +279,17 @@ mod tests {
         store.transition_task(task.id, TaskState::Ready).unwrap();
         store.transition_task(task.id, TaskState::Active).unwrap();
         store.transition_task(task.id, TaskState::Review).unwrap();
+        // A claim needs a commit report to stand on since 2026-09-04;
+        // an empty list is the documented "nothing was built".
+        store
+            .record_task_commits(
+                task.id,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                900,
+            )
+            .unwrap();
         store
             .claim_completion_exemption(task.id, "Nothing shipped: PR #418 is open.", None, 1_000)
             .unwrap();
@@ -402,6 +413,17 @@ mod tests {
         store.transition_task(task.id, TaskState::Ready).unwrap();
         store.transition_task(task.id, TaskState::Active).unwrap();
         store.transition_task(task.id, TaskState::Review).unwrap();
+        // A claim needs a commit report to stand on since 2026-09-04;
+        // an empty list is the documented "nothing was built".
+        store
+            .record_task_commits(
+                task.id,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                900,
+            )
+            .unwrap();
         store
             .claim_completion_exemption(task.id, "An investigation with no code.", None, 1_000)
             .unwrap();
@@ -461,6 +483,17 @@ mod tests {
         store.transition_task(task.id, TaskState::Ready).unwrap();
         store.transition_task(task.id, TaskState::Active).unwrap();
         store.transition_task(task.id, TaskState::Review).unwrap();
+        // A claim needs a commit report to stand on since 2026-09-04;
+        // an empty list is the documented "nothing was built".
+        store
+            .record_task_commits(
+                task.id,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                900,
+            )
+            .unwrap();
         store
             .claim_completion_exemption(task.id, "Nothing to deploy.", None, 2_000)
             .unwrap();
@@ -491,6 +524,17 @@ mod tests {
         store.transition_task(task.id, TaskState::Ready).unwrap();
         store.transition_task(task.id, TaskState::Active).unwrap();
         store.transition_task(task.id, TaskState::Review).unwrap();
+        // A claim needs a commit report to stand on since 2026-09-04;
+        // an empty list is the documented "nothing was built".
+        store
+            .record_task_commits(
+                task.id,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                900,
+            )
+            .unwrap();
         store
             .claim_completion_exemption(task.id, "An investigation with no code.", None, 1_000)
             .unwrap();
@@ -816,10 +860,20 @@ impl TaskStore {
         // The operator is not stranded by this. `approve_completion_exemption`
         // and `record_task_unverifiable` are both still open to them, which is
         // what makes this a route to a person rather than a dead end.
-        if commit_settlement(self.task_commit_report(task_id)?.as_ref())
-            == CommitSettlement::BuiltCode
-        {
-            return Err(TaskStoreError::CommitsContradictNoDeployment);
+        match commit_settlement(self.task_commit_report(task_id)?.as_ref()) {
+            CommitSettlement::BuiltCode => {
+                return Err(TaskStoreError::CommitsContradictNoDeployment);
+            }
+            // ⚠️ AND NOBODY REPORTING IS NOT THE SAME AS A REPORT THAT SETTLES
+            // NOTHING. Folding these together is what made reporting the only
+            // route to a refusal. Unestablished still claims, which is what
+            // keeps a non-checkout workspace able to record an outcome at all.
+            CommitSettlement::NotReported => {
+                return Err(TaskStoreError::CommitsNotReported);
+            }
+            CommitSettlement::Unestablished
+            | CommitSettlement::NothingBuilt
+            | CommitSettlement::DocumentationOnly => {}
         }
         let connection = self.connection()?;
         let approved: bool = connection.query_row(
@@ -1141,6 +1195,21 @@ mod completion_evidence_tests {
 
     /// A task far enough along to have something to say about deployment.
     /// Recording one is only allowed from Review or Completed.
+    /// A reviewed task on which a no-deployment claim is LEGAL.
+    ///
+    /// ⚠️ IT REPORTS AN EMPTY COMMIT LIST, and that is not incidental setup.
+    /// Since 2026-09-04 a claim needs a commit report to stand on — silence used
+    /// to be the one route that always passed, which made reporting your commits
+    /// the only way to get refused. An empty list is the documented way to say
+    /// "nothing was built"; it settles as `NothingBuilt` and the claim proceeds.
+    ///
+    /// The tests using this are about what happens TO a claim — approval,
+    /// withdrawal, supersession, readback — not about whether one may be made.
+    /// The two that assert the precondition build their own task instead, so
+    /// this helper cannot quietly satisfy the thing they exist to check.
+    ///
+    /// Upsert, not replace: a later real report adds to this rather than being
+    /// masked by it, so tests that report actual commits are unaffected.
     fn task(store: &TaskStore) -> TaskId {
         let id = store
             .create_task("Ship the thing", "/projects/app")
@@ -1149,6 +1218,9 @@ mod completion_evidence_tests {
         for state in [TaskState::Ready, TaskState::Active, TaskState::Review] {
             store.transition_task(id, state).unwrap();
         }
+        store
+            .record_task_commits(id, "/projects/app", CommitRepositoryState::Read, &[], 900)
+            .unwrap();
         id
     }
 
@@ -2056,6 +2128,17 @@ mod awaiting_judgment_subject_tests {
     fn a_stale_claim_beside_a_real_deployment_is_not_waiting_on_anyone() {
         let store = TaskStore::in_memory().unwrap();
         let task = reviewed(&store, "Shipped, and carries a rotted claim");
+        // A claim needs a commit report to stand on since 2026-09-04;
+        // an empty list is the documented "nothing was built".
+        store
+            .record_task_commits(
+                task,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                900,
+            )
+            .unwrap();
         store
             .claim_completion_exemption(task, "Thought there was nothing to deploy", None, 1_000)
             .unwrap();
@@ -2076,6 +2159,17 @@ mod awaiting_judgment_subject_tests {
     fn work_the_coordinator_settled_is_not_waiting_on_anyone() {
         let store = TaskStore::in_memory().unwrap();
         let task = reviewed(&store, "Investigation the sweep closed");
+        // A claim needs a commit report to stand on since 2026-09-04;
+        // an empty list is the documented "nothing was built".
+        store
+            .record_task_commits(
+                task,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                900,
+            )
+            .unwrap();
         store
             .claim_completion_exemption(task, "Nothing was built", None, 1_000)
             .unwrap();
@@ -2107,6 +2201,17 @@ mod awaiting_judgment_subject_tests {
 
         // An unapproved claim on its own does NOT settle it, which is the
         // distinction the whole evidence model rests on.
+        // A claim needs a commit report to stand on since 2026-09-04;
+        // an empty list is the documented "nothing was built".
+        store
+            .record_task_commits(
+                task,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                900,
+            )
+            .unwrap();
         store
             .claim_completion_exemption(task, "Nothing to deploy", None, 1_000)
             .unwrap();
@@ -2125,12 +2230,40 @@ mod settlement_tests {
     use super::*;
     use crate::TaskStore;
 
+    /// A reviewed task that has REPORTED NOTHING. Used by the two tests that
+    /// assert the reporting precondition, which need exactly that.
     fn reviewed_task(store: &TaskStore, title: &str) -> TaskId {
         let task = store.create_task(title, "/workspace/petal").unwrap();
         store.transition_task(task.id, TaskState::Ready).unwrap();
         store.transition_task(task.id, TaskState::Active).unwrap();
         store.transition_task(task.id, TaskState::Review).unwrap();
         task.id
+    }
+
+    /// A reviewed task that has ALREADY REPORTED, so a no-deployment claim on it
+    /// is legal.
+    ///
+    /// ⚠️ USE THIS WHEREVER THE TEST IS ABOUT WHAT HAPPENS TO A CLAIM, not about
+    /// whether one may be made. Since 2026-09-04 a claim needs a commit report
+    /// to stand on; an empty list is the documented way to say nothing was
+    /// built, and it settles as `NothingBuilt`. Tests of approval, withdrawal
+    /// and supersession all take that route so they exercise the shape the
+    /// tools actually permit.
+    ///
+    /// `reviewed_task` deliberately still reports NOTHING, because the tests
+    /// that assert the precondition need a task that has not reported.
+    fn claimable_task(store: &TaskStore, title: &str) -> TaskId {
+        let task = reviewed_task(store, title);
+        store
+            .record_task_commits(
+                task,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                900,
+            )
+            .unwrap();
+        task
     }
 
     fn commit(paths: &[&str]) -> TaskCommit {
@@ -2285,7 +2418,7 @@ mod settlement_tests {
     #[test]
     fn approving_a_claim_that_was_never_recorded_says_so_rather_than_blaming_the_basis() {
         let store = TaskStore::in_memory().unwrap();
-        let task = reviewed_task(&store, "Claim was refused");
+        let task = claimable_task(&store, "Claim was refused");
         store
             .record_task_commits(
                 task,
@@ -2313,7 +2446,7 @@ mod settlement_tests {
 
         // And the other error keeps its own meaning: an empty basis IS the
         // basis being wrong, and must not be relabelled by this change.
-        let task = reviewed_task(&store, "Claim exists");
+        let task = claimable_task(&store, "Claim exists");
         store
             .claim_completion_exemption(task, "Investigation only", None, 2_000)
             .unwrap();
@@ -2323,19 +2456,22 @@ mod settlement_tests {
         ));
     }
 
-    /// The refusal is NARROW, and this is the case that makes it so.
+    /// The refusal is NARROW, and THIS is the case that makes it so — the only
+    /// one, since 2026-09-04.
     ///
-    /// `Unknown` is not a contradiction: nobody reported, or the workspace was
-    /// not a checkout. Refusing on it would block every worker whose workspace
-    /// is not under version control from ever recording an outcome.
+    /// A report that cannot be checked is not a contradiction. The workspace may
+    /// not be a checkout at all, and refusing here would block every worker
+    /// outside version control from ever recording an outcome. That is the
+    /// original intent of this test and it is unchanged.
+    ///
+    /// ⚠️ ITS OTHER HALF MOVED, AND DELIBERATELY. This test also asserted that a
+    /// task with NO report may claim. That is now refused — see
+    /// `an_unreported_task_cannot_claim_that_nothing_was_deployed` below. The
+    /// two used to be one `Unknown`, which is what made reporting your commits
+    /// the only route to a refusal.
     #[test]
-    fn a_claim_is_not_refused_when_nothing_was_established() {
+    fn a_report_that_settles_nothing_is_not_refused() {
         let store = TaskStore::in_memory().unwrap();
-        let unreported = reviewed_task(&store, "Nobody reported commits");
-        store
-            .claim_completion_exemption(unreported, "Investigation only", None, 2_000)
-            .expect("an unreported task may still claim");
-
         let unreadable = reviewed_task(&store, "Not a git checkout");
         store
             .record_task_commits(
@@ -2354,6 +2490,56 @@ mod settlement_tests {
         store
             .claim_completion_exemption(unreadable, "Nothing to deploy", None, 2_000)
             .expect("a workspace with no repository must not be refused");
+    }
+
+    /// ⚠️ THE INCENTIVE RAN BACKWARDS AND THIS IS WHERE IT IS TURNED ROUND.
+    ///
+    /// Measured on two tasks that made the SAME comment-only `.ts` change
+    /// minutes apart: rcg-admin had no commit report and its no-deployment claim
+    /// was approved; rcg-wifi-portal reported one commit and was refused on it.
+    /// They did not receive different judgements of the same facts — they
+    /// presented different facts, and the honest one was penalised.
+    ///
+    /// The remedy in the error is genuinely one call. An EMPTY list settles as
+    /// `NothingBuilt` and passes, which the third assertion here proves, so a
+    /// worker that truly built nothing is never stuck.
+    ///
+    /// FALSE NEGATIVE, STATED RATHER THAN DISCOVERED LATER: a worker that DID
+    /// build code and reports an empty list still passes. That is a lie rather
+    /// than a gap and it was equally possible before; what changes is that the
+    /// omission is now an explicit recorded claim instead of a silent absence.
+    #[test]
+    fn an_unreported_task_cannot_claim_that_nothing_was_deployed() {
+        let store = TaskStore::in_memory().unwrap();
+        let unreported = reviewed_task(&store, "Nobody reported commits");
+        assert!(
+            matches!(
+                store.claim_completion_exemption(unreported, "Investigation only", None, 2_000),
+                Err(TaskStoreError::CommitsNotReported)
+            ),
+            "silence must not be the cheap route past a check that reporting triggers"
+        );
+        assert_eq!(
+            store.completion_evidence(unreported).unwrap(),
+            CompletionEvidence::None,
+            "a refused claim must leave no record behind"
+        );
+
+        // AND THE ONE CALL THE ERROR NAMES ACTUALLY WORKS. Reporting an empty
+        // list is a documented answer meaning nothing was built; it settles as
+        // NothingBuilt and the same claim then passes.
+        store
+            .record_task_commits(
+                unreported,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                2_500,
+            )
+            .unwrap();
+        store
+            .claim_completion_exemption(unreported, "Investigation only", None, 3_000)
+            .expect("an explicit 'nothing was built' must pass");
     }
 
     /// A STATE THE PRODUCT DELIBERATELY REPORTS, kept reachable.
@@ -2657,7 +2843,9 @@ impl TaskStore {
                 CommitSettlement::DocumentationOnly => {
                     "Settled automatically: every commit recorded for this task touches documentation only, so there is nothing to deploy."
                 }
-                CommitSettlement::BuiltCode | CommitSettlement::Unknown => continue,
+                CommitSettlement::BuiltCode
+                | CommitSettlement::NotReported
+                | CommitSettlement::Unestablished => continue,
             };
             self.claim_completion_exemption(task_id, reason, None, now)?;
             // THE BASIS WRITES ITSELF HERE, and this is the machine half of
@@ -2671,7 +2859,9 @@ impl TaskStore {
                 CommitSettlement::DocumentationOnly => {
                     "Derived: every recorded commit touches documentation only."
                 }
-                CommitSettlement::BuiltCode | CommitSettlement::Unknown => continue,
+                CommitSettlement::BuiltCode
+                | CommitSettlement::NotReported
+                | CommitSettlement::Unestablished => continue,
             };
             self.approve_completion_exemption(task_id, "coordinator", basis, now)?;
             match self.transition_task_with_note_as(
