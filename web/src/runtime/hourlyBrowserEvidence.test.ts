@@ -2,6 +2,43 @@ import { expect, test } from "vitest";
 import { HourlyBrowserEvidence } from "./hourlyBrowserEvidence";
 import { BrowserPerformanceRecorder } from "./browserPerformance";
 
+test("reload preserves pending identity and build without appending to restored captures", () => {
+  const id = "00000000-0000-0000-0000-000000000001";
+  const old = new HourlyBrowserEvidence("old-build", () => id);
+  old.record("route", 10, 3_600_000);
+  const restored = new HourlyBrowserEvidence("new-build", () => "00000000-0000-0000-0000-000000000002");
+  expect(restored.restore(old.serialize(3_600_000), 3_600_000)).toBe(true);
+  expect(restored.next(3_600_000)).toEqual(old.next(3_600_000));
+  restored.record("route", 20, 3_601_000);
+  const pending = restored.next(3_601_000)!;
+  restored.acknowledge(pending);
+  expect(restored.next(3_601_000)?.build).toBe("new-build");
+  expect(restored.next(3_601_000)?.route.count).toBe(1);
+});
+
+test("expired loss excludes acknowledged samples even after reload", () => {
+  const old = new HourlyBrowserEvidence("build", () => "00000000-0000-0000-0000-000000000001");
+  old.record("route", 10, 3_600_000);
+  old.acknowledge(old.next(3_600_000)!);
+  old.record("route", 20, 3_601_000);
+  const restored = new HourlyBrowserEvidence("build");
+  expect(restored.restore(old.serialize(3_601_000), 3_601_000)).toBe(true);
+  restored.next(26 * 3_600_000);
+  expect(restored.status.dropped_samples).toBe(1);
+});
+
+test("untrusted storage is bounded and content fields are not restored", () => {
+  const source = new HourlyBrowserEvidence("build", () => "00000000-0000-0000-0000-000000000001");
+  source.record("route", 10, 3_600_000);
+  const stored = JSON.parse(source.serialize(3_600_000));
+  stored.captures[0].prompt = "private";
+  const restored = new HourlyBrowserEvidence("build");
+  expect(restored.restore(JSON.stringify(stored), 3_600_000)).toBe(true);
+  expect(JSON.stringify(restored.next(3_600_000))).not.toContain("private");
+  expect(new HourlyBrowserEvidence("build").restore(" ".repeat(65_537), 3_600_000)).toBe(false);
+  expect(new HourlyBrowserEvidence("build").restore(JSON.stringify(stored), 26 * 3_600_000)).toBe(false);
+});
+
 test("hourly totals survive rolling local-window expiry and retries preserve identity", () => {
   const collector = new HourlyBrowserEvidence("1.4.1-dev-test", () => "id");
   collector.record("route", 10, 3_600_000);

@@ -6,6 +6,22 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P1k: reload-safe pending evidence
+
+- Save bounded pending captures to tab-scoped session storage on background,
+  pagehide and owner cleanup, without per-sample writes or a new timer. Restore
+  validates a 64 KiB envelope, at most 24 captures, age, identity and numeric
+  aggregates; arbitrary fields are projected away before any later upload.
+- Restored captures retain their original build/identity for retry only. New
+  samples get a new identity even in the same hour, preventing build changes or
+  duplicated tabs from rewriting old captures. Loss accounting subtracts samples
+  already acknowledged, including after reload.
+- Fourteen focused accumulator/collection/Dogfood tests and the production web
+  build passed. Existing terminal chunk warning remains. Storage failure appears
+  in Dogfood; abrupt browser termination can still lose recent unsaved samples.
+- Saved comparison UI, actual-device suspend/eviction validation, upload route
+  execution and measured overhead remain open. No push, deployment or release.
+
 ### P1j: app-owned development collection and bounded upload
 
 - Reused the App runtime-update hook's development flag; no additional status

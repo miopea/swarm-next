@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { recordBrowserEvidence } from "../api";
 import { browserPerformance } from "./browserPerformance";
 import { HourlyBrowserEvidence } from "./hourlyBrowserEvidence";
@@ -8,6 +8,7 @@ export type DogfoodCollectionStatus = {
   state: "disabled" | "collecting" | "unavailable";
   dropped_samples: number;
   pruned_captures: number;
+  persistence_unavailable?: boolean;
 };
 
 /** App-owned, single-flight uploads; Settings does not own collection lifetime. */
@@ -17,12 +18,33 @@ export function useDogfoodCollection(token: string | undefined, enabled: boolean
     return new HourlyBrowserEvidence(build);
   }, [token, enabled, build]);
   const [status, setStatus] = useState<DogfoodCollectionStatus>({ state: "disabled", dropped_samples: 0, pruned_captures: 0 });
+  const restoredCollector = useRef<HourlyBrowserEvidence | undefined>(undefined);
   useEffect(() => {
     setStatus({ state: collector ? "collecting" : "disabled", dropped_samples: 0, pruned_captures: 0 });
     if (!collector) return;
-    return browserPerformance.attachHourlySink((metric, duration, at) => {
+    if (restoredCollector.current !== collector) {
+      restoredCollector.current = collector;
+      let restored = false;
+      try { restored = collector.restore(window.sessionStorage.getItem("swarm.hourly-evidence.v1"), Date.now()); } catch { /* Optional storage. */ }
+      if (!restored) setStatus((previous) => ({ ...previous, persistence_unavailable: true }));
+    }
+    const save = (notify = true) => {
+      try { window.sessionStorage.setItem("swarm.hourly-evidence.v1", collector.serialize(Date.now())); }
+      catch { if (notify) setStatus((previous) => ({ ...previous, persistence_unavailable: true })); }
+    };
+    const persist = () => save();
+    const visibility = () => { if (document.visibilityState === "hidden") persist(); };
+    const detach = browserPerformance.attachHourlySink((metric, duration, at) => {
       if (document.visibilityState === "visible") collector.record(metric, duration, at);
     });
+    window.addEventListener("pagehide", persist);
+    document.addEventListener("visibilitychange", visibility);
+    return () => {
+      detach();
+      window.removeEventListener("pagehide", persist);
+      document.removeEventListener("visibilitychange", visibility);
+      save(false);
+    };
   }, [collector]);
 
   const flush = useCallback(async (signal: AbortSignal) => {
@@ -38,7 +60,7 @@ export function useDogfoodCollection(token: string | undefined, enabled: boolean
       const result = await recordBrowserEvidence(token, capture, signal);
       if (signal.aborted) return;
       collector.acknowledge(capture);
-      setStatus((previous) => ({ state: "collecting", dropped_samples: collector.status.dropped_samples,
+      setStatus((previous) => ({ ...previous, state: "collecting", dropped_samples: collector.status.dropped_samples,
         pruned_captures: previous.pruned_captures + result.pruned }));
     } catch {
       if (!signal.aborted || (signal.reason instanceof DOMException && signal.reason.name === "TimeoutError")) {
