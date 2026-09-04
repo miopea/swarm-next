@@ -1482,6 +1482,16 @@ export function App() {
   // Open work somebody or something owes a move on. Deliberately excludes a
   // task whose owner the server did not state: an older API must not be able
   // to manufacture a queue, and the tab must agree with what the view shows.
+  // ⚠️ THIS EQUALS openTaskCount ALWAYS, and the operator noticed: the Queues
+  // and Tasks badges are the same number by construction. Every open state
+  // derives a real owner and only completed and abandoned derive "nobody", so
+  // this filter excludes nothing.
+  //
+  // NOT "fixed" by excluding blocked here. That would read 6 against 43 rows on
+  // the page, which is the badge-disagrees-with-the-page defect this repo
+  // already has a test for on Needs You — and trading one badge defect for
+  // another is not a fix. What the badge should say is a product question and
+  // it is reported rather than guessed at.
   const queuedTaskCount = tasks.filter(
     (task) => isOpenTaskState(task.state) && task.next_move_owner !== undefined && task.next_move_owner !== "nobody",
   ).length;

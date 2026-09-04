@@ -2759,7 +2759,11 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 /* QUEUES — one screen per owner of the next move.
    Ordered by who is holding work up rather than by which mechanism queued it,
    so a growing pile is attributable at a glance. */
-.queues { display: grid; gap: 1.25rem; padding: 1rem; min-width: 0; }
+/* Scrolls like the task board and for the same reason: the surface is a
+   fixed-height grid cell, so a child without min-height:0 and its own
+   overflow grows past the viewport and is clipped rather than scrolled.
+   Queues had neither, so anything below the fold was unreachable. */
+.queues { display: grid; gap: 1.25rem; padding: 1rem; min-width: 0; min-height: 0; overflow-y: auto; }
 .queues-empty { color: var(--muted); }
 .queue-group { border: 1px solid var(--line); border-radius: 10px; padding: 0.85rem 1rem; background: var(--panel); min-width: 0; }
 .queue-group > header { display: grid; gap: 0.15rem; margin-bottom: 0.6rem; }
