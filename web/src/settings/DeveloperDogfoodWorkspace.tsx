@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { DevelopmentRuntime } from "../api";
 import type { DogfoodCollectionStatus } from "../runtime/useDogfoodCollection";
+import SavedBrowserEvidence from "./SavedBrowserEvidence";
 import { BROWSER_METRICS, readBrowserPerformance } from "../runtime/browserPerformance";
 import { terminalWorkspace } from "../terminal/TerminalWorkspace";
 
@@ -9,9 +10,10 @@ const labels = {
   terminal_render: "Terminal paint", terminal_reconnect: "Terminal connection",
 };
 
-export default function DeveloperDogfoodWorkspace({ runtime, version, reachable, collection }: {
+export default function DeveloperDogfoodWorkspace({ runtime, version, reachable, collection, operatorToken }: {
   runtime: DevelopmentRuntime | undefined; version: string | undefined; reachable: boolean;
   collection?: DogfoodCollectionStatus;
+  operatorToken?: string;
 }) {
   const [evidence, setEvidence] = useState(readBrowserPerformance);
   const [preview, setPreview] = useState(false);
@@ -49,6 +51,7 @@ export default function DeveloperDogfoodWorkspace({ runtime, version, reachable,
     <p>{collection?.dropped_samples ?? 0} samples dropped · {collection?.pruned_captures ?? 0} server captures pruned during this collection.</p>
     <small>Up to 24 pending hourly captures are saved in this tab on backgrounding or reload, where browser storage is available. Abrupt browser termination can still lose recent samples. Private Hive storage retains up to 4,096 captures for 90 days. No external publishing.</small>
     {collection?.persistence_unavailable && <p role="status">Pending history could not be restored or saved in this browser. Reload may lose unsaved evidence.</p>}
+    {operatorToken && <SavedBrowserEvidence key={operatorToken} operatorToken={operatorToken} />}
     <h4>Terminal warm-pool experiment</h4>
     <p>Off by default. Retain the active terminal and four recent renderers; colder views reconnect to the engine’s newest snapshot. Workers keep running. This browser only; reload resets the experiment.</p>
     <p>Evaluate repeated cold restores against the 500 ms p95 target before adopting this policy. These counts do not prove restore speed or resource savings.</p>
@@ -67,6 +70,6 @@ export default function DeveloperDogfoodWorkspace({ runtime, version, reachable,
     <button type="button" onClick={() => { setEvidence(readBrowserPerformance()); setRetention(terminalWorkspace.rendererRetention); setColdRestores(terminalWorkspace.coldRestoreEvidence); }}>Refresh evidence</button>
     <button type="button" aria-expanded={preview} onClick={() => setPreview(!preview)}>Preview browser evidence</button>
     {preview && <pre>{JSON.stringify({ running_version: version ?? runtime.version, checkout_revision: runtime.source_revision, source_dirty: runtime.source_dirty, browser: evidence, renderer_pool: retention, cold_view_restores: coldRestores }, null, 2)}</pre>}
-    <small>Long-term revision comparisons and instrumentation-overhead validation are still pending. This panel does not publish or cut releases.</small>
+    <small>Controlled workload comparisons and instrumentation-overhead validation are still pending. This panel does not publish or cut releases.</small>
   </section>;
 }

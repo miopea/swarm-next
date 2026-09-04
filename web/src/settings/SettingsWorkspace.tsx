@@ -707,7 +707,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
       )}
 
       {shows("settings-dogfood") && (
-        <DeveloperDogfoodWorkspace runtime={developmentRuntime} version={health?.version} reachable={developmentReachable} collection={dogfoodCollection} />
+        <DeveloperDogfoodWorkspace runtime={developmentRuntime} version={health?.version} reachable={developmentReachable} collection={dogfoodCollection} operatorToken={operatorToken} />
       )}
 
       {shows("settings-shortcuts") && (

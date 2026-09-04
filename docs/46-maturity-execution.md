@@ -6,6 +6,22 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P1l: saved build-linked browser evidence view
+
+- Dogfood now reads the latest bounded 100 captures and groups them by immutable
+  browser build, showing capture counts, UTC hour range and sample-weighted
+  mean/max per metric. Build details are collapsed by default. Copy distinguishes
+  observed hour ranges from continuous coverage and warns about mixed devices
+  and workloads; these comparisons are not causal regression evidence or p95.
+- Uses on-demand visible polling with cancellation/deadline, no periodic history
+  fetch. Failed refresh preserves last-known evidence with an explicit warning.
+- Passed 27 Settings/Dogfood/history tests and production build; the final three
+  history tests were rerun after making in-flight cancellation non-vacuous.
+  Existing terminal chunk warning remains. Rendered browser/mobile review and
+  authenticated live history validation have not been performed for this slice.
+- Controlled comparisons, collection coverage/overhead, broader server and Queen
+  metrics remain open. No push, deployment or release; P1 is not complete.
+
 ### P1k: reload-safe pending evidence
 
 - Save bounded pending captures to tab-scoped session storage on background,
