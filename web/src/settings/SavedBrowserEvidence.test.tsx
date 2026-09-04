@@ -21,10 +21,10 @@ test("failed refresh retains saved evidence with unavailable status", async () =
   vi.mocked(fetchBrowserEvidence).mockResolvedValueOnce([capture("build-a", 1, 100)])
     .mockRejectedValueOnce(new Error("offline"));
   render(<SavedBrowserEvidence operatorToken="token" />);
-  expect(await screen.findByText("build-a · 1 captures")).toBeInTheDocument();
+  expect(await screen.findByText("build-a · 1 capture")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Refresh saved history" }));
   expect(await screen.findByRole("status")).toHaveTextContent("unavailable");
-  expect(screen.getByText("build-a · 1 captures")).toBeInTheDocument();
+  expect(screen.getByText("build-a · 1 capture")).toBeInTheDocument();
 });
 
 test("unmount cancels the history read", async () => {

@@ -51,7 +51,7 @@ export default function SavedBrowserEvidence({ operatorToken }: { operatorToken:
     {!unavailable && !captures && <p role="status">Loading saved history…</p>}
     {captures?.length === 0 && <p>No saved browser captures yet. Missing evidence is not a healthy result.</p>}
     {summaries.map((summary) => <details key={summary.build}>
-      <summary>{summary.build} · {summary.captures} captures</summary>
+      <summary>{summary.build} · {summary.captures} {summary.captures === 1 ? "capture" : "captures"}</summary>
       <p>UTC hours: {new Date(summary.first * 1000).toISOString().slice(0, 16)} to {new Date(summary.last * 1000).toISOString().slice(0, 16)}</p>
       <ul>{BROWSER_METRICS.map((metric) => {
         const timing = summary.metrics[metric];

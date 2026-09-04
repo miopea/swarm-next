@@ -20,6 +20,15 @@ import { demoDecision, demoTasks, demoWorkers } from "./productFixtures";
 const now = Math.floor(Date.now() / 1000);
 
 export function hiveFixture(path: string): unknown | undefined {
+  if (path === "/api/v1/diagnostics/browser-evidence") {
+    const empty = { count: 0, total_ms: 0, max_ms: 0 };
+    return ["1.4.1-dev-synthetic-a", "1.4.1-dev-synthetic-b"].map((build, index) => ({
+      capture_id: `00000000-0000-0000-0000-00000000000${index + 1}`, build,
+      hour: Math.floor(now / 3600) * 3600 - index * 3600, revision: 1,
+      route: { count: 10, total_ms: 200 + index * 100, max_ms: 70 },
+      long_task: empty, interaction: empty, terminal_render: empty, terminal_reconnect: empty,
+    }));
+  }
   if (path === "/api/v1/presence/night-watch") return { enabled: false, timezone: "America/New_York", start_minute: 1320, end_minute: 420 };
   // A terminal attachment asks for a grant at a per-session path, so it cannot
   // be an arm of the switch below. The grant is a fiction like everything else

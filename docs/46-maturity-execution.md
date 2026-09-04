@@ -6,6 +6,21 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### Integrated Dogfood checkpoint
+
+- Full web regression at `184cc9a`: 123 files, 1,012 tests passed (two workers,
+  93.27 seconds). No live CPU or mobile acceptance is implied by this result.
+- Chrome/Edge skill drove a separate local, no-proxy harness at port 5201 with
+  two explicitly synthetic history builds. Inspected the rendered desktop panel,
+  expanded a build and refreshed saved history; sample count/mean/max and UTC
+  range remained readable. Corrected singular capture copy and reran three tests.
+- Added history data to the existing isolated harness so the actual component
+  remains visually reproducible without credentials or live worker data. No
+  production fetch interception or new production fixture dependency.
+- Real-device width, live data/reconnect, session-length degradation and overhead
+  remain unverified. The UI is readable, not a declaration of final visual polish.
+  Full P0-P7 goal remains active; no push, deployment or release.
+
 ### P1l: saved build-linked browser evidence view
 
 - Dogfood now reads the latest bounded 100 captures and groups them by immutable

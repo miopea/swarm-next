@@ -223,7 +223,7 @@ export const SURFACES: Surface[] = [
     id: "developer-dogfood",
     title: "Developer Dogfood",
     why: "Isolated diagnostics and opt-in warm-pool controls; no live workers or Hive requests.",
-    render: () => <DeveloperDogfoodWorkspace runtime={{ enabled: true, version: "fixture-dev", state: "idle", reload_available: false, source_revision: "fixture-revision", source_dirty: false, deployed_source_published: false }} version="fixture-dev" reachable />,
+    render: () => <DeveloperDogfoodWorkspace operatorToken="fixture-only" runtime={{ enabled: true, version: "fixture-dev", state: "idle", reload_available: false, source_revision: "fixture-revision", source_dirty: false, deployed_source_published: false }} version="fixture-dev" reachable />,
   },
   {
     id: "terminal-handoff",
