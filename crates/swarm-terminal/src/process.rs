@@ -162,6 +162,38 @@ pub struct ProcessTerminalSession {
     provider: Option<ProviderKind>,
 }
 
+/// Owns history from successful registration through reader shutdown, including
+/// setup failure and a reader closure dropped because thread creation failed.
+struct ReaderHistoryOwner {
+    session_id: WorkerSessionId,
+    history: Option<Arc<HistoryStore>>,
+}
+
+impl ReaderHistoryOwner {
+    fn start(
+        session_id: WorkerSessionId,
+        history: Option<Arc<HistoryStore>>,
+    ) -> Result<Self, HistoryError> {
+        if let Some(history) = &history {
+            history.start_session(session_id)?;
+        }
+        Ok(Self {
+            session_id,
+            history,
+        })
+    }
+}
+
+impl Drop for ReaderHistoryOwner {
+    fn drop(&mut self) {
+        if let Some(history) = &self.history
+            && let Err(error) = history.finish_session(self.session_id)
+        {
+            warn!(session_id = %self.session_id, %error, "terminal history finalization failed");
+        }
+    }
+}
+
 impl std::fmt::Debug for ProcessTerminalSession {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -208,17 +240,11 @@ impl ProcessTerminalSession {
         command_builder.cwd(&command.working_directory);
         let provider_lifecycle = configure_provider_lifecycle(id, provider, &mut command_builder)?;
         configure_terminal_environment(&mut command_builder, &command.executable);
-        let child = pair
-            .slave
-            .spawn_command(command_builder)
-            .map_err(terminal_error)?;
-        drop(pair.slave);
-
         let mut reader = pair.master.try_clone_reader().map_err(terminal_error)?;
         let writer = pair.master.take_writer().map_err(terminal_error)?;
         let terminal_state = Arc::new(Mutex::new(CanonicalTerminalState::new(limits, size)));
+        let history_owner = ReaderHistoryOwner::start(id, history.as_ref().map(Arc::clone))?;
         if let Some(history) = &history {
-            history.start_session(id)?;
             history.append_checkpoint(id, &lock(&terminal_state)?.snapshot())?;
         }
         let reader_terminal_state = Arc::clone(&terminal_state);
@@ -267,15 +293,21 @@ impl ProcessTerminalSession {
                         }
                     }
                 }
-                if let Some(history) = &reader_history
-                    && let Err(error) = history.finish_session(id)
-                {
-                    warn!(session_id = %id, %error, "terminal history finalization failed");
-                }
+                drop(history_owner);
                 reader_state.store(false, Ordering::Release);
                 reader_output_state.send_replace(false);
             })
             .map_err(terminal_error)?;
+
+        // Prepare every fallible owned resource before creating the provider.
+        // The parent holds the slave open while the reader waits. Spawn failure
+        // closes it, ending the reader and its history owner without a child to
+        // orphan. After successful spawn there are no fallible setup steps.
+        let child = pair
+            .slave
+            .spawn_command(command_builder)
+            .map_err(terminal_error)?;
+        drop(pair.slave);
 
         Ok(Self {
             id,
@@ -1811,6 +1843,93 @@ mod tests {
         )
         .unwrap();
         assert!(output_until(&session, "firstsecond").contains("firstsecond"));
+    }
+
+    #[test]
+    fn startup_history_failure_precedes_provider_spawn_and_releases_history() {
+        let temp = TempDir::new().unwrap();
+        let history = Arc::new(
+            HistoryStore::open(
+                temp.path().join("history"),
+                HistoryLimits::new(1, 1024, 4096, 8192, 3600),
+            )
+            .unwrap(),
+        );
+        let mut command = shell_command("unused");
+        // Both operations would fail. The history failure must happen first:
+        // no provider may be launched before its checkpoint can be prepared.
+        command.executable = temp.path().join("no-such-provider");
+        let result = ProcessTerminalSession::spawn_with_history(
+            WorkerSessionId::new(),
+            &command,
+            JournalLimits::new(1024, 16),
+            TerminalSize::default(),
+            Some(Arc::clone(&history)),
+            None,
+        );
+        assert!(matches!(
+            result,
+            Err(SessionRegistryError::History(
+                HistoryError::RecordTooLarge { .. }
+            ))
+        ));
+        assert_eq!(history.diagnostics().unwrap().session_count, 0);
+    }
+
+    #[test]
+    fn history_owner_cleans_up_when_reader_closure_is_not_started() {
+        let temp = TempDir::new().unwrap();
+        let history = Arc::new(
+            HistoryStore::open(temp.path().join("history"), HistoryLimits::default()).unwrap(),
+        );
+        let owner =
+            ReaderHistoryOwner::start(WorkerSessionId::new(), Some(Arc::clone(&history))).unwrap();
+        // Thread creation failure drops its closure instead of executing it.
+        let reader = move || drop(owner);
+        drop(reader);
+        assert_eq!(history.diagnostics().unwrap().session_count, 0);
+    }
+
+    #[test]
+    fn failed_provider_spawn_finishes_prepared_reader_and_allows_retry() {
+        let temp = TempDir::new().unwrap();
+        let history = Arc::new(
+            HistoryStore::open(temp.path().join("history"), HistoryLimits::default()).unwrap(),
+        );
+        let registry = SessionRegistry::new_with_history(
+            JournalLimits::new(1024, 16),
+            1,
+            [env::temp_dir().canonicalize().unwrap()],
+            Some(Arc::clone(&history)),
+        )
+        .unwrap();
+        let mut command = shell_command("unused");
+        command.executable = temp.path().join("no-such-provider");
+        assert!(matches!(
+            registry.spawn(&command, TerminalSize::default()),
+            Err(SessionRegistryError::Terminal(_))
+        ));
+        assert!(registry.session_resource_states().unwrap().is_empty());
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let sessions = history.sessions().unwrap();
+            assert_eq!(sessions.len(), 1);
+            if !sessions[0].active {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "failed startup left history active"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        let session = registry
+            .spawn(
+                &shell_command("printf retry-ready"),
+                TerminalSize::default(),
+            )
+            .unwrap();
+        assert!(output_until(&session, "retry-ready").contains("retry-ready"));
     }
 
     #[test]

@@ -6,6 +6,32 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2/P5: failed startup cannot orphan a provider during setup
+
+- The startup audit found child creation preceding fallible PTY reader/writer,
+  initial history checkpoint, and reader-thread creation. An error in those
+  steps could return before constructing the session that owns child cleanup.
+- Prepare those resources before provider creation. The parent retains the PTY
+  slave while the reader waits; failed child creation closes it and ends the
+  prepared reader. No fallible setup remains after successful child creation.
+  Existing immutable session identities and registry insertion ownership remain.
+- A scoped history owner finalizes registration on checkpoint failure, a dropped
+  reader closure, and normal reader termination. Failures remain errors; no
+  restoration or successful provider startup is inferred from preparation.
+- All 113 Linux terminal tests passed, including new history-before-spawn,
+  unstarted reader-closure cleanup, failed real PTY startup, and successful retry
+  under a one-session registry cap. Strict all-target/all-feature Linux terminal
+  Clippy, formatting, and diff checks passed. This is startup cleanup evidence,
+  not graceful shutdown or complete conversation recovery acceptance.
+- Recovered the preceding disposable Claude diagnostic result: its empty MCP
+  configuration was invalid, so exit 1 was not missing-context evidence. The
+  corrected five-second interactive test reached workspace trust and timed out;
+  no trust selection was submitted. A subsequent read-only process check found
+  no process in either exact temporary workspace. Neither result authorizes a
+  Continue-to-Fresh transition. The full interactive ladder remains open; no
+  print-mode continuation inference or live-worker change was introduced.
+- No push, deployment, release, or live worker interruption.
+
 ### P4: connect delivery recovery to unattended Queen work
 
 - Delivery exceptions now contribute to the existing conductor's actionable
