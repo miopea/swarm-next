@@ -82,6 +82,11 @@ export function hiveFixture(path: string): unknown | undefined {
     case "/api/v1/runtime/resources":
       // Normal, so the header carries no pressure badge in a screenshot.
       return {
+        daily_backup: (() => {
+          const state = new URLSearchParams(window.location.search).get("backupState");
+          return state === "failed" || state === "unavailable" ? { state }
+            : state === "ready" ? { state, snapshot_day: "20260904" } : { state: "not_reported" };
+        })(),
         sampled_at: now,
         policy: { mode: "observe_only", advisory_percent: 85, critical_percent: 95 },
         api: { resident_memory_bytes: 92 * 1024 * 1024, pressure: "normal" },

@@ -6,6 +6,21 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P6 / P7: real Edge check of backup runtime states
+
+- Extended the isolated whole-App fixture with failed/unavailable/ready backup
+  outcomes. No fixture call reaches a Hive or runs backup commands.
+- Edge displayed the failure in the existing desktop runtime region. Backup
+  details opened Maintenance with the backup card and troubleshooting commands.
+  At 390x844 the notice remained accessible through System; expanded guidance
+  fit with document scrollWidth equal to viewport width (390).
+- Unavailable explicitly said health was unconfirmed; ready removed the notice
+  from the expanded runtime region. This tested three fixture states through
+  navigation, not a live scheduled failure/recovery event.
+- Production web build passed; terminal chunk-size warning remains. Reset the
+  viewport and closed the owned tab; existing fixture server was left running.
+  No live worker changes, push, deployment or release.
+
 ### P5 / P6: daily backup outcome reaches the runtime area
 
 - The authenticated, no-store resource response now projects the package outcome
