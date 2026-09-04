@@ -6,6 +6,22 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2: process-scoped startup capability gate
+
+- Added the engine-side gate primitive: exact engine session plus 32-byte
+  capability, one accepted startup observation, identical retry acknowledgement,
+  conflicting-startup refusal and explicit irreversible revocation. Unrelated
+  lifecycle events do not consume the startup observation. Debug output omits
+  the secret. Callers must supply OS entropy and hold the live-session lifecycle
+  boundary; the primitive is not itself a network receiver.
+- Four focused lifecycle/parser tests and strict all-target/all-feature terminal
+  Clippy passed. Tests vary every capability byte, process identity, duplicate,
+  conflicting and post-revocation events. No constant-time compiler guarantee is
+  claimed for the comparison helper.
+- Engine allocation/inherited capability delivery, IPC dispatch, hook installation
+  and persistence reconciliation remain unfinished. No production session uses
+  this gate yet; no deployment, release or live worker change occurred.
+
 ### P2: bounded provider lifecycle input boundary
 
 - Added a 64 KiB Claude SessionStart parser in the terminal provider adapter.

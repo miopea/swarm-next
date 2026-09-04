@@ -7,6 +7,7 @@ mod process;
 mod provider;
 mod provider_activity;
 mod provider_lifecycle;
+mod provider_lifecycle_gate;
 mod resources;
 mod state;
 
@@ -44,6 +45,7 @@ pub use provider_activity::{
 pub use provider_lifecycle::{
     MAX_PROVIDER_LIFECYCLE_BYTES, ProviderSessionStartObservation, read_claude_session_start,
 };
+pub use provider_lifecycle_gate::{ProviderLifecycleAcceptance, ProviderLifecycleGate};
 pub use resources::{ProcessResourceSample, sample_current_process, sample_process_tree};
 pub use state::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, CanonicalTerminalState,
