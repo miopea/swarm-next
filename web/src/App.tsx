@@ -1529,8 +1529,19 @@ export function App() {
   // counted a card that is not on the page. Same badge-disagrees-with-page
   // defect as the three above, arriving from the other side: a count without a
   // card rather than a card without a count.
+  // FIFTH PASS OVER THIS COUNTER, and checked in the same change as the card
+  // rather than after somebody notices. An unreadable project directory is back
+  // on the page as a fault, so it is back in the count; the benign never-run
+  // causes are in neither. The rule this file keeps relearning: the badge reads
+  // exactly what the card renders, from the same predicate.
   const conversationDriftAttentionCount =
-    workerConversations.some((worker) => worker.freshness.state === "stale") ? 1 : 0;
+    workerConversations.some(
+      (worker) =>
+        worker.freshness.state === "stale" ||
+        (worker.freshness.state === "unknown" && worker.freshness.cause.fault),
+    )
+      ? 1
+      : 0;
   // blockedEscalationAttentionCount BELONGS HERE and was missing, which is the
   // same defect the paragraph above describes and fixes for held deliveries.
   // It was computed, passed to the inbox as additionalPendingCount, and left

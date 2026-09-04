@@ -9,9 +9,25 @@ const stale: WorkerConversation = {
   worker_id: "w-1", name: "Scout",
   freshness: { state: "stale", newest_conversation: "4c59142a", pinned_last_entry: "2026-09-02T00:57:40.565Z", newest_last_entry: "2026-09-02T02:13:26.742Z" },
 };
+// A worker that has never run in its workspace. Ordinary, and not the
+// operator's — five of these were the rows they objected to.
 const unknown: WorkerConversation = {
   worker_id: "w-2", name: "ShotCraft",
-  freshness: { state: "unknown", reason: "no Claude project directory exists for this workspace" },
+  freshness: {
+    state: "unknown",
+    cause: { kind: "never_run", fault: false },
+    reason: "no Claude project directory exists for this workspace",
+  },
+};
+// A directory that exists and cannot be read. Same "unknown" state, opposite
+// verdict — this one is somebody's to fix.
+const unreadable: WorkerConversation = {
+  worker_id: "w-4", name: "Aria",
+  freshness: {
+    state: "unknown",
+    cause: { kind: "directory_unreadable", fault: true },
+    reason: "the Claude project directory could not be read",
+  },
 };
 const current: WorkerConversation = { worker_id: "w-3", name: "Platform", freshness: { state: "current" } };
 
@@ -55,4 +71,37 @@ test("a stale worker still brings the card back, with the unknown ones left out"
 test("says nothing when every conversation is the newest", () => {
   const { container } = render(<ConversationDriftCard workers={[current]} onOpenWorker={vi.fn()} />);
   expect(container).toBeEmptyDOMElement();
+});
+
+/**
+ * ⚠️ THE TWO UNKNOWNS ARE THE SAME STATE AND OPPOSITE ANSWERS, and this is the
+ * web half of the guard that stops them collapsing.
+ *
+ * Both arrive as state "unknown". A worker that has never run has no second
+ * thread to choose between and is not the operator's business; a project
+ * directory that exists and cannot be read is a permissions fault and is the
+ * one case in this bucket where something is wrong and someone can fix it.
+ *
+ * Selected on the server's `fault` verdict, never on the reason sentence.
+ * Matching prose would make a display string load-bearing, and rewording the
+ * message would break detection with nothing failing.
+ */
+test("an unreadable project directory is shown; a worker that never ran is not", () => {
+  render(<ConversationDriftCard workers={[unreadable, unknown, current]} onOpenWorker={vi.fn()} />);
+  expect(screen.getByText("Aria")).toBeInTheDocument();
+  expect(screen.queryByText("ShotCraft")).not.toBeInTheDocument();
+  expect(screen.getByText(/permissions or filesystem problem/i)).toBeInTheDocument();
+});
+
+/**
+ * The closing line tells the operator to pick a thread. A worker whose history
+ * cannot be READ has no threads to pick between, so the instruction is false
+ * for it — the same defect that put five never-run workers on this page.
+ */
+test("the pick-a-thread instruction appears only when there is a thread to pick", () => {
+  const { container } = render(<ConversationDriftCard workers={[unreadable]} onOpenWorker={vi.fn()} />);
+  expect(container.textContent).not.toMatch(/Swarm does not switch for you/i);
+  cleanup();
+  render(<ConversationDriftCard workers={[stale]} onOpenWorker={vi.fn()} />);
+  expect(screen.getByText(/Swarm does not switch for you/i)).toBeInTheDocument();
 });
