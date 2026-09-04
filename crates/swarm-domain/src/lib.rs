@@ -10,6 +10,7 @@ mod decisions;
 mod dogfood_evidence;
 mod night_watch;
 mod operator_answers;
+mod ops_tickets;
 mod presence_policy;
 mod release;
 mod tasks;
@@ -25,6 +26,7 @@ pub use decisions::*;
 pub use dogfood_evidence::*;
 pub use night_watch::*;
 pub use operator_answers::*;
+pub use ops_tickets::*;
 pub use presence_policy::*;
 pub use release::*;
 pub use tasks::*;
@@ -1398,7 +1400,14 @@ mod commit_settlement_tests {
     fn nobody_reporting_is_not_the_same_as_reporting_nothing() {
         // The distinction the previous task exists to preserve. If these ever
         // agree, work whose worker simply forgot closes itself.
-        assert_eq!(commit_settlement(None), CommitSettlement::Unknown);
+        //
+        // ⚠️ AND SINCE 2026-09-04 IT IS A THREE-WAY DISTINCTION, not two. Nobody
+        // reporting is NotReported, reporting an empty list is NothingBuilt, and
+        // a report that cannot be settled is Unestablished. The first two used to
+        // differ here and then be folded back together by every caller reading
+        // Unknown, which is how reporting your commits became the only route to
+        // a refused no-deployment claim.
+        assert_eq!(commit_settlement(None), CommitSettlement::NotReported);
         assert_eq!(
             commit_settlement(Some(&report(vec![]))),
             CommitSettlement::NothingBuilt
@@ -1465,7 +1474,7 @@ mod commit_settlement_tests {
                     commit(CommitVerdict::Present, &["docs/a.md"]),
                     commit(unchecked, &["docs/b.md"]),
                 ]))),
-                CommitSettlement::Unknown,
+                CommitSettlement::Unestablished,
                 "{unchecked} must not settle"
             );
         }
@@ -1477,10 +1486,10 @@ mod commit_settlement_tests {
     /// path is documentation" is trivially true of a commit that may carry an
     /// entire release. Settling on that would close shipped work automatically.
     #[test]
-    fn a_commit_reporting_no_paths_is_unknown_rather_than_documentation() {
+    fn a_commit_reporting_no_paths_is_unsettled_rather_than_documentation() {
         assert_eq!(
             commit_settlement(Some(&report(vec![commit(CommitVerdict::Present, &[])]))),
-            CommitSettlement::Unknown
+            CommitSettlement::Unestablished
         );
     }
 }

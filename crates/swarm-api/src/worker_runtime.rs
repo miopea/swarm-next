@@ -437,7 +437,91 @@ pub(crate) enum ConversationFreshness {
         newest_last_entry: String,
     },
     /// Swarm cannot establish which is newest. Reported, never assumed fine.
-    Unknown { reason: String },
+    ///
+    /// `cause` is the machine-readable half and `reason` is the sentence. THEY
+    /// ARE NOT REDUNDANT AND THE ORDER MATTERS: every caller deciding anything
+    /// reads `cause`, and `reason` is for a human to read afterwards.
+    Unknown { cause: UnknownCause, reason: String },
+}
+
+/// Why freshness could not be established — as a value, not a sentence.
+///
+/// ⚠️ THIS EXISTS BECAUSE DISTINCT CASES WERE FLATTENED INTO PROSE ONE LINE
+/// AFTER BEING DISTINGUISHED. The resolver knows exactly which happened at the
+/// point it gives up; it was throwing that away and keeping only an English
+/// description, so the only way back to the fact was matching on the wording.
+///
+/// Three of these are ordinary diagnostic outcomes and two are faults; the
+/// difference is what a person can do about it. A worker that has never run in its workspace has no
+/// second thread to choose between, and saying so under "what needs you" is
+/// noise — the operator, shown five such rows: "there is nothing I can do about
+/// it". A directory that exists and cannot be read is a permissions or
+/// filesystem fault, and it is one of the cases where something IS wrong and
+/// someone CAN fix it.
+///
+/// ⚠️ DO NOT RECOVER THE DISTINCTION BY MATCHING `reason`. A human-readable
+/// reason is prose written for a person; keying behaviour off its wording makes
+/// a display string load-bearing, and the next person to reword the message
+/// breaks the detection with no test failing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnknownCause {
+    /// The shared diagnostic allowance was exhausted before the scan could
+    /// establish a result. This is visible in runtime diagnostics, but it is
+    /// not a conversation choice the operator can resolve from Needs You.
+    ScanLimitReached,
+    /// No project directory exists for this workspace. The worker has never run
+    /// here, so there is nothing to be newest. Ordinary.
+    NeverRun,
+    /// The project directory exists and `read_dir` failed. Permissions or
+    /// filesystem. A fault.
+    DirectoryUnreadable,
+    /// The directory read cleanly and holds no transcripts at all. Claude made
+    /// the directory and nothing has been written. Ordinary.
+    NoTranscripts,
+    /// Transcripts are present and NOT ONE yielded a readable entry. Distinct
+    /// from `NoTranscripts` on purpose: files that exist and cannot be read are
+    /// the same fault as a directory that cannot be read, one level down, and
+    /// collapsing them would hide a file-permission problem behind the benign
+    /// never-run case.
+    TranscriptsUnreadable,
+}
+
+/// ⚠️ SERIALISED AS `{ kind, fault }` SO THE CLIENT NEVER CLASSIFIES.
+///
+/// The obvious shape is a bare string and it is wrong here: the web would then
+/// hold its own list of which causes are faults, and two owners of one fact
+/// drift. A cause added in this file and forgotten in the card is the same
+/// silent wrong answer the whole ticket is about, so `is_fault` below is the
+/// only place that decides and the verdict travels with the value.
+impl serde::Serialize for UnknownCause {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+        let kind = match self {
+            Self::ScanLimitReached => "scan_limit_reached",
+            Self::NeverRun => "never_run",
+            Self::DirectoryUnreadable => "directory_unreadable",
+            Self::NoTranscripts => "no_transcripts",
+            Self::TranscriptsUnreadable => "transcripts_unreadable",
+        };
+        let mut out = serializer.serialize_struct("UnknownCause", 2)?;
+        out.serialize_field("kind", kind)?;
+        out.serialize_field("fault", &self.is_fault())?;
+        out.end()
+    }
+}
+
+impl UnknownCause {
+    /// Whether this is something wrong that somebody can fix, as opposed to the
+    /// ordinary state of a worker that has never run.
+    ///
+    /// The card and its badge both read THIS, so a cause added later is
+    /// classified once here rather than in each of them.
+    pub(crate) const fn is_fault(self) -> bool {
+        match self {
+            Self::ScanLimitReached | Self::NeverRun | Self::NoTranscripts => false,
+            Self::DirectoryUnreadable | Self::TranscriptsUnreadable => true,
+        }
+    }
 }
 
 /// One work allowance shared by the complete diagnostic scan, not per worker.
@@ -532,6 +616,7 @@ pub(crate) fn conversation_freshness(
     }
     if !budget.reserve(1, 0) {
         return ConversationFreshness::Unknown {
+            cause: UnknownCause::ScanLimitReached,
             reason: "conversation scan limit reached".into(),
         };
     }
@@ -549,16 +634,22 @@ pub(crate) fn conversation_freshness(
     let Some(directory) = swarm_persistence::claude_project_directory(projects_root, &workspace)
     else {
         return ConversationFreshness::Unknown {
+            cause: UnknownCause::NeverRun,
             reason: "no Claude project directory exists for this workspace".to_owned(),
         };
     };
     let Ok(entries) = std::fs::read_dir(&directory) else {
         return ConversationFreshness::Unknown {
+            cause: UnknownCause::DirectoryUnreadable,
             reason: "the Claude project directory could not be read".to_owned(),
         };
     };
     let mut newest: Option<(String, String)> = None;
     let mut pinned_last: Option<String> = None;
+    // Counted so that "found nothing" can be told from "found transcripts and
+    // could not read one of them". Keep the shared entry/byte/deadline budget:
+    // fault classification must not restore the unbounded scan it follows.
+    let mut transcripts_seen = 0_usize;
     for entry in entries {
         if !budget.reserve(1, 0) {
             break;
@@ -576,6 +667,7 @@ pub(crate) fn conversation_freshness(
         let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
+        transcripts_seen += 1;
         let Some(timestamp) = last_entry_timestamp(&path, budget) else {
             if budget.exhausted {
                 break;
@@ -594,12 +686,23 @@ pub(crate) fn conversation_freshness(
     }
     if !budget.reserve(0, 0) {
         return ConversationFreshness::Unknown {
+            cause: UnknownCause::ScanLimitReached,
             reason: "conversation scan limit reached".into(),
         };
     }
     let Some((newest_id, newest_timestamp)) = newest else {
-        return ConversationFreshness::Unknown {
-            reason: "no conversation in this workspace carries a readable entry".to_owned(),
+        return if transcripts_seen == 0 {
+            ConversationFreshness::Unknown {
+                cause: UnknownCause::NoTranscripts,
+                reason: "this workspace has no Claude conversations yet".to_owned(),
+            }
+        } else {
+            ConversationFreshness::Unknown {
+                cause: UnknownCause::TranscriptsUnreadable,
+                reason: format!(
+                    "none of the {transcripts_seen} conversations in this workspace could be read"
+                ),
+            }
         };
     };
     if newest_id == pinned.to_string() {
@@ -2287,6 +2390,165 @@ mod tests {
         assert!(
             matches!(freshness, ConversationFreshness::Unknown { .. }),
             "an unknown reported as Current is the failure this exists to prevent: {freshness:?}"
+        );
+    }
+
+    /// ⚠️ THE TWO UNKNOWNS MUST NOT COLLAPSE BACK TOGETHER, and this test is
+    /// the thing that fails if they do.
+    ///
+    /// A worker that has never run and a directory nobody can read both end at
+    /// `Unknown`. One is ordinary — the operator, shown five such rows under
+    /// "what needs you": "there is nothing I can do about it". The other is a
+    /// permissions fault, and it is the ONE case in that bucket where something
+    /// is wrong and someone can fix it.
+    ///
+    /// Asserted on `cause` and on `is_fault`, never on the sentence. Matching
+    /// the reason string is the trap this whole change exists to avoid: it
+    /// makes a display string load-bearing, and rewording the message would
+    /// break detection with nothing failing.
+    #[test]
+    fn a_directory_nobody_can_read_is_a_fault_and_a_worker_that_never_ran_is_not() {
+        let home = tempfile::tempdir().unwrap();
+        let projects = home.path().join(".claude/projects");
+        std::fs::create_dir_all(&projects).unwrap();
+
+        let never_ran = home.path().join("projects/never-ran");
+        let profile = worker_profile(
+            &never_ran,
+            Some("11111111-1111-4111-8111-111111111111"),
+            true,
+        );
+        let benign = conversation_freshness(
+            &profile,
+            &projects,
+            home.path(),
+            &mut ConversationScanBudget::new(),
+            &HashMap::new(),
+        );
+
+        // A real directory, made unreadable for real rather than mocked — the
+        // fault is a filesystem permission, so anything less proves nothing.
+        let unreadable = home.path().join("projects/unreadable");
+        let slug = unreadable.to_string_lossy().replace(['/', '.'], "-");
+        let directory = projects.join(&slug);
+        transcript(
+            &directory,
+            "22222222-2222-4222-8222-222222222222",
+            "2026-09-02T02:13:26.742Z",
+        );
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        let profile = worker_profile(
+            &unreadable,
+            Some("11111111-1111-4111-8111-111111111111"),
+            true,
+        );
+        let fault = conversation_freshness(
+            &profile,
+            &projects,
+            home.path(),
+            &mut ConversationScanBudget::new(),
+            &HashMap::new(),
+        );
+        {
+            // Restored so the tempdir can be cleaned up.
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let ConversationFreshness::Unknown {
+            cause: benign_cause,
+            ..
+        } = benign
+        else {
+            panic!("a worker that never ran is unknown: {benign:?}");
+        };
+        let ConversationFreshness::Unknown {
+            cause: fault_cause, ..
+        } = fault
+        else {
+            panic!("an unreadable directory is unknown: {fault:?}");
+        };
+
+        assert_ne!(
+            benign_cause, fault_cause,
+            "these are the two cases the operator needs told apart"
+        );
+        assert!(
+            !benign_cause.is_fault(),
+            "a worker that has never run has no second thread to choose between, \
+             and filing that as the operator's is the noise they objected to"
+        );
+        assert!(
+            fault_cause.is_fault(),
+            "a directory that exists and cannot be read is somebody's to fix"
+        );
+    }
+
+    /// Transcripts that exist and cannot be read are the SAME fault one level
+    /// down, and must not hide behind the benign never-run case.
+    #[test]
+    fn transcripts_that_exist_and_cannot_be_read_are_a_fault_not_an_empty_workspace() {
+        let home = tempfile::tempdir().unwrap();
+        let workspace = home.path().join("projects/unreadable-files");
+        let projects = home.path().join(".claude/projects");
+        let slug = workspace.to_string_lossy().replace(['/', '.'], "-");
+        let directory = projects.join(&slug);
+        // A .jsonl that is present and carries no readable entry.
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("33333333-3333-4333-8333-333333333333.jsonl"),
+            "",
+        )
+        .unwrap();
+
+        let profile = worker_profile(
+            &workspace,
+            Some("11111111-1111-4111-8111-111111111111"),
+            true,
+        );
+        let freshness = conversation_freshness(
+            &profile,
+            &projects,
+            home.path(),
+            &mut ConversationScanBudget::new(),
+            &HashMap::new(),
+        );
+
+        let ConversationFreshness::Unknown { cause, .. } = freshness else {
+            panic!("expected unknown, got {freshness:?}");
+        };
+        assert_eq!(cause, UnknownCause::TranscriptsUnreadable);
+        assert!(
+            cause.is_fault(),
+            "a transcript that exists and cannot be read is not an empty workspace"
+        );
+    }
+
+    /// THE WIRE IS PART OF THE CONTRACT. The card decides what to show from
+    /// `fault`, so a cause that serialises without it, or with the wrong
+    /// verdict, breaks the page while every Rust test above still passes.
+    #[test]
+    fn a_cause_travels_with_its_verdict_so_the_client_never_classifies() {
+        let benign = serde_json::to_value(ConversationFreshness::Unknown {
+            cause: UnknownCause::NeverRun,
+            reason: "x".to_owned(),
+        })
+        .unwrap();
+        assert_eq!(benign["cause"]["kind"], "never_run");
+        assert_eq!(benign["cause"]["fault"], false);
+
+        let fault = serde_json::to_value(ConversationFreshness::Unknown {
+            cause: UnknownCause::DirectoryUnreadable,
+            reason: "x".to_owned(),
+        })
+        .unwrap();
+        assert_eq!(fault["cause"]["kind"], "directory_unreadable");
+        assert_eq!(
+            fault["cause"]["fault"], true,
+            "the one case somebody can fix must reach the page as a fault"
         );
     }
 

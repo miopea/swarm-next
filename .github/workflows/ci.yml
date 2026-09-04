@@ -41,7 +41,22 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm audit --prod --audit-level high
+      # THE ONLY STATE THIS JOB KEEPS: the date the audit last actually reached
+      # the advisory database. It exists so a fail-open cannot become permanent
+      # — see the banner-is-bounded note in scripts/audit-web.sh. Rolling key,
+      # because a cache entry is immutable once saved and a fixed key would
+      # freeze the first date forever, which is the same defect wearing a hat.
+      - uses: actions/cache@v4
+        with:
+          path: web/.audit-web-last-success
+          key: audit-web-last-success-${{ github.run_id }}
+          restore-keys: audit-web-last-success-
+      # A REGISTRY OUTAGE IS NOT AN AUDIT FINDING, and `pnpm audit` reported
+      # both as exit 1. See scripts/audit-web.sh — a real advisory still fails
+      # this job; an unreachable advisory database says so instead of pretending
+      # to be a verdict, and fails once it has been saying so for a week.
+      - run: sh ../scripts/audit-web.sh
+        working-directory: web
       - run: pnpm check
       - run: pnpm test
       - run: pnpm test:dogfood
@@ -54,15 +69,24 @@ jobs:
       checks: write
     steps:
       - uses: actions/checkout@v4
-      - uses: rustsec/audit-check@v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          # web-push-native's VAPID feature pulls jwt-simple's optional RSA
-          # implementation into Cargo.lock, but Swarm constructs only ES256
-          # keys. RUSTSEC-2023-0071 has no patched rsa release and applies to
-          # observable RSA private-key operations, which this binary never
-          # performs. Keep the exception visible and scoped to this one ID.
-          ignore: RUSTSEC-2023-0071
+      # ⚠️ NOT rustsec/audit-check. THAT ACTION BUILDS cargo-audit FROM SOURCE
+      # WITHOUT --locked, so cargo resolves the newest semver-compatible
+      # dependency set rather than the one cargo-audit was tested against. On
+      # 2026-09-04 that set contained a tinyvec that will not compile at all
+      # ("error: cannot find macro `vec` in this scope"), and the required
+      # rust-audit check failed on every commit for reasons no change to this
+      # repository could cause or fix.
+      #
+      # --locked builds cargo-audit's own lockfile. Measured on this box: the
+      # action's build fails, `cargo install cargo-audit --locked` installs
+      # 0.22.2 and scans 400 crate dependencies clean.
+      - run: cargo install cargo-audit --locked --version 0.22.2
+      # web-push-native's VAPID feature pulls jwt-simple's optional RSA
+      # implementation into Cargo.lock, but Swarm constructs only ES256 keys.
+      # RUSTSEC-2023-0071 has no patched rsa release and applies to observable
+      # RSA private-key operations, which this binary never performs. Keep the
+      # exception visible and scoped to this one ID.
+      - run: cargo audit --ignore RUSTSEC-2023-0071
 
   linux-package:
     runs-on: ubuntu-latest

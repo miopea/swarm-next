@@ -458,3 +458,26 @@ test("makes emphasis in What's New heavier than the global strong reset", () => 
   expect(panelStrong).toBeDefined();
   expect(Number(panelStrong)).toBeGreaterThan(Number(globalStrong));
 });
+
+/**
+ * ⚠️ ANYTHING BELOW THE FOLD ON QUEUES WAS UNREACHABLE. The surface is a
+ * fixed-height grid cell, so a child without `min-height: 0` and its own
+ * overflow grows past the viewport and is CLIPPED rather than scrolled. The task
+ * board carries both and scrolls; queues carried neither, and the operator found
+ * it by trying to scroll.
+ *
+ * Asserted against the stylesheet because jsdom does not lay out — a render
+ * based check would pass whatever the CSS said, which is the shape of test this
+ * repository keeps deleting.
+ */
+test("a scrolling surface declares both halves of the scroll", () => {
+  for (const selector of [".queues {", ".task-board {"]) {
+    const rule = stylesheet.split("\n").find((line: string) => line.startsWith(selector)) ?? "";
+    expect(rule, `${selector} must still exist to be checked`).not.toBe("");
+    expect(rule, `${selector} needs overflow-y to scroll at all`).toContain("overflow-y: auto");
+    expect(
+      rule,
+      `${selector} needs min-height: 0 — without it the grid cell refuses to shrink and the overflow never engages`,
+    ).toContain("min-height: 0");
+  }
+});

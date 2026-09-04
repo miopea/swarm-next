@@ -1511,6 +1511,16 @@ export function App() {
   // Open work somebody or something owes a move on. Deliberately excludes a
   // task whose owner the server did not state: an older API must not be able
   // to manufacture a queue, and the tab must agree with what the view shows.
+  // ⚠️ THIS EQUALS openTaskCount ALWAYS, and the operator noticed: the Queues
+  // and Tasks badges are the same number by construction. Every open state
+  // derives a real owner and only completed and abandoned derive "nobody", so
+  // this filter excludes nothing.
+  //
+  // NOT "fixed" by excluding blocked here. That would read 6 against 43 rows on
+  // the page, which is the badge-disagrees-with-the-page defect this repo
+  // already has a test for on Needs You — and trading one badge defect for
+  // another is not a fix. What the badge should say is a product question and
+  // it is reported rather than guessed at.
   const queuedTaskCount = tasks.filter(
     (task) => isOpenTaskState(task.state) && task.next_move_owner !== undefined && task.next_move_owner !== "nobody",
   ).length;
@@ -1539,11 +1549,17 @@ export function App() {
   // opening anything; the badge counts things to deal with, not rows.
   const unsettledReviewAttentionCount = unsettledReview.length > 0 ? 1 : 0;
   // A reviewable default is distinct from a scan that cannot establish history.
-  // Share the same actionable subset between the card and badge; unknowns stay
-  // visible in runtime diagnostics without manufacturing a human decision.
-  const conversationDefaultsToReview = workerConversations.filter((worker) => worker.freshness.state === "stale");
+  // Actual filesystem faults also have an operator action; benign never-run,
+  // empty-history and bounded-scan outcomes remain runtime diagnostics.
   const uncheckedConversations = workerConversations.filter((worker) => worker.freshness.state === "unknown");
-  const conversationDriftAttentionCount = conversationDefaultsToReview.length > 0 ? 1 : 0;
+  const actionableConversationChecks = workerConversations.filter(
+    (worker) => worker.freshness.state === "stale"
+      || (worker.freshness.state === "unknown" && worker.freshness.cause?.fault === true),
+  );
+  // One card, one badge count. The card reads the same actionable collection;
+  // do not count unknowns that only appear in runtime diagnostics.
+  const conversationDriftAttentionCount =
+    actionableConversationChecks.length > 0 ? 1 : 0;
   // ⚠️ unsettledReviewAttentionCount IS DELIBERATELY ABSENT, and so is its card.
   // QueuesView's own docstring names it as the anti-pattern: "a card there
   // reading 'N pieces of finished work are waiting on Queen' is Queen's backlog
@@ -2340,7 +2356,7 @@ export function App() {
               attentionCards={<>
                 <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onReviseReply={reviseAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
-                <ConversationDriftCard workers={conversationDefaultsToReview} onOpenWorker={openWorkerProfile} />
+                <ConversationDriftCard workers={actionableConversationChecks} onOpenWorker={openWorkerProfile} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
                 <HeldDeliveryAttentionCard
                   held={actionableHeldDeliveries}

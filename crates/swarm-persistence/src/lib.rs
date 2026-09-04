@@ -117,7 +117,9 @@ pub use notifications::{
 };
 pub use terminal_control_projection::TerminalControlProjection;
 mod deployment_grants;
+mod ops_tickets;
 mod orchestration;
+pub use ops_tickets::{OpsDeploymentPage, OpsDeploymentRecord, OpsTicketReceipt};
 mod queen_conductor;
 pub use queen_conductor::{QueenAutomationDelivery, QueenAutomationFailure, QueenAutomationFinish};
 mod presentation;
@@ -224,7 +226,10 @@ const OPERATOR_STATEMENT_RESOLUTIONS_SCHEMA_VERSION: i64 = 131;
 const OPERATOR_SUBMISSIONS_SCHEMA_VERSION: i64 = 132;
 const REVIEW_ANSWERS_SCHEMA_VERSION: i64 = 133;
 const MESSAGE_DELIVERY_SCHEMA_VERSION: i64 = 134;
-const CURRENT_SCHEMA_VERSION: i64 = MESSAGE_DELIVERY_SCHEMA_VERSION;
+// Upstream introduced Ops tickets as schema 124 while this branch already
+// owned 124-134. Keep every migration identity unique in the combined history.
+const OPS_TICKETS_SCHEMA_VERSION: i64 = 135;
+const CURRENT_SCHEMA_VERSION: i64 = OPS_TICKETS_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -432,6 +437,24 @@ pub enum TaskStoreError {
     InvalidTaskActivityNote,
     #[error("completed work requires concise verification evidence")]
     CompletionEvidenceRequired,
+    // ⚠️ NAMES THE MISSING RECORD, NOT THE BASIS. This case used to return
+    // CompletionEvidenceRequired, whose text is "completed work requires
+    // concise verification evidence" -- so an approver with a perfectly good
+    // basis was told their basis was inadequate, and the actual cause was that
+    // there was no claim to countersign at all.
+    //
+    // Measured cost: Queen attempted swarm_approve_no_deployment FOUR TIMES on
+    // 01a06b37-eac8, rewriting the basis each time, before working out that
+    // `evidence.exemption` was NULL because the worker's claim had been
+    // REFUSED. The error pointed at the one thing that was fine.
+    //
+    // A refused claim leaves no row, so there is nothing to approve and the
+    // remedy is not a better basis -- it is the worker recording a claim, or
+    // the operator writing the task off as unverifiable.
+    #[error(
+        "no nothing-to-deploy claim has been recorded for this task, so there is nothing to approve. The worker's claim was refused or never made -- have the worker record one, or write the task off as unverifiable"
+    )]
+    NoCompletionExemptionToApprove,
     // NAMES THE CONTRADICTION, not the rule. A worker reading "not authorized"
     // or "evidence required" would go looking at permissions or at what it
     // wrote; the thing to look at is the commits it reported.
@@ -447,6 +470,21 @@ pub enum TaskStoreError {
         "the commits recorded for this task touch code, which contradicts a claim that nothing was deployed. Record where it is running with a deployment, or ask the operator to write it off as unverifiable, or close it as abandoned if it was superseded"
     )]
     CommitsContradictNoDeployment,
+    // ⚠️ THE REFUSAL THAT MAKES HONESTY THE CHEAP PATH. Until 2026-09-04 a task
+    // with NO commit report at all could claim "nothing was deployed" freely,
+    // while a worker who reported its commits could be refused on them. So
+    // reporting was the only route to a refusal and silence always passed --
+    // measured on two tasks that made the same comment-only .ts change minutes
+    // apart, where the honest worker was refused and the silent one approved.
+    //
+    // NAMES THE ONE-CALL REMEDY, and it is genuinely one call: record_task_commits
+    // documents an empty list as the way to say nothing was built, which settles
+    // as NothingBuilt and passes. A worker outside a checkout is NOT caught by
+    // this -- a report that cannot be checked is Unestablished and still claims.
+    #[error(
+        "no commits have been reported for this task, so there is nothing for a claim of 'nothing was deployed' to stand on. Report them with swarm_record_task_commits first -- an EMPTY list is a valid answer and means the task built nothing"
+    )]
+    CommitsNotReported,
     #[error("this Hive already has the maximum number of pending Queen handoffs")]
     TaskOutcomeQueueFull,
     #[error("Jira comment content is invalid")]
@@ -509,6 +547,8 @@ pub enum TaskStoreError {
     EmailReplyQueueFull,
     #[error("task title must contain 1 to {MAX_TASK_TITLE_BYTES} bytes")]
     InvalidTitle,
+    #[error("the Ops request already has a different submitted command")]
+    OpsTicketConflict,
     #[error("task description must not exceed {MAX_TASK_DESCRIPTION_BYTES} bytes")]
     InvalidDescription,
     #[error("task details update must contain at least one field")]
@@ -3725,13 +3765,25 @@ fn migrate_newest_schema_steps(
     if schema_version < DELIVERY_COOLDOWN_SCHEMA_VERSION {
         migrate_delivery_cooldown(transaction)?;
     }
+    migrate_ops_intake_schema_steps(transaction, schema_version)
+}
+
+fn migrate_ops_intake_schema_steps(
+    transaction: &rusqlite::Transaction<'_>,
+    schema_version: i64,
+) -> rusqlite::Result<()> {
+    // Include the immediately preceding step to preserve strict version order.
     // LAST, and it has to stay last. Every migration sets user_version to its
     // own number as its final act, so one running after this one winds the
     // recorded version backwards.
     if schema_version < CLAIM_WITHDRAWAL_SCHEMA_VERSION {
         migrate_claim_withdrawal(transaction)?;
     }
-    migrate_maturity_schema_steps(transaction, schema_version)
+    migrate_maturity_schema_steps(transaction, schema_version)?;
+    if schema_version < OPS_TICKETS_SCHEMA_VERSION {
+        ops_tickets::migrate_ops_tickets(transaction)?;
+    }
+    Ok(())
 }
 
 fn migrate_maturity_schema_steps(
@@ -8587,11 +8639,21 @@ mod tests {
                  ALTER TABLE task_completion_exemptions DROP COLUMN withdrawn_at",
             probe_sql: "",
         },
+        // 124. The first maturity migration remains at its published number.
         SchemaStep {
             table: "worker_terminal_control",
             artifact: "",
             undo_sql: "",
             probe_sql: "",
+        },
+        // 135 after integration. Additive provenance preserves existing task
+        // and activity rows; 124-134 belong to the maturity branch migrations.
+        SchemaStep {
+            table: "ops_console_tickets",
+            artifact: "",
+            undo_sql: "DROP TABLE IF EXISTS ops_console_tickets",
+            probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'ops_console_tickets')",
         },
     ];
 

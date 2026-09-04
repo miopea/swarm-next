@@ -30,6 +30,9 @@ use swarm_domain::{
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
 
+mod ops_tickets;
+pub use ops_tickets::{OpsTicketError, OpsTicketProgress, OpsTicketService};
+
 /// The durable agent identity resolved before an application command is invoked.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AgentPrincipal {
@@ -2836,7 +2839,7 @@ pub enum ApplicationError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swarm_domain::{JiraProjectScope, JiraStatusMapping, ProviderKind};
+    use swarm_domain::{CommitRepositoryState, JiraProjectScope, JiraStatusMapping, ProviderKind};
     use swarm_persistence::JiraProjectBindingInput;
 
     fn setup() -> (TaskService, WorkerProfile, WorkerProfile) {
@@ -3866,6 +3869,21 @@ mod tests {
         service.store.assign_task(task.id, session).unwrap();
         service
             .store
+            // Reported before claiming, which is the documented path since
+            // 2026-09-04: a no-deployment claim needs a commit report to stand
+            // on, and an empty list is how "nothing was built" is said. This
+            // test is about who may APPROVE a claim, so it takes that route
+            // rather than exercising a shape the tools no longer permit.
+            .record_task_commits(
+                task.id,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                900,
+            )
+            .unwrap();
+        service
+            .store
             .claim_completion_exemption(
                 task.id,
                 "Documentation only; nothing ships.",
@@ -3961,6 +3979,18 @@ mod tests {
             .create_task_with_details("Spike", "", TaskPriority::Normal, "/workspace/petal")
             .unwrap();
         service.store.assign_task(task.id, session).unwrap();
+        service
+            .store
+            // Same precondition as above; this test is about a worker being
+            // refused its own approval, not about how the claim was made.
+            .record_task_commits(
+                task.id,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                900,
+            )
+            .unwrap();
         service
             .store
             .claim_completion_exemption(task.id, "Investigation only.", Some(worker.id), 1_000)

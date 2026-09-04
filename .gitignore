@@ -16,3 +16,6 @@
 *.tsbuildinfo
 .DS_Store
 Thumbs.db
+
+# Written by scripts/audit-web.sh; the CI copy lives in the actions cache.
+.audit-web-last-success

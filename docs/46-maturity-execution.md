@@ -4,6 +4,35 @@ Approved program: [scope and acceptance](45-daily-driver-maturity-plan.md).
 Branch: `codex/daily-driver-maturity`. Starting revision: `36420b3`.
 Local commits authorized; no push, deployment, releases, or live worker interruption.
 
+## Mainline reconciliation checkpoint — 2026-09-04
+
+- Audited all 11 `origin/main` commits since the maturity branch diverged,
+  from `35bd453` through `01cb34b`, before combining them here. The incoming
+  work covers Queues/Needs You corrections, typed conversation faults, release
+  gates, decision design and the scoped Ops Console intake.
+- Reconciled six semantic conflicts rather than selecting either side wholesale:
+  the domain exports both capability sets; the API keeps bounded, safe transcript
+  reads plus typed upstream fault causes; Needs You keeps only stale or actionable
+  conversation failures; and the web card remains compatible with an older API
+  during a rolling App/API update.
+- Preserved every published migration identity. The maturity line already owns
+  schemas 124–134, so the incoming Ops provenance table advances from its
+  mainline-only number 124 to combined schema 135. The colliding Ops ADR number
+  similarly moves from 0060 to 0072; its references were updated.
+- The merged web production build and 105 overlapping frontend tests pass. The
+  domain suite passes all 97 tests. The exact 134→135 database migration and all
+  Ops ticket persistence tests pass within the broader persistence run. The
+  combined Linux API test harness builds; all 24 worker-runtime tests, all four
+  Ops MCP tests and three API conversation-fault projection tests pass from it.
+- That broader Windows persistence run passed 485 tests and exposed 39 failures:
+  32 are stale synthetic downgrade fixtures which leave maturity artifacts in a
+  database whose `user_version` they rewind below those artifacts; seven are Linux
+  home/path expectations executed on Windows. This is recorded test debt rather
+  than claimed green evidence, and no failure is being hidden to call the merge
+  complete.
+- No push, deployment, release or live worker action was performed. This local
+  combined branch is the dogfood candidate.
+
 ## Cross-phase regression checkpoint — 2026-09-04
 
 ### P3 / PERF-02: pace ordinary control-room snapshot rebuilds

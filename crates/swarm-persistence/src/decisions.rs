@@ -1130,6 +1130,7 @@ fn parse_id<T: FromStr>(value: &str) -> rusqlite::Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use swarm_domain::CommitRepositoryState;
     use swarm_domain::{NextMoveOwner, TaskState};
     use swarm_domain::{PresenceDeviceId, ProviderKind, TaskPriority};
 
@@ -1474,6 +1475,17 @@ mod tests {
         assert_eq!(found.discharge, Some(DecisionDischarge::Unknown));
 
         // Closed on its own ticket, with no deployment anywhere.
+        // A claim needs a commit report to stand on since 2026-09-04;
+        // an empty list is the documented "nothing was built".
+        store
+            .record_task_commits(
+                raised_and_done,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                900,
+            )
+            .unwrap();
         store
             .claim_completion_exemption(
                 raised_and_done,

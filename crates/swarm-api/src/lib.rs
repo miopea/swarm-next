@@ -6,6 +6,7 @@ mod backups;
 pub mod bundled_feedback;
 mod control_room;
 mod coordination_delivery;
+mod ops_mcp;
 use coordination_delivery::{
     TerminalSubmission, decision_delivery_message, queen_automation_message,
     submit_coordination_message, task_dispatch_message, task_outcome_message,
@@ -221,6 +222,8 @@ pub struct AppState {
     websocket_limit: Arc<Semaphore>,
     task_store: Option<TaskStore>,
     agent_bridge: Option<agent::AgentBridge>,
+    ops_integrations_path: Option<Arc<PathBuf>>,
+    ops_mcp_limit: Arc<Semaphore>,
     worker_lifecycle: Arc<Mutex<()>>,
     review_settlement_cursor: Arc<Mutex<Option<swarm_domain::TaskId>>>,
     worker_description_improvement_limit: Arc<Semaphore>,
@@ -348,6 +351,8 @@ impl AppState {
             websocket_limit: Arc::new(Semaphore::new(MAX_TERMINAL_WEBSOCKETS)),
             task_store: None,
             agent_bridge: None,
+            ops_integrations_path: None,
+            ops_mcp_limit: Arc::new(Semaphore::new(2)),
             worker_lifecycle: Arc::new(Mutex::new(())),
             review_settlement_cursor: Arc::new(Mutex::new(None)),
             worker_description_improvement_limit: Arc::new(Semaphore::new(
@@ -648,6 +653,13 @@ impl AppState {
     #[must_use]
     pub fn with_task_store(mut self, task_store: TaskStore) -> Self {
         self.task_store = Some(task_store);
+        self
+    }
+
+    /// Configures a private, runtime-reloaded digest and scope file for Ops MCP.
+    #[must_use]
+    pub fn with_ops_integrations_path(mut self, path: PathBuf) -> Self {
+        self.ops_integrations_path = Some(Arc::new(path));
         self
     }
 
@@ -3278,6 +3290,7 @@ fn router_with_optional_asset_root(
 fn api_router(state: AppState) -> Router {
     Router::new()
         .route("/mcp", post(mcp))
+        .route("/mcp/ops", post(ops_mcp::handle))
         // Discovery for an outside tool. PUBLIC, and deliberately so: these are
         // the documents a client reads to find out how to authenticate, and
         // putting them behind the credential they exist to obtain is a loop.
@@ -8560,10 +8573,32 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         | TaskStoreError::CompletionEvidenceRequired => {
             ApiError::new(StatusCode::BAD_REQUEST, "invalid_task", error.to_string())
         }
+        // ITS OWN CODE for the same reason as the refusal below: the approver
+        // did nothing wrong, and the remedy is not in their hands. Reported as
+        // invalid_task it reads as a malformed approval, which is how four
+        // attempts went into rewriting a basis that was never the problem.
+        TaskStoreError::NoCompletionExemptionToApprove => ApiError::new(
+            StatusCode::CONFLICT,
+            "no_no_deployment_claim_to_approve",
+            error.to_string(),
+        ),
         // ITS OWN CODE, because it is not a malformed request and the caller is
         // not at fault for asking. The claim was refused because the recorded
         // commits disagree with it, and a client that can tell this apart can
         // say so rather than reporting the task as invalid.
+        // Same treatment as the contradiction below and for the same reason: the
+        // caller asked a legitimate question and the answer is about the record,
+        // not about their request being malformed.
+        TaskStoreError::OpsTicketConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            "ops_ticket_conflict",
+            error.to_string(),
+        ),
+        TaskStoreError::CommitsNotReported => ApiError::new(
+            StatusCode::CONFLICT,
+            "commits_not_reported",
+            error.to_string(),
+        ),
         TaskStoreError::CommitsContradictNoDeployment => ApiError::new(
             StatusCode::CONFLICT,
             "commits_contradict_no_deployment",

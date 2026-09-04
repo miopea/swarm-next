@@ -197,9 +197,16 @@ fn unsettled_review(state: &Arc<AppState>) -> Result<Vec<UnsettledReviewResponse
                         "code_no_deployment",
                         "it recorded commits that touch code, and no deployment",
                     ),
-                    swarm_domain::CommitSettlement::Unknown => (
+                    swarm_domain::CommitSettlement::NotReported => (
                         "nothing_reported",
                         "nobody reported what this work produced",
+                    ),
+                    // ⚠️ NOT "nothing_reported". Somebody DID report; the report
+                    // does not settle the question, which is a different thing
+                    // to tell an operator and used to be told wrongly.
+                    swarm_domain::CommitSettlement::Unestablished => (
+                        "report_unsettled",
+                        "commits were reported and could not be checked in that workspace",
                     ),
                     // Settleable, so the sweep will take it on its next pass.
                     // Present here only in the seconds between the two.

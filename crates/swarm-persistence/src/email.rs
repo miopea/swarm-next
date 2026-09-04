@@ -2187,6 +2187,7 @@ fn unanswered_email_task(row: UnansweredEmailRow) -> Result<UnansweredEmailTask,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use swarm_domain::CommitRepositoryState;
 
     fn message<'a>(attachments: &'a [EmailAttachmentSnapshot<'a>]) -> EmailMessageSnapshot<'a> {
         EmailMessageSnapshot {
@@ -3280,6 +3281,17 @@ mod tests {
         ] {
             store.transition_task(imported.task.id, state).unwrap();
         }
+        // A claim needs a commit report to stand on since 2026-09-04;
+        // an empty list is the documented "nothing was built".
+        store
+            .record_task_commits(
+                imported.task.id,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                900,
+            )
+            .unwrap();
         store
             .claim_completion_exemption(imported.task.id, "Question, not a change", None, 1_000)
             .unwrap();

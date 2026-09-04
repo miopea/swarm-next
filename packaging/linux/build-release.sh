@@ -74,6 +74,27 @@ mkdir -p "$bundle/bin" "$bundle/web" "$bundle/systemd-user"
 # where a reader can see which item a release draws from, and is overridable for
 # anyone packaging from a different vault.
 : "${SWARM_FEEDBACK_TOKEN_REFERENCE:=op://BFG/Swarm feedback token/credential}"
+# ⚠️ A MISSING TOKEN FAILS THE BUILD. IT USED TO WARN, AND EVERY RELEASE EVER
+# CUT SHIPPED WITHOUT THE CREDENTIAL.
+#
+# Measured 2026-09-04 against the published artefacts: v1.2.0, v1.3.1 and v1.4.1
+# each contain ZERO GitHub token literals of any prefix. The feature shipped in
+# 1.1.2 and has never once worked in a packaged release. A developer on 1.4.1
+# reported the dialog telling her to set SWARM_GITHUB_REPOSITORY and
+# SWARM_GITHUB_TOKEN herself -- which is the exact thing the bundled credential
+# exists to spare her, and the operator's original complaint verbatim: "so you
+# are telling me that devs need to install settings to make it work? that is
+# stupid".
+#
+# Every branch below used to print to stderr and carry on. Nobody reads a
+# successful build's stderr, so the release went out looking fine, was verified
+# in code and in tests, and was broken in the only place that ships. The
+# packaging guide's own rule -- verify the ARTIFACT, not your working tree --
+# names this exact failure and this step did not follow it.
+#
+# SWARM_SKIP_BUNDLED_FEEDBACK_TOKEN=1 remains the way to build without one, and
+# it is now the ONLY way: deliberate, named, and visible in the command that did
+# it rather than in a line of output nobody kept.
 bundled_feedback_token=""
 if [ "${SWARM_SKIP_BUNDLED_FEEDBACK_TOKEN:-0}" = "1" ]; then
   echo "swarm-package: building WITHOUT a bundled feedback token (asked to skip)" >&2
@@ -84,20 +105,60 @@ elif command -v op >/dev/null 2>&1; then
   # investigation goes to the wrong system.
   if bundled_feedback_token=$(op read "$SWARM_FEEDBACK_TOKEN_REFERENCE"); then
     if [ -z "$bundled_feedback_token" ]; then
-      echo "swarm-package: the feedback token reference resolved EMPTY; building without it" >&2
+      echo "swarm-package: the feedback token reference resolved EMPTY." >&2
+      echo "  A release without it cannot file feedback and tells every installer to" >&2
+      echo "  obtain their own token. Sign in with 'eval \"\$(op-login)\"' and retry," >&2
+      echo "  or pass SWARM_SKIP_BUNDLED_FEEDBACK_TOKEN=1 to build one deliberately." >&2
+      exit 1
     else
       # Its LENGTH, never any part of its value.
       echo "swarm-package: bundling a feedback token (${#bundled_feedback_token} characters)" >&2
     fi
   else
-    echo "swarm-package: could not read the feedback token; building without it" >&2
-    bundled_feedback_token=""
+    echo "swarm-package: could not read $SWARM_FEEDBACK_TOKEN_REFERENCE." >&2
+    echo "  Sign in with 'eval \"\$(op-login)\"' and retry, or pass" >&2
+    echo "  SWARM_SKIP_BUNDLED_FEEDBACK_TOKEN=1 to build without it deliberately." >&2
+    exit 1
   fi
 else
-  echo "swarm-package: 'op' is not on PATH; building without a bundled feedback token" >&2
+  echo "swarm-package: 'op' is not on PATH, so no feedback token can be read." >&2
+  echo "  Install the 1Password CLI, or pass SWARM_SKIP_BUNDLED_FEEDBACK_TOKEN=1" >&2
+  echo "  to build without it deliberately." >&2
+  exit 1
 fi
 
 (cd "$repo_root" && SWARM_BUILD_VERSION="$version" SWARM_BUILD_SOURCE_REVISION="$source_revision" SWARM_WORKER_ENGINE_BUILD_ID="$worker_engine_build_id" SWARM_RELEASE_VERIFYING_KEY="$release_verifying_key" SWARM_BUNDLED_FEEDBACK_TOKEN="$bundled_feedback_token" cargo build --release --locked --workspace)
+
+# ⚠️ THE CREDENTIAL IS IN THE BINARY, ASSERTED AGAINST THE ARTEFACT ITSELF.
+#
+# The env var above being set is not evidence that the token reached the
+# compiled output. `bundled_feedback_destination` reads it through `option_env!`,
+# a COMPILE-TIME lookup, so anything that stops the crate being rebuilt -- a
+# warm cache, a changed feature set, a refactor that moves the call -- silently
+# produces a binary with no credential and a build that exits 0.
+#
+# That is not hypothetical. v1.2.0, v1.3.1 and v1.4.1 all shipped with zero
+# token literals while their source and tests were correct, and it went
+# unnoticed for four releases because nothing ever looked at the artefact.
+#
+# THE SECRET NEVER REACHES argv. It goes to grep on stdin as a pattern file, so
+# it appears in no command line, no `ps` listing and no error message. Only the
+# yes/no answer is printed.
+if [ -n "$bundled_feedback_token" ]; then
+  api_binary="$repo_root/target/release/swarm-api"
+  [ -f "$api_binary" ] || { echo "swarm-package: $api_binary is missing after the build" >&2; exit 1; }
+  if printf '%s\n' "$bundled_feedback_token" | grep -qFf - "$api_binary"; then
+    echo "swarm-package: the bundled feedback credential is present in swarm-api" >&2
+  else
+    echo "swarm-package: THE BUILD DID NOT BAKE IN THE FEEDBACK CREDENTIAL." >&2
+    echo "  SWARM_BUNDLED_FEEDBACK_TOKEN was set and read, and the compiled" >&2
+    echo "  swarm-api does not contain it -- option_env! is resolved at compile" >&2
+    echo "  time, so a cached build can ignore a changed value. Try again with" >&2
+    echo "  'cargo clean -p swarm-api', or pass SWARM_SKIP_BUNDLED_FEEDBACK_TOKEN=1" >&2
+    echo "  to ship without it deliberately." >&2
+    exit 1
+  fi
+fi
 if [ "${SWARM_SKIP_WEB_BUILD:-0}" != "1" ]; then
   (cd "$repo_root" && VITE_SWARM_BUILD_VERSION="$version" "${SWARM_PNPM_BIN:-pnpm}" --dir web build)
 fi
