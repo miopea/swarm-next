@@ -113,6 +113,17 @@ Manual fencing alone cannot clear attention. The existing session response carri
 the confirmation without another poll; the terminal keeps earlier startup results
 in Session details, not as an ongoing warning after a confirmed switch.
 
+The legacy conversation-drift diagnostic also honors that same confirmed-selection
+projection. It reads engine selections with a bounded two-second request and
+revalidates them against persistence, then matches the current profile's active
+session and saved conversation. A matching confirmed default skips transcript
+recency scanning; a newer file cannot overrule the chosen conversation. Missing,
+offline, suspended, replaced, or mismatched evidence does not acquire this status.
+The existing Current wire state means no unresolved drift, preserving older
+browser counts/cards. Remaining timestamp warnings request review, not claim
+proven context loss. This does not confirm defaults for sleeping workers or
+replace the provider's native resume behavior.
+
 Engine evidence accepted while a provider was alive remains eligible if that
 provider exits before the API reads it. Reconciliation applies the retained
 startup/selection evidence before releasing missing worker bindings; process exit

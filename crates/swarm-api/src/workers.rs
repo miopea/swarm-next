@@ -349,6 +349,7 @@ pub(super) async fn conversation_freshness(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    let confirmed_selections = confirmed_conversation_selections(&state).await?;
     let profiles = task_store(&state)?
         .list_worker_profiles()
         .map_err(|error| task_store_error(&error))?;
@@ -366,7 +367,7 @@ pub(super) async fn conversation_freshness(
         let mut budget = crate::worker_runtime::ConversationScanBudget::new();
         let mut workers = Vec::new();
         for profile in &profiles {
-            let freshness = crate::worker_runtime::conversation_freshness(profile, &projects, &home, &mut budget);
+            let freshness = crate::worker_runtime::conversation_freshness(profile, &projects, &home, &mut budget, &confirmed_selections);
             if budget.exhausted {
                 return Err(ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "conversation_scan_incomplete", "Conversation checks reached their work limit. No partial result was used to judge conversation health."));
             }
@@ -380,6 +381,39 @@ pub(super) async fn conversation_freshness(
         Ok(workers)
     }).await?;
     Ok(Json(serde_json::json!({ "workers": workers })).into_response())
+}
+
+async fn confirmed_conversation_selections(
+    state: &AppState,
+) -> Result<
+    std::collections::HashMap<
+        swarm_domain::WorkerSessionId,
+        swarm_domain::ProviderConversationSelection,
+    >,
+    ApiError,
+> {
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        request_host(state, HostRequest::ListSessions),
+    )
+    .await;
+    let Ok(Ok(swarm_terminal::HostResponse::Sessions { sessions })) = response else {
+        // An unavailable/older engine supplies no confirmation. Do not promote
+        // a stale stored pin merely because the evidence source is offline.
+        return Ok(std::collections::HashMap::new());
+    };
+    let candidates = sessions
+        .iter()
+        .filter(|session| session.running)
+        .filter_map(|session| {
+            session
+                .provider_selection
+                .map(|selection| (session.session_id, selection))
+        })
+        .collect::<Vec<_>>();
+    task_store(state)?
+        .confirmed_provider_selections(&candidates)
+        .map_err(|error| task_store_error(&error))
 }
 
 async fn run_conversation_scan(

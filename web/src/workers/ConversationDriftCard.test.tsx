@@ -19,6 +19,9 @@ test("names the workers that would resume an older conversation", () => {
   render(<ConversationDriftCard workers={[stale, current]} onOpenWorker={vi.fn()} />);
   expect(screen.getByText("Scout")).toBeInTheDocument();
   expect(screen.queryByText("Platform")).toBeNull();
+  expect(screen.getByText("1 conversation default to review")).toBeInTheDocument();
+  expect(screen.getByText(/saved default is still the conversation you want/)).toBeInTheDocument();
+  expect(screen.queryByText(/loses whatever happened/)).not.toBeInTheDocument();
 });
 
 /**

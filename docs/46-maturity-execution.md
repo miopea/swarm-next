@@ -6,6 +6,29 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2/P4: confirmed selection takes precedence over timestamp drift
+
+- Conversation checks now read live engine selections with a two-second bound
+  and use the existing persistence projection to confirm their exact revision,
+  saved default, and current unsuspended binding. The profile must still match
+  that active session and conversation. Matching evidence skips transcript scans
+  and reports no unresolved drift; newer files cannot overrule that selection.
+- Offline/older engines provide no confirmation. Missing or mismatched evidence
+  falls back to the existing bounded diagnostic, without switching a conversation
+  or treating a stored pin as proof. Sleeping workers cannot reuse active-session
+  confirmation. The existing Current response keeps cards/counts compatible.
+- Remaining drift cards now ask to review the saved default rather than claiming
+  that newer history proves context loss. The operator's intended conversation
+  may legitimately be older than another transcript.
+- All 18 local Linux scan/recovery tests passed, including confirmed older
+  selection, zero transcript-read budget when confirmed, replacement session,
+  changed pin, and sleeping-worker rejection. Eight focused web/card-count tests
+  and production web build passed; the existing terminal chunk warning remains.
+- Strict all-target/all-feature Linux API Clippy and formatting passed.
+- This closes the active confirmed-selection contradiction, not complete
+  sleeping-worker/native-provider recovery or live attention acceptance. No
+  deployment, release, provider command, or worker interruption.
+
 ### P1/P6: show incomplete conversation checks as runtime state
 
 - Failed, malformed, or deadline-aborted conversation checks now mark the last

@@ -420,7 +420,8 @@ fn expand_home_against(workspace: &str, home: &Path) -> String {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub(crate) enum ConversationFreshness {
-    /// The pinned conversation is the newest for this workspace.
+    /// No unresolved drift: the default is provider-confirmed, or is the newest
+    /// transcript available to the legacy diagnostic.
     Current,
     /// A newer conversation exists, so a start would resume an older thread.
     Stale {
@@ -508,7 +509,20 @@ pub(crate) fn conversation_freshness(
     projects_root: &Path,
     home: &Path,
     budget: &mut ConversationScanBudget,
+    confirmed: &HashMap<WorkerSessionId, swarm_domain::ProviderConversationSelection>,
 ) -> ConversationFreshness {
+    if profile.provider == ProviderKind::ClaudeCode
+        && profile
+            .active_session_id
+            .and_then(|session| confirmed.get(&session))
+            .is_some_and(|selection| {
+                Some(selection.conversation) == profile.provider_conversation_id
+            })
+    {
+        // The engine and persistence already agree on the current session's
+        // selected conversation. Another file's timestamp cannot overrule it.
+        return ConversationFreshness::Current;
+    }
     if !budget.reserve(1, 0) {
         return ConversationFreshness::Unknown {
             reason: "conversation scan limit reached".into(),
@@ -1416,6 +1430,7 @@ mod tests {
             &projects,
             home.path(),
             &mut ConversationScanBudget::new(),
+            &HashMap::new(),
         );
 
         match freshness {
@@ -1453,7 +1468,13 @@ mod tests {
                 _ => budget.deadline = std::time::Instant::now(),
             }
             assert!(matches!(
-                conversation_freshness(&profile, &projects, home.path(), &mut budget),
+                conversation_freshness(
+                    &profile,
+                    &projects,
+                    home.path(),
+                    &mut budget,
+                    &HashMap::new()
+                ),
                 ConversationFreshness::Unknown { .. }
             ));
             assert!(
@@ -1462,6 +1483,76 @@ mod tests {
             );
             assert!(!budget.reserve(0, 0));
         }
+    }
+
+    #[test]
+    fn confirmed_current_selection_outweighs_newer_transcript_but_not_a_changed_binding() {
+        let home = tempfile::tempdir().unwrap();
+        let workspace = home.path().join("projects/scout");
+        let projects = home.path().join(".claude/projects");
+        let directory = projects.join(workspace.to_string_lossy().replace(['/', '.'], "-"));
+        let chosen = "11111111-1111-4111-8111-111111111111";
+        transcript(&directory, chosen, "2026-09-02T00:00:00.000Z");
+        transcript(
+            &directory,
+            "22222222-2222-4222-8222-222222222222",
+            "2026-09-02T09:00:00.000Z",
+        );
+        let mut profile = worker_profile(&workspace, Some(chosen), true);
+        let session = WorkerSessionId::new();
+        profile.active_session_id = Some(session);
+        let confirmed = HashMap::from([(
+            session,
+            swarm_domain::ProviderConversationSelection {
+                revision: 2,
+                conversation: profile.provider_conversation_id.unwrap(),
+            },
+        )]);
+        let mut budget = ConversationScanBudget::new();
+        budget.entries = 0;
+        assert_eq!(
+            conversation_freshness(&profile, &projects, home.path(), &mut budget, &confirmed),
+            ConversationFreshness::Current
+        );
+        assert!(
+            !budget.exhausted,
+            "confirmed selection does not scan transcript files"
+        );
+
+        profile.active_session_id = Some(WorkerSessionId::new());
+        assert!(matches!(
+            conversation_freshness(
+                &profile,
+                &projects,
+                home.path(),
+                &mut ConversationScanBudget::new(),
+                &confirmed
+            ),
+            ConversationFreshness::Stale { .. }
+        ));
+        profile.active_session_id = Some(session);
+        profile.provider_conversation_id = Some(swarm_domain::ProviderConversationId::new());
+        assert!(matches!(
+            conversation_freshness(
+                &profile,
+                &projects,
+                home.path(),
+                &mut ConversationScanBudget::new(),
+                &confirmed
+            ),
+            ConversationFreshness::Stale { .. }
+        ));
+        profile.active_session_id = None;
+        assert!(matches!(
+            conversation_freshness(
+                &profile,
+                &projects,
+                home.path(),
+                &mut ConversationScanBudget::new(),
+                &confirmed
+            ),
+            ConversationFreshness::Stale { .. }
+        ));
     }
 
     #[test]
@@ -1505,7 +1596,8 @@ mod tests {
                 &profile,
                 &projects,
                 home.path(),
-                &mut ConversationScanBudget::new()
+                &mut ConversationScanBudget::new(),
+                &HashMap::new(),
             ),
             ConversationFreshness::Current
         );
@@ -1532,6 +1624,7 @@ mod tests {
             &projects,
             home.path(),
             &mut ConversationScanBudget::new(),
+            &HashMap::new(),
         );
 
         assert!(

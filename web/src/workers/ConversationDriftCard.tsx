@@ -1,11 +1,9 @@
 /**
  * Workers whose next start would resume a conversation Swarm cannot vouch for.
  *
- * Swarm pins a conversation id when a worker is created and never learns when
- * the real one moves. Resuming a different thread inside the session — exactly
- * what an operator does to recover work — is invisible to Swarm, so the next
- * start drops the worker back into the older conversation and silently
- * regresses its state.
+ * Confirmed provider selections take precedence on the server. These remaining
+ * rows come from the older transcript-recency check and are reasons to review
+ * a default, not proof that a newer transcript is the operator's intended one.
  *
  * BOTH CASES ARE SHOWN, and the second is the operator's own requirement: "We
  * need a way to notify if we don't know." An unknown that reads as healthy is
@@ -46,15 +44,14 @@ export default function ConversationDriftCard({
       <header>
         <strong>
           {stale.length > 0
-            ? `${stale.length} worker${stale.length === 1 ? "" : "s"} would resume an older conversation`
+            ? `${stale.length} conversation default${stale.length === 1 ? "" : "s"} to review`
             : "Some worker conversations could not be checked"}
         </strong>
       </header>
       {stale.length > 0 ? (
         <>
           <p>
-            Starting {stale.length === 1 ? "this worker" : "these workers"} resumes a thread that is
-            not the newest one in its workspace, which loses whatever happened since.
+            Newer conversation history exists. Check that the saved default is still the conversation you want.
           </p>
           <ul>
             {stale.map((worker) => {
