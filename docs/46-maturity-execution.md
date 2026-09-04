@@ -71,6 +71,18 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 
 ## P3–P7 — Implementation checkpoints (phases remain incomplete)
 
+### P2r: Codex honors a saved conversation before its first Swarm session
+
+- Fixed Codex startup selecting New despite a saved conversation when the
+  worker had no recorded Swarm terminal history. Exact identity now takes
+  precedence; history without identity selects native Continue, neither selects
+  New. No provider switch or running-session mutation is introduced.
+- Added a four-case request-builder regression test. Linux-target API strict
+  Clippy with all targets/features passed, compiling the test. It was not executed
+  on Linux; real provider startup acceptance remains pending. The complete
+  interactive recovery ladder and provider session-event integration are still
+  incomplete; this change does not establish restoration success.
+
 ### P3h: hidden control-room feeds relinquish presentation work
 
 - Hidden documents no longer start or retain the control-room long poll and its

@@ -39,6 +39,11 @@ are notified after commit. Repeating the same choice is a persistence no-op.
 This changes the next startup target only; it must not move a running terminal.
 It does not yet detect the provider's in-terminal conversation switch.
 
+For Codex, an explicit saved conversation selects exact resume regardless of
+whether Swarm has recorded a previous terminal session. Session history chooses
+native continuation only when no exact identity is available. Without either,
+startup is new. A history flag must not silently discard the selected identity.
+
 ## Consequences
 
 - Crash, reboot, and intentional stop/start attempt to preserve the chosen

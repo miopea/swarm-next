@@ -320,7 +320,7 @@ fn provider_start_request(
                 profile.provider_conversation_id,
                 profile.has_session_history,
             ) {
-                (Some(session_id), true) => CodexConversationStart::Resume { session_id },
+                (Some(session_id), _) => CodexConversationStart::Resume { session_id },
                 (None, true) => CodexConversationStart::Continue,
                 _ => CodexConversationStart::New,
             },
@@ -614,6 +614,56 @@ async fn reconcile_worker_bindings_unlocked(state: &AppState) -> Result<LiveSess
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn codex_saved_conversation_wins_over_session_history() {
+        use swarm_terminal::{CodexConversationStart, HostRequest, TerminalSize};
+
+        let root = tempfile::tempdir().unwrap();
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let mut profile = store
+            .create_worker(
+                "Codex",
+                swarm_domain::ProviderKind::Codex,
+                &root.path().to_string_lossy(),
+                false,
+                1,
+            )
+            .unwrap();
+        let state = crate::AppState::default()
+            .with_workspace_roots(vec![root.path().to_path_buf()])
+            .with_task_store(store);
+        let chosen = "22222222-2222-4222-8222-222222222222".parse().unwrap();
+        for (identity, history, expected) in [
+            (
+                Some(chosen),
+                false,
+                CodexConversationStart::Resume { session_id: chosen },
+            ),
+            (
+                Some(chosen),
+                true,
+                CodexConversationStart::Resume { session_id: chosen },
+            ),
+            (None, true, CodexConversationStart::Continue),
+            (None, false, CodexConversationStart::New),
+        ] {
+            profile.provider_conversation_id = identity;
+            profile.has_session_history = history;
+            let request = super::provider_start_request(
+                &state,
+                profile.id,
+                &profile,
+                TerminalSize::default(),
+                None,
+            )
+            .unwrap();
+            let HostRequest::StartCodex { conversation, .. } = request else {
+                panic!("Codex must not switch providers");
+            };
+            assert_eq!(conversation, expected);
+        }
+    }
+
     use super::*;
 
     #[tokio::test]
