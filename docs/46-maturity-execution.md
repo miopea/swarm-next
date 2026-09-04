@@ -6,6 +6,20 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2: scoped provider lifecycle recovery rules
+
+- Validated the current official SessionStart contract and recorded ADR 0064.
+  Added provider-neutral startup kinds and a domain entry point that requires
+  matching engine session and recovery attempt. Resume still validates exact
+  identity; New cannot masquerade as restored context. Clear, compact, fork and
+  unknown lifecycle events do not complete startup recovery.
+- All 83 domain tests and strict all-target/all-feature domain Clippy passed,
+  including wrong-process, wrong-attempt, duplicate, unrelated-lifecycle, and
+  unexpected-fresh evidence. This validates rules, not callback authenticity.
+- Hook transport/capabilities, durable identity reconciliation, explicit missing
+  context evidence and provider acceptance remain open. No hooks installed,
+  live worker changes, push, deployment or release. Full goal remains active.
+
 ### P2 recovery integration audit — authoritative continuation gap
 
 - Traced `worker_runtime::start_worker_process_unlocked` through provider request,

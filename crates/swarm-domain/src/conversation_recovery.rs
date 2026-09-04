@@ -34,6 +34,18 @@ pub enum ConversationRecoveryEvidence {
     Unknown,
 }
 
+/// Provider-neutral lifecycle evidence, normalized by the provider adapter.
+/// These values do not authenticate a callback or authorize a conversation switch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderSessionStartKind {
+    New,
+    Resumed,
+    Reset,
+    Compacted,
+    Forked,
+    Unknown,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversationRecoveryStop {
@@ -68,6 +80,34 @@ pub struct ConversationRecovery {
 }
 
 impl ConversationRecovery {
+    /// Applies authenticated startup evidence only to its bound engine session.
+    /// Non-startup lifecycle events cannot settle or advance the recovery ladder.
+    pub fn observe_provider_start(
+        &mut self,
+        bound_session: crate::WorkerSessionId,
+        observed_session: crate::WorkerSessionId,
+        attempt: ConversationRecoveryAttempt,
+        kind: ProviderSessionStartKind,
+        conversation: ProviderConversationId,
+    ) -> bool {
+        if bound_session != observed_session {
+            return false;
+        }
+        let evidence = match kind {
+            ProviderSessionStartKind::Resumed => {
+                ConversationRecoveryEvidence::Restored(conversation)
+            }
+            ProviderSessionStartKind::New => {
+                ConversationRecoveryEvidence::FreshStarted(conversation)
+            }
+            ProviderSessionStartKind::Reset
+            | ProviderSessionStartKind::Compacted
+            | ProviderSessionStartKind::Forked
+            | ProviderSessionStartKind::Unknown => return false,
+        };
+        self.observe(attempt, evidence)
+    }
+
     #[must_use]
     pub fn new(chosen: Option<ProviderConversationId>, provider_can_resume: bool) -> Self {
         let state = if provider_can_resume {
@@ -347,5 +387,101 @@ mod tests {
             ConversationRecoveryEvidence::FreshStarted(ProviderConversationId::new())
         ));
         assert_eq!(recovery.state(), before);
+    }
+
+    #[test]
+    fn lifecycle_evidence_requires_current_process_and_matching_attempt() {
+        let session = crate::WorkerSessionId::new();
+        let conversation = ProviderConversationId::new();
+        let mut recovery = ConversationRecovery::new(None, true);
+        let current = attempt(recovery);
+        for kind in [
+            ProviderSessionStartKind::Reset,
+            ProviderSessionStartKind::Compacted,
+            ProviderSessionStartKind::Forked,
+            ProviderSessionStartKind::Unknown,
+        ] {
+            assert!(!recovery.observe_provider_start(
+                session,
+                session,
+                current,
+                kind,
+                conversation
+            ));
+        }
+        assert!(!recovery.observe_provider_start(
+            session,
+            crate::WorkerSessionId::new(),
+            current,
+            ProviderSessionStartKind::Resumed,
+            conversation
+        ));
+        let other = attempt(ConversationRecovery::new(None, true));
+        assert!(!recovery.observe_provider_start(
+            session,
+            session,
+            other,
+            ProviderSessionStartKind::Resumed,
+            conversation
+        ));
+        assert!(recovery.observe_provider_start(
+            session,
+            session,
+            current,
+            ProviderSessionStartKind::Resumed,
+            conversation
+        ));
+        assert_eq!(
+            recovery.state(),
+            ConversationRecoveryState::Restored {
+                conversation,
+                via_continue: true
+            }
+        );
+        assert!(!recovery.observe_provider_start(
+            session,
+            session,
+            current,
+            ProviderSessionStartKind::Resumed,
+            conversation
+        ));
+    }
+
+    #[test]
+    fn startup_is_fresh_only_when_fresh_was_the_authorized_attempt() {
+        let session = crate::WorkerSessionId::new();
+        let conversation = ProviderConversationId::new();
+        let mut continuing = ConversationRecovery::new(None, true);
+        let current = attempt(continuing);
+        assert!(continuing.observe_provider_start(
+            session,
+            session,
+            current,
+            ProviderSessionStartKind::New,
+            conversation
+        ));
+        assert_eq!(
+            continuing.state(),
+            ConversationRecoveryState::Manual {
+                reason: ConversationRecoveryStop::UnexpectedConversation
+            }
+        );
+        let mut fresh = ConversationRecovery::new(None, true);
+        fresh.observe(
+            attempt(fresh),
+            ConversationRecoveryEvidence::ContextUnavailable,
+        );
+        let current = attempt(fresh);
+        assert!(fresh.observe_provider_start(
+            session,
+            session,
+            current,
+            ProviderSessionStartKind::New,
+            conversation
+        ));
+        assert_eq!(
+            fresh.state(),
+            ConversationRecoveryState::Fresh { conversation }
+        );
     }
 }
