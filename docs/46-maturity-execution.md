@@ -6,6 +6,34 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2/P5: transactional successor binding and API reconciliation
+
+- Added a persistence handoff for an engine-authenticated Continue-to-Fresh
+  successor. It validates the exact domain attempt transition and requires the
+  original active binding, pending startup receipt, and unchanged operator
+  selection. Old-session retirement, new binding, receipt transfer, engagement
+  cleanup, and control events commit together.
+- The saved conversation remains unchanged until the successor's authenticated
+  provider startup is reconciled. No task assignment, dispatch, or message is
+  created by this operation. A dispatch regression exercises normal assignment
+  repair and rebrief selection after handoff: both delivered and uncertain
+  briefings remain unchanged and are never claimed again.
+- Thirteen Linux conversation-recovery persistence tests passed, including three
+  new tests for database reopen/idempotence/fresh startup, unrelated attempt and
+  manual-choice refusal, and event-failure rollback followed by retry. Strict
+  persistence all-target/all-feature Linux Clippy and diff checks passed.
+- API reconciliation transfers successor bindings before processing startup
+  evidence or releasing dead bindings, independent of engine snapshot order.
+  Its IPC test covers normal handoff, a previously committed handoff after API
+  interruption, newer manual choices, missing successors and invalid attempts.
+- Final verification: 35 Linux recovery/dispatch persistence tests and 17 Linux
+  API worker-runtime tests passed. Strict all-target/all-feature Linux API and
+  persistence Clippy passed; formatting and diff checks passed.
+- Automatic RecoverContinuation initiation and old engine-entry cleanup remain
+  open, as do final-launch failure presentation and live provider acceptance.
+  This checkpoint does not complete REC-01 or a program phase. No push,
+  deployment, release, or live worker interruption.
+
 ### P2/P5: engine-owned, idempotent final fresh successor
 
 - Protocol 16 adds RecoverContinuation with the exact old session and attempt.

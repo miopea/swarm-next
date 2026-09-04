@@ -29,6 +29,102 @@ pub(super) fn migrate(tx: &Transaction<'_>, version: i64) -> rusqlite::Result<()
 }
 
 impl TaskStore {
+    /// Rebinds an engine-confirmed final successor without replaying assignments.
+    /// The caller must authenticate the parent/successor relationship at the
+    /// engine boundary. A changed choice, settled startup or replaced binding
+    /// cannot be superseded by this delayed result.
+    /// # Errors
+    /// Returns storage errors; both bindings, the receipt and events roll back.
+    pub fn reconcile_continuation_successor(
+        &self,
+        previous: WorkerSessionId,
+        previous_attempt: ConversationRecoveryAttempt,
+        successor: WorkerSessionId,
+        successor_attempt: ConversationRecoveryAttempt,
+    ) -> Result<bool, TaskStoreError> {
+        if previous == successor
+            || !matches!(
+                previous_attempt.step,
+                swarm_domain::ConversationRecoveryStep::Continue
+            )
+        {
+            return Ok(false);
+        }
+        let Some(mut recovery) = ConversationRecovery::from_attempt(previous_attempt) else {
+            return Ok(false);
+        };
+        recovery.observe(
+            previous_attempt,
+            swarm_domain::ConversationRecoveryEvidence::ContextUnavailable,
+        );
+        if recovery.state()
+            != (ConversationRecoveryState::Attempt {
+                attempt: successor_attempt,
+            })
+        {
+            return Ok(false);
+        }
+        let mut connection = self.connection()?;
+        let tx = connection.transaction()?;
+        let worker: Option<String> = tx.query_row(
+            "SELECT context.worker_id FROM worker_startup_context context
+             JOIN worker_profiles worker ON worker.id = context.worker_id
+             JOIN worker_sessions session ON session.worker_id = worker.id AND session.session_id = context.session_id
+             WHERE context.session_id = ?1 AND context.status = 'pending'
+               AND context.selection_suspended = 0 AND worker.archived_at IS NULL
+               AND session.ended_at IS NULL AND worker.provider = 'claude_code'
+               AND worker.provider_conversation_id IS context.selected_conversation",
+            [previous.to_string()], |row| row.get(0)).optional()?;
+        let Some(worker) = worker else {
+            return Ok(false);
+        };
+        tx.execute("UPDATE worker_sessions SET ended_at = unixepoch(),
+                    ended_reason = 'native continuation could not restore context', ended_by = 'swarm_recovery'
+                    WHERE session_id = ?1 AND ended_at IS NULL", [previous.to_string()])?;
+        tx.execute(
+            "INSERT INTO worker_sessions(session_id, worker_id) VALUES (?1, ?2)",
+            params![successor.to_string(), worker],
+        )?;
+        tx.execute(
+            "DELETE FROM worker_engagements WHERE session_id = ?1",
+            [previous.to_string()],
+        )?;
+        tx.execute("UPDATE worker_startup_context SET session_id = ?2, status = 'pending',
+                    outcome = NULL, selection_revision = 0, selection_suspended = 0 WHERE worker_id = ?1",
+            params![worker, successor.to_string()])?;
+        tx.execute(
+            "UPDATE worker_profiles SET updated_at = unixepoch() WHERE id = ?1",
+            [&worker],
+        )?;
+        // Existing assignment and delivery identities survive. Their normal
+        // dead-session reconciliation may move an UNSENT briefing, but no new
+        // task command, dispatch, or message is manufactured by this handoff.
+        insert_control_room_event(&tx, ControlRoomEventKind::WorkersChanged)?;
+        insert_control_room_event(&tx, ControlRoomEventKind::SessionsChanged)?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Confirms that an ended parent and its successor belong to the same
+    /// currently bound worker, permitting cleanup of the old engine entry after
+    /// API interruption. It does not authorize stopping the successor.
+    /// # Errors
+    /// Returns storage errors instead of claiming the handoff was saved.
+    pub fn continuation_successor_bound(
+        &self,
+        previous: WorkerSessionId,
+        successor: WorkerSessionId,
+    ) -> Result<bool, TaskStoreError> {
+        Ok(self.connection()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM worker_sessions old
+             JOIN worker_sessions current ON current.worker_id = old.worker_id
+             JOIN worker_startup_context context ON context.worker_id = current.worker_id AND context.session_id = current.session_id
+             WHERE old.session_id = ?1 AND old.ended_at IS NOT NULL
+               AND current.session_id = ?2 AND current.ended_at IS NULL
+               AND old.ended_by = 'swarm_recovery')",
+            params![previous.to_string(), successor.to_string()], |row| row.get(0))?)
+    }
+
     /// Confirms engine selections only when their exact revision and conversation
     /// are already the durable default of the current binding. A manual fence is
     /// not a provider selection, even when it advanced the stored revision.
@@ -250,6 +346,163 @@ pub(super) fn migrate_selection(tx: &Transaction<'_>, version: i64) -> rusqlite:
 mod tests {
     use super::*;
     use swarm_domain::ProviderKind;
+
+    fn fresh_after(previous: ConversationRecoveryAttempt) -> ConversationRecoveryAttempt {
+        let mut recovery = ConversationRecovery::from_attempt(previous).unwrap();
+        recovery.observe(
+            previous,
+            swarm_domain::ConversationRecoveryEvidence::ContextUnavailable,
+        );
+        let ConversationRecoveryState::Attempt { attempt } = recovery.state() else {
+            panic!("expected final fresh attempt");
+        };
+        attempt
+    }
+
+    #[test]
+    fn continuation_handoff_survives_reopen_and_records_fresh_context_once() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("successor.sqlite");
+        let store = TaskStore::open(&path).unwrap();
+        let worker = store
+            .create_worker("Poppy", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let previous = WorkerSessionId::new();
+        let successor = WorkerSessionId::new();
+        let previous_attempt = attempt();
+        let fresh = fresh_after(previous_attempt);
+        store.bind_worker_session(worker.id, previous).unwrap();
+        let pin = store
+            .get_worker_profile(worker.id)
+            .unwrap()
+            .provider_conversation_id;
+        assert!(
+            store
+                .reconcile_continuation_successor(previous, previous_attempt, successor, fresh)
+                .unwrap()
+        );
+        drop(store);
+        let store = TaskStore::open(&path).unwrap();
+        let profile = store.get_worker_profile(worker.id).unwrap();
+        assert_eq!(profile.active_session_id, Some(successor));
+        assert_eq!(profile.provider_conversation_id, pin);
+        assert!(
+            store
+                .continuation_successor_bound(previous, successor)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .reconcile_continuation_successor(previous, previous_attempt, successor, fresh)
+                .unwrap()
+        );
+        let conversation = ProviderConversationId::new();
+        assert!(matches!(
+            store
+                .reconcile_provider_start(
+                    successor,
+                    fresh,
+                    ProviderSessionStartKind::New,
+                    conversation
+                )
+                .unwrap(),
+            Some(ConversationRecoveryState::Fresh { .. })
+        ));
+        assert_eq!(
+            store
+                .get_worker_profile(worker.id)
+                .unwrap()
+                .provider_conversation_id,
+            Some(conversation)
+        );
+        store.release_worker_session(successor).unwrap();
+        assert!(
+            !store
+                .continuation_successor_bound(previous, successor)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn continuation_handoff_refuses_unrelated_attempt_and_manual_choice() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Poppy", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let previous = WorkerSessionId::new();
+        let successor = WorkerSessionId::new();
+        let previous_attempt = attempt();
+        let fresh = fresh_after(previous_attempt);
+        store.bind_worker_session(worker.id, previous).unwrap();
+        assert!(
+            !store
+                .reconcile_continuation_successor(
+                    previous,
+                    previous_attempt,
+                    successor,
+                    fresh_after(attempt())
+                )
+                .unwrap()
+        );
+        assert!(
+            !store
+                .reconcile_continuation_successor(previous, previous_attempt, previous, fresh)
+                .unwrap()
+        );
+        let manual = ProviderConversationId::new();
+        store
+            .repoint_provider_conversation(worker.id, &manual)
+            .unwrap();
+        assert!(
+            !store
+                .reconcile_continuation_successor(previous, previous_attempt, successor, fresh)
+                .unwrap()
+        );
+        let profile = store.get_worker_profile(worker.id).unwrap();
+        assert_eq!(profile.active_session_id, Some(previous));
+        assert_eq!(profile.provider_conversation_id, Some(manual));
+    }
+
+    #[test]
+    fn continuation_handoff_event_failure_rolls_back_and_can_retry() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Poppy", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let previous = WorkerSessionId::new();
+        let successor = WorkerSessionId::new();
+        let previous_attempt = attempt();
+        let fresh = fresh_after(previous_attempt);
+        store.bind_worker_session(worker.id, previous).unwrap();
+        store.connection().unwrap().execute_batch("CREATE TRIGGER reject_successor_event BEFORE INSERT ON control_room_events BEGIN SELECT RAISE(ABORT, 'test'); END;").unwrap();
+        assert!(
+            store
+                .reconcile_continuation_successor(previous, previous_attempt, successor, fresh)
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .get_worker_profile(worker.id)
+                .unwrap()
+                .active_session_id,
+            Some(previous)
+        );
+        assert!(
+            !store
+                .continuation_successor_bound(previous, successor)
+                .unwrap()
+        );
+        store
+            .connection()
+            .unwrap()
+            .execute_batch("DROP TRIGGER reject_successor_event;")
+            .unwrap();
+        assert!(
+            store
+                .reconcile_continuation_successor(previous, previous_attempt, successor, fresh)
+                .unwrap()
+        );
+    }
 
     #[test]
     fn selection_projection_requires_committed_exact_evidence_and_rejects_fences() {

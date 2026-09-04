@@ -786,6 +786,46 @@ pub(super) async fn stop_worker_session_preserving_context(
     }
 }
 
+fn reconcile_recovery_successors(
+    state: &AppState,
+    sessions: &[swarm_terminal::HostSessionSummary],
+) -> Result<(), ApiError> {
+    let by_id = sessions
+        .iter()
+        .map(|session| (session.session_id, session))
+        .collect::<HashMap<_, _>>();
+    for previous in sessions {
+        let Some(swarm_terminal::ContinuationRecoveryOutcome::SessionCreated { session_id }) =
+            previous.continuation_recovery
+        else {
+            continue;
+        };
+        let Some(successor) = by_id.get(&session_id) else {
+            continue;
+        };
+        let (Some(previous_attempt), Some(successor_attempt)) =
+            (previous.recovery_attempt, successor.recovery_attempt)
+        else {
+            continue;
+        };
+        if previous.running || previous.stop_pending_release {
+            continue;
+        }
+        if task_store(state)?
+            .reconcile_continuation_successor(
+                previous.session_id,
+                previous_attempt,
+                successor.session_id,
+                successor_attempt,
+            )
+            .map_err(|error| task_store_error(&error))?
+        {
+            state.control_room_notify.notify_waiters();
+        }
+    }
+    Ok(())
+}
+
 async fn reconcile_worker_bindings_unlocked(state: &AppState) -> Result<LiveSessions, ApiError> {
     let response = request_host(state, HostRequest::ListSessions).await?;
     let HostResponse::Sessions { sessions } = response else {
@@ -795,6 +835,9 @@ async fn reconcile_worker_bindings_unlocked(state: &AppState) -> Result<LiveSess
             "terminal host returned an unexpected response",
         ));
     };
+    // Session order is arbitrary. Transfer the receipt before consuming the
+    // successor's startup evidence or retiring the original dead binding.
+    reconcile_recovery_successors(state, &sessions)?;
     for session in &sessions {
         // The engine authenticated this evidence while the child was alive.
         // It can exit before our next read; retain its final conversation before
@@ -1066,6 +1109,108 @@ mod tests {
         let mut response = serde_json::to_vec(&HostResponse::Sessions { sessions }).unwrap();
         response.push(b'\n');
         stream.get_mut().write_all(&response).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn successor_reconciliation_precedes_startup_and_dead_binding_release() {
+        use swarm_domain::{
+            ConversationRecovery, ConversationRecoveryEvidence, ConversationRecoveryState,
+            ProviderConversationId, ProviderSessionStartKind,
+        };
+        use swarm_terminal::{
+            ContinuationRecoveryOutcome, HostClient, ProviderSessionStartObservation,
+        };
+        for scenario in ["normal", "reopened", "manual", "missing", "wrong_attempt"] {
+            let directory = tempfile::tempdir().unwrap();
+            let socket = directory.path().join("successor.sock");
+            let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+            let store = swarm_persistence::TaskStore::in_memory().unwrap();
+            let worker = store.ensure_queen("/workspace").unwrap();
+            let previous = WorkerSessionId::new();
+            let successor = WorkerSessionId::new();
+            let mut recovery = ConversationRecovery::new(None, true);
+            let ConversationRecoveryState::Attempt {
+                attempt: continuation,
+            } = recovery.state()
+            else {
+                panic!("continue");
+            };
+            recovery.observe(
+                continuation,
+                ConversationRecoveryEvidence::ContextUnavailable,
+            );
+            let ConversationRecoveryState::Attempt { attempt: fresh } = recovery.state() else {
+                panic!("fresh");
+            };
+            store.bind_worker_session(worker.id, previous).unwrap();
+            if scenario == "reopened" {
+                assert!(
+                    store
+                        .reconcile_continuation_successor(previous, continuation, successor, fresh)
+                        .unwrap()
+                );
+            }
+            let chosen = ProviderConversationId::new();
+            if scenario == "manual" {
+                store
+                    .repoint_provider_conversation(worker.id, &chosen)
+                    .unwrap();
+            }
+            let mut summaries = vec![swarm_terminal::HostSessionSummary {
+                recovery_attempt: Some(continuation),
+                continuation_recovery: Some(ContinuationRecoveryOutcome::SessionCreated {
+                    session_id: successor,
+                }),
+                ..bare_session_summary(previous, false)
+            }];
+            if scenario != "missing" {
+                summaries.insert(
+                    0,
+                    swarm_terminal::HostSessionSummary {
+                        recovery_attempt: Some(if scenario == "wrong_attempt" {
+                            continuation
+                        } else {
+                            fresh
+                        }),
+                        provider_start: Some(ProviderSessionStartObservation {
+                            conversation: chosen,
+                            kind: ProviderSessionStartKind::New,
+                        }),
+                        ..bare_session_summary(successor, true)
+                    },
+                );
+            }
+            let state = AppState::default()
+                .with_task_store(store.clone())
+                .with_terminal_host(HostClient::new(&socket), "fixture");
+            let ((), result) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                tokio::join!(
+                    serve_session_snapshot(listener, summaries),
+                    reconcile_worker_bindings(&state)
+                )
+            })
+            .await
+            .unwrap();
+            let live = result.unwrap();
+            assert_eq!(live.contains_key(&successor), scenario != "missing");
+            let profile = store.get_worker_profile(worker.id).unwrap();
+            if matches!(scenario, "normal" | "reopened") {
+                assert_eq!(profile.active_session_id, Some(successor));
+                assert_eq!(profile.provider_conversation_id, Some(chosen));
+                assert!(matches!(
+                    store
+                        .provider_recovery_outcomes(&[successor])
+                        .unwrap()
+                        .get(&successor),
+                    Some(ConversationRecoveryState::Fresh { .. })
+                ));
+            } else {
+                assert_eq!(profile.active_session_id, None);
+                if scenario == "manual" {
+                    assert_eq!(profile.provider_conversation_id, Some(chosen));
+                }
+            }
+        }
     }
 
     #[tokio::test]

@@ -1075,6 +1075,61 @@ mod tests {
     }
 
     #[test]
+    fn fresh_successor_never_replays_delivered_or_uncertain_briefings() {
+        use swarm_domain::{
+            ConversationRecovery, ConversationRecoveryEvidence, ConversationRecoveryState,
+        };
+        for delivered in [true, false] {
+            let (store, task_id, previous) = assigned_task();
+            let dispatch = store
+                .claim_task_dispatches(100, &HashSet::new())
+                .unwrap()
+                .remove(0);
+            if delivered {
+                assert!(
+                    store
+                        .complete_task_dispatch(&dispatch.assignment_id, dispatch.generation, 101)
+                        .unwrap()
+                );
+            } else {
+                assert_eq!(store.recover_inflight_task_dispatches().unwrap(), 1);
+            }
+            let before = store.get_task(task_id).unwrap().dispatch_state;
+            let mut recovery = ConversationRecovery::new(None, true);
+            let ConversationRecoveryState::Attempt {
+                attempt: continuation,
+            } = recovery.state()
+            else {
+                panic!("continue");
+            };
+            recovery.observe(
+                continuation,
+                ConversationRecoveryEvidence::ContextUnavailable,
+            );
+            let ConversationRecoveryState::Attempt { attempt: fresh } = recovery.state() else {
+                panic!("fresh");
+            };
+            let successor = WorkerSessionId::new();
+            assert!(
+                store
+                    .reconcile_continuation_successor(previous, continuation, successor, fresh)
+                    .unwrap()
+            );
+            // Exercise normal assignment repair and rebrief selection, not just
+            // the handoff's immediate database contents.
+            for now in [102, 200] {
+                assert!(
+                    store
+                        .claim_task_dispatches(now, &HashSet::new())
+                        .unwrap()
+                        .is_empty()
+                );
+            }
+            assert_eq!(store.get_task(task_id).unwrap().dispatch_state, before);
+        }
+    }
+
+    #[test]
     fn night_watch_holds_experimental_briefs_without_spending_attempts() {
         for provider in ["gemini", "grok", "opencode", "future-provider"] {
             let (store, task_id, session) = assigned_task();
