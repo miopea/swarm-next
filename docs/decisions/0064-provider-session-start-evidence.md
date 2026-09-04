@@ -146,3 +146,8 @@ diagnostics. This cannot guarantee capture of a switch racing that legacy Stop.
 Remove this compatibility branch when the supported engine floor reaches 15.
 Unknown future protocols are not assumed to implement this handshake. This
 change does not turn abrupt process termination into graceful provider shutdown.
+
+Protocol 16 adds the engine-owned final continuation successor described in
+ADR 0068; lifecycle helpers now preflight that version. The retained-stop
+handshake is unchanged for versions 15 and 16, and the older 11-14 compatibility
+branch still provides only its documented weaker pre-stop snapshot protection.

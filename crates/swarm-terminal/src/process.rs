@@ -110,6 +110,71 @@ pub enum SessionRegistryError {
     History(#[from] HistoryError),
     #[error("terminal session lock was poisoned")]
     LockPoisoned,
+    #[error("continuation recovery is not authorized for this session and attempt")]
+    RecoveryRefused,
+    #[error("the recorded recovery successor is no longer available; it will not be restarted")]
+    RecoverySuccessorUnavailable,
+    #[error("the final fresh startup failed; manual recovery is required")]
+    RecoveryLaunchFailed,
+}
+
+/// Prepared by the provider adapter, never accepted as a caller-supplied IPC
+/// command. Retained only for one eligible engine-owned continuation attempt.
+pub struct FreshRecoveryLaunch {
+    command: ProviderCommand,
+    size: TerminalSize,
+    allow_outside_roots: bool,
+}
+
+impl FreshRecoveryLaunch {
+    /// Bounds retained launch configuration before any provider is created.
+    /// # Errors
+    /// Refuses invalid geometry, relative workspaces or oversized commands.
+    pub fn new(
+        mut command: ProviderCommand,
+        size: TerminalSize,
+        allow_outside_roots: bool,
+    ) -> Result<Self, SessionRegistryError> {
+        size.validate()?;
+        let bytes = command.arguments.iter().try_fold(
+            command
+                .executable
+                .as_os_str()
+                .len()
+                .saturating_add(command.working_directory.as_os_str().len()),
+            |total, argument| {
+                total
+                    .checked_add(std::mem::size_of::<String>())?
+                    .checked_add(argument.len())
+            },
+        );
+        if !command.working_directory.is_absolute()
+            || bytes
+                .and_then(|bytes| u64::try_from(bytes).ok())
+                .is_none_or(|bytes| bytes > crate::MAX_REQUEST_BYTES)
+        {
+            return Err(SessionRegistryError::RecoveryRefused);
+        }
+        // Do not retain oversized spare capacities supplied by a builder.
+        command.executable.shrink_to_fit();
+        command.working_directory.shrink_to_fit();
+        for argument in &mut command.arguments {
+            argument.shrink_to_fit();
+        }
+        command.arguments.shrink_to_fit();
+        Ok(Self {
+            command,
+            size,
+            allow_outside_roots,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ContinuationRecoveryOutcome {
+    SessionCreated { session_id: WorkerSessionId },
+    LaunchFailed,
 }
 
 /// What the host knows about one live terminal without reading its contents.
@@ -125,6 +190,7 @@ pub struct SessionResourceState {
     pub provider_start: Option<crate::ProviderSessionStartObservation>,
     pub provider_selection: Option<swarm_domain::ProviderConversationSelection>,
     pub continuation_unavailable: bool,
+    pub continuation_recovery: Option<ContinuationRecoveryOutcome>,
 }
 
 /// Seconds since the Unix epoch, saturating rather than panicking on a clock
@@ -140,6 +206,8 @@ pub struct ProcessTerminalSession {
     stop_pending_release: AtomicBool,
     recovery_attempt: OnceLock<ConversationRecoveryAttempt>,
     startup_failure: Arc<Mutex<crate::startup_failure::StartupFailureCapture>>,
+    continuation_launch: OnceLock<FreshRecoveryLaunch>,
+    recovery_successor: OnceLock<ContinuationRecoveryOutcome>,
     provider_lifecycle: Mutex<Option<crate::ProviderLifecycleGate>>,
     control: TerminalControlGate,
     control_changes: watch::Sender<()>,
@@ -340,6 +408,8 @@ impl ProcessTerminalSession {
             control: TerminalControlGate::default(),
             recovery_attempt: OnceLock::new(),
             startup_failure,
+            continuation_launch: OnceLock::new(),
+            recovery_successor: OnceLock::new(),
             provider_lifecycle: Mutex::new(provider_lifecycle),
             control_changes: watch::channel(()).0,
             child: Mutex::new(child),
@@ -405,6 +475,35 @@ impl ProcessTerminalSession {
     #[must_use]
     pub fn recovery_attempt(&self) -> Option<ConversationRecoveryAttempt> {
         self.recovery_attempt.get().copied()
+    }
+
+    /// Installs the adapter-prepared final launch once, without starting it.
+    /// Only Claude continuation attempts may own this fallback plan.
+    pub fn record_continuation_launch(&self, launch: FreshRecoveryLaunch) -> bool {
+        self.provider == Some(ProviderKind::ClaudeCode)
+            && self.recovery_attempt().is_some_and(|attempt| {
+                matches!(
+                    attempt.step,
+                    swarm_domain::ConversationRecoveryStep::Continue
+                ) && swarm_domain::ConversationRecovery::from_attempt(attempt).is_some()
+            })
+            && self.continuation_launch.set(launch).is_ok()
+    }
+
+    #[must_use]
+    pub fn recovery_successor(&self) -> Option<WorkerSessionId> {
+        match self.recovery_successor.get() {
+            Some(ContinuationRecoveryOutcome::SessionCreated { session_id }) => Some(*session_id),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn recovery_launch_failed(&self) -> bool {
+        matches!(
+            self.recovery_successor.get(),
+            Some(ContinuationRecoveryOutcome::LaunchFailed)
+        )
     }
 
     /// Returns retained startup evidence, not a claim of current process liveness
@@ -977,13 +1076,105 @@ impl SessionRegistry {
         self.spawn_inner(command, size, allow_outside_roots, None)
     }
 
-    fn spawn_inner(
+    /// Creates the final fresh attempt only from positive native-Continue
+    /// failure. Duplicate requests return the same immutable successor, even
+    /// while draining. A removed successor is never silently recreated.
+    /// # Errors
+    /// Refuses stale/disarmed attempts, drain/capacity, invalid roots and spawn
+    /// failures. The API must separately validate and persist its worker binding.
+    pub fn recover_continuation(
+        &self,
+        previous: WorkerSessionId,
+        attempt: ConversationRecoveryAttempt,
+    ) -> Result<WorkerSessionId, SessionRegistryError> {
+        let mut sessions = lock(&self.sessions)?;
+        let session = sessions
+            .get(&previous)
+            .cloned()
+            .ok_or(SessionRegistryError::SessionNotFound)?;
+        if session.recovery_attempt() != Some(attempt) {
+            return Err(SessionRegistryError::RecoveryRefused);
+        }
+        if session.recovery_launch_failed() {
+            return Err(SessionRegistryError::RecoveryLaunchFailed);
+        }
+        if let Some(successor) = session.recovery_successor() {
+            return sessions
+                .contains_key(&successor)
+                .then_some(successor)
+                .ok_or(SessionRegistryError::RecoverySuccessorUnavailable);
+        }
+        let launch = session
+            .continuation_launch
+            .get()
+            .ok_or(SessionRegistryError::RecoveryRefused)?;
+        if self.draining.load(Ordering::Acquire) {
+            return Err(SessionRegistryError::HostDraining);
+        }
+        if sessions.len() >= self.max_sessions {
+            return Err(SessionRegistryError::SessionLimitReached {
+                limit: self.max_sessions,
+            });
+        }
+        // Span the evidence check AND spawn. Input owns writer; stop, callbacks
+        // and manual fences own child. No one can disarm between check/effect.
+        let _writer = lock(&session.writer)?;
+        let mut child = lock(&session.child)?;
+        let capture = lock(&session.startup_failure)?;
+        let exit = child.try_wait().map_err(terminal_error)?;
+        if session.reader_running()
+            || !capture.missing_continuation()
+            || !exit.is_some_and(|exit| exit.signal().is_none() && exit.exit_code() == 1)
+        {
+            return Err(SessionRegistryError::RecoveryRefused);
+        }
+        let mut recovery = swarm_domain::ConversationRecovery::from_attempt(attempt)
+            .ok_or(SessionRegistryError::RecoveryRefused)?;
+        recovery.observe(
+            attempt,
+            swarm_domain::ConversationRecoveryEvidence::ContextUnavailable,
+        );
+        let swarm_domain::ConversationRecoveryState::Attempt { attempt: fresh } = recovery.state()
+        else {
+            return Err(SessionRegistryError::RecoveryRefused);
+        };
+        if !matches!(fresh.step, swarm_domain::ConversationRecoveryStep::Fresh) {
+            return Err(SessionRegistryError::RecoveryRefused);
+        }
+        self.validate_workspace(&launch.command, launch.allow_outside_roots)?;
+        let successor = WorkerSessionId::new();
+        let next = match ProcessTerminalSession::spawn_with_history(
+            successor,
+            &launch.command,
+            self.limits,
+            launch.size,
+            self.history.as_ref().map(Arc::clone),
+            Some(ProviderKind::ClaudeCode),
+        ) {
+            Ok(next) => Arc::new(next),
+            Err(error) => {
+                let _ = session
+                    .recovery_successor
+                    .set(ContinuationRecoveryOutcome::LaunchFailed);
+                return Err(error);
+            }
+        };
+        next.record_recovery_attempt(fresh);
+        // Both cells are new and the registry mutex owns this transition.
+        let _ = session
+            .recovery_successor
+            .set(ContinuationRecoveryOutcome::SessionCreated {
+                session_id: successor,
+            });
+        sessions.insert(successor, next);
+        Ok(successor)
+    }
+
+    fn validate_workspace(
         &self,
         command: &ProviderCommand,
-        size: TerminalSize,
         allow_outside_roots: bool,
-        provider: Option<ProviderKind>,
-    ) -> Result<Arc<ProcessTerminalSession>, SessionRegistryError> {
+    ) -> Result<(), SessionRegistryError> {
         let canonical_workspace = command.working_directory.canonicalize().map_err(|_| {
             SessionRegistryError::WorkspaceUnavailable(command.working_directory.clone())
         })?;
@@ -997,6 +1188,17 @@ impl SessionRegistry {
                 canonical_workspace,
             ));
         }
+        Ok(())
+    }
+
+    fn spawn_inner(
+        &self,
+        command: &ProviderCommand,
+        size: TerminalSize,
+        allow_outside_roots: bool,
+        provider: Option<ProviderKind>,
+    ) -> Result<Arc<ProcessTerminalSession>, SessionRegistryError> {
+        self.validate_workspace(command, allow_outside_roots)?;
 
         // Held through process spawn and registration. A startup hook's get()
         // waits for insertion rather than observing an unregistered live child.
@@ -1380,6 +1582,7 @@ impl SessionRegistry {
                     provider_start: session.provider_start()?,
                     provider_selection: session.provider_selection()?,
                     continuation_unavailable: session.continuation_unavailable()?,
+                    continuation_recovery: session.recovery_successor.get().copied(),
                 })
             })
             .collect()
@@ -2363,6 +2566,191 @@ mod tests {
             }
             assert!(!session.continuation_unavailable().unwrap(), "{action}");
         }
+    }
+
+    #[test]
+    fn retained_fresh_launch_is_bounded_before_process_creation() {
+        let mut command = shell_command("read value");
+        command.arguments = vec![String::new(); 20_000];
+        assert!(matches!(
+            FreshRecoveryLaunch::new(command, TerminalSize::default(), false),
+            Err(SessionRegistryError::RecoveryRefused)
+        ));
+        let mut command = shell_command("read value");
+        command.working_directory = PathBuf::from("relative");
+        assert!(matches!(
+            FreshRecoveryLaunch::new(command, TerminalSize::default(), false),
+            Err(SessionRegistryError::RecoveryRefused)
+        ));
+        assert!(
+            FreshRecoveryLaunch::new(shell_command("read value"), TerminalSize::new(0, 0), false)
+                .is_err()
+        );
+    }
+
+    fn recoverable_fixture(
+        registry: &SessionRegistry,
+        script: &str,
+        fresh: ProviderCommand,
+    ) -> (Arc<ProcessTerminalSession>, ConversationRecoveryAttempt) {
+        let session = registry
+            .spawn_provider_session(
+                &shell_command(script),
+                TerminalSize::default(),
+                false,
+                Some(ProviderKind::ClaudeCode),
+            )
+            .unwrap();
+        let swarm_domain::ConversationRecoveryState::Attempt { attempt } =
+            swarm_domain::ConversationRecovery::new(None, true).state()
+        else {
+            panic!("attempt");
+        };
+        assert!(session.record_recovery_attempt(attempt));
+        assert!(session.record_continuation_launch(
+            FreshRecoveryLaunch::new(fresh, TerminalSize::default(), false,).unwrap()
+        ));
+        (session, attempt)
+    }
+
+    #[test]
+    fn concurrent_recovery_owns_one_fresh_successor_and_never_recreates_it() {
+        let registry = SessionRegistry::new(
+            JournalLimits::new(4096, 64),
+            2,
+            [env::temp_dir().canonicalize().unwrap()],
+        )
+        .unwrap();
+        let (old, attempt) = recoverable_fixture(
+            &registry,
+            "printf 'No conversation found to continue\\n'; exit 1",
+            shell_command("read value; printf 'fresh:%s' \"$value\""),
+        );
+        wait_for_fixture_exit(&old);
+        let results = thread::scope(|scope| {
+            let attempts = (0..8)
+                .map(|_| scope.spawn(|| registry.recover_continuation(old.id(), attempt)))
+                .collect::<Vec<_>>();
+            attempts
+                .into_iter()
+                .map(|task| task.join().unwrap().unwrap())
+                .collect::<Vec<_>>()
+        });
+        let successor = results[0];
+        assert!(results.iter().all(|id| *id == successor));
+        assert_ne!(successor, old.id());
+        let next = registry.get(successor).unwrap();
+        let fresh = next.recovery_attempt().unwrap();
+        assert_eq!(fresh.recovery_id, attempt.recovery_id);
+        assert_eq!(fresh.number, attempt.number + 1);
+        assert_eq!(fresh.step, swarm_domain::ConversationRecoveryStep::Fresh);
+        assert!(next.is_running().unwrap(), "no task input was replayed");
+        assert_eq!(old.recovery_successor(), Some(successor));
+        assert_eq!(registry.session_resource_states().unwrap().len(), 2);
+        registry.begin_drain().unwrap();
+        assert_eq!(
+            registry.recover_continuation(old.id(), attempt).unwrap(),
+            successor
+        );
+        registry.stop(successor).unwrap();
+        assert!(matches!(
+            registry.recover_continuation(old.id(), attempt),
+            Err(SessionRegistryError::RecoverySuccessorUnavailable)
+        ));
+        assert_eq!(registry.session_resource_states().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn recovery_refuses_live_disarmed_and_wrong_attempts_without_a_successor() {
+        for action in ["live", "input", "fence", "stop", "wrong-attempt"] {
+            let registry = SessionRegistry::new(
+                JournalLimits::new(4096, 64),
+                2,
+                [env::temp_dir().canonicalize().unwrap()],
+            )
+            .unwrap();
+            let script = if action == "live" {
+                "printf 'No conversation found to continue\\n'; read value"
+            } else {
+                "printf 'No conversation found to continue\\n'; exit 1"
+            };
+            let (old, mut attempt) =
+                recoverable_fixture(&registry, script, shell_command("read value"));
+            if action == "live" {
+                output_until(&old, "No conversation found");
+            } else {
+                wait_for_fixture_exit(&old);
+            }
+            match action {
+                "input" => {
+                    let _ = old.write_input(b"\n");
+                }
+                "fence" => {
+                    old.fence_provider_selection().unwrap();
+                }
+                "stop" => {
+                    old.stop().unwrap();
+                }
+                "wrong-attempt" => {
+                    attempt.recovery_id = swarm_domain::ConversationRecoveryId::new();
+                }
+                _ => {}
+            }
+            assert!(
+                matches!(
+                    registry.recover_continuation(old.id(), attempt),
+                    Err(SessionRegistryError::RecoveryRefused)
+                ),
+                "{action}"
+            );
+            assert_eq!(old.recovery_successor(), None);
+            assert_eq!(registry.session_resource_states().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn recovery_defers_for_capacity_and_drain_but_final_spawn_failure_is_not_retried() {
+        let registry = SessionRegistry::new(
+            JournalLimits::new(4096, 64),
+            2,
+            [env::temp_dir().canonicalize().unwrap()],
+        )
+        .unwrap();
+        let root = TempDir::new().unwrap();
+        let mut missing = shell_command("unused");
+        missing.executable = root.path().join("no-such-provider");
+        let (old, attempt) = recoverable_fixture(
+            &registry,
+            "printf 'No conversation found to continue\\n'; exit 1",
+            missing,
+        );
+        wait_for_fixture_exit(&old);
+        let busy = registry
+            .spawn(&shell_command("read value"), TerminalSize::default())
+            .unwrap();
+        assert!(matches!(
+            registry.recover_continuation(old.id(), attempt),
+            Err(SessionRegistryError::SessionLimitReached { .. })
+        ));
+        assert!(!old.recovery_launch_failed());
+        registry.stop(busy.id()).unwrap();
+        registry.begin_drain().unwrap();
+        assert!(matches!(
+            registry.recover_continuation(old.id(), attempt),
+            Err(SessionRegistryError::HostDraining)
+        ));
+        assert!(!old.recovery_launch_failed());
+        registry.cancel_drain().unwrap();
+        assert!(matches!(
+            registry.recover_continuation(old.id(), attempt),
+            Err(SessionRegistryError::Terminal(_))
+        ));
+        assert!(old.recovery_launch_failed());
+        assert!(matches!(
+            registry.recover_continuation(old.id(), attempt),
+            Err(SessionRegistryError::RecoveryLaunchFailed)
+        ));
+        assert_eq!(registry.session_resource_states().unwrap().len(), 1);
     }
 
     #[test]

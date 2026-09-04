@@ -6,6 +6,39 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2/P5: engine-owned, idempotent final fresh successor
+
+- Protocol 16 adds RecoverContinuation with the exact old session and attempt.
+  The host prepares the final New launch alongside native Continue, retaining
+  the same workspace, MCP/settings paths, geometry and root policy. Launch-plan
+  storage includes argument overhead, removes excess spare capacity, and is
+  capped before provider creation. The request cannot carry arbitrary commands.
+- The registry serializes failure validation, Fresh domain transition, process
+  creation and successor publication. Input and child/lifecycle ownership span
+  check through effect. Eight concurrent requests produce one new immutable
+  process identity, never a replacement child underneath the old terminal ID.
+- The old entry retains SessionCreated or LaunchFailed. Reconnection and a lost
+  acknowledgement return the same successor, including during drain. Removing
+  that successor cannot cause recreation. Both entries count against capacity;
+  capacity/drain deferral does not consume the final attempt, while final process
+  creation failure cannot trigger repeated launches. No task input is sent.
+- Lifecycle helpers preflight exactly version 16. Their incompatible-version
+  tests now cover all earlier versions and one future version instead of a list
+  that accidentally included the current version. API stop fixtures distinguish
+  legacy 14, retained-stop 15/current, and unknown future protocols dynamically.
+- Verification passed: 124 Linux terminal tests, 25 host-library tests, six
+  executable/helper tests, and 16 API worker-runtime tests. Includes real PTY
+  failure, concurrent requests, lost IPC acknowledgement, stale/disarmed/live
+  refusal, capacity/drain, terminal fresh-launch failure, and context-preserving
+  stop across protocol versions. Full Rust workspace all-target/all-feature
+  Linux Clippy, formatting and diff checks passed without lint suppression.
+- This completes the engine operation, not automatic application recovery. The
+  API still needs durable old-to-new binding reconciliation, manual-choice
+  protection after API interruption, fresh-context presentation and prior-task
+  replay protection before invoking it automatically. Real-provider/device and
+  overnight acceptance remain open. No phase-level completion is claimed.
+- No push, deployment, release, engine replacement, or live worker interruption.
+
 ### P2/P5: observe actual interactive continuation failure
 
 - ADR 0068 records the provider-specific failure evidence contract. The official

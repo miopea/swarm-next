@@ -896,6 +896,24 @@ mod tests {
         }
     }
 
+    fn bare_session_summary(
+        session_id: WorkerSessionId,
+        running: bool,
+    ) -> swarm_terminal::HostSessionSummary {
+        swarm_terminal::HostSessionSummary {
+            session_id,
+            running,
+            stop_pending_release: false,
+            continuation_unavailable: false,
+            continuation_recovery: None,
+            resources: None,
+            last_output_at: None,
+            recovery_attempt: None,
+            provider_start: None,
+            provider_selection: None,
+        }
+    }
+
     #[tokio::test]
     async fn retained_stop_commits_context_before_cleanup_and_recovers_after_api_failure() {
         let directory = tempfile::tempdir().unwrap();
@@ -911,6 +929,7 @@ mod tests {
             running: false,
             stop_pending_release: true,
             continuation_unavailable: false,
+            continuation_recovery: None,
             resources: None,
             last_output_at: None,
             recovery_attempt: None,
@@ -969,7 +988,9 @@ mod tests {
             (14, false, true),
             (15, true, true),
             (15, false, false),
-            (16, false, false),
+            (swarm_terminal::PROTOCOL_VERSION, true, true),
+            (swarm_terminal::PROTOCOL_VERSION, false, false),
+            (swarm_terminal::PROTOCOL_VERSION + 1, false, false),
         ] {
             let directory = tempfile::tempdir().unwrap();
             let socket = directory.path().join("stop.sock");
@@ -984,6 +1005,7 @@ mod tests {
                 running: version == 14,
                 stop_pending_release: frozen,
                 continuation_unavailable: false,
+                continuation_recovery: None,
                 resources: None,
                 last_output_at: None,
                 recovery_attempt: None,
@@ -1000,8 +1022,12 @@ mod tests {
             );
             let expected: &[&str] = match (version, frozen) {
                 (14, _) => &["ping", "list_sessions", "stop"],
-                (15, true) => &["ping", "stop_retained", "list_sessions", "stop"],
-                (15, false) => &["ping", "stop_retained", "list_sessions"],
+                (version, true) if (15..=swarm_terminal::PROTOCOL_VERSION).contains(&version) => {
+                    &["ping", "stop_retained", "list_sessions", "stop"]
+                }
+                (version, false) if (15..=swarm_terminal::PROTOCOL_VERSION).contains(&version) => {
+                    &["ping", "stop_retained", "list_sessions"]
+                }
                 _ => &["ping"],
             };
             let serve = serve_stop_handshake(
@@ -1073,12 +1099,6 @@ mod tests {
                 panic!("expected continuation");
             };
             let mut summaries = vec![HostSessionSummary {
-                session_id: session,
-                running: false,
-                stop_pending_release: false,
-                continuation_unavailable: false,
-                resources: None,
-                last_output_at: None,
                 recovery_attempt: Some(attempt),
                 provider_start: (scenario != "selection").then_some(
                     ProviderSessionStartObservation {
@@ -1092,6 +1112,7 @@ mod tests {
                         conversation: resumed,
                     },
                 ),
+                ..bare_session_summary(session, false)
             }];
             if scenario == "manual" {
                 store
@@ -1102,17 +1123,7 @@ mod tests {
             if scenario == "replacement" {
                 store.release_worker_session(session).unwrap();
                 store.bind_worker_session(worker.id, replacement).unwrap();
-                summaries.push(HostSessionSummary {
-                    session_id: replacement,
-                    running: true,
-                    stop_pending_release: false,
-                    continuation_unavailable: false,
-                    resources: None,
-                    last_output_at: None,
-                    recovery_attempt: None,
-                    provider_start: None,
-                    provider_selection: None,
-                });
+                summaries.push(bare_session_summary(replacement, true));
             }
             let state = AppState::default()
                 .with_task_store(store.clone())

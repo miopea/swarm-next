@@ -30,7 +30,8 @@ use crate::{
 // carries it.
 // Protocol 14 fences interactive selection against explicit operator choices.
 // Protocol 15 retains stopped-session evidence until the API persists it.
-pub const PROTOCOL_VERSION: u16 = 15;
+// Protocol 16 owns an idempotent Continue-to-Fresh successor in the engine.
+pub const PROTOCOL_VERSION: u16 = 16;
 pub const TERMINAL_CONTROL_PROTOCOL_VERSION: u16 = 11;
 pub const MAX_CONTROL_INPUT_BYTES: usize = 64 * 1024;
 pub const MAX_REQUEST_BYTES: u64 = 256 * 1024;
@@ -291,6 +292,10 @@ pub enum HostRequest {
     FenceProviderSelection {
         session_id: WorkerSessionId,
     },
+    RecoverContinuation {
+        session_id: WorkerSessionId,
+        attempt: swarm_domain::ConversationRecoveryAttempt,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -371,6 +376,8 @@ pub struct HostSessionSummary {
     /// to change the worker binding. Older engines supply no positive evidence.
     #[serde(default)]
     pub continuation_unavailable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuation_recovery: Option<crate::ContinuationRecoveryOutcome>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -599,6 +606,7 @@ mod tests {
             "provider_session_start",
             "provider_resume_end",
             "fence_provider_selection",
+            "recover_continuation",
         ];
         let error = serde_json::from_value::<HostRequest>(serde_json::json!({
             "type": "a_request_that_does_not_exist"
@@ -620,8 +628,8 @@ mod tests {
              anyone -- bump it, then update this list."
         );
         assert_eq!(
-            PROTOCOL_VERSION, 15,
-            "the pinned surface above belongs to protocol 15; if you changed \
+            PROTOCOL_VERSION, 16,
+            "the pinned surface above belongs to protocol 16; if you changed \
              the requests, this number moves with them"
         );
     }
@@ -730,7 +738,7 @@ mod tests {
             variants,
             ["status", "claim", "renew", "release", "input", "resize"]
         );
-        assert_eq!(PROTOCOL_VERSION, 15);
+        assert_eq!(PROTOCOL_VERSION, 16);
     }
 
     #[test]

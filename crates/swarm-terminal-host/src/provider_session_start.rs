@@ -15,7 +15,7 @@ use swarm_terminal::{
 };
 
 const DEADLINE: Duration = Duration::from_secs(3);
-const STARTUP_PROTOCOL: u16 = 15;
+const STARTUP_PROTOCOL: u16 = 16;
 
 fn unavailable() -> io::Error {
     io::Error::other("provider startup evidence unavailable")
@@ -238,7 +238,7 @@ mod tests {
             io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
             net::UnixListener,
         };
-        for protocol_version in [11, 12, 13, 15] {
+        for protocol_version in (0..STARTUP_PROTOCOL).chain(std::iter::once(STARTUP_PROTOCOL + 1)) {
             let directory = tempfile::tempdir().unwrap();
             let socket = directory.path().join("engine.sock");
             let listener = UnixListener::bind(&socket).unwrap();

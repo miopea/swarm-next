@@ -609,43 +609,27 @@ fn dispatch_blocking(
             .and_then(|()| terminal_host_status(registry, host_version, host_build_id))
             .map(|status| HostResponse::HostStatus { status })
             .map_err(|error| error.to_string()),
+        HostRequest::RecoverContinuation {
+            session_id,
+            attempt,
+        } => registry
+            .recover_continuation(session_id, attempt)
+            .map(|session_id| HostResponse::SessionStarted { session_id })
+            .map_err(|error| error.to_string()),
         HostRequest::StartClaude {
             workspace,
             size,
             conversation,
             mcp_config,
             allow_outside_roots,
-        } => {
-            let selection = conversation_claude_can_open(conversation, |session_id| {
-                claude_holds_no_such_conversation(session_id, &workspace)
-            });
-            ClaudeCodeAdapter
-                .command_for_with_configuration(
-                    &workspace,
-                    selection.conversation,
-                    mcp_config.as_deref(),
-                    claude_settings_for(mcp_config.as_deref()).as_deref(),
-                )
-                .map_err(|error| error.to_string())
-                .and_then(|command| {
-                    registry
-                        .spawn_provider_session(
-                            &command,
-                            size,
-                            allow_outside_roots,
-                            Some(ProviderKind::ClaudeCode),
-                        )
-                        .map_err(|error| error.to_string())
-                })
-                .map(|session| {
-                    if let Some(attempt) = selection.recovery_attempt {
-                        session.record_recovery_attempt(attempt);
-                    }
-                    HostResponse::SessionStarted {
-                        session_id: session.id(),
-                    }
-                })
-        }
+        } => start_claude_session(
+            registry,
+            &workspace,
+            size,
+            conversation,
+            mcp_config.as_deref(),
+            allow_outside_roots,
+        ),
         HostRequest::StartCodex {
             workspace,
             size,
@@ -713,6 +697,7 @@ fn dispatch_blocking(
                         provider_start: state.provider_start,
                         provider_selection: state.provider_selection,
                         continuation_unavailable: state.continuation_unavailable,
+                        continuation_recovery: state.continuation_recovery,
                     })
                     .collect(),
             })
@@ -849,6 +834,65 @@ fn build_version() -> &'static str {
 
 fn worker_engine_build_id() -> &'static str {
     option_env!("SWARM_WORKER_ENGINE_BUILD_ID").unwrap_or(build_version())
+}
+
+fn start_claude_session(
+    registry: &SessionRegistry,
+    workspace: &Path,
+    size: swarm_terminal::TerminalSize,
+    conversation: ClaudeConversationStart,
+    mcp_config: Option<&Path>,
+    allow_outside_roots: bool,
+) -> Result<HostResponse, String> {
+    let selection = conversation_claude_can_open(conversation, |session_id| {
+        claude_holds_no_such_conversation(session_id, workspace)
+    });
+    let settings = claude_settings_for(mcp_config);
+    let command = ClaudeCodeAdapter
+        .command_for_with_configuration(
+            workspace,
+            selection.conversation,
+            mcp_config,
+            settings.as_deref(),
+        )
+        .map_err(|error| error.to_string())?;
+    let fallback = if matches!(selection.conversation, ClaudeConversationStart::Continue) {
+        let fresh = ClaudeCodeAdapter
+            .command_for_with_configuration(
+                workspace,
+                ClaudeConversationStart::New {
+                    session_id: ProviderConversationId::new(),
+                },
+                mcp_config,
+                settings.as_deref(),
+            )
+            .map_err(|error| error.to_string())?;
+        Some(
+            swarm_terminal::FreshRecoveryLaunch::new(fresh, size, allow_outside_roots)
+                .map_err(|error| error.to_string())?,
+        )
+    } else {
+        None
+    };
+    let session = registry
+        .spawn_provider_session(
+            &command,
+            size,
+            allow_outside_roots,
+            Some(ProviderKind::ClaudeCode),
+        )
+        .map_err(|error| error.to_string())?;
+    if let Some(attempt) = selection.recovery_attempt {
+        session.record_recovery_attempt(attempt);
+    }
+    if let Some(fallback) = fallback
+        && !session.record_continuation_launch(fallback)
+    {
+        warn!(session_id = %session.id(), "continuation fallback plan could not be retained");
+    }
+    Ok(HostResponse::SessionStarted {
+        session_id: session.id(),
+    })
 }
 
 fn error_response(code: &str, message: &str) -> HostResponse {
@@ -1168,6 +1212,121 @@ mod tests {
             assert!(!sessions[0].running);
             assert!(sessions[0].continuation_unavailable);
         }
+        server_task.abort();
+        let _ = server_task.await;
+    }
+
+    async fn wait_for_terminal_exit(session: &swarm_terminal::ProcessTerminalSession) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        while session.is_running().unwrap() || session.reader_running() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "fixture did not exit"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn lost_recovery_acknowledgement_reuses_the_same_engine_successor() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
+        );
+        let command = ProviderCommand {
+            executable: PathBuf::from("/bin/sh"),
+            arguments: vec![
+                "-c".into(),
+                "printf 'No conversation found to continue\\n'; exit 1".into(),
+            ],
+            working_directory: workspace,
+        };
+        let old = registry
+            .spawn_provider_session(
+                &command,
+                TerminalSize::default(),
+                false,
+                Some(ProviderKind::ClaudeCode),
+            )
+            .unwrap();
+        let ConversationRecoveryState::Attempt { attempt } =
+            ConversationRecovery::new(None, true).state()
+        else {
+            panic!("attempt");
+        };
+        old.record_recovery_attempt(attempt);
+        let fresh = ProviderCommand {
+            arguments: vec!["-c".into(), "read value".into()],
+            ..command
+        };
+        assert!(
+            old.record_continuation_launch(
+                swarm_terminal::FreshRecoveryLaunch::new(fresh, TerminalSize::default(), false)
+                    .unwrap()
+            )
+        );
+        wait_for_terminal_exit(&old).await;
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind(&socket, Arc::clone(&registry)).unwrap();
+        let server_task = tokio::spawn(server.run());
+        let request = HostRequest::RecoverContinuation {
+            session_id: old.id(),
+            attempt,
+        };
+        // Deliver the request but close before reading its acknowledgement.
+        let mut lost = UnixStream::connect(&socket).await.unwrap();
+        let mut payload = serde_json::to_vec(&request).unwrap();
+        payload.push(b'\n');
+        lost.write_all(&payload).await.unwrap();
+        drop(lost);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        while old.recovery_successor().is_none() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "request was not processed"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let successor = old.recovery_successor().unwrap();
+        let replacement = HostClient::new(&socket);
+        let HostResponse::SessionStarted { session_id } =
+            replacement.request(&request).await.unwrap()
+        else {
+            panic!("successor");
+        };
+        assert_eq!(session_id, successor);
+        let HostResponse::Sessions { sessions } = replacement
+            .request(&HostRequest::ListSessions)
+            .await
+            .unwrap()
+        else {
+            panic!("sessions");
+        };
+        assert_eq!(sessions.len(), 2);
+        let previous = sessions
+            .iter()
+            .find(|session| session.session_id == old.id())
+            .unwrap();
+        assert_eq!(
+            previous.continuation_recovery,
+            Some(
+                swarm_terminal::ContinuationRecoveryOutcome::SessionCreated {
+                    session_id: successor
+                }
+            )
+        );
+        let next = sessions
+            .iter()
+            .find(|session| session.session_id == successor)
+            .unwrap();
+        assert!(next.running);
+        assert_eq!(
+            next.recovery_attempt.unwrap().step,
+            ConversationRecoveryStep::Fresh
+        );
+        assert!(registry.recent_write_audit(10).unwrap().is_empty());
+        registry.stop(successor).unwrap();
         server_task.abort();
         let _ = server_task.await;
     }

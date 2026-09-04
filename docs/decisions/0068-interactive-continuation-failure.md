@@ -35,3 +35,29 @@ satisfied merely by recognizing the startup error.
 Existing lifecycle and startup ownership in ADRs 0011 and 0064 remain in force.
 There is no timeout-driven fallback, permission bypass, provider substitution,
 or replacement of a running PTY under the same Swarm session identity.
+
+## Engine successor implementation
+
+Protocol 16 adds RecoverContinuation with only the original session and exact
+attempt identity. The host prepares the final Claude New command at initial
+Continue startup, preserving its workspace, MCP configuration, settings, and
+root policy. Retained command storage includes argument overhead and is bounded
+by the IPC request-size budget; the caller cannot submit a replacement command.
+
+The registry owns the recovery check, new process, and successor publication in
+one exclusive operation. Input ownership and child/lifecycle ownership span the
+failure check through spawn. The domain advances the same recovery operation to
+its numbered Fresh step. Its process gets a new immutable Swarm session identity.
+
+Concurrent requests and lost acknowledgements return the same recorded successor,
+including during drain. A removed successor cannot be recreated through the old
+attempt. Both entries count toward the registry cap. Capacity/drain refusal is a
+deferral; a failed final process startup is retained as LaunchFailed and cannot
+be retried through this attempt. Neither outcome claims restored conversation.
+
+Session summaries expose a mutually exclusive SessionCreated/LaunchFailed result,
+not raw command configuration. Lifecycle helpers preflight exactly protocol 16;
+older engines must be detected before using this recovery request. This does not
+authorize an engine replacement or deployment. API binding reconciliation,
+manual-choice fencing across API interruption, fresh-context presentation, and
+prior-task replay protection are still required before automatic use is complete.

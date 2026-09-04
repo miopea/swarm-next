@@ -32,8 +32,9 @@ pub use ipc::{
 };
 pub use journal::{JournalLimits, SequencedFrame};
 pub use process::{
-    MAX_TERMINAL_CELLS, MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS, MIN_TERMINAL_COLUMNS,
-    MIN_TERMINAL_ROWS, ProcessTerminalSession, SessionRegistry, SessionRegistryError, TerminalSize,
+    ContinuationRecoveryOutcome, FreshRecoveryLaunch, MAX_TERMINAL_CELLS, MAX_TERMINAL_COLUMNS,
+    MAX_TERMINAL_ROWS, MIN_TERMINAL_COLUMNS, MIN_TERMINAL_ROWS, ProcessTerminalSession,
+    SessionRegistry, SessionRegistryError, TerminalSize,
 };
 pub use provider::{
     AlphaProviderAdapter, ClaudeCodeAdapter, ClaudeConversationStart, CodexAdapter,
