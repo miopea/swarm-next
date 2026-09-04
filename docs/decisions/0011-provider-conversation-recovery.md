@@ -33,6 +33,12 @@ filesystem timestamps are not authority to undo that choice. Provider-native
 continue semantics may choose a different workspace conversation, so Swarm must
 distinguish an exact restoration from that fallback in its recovery evidence.
 
+The existing operator correction endpoint serializes with worker startup. The
+saved choice and its worker-change event commit atomically, and connected views
+are notified after commit. Repeating the same choice is a persistence no-op.
+This changes the next startup target only; it must not move a running terminal.
+It does not yet detect the provider's in-terminal conversation switch.
+
 ## Consequences
 
 - Crash, reboot, and intentional stop/start attempt to preserve the chosen
@@ -90,3 +96,12 @@ Do not infer interactive continuation from a print-mode continuation probe:
 states that those modes can consider different sets of sessions. Preserve the
 interactive provider contract and verify its outcome directly. The existing
 exact-ID probe does not justify extending that technique to `--continue`.
+
+For the pending Claude session-event integration, the official
+[hooks reference](https://code.claude.com/docs/en/hooks) provides the current
+conversation ID on `SessionStart`; `resume` covers command-line continuation and
+in-terminal `/resume`. Events must be bound to the actual engine process
+incarnation before updating the saved choice. Do not infer operator intent from
+arbitrary terminal text, accept an old process's late report as current, or treat
+a background fork as the foreground conversation. These are integration
+requirements, not a claim that a hook has been installed.

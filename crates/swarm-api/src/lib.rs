@@ -14814,6 +14814,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn conversation_repoint_waits_for_startup_and_notifies_the_control_room() {
+        use std::{
+            future::Future,
+            task::{Context, Poll, Waker},
+        };
+
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Poppy", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+            .with_task_store(store.clone());
+        let lifecycle = Arc::clone(&state.worker_lifecycle);
+        let notify = Arc::clone(&state.control_room_notify);
+        let guard = lifecycle.lock().await;
+        let chosen = swarm_domain::ProviderConversationId::new();
+        let mut request = Box::pin(
+            router(state).oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/workers/{}/conversation", worker.id))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"conversation_id":"{chosen}"}}"#)))
+                    .unwrap(),
+            ),
+        );
+        assert!(matches!(
+            request
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Pending
+        ));
+        assert_eq!(
+            store
+                .get_worker_profile(worker.id)
+                .unwrap()
+                .provider_conversation_id,
+            worker.provider_conversation_id
+        );
+        let mut changed = Box::pin(notify.notified());
+        changed.as_mut().enable();
+        drop(guard);
+        assert_eq!(request.await.unwrap().status(), StatusCode::OK);
+        assert!(matches!(
+            changed
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(())
+        ));
+        assert_eq!(
+            store
+                .get_worker_profile(worker.id)
+                .unwrap()
+                .provider_conversation_id,
+            Some(chosen)
+        );
+    }
+
+    #[tokio::test]
     async fn worker_preferences_update_without_changing_repository_or_conversation() {
         let store = TaskStore::in_memory().unwrap();
         let worker = store

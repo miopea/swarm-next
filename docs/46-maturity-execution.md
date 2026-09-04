@@ -492,6 +492,29 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   This is startup provenance, not the completed recovery state machine.
 - No push, release, deployment, or live-worker restart.
 
+### P2q: atomic, observable operator conversation correction
+
+- Inspection confirmed the existing explicit conversation-correction endpoint
+  saved a new ID without publishing a worker event or serializing with startup.
+  The API now takes the same lifecycle guard as startup and notifies control-room
+  waiters after persistence succeeds.
+- Saved identity and WorkersChanged commit together. Failure to record the event
+  rolls back the identity change; selecting the same ID again is a no-op rather
+  than generating duplicate history. The live terminal remains unchanged.
+- Five focused persistence tests executed successfully on Windows, including
+  rollback, duplicate selection, live-session preservation, and existing repair
+  cases. Strict Linux-target all-target/all-feature API Clippy passed. The new
+  deterministic API lifecycle/notification regression compiled but was not
+  executed on Linux; no elapsed-delay assumption is used in that test.
+- The first native test attempt selected the Linux C wrapper and failed before
+  test execution. Rerunning with the existing `zig-windows-cc.cmd` succeeded;
+  production source and compiler checks were not weakened for that failure.
+- Reviewed the official Claude SessionStart contract and recorded its integration
+  constraints in ADR 0011. Automatic in-terminal switch observation remains
+  unimplemented; this checkpoint fixes the explicit correction path only.
+- No live provider invocation, worker restart, schema change, release, push,
+  or deployment.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

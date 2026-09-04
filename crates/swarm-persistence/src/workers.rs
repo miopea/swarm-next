@@ -1131,17 +1131,26 @@ impl TaskStore {
         worker_id: WorkerId,
         conversation_id: &ProviderConversationId,
     ) -> Result<(), TaskStoreError> {
-        let connection = self.connection()?;
-        let updated = connection.execute(
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let previous = transaction.query_row(
+            "SELECT provider_conversation_id FROM worker_profiles WHERE id = ?1 AND archived_at IS NULL",
+            [worker_id.to_string()],
+            |row| row.get::<_, Option<String>>(0),
+        ).optional()?.ok_or(TaskStoreError::WorkerNotFound)?;
+        let selected = conversation_id.to_string();
+        if previous.as_deref() == Some(selected.as_str()) {
+            return Ok(());
+        }
+        transaction.execute(
             "UPDATE worker_profiles
              SET provider_conversation_id = ?1, updated_at = unixepoch()
              WHERE id = ?2 AND archived_at IS NULL",
-            params![conversation_id.to_string(), worker_id.to_string()],
+            params![selected, worker_id.to_string()],
         )?;
-        if updated == 1 {
-            return Ok(());
-        }
-        Err(TaskStoreError::WorkerNotFound)
+        insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        transaction.commit()?;
+        Ok(())
     }
 
     /// Assigns a stable provider conversation to a profile that has never launched.
@@ -3043,6 +3052,71 @@ mod tests {
             store.repoint_provider_conversation(WorkerId::new(), &ProviderConversationId::new()),
             Err(TaskStoreError::WorkerNotFound)
         ));
+    }
+
+    #[test]
+    fn conversation_repoint_publishes_one_event_without_moving_the_live_session() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Poppy", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let before = store
+            .list_control_room_events(0)
+            .unwrap()
+            .events
+            .last()
+            .unwrap()
+            .sequence;
+        let chosen = ProviderConversationId::new();
+        store
+            .repoint_provider_conversation(worker.id, &chosen)
+            .unwrap();
+        let changed = store.list_control_room_events(before).unwrap().events;
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].kind, ControlRoomEventKind::WorkersChanged);
+        let profile = store.get_worker_profile(worker.id).unwrap();
+        assert_eq!(profile.active_session_id, Some(session));
+        assert_eq!(profile.provider_conversation_id, Some(chosen));
+        store
+            .repoint_provider_conversation(worker.id, &chosen)
+            .unwrap();
+        assert!(
+            store
+                .list_control_room_events(changed[0].sequence)
+                .unwrap()
+                .events
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn conversation_repoint_rolls_back_if_its_change_event_cannot_be_recorded() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Poppy", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_conversation_test_event BEFORE INSERT ON control_room_events
+             BEGIN SELECT RAISE(ABORT, 'test event failure'); END;",
+            )
+            .unwrap();
+        assert!(
+            store
+                .repoint_provider_conversation(worker.id, &ProviderConversationId::new())
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .get_worker_profile(worker.id)
+                .unwrap()
+                .provider_conversation_id,
+            worker.provider_conversation_id
+        );
     }
 
     #[test]

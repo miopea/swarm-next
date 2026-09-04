@@ -472,9 +472,13 @@ pub(super) async fn repoint_worker_conversation(
                 "a provider conversation id must be a UUID",
             )
         })?;
+    // Serialize with startup's profile read and host launch. Once this change
+    // returns, a later start must not launch from an earlier cached selection.
+    let _lifecycle = state.worker_lifecycle.lock().await;
     task_store(&state)?
         .repoint_provider_conversation(worker_id, &conversation_id)
         .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
     Ok((
         StatusCode::OK,
         Json(serde_json::json!({
