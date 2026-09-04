@@ -6,6 +6,19 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: distinguish operator activity from verifiable answers
+
+- Inspected ADR 0054, terminal write provenance, engine audit recording, and the
+  mobile composer's submission boundary. Existing evidence identifies input actor
+  and byte count, but cannot verify a statement or an AskUser option selection.
+- ADR 0065 defines the separate first-party statement and exact decision-link
+  contract, including uncertain delivery, no replay, no agent-forged authorship,
+  bounded retention, and duplicate-answer reconciliation. Raw-terminal/provider
+  integration remains required; composer support alone will not complete it.
+- Documentation checkpoint only: no runtime implementation or live acceptance
+  claimed. The earlier full web run's result was not recovered after output
+  truncation; it is not counted as a passing regression checkpoint.
+
 ### P4: returned work has a distinct durable briefing generation
 
 - Schema 129 adds an integer generation to each task dispatch, starting at zero.
