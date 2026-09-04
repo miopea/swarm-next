@@ -1060,11 +1060,21 @@ function bootFetch() {
 test("hidden windows defer transcript scans and background status polls until visible", async () => {
   let visibility: DocumentVisibilityState = "hidden";
   const visibilitySpy = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
-  const fetch = bootFetch();
+  const baseFetch = bootFetch();
+  const eventSignals: AbortSignal[] = [];
+  const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    if (String(input).includes("/control-room/events")) {
+      const signal = init!.signal!;
+      eventSignals.push(signal);
+      return new Promise<Response>((_, reject) => signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
+    }
+    return baseFetch(input);
+  });
   vi.stubGlobal("fetch", fetch);
   try {
     render(<App />);
     await screen.findByRole("button", { name: "Open quick navigation" });
+    expect(eventSignals).toHaveLength(0);
     expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/workers/conversations"))).toBe(false);
     expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/runtime/tunnel"))).toBe(false);
     for (const endpoint of ["/runtime/resources", "/orchestration/coordinator", "/integrations/email/awaiting-reply"]) {
@@ -1072,11 +1082,23 @@ test("hidden windows defer transcript scans and background status polls until vi
     }
     visibility = "visible";
     await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    expect(eventSignals).toHaveLength(1);
+    expect(eventSignals[0].aborted).toBe(false);
     expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/workers/conversations"))).toBe(true);
     expect(fetch.mock.calls.some(([url]) => String(url).endsWith("/runtime/tunnel"))).toBe(true);
     for (const endpoint of ["/runtime/resources", "/orchestration/coordinator", "/integrations/email/awaiting-reply"]) {
       expect(fetch.mock.calls.some(([url]) => String(url).endsWith(endpoint))).toBe(true);
     }
+    visibility = "hidden";
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    expect(eventSignals[0].aborted).toBe(true);
+    expect(eventSignals).toHaveLength(1);
+    visibility = "visible";
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    expect(eventSignals).toHaveLength(2);
+    expect(eventSignals[1].aborted).toBe(false);
+    cleanup();
+    expect(eventSignals[1].aborted).toBe(true);
   } finally {
     cleanup();
     visibilitySpy.mockRestore();

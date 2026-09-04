@@ -71,6 +71,18 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 
 ## P3–P7 — Implementation checkpoints (phases remain incomplete)
 
+### P3h: hidden control-room feeds relinquish presentation work
+
+- Hidden documents no longer start or retain the control-room long poll and its
+  snapshot invalidation requests. Return reconnects immediately using the existing
+  cursor handshake. The last rendered snapshot remains; no provider/worker stop
+  or terminal-lifecycle operation is involved. Push subscription ownership is
+  independent and unchanged.
+- Verification: 42 App/feed/model tests passed, including hidden startup with no
+  event request, visibility return, hidden cancellation, another return, and
+  unmount cancellation. Production web build passed (existing terminal chunk size
+  warning). Before/after live CPU and suspended-device acceptance remain pending.
+
 ### P4f: failed coordination reads do not imply resolution
 
 - Preserve held deliveries, briefings, blocked observations, and unsettled review

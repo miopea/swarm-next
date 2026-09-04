@@ -720,19 +720,21 @@ export function App() {
       },
       setLiveFeedState,
     );
-    connect();
-    // A phone suspends a backgrounded tab, and the poll it left in flight may
-    // never settle — it neither answers nor fails. The feed abandons such a
-    // poll at its own ceiling, but reconnecting the moment the page comes back
-    // makes the roster current immediately instead of after that wait, which is
-    // the difference between returning to live work and returning to a screen
-    // frozen where it stood.
-    const reconnectOnReturn = () => {
-      if (document.visibilityState === "visible") connect();
+    // This is presentation traffic, not worker execution or push delivery.
+    // Hidden documents retain their last snapshot but own no event poll or
+    // invalidation fetch. Returning starts a fresh cursor handshake immediately.
+    const syncFeedVisibility = () => {
+      if (document.visibilityState === "visible") {
+        connect();
+      } else {
+        feed.stop();
+        setLiveFeedState("connecting");
+      }
     };
-    document.addEventListener("visibilitychange", reconnectOnReturn);
+    syncFeedVisibility();
+    document.addEventListener("visibilitychange", syncFeedVisibility);
     return () => {
-      document.removeEventListener("visibilitychange", reconnectOnReturn);
+      document.removeEventListener("visibilitychange", syncFeedVisibility);
       feed.stop();
     };
   }, [operatorToken, presentationDevice]);
