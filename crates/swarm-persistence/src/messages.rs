@@ -434,6 +434,11 @@ impl TaskStore {
              {live_session}
              LEFT JOIN worker_profiles sender ON sender.id = m.sender_worker_id
              WHERE m.delivered_at IS NULL AND delivery.state = 'queued'
+               AND (recipient.role = 'queen' OR NOT EXISTS (
+                   SELECT 1 FROM tasks ongoing
+                   WHERE ongoing.assigned_worker_id = recipient.id
+                     AND ongoing.state = 'active' AND ongoing.removed_at IS NULL
+                     AND ongoing.id != m.task_id))
                AND NOT EXISTS (SELECT 1 FROM task_message_deliveries active
                    WHERE active.state = 'dispatching' AND active.session_id = session.session_id)
              ORDER BY ROW_NUMBER() OVER (PARTITION BY recipient.id ORDER BY m.created_at, m.id),

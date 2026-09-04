@@ -57,6 +57,26 @@ lifetimes remain unchanged.
 
 ## Acceptance
 
+### Task-aware delivery holds
+
+Queue selection leaves a worker's cross-task messages queued while that worker
+owns another Active task. A question about that same Active task remains eligible,
+so continuing current work is not blocked behind an unrelated question. Queen's
+inbox is exempt from this worker-task restriction because coordination is her job.
+
+Immediately before contacting each terminal, the dispatcher rechecks every
+group member's exact claim, current recipient/session, supersession, operator
+engagement and unrelated Active work. Any held member defers the group without
+writing, preserving the selected group's order. A failed evidence read rejects
+the delivery for Queen reconciliation, not optimistic submission. These normal
+holds do not create operator attention or a timer-based escalation.
+
+This durable preflight is not a reservation held across asynchronous terminal
+observation and input. The engine still owns live input/engagement protection.
+An atomic task-admission fence across that interval, and explicit Scout-only
+second-opinion admission, remain open; passing these tests does not prove that
+all cross-task races are eliminated.
+
 Verify transactional admission and rollback, bounded exclusive claims, session
 and claim fencing, deferral, uncertain writes and restart recovery, explicit
 Queen reconciliation, supersession without erased history, readable Queues

@@ -48,6 +48,8 @@ pub(super) enum DeferralReason {
     RecentDelivery,
     /// Builder policy holds experimental providers during unattended operation.
     ProviderPolicy,
+    /// A task message is held for engagement, unrelated Active work or stale ownership.
+    TaskMessageHold,
 }
 
 impl DeferralReason {
@@ -69,13 +71,16 @@ impl DeferralReason {
             Self::PromptHoldsUnsentText => {
                 Some(swarm_persistence::REFUSAL_DELIVERY_HELD_UNSENT_TEXT)
             }
-            Self::RecentDelivery | Self::ProviderPolicy => None,
+            Self::RecentDelivery | Self::ProviderPolicy | Self::TaskMessageHold => None,
         }
     }
 
     /// Written to the operator, so it names the remedy rather than the state.
     pub(super) fn describe(self, subject: &str) -> String {
         match self {
+            Self::TaskMessageHold => format!(
+                "{subject} is queued behind current work or operator engagement; delivery ownership will be rechecked"
+            ),
             Self::ProviderBusy => {
                 format!("{subject} is waiting for an unanswered prompt in this terminal")
             }
@@ -276,6 +281,58 @@ pub(super) async fn submit_grouped_per_terminal<D>(
             (group, submission)
         });
     join_all(groups).await
+}
+
+/// Rechecks task-message ownership and durable holds before contacting each terminal.
+/// A held member defers the whole group, preserving per-terminal message order.
+pub(super) async fn submit_task_message_groups(
+    store: &TaskStore,
+    client: &HostClient,
+    claims: Vec<swarm_persistence::ClaimedTaskMessage>,
+) -> Vec<(
+    Vec<swarm_persistence::ClaimedTaskMessage>,
+    Result<TerminalSubmission, swarm_terminal::IpcError>,
+)> {
+    join_all(
+        group_by_terminal(claims, |claim: &swarm_persistence::ClaimedTaskMessage| {
+            claim.message.session_id
+        })
+        .into_iter()
+        .map(|group| async move {
+            for claim in &group {
+                match store.task_message_claim_can_submit(claim, unix_timestamp()) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        return (
+                            group,
+                            Ok(TerminalSubmission::Deferred(
+                                DeferralReason::TaskMessageHold,
+                            )),
+                        );
+                    }
+                    Err(error) => {
+                        return (
+                            group,
+                            Ok(TerminalSubmission::Rejected {
+                                code: "task_message_evidence_unavailable".into(),
+                                message: error.to_string(),
+                            }),
+                        );
+                    }
+                }
+            }
+            let session = group[0].message.session_id;
+            let message = task_message_message(
+                &group
+                    .iter()
+                    .map(|claim| claim.message.clone())
+                    .collect::<Vec<_>>(),
+            );
+            let result = submit_coordination_message(store, client, session, message).await;
+            (group, result)
+        }),
+    )
+    .await
 }
 
 /// Gathers deliveries into one group per terminal, keeping each terminal's own
@@ -1338,6 +1395,121 @@ mod tests {
     use swarm_domain::{PresenceMode, QueenAutomationTrigger, TaskId, WorkerId};
     use swarm_persistence::{QueenAutomationDelivery, TaskMessageDispatch};
     use swarm_terminal::{CanonicalTerminalState, JournalLimits, TerminalSize, TerminalSnapshot};
+
+    fn message_worker_fixture() -> (TaskStore, swarm_domain::WorkerProfile, WorkerSessionId) {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        (store, worker, session)
+    }
+
+    #[tokio::test]
+    async fn task_messages_recheck_unrelated_work_and_engagement_after_claim() {
+        use swarm_domain::TaskState;
+        use swarm_persistence::{MessageEnd, TaskMessageResult};
+        let (store, worker, session) = message_worker_fixture();
+        let task = store
+            .create_task("A question about earlier work", "/workspace/petal")
+            .unwrap();
+        let other = store
+            .create_task("Current work", "/workspace/petal")
+            .unwrap();
+        store.assign_task_to_worker(other.id, worker.id).unwrap();
+        store.transition_task(other.id, TaskState::Ready).unwrap();
+        store
+            .send_task_message(
+                task.id,
+                MessageEnd::queen(),
+                MessageEnd::worker(worker.id),
+                "Please clarify the earlier result",
+                10,
+            )
+            .unwrap();
+        let claims = store.claim_task_messages(11).unwrap();
+        assert_eq!(claims.len(), 1);
+        // Activity changed after the queue was claimed, before any terminal call.
+        store.transition_task(other.id, TaskState::Active).unwrap();
+        let results = submit_task_message_groups(
+            &store,
+            &HostClient::new("/unreachable/terminal.sock"),
+            claims,
+        )
+        .await;
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].1.as_ref().unwrap(),
+            &TerminalSubmission::Deferred(DeferralReason::TaskMessageHold)
+        );
+        store
+            .finish_task_message(&results[0].0[0], TaskMessageResult::Deferred, 12)
+            .unwrap();
+        assert!(
+            store.claim_task_messages(13).unwrap().is_empty(),
+            "selection must leave cross-task messages queued while current work is active"
+        );
+        store
+            .send_task_message(
+                other.id,
+                MessageEnd::queen(),
+                MessageEnd::worker(worker.id),
+                "Continue this same task",
+                14,
+            )
+            .unwrap();
+        let same_task = store.claim_task_messages(15).unwrap();
+        assert_eq!(same_task.len(), 1);
+        assert_eq!(same_task[0].message.task_id, other.id);
+        assert!(
+            store
+                .task_message_claim_can_submit(&same_task[0], 15)
+                .unwrap()
+        );
+        store
+            .finish_task_message(&same_task[0], TaskMessageResult::Delivered, 16)
+            .unwrap();
+        store.transition_task(other.id, TaskState::Review).unwrap();
+        let claims = store.claim_task_messages(17).unwrap();
+        assert_eq!(
+            claims.len(),
+            1,
+            "held work becomes eligible when unrelated work finishes"
+        );
+        let now = unix_timestamp();
+        store
+            .renew_worker_engagement(session, None, now, 60)
+            .unwrap();
+        let results = submit_task_message_groups(
+            &store,
+            &HostClient::new("/unreachable/terminal.sock"),
+            claims,
+        )
+        .await;
+        assert_eq!(
+            results[0].1.as_ref().unwrap(),
+            &TerminalSubmission::Deferred(DeferralReason::TaskMessageHold)
+        );
+        assert!(
+            store
+                .task_message_claim_can_submit(&results[0].0[0], now + 60)
+                .unwrap()
+        );
+        store.release_worker_session(session).unwrap();
+        assert!(
+            !store
+                .task_message_claim_can_submit(&results[0].0[0], now + 60)
+                .unwrap()
+        );
+        assert_eq!(DeferralReason::TaskMessageHold.refusal_kind(), None);
+    }
 
     #[tokio::test]
     async fn experimental_coordination_is_deferred_before_contacting_terminal() {

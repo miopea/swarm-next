@@ -2154,21 +2154,8 @@ impl AppState {
                 return;
             }
         };
-        let settled = coordination_delivery::submit_grouped_per_terminal(
-            store,
-            client,
-            pending,
-            |claim| claim.message.session_id,
-            |claims| {
-                coordination_delivery::task_message_message(
-                    &claims
-                        .iter()
-                        .map(|claim| claim.message.clone())
-                        .collect::<Vec<_>>(),
-                )
-            },
-        )
-        .await;
+        let settled =
+            coordination_delivery::submit_task_message_groups(store, client, pending).await;
         let mut changed = false;
         for (group, submission) in settled {
             use swarm_persistence::TaskMessageResult;

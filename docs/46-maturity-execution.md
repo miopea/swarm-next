@@ -6,6 +6,29 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: task-aware message selection and pre-contact revalidation
+
+- Cross-task messages remain queued while the recipient worker owns unrelated
+  Active work. Same-task questions stay eligible, including behind an earlier
+  held cross-task question; Queen's coordination inbox is exempt from this
+  worker-task restriction. Prompt-idle no longer defeats this durable hold.
+- Before contacting each terminal, every claimed group member is rechecked for
+  exact claim/session, current recipient, supersession, operator engagement and
+  unrelated Active work. A hold defers the whole selected group; evidence-read
+  failure rejects for explicit reconciliation. Normal holds create no operator
+  attention and no age-based escalation. Existing outbox bounds remain unchanged.
+- The new adapter test changes state after claiming and uses an unreachable
+  socket to prove held delivery returns without terminal contact. It checks
+  same-task continuation, held-work recovery, engagement expiry and session close.
+- Initial Linux API build passed after correcting a closure type annotation;
+  29 coordination tests and two transport/recovery tests passed. Strict Clippy
+  passed after extracting test setup to meet the function-size lint. Final
+  rebuilt execution passed all 31 API checks again, plus 10 persistence delivery
+  lifecycle and 14 messaging tests (55 checks total). Formatting/diff checks passed.
+- This preflight is not an atomic reservation across terminal observation/write.
+  That remaining task-admission race and explicit Scout-only second-opinion
+  enforcement are not claimed fixed. No live worker changes or release actions.
+
 ### P4: expose managed Scout routing facts without guessing idle
 
 - The Queen-only worker list now includes a read-only `scout_routing` projection.

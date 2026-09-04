@@ -158,6 +158,44 @@ impl TaskStore {
         Ok(claims)
     }
 
+    /// Rechecks durable claim ownership and task/engagement holds before submission.
+    /// This is an observation, not a reservation across an asynchronous PTY write.
+    ///
+    /// # Errors
+    /// Returns database failures without granting permission to write.
+    pub fn task_message_claim_can_submit(
+        &self,
+        claim: &ClaimedTaskMessage,
+        now: i64,
+    ) -> Result<bool, TaskStoreError> {
+        Ok(self.connection()?.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM task_message_deliveries d
+                JOIN task_messages m ON m.id = d.message_id
+                JOIN tasks task ON task.id = m.task_id AND task.removed_at IS NULL
+                JOIN worker_sessions s ON s.session_id = d.session_id AND s.ended_at IS NULL
+                JOIN worker_profiles recipient ON recipient.id = s.worker_id
+                  AND recipient.archived_at IS NULL
+                WHERE d.message_id = ?1 AND d.claim_id = ?2 AND d.session_id = ?3
+                  AND d.state = 'dispatching' AND d.superseded = 0
+                  AND ((m.recipient = 'queen' AND recipient.role = 'queen')
+                    OR (m.recipient = 'worker' AND m.recipient_worker_id = recipient.id))
+                  AND NOT EXISTS(SELECT 1 FROM worker_engagements e
+                    WHERE e.worker_id = recipient.id AND e.expires_at > ?4)
+                  AND (recipient.role = 'queen' OR NOT EXISTS(
+                    SELECT 1 FROM tasks ongoing WHERE ongoing.assigned_worker_id = recipient.id
+                      AND ongoing.state = 'active' AND ongoing.removed_at IS NULL
+                      AND ongoing.id != m.task_id)))",
+            params![
+                claim.message.message_id,
+                claim.claim_id,
+                claim.message.session_id.to_string(),
+                now
+            ],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Completes only the exact in-flight claim. False means a stale observation.
     ///
     /// # Errors
