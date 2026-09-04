@@ -99,7 +99,7 @@ pub use notifications::{
 mod deployment_grants;
 mod ops_tickets;
 mod orchestration;
-pub use ops_tickets::OpsTicketReceipt;
+pub use ops_tickets::{OpsDeploymentPage, OpsDeploymentRecord, OpsTicketReceipt};
 mod queen_conductor;
 pub use queen_conductor::{QueenAutomationDelivery, QueenAutomationFailure, QueenAutomationFinish};
 mod presentation;

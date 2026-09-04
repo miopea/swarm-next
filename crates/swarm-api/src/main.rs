@@ -217,6 +217,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     state = configure_jira(state, &database_path);
     state = configure_email(state, &database_path);
     state = state.with_agent_configuration(agent_config_root, mcp_url_from_env(address));
+    state = configure_ops_integrations(state);
     // Recovering queued deliveries is repair, and repair that cannot run is a
     // reason to say so rather than a reason to refuse to start -- a Hive that
     // will not boot delivers nothing at all, which is strictly worse than one
@@ -240,6 +241,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+fn configure_ops_integrations(state: AppState) -> AppState {
+    match env::var_os("SWARM_OPS_INTEGRATIONS_FILE") {
+        Some(path) => state.with_ops_integrations_path(PathBuf::from(path)),
+        None => state,
+    }
 }
 
 /// Says so when there is no operator token, and does not stop the Hive.

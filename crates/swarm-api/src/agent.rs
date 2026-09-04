@@ -338,7 +338,7 @@ pub async fn handle(
 /// ONLY the configured public address is added, never the request's own Host.
 /// Trusting the Host a request arrives with would delete the protection rather
 /// than configure it: any name at all would then vouch for itself.
-fn allowed_mcp_hosts(state: &crate::AppState) -> Vec<String> {
+pub(crate) fn allowed_mcp_hosts(state: &crate::AppState) -> Vec<String> {
     let mut hosts = vec![
         "localhost".to_owned(),
         "127.0.0.1".to_owned(),

@@ -6,6 +6,7 @@ mod backups;
 pub mod bundled_feedback;
 mod control_room;
 mod coordination_delivery;
+mod ops_mcp;
 use coordination_delivery::{
     TerminalSubmission, decision_delivery_message, queen_automation_message,
     submit_coordination_message, task_dispatch_message, task_outcome_message,
@@ -194,6 +195,8 @@ pub struct AppState {
     websocket_limit: Arc<Semaphore>,
     task_store: Option<TaskStore>,
     agent_bridge: Option<agent::AgentBridge>,
+    ops_integrations_path: Option<Arc<PathBuf>>,
+    ops_mcp_limit: Arc<Semaphore>,
     worker_lifecycle: Arc<Mutex<()>>,
     worker_description_improvement_limit: Arc<Semaphore>,
     development_reload: Arc<Mutex<()>>,
@@ -318,6 +321,8 @@ impl AppState {
             websocket_limit: Arc::new(Semaphore::new(MAX_TERMINAL_WEBSOCKETS)),
             task_store: None,
             agent_bridge: None,
+            ops_integrations_path: None,
+            ops_mcp_limit: Arc::new(Semaphore::new(2)),
             worker_lifecycle: Arc::new(Mutex::new(())),
             worker_description_improvement_limit: Arc::new(Semaphore::new(
                 MAX_WORKER_DESCRIPTION_IMPROVEMENTS,
@@ -615,6 +620,13 @@ impl AppState {
     #[must_use]
     pub fn with_task_store(mut self, task_store: TaskStore) -> Self {
         self.task_store = Some(task_store);
+        self
+    }
+
+    /// Configures a private, runtime-reloaded digest and scope file for Ops MCP.
+    #[must_use]
+    pub fn with_ops_integrations_path(mut self, path: PathBuf) -> Self {
+        self.ops_integrations_path = Some(Arc::new(path));
         self
     }
 
@@ -3252,6 +3264,7 @@ fn router_with_optional_asset_root(
 fn api_router(state: AppState) -> Router {
     Router::new()
         .route("/mcp", post(mcp))
+        .route("/mcp/ops", post(ops_mcp::handle))
         // Discovery for an outside tool. PUBLIC, and deliberately so: these are
         // the documents a client reads to find out how to authenticate, and
         // putting them behind the credential they exist to obtain is a loop.
@@ -8522,6 +8535,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         // Same treatment as the contradiction below and for the same reason: the
         // caller asked a legitimate question and the answer is about the record,
         // not about their request being malformed.
+        TaskStoreError::OpsTicketConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            "ops_ticket_conflict",
+            error.to_string(),
+        ),
         TaskStoreError::CommitsNotReported => ApiError::new(
             StatusCode::CONFLICT,
             "commits_not_reported",

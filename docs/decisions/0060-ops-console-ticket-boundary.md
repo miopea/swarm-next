@@ -31,6 +31,12 @@ existing activity model records `actor_kind=system` and the unambiguous
 and CHECK constraints without manufacturing a worker profile. The dedicated
 integration identity and app scope are separate from all worker authorization.
 
+The external transport is `POST /mcp/ops`, separate from worker and remote OAuth
+MCP. It reloads a bounded private digest/scope file for every request, so removing
+or disabling an entry revokes subsequent requests without worker disruption.
+No credential fallback exists. Deployment and rotation instructions are in
+`docs/ops-console-integration.md`; runtime enablement remains pending.
+
 Authorized commands expose only immutable accessors after domain validation.
 An IMMEDIATE transaction serializes external-key lookup and creation across
 independent database connections. Removed tasks retain their source keys; replay

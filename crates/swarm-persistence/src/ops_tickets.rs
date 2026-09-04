@@ -10,6 +10,22 @@ pub struct OpsTicketReceipt {
     pub replayed: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OpsDeploymentRecord {
+    pub id: String,
+    pub environment: String,
+    pub reference: String,
+    pub deployed_at: i64,
+    pub recorded_at: i64,
+    pub delivers_whole_task: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OpsDeploymentPage {
+    pub records: Vec<OpsDeploymentRecord>,
+    pub truncated: bool,
+}
+
 pub(crate) fn migrate_ops_tickets(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
     transaction.execute_batch(
         "CREATE TABLE IF NOT EXISTS ops_console_tickets (
@@ -29,6 +45,38 @@ pub(crate) fn migrate_ops_tickets(transaction: &rusqlite::Transaction<'_>) -> ru
 }
 
 impl TaskStore {
+    /// Reads bounded deployment evidence, retaining partial-delivery semantics.
+    /// The application service first resolves a currently scoped ticket.
+    ///
+    /// # Errors
+    /// Returns a persistence error if evidence cannot be read.
+    pub fn ops_ticket_deployments(
+        &self,
+        task_id: TaskId,
+    ) -> Result<OpsDeploymentPage, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT id, environment, reference, deployed_at, recorded_at, delivers_whole_task
+             FROM task_deployments WHERE task_id = ?1
+             ORDER BY recorded_at DESC, id DESC LIMIT 51",
+        )?;
+        let mut records = statement
+            .query_map([task_id.to_string()], |row| {
+                Ok(OpsDeploymentRecord {
+                    id: row.get(0)?,
+                    environment: row.get(1)?,
+                    reference: row.get(2)?,
+                    deployed_at: row.get(3)?,
+                    recorded_at: row.get(4)?,
+                    delivers_whole_task: row.get(5)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let truncated = records.len() > 50;
+        records.truncate(50);
+        Ok(OpsDeploymentPage { records, truncated })
+    }
+
     /// Atomically accepts an authorized external request as one inert draft.
     /// Identical retries survive lost responses and restarts; changed retries fail.
     ///
@@ -87,11 +135,12 @@ impl TaskStore {
         // System attribution retains a dedicated integration identity, without
         // inventing a worker or rewriting the existing activity CHECK constraint.
         transaction.execute(
-            "INSERT INTO task_activity (task_id, kind, to_state, actor_kind, actor_id)
-             VALUES (?1, 'created', 'draft', 'system', ?2)",
+            "INSERT INTO task_activity (task_id, kind, to_state, actor_kind, actor_id, note)
+             VALUES (?1, 'created', 'draft', 'system', ?2, ?3)",
             params![
                 task_id.to_string(),
-                format!("ops-console:{}", command.integration_id())
+                format!("ops-console:{}", command.integration_id()),
+                format!("Ops Console source: app {}, request {}, conversation {}. Ops Console owns customer communication; record implementation progress and deployment evidence in Swarm.", input.app_id, input.request_id, input.conversation_id)
             ],
         )?;
         insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
@@ -185,6 +234,12 @@ mod tests {
         assert_eq!(count(&store, "ops_console_tickets"), 1);
         let history = store.list_task_activity(first.task_id, 10).unwrap();
         assert_eq!(history.events.len(), 1);
+        assert!(history.events[0].note.contains("request request-one"));
+        assert!(
+            history.events[0]
+                .note
+                .contains("Ops Console owns customer communication")
+        );
         assert_eq!(
             history.events[0].actor_id.as_deref(),
             Some("ops-console:console")
@@ -278,5 +333,45 @@ mod tests {
             store.ops_ticket_task(&remapped, "app-one", "request-one"),
             Err(TaskStoreError::NotFound)
         ));
+    }
+
+    #[test]
+    fn ops_deployment_evidence_is_bounded_and_preserves_partial_delivery() {
+        let store = TaskStore::in_memory().unwrap();
+        let ticket = store
+            .submit_ops_ticket(&scope().authorize(input()).unwrap())
+            .unwrap();
+        // Fixture only: production evidence writes retain their existing review gates.
+        for number in 0..52 {
+            store.connection().unwrap().execute(
+                "INSERT INTO task_deployments (id, task_id, environment, reference, deployed_at, recorded_at, delivers_whole_task, approved_by_operator_id)
+                 VALUES (?1, ?2, 'production', ?1, 1, ?3, 0, (SELECT id FROM operators LIMIT 1))",
+                params![format!("deployment-{number}"),ticket.task_id.to_string(),number],
+            ).unwrap();
+        }
+        let page = store.ops_ticket_deployments(ticket.task_id).unwrap();
+        assert_eq!(page.records.len(), 50);
+        assert!(page.truncated);
+        assert_eq!(page.records[0].id, "deployment-51");
+        assert!(
+            page.records
+                .iter()
+                .all(|record| !record.delivers_whole_task)
+        );
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE task_deployments SET delivers_whole_task = 1 WHERE id = 'deployment-51'",
+                [],
+            )
+            .unwrap();
+        assert!(
+            store
+                .ops_ticket_deployments(ticket.task_id)
+                .unwrap()
+                .records[0]
+                .delivers_whole_task
+        );
     }
 }

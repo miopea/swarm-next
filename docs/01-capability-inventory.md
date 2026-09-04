@@ -52,8 +52,9 @@ Decision meanings:
 Ops Console ticket intake is an approved addition under ADR 0060, currently in
 development. Explicit app scope and atomic draft/provenance persistence are
 implemented in an isolated worktree with retry, restart, concurrency and rollback
-tests. Scoped MCP authentication, progress adaptation and console outbox delivery
-remain unimplemented; no runtime integration is enabled yet.
+tests. A separate scoped MCP endpoint and bounded progress/deployment projection
+are implemented in isolation. Console outbox delivery and production provisioning
+remain pending; no runtime integration is enabled yet.
 
 | Capability | Decision | Rationale and intended direction |
 |---|---|---|

@@ -1,7 +1,7 @@
 use swarm_domain::{
     OpsIntegrationScope, OpsTicketInput, OpsTicketValidationError, Task, TaskActivityPage,
 };
-use swarm_persistence::{OpsTicketReceipt, TaskStore, TaskStoreError};
+use swarm_persistence::{OpsDeploymentPage, OpsTicketReceipt, TaskStore, TaskStoreError};
 use thiserror::Error;
 
 /// External intake never borrows an agent principal or exposes agent commands.
@@ -24,6 +24,7 @@ pub enum OpsTicketError {
 pub struct OpsTicketProgress {
     pub task: Task,
     pub activity: TaskActivityPage,
+    pub deployments: OpsDeploymentPage,
 }
 
 impl OpsTicketService {
@@ -59,7 +60,12 @@ impl OpsTicketService {
     ) -> Result<OpsTicketProgress, OpsTicketError> {
         let task = self.store.ops_ticket_task(scope, app_id, request_id)?;
         let activity = self.store.list_task_activity(task.id, 50)?;
-        Ok(OpsTicketProgress { task, activity })
+        let deployments = self.store.ops_ticket_deployments(task.id)?;
+        Ok(OpsTicketProgress {
+            task,
+            activity,
+            deployments,
+        })
     }
 }
 
