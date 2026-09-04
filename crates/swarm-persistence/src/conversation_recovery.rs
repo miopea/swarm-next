@@ -29,6 +29,53 @@ pub(super) fn migrate(tx: &Transaction<'_>, version: i64) -> rusqlite::Result<()
 }
 
 impl TaskStore {
+    /// Confirms engine selections only when their exact revision and conversation
+    /// are already the durable default of the current binding. A manual fence is
+    /// not a provider selection, even when it advanced the stored revision.
+    /// # Errors
+    /// Returns storage errors or rejects more than 256 candidates.
+    pub fn confirmed_provider_selections(
+        &self,
+        candidates: &[(WorkerSessionId, swarm_domain::ProviderConversationSelection)],
+    ) -> Result<
+        std::collections::HashMap<WorkerSessionId, swarm_domain::ProviderConversationSelection>,
+        TaskStoreError,
+    > {
+        if candidates.len() > 256 {
+            return Err(TaskStoreError::IntegrityFailure(
+                "selection projection limit exceeded".into(),
+            ));
+        }
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT EXISTS(SELECT 1 FROM worker_startup_context context
+             JOIN worker_profiles worker ON worker.id = context.worker_id
+             JOIN worker_sessions session ON session.worker_id = worker.id AND session.session_id = context.session_id
+             WHERE context.session_id = ?1 AND context.selection_revision = ?2
+               AND context.selection_suspended = 0 AND worker.provider_conversation_id = ?3
+               AND worker.provider = 'claude_code' AND worker.archived_at IS NULL AND session.ended_at IS NULL)"
+        )?;
+        let mut confirmed = std::collections::HashMap::new();
+        for (session, selection) in candidates {
+            let Ok(revision) = i64::try_from(selection.revision) else {
+                continue;
+            };
+            if revision > 1
+                && statement.query_row(
+                    params![
+                        session.to_string(),
+                        revision,
+                        selection.conversation.to_string()
+                    ],
+                    |row| row.get::<_, bool>(0),
+                )?
+            {
+                confirmed.insert(*session, *selection);
+            }
+        }
+        Ok(confirmed)
+    }
+
     /// Whether this current binding has a receipt that can order an operator fence.
     /// Older sessions without a startup receipt must retain manual-only selection.
     /// # Errors
@@ -203,6 +250,98 @@ pub(super) fn migrate_selection(tx: &Transaction<'_>, version: i64) -> rusqlite:
 mod tests {
     use super::*;
     use swarm_domain::ProviderKind;
+
+    #[test]
+    fn selection_projection_requires_committed_exact_evidence_and_rejects_fences() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Poppy", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let selected = swarm_domain::ProviderConversationSelection {
+            revision: 2,
+            conversation: ProviderConversationId::new(),
+        };
+        let candidates = [(session, selected)];
+        assert!(
+            store
+                .confirmed_provider_selections(&candidates)
+                .unwrap()
+                .is_empty()
+        );
+        store
+            .reconcile_provider_selection(session, selected)
+            .unwrap();
+        assert_eq!(
+            store
+                .confirmed_provider_selections(&candidates)
+                .unwrap()
+                .get(&session),
+            Some(&selected)
+        );
+        let wrong = [(
+            session,
+            swarm_domain::ProviderConversationSelection {
+                conversation: ProviderConversationId::new(),
+                ..selected
+            },
+        )];
+        assert!(
+            store
+                .confirmed_provider_selections(&wrong)
+                .unwrap()
+                .is_empty()
+        );
+        store
+            .repoint_provider_conversation_fenced(
+                worker.id,
+                &selected.conversation,
+                Some((session, 3)),
+            )
+            .unwrap();
+        assert!(
+            store
+                .confirmed_provider_selections(&candidates)
+                .unwrap()
+                .is_empty()
+        );
+        let later = [(
+            session,
+            swarm_domain::ProviderConversationSelection {
+                revision: 4,
+                ..selected
+            },
+        )];
+        store
+            .reconcile_provider_selection(session, later[0].1)
+            .unwrap();
+        assert_eq!(
+            store.confirmed_provider_selections(&later).unwrap().len(),
+            1
+        );
+        store
+            .repoint_provider_conversation(worker.id, &selected.conversation)
+            .unwrap();
+        assert!(
+            store
+                .confirmed_provider_selections(&later)
+                .unwrap()
+                .is_empty()
+        );
+        store.release_worker_session(session).unwrap();
+        assert!(
+            store
+                .confirmed_provider_selections(&later)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .confirmed_provider_selections(&vec![(session, selected); 257])
+                .is_err()
+        );
+    }
 
     #[test]
     fn fence_readiness_requires_a_current_receipt_not_just_a_live_binding() {

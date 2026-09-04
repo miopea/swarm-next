@@ -6,6 +6,20 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2: resolved conversation recovery stops asking for attention
+
+- Session responses now distinguish a later durably confirmed selection from raw
+  engine evidence and immutable startup outcomes. Projection requires exact engine
+  revision, saved conversation, current binding and unsuspended following, bounded
+  to 256 candidates. Manual fences and unapplied selections do not claim recovery.
+- Terminal warnings clear after confirmation; earlier startup results remain in
+  collapsed Session details. No additional polling or automatic modal was added.
+- Ten persistence recovery tests, 24 TerminalView tests, production web build and
+  strict Linux-target API/persistence Clippy passed. Existing terminal bundle-size
+  warning remains. Separate Edge synthetic fixture visually verified current
+  selection and earlier history with no stale warning; not a live provider or
+  real-device acceptance test. No release, deployment, push or worker restart.
+
 ### P2: integrate explicit-choice fencing and selection consumption
 
 - Protocol 14 adds a live engine selection fence, without changing the provider

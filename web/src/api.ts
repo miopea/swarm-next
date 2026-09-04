@@ -230,7 +230,7 @@ export type ConversationRecoveryOutcome =
   | { state: "restored"; conversation: string; via_continue: boolean }
   | { state: "fresh"; conversation: string }
   | { state: "manual"; reason: "provider_cannot_resume" | "uncertain_outcome" | "unexpected_conversation" | "fresh_start_failed" };
-export type SessionSummary = { session_id: string; running: boolean; resources?: ProcessResources | null; recovery_attempt?: ConversationRecoveryAttempt | null; recovery_outcome?: ConversationRecoveryOutcome | null };
+export type SessionSummary = { session_id: string; running: boolean; resources?: ProcessResources | null; recovery_attempt?: ConversationRecoveryAttempt | null; recovery_outcome?: ConversationRecoveryOutcome | null; confirmed_selection?: { revision: number; conversation: string } | null };
 export type SessionsResponse = { type: "sessions"; sessions: SessionSummary[] };
 export type SessionStartedResponse = { type: "session_started"; session_id: string };
 /** A provider release on disk that some running workers have not picked up. */

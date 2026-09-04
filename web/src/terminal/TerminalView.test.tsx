@@ -231,6 +231,21 @@ test("manual and fresh outcomes never claim restored context", () => {
   expect(screen.queryByText(/Provider context was restored/)).not.toBeInTheDocument();
 });
 
+test("confirmed later selection clears old recovery attention without removing its history", () => {
+  const base = { session_id: "recovered", running: true, recovery_outcome: { state: "manual" as const, reason: "unexpected_conversation" as const } };
+  const { rerender } = render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={base} />);
+  expect(screen.getByText("Check conversation · see Session details")).toBeVisible();
+  rerender(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ ...base, confirmed_selection: { revision: 2, conversation: "chosen-context" } }} />);
+  expect(screen.queryByText("Check conversation · see Session details")).not.toBeInTheDocument();
+  expect(screen.getByText("Current conversation confirmed")).toBeInTheDocument();
+  expect(screen.getByText(/Startup result: manual/)).toBeInTheDocument();
+  expect(screen.getByText("chosen-context").closest("details")).not.toHaveAttribute("open");
+  rerender(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ ...base, recovery_outcome: { state: "fresh", conversation: "fresh-context" }, confirmed_selection: { revision: 3, conversation: "chosen-context" } }} />);
+  expect(screen.queryByText("Fresh conversation · previous context not restored")).not.toBeInTheDocument();
+  rerender(<TerminalView busy={false} operatorToken="browser-session-cookie" session={base} />);
+  expect(screen.getByText("Check conversation · see Session details")).toBeVisible();
+});
+
 test("copies the internal terminal id only when the operator asks", async () => {
   const writeText = vi.fn().mockResolvedValue(undefined);
   vi.stubGlobal("navigator", { clipboard: { writeText } });

@@ -97,3 +97,10 @@ automatic following is suspended for that binding instead. Persistence failures
 remain errors, not evidence that following is safe. The API reports whether
 following was retained. Actual provider ordering and Linux end-to-end acceptance
 remain required; this integration is not a completed recovery acceptance gate.
+
+Recovery attention clears after a later engine selection is confirmed against
+the exact durable revision, pin, and current unsuspended binding. This bounded
+projection (at most 256 candidates) is separate from immutable startup outcomes.
+Manual fencing alone cannot clear attention. The existing session response carries
+the confirmation without another poll; the terminal keeps earlier startup results
+in Session details, not as an ongoing warning after a confirmed switch.

@@ -33,6 +33,8 @@ struct LiveSessionView {
     session: swarm_terminal::HostSessionSummary,
     #[serde(skip_serializing_if = "Option::is_none")]
     recovery_outcome: Option<swarm_domain::ConversationRecoveryState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    confirmed_selection: Option<swarm_domain::ProviderConversationSelection>,
 }
 
 pub(super) async fn list_live_sessions(
@@ -60,6 +62,22 @@ pub(super) async fn list_live_sessions(
         .transpose()
         .map_err(|error| crate::task_store_error(&error))?
         .unwrap_or_default();
+    let candidates = sessions
+        .iter()
+        .filter(|session| session.running)
+        .filter_map(|session| {
+            session
+                .provider_selection
+                .map(|selection| (session.session_id, selection))
+        })
+        .collect::<Vec<_>>();
+    let mut confirmed = state
+        .task_store
+        .as_ref()
+        .map(|store| store.confirmed_provider_selections(&candidates))
+        .transpose()
+        .map_err(|error| crate::task_store_error(&error))?
+        .unwrap_or_default();
     Ok(Json(LiveSessionsResponse {
         kind: "sessions",
         sessions: sessions
@@ -67,6 +85,7 @@ pub(super) async fn list_live_sessions(
             .filter(|session| session.running)
             .map(|session| LiveSessionView {
                 recovery_outcome: outcomes.remove(&session.session_id),
+                confirmed_selection: confirmed.remove(&session.session_id),
                 session,
             })
             .collect(),

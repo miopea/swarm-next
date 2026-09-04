@@ -218,6 +218,8 @@ export const SURFACES: Surface[] = [
       <p>Synthetic recovery evidence. Not a live provider test.</p>
       <div style={{ flex: 1, minHeight: 0 }}><TerminalView busy={false} operatorToken="fixture-only" session={{
         session_id: "fixture-terminal-recovery", running: true,
+        confirmed_selection: new URLSearchParams(location.search).get("confirmed") === "1"
+          ? { revision: 2, conversation: "fixture-later-selected-conversation" } : undefined,
         recovery_outcome: new URLSearchParams(location.search).get("outcome") === "restored"
           ? { state: "restored", conversation: "fixture-restored-conversation", via_continue: true }
           : { state: "manual", reason: "unexpected_conversation" },

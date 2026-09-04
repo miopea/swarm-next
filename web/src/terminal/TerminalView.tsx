@@ -304,16 +304,23 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
               <strong>Swarm terminal session</strong>
               <code>{session.session_id}</code>
               <small>This identifies the durable terminal for diagnostics. Your Claude or Codex conversation is separate.</small>
+              {session.confirmed_selection && <>
+                <strong>Current conversation confirmed</strong>
+                <small>Your later conversation selection was confirmed and saved for the next start.</small>
+                <code>{session.confirmed_selection.conversation}</code>
+              </>}
               {session.recovery_outcome && <>
-                <strong>Conversation recovery result</strong>
-                <small>{session.recovery_outcome.state === "restored"
+                <strong>{session.confirmed_selection ? "Earlier startup recovery" : "Conversation recovery result"}</strong>
+                <small>{session.confirmed_selection
+                  ? `Startup result: ${session.recovery_outcome.state}. The later confirmed selection above supersedes it.`
+                  : session.recovery_outcome.state === "restored"
                   ? "Provider context was restored at startup. That conversation was saved as the resumption default."
                   : session.recovery_outcome.state === "fresh"
                     ? "A fresh conversation started after recovery attempts. Previous context was not restored. Use the provider's resume command to choose another conversation."
                     : "Swarm could not confirm the intended conversation. The saved default was not changed. Check this terminal and use the provider's resume command if needed."}</small>
                 {session.recovery_outcome.state !== "manual" && <code>{session.recovery_outcome.conversation}</code>}
               </>}
-              {!session.recovery_outcome && session.recovery_attempt && <>
+              {!session.recovery_outcome && !session.confirmed_selection && session.recovery_attempt && <>
                 <strong>Conversation recovery startup</strong>
                 <small>{session.recovery_attempt.step.kind === "continue"
                   ? "Started with provider-native continuation after the saved conversation was unavailable. Swarm has not verified which conversation was restored."
@@ -327,9 +334,9 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
             </div>
           </details>
           {detail && <small>{detail}</small>}
-          {!session.recovery_outcome && session.recovery_attempt?.step.kind === "continue" && <small>Continuation fallback · see Session details</small>}
-          {session.recovery_outcome?.state === "manual" && <small role="status">Check conversation · see Session details</small>}
-          {session.recovery_outcome?.state === "fresh" && <small role="status">Fresh conversation · previous context not restored</small>}
+          {!session.confirmed_selection && !session.recovery_outcome && session.recovery_attempt?.step.kind === "continue" && <small>Continuation fallback · see Session details</small>}
+          {!session.confirmed_selection && session.recovery_outcome?.state === "manual" && <small role="status">Check conversation · see Session details</small>}
+          {!session.confirmed_selection && session.recovery_outcome?.state === "fresh" && <small role="status">Fresh conversation · previous context not restored</small>}
           {control !== "owned" && <small role="status">{control === "unsupported" ? "Viewing only · a safe worker-engine update is needed for terminal control." : control === "checking" ? "Checking terminal control…" : control === "elsewhere" ? "Viewing only · another view controls this terminal." : "Viewing only · ready to resume here."}</small>}
           {(control === "elsewhere" || control === "available") && <button type="button" className="secondary-button" onClick={() => controller.resumeHere()}>Resume Here</button>}
           {attachmentState !== "idle" && (
