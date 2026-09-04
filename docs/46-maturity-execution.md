@@ -3141,8 +3141,18 @@ Real Android/iOS and normal operator soak remain separate evidence requirements.
   keeps that managed release in addition to current, previous, and `host-current`.
   It becomes eligible for normal bounded cleanup after the host restarts. An
   explicit test fixture models an unchanged-engine relink and asserts the running
-  hook release survives pruning. Live rebuild/restart and a clean lifecycle
-  callback remain the acceptance gate.
+  hook release survives pruning. The Linux package-lifecycle suite passed; the
+  focused release-apply checkpoint passed before that older script's later,
+  unrelated pending-protocol-migration assertion failed.
+- Revision `e72afc5` deployed through the normal development reload. A deliberate
+  terminal-host restart moved the previously `(deleted)` process onto that intact
+  release. Queen automatically returned in a new engine session with her exact
+  saved conversation `182fc487-7cd9-463a-b1df-d4abe211c9db`. Waking `Fresh Flight`
+  again restored its exact conversation and persisted a settled authenticated
+  startup receipt; its current transcript contained no new hook-error occurrence.
+  The test worker was then stopped, both disposable tasks removed, and both test
+  profiles archived. One subsequent unchanged-engine reload still must prove the
+  executing `e72afc5` release remains on disk after pruning.
 
 ### Live dogfood: repair the integrated schema-124 collision
 
