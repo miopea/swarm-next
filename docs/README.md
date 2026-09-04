@@ -99,3 +99,4 @@ Current decision records:
 41. [Steering a task already described](42-steering-a-task-already-described.md)
 42. [Making the Queen work](43-making-the-queen-work.md)
 43. [No transition that is true](44-no-transition-that-is-true.md)
+44. [A question that cannot be unasked](45-a-question-that-cannot-be-unasked.md)
