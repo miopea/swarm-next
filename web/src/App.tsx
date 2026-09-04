@@ -414,21 +414,39 @@ export function App() {
   /**
    * Whether each worker's pinned conversation is still the newest one.
    *
-   * Checked from the filesystem rather than the board, because the drift is a
-   * fact about Claude's transcripts that Swarm never observes: it pins an id at
-   * creation and only an operator ever repoints it.
+   * This legacy filesystem-recency diagnostic is separate from authenticated
+   * provider startup/selection evidence. A failed scan leaves last-known data
+   * in place and marks its freshness as unconfirmed in runtime status.
    */
   const [workerConversations, setWorkerConversations] = useState<WorkerConversation[]>([]);
+  const [conversationChecksUnavailable, setConversationChecksUnavailable] = useState(false);
   useEffect(() => {
-    if (!operatorToken) setWorkerConversations([]);
+    if (!operatorToken) {
+      setWorkerConversations([]);
+      setConversationChecksUnavailable(false);
+    }
   }, [operatorToken]);
   const refreshConversations = useCallback(async (signal: AbortSignal) => {
     if (!operatorToken) return;
-    const page = await fetchWorkerConversations(operatorToken, signal);
-    if (!signal.aborted && Array.isArray(page.workers)) setWorkerConversations(page.workers as WorkerConversation[]);
+    const timedOut = () => {
+      if (signal.reason?.name === "TimeoutError") setConversationChecksUnavailable(true);
+    };
+    signal.addEventListener("abort", timedOut, { once: true });
+    try {
+      const page = await fetchWorkerConversations(operatorToken, signal);
+      if (!signal.aborted) {
+        if (!Array.isArray(page.workers)) throw new Error("Invalid conversation check response");
+        setWorkerConversations(page.workers as WorkerConversation[]);
+        setConversationChecksUnavailable(false);
+      }
+    } catch {
+      if (!signal.aborted) setConversationChecksUnavailable(true);
+    } finally {
+      signal.removeEventListener("abort", timedOut);
+    }
   }, [operatorToken, workers.length]);
   // Filesystem-backed transcript checks do not run for hidden windows or overlap.
-  useVisiblePolling(refreshConversations, Boolean(operatorToken), 120_000);
+  const retryConversationChecks = useVisiblePolling(refreshConversations, Boolean(operatorToken), 120_000);
   const [operationError, setOperationError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState<string>();
@@ -1964,6 +1982,13 @@ export function App() {
               shows something most of the day stops being read, which is the
               failure this exists to prevent. */}
           <MachinePressureBadge notice={machinePressure} />
+          {operatorToken && conversationChecksUnavailable ? (
+            <div className="runtime-update-card" role="status">
+              <p className="runtime-update-label">Conversation checks unavailable</p>
+              <p className="runtime-update-detail">Conversation status is unconfirmed. Existing results may be out of date.</p>
+              <button type="button" className="runtime-update-run" onClick={() => void retryConversationChecks()}>Retry conversation checks</button>
+            </div>
+          ) : null}
           {/* One per subsystem rather than only the most severe: they are
               independent and can all be true at once, and ranking them into a
               single pill hid the others until the first was dealt with.

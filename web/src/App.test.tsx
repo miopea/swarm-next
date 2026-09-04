@@ -1057,6 +1057,29 @@ function bootFetch() {
   });
 }
 
+test.each(["busy", "malformed"])("conversation scan %s stays in runtime status and clears on recovery", async (failure) => {
+  const baseFetch = bootFetch();
+  let healthy = false;
+  let reads = 0;
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => {
+    if (String(input).endsWith("/workers/conversations")) {
+      reads += 1;
+      return Promise.resolve(healthy ? ok({ workers: [] }) : failure === "busy"
+        ? new Response(JSON.stringify({ code: "conversation_scan_busy", message: "busy" }), { status: 503 })
+        : ok({}));
+    }
+    return baseFetch(input);
+  }));
+  render(<App />);
+  const notice = await screen.findByText("Conversation checks unavailable");
+  expect(within(screen.getByRole("region", { name: "Runtime and system status" })).getByText("Conversation checks unavailable")).toBe(notice);
+  expect(screen.getByRole("button", { name: /^Needs you/ })).toHaveTextContent("0");
+  healthy = true;
+  fireEvent.click(screen.getByRole("button", { name: "Retry conversation checks" }));
+  await waitFor(() => expect(screen.queryByText("Conversation checks unavailable")).not.toBeInTheDocument());
+  expect(reads).toBe(2);
+});
+
 test("hidden windows defer transcript scans and background status polls until visible", async () => {
   let visibility: DocumentVisibilityState = "hidden";
   const visibilitySpy = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);

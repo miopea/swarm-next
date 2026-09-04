@@ -6,6 +6,23 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P1/P6: show incomplete conversation checks as runtime state
+
+- Failed, malformed, or deadline-aborted conversation checks now mark the last
+  known results unconfirmed. A compact runtime-area notice offers explicit retry
+  through the existing single-request owner. It adds no Needs You count and no
+  separate timer, notification history, or automatic retry loop.
+- A successful valid response replaces results and removes the notice. Logout
+  clears it; ordinary visibility cancellation cannot manufacture a failure or
+  let a late response clear a newer warning. Unknown status is not presented as
+  an empty healthy response.
+- All 39 App and visible-request tests passed, including busy/malformed responses,
+  runtime placement, unchanged Needs You count, and disappearance on recovery.
+  Production web build passed with the existing terminal chunk warning. This
+  uses existing runtime-card styles; live/mobile visual acceptance remains open.
+- No deployment, release, or worker interruption. Provider-authoritative
+  reconciliation of the older timestamp-based drift cards remains separate work.
+
 ### P3: cap transcript scan work without inferring partial health
 
 - One allowance now spans the complete worker conversation scan: 4,096 worker/
