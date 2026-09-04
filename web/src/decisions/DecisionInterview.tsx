@@ -16,11 +16,23 @@ const OTHER = "__other__";
  * holding its session for the whole set, and resuming it on a partial answer
  * would give it an incomplete picture with no way to ask the rest.
  */
-export default function DecisionInterview({ questions, busy, onAnswer }: {
+type DecisionInterviewProps = {
   questions: DecisionQuestion[];
   busy: boolean;
   onAnswer: (answers: Record<string, string[]>, note: string) => void;
-}) {
+};
+
+export default function DecisionInterview(props: DecisionInterviewProps) {
+  // A refreshed object is not a new question. Changed wording, options, order,
+  // or selection mode is: never apply an answer to a question not yet reviewed.
+  // Key the complete form so even optional notes cannot survive a changed ask.
+  const identity = JSON.stringify(props.questions.map((question) => [
+    question.header, question.question, question.options, question.multi_select ?? false,
+  ]));
+  return <InterviewAnswers key={identity} {...props} />;
+}
+
+function InterviewAnswers({ questions, busy, onAnswer }: DecisionInterviewProps) {
   const [choices, setChoices] = useState<Record<string, string[]>>({});
   const [other, setOther] = useState<Record<string, string>>({});
   const [note, setNote] = useState("");

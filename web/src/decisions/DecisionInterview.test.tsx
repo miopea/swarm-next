@@ -10,6 +10,45 @@ const questions = [
   { header: "Timing", question: "When?", options: ["Now", "After the release"] },
 ];
 
+test("preserves drafts across equivalent snapshots and busy refreshes", () => {
+  const onAnswer = vi.fn();
+  const { rerender } = render(<DecisionInterview questions={questions} busy={false} onAnswer={onAnswer} />);
+  fireEvent.click(screen.getByRole("button", { name: "This repo" }));
+  fireEvent.click(screen.getAllByRole("button", { name: "Something else" })[1]);
+  fireEvent.change(screen.getByLabelText("Your answer"), { target: { value: "Tomorrow" } });
+  fireEvent.change(screen.getByLabelText("Anything else the worker should know"), { target: { value: "Keep the tests" } });
+  const refreshed = questions.map((question) => ({ ...question, options: [...question.options], multi_select: false }));
+  rerender(<DecisionInterview questions={refreshed} busy={true} onAnswer={onAnswer} />);
+  expect(screen.getByRole("button", { name: "Send answers" })).toBeDisabled();
+  rerender(<DecisionInterview questions={refreshed} busy={false} onAnswer={onAnswer} />);
+  fireEvent.click(screen.getByRole("button", { name: "Send answers" }));
+  expect(onAnswer).toHaveBeenCalledWith({ Scope: ["This repo"], Timing: ["Tomorrow"] }, "Keep the tests");
+});
+
+test.each([
+  { label: "wording", next: [{ ...questions[0], question: "Delete which repositories?" }, questions[1]] },
+  { label: "options", next: [{ ...questions[0], options: ["One file", "Everything"] }, questions[1]] },
+  { label: "option order", next: [{ ...questions[0], options: [...questions[0].options].reverse() }, questions[1]] },
+  { label: "selection mode", next: [{ ...questions[0], multi_select: true }, questions[1]] },
+  { label: "question order", next: [...questions].reverse() },
+])("requires fresh answers when $label changes, without resurrecting old drafts", ({ next }) => {
+  const onAnswer = vi.fn();
+  const { rerender } = render(<DecisionInterview questions={questions} busy={false} onAnswer={onAnswer} />);
+  fireEvent.click(screen.getByRole("button", { name: "This repo" }));
+  fireEvent.click(screen.getAllByRole("button", { name: "Something else" })[1]);
+  fireEvent.change(screen.getByLabelText("Your answer"), { target: { value: "Tomorrow" } });
+  fireEvent.change(screen.getByLabelText("Anything else the worker should know"), { target: { value: "Old note" } });
+  rerender(<DecisionInterview questions={next} busy={false} onAnswer={onAnswer} />);
+  expect(screen.getByRole("button", { name: "Send answers" })).toBeDisabled();
+  expect(screen.getByLabelText("Anything else the worker should know")).toHaveValue("");
+  expect(screen.queryByLabelText("Your answer")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Send answers" }));
+  expect(onAnswer).not.toHaveBeenCalled();
+  rerender(<DecisionInterview questions={questions} busy={false} onAnswer={onAnswer} />);
+  expect(screen.getByRole("button", { name: "This repo" })).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByRole("button", { name: "Send answers" })).toBeDisabled();
+});
+
 test("will not send until every question is answered", () => {
   // The asking worker holds its session for the whole set. Half an answer
   // resumes it with an incomplete picture and no way to ask for the rest.

@@ -6,6 +6,25 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: bind interview drafts to the question snapshot
+
+- Needs You interview drafts previously used only question headers as identity.
+  A refreshed request with changed wording or choices could retain answers to the
+  old question and leave Send enabled. The form now keys its local draft lifetime
+  to the complete question snapshot: headers, wording, ordered options, ordered
+  questions, and selection modes. A changed ask clears selections, free text,
+  and the optional note before any answer can be submitted.
+- Equivalent fresh objects and busy-state changes preserve drafts. Absent and
+  false multi-select flags are equivalent. Returning to an earlier question
+  snapshot does not resurrect discarded answers. The inbox's existing decision-ID
+  keyed cards keep drafts separated across requests.
+- All 59 decision UI tests passed, including five changed-snapshot cases and
+  preservation through equivalent refresh/busy transitions. Production web build
+  passed with the existing 546.53 KiB terminal chunk warning.
+- This is local Needs You form correctness, not a native Claude AskUser renderer
+  fix, server-side stale-request fencing, or proof of terminal-to-Queen answer
+  reconciliation. No deployment, release, or live worker change.
+
 ### P3: bounded recent-event admission and replay ordering
 
 - Replaced whole-page quadratic duplicate scanning with a sorted sixteen-entry
