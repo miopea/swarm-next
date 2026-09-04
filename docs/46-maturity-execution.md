@@ -6,6 +6,31 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P2 recovery integration audit — authoritative continuation gap
+
+- Traced `worker_runtime::start_worker_process_unlocked` through provider request,
+  `StartClaude`, `conversation_claude_can_open`, process spawn and binding. Exact
+  absence advances to Continue, and the engine stores startup provenance in a
+  OnceLock. No API consumer currently resolves that recovery operation from
+  provider-authoritative context evidence. A running PID is not that evidence.
+- `AgentBridge::ensure_worker_settings` currently writes command grants only,
+  removes its file when no grants exist, and configures no session-start hook.
+  A future hook must preserve those grants and remain present independently of
+  whether any grant exists. MCP configuration alone is not session-start proof.
+- Read-only SSH checked the installed user-bin Claude: 2.1.260. CLI help confirms
+  Continue means the most recent conversation in the current directory. The
+  non-login SSH PATH did not include Claude; the explicit standard user-bin
+  executable was used. No conversation, worker or service was started/stopped.
+- Next integration must bind provider observations to the exact engine session
+  and recovery attempt, reconcile successful conversation identity atomically,
+  and distinguish explicit missing context from transport/auth/unknown failure.
+  Delayed observations from a replaced process must not change the new default.
+  Provider exit or a timer cannot authorize the Continue-to-Fresh transition.
+- This audit narrows the implementation path; it does not complete recovery.
+  Provider callback semantics and failure evidence still need validation before
+  installing hooks or enabling automatic fresh fallback. No runtime changes,
+  deployment or release were made in this checkpoint.
+
 ### Integrated Dogfood checkpoint
 
 - Full web regression at `184cc9a`: 123 files, 1,012 tests passed (two workers,
