@@ -6,6 +6,19 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: worker handoff observations follow their exact outbox identity
+
+- New outcome holds and clears use the handoff ID and recipient session, not the
+  task-wide key. The projection requires a pending handoff and matching task
+  target state. A later outcome for the same task is independent of old responses.
+- Valid scoped observations replace legacy task-wide rows atomically; known
+  legacy rows also require applicable pending work. Unknown subjects are retained.
+  No task/outbox delivery is replayed or automatically marked successful.
+- Twelve worker-outcome tests and strict Linux-target API/persistence lint passed.
+  The focused lifecycle test passed again after the final legacy-completion guard.
+  Decision delivery, returned-work briefing identity and broader operator-answer
+  reconciliation remain open. No push, deployment, release or worker interruption.
+
 ### P4: Queen delivery observations belong to an exact review run
 
 - Replaced singleton Queen-review subjects for new observations/clears with the

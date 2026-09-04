@@ -2217,7 +2217,7 @@ impl AppState {
                 Ok(TerminalSubmission::Acknowledged) => {
                     clear_held_delivery_refusals(
                         store,
-                        &format!("task-outcome:{}", outcome.task_id),
+                        &format!("outcome-delivery:{}", outcome.id),
                     );
                     store.complete_task_outcome(&outcome.id, unix_timestamp())
                 }
@@ -2228,9 +2228,9 @@ impl AppState {
                     if let Some(kind) = reason.refusal_kind() {
                         let _ = store.record_coordinator_refusal(
                             kind,
-                            &format!("task-outcome:{}", outcome.task_id),
+                            &format!("outcome-delivery:{}", outcome.id),
                             Some(outcome.recipient_worker_id),
-                            None,
+                            Some(outcome.session_id),
                             &reason.describe("An outcome report"),
                             unix_timestamp(),
                         );

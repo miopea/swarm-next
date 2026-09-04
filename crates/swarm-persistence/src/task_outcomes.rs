@@ -231,6 +231,110 @@ mod tests {
         queen_session: WorkerSessionId,
     }
 
+    #[test]
+    fn outcome_holds_follow_exact_delivery_and_task_state() {
+        let fixture = active_assignment();
+        let store = &fixture.store;
+        store
+            .transition_worker_task(
+                fixture.task_id,
+                TaskState::Blocked,
+                "Need a ruling",
+                fixture.worker_session,
+            )
+            .unwrap();
+        let first = store.claim_task_outcomes(100).unwrap().remove(0);
+        let subject = format!("outcome-delivery:{}", first.id);
+        store
+            .record_coordinator_refusal(
+                crate::REFUSAL_DELIVERY_HELD,
+                &format!("task-outcome:{}", fixture.task_id),
+                Some(first.recipient_worker_id),
+                None,
+                "legacy",
+                100,
+            )
+            .unwrap();
+        store
+            .record_coordinator_refusal(
+                crate::REFUSAL_DELIVERY_HELD,
+                &subject,
+                Some(first.recipient_worker_id),
+                Some(first.session_id),
+                "first",
+                101,
+            )
+            .unwrap();
+        store.defer_task_outcome(&first.id, 102).unwrap();
+        assert_eq!(
+            store
+                .standing_coordinator_refusals(10_000, 0)
+                .unwrap()
+                .len(),
+            1
+        );
+        store
+            .transition_task(fixture.task_id, TaskState::Active)
+            .unwrap();
+        assert!(
+            store
+                .standing_coordinator_refusals(10_000, 0)
+                .unwrap()
+                .is_empty()
+        );
+        store
+            .transition_worker_task(
+                fixture.task_id,
+                TaskState::Blocked,
+                "Different question",
+                fixture.worker_session,
+            )
+            .unwrap();
+        let next = store.claim_task_outcomes(103).unwrap().remove(0);
+        assert_ne!(first.id, next.id);
+        let next_subject = format!("outcome-delivery:{}", next.id);
+        store
+            .record_coordinator_refusal(
+                crate::REFUSAL_DELIVERY_HELD_UNSENT_TEXT,
+                &next_subject,
+                Some(next.recipient_worker_id),
+                Some(next.session_id),
+                "next",
+                104,
+            )
+            .unwrap();
+        store
+            .record_coordinator_refusal(
+                crate::REFUSAL_DELIVERY_HELD,
+                &subject,
+                Some(first.recipient_worker_id),
+                Some(first.session_id),
+                "late old",
+                105,
+            )
+            .unwrap();
+        let holds = store.standing_coordinator_refusals(10_000, 0).unwrap();
+        assert_eq!(holds.len(), 1);
+        assert_eq!(holds[0].subject, next_subject);
+        store.complete_task_outcome(&next.id, 106).unwrap();
+        store
+            .record_coordinator_refusal(
+                crate::REFUSAL_DELIVERY_HELD,
+                &format!("task-outcome:{}", fixture.task_id),
+                Some(next.recipient_worker_id),
+                None,
+                "late legacy",
+                107,
+            )
+            .unwrap();
+        assert!(
+            store
+                .standing_coordinator_refusals(10_000, 0)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     fn active_assignment() -> Fixture {
         let store = TaskStore::in_memory().unwrap();
         let queen = store.ensure_queen("/workspace/queen").unwrap();

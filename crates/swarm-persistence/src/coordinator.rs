@@ -5799,6 +5799,22 @@ impl TaskStore {
                     params![run_id, session_id.map(|id| id.to_string()), now],
                 )?;
             }
+            if let Some(outcome_id) = subject.strip_prefix("outcome-delivery:") {
+                transaction.execute(
+                    "UPDATE coordinator_refusals SET cleared_at = ?4
+                     WHERE kind IN ('delivery_held_open_prompt','delivery_held_unsent_text')
+                       AND cleared_at IS NULL AND subject = (
+                         SELECT 'task-outcome:' || task_id FROM task_outcome_deliveries
+                         WHERE id = ?1 AND recipient_worker_id = ?2 AND session_id = ?3
+                           AND state IN ('queued','dispatching'))",
+                    params![
+                        outcome_id,
+                        worker_id.map(|id| id.to_string()),
+                        session_id.map(|id| id.to_string()),
+                        now
+                    ],
+                )?;
+            }
             // A newer observation replaces the other prompt condition for the
             // same delivery. Never clear unrelated subjects or wake recovery.
             transaction.execute(
@@ -5889,6 +5905,41 @@ impl TaskStore {
              FROM coordinator_refusals refusal
              LEFT JOIN worker_profiles worker ON worker.id = refusal.worker_id
              WHERE refusal.cleared_at IS NULL
+               AND (refusal.kind NOT IN ('delivery_held_open_prompt', 'delivery_held_unsent_text')
+                    OR refusal.subject NOT LIKE 'task-outcome:%'
+                    OR NOT EXISTS (SELECT 1 FROM tasks task WHERE task.id = substr(refusal.subject, 14))
+                    OR EXISTS (
+                        SELECT 1 FROM task_outcome_deliveries outcome
+                        JOIN tasks task ON task.id = outcome.task_id
+                        WHERE task.id = substr(refusal.subject, 14)
+                          AND outcome.state IN ('queued','dispatching')
+                          AND task.removed_at IS NULL AND task.state = outcome.target_state
+                          AND (refusal.worker_id IS NULL OR outcome.recipient_worker_id = refusal.worker_id)
+                          AND (refusal.session_id IS NULL OR outcome.session_id = refusal.session_id)
+                    ))
+               AND (refusal.kind NOT IN ('delivery_held_open_prompt', 'delivery_held_unsent_text')
+                    OR refusal.subject NOT LIKE 'task-outcome:%'
+                    OR NOT EXISTS (SELECT 1 FROM tasks task WHERE task.id = substr(refusal.subject, 14))
+                    OR EXISTS (
+                        SELECT 1 FROM task_outcome_deliveries outcome
+                        JOIN tasks task ON task.id = outcome.task_id
+                        WHERE task.id = substr(refusal.subject, 14)
+                          AND outcome.state IN ('queued','dispatching')
+                          AND task.removed_at IS NULL AND task.state = outcome.target_state
+                          AND (refusal.worker_id IS NULL OR outcome.recipient_worker_id = refusal.worker_id)
+                          AND (refusal.session_id IS NULL OR outcome.session_id = refusal.session_id)
+                    ))
+               AND (refusal.kind NOT IN ('delivery_held_open_prompt', 'delivery_held_unsent_text')
+                    OR refusal.subject NOT LIKE 'outcome-delivery:%'
+                    OR EXISTS (
+                        SELECT 1 FROM task_outcome_deliveries outcome
+                        JOIN tasks task ON task.id = outcome.task_id
+                        WHERE outcome.id = substr(refusal.subject, 18)
+                          AND outcome.state IN ('queued','dispatching')
+                          AND task.removed_at IS NULL AND task.state = outcome.target_state
+                          AND outcome.recipient_worker_id = refusal.worker_id
+                          AND outcome.session_id = refusal.session_id
+                    ))
                AND (refusal.kind NOT IN ('delivery_held_open_prompt', 'delivery_held_unsent_text')
                     OR refusal.subject != 'queen-review'
                     OR EXISTS (SELECT 1 FROM queen_automation WHERE id = 1 AND

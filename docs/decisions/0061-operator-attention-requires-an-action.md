@@ -62,6 +62,14 @@ states. A valid scoped observation replaces the legacy singleton observation
 atomically. The legacy projection also stops displaying a hold once a known run
 has progressed beyond delivery. This says nothing about other work Queen can do.
 
+Worker outcome holds similarly use `outcome-delivery:<id>` and the recipient
+session. The exact pending outbox row and matching task target state determine
+whether the historical prompt hold remains applicable. A newer valid observation
+replaces the task-wide legacy row atomically; completed or superseded handoffs
+cannot revive a hold through a late result. Known legacy task-outcome subjects
+also require applicable pending work. This does not settle uncertain delivery or
+replay a report; those remain distinct outbox states.
+
 ## Consequences and verification
 
 A failed coordinator read is not evidence that held work resolved. Preserve the
