@@ -89,6 +89,23 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 
 ## P3–P7 — Implementation checkpoints (phases remain incomplete)
 
+### P5k: revival completion retains lifecycle ownership
+
+- Moved promise settlement and start-failure publication into the lifecycle-locked
+  revival operation. Removed post-return clearing/error writes from supervisor
+  and maintenance callers, including their unguarded already-running shortcut.
+  A concurrent API operation cannot record a new promise between this start and
+  its settlement or have its newer success overwritten by the earlier caller.
+- Recheck host drain under the lock before starting; a drain hold preserves the
+  promise. A compatible older host is not itself a reason to refuse an explicit
+  provider-restart return. The supervisor retains its separate engine-ready gate.
+- Verification: strict Linux-target API all-target/all-feature Clippy passed.
+  Extended integration test compiles for drain hold, preserved promise, and
+  already-running settlement without replacing the session; not executed here.
+  No live workers touched. Durable per-attempt identity, process-crash ambiguity,
+  failed persistence during settlement, and full Linux recovery execution remain
+  open. This is not crash-safe convergence or phase completion.
+
 ### P5j: compatible package updates record loaded workers before replacement
 
 - Added authenticated, no-store prepare-return endpoint. It requires host drain,

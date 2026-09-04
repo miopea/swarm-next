@@ -88,7 +88,7 @@ pub(super) async fn start_worker_process(
     start_worker_process_unlocked(state, worker_id, size).await
 }
 
-/// None means cancelled or policy-deferred, not a failed recovery attempt.
+/// None means cancelled, policy-deferred, or draining, not a failed attempt.
 pub(super) async fn revive_worker_process(
     state: &AppState,
     worker_id: WorkerId,
@@ -108,9 +108,27 @@ pub(super) async fn revive_worker_process(
     if !automation_admitted(state, profile.provider) {
         return Ok(None);
     }
-    start_worker_process_unlocked(state, worker_id, size)
-        .await
-        .map(Some)
+    // Recheck after acquiring ownership: another maintenance run may have
+    // started after the supervisor's earlier host observation.
+    let host = crate::maintenance::host_status_snapshot(state).await?;
+    if host.draining {
+        return Ok(None);
+    }
+    let result = start_worker_process_unlocked(state, worker_id, size).await;
+    if let Err(error) = &result {
+        state
+            .worker_errors
+            .write()
+            .await
+            .insert(worker_id, error.message.clone());
+    }
+    // Start outcome and promise settlement share the same lifecycle lock.
+    // A caller must not clear a newer promise or overwrite a newer success
+    // after this operation gives up ownership.
+    store
+        .clear_worker_revival_intent(worker_id)
+        .map_err(|error| task_store_error(&error))?;
+    result.map(Some)
 }
 
 async fn start_worker_process_unlocked(

@@ -59,6 +59,15 @@ the exact promise and provider policy. Policy holds retain the promise without
 becoming recovery failures. No running worker is stopped to enforce admission.
 Presence changes after admission and crash ambiguity remain separate recovery work.
 
+Revival outcome publication and promise settlement occur before releasing the
+same worker lifecycle lock used for start/admission. Supervisor and maintenance
+callers must not clear promises or overwrite worker errors afterwards. This
+prevents a late completion from deleting a newly recorded promise or overwriting
+a newer successful start. A fresh drain observation inside that lock defers
+revival without consuming its promise. This is process-local ordering, not a
+durable per-attempt claim across crashes; that stronger recovery boundary remains
+required before claiming crash-safe convergence.
+
 The compatible-engine package reconciler must also record this return set before
 replacement. After its existing drain and idle checks, it calls an authenticated
 API preparation endpoint, with a ten-second request bound. The endpoint serializes

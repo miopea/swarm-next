@@ -1276,32 +1276,13 @@ impl AppState {
             Err(_) => return,
         }
         for worker_id in owed {
-            let Ok(profile) = store.get_worker_profile(worker_id) else {
-                continue;
-            };
-            let already_running = profile.active_session_id.is_some();
-            if !already_running && !worker_runtime::automation_admitted(self, profile.provider) {
-                continue;
+            if let Err(error) =
+                worker_runtime::revive_worker_process(self, worker_id, TerminalSize::default())
+                    .await
+            {
+                tracing::warn!(worker_id = %worker_id, message = %error.message,
+                    "worker owed a return after a worker-engine replacement could not be started");
             }
-            if !already_running {
-                let result =
-                    worker_runtime::revive_worker_process(self, worker_id, TerminalSize::default())
-                        .await;
-                if matches!(result, Ok(None)) {
-                    continue;
-                }
-                if let Err(error) = result {
-                    // The intent is cleared either way. The roster shows the error
-                    // where the operator can act on it, which is a better answer
-                    // than starting the same worker every half minute in silence.
-                    self.worker_errors
-                        .write()
-                        .await
-                        .insert(worker_id, error.message.clone());
-                    tracing::warn!(worker_id = %worker_id, message = %error.message, "worker owed a return after a worker-engine replacement could not be started");
-                }
-            }
-            let _ = store.clear_worker_revival_intent(worker_id);
         }
         self.control_room_notify.notify_waiters();
     }
@@ -16197,11 +16178,10 @@ mod tests {
                 1,
             )
             .unwrap();
-        let app = router(
-            AppState::default()
-                .with_terminal_host(HostClient::new(&socket), "secret")
-                .with_task_store(store.clone()),
-        );
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new(&socket), "secret")
+            .with_task_store(store.clone());
+        let app = router(state.clone());
         for (token, drained, expected) in [
             ("wrong", false, StatusCode::UNAUTHORIZED),
             ("secret", false, StatusCode::CONFLICT),
@@ -16229,6 +16209,22 @@ mod tests {
             assert!(session.is_running().unwrap());
         }
         assert_eq!(store.worker_revival_intents().unwrap().len(), 1);
+        assert!(
+            worker_runtime::revive_worker_process(&state, worker.id, TerminalSize::default())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(store.worker_revival_pending(worker.id).unwrap());
+        registry.cancel_drain().unwrap();
+        let revived =
+            worker_runtime::revive_worker_process(&state, worker.id, TerminalSize::default())
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(revived.profile.active_session_id, Some(session.id()));
+        assert!(!store.worker_revival_pending(worker.id).unwrap());
+        assert!(session.is_running().unwrap());
         session.stop().unwrap();
         server_task.abort();
         let _ = server_task.await;
