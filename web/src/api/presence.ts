@@ -10,6 +10,28 @@ export type OperatorPresence = {
   source: PresenceSource;
 };
 
+export type NightWatchConfiguration = {
+  enabled: boolean;
+  timezone: string;
+  start_minute: number;
+  end_minute: number;
+};
+
+export async function fetchNightWatchConfiguration(operatorToken: string, signal?: AbortSignal): Promise<NightWatchConfiguration | null> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/presence/night-watch", { signal });
+  return response.json() as Promise<NightWatchConfiguration | null>;
+}
+
+export async function saveNightWatchConfiguration(operatorToken: string, configuration: NightWatchConfiguration, signal?: AbortSignal): Promise<NightWatchConfiguration> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/presence/night-watch", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(configuration),
+    signal,
+  });
+  return response.json() as Promise<NightWatchConfiguration>;
+}
+
 export async function fetchPresence(operatorToken: string): Promise<OperatorPresence> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/presence");
   return response.json() as Promise<OperatorPresence>;

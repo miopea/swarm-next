@@ -7,6 +7,7 @@ import { downloadBlob } from "../shared/download";
 import type { ColorTheme } from "../brand/theme";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 import type { LockDetectionState } from "../presence/PresenceController";
+import NightWatchSettings from "./NightWatchSettings";
 import { deviceClass } from "../presence/PresenceController";
 import type { NotificationCapabilityState } from "../notifications/NotificationController";
 import { queenAutomationStateDetail, queenAutomationStateLabel, queenAutomationStateTone } from "../orchestration/queenAutomationPresentation";
@@ -282,7 +283,8 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
             </select>
             <small>Every device opens here.</small>
           </label>
-          <p>Automatic presence uses this device's activity, visibility, and expiry. A manual mode stays in effect until you return to Automatic.</p>
+          <p>Automatic presence follows device activity and your schedule. Night Watch ends when you return to Swarm on desktop; other manual modes stay until you choose Automatic.</p>
+          <NightWatchSettings operatorToken={operatorToken} />
           <label htmlFor="presence-mode"><span>Presence policy</span>
             <select
               id="presence-mode"
@@ -295,7 +297,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
               <option value="night_watch">Night Watch</option>
             </select>
           </label>
-          <div className="presence-summary" role="status">
+          <div className="presence-summary" role="status" aria-label="Current presence">
             <span className={`presence ${presence?.mode === "at_hive" ? "online" : presence?.mode === "night_watch" ? "waiting" : "offline"}`} />
             <span><strong>{presenceLabel(presence?.mode)}</strong><small>{presenceSourceLabel(presence)}</small></span>
           </div>

@@ -3572,6 +3572,10 @@ fn api_router(state: AppState) -> Router {
             get(presence::operator_presence).put(presence::set_operator_presence),
         )
         .route(
+            "/api/v1/presence/night-watch",
+            get(presence::night_watch_configuration).put(presence::set_night_watch_configuration),
+        )
+        .route(
             "/api/v1/presence/devices/{device_id}",
             put(presence::observe_presence_device),
         )
@@ -14222,6 +14226,58 @@ mod tests {
             response_json(authorized_get(app, "/api/v1/presence").await).await["source"],
             "manual"
         );
+    }
+
+    #[tokio::test]
+    async fn night_watch_routes_require_auth_and_validate_before_persisting() {
+        let store = TaskStore::in_memory().unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone()),
+        );
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/presence/night-watch")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        for (zone, expected) in [
+            ("invalid-zone", StatusCode::BAD_REQUEST),
+            ("America/New_York", StatusCode::OK),
+        ] {
+            let response = app.clone().oneshot(Request::builder().method("PUT")
+                .uri("/api/v1/presence/night-watch")
+                .header("authorization", "Bearer secret").header("content-type", "application/json")
+                .body(Body::from(serde_json::json!({ "enabled": true, "timezone": zone, "start_minute": 1320, "end_minute": 420 }).to_string())).unwrap()).await.unwrap();
+            assert_eq!(response.status(), expected);
+            if expected == StatusCode::BAD_REQUEST {
+                assert!(store.night_watch_configuration().unwrap().is_none());
+            } else {
+                assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            }
+        }
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/presence/night-watch")
+                    .header("authorization", "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["timezone"], "America/New_York");
     }
 
     #[tokio::test]

@@ -20,6 +20,7 @@ import { demoDecision, demoTasks, demoWorkers } from "./productFixtures";
 const now = Math.floor(Date.now() / 1000);
 
 export function hiveFixture(path: string): unknown | undefined {
+  if (path === "/api/v1/presence/night-watch") return { enabled: false, timezone: "America/New_York", start_minute: 1320, end_minute: 420 };
   // A terminal attachment asks for a grant at a per-session path, so it cannot
   // be an arm of the switch below. The grant is a fiction like everything else
   // here: FixtureWebSocket never dials the websocket_path it names.

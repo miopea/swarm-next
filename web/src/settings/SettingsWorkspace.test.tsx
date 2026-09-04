@@ -119,7 +119,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   // Section navigation lives in the rail now, with every other surface's, and
   // is covered at that level. This file covers what the workspace itself does.
 
-  expect(screen.getAllByRole("status")[0]).toHaveTextContent("AwayComputer lock detected");
+  expect(screen.getByRole("status", { name: "Current presence" })).toHaveTextContent("AwayComputer lock detected");
   fireEvent.change(screen.getByLabelText("Presence policy"), { target: { value: "night_watch" } });
   expect(onPresenceChange).toHaveBeenCalledWith("night_watch");
   fireEvent.click(screen.getByRole("button", { name: "Enable" }));

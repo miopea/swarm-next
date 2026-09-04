@@ -708,6 +708,27 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   changes requires further reconciliation; this is not full presence acceptance.
 - No live settings, databases, workers, push, release, or deployment changed.
 
+### P5e: Night Watch schedule editor and authenticated API
+
+- Added private no-store GET/PUT schedule routes through the application service.
+  Validated named zones and local windows are required before persistence. Added
+  a route test for authentication, invalid-zone refusal without mutation, and
+  read-back; it compiled in strict Linux-target API Clippy but was not executed.
+- Presence settings now expose enable, time zone, start/end, and explicit save.
+  Unknown/loading settings cannot be overwritten, requests have eight-second
+  deadlines, duplicate saves are blocked, and failure retains edits with retry.
+  Cleanup aborts requests and prevents abandoned save completion updating state.
+- 22 settings/editor tests passed; final production build passed with the existing
+  terminal chunk warning. The first settings test used positional status selection;
+  it now targets the named Current presence status, preserving its assertion.
+- Chrome/Edge skill inspected the separate isolated editor fixture, confirmed save
+  feedback, and caught joined labels. Added scoped spacing and re-inspected the
+  corrected layout. Fixture saves are synthetic, not live persistence acceptance.
+- End-to-end Linux route execution, real device/DST/overnight acceptance, Reachable
+  semantics, and stale desktop-return ordering remain open. This completes the
+  schedule editing path, not P5 or the overall maturity goal.
+- No live schedule, database, worker, release, push, or deployment changed.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

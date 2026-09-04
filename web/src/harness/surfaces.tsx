@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import TerminalQuestionsFixture from "./TerminalQuestionsFixture";
 import TerminalView from "../terminal/TerminalView";
 import DeveloperDogfoodWorkspace from "../settings/DeveloperDogfoodWorkspace";
+import NightWatchSettings from "../settings/NightWatchSettings";
 import TerminalPoolFixture from "./TerminalPoolFixture";
 
 import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
@@ -209,6 +210,7 @@ export type Surface = { id: string; title: string; why: string; render: () => Re
 const FILED = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
 
 export const SURFACES: Surface[] = [
+  { id: "night-watch", title: "Night Watch schedule", why: "isolated schedule editor; saves are fixture responses only", render: () => <section className="settings-card"><NightWatchSettings operatorToken="fixture" /></section> },
   {
     id: "terminal-pool",
     title: "Terminal renderer pool lifecycle",

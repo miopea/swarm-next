@@ -1,3 +1,21 @@
+.night-watch-settings fieldset {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.night-watch-settings fieldset > label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.night-watch-settings fieldset > label:first-of-type {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.night-watch-settings input[type="checkbox"] { width: auto; }
+.night-watch-settings button { justify-self: start; }
+
 :root {
   /* Every pill-shaped control is this tall, and none is sized by its content.
      Measured before this existed: five different pill heights on one row —

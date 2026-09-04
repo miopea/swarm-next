@@ -1840,6 +1840,29 @@ impl TaskService {
         self.store.operator_presence(now).map_err(Into::into)
     }
 
+    /// Reads the optional operator-configured Night Watch schedule.
+    ///
+    /// # Errors
+    /// Returns a persistence or stored-configuration error.
+    pub fn night_watch_configuration(
+        &self,
+    ) -> Result<Option<swarm_persistence::NightWatchConfiguration>, ApplicationError> {
+        self.store.night_watch_configuration().map_err(Into::into)
+    }
+
+    /// Saves a validated schedule without changing provider capabilities.
+    ///
+    /// # Errors
+    /// Returns a persistence error; settings and event writes are atomic.
+    pub fn set_night_watch_configuration(
+        &self,
+        config: &swarm_persistence::NightWatchConfiguration,
+    ) -> Result<bool, ApplicationError> {
+        self.store
+            .set_night_watch_configuration(config)
+            .map_err(Into::into)
+    }
+
     /// Sets or clears the operator's explicit presence override.
     ///
     /// # Errors

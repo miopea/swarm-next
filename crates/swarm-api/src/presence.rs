@@ -17,6 +17,54 @@ pub(super) struct SetPresenceRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct NightWatchRequest {
+    enabled: bool,
+    timezone: String,
+    start_minute: u16,
+    end_minute: u16,
+}
+
+pub(super) async fn night_watch_configuration(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let config = task_service(&state)?
+        .night_watch_configuration()
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(config)).into_response())
+}
+
+pub(super) async fn set_night_watch_configuration(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<NightWatchRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let config = swarm_persistence::NightWatchConfiguration::new(
+        request.enabled,
+        &request.timezone,
+        request.start_minute,
+        request.end_minute,
+    )
+    .ok_or_else(|| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_night_watch_schedule",
+            "choose a valid IANA time zone and different start/end times within the day",
+        )
+    })?;
+    if task_service(&state)?
+        .set_night_watch_configuration(&config)
+        .map_err(application_error)?
+    {
+        state.control_room_notify.notify_waiters();
+    }
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(config)).into_response())
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct PresenceObservationRequest {
     device_class: PresenceDeviceClass,
     state: PresenceObservationState,
