@@ -6,6 +6,26 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P5 / REC-02: protect restore source and rollback admission
+
+- Package restore verified the selected backup directly through a CLI that may
+  migrate older schemas. It now verifies a private installation copy instead.
+- The previous EXIT path could install an incomplete or rejected rollback
+  download over the live database. A separate candidate is now downloaded and
+  verified before rollback is armed, after successful API stop. Admission failure
+  only removes owned temporary files; it does not stop services or replace data.
+- Successful restores retain and print the pre-restore snapshot, keeping that
+  snapshot plus the two newest other managed pre-restore copies. Manual backups
+  are untouched; failed restores retain recovery evidence without pruning.
+- WSL isolated package lifecycle smoke passed, including injected partial curl
+  output, rejected rollback verification, a mutating verifier, source-byte
+  preservation, retention bounds, manual-file preservation and no terminal-host
+  lifecycle calls during restore. Services and databases in this smoke are fake;
+  this is not a real SQLite corruption/restore drill.
+- Offline/corrupt-database restore, seven daily/three pre-upgrade retention and
+  corruption quarantine remain open REC-02 work. No live restore, deployment,
+  release, push or worker interruption.
+
 ### P2: preserve one composer draft through renderer and page recovery
 
 - One tab-owned, bounded draft now survives renderer replacement and view changes.

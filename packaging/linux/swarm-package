@@ -22,6 +22,7 @@ drain_release=
 rollback_release=
 rollback_host_release=
 restore_rollback=
+restore_candidate=
 restore_auth=
 restore_incoming=
 update_rollback=
@@ -329,6 +330,7 @@ on_exit() {
   trap - EXIT
   [ -z "$restore_auth" ] || rm -f "$restore_auth"
   [ -z "$restore_incoming" ] || rm -f "$restore_incoming"
+  [ -z "$restore_candidate" ] || rm -f "$restore_candidate"
   [ -z "$update_auth" ] || rm -f "$update_auth"
   [ -z "$return_auth" ] || rm -f "$return_auth"
   [ -z "$update_incoming" ] || rm -f "$update_incoming"
@@ -592,31 +594,48 @@ restore_database() {
   [ -f "$backup" ] || die "restore database is missing"
   current=$(release_from_link "$install_root/current")
   [ -n "$current" ] || die "no current release is installed"
-  "$current/bin/swarmctl" verify-database "$backup" >/dev/null || die "restore database failed integrity verification"
+  umask 077
+  restore_incoming=$(mktemp "$state_root/.restore-incoming-XXXXXX.sqlite3")
+  cp "$backup" "$restore_incoming"
+  # Verification can migrate an older schema. Only the installation candidate
+  # may change; the operator's selected recovery file must remain untouched.
+  "$current/bin/swarmctl" verify-database "$restore_incoming" >/dev/null || die "restore database failed integrity verification"
   database="$state_root/swarm.sqlite3"
-  restore_rollback="$state_root/.restore-rollback-$$.sqlite3"
+  restore_candidate=$(mktemp "$state_root/.restore-candidate-XXXXXX.sqlite3")
   restore_auth="$state_root/.restore-auth-$$"
   token=$(sed -n 's/^SWARM_OPERATOR_TOKEN=//p' "$config_root/swarm.env")
   umask 077
   printf 'header = "Authorization: Bearer %s"\n' "$token" > "$restore_auth"
   authenticated_curl "$restore_auth" --fail --silent --show-error \
-    --output "$restore_rollback" "${health_url%/health}/api/v1/backups/database" \
+    --output "$restore_candidate" "${health_url%/health}/api/v1/backups/database" \
     || die "could not create the pre-restore rollback backup"
   rm -f "$restore_auth"
   restore_auth=
-  "$current/bin/swarmctl" verify-database "$restore_rollback" >/dev/null || die "pre-restore rollback backup failed verification"
+  "$current/bin/swarmctl" verify-database "$restore_candidate" >/dev/null || die "pre-restore rollback backup failed verification"
+  # Arm rollback only after a complete, verified snapshot exists. A partial
+  # download or failed check must never be copied over the live database by EXIT.
+  mkdir -p "$state_root/backups"
+  chmod 0700 "$state_root/backups"
+  restore_saved="$state_root/backups/pre-restore-$(date -u +%Y%m%dT%H%M%S)-$$.sqlite3"
+  mv "$restore_candidate" "$restore_saved"
+  restore_candidate=
   run_systemctl stop swarm-api.service
-  restore_incoming="$state_root/.restore-incoming-$$.sqlite3"
-  cp "$backup" "$restore_incoming"
+  restore_rollback=$restore_saved
   chmod 0600 "$restore_incoming"
   mv -f "$restore_incoming" "$database"
   restore_incoming=
   rm -f "$database-wal" "$database-shm"
   run_systemctl start swarm-api.service
   wait_for_health || die "restored API failed health verification; previous database will be restored"
-  rm -f "$restore_rollback"
   restore_rollback=
-  printf 'Hive database restored and verified; terminal host and repositories were preserved.\n'
+  count=1
+  for candidate in $(find "$state_root/backups" -maxdepth 1 -type f -name 'pre-restore-*.sqlite3' -printf '%T@ %p\n' | sort -nr | sed 's/^[^ ]* //'); do
+    [ "$candidate" != "$restore_saved" ] || continue
+    count=$((count + 1))
+    [ "$count" -le 3 ] && continue
+    case "$candidate" in "$state_root"/backups/pre-restore-*.sqlite3) rm -f -- "$candidate";; *) die "restore backup cleanup path escapes managed state";; esac
+  done
+  printf 'Hive database restored and verified; terminal host and repositories were preserved. Previous database retained at %s\n' "$restore_saved"
 }
 trap on_exit EXIT
 

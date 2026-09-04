@@ -45,3 +45,19 @@ configuration; it must never silently copy machine credentials.
 - Browser tests verify the Settings action downloads the returned snapshot.
 - Package lifecycle tests prove restore verification, API-only restart, and
   terminal-host preservation.
+
+## Restore safety refinement — 2026-09-04
+
+Restore stages a private copy before invoking the installed verifier, because
+verification may migrate an older schema. The selected backup is never opened
+for mutation by restore. The rollback download remains an unarmed candidate
+until fully downloaded and verified; failure before replacement cannot activate
+rollback with incomplete bytes. After a successful API stop, replacement arms
+the existing rollback path. Successful restoration retains the previous database
+and prints its path, keeping the current pre-restore snapshot plus the two newest
+other managed pre-restore snapshots. Manual backups are outside this retention.
+Failed restores retain their recovery snapshot rather than pruning evidence.
+
+This does not yet make corrupt/offline databases restorable: acquiring the
+pre-restore snapshot still requires the API. That separate REC-02 gap must not
+be confused with the source-preservation and rollback-admission safeguards here.

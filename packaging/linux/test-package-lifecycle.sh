@@ -82,6 +82,10 @@ for argument in "$@"; do
   previous=$argument
 done
 if [ -n "$output" ]; then
+  if [ -f "$HOME/restore-download-partial" ]; then
+    printf 'incomplete database\n' > "$output"
+    exit 18
+  fi
   # A curl that SPEAKS THE CREDENTIAL BACK. No released curl is known to do
   # this for our config shape — that was measured — but the guarantee has to
   # hold for the next version of the tool, so the test asserts the channel is
@@ -203,6 +207,13 @@ if [ "$(basename "$0")" = "swarmctl" ]; then
     # A corrupt backup is otherwise unreachable from here, and the refusal it
     # produces is one of the failures the operator named as uninformative.
     [ ! -f "$HOME/verify-fails" ] || exit 1
+    if [ -f "$HOME/restore-migration" ]; then
+      case "$2" in
+        */.restore-incoming-*) printf 'migrated-restore\n' > "$2";;
+        "$HOME/hive-backup.sqlite3") printf 'SOURCE-MUTATED\n' > "$2";;
+      esac
+    fi
+    case "$2" in */.restore-candidate-*) [ ! -f "$HOME/restore-rollback-invalid" ] || exit 1;; esac
   fi
   if [ "$command" = "status" ]; then
     running=0
@@ -910,9 +921,40 @@ fi
 # the API, and preserves the terminal host and repository root.
 printf 'old-database\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
 printf 'restored-database\n' > "$HOME/hive-backup.sqlite3"
+# A refused rollback snapshot must not activate EXIT rollback or stop the API.
+: > "$HOME/restore-rollback-invalid"
+: > "$HOME/systemctl.log"
+if "$package" restore "$HOME/hive-backup.sqlite3"; then
+  echo "restore accepted an invalid rollback snapshot" >&2; exit 1
+fi
+[ "$(cat "$SWARM_STATE_ROOT/swarm.sqlite3")" = "old-database" ]
+[ ! -s "$HOME/systemctl.log" ]
+rm "$HOME/restore-rollback-invalid"
+: > "$HOME/restore-download-partial"
+if "$package" restore "$HOME/hive-backup.sqlite3"; then
+  echo "restore accepted a partial rollback download" >&2; exit 1
+fi
+[ "$(cat "$SWARM_STATE_ROOT/swarm.sqlite3")" = "old-database" ]
+[ ! -s "$HOME/systemctl.log" ]
+rm "$HOME/restore-download-partial"
+# Model a verifier that migrates an older database, as the real CLI does.
+: > "$HOME/restore-migration"
 : > "$HOME/systemctl.log"
 "$package" restore "$HOME/hive-backup.sqlite3"
-[ "$(cat "$SWARM_STATE_ROOT/swarm.sqlite3")" = "restored-database" ]
+[ "$(cat "$SWARM_STATE_ROOT/swarm.sqlite3")" = "migrated-restore" ]
+[ "$(cat "$HOME/hive-backup.sqlite3")" = "restored-database" ]
+saved_restore=$(find "$SWARM_STATE_ROOT/backups" -maxdepth 1 -name 'pre-restore-*.sqlite3' -type f)
+[ "$(cat "$saved_restore")" = "old-database" ]
+rm "$HOME/restore-migration"
+# Retention applies only to owned pre-restore files; manually saved files stay.
+printf 'manual\n' > "$SWARM_STATE_ROOT/backups/manual.sqlite3"
+for age in 1 2 3 4; do
+  printf 'older\n' > "$SWARM_STATE_ROOT/backups/pre-restore-old-$age.sqlite3"
+  touch -d "@$age" "$SWARM_STATE_ROOT/backups/pre-restore-old-$age.sqlite3"
+done
+"$package" restore "$HOME/hive-backup.sqlite3"
+[ "$(find "$SWARM_STATE_ROOT/backups" -maxdepth 1 -type f -name 'pre-restore-*.sqlite3' | wc -l)" -eq 3 ]
+[ "$(cat "$SWARM_STATE_ROOT/backups/manual.sqlite3")" = "manual" ]
 grep -q '^--user stop swarm-api.service$' "$HOME/systemctl.log"
 grep -q '^--user start swarm-api.service$' "$HOME/systemctl.log"
 if grep -q 'swarm-terminal-host.service' "$HOME/systemctl.log"; then
