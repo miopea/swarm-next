@@ -27,6 +27,7 @@ restore_incoming=
 update_rollback=
 update_schema_before=
 update_auth=
+return_auth=
 update_incoming=
 dev_config="$config_root/swarm-dev.env"
 dev_reload_started=
@@ -208,8 +209,7 @@ last_error() {
   ' "$1" 2>/dev/null | tr -d '\r' | tr '\n' ' ' | cut -c1-300
 }
 
-# The ONLY two commands in this script that hold the operator token, and the one
-# place their output is allowed to go.
+# Every authenticated command in this script shares this output boundary.
 #
 # WHY THIS EXISTS. e74affc made a failing step's stderr into `detail`, a field
 # rendered on a card. That was the right fix for "it is taking a lot of work to
@@ -330,6 +330,7 @@ on_exit() {
   [ -z "$restore_auth" ] || rm -f "$restore_auth"
   [ -z "$restore_incoming" ] || rm -f "$restore_incoming"
   [ -z "$update_auth" ] || rm -f "$update_auth"
+  [ -z "$return_auth" ] || rm -f "$return_auth"
   [ -z "$update_incoming" ] || rm -f "$update_incoming"
   if [ -n "$restore_rollback" ] && [ -f "$restore_rollback" ]; then
     run_systemctl stop swarm-api.service >/dev/null 2>&1 || true
@@ -1464,6 +1465,7 @@ reconcile_host() {
   fi
   clear_deferrals host-reconcile
 
+  record_loaded_worker_returns || die "worker engine update deferred: could not record the loaded workers owed a return; no sessions stopped"
   activate_host_link "$current"
   install_units "$current"
   if run_systemctl restart swarm-terminal-host.service && wait_for_host "$current"; then
@@ -1477,6 +1479,26 @@ reconcile_host() {
   wait_for_host "$host_release" || true
   drain_release=
   die "terminal host restart failed; previous host release restored"
+}
+
+record_loaded_worker_returns() {
+  # Empty engines need no return record. Card-requested maintenance already
+  # records and stops its loaded workers before asking the package to replace.
+  [ "$running" -gt 0 ] || return 0
+  [ -f "$config_root/swarm.env" ] || return 1
+  mkdir -p "$state_root"
+  return_auth="$state_root/.return-auth-$$"
+  token=$(sed -n 's/^SWARM_OPERATOR_TOKEN=//p' "$config_root/swarm.env")
+  [ -n "$token" ] || return 1
+  umask 077
+  printf 'header = "Authorization: Bearer %s"\n' "$token" > "$return_auth"
+  return_status=0
+  authenticated_curl "$return_auth" --fail --silent --show-error \
+    --connect-timeout 3 --max-time 10 --request POST --output /dev/null \
+    "${health_url%/health}/api/v1/runtime/terminal-host/prepare-return" || return_status=$?
+  rm -f "$return_auth"
+  return_auth=
+  [ "$return_status" -eq 0 ]
 }
 
 reconcile_host_requested() {

@@ -59,6 +59,24 @@ the exact promise and provider policy. Policy holds retain the promise without
 becoming recovery failures. No running worker is stopped to enforce admission.
 Presence changes after admission and crash ambiguity remain separate recovery work.
 
+The compatible-engine package reconciler must also record this return set before
+replacement. After its existing drain and idle checks, it calls an authenticated
+API preparation endpoint, with a ten-second request bound. The endpoint serializes
+with worker lifecycle operations, requires a drained host, maps live host sessions
+to their current durable worker profiles, and records the existing bounded promises.
+It neither stops sessions nor authorizes replacement. Unprofiled shells are not
+invented as workers; already sleeping workers are excluded.
+
+If preparation is unavailable or fails, the package leaves the previous engine
+in place and its exit cleanup cancels drain. An empty engine needs no new promise;
+the operator-controlled maintenance path already records its return set before
+stopping sessions. This allows that path to upgrade an older API without teaching
+the package to write SQLite. The package adapter owns this compatibility behavior;
+remove the old-API consideration when all supported versions expose preparation.
+Protocol-migration activation is not yet wired to this preparation path. The
+existing idle-observation versus subsequent input race also remains open; recording
+a return set is not an atomic quiescence or context-restoration guarantee.
+
 ## Consequences
 
 - Normal application updates preserve every worker immediately.

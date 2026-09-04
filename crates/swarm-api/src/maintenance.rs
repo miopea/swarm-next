@@ -67,6 +67,50 @@ pub(super) struct RestartWorkersResponse {
     restarted_workers: usize,
 }
 
+/// Package-owned replacement records its return set while the engine is drained.
+/// This endpoint grants no authority to stop work and never stops a session.
+pub(super) async fn prepare_worker_engine_return(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let _guard = state.worker_lifecycle.lock().await;
+    if !host_status_snapshot(&state).await?.draining {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "worker_engine_not_draining",
+            "drain the worker engine before recording its return set",
+        ));
+    }
+    let HostResponse::Sessions { sessions } =
+        request_host(&state, HostRequest::ListSessions).await?
+    else {
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "unexpected_host_response",
+            "terminal host returned an unexpected session response",
+        ));
+    };
+    let running = sessions
+        .into_iter()
+        .filter(|session| session.running)
+        .map(|session| session.session_id)
+        .collect();
+    let store = task_store(&state)?;
+    let profiles = store
+        .list_worker_profiles()
+        .map_err(|error| task_store_error(&error))?;
+    let workers = loaded_workers(&profiles, &running);
+    store
+        .record_worker_revival_intents(&workers, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({ "recorded_workers": workers.len() })),
+    )
+        .into_response())
+}
+
 /// Restarts the workers still running a superseded provider release.
 ///
 /// Claude and Codex update themselves and a running process keeps executing the

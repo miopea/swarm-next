@@ -427,7 +427,7 @@ test("it names how many sessions the swap will stop", () => {
   expect(screen.getByText(/all 11 running worker sessions/)).toBeInTheDocument();
 });
 
-test("it says the workers do not come back on their own", () => {
+test("it distinguishes recorded worker recovery from confirmed context restoration", () => {
   render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
     enabled: true,
     version: "0.1.0-dev-123456789abc-20260815040000-10",
@@ -440,7 +440,8 @@ test("it says the workers do not come back on their own", () => {
     worker_engine_update_required: true,
     running_worker_sessions: 11,
   }} />);
-  expect(screen.getByText(/the rest wait to be started by hand/)).toBeInTheDocument();
+  expect(screen.getByText(/records loaded workers for recovery before the swap/)).toBeInTheDocument();
+  expect(screen.getByText(/not confirmation that context was restored/)).toBeInTheDocument();
 });
 
 /**

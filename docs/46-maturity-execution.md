@@ -89,6 +89,28 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
 
 ## P3–P7 — Implementation checkpoints (phases remain incomplete)
 
+### P5j: compatible package updates record loaded workers before replacement
+
+- Added authenticated, no-store prepare-return endpoint. It requires host drain,
+  shares the worker lifecycle lock, maps running host sessions to loaded profiles,
+  and records the existing bounded durable intents without stopping anything.
+  Repeated preparation does not create duplicate promises; sleepers are excluded.
+- Compatible-engine package reconciliation calls preparation after its existing
+  idle checks and before changing the host link. Recording failure refuses the
+  swap; existing exit cleanup cancels drain. Requests are bounded to ten seconds
+  and use the existing protected credential/output boundary. Empty engines skip
+  preparation, preserving card-requested upgrade compatibility with older APIs.
+- Updated consequence copy to distinguish recovery attempts from confirmed
+  context restoration. No actual updater/service was run against the live Hive.
+- Verification: strict Linux-target API Clippy (including new route test) passed;
+  route test compiled, not executed. Focused production shell-helper tests passed
+  for empty/success/failure/missing-config and credential-file cleanup. Both shell
+  files passed syntax checks. 23 update-card tests and web build passed.
+- Full package lifecycle harness failed at its initial Windows symlink assertion
+  (line 253), before reaching the added replacement/failure assertions. Full Linux
+  lifecycle execution, real worker return, protocol-migration preparation, atomic
+  idle/input exclusion, and generation-bound revival settlement remain pending.
+
 ### P6a: diagnostics belongs with runtime status
 
 - Removed the duplicate-location diagnostics shortcut from the brand header and

@@ -90,8 +90,9 @@ export default function DevelopmentReloadAction({ busy, runtime, reachable = tru
       {typeof runningSessions === "number"
         ? `all ${runningSessions} running worker session${runningSessions === 1 ? "" : "s"}`
         : "every running worker session"}
-      . Only workers set to stay active automatically come back on their own; the rest wait to be
-      started by hand. Use the worker engine update below if you would rather choose the moment.
+      . This build's compatible-engine updater records loaded workers for recovery before the swap.
+      Recovery may pause for provider policy or a reported failure; it is not confirmation that
+      context was restored. Use the worker engine update below to choose the moment.
     </p>
   ) : null;
   const uncommittedOnly = runtime.source_dirty

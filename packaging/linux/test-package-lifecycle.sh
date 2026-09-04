@@ -72,6 +72,12 @@ set -eu
 output=
 previous=
 for argument in "$@"; do
+  case "$argument" in
+    */api/v1/runtime/terminal-host/prepare-return)
+      [ ! -f "$HOME/return-record-fails" ] || exit 22
+      printf 'recorded\n' >> "$HOME/return-record.log"
+      exit 0;;
+  esac
   if [ "$previous" = "--output" ]; then output=$argument; fi
   previous=$argument
 done
@@ -651,13 +657,28 @@ restore_pending_engine_change
 printf '3\n' > "$HOME/running-sessions"
 printf '0\n' > "$HOME/busy-sessions"
 printf '0\n' > "$HOME/unreadable-sessions"
+: > "$HOME/return-record.log"
+: > "$HOME/return-record.log"
 quiet_out=$("$package" reconcile-host-if-idle 2>&1)
+grep -q '^recorded$' "$HOME/return-record.log" \
+  || { echo "engine replacement skipped durable worker return preparation" >&2; exit 1; }
 # BOTH halves, because silence alone does not distinguish "proceeded quietly"
 # from "deferred quietly" — and deferring quietly is the original bug.
 printf '%s' "$quiet_out" | grep -q 'now uses' \
   || { echo "resting sessions did not let the engine update land: $quiet_out" >&2; exit 1; }
 printf '%s' "$quiet_out" | grep -qi 'WARNING' \
   && { echo "a fully readable idle host warned about nothing: $quiet_out" >&2; exit 1; }
+
+# Return-record failure preserves the old engine and cancels its drain.
+restore_pending_engine_change
+: > "$HOME/return-record-fails"
+: > "$HOME/swarmctl.log"
+if "$package" reconcile-host-if-idle; then
+  echo "engine replacement proceeded without durable return preparation" >&2; exit 1
+fi
+rm -f "$HOME/return-record-fails"
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "1.0.0" ]
+grep -q '^cancel-drain$' "$HOME/swarmctl.log"
 
 # 3a. A PROVIDER THIS BUILD CANNOT READ: DEFER, and name it. Not proceed —
 #     the worker engine card is the deliberate route, and it exists.

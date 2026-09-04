@@ -3663,6 +3663,10 @@ fn api_router(state: AppState) -> Router {
             post(maintenance::maintain_worker_engine),
         )
         .route(
+            "/api/v1/runtime/terminal-host/prepare-return",
+            post(maintenance::prepare_worker_engine_return),
+        )
+        .route(
             "/api/v1/runtime/providers/restart",
             post(maintenance::restart_superseded_workers),
         )
@@ -16143,6 +16147,89 @@ mod tests {
                 .is_some()
         );
 
+        server_task.abort();
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn package_return_preparation_requires_auth_and_drain_and_preserves_sessions() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
+        );
+        let session = registry
+            .spawn(
+                &ProviderCommand {
+                    executable: PathBuf::from("/bin/sh"),
+                    arguments: vec!["-lc".into(), "sleep 10".into()],
+                    working_directory: workspace.clone(),
+                },
+                TerminalSize::default(),
+            )
+            .unwrap();
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind_with_identity(
+            &socket,
+            Arc::clone(&registry),
+            "old-host",
+            "old-engine",
+        )
+        .unwrap();
+        let server_task = tokio::spawn(server.run());
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Loaded",
+                ProviderKind::ClaudeCode,
+                &workspace.to_string_lossy(),
+                false,
+                1,
+            )
+            .unwrap();
+        store.bind_worker_session(worker.id, session.id()).unwrap();
+        let sleeping = store
+            .create_worker(
+                "Sleeping",
+                ProviderKind::ClaudeCode,
+                &workspace.to_string_lossy(),
+                false,
+                1,
+            )
+            .unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new(&socket), "secret")
+                .with_task_store(store.clone()),
+        );
+        for (token, drained, expected) in [
+            ("wrong", false, StatusCode::UNAUTHORIZED),
+            ("secret", false, StatusCode::CONFLICT),
+            ("secret", true, StatusCode::OK),
+            ("secret", true, StatusCode::OK),
+        ] {
+            if drained {
+                registry.begin_drain().unwrap();
+            }
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/runtime/terminal-host/prepare-return")
+                        .header("authorization", format!("Bearer {token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            assert_eq!(store.worker_revival_pending(worker.id).unwrap(), drained);
+            assert!(!store.worker_revival_pending(sleeping.id).unwrap());
+            assert!(session.is_running().unwrap());
+        }
+        assert_eq!(store.worker_revival_intents().unwrap().len(), 1);
+        session.stop().unwrap();
         server_task.abort();
         let _ = server_task.await;
     }
