@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, expect, test, vi } from "vitest";
 
 vi.mock("./terminal/XtermSurface", () => ({ XtermSurface: class {} }));
-vi.mock("./terminal/TerminalView", () => ({ default: () => <div>Terminal ready</div> }));
+vi.mock("./terminal/TerminalView", () => ({ default: ({ session }: { session?: { session_id: string } }) => <div data-testid="terminal-view" data-session-id={session?.session_id}>Terminal ready</div> }));
 vi.mock("./presence/PresenceController", () => ({
   deviceClass: () => "desktop",
   presenceDeviceId: () => "019fedfc-1c30-70e1-a5e2-9a3c94268093",
@@ -1040,6 +1040,31 @@ test("a detached window shows its surface and nothing else", async () => {
   expect(await screen.findByRole("heading", { name: "Task board" })).toBeInTheDocument();
   expect(screen.queryByRole("navigation", { name: "Swarm navigation" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /Open .* in a new window/ })).not.toBeInTheDocument();
+});
+
+test.each([true, false])("conversation review opens the actual terminal (already awake: %s)", async (awake) => {
+  const baseFetch = bootFetch();
+  const worker = { id: "worker-scout", name: "Scout", role: "worker", provider: "claude_code", workspace: "/scout", position: 1, autostart: false };
+  const sessionId = "session-scout";
+  let running = awake;
+  const profile = () => ({ ...worker, running, active_session_id: running ? sessionId : null, attention_state: running ? "resting" : "sleeping" });
+  const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url === `/api/v1/workers/${worker.id}/start`) { running = true; return Promise.resolve(ok(profile())); }
+    if (url === "/api/v1/workers") return Promise.resolve(ok([profile()]));
+    if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: running ? [{ session_id: sessionId, running: true }] : [] }));
+    if (url === "/api/v1/workers/conversations") return Promise.resolve(ok({ workers: [{ worker_id: worker.id, name: worker.name, freshness: { state: "stale", newest_conversation: "other", pinned_last_entry: null, newest_last_entry: "2026-09-02T00:00:00Z" } }] }));
+    if (url === "/api/v1/preferences/start-surface") return Promise.resolve(ok({ start_surface: "decisions" }));
+    if (url.includes("/api/v1/control-room/events")) return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
+    return baseFetch(input);
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(<App />);
+  const card = await screen.findByRole("article", { name: "Worker conversations" });
+  fireEvent.click(within(card).getByRole("button", { name: "Scout" }));
+  await waitFor(() => expect(screen.getByTestId("terminal-view")).toHaveAttribute("data-session-id", sessionId));
+  const starts = fetch.mock.calls.filter(([url]) => String(url).endsWith(`/workers/${worker.id}/start`));
+  expect(starts).toHaveLength(awake ? 0 : 1);
 });
 
 function bootFetch() {

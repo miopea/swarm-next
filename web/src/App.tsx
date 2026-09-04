@@ -1135,6 +1135,13 @@ export function App() {
     focusTerminalAfterRender(sessionId);
   }
 
+  function openWorkerProfile(workerId: string) {
+    const worker = workers.find((candidate) => candidate.id === workerId);
+    if (!worker) return;
+    if (worker.active_session_id) openWorker(worker.active_session_id);
+    else void startExistingWorker(worker);
+  }
+
   async function retryTaskJira(task: Task) {
     if (!operatorToken) return;
     await perform(async () => {
@@ -2312,7 +2319,7 @@ export function App() {
               attentionCards={<>
                 <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onReviseReply={reviseAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
-                <ConversationDriftCard workers={workerConversations} onOpenWorker={openWorker} />
+                <ConversationDriftCard workers={workerConversations} onOpenWorker={openWorkerProfile} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
                 <HeldDeliveryAttentionCard
                   held={actionableHeldDeliveries}

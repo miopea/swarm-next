@@ -6,6 +6,21 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4/P6: conversation-review action opens the intended terminal
+
+- The Needs You conversation-review card emitted a durable worker ID directly
+  into session-ID navigation. It could select an ID that was not a terminal.
+  A profile-aware handler now opens the worker's current session or uses the
+  existing wake flow and navigates to the returned session. It never changes
+  the saved provider conversation or chooses a newer transcript.
+- Two App integration regressions use distinct worker/session identities and
+  assert the rendered terminal identity. Awake workers issue no start request;
+  sleeping workers issue exactly one. All 38 App/conversation-card tests passed,
+  as did the production web build and diff checks. The existing 546.53 KiB
+  terminal chunk warning remains. No browser/device visual acceptance claimed.
+- This repairs an action, not the whole attention-information architecture or
+  broader redesign. No push, deployment, release or live worker interruption.
+
 ### P2/P5: automatic continuation-to-fresh recovery wiring
 
 - Normal worker reconciliation now advances an engine-confirmed failed Continue
