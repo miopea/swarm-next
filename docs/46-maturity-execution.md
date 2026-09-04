@@ -662,6 +662,30 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   and integrated acceptance remain open. No active runtime schedule is claimed.
 - No dependencies, database schema, live configuration, push, or release changed.
 
+### P5c: durable schedule configuration and named-zone clock
+
+- Added validated named-zone/window configuration with no implicit bedtime,
+  schema 125 storage, atomic settings/event writes, and no-op repeated saves.
+  Schema upgrade preserves the existing manual presence mode. One nullable
+  dismissal field is reserved for the next policy integration step.
+- UTC-to-local conversion uses Chrono-TZ 0.10.4's bundled IANA data, not server
+  locale. Verified New York spring-forward and fall-back instants against the
+  overnight domain window and exact end boundary. Invalid zones/timestamps fail.
+  Source contract: https://docs.rs/chrono-tz/0.10.4/chrono_tz/ .
+- Six focused tests passed, including new reopen, schema-124 upgrade, event
+  failure rollback, and DST checks plus existing manual-watch/authority tests.
+  Strict persistence all-target/all-feature Clippy passed after final edits.
+  Initial compile required an explicit connection guard; lint required splitting
+  the migration dispatcher. Both were corrected and verification repeated.
+- Dependency change adds chrono-tz and three transitive crates without updating
+  existing locked versions. Fetch used the previously documented process-local
+  revocation workaround; tests/lint ran offline with the final lockfile.
+- No live database opened. Testing this build will introduce schema 125; older
+  binaries cannot be assumed compatible. Keep the pre-upgrade database backup.
+  Effective schedule evaluation, return events, and settings/API remain unwired;
+  this checkpoint does not claim an available Night Watch schedule.
+- No push, deployment, release, or live configuration change.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

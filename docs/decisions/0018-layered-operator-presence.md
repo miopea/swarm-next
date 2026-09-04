@@ -65,6 +65,16 @@ The domain policy is the first implementation step, not an active schedule:
 durable settings, clock conversion, explicit return events, API/UI wiring, and
 end-to-end verification remain required before this behavior is available.
 
+Schedule configuration is one row per operator, initially absent (no automatic
+bedtime). Validate its named IANA zone and local window before writing; preserve
+the manual mode when upgrading. Schema 125 stores the schedule and a nullable
+dismissed occurrence. Settings changes and their presence event are atomic;
+identical saves do not churn events. UTC instants are converted using the bundled
+IANA data via [Chrono-TZ](https://docs.rs/chrono-tz/0.10.4/chrono_tz/), avoiding
+machine-local offsets. Updating zone data follows the dependency/update lifecycle.
+Clock conversion and durable settings alone do not activate a schedule: effective
+presence evaluation and desktop-return commands must be wired together next.
+
 ## Consequences
 
 Desktop and mobile clients share one durable, privacy-minimal view of operator

@@ -84,6 +84,7 @@ pub use migration::{
     LegacyWorkerMigrationReceipt, LegacyWorkerMigrationRollback, LegacyWorkerPreview,
     LegacyWorkerRecord,
 };
+mod night_watch;
 mod passkeys;
 mod presence;
 pub use decisions::{DecisionDeliveryFailure, DecisionDispatch, NewDecisionRequest};
@@ -92,6 +93,7 @@ pub use email::{
     EmailReplyFailure, EmailReplyState, EmailReplyTarget, EmailReplyTargetDispatch,
     EmailTaskAttachment, EmailTaskDraft, EmailTaskLink, TaskDeploymentRecord, UnansweredEmailTask,
 };
+pub use night_watch::NightWatchConfiguration;
 pub use presence::PresenceMutation;
 mod notifications;
 mod terminal_control_projection;
@@ -196,7 +198,8 @@ const MESSAGE_DELIVERY_SESSION_SCHEMA_VERSION: i64 = 121;
 const DELIVERY_COOLDOWN_SCHEMA_VERSION: i64 = 122;
 const CLAIM_WITHDRAWAL_SCHEMA_VERSION: i64 = 123;
 const TERMINAL_CONTROL_PROJECTION_SCHEMA_VERSION: i64 = 124;
-const CURRENT_SCHEMA_VERSION: i64 = TERMINAL_CONTROL_PROJECTION_SCHEMA_VERSION;
+const NIGHT_WATCH_SCHEMA_VERSION: i64 = 125;
+const CURRENT_SCHEMA_VERSION: i64 = NIGHT_WATCH_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -3716,7 +3719,15 @@ fn migrate_newest_schema_steps(
     if schema_version < CLAIM_WITHDRAWAL_SCHEMA_VERSION {
         migrate_claim_withdrawal(transaction)?;
     }
-    terminal_control_projection::migrate(transaction, schema_version)
+    migrate_maturity_schema_steps(transaction, schema_version)
+}
+
+fn migrate_maturity_schema_steps(
+    transaction: &rusqlite::Transaction<'_>,
+    schema_version: i64,
+) -> rusqlite::Result<()> {
+    terminal_control_projection::migrate(transaction, schema_version)?;
+    night_watch::migrate(transaction, schema_version)
 }
 
 /// Work closed for a reason other than success gets its own state.
