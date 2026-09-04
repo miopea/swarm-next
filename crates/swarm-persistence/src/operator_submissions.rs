@@ -1,8 +1,29 @@
 //! Authored text is independent of provider consumption and decision resolution.
 use rusqlite::{OptionalExtension, Transaction, params};
-use swarm_domain::{OperatorSubmissionId, WorkerSessionId, valid_operator_submission};
+use swarm_domain::{
+    OperatorId, OperatorSubmissionId, WorkerId, WorkerSessionId, valid_operator_submission,
+};
 
-use crate::{OperatorStatementError, TaskStore};
+use crate::{OperatorStatementError, TaskStore, TaskStoreError};
+
+#[derive(serde::Serialize)]
+pub struct OperatorSubmissionIndexEntry {
+    pub id: OperatorSubmissionId,
+    pub session_id: WorkerSessionId,
+    pub recorded_at: i64,
+    pub text_bytes: usize,
+}
+
+/// Authorship evidence only. No Debug implementation for private message text.
+#[derive(serde::Serialize)]
+pub struct AuthoredOperatorSubmission {
+    pub id: OperatorSubmissionId,
+    pub worker_id: WorkerId,
+    pub session_id: WorkerSessionId,
+    pub operator_id: OperatorId,
+    pub text: String,
+    pub recorded_at: i64,
+}
 
 pub(super) fn migrate(tx: &Transaction<'_>, version: i64) -> rusqlite::Result<()> {
     if version >= crate::OPERATOR_SUBMISSIONS_SCHEMA_VERSION {
@@ -26,6 +47,103 @@ pub(super) fn migrate(tx: &Transaction<'_>, version: i64) -> rusqlite::Result<()
 }
 
 impl TaskStore {
+    /// Bounded, content-free discovery for one worker in this Hive.
+    ///
+    /// # Errors
+    /// Returns persistence or invalid-time errors; unavailable is not empty.
+    pub fn operator_submission_index(
+        &self,
+        worker: WorkerId,
+        now: i64,
+    ) -> Result<(Vec<OperatorSubmissionIndexEntry>, bool), TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::IntegrityFailure(
+                "invalid submission read time".into(),
+            ));
+        }
+        let connection = self.connection()?;
+        let mut query = connection.prepare("SELECT s.id,s.session_id,s.recorded_at,length(CAST(s.text AS BLOB))
+            FROM operator_submissions s JOIN worker_profiles w ON w.id=s.worker_id
+            JOIN local_hive_identity l ON l.hive_id=w.hive_id AND l.singleton=1
+            WHERE s.worker_id=?1 AND s.recorded_at>=?2 ORDER BY s.recorded_at DESC,s.id DESC LIMIT 11")?;
+        let mut entries = query
+            .query_map(
+                params![worker.to_string(), now.saturating_sub(90 * 86400)],
+                |row| {
+                    Ok(OperatorSubmissionIndexEntry {
+                        id: row
+                            .get::<_, String>(0)?
+                            .parse()
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                        session_id: row
+                            .get::<_, String>(1)?
+                            .parse()
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                        recorded_at: row.get(2)?,
+                        text_bytes: row.get(3)?,
+                    })
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        let more = entries.len() > 10;
+        entries.truncate(10);
+        Ok((entries, more))
+    }
+
+    /// Reads one retained authored source by exact ID, not a semantic match.
+    ///
+    /// # Errors
+    /// Returns storage or integrity errors instead of a false missing result.
+    pub fn authored_operator_submission(
+        &self,
+        id: OperatorSubmissionId,
+        now: i64,
+    ) -> Result<Option<AuthoredOperatorSubmission>, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::IntegrityFailure(
+                "invalid submission read time".into(),
+            ));
+        }
+        let connection = self.connection()?;
+        let source = connection
+            .query_row(
+                "SELECT s.worker_id,s.session_id,s.operator_id,s.text,s.recorded_at
+            FROM operator_submissions s JOIN worker_profiles w ON w.id=s.worker_id
+            JOIN local_hive_identity l ON l.hive_id=w.hive_id AND l.singleton=1
+            WHERE s.id=?1 AND s.recorded_at>=?2",
+                params![id.to_string(), now.saturating_sub(90 * 86400)],
+                |row| {
+                    Ok(AuthoredOperatorSubmission {
+                        id,
+                        worker_id: row
+                            .get::<_, String>(0)?
+                            .parse()
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                        session_id: row
+                            .get::<_, String>(1)?
+                            .parse()
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                        operator_id: row
+                            .get::<_, String>(2)?
+                            .parse()
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                        text: row.get(3)?,
+                        recorded_at: row.get(4)?,
+                    })
+                },
+            )
+            .optional()?;
+        if source
+            .as_ref()
+            .is_some_and(|source| !valid_operator_submission(&source.text))
+        {
+            return Err(TaskStoreError::IntegrityFailure(
+                "invalid authored submission".into(),
+            ));
+        }
+        Ok(source)
+    }
+
     /// Records a complete authored submission after explicit operator authentication.
     /// This does not deliver text, confirm consumption, or resolve any decision.
     /// Returns false on an exact retry; source content can never be overwritten.
@@ -175,6 +293,58 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn discovery_is_bounded_content_free_and_exact_reads_expire() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store.ensure_queen("/workspace").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let mut last = OperatorSubmissionId::new();
+        for now in 0..12 {
+            last = OperatorSubmissionId::new();
+            store
+                .record_operator_submission(last, session, "Private exact text", now)
+                .unwrap();
+        }
+        let (index, more) = store.operator_submission_index(worker.id, 12).unwrap();
+        assert!(more);
+        assert_eq!(index.len(), 10);
+        assert_eq!(index[0].id, last);
+        assert!(!serde_json::to_string(&index).unwrap().contains("Private"));
+        assert!(
+            store
+                .operator_submission_index(WorkerId::new(), 12)
+                .unwrap()
+                .0
+                .is_empty()
+        );
+        let source = store
+            .authored_operator_submission(last, 12)
+            .unwrap()
+            .unwrap();
+        assert_eq!(source.text, "Private exact text");
+        assert_eq!(source.session_id, session);
+        assert!(
+            store
+                .authored_operator_submission(OperatorSubmissionId::new(), 12)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .authored_operator_submission(last, 90 * 86400 + 12)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .operator_submission_index(worker.id, 90 * 86400 + 12)
+                .unwrap()
+                .0
+                .is_empty()
+        );
     }
 
     #[test]

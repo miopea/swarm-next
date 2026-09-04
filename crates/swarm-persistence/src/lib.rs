@@ -89,6 +89,7 @@ mod dogfood_evidence;
 mod operator_statements;
 mod operator_submissions;
 pub use operator_statements::{OperatorStatementError, VerifiedOperatorStatement};
+pub use operator_submissions::{AuthoredOperatorSubmission, OperatorSubmissionIndexEntry};
 mod night_watch;
 pub use dogfood_evidence::{EvidenceError, EvidenceWrite};
 mod passkeys;

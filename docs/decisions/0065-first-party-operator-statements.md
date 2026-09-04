@@ -153,6 +153,17 @@ stale completions cannot overwrite the latest submission status. Nothing is
 persisted in browser storage. A canceled request may already have committed on
 the server, so absence of an acknowledgement is stated as unconfirmed, not lost.
 
+`swarm_operator_submissions` provides a content-free index of the newest ten
+retained submissions for one local-Hive worker, defaulting to the caller. A full
+submission ID retrieves exact authored text and operator/worker/session/time.
+Both selectors together, prefixes, and agent-supplied source text are refused.
+Queen and other local workers share this read capability; it creates no evidence,
+decision resolution, terminal delivery, or control-room invalidation. Reads exclude
+sources older than 90 days even before admission-time pruning runs. The index
+reports whether more records exist; older records currently require their exact ID.
+Tool-surface revision 13 includes this tool and the statement selector added to
+`swarm_list_decisions`; existing sessions need their normal schema refresh.
+
 Verification reads return the statement and its scope, evidence status, and exact
 decision link when present. A full ID is required; no prefix lookup. Verified
 origin never expands the action authorized by the actual words. Preserve ADR 0054's

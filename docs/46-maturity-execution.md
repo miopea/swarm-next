@@ -6,6 +6,25 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P4: Queen and workers can discover and verify composer sources
+
+- Added the read-only `swarm_operator_submissions` tool: a content-free newest-ten
+  worker index followed by exact-ID authored-text verification. The standing brief
+  directs agents to check this source before asking the operator to repeat a relay.
+  Authorship remains distinct from delivery, decision resolution, and quoted-text
+  endorsement. No terminal input or control-room invalidation is emitted by reads.
+- Four native source-storage tests passed, covering bounded discovery, expiry,
+  immutability, capacity, and migration/reopen. Strict Linux-target API/persistence
+  Clippy passed. MCP tests cover discovery, exact reads, missing IDs, conflicting
+  selectors, shortened IDs, and forged source text; compiled, not executed here.
+- Tool-surface revision advanced to 13. The structural fingerprint was derived
+  from current schema/order and checked against the exact revision-12 fingerprint
+  using the same extraction on its historical source. This is not execution of
+  the Linux served-surface test; that gate remains required.
+- Native terminal and AskUser source capture, confirmed-consumption integration,
+  and full duplicate-question acceptance remain open. Older-than-index discovery
+  currently requires an exact ID. No release, deployment, or live-worker changes.
+
 ### P4: composer Send records authored source without waiting on HTTP
 
 - Connected composer Send to the explicit-credential source endpoint after local
