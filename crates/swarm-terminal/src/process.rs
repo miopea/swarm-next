@@ -3,7 +3,7 @@ use std::{
     io::{Read, Write},
     path::PathBuf,
     sync::{
-        Arc, Mutex, MutexGuard,
+        Arc, Mutex, MutexGuard, OnceLock,
         atomic::{AtomicBool, AtomicI64, Ordering},
     },
     thread::{self, JoinHandle},
@@ -13,8 +13,8 @@ use std::{
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 use swarm_domain::{
-    FederationStewardTakeoverLeaseId, ProviderKind, TerminalControlError, TerminalControlGrant,
-    TerminalControlIdentity, WorkerSessionId,
+    ConversationRecoveryAttempt, FederationStewardTakeoverLeaseId, ProviderKind,
+    TerminalControlError, TerminalControlGrant, TerminalControlIdentity, WorkerSessionId,
 };
 use thiserror::Error;
 use tokio::sync::watch;
@@ -120,6 +120,7 @@ pub struct SessionResourceState {
     pub resources: Option<crate::ProcessResourceSample>,
     /// Wall-clock second of this terminal's most recent output.
     pub last_output_at: i64,
+    pub recovery_attempt: Option<ConversationRecoveryAttempt>,
 }
 
 /// Seconds since the Unix epoch, saturating rather than panicking on a clock
@@ -132,6 +133,7 @@ fn unix_seconds() -> i64 {
 
 pub struct ProcessTerminalSession {
     id: WorkerSessionId,
+    recovery_attempt: OnceLock<ConversationRecoveryAttempt>,
     control: TerminalControlGate,
     control_changes: watch::Sender<()>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
@@ -286,6 +288,7 @@ impl ProcessTerminalSession {
         Ok(Self {
             id,
             control: TerminalControlGate::default(),
+            recovery_attempt: OnceLock::new(),
             control_changes: watch::channel(()).0,
             child: Mutex::new(child),
             writer: Mutex::new(writer),
@@ -303,6 +306,18 @@ impl ProcessTerminalSession {
     #[must_use]
     pub const fn id(&self) -> WorkerSessionId {
         self.id
+    }
+
+    /// Records startup provenance, not evidence of restored provider context.
+    /// Owned by this process incarnation and retained across browser/API reloads.
+    /// Returns false if a caller tries to replace already recorded provenance.
+    pub fn record_recovery_attempt(&self, attempt: ConversationRecoveryAttempt) -> bool {
+        self.recovery_attempt.set(attempt).is_ok()
+    }
+
+    #[must_use]
+    pub fn recovery_attempt(&self) -> Option<ConversationRecoveryAttempt> {
+        self.recovery_attempt.get().copied()
     }
 
     /// Writes input directly to the PTY master.
@@ -1120,6 +1135,7 @@ impl SessionRegistry {
                     running: session.is_running()?,
                     resources: session.resource_sample()?,
                     last_output_at: session.last_output_at(),
+                    recovery_attempt: session.recovery_attempt(),
                 })
             })
             .collect()
@@ -1783,6 +1799,36 @@ mod tests {
         ));
         registry.stop(first.id()).unwrap();
         assert!(registry.is_empty().unwrap());
+    }
+
+    #[test]
+    fn recovery_startup_provenance_is_owned_by_the_session_and_cannot_be_replaced() {
+        let root = env::temp_dir().canonicalize().unwrap();
+        let registry = SessionRegistry::new(JournalLimits::new(1024, 16), 1, [root]).unwrap();
+        let session = registry
+            .spawn(&shell_command("sleep 5"), TerminalSize::default())
+            .unwrap();
+        let swarm_domain::ConversationRecoveryState::Attempt { attempt } =
+            swarm_domain::ConversationRecovery::new(None, true).state()
+        else {
+            panic!("expected attempt");
+        };
+        assert!(session.record_recovery_attempt(attempt));
+        assert!(
+            !session.record_recovery_attempt(ConversationRecoveryAttempt {
+                number: 3,
+                ..attempt
+            })
+        );
+        assert_eq!(session.recovery_attempt(), Some(attempt));
+        let listed = registry.session_resource_states().unwrap();
+        assert_eq!(listed[0].recovery_attempt, Some(attempt));
+        // Reading again (as a replacement API would) neither consumes nor resets it.
+        assert_eq!(
+            registry.session_resource_states().unwrap()[0].recovery_attempt,
+            Some(attempt)
+        );
+        registry.stop(session.id()).unwrap();
     }
 
     #[test]

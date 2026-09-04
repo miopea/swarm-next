@@ -188,6 +188,20 @@ test("keeps the internal terminal id behind session details", () => {
   expect(screen.getByText("private-session-id").closest("details")).not.toHaveAttribute("open");
   expect(screen.getByText("Swarm terminal session")).toBeInTheDocument();
   expect(screen.getByText(/Claude or Codex conversation is separate/)).toBeInTheDocument();
+  expect(screen.queryByText(/Continuation fallback/)).not.toBeInTheDocument();
+});
+
+test("shows continuation provenance without claiming restoration and clears it for another session", () => {
+  const { rerender } = render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{
+    session_id: "recovery-session", running: true,
+    recovery_attempt: { recovery_id: "recovery-1", number: 2, step: { kind: "continue" } },
+  }} />);
+  expect(screen.getByText("Continuation fallback · see Session details")).toBeInTheDocument();
+  expect(screen.getByText(/Swarm has not verified which conversation was restored/).closest("details")).not.toHaveAttribute("open");
+  expect(screen.getByText("Recovery attempt 2 · recovery-1")).toBeInTheDocument();
+  rerender(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "normal-session", running: true }} />);
+  expect(screen.queryByText(/Continuation fallback/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Recovery attempt 2/)).not.toBeInTheDocument();
 });
 
 test("copies the internal terminal id only when the operator asks", async () => {

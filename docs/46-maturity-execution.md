@@ -469,6 +469,29 @@ Keep native browser capability gaps explicit. Record checks and evidence here.
   not claim the full recovery ladder or P2 complete.
 - No live worker changes, push, deployment, or release.
 
+### P2p: preserve and display recovery startup provenance
+
+- The actual fallback attempt token now travels from host selection into the
+  engine-owned session. A write-once value prevents later callers from replacing
+  that startup provenance. Session enumeration exposes it without terminal reads,
+  new polling, or coupling to browser/API lifetime.
+- The existing authorized session-list API forwards the optional metadata. Older
+  hosts remain readable with no field; omission is not restoration evidence.
+  No protocol request or provider invocation was added.
+- The terminal shows a compact continuation-fallback note, with startup detail
+  explaining that Swarm has not verified which conversation was restored. It
+  does not create a Needs You item, mark work failed, or claim a task resumed.
+  Switching to a normal session removes the note.
+- Verification: 21 terminal-view tests passed; TypeScript build checking passed;
+  78 Windows-compatible terminal-library tests passed, including optional-field
+  serialization. Strict all-target/all-feature Linux-target Clippy passed for
+  terminal and host, including compilation of the session-retention regression.
+  Linux-only tests were not executed. Rendered browser/device review remains open.
+- Persistence across engine replacement, authoritative provider outcome evidence,
+  final fresh fallback, and chosen-conversation switch tracking remain open.
+  This is startup provenance, not the completed recovery state machine.
+- No push, release, deployment, or live-worker restart.
+
 ### Verification environment update
 
 - Remote Linux reached read-only using SSH with forwarding disabled. The host has

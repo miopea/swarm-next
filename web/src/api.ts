@@ -220,7 +220,13 @@ export type ProcessResources = {
   process_tree_resident_memory_bytes?: number | null;
   process_tree_process_count?: number | null;
 };
-export type SessionSummary = { session_id: string; running: boolean; resources?: ProcessResources | null };
+/** Startup provenance, not confirmation that the provider restored context. */
+export type ConversationRecoveryAttempt = {
+  recovery_id: string;
+  number: number;
+  step: { kind: "exact"; conversation: string } | { kind: "continue" } | { kind: "fresh" };
+};
+export type SessionSummary = { session_id: string; running: boolean; resources?: ProcessResources | null; recovery_attempt?: ConversationRecoveryAttempt | null };
 export type SessionsResponse = { type: "sessions"; sessions: SessionSummary[] };
 export type SessionStartedResponse = { type: "session_started"; session_id: string };
 /** A provider release on disk that some running workers have not picked up. */

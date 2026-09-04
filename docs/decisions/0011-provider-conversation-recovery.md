@@ -66,8 +66,8 @@ probe's stderr is bounded and nonblocking; only the recognized exit-1 missing
 result is evidence of absence. Other outcomes retain the exact resume attempt.
 Confirmed missing exact context now selects native Continue through the domain
 transition, rather than the former direct missing-to-New branch. This is only
-startup selection: the full interactive ladder and visible fallback reporting
-remain incomplete. No process launch is treated as evidence of restoration.
+startup selection: the full interactive ladder remains incomplete. The terminal
+shows fallback startup provenance, not a claimed restoration outcome.
 
 ## Recovery operation contract (implementation in progress)
 
@@ -78,9 +78,12 @@ Late evidence from another attempt/operation is ignored. Exact restoration must
 match the chosen identity; continuation and fresh results remain distinguishable.
 An uncertain outcome requires resolution without starting a duplicate process.
 This bounded model is implemented and tested. The host uses its first transition
-for a confirmed missing exact conversation; retaining the operation through the
-interactive lifecycle, durable reporting, and provider outcome evidence remain
-unimplemented.
+for a confirmed missing exact conversation. Its attempt token is stored once on
+the engine-owned process session and exposed as optional session-list metadata.
+API/browser restarts can reread it without restarting the provider. Older hosts
+omit it, meaning unknown, not successful restoration. It is startup provenance,
+not mutable recovery outcome state. Persistence across engine replacement and
+provider outcome evidence remain unimplemented.
 
 Do not infer interactive continuation from a print-mode continuation probe:
 [Claude's session documentation](https://code.claude.com/docs/en/sessions)

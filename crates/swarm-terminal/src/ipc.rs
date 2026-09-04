@@ -328,6 +328,9 @@ pub struct HostSessionSummary {
     /// host that predates the field, so a rolling update stays compatible.
     #[serde(default)]
     pub last_output_at: Option<i64>,
+    /// Startup attempt only. Missing on older hosts; never implies restoration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_attempt: Option<swarm_domain::ConversationRecoveryAttempt>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -659,5 +662,31 @@ mod tests {
         assert_eq!(operator(&[3]), TerminalInputKind::Interrupt);
         assert_eq!(operator(b"\x1b[A"), TerminalInputKind::Navigation);
         assert_eq!(operator(&[4]), TerminalInputKind::Control);
+    }
+
+    #[test]
+    fn session_recovery_provenance_is_optional_and_round_trips() {
+        let id = WorkerSessionId::new();
+        let mut summary: HostSessionSummary = serde_json::from_value(serde_json::json!({
+            "session_id": id, "running": true
+        }))
+        .unwrap();
+        assert_eq!(summary.recovery_attempt, None);
+        assert!(
+            serde_json::to_value(&summary)
+                .unwrap()
+                .get("recovery_attempt")
+                .is_none()
+        );
+        let recovery = swarm_domain::ConversationRecovery::new(None, true);
+        let swarm_domain::ConversationRecoveryState::Attempt { attempt } = recovery.state() else {
+            panic!("expected continuation attempt");
+        };
+        summary.recovery_attempt = Some(attempt);
+        assert_eq!(
+            serde_json::from_value::<HostSessionSummary>(serde_json::to_value(&summary).unwrap())
+                .unwrap(),
+            summary
+        );
     }
 }

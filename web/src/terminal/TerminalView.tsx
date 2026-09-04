@@ -6,12 +6,12 @@ import type { TerminalController } from "./TerminalController";
 import { terminalWorkspace } from "./TerminalWorkspace";
 import { XtermSurface } from "./XtermSurface";
 import { chosenAttachment, dragCarriesFiles, terminalAttachmentPaste, terminalTextPaste, transferredAttachment, uploadTerminalAttachment } from "./TerminalAttachments";
-import type { QueenAutonomyLevel, QueenAutomationStatus } from "../api";
+import type { QueenAutonomyLevel, QueenAutomationStatus, SessionSummary } from "../api";
 import { queenAutonomyDetail, queenAutonomyLabel } from "../orchestration/queenAutonomyPresentation";
 import { queenAutomationCompactLabel, queenAutomationStateDetail, queenAutomationStateTone } from "../orchestration/queenAutomationPresentation";
 
 export interface TerminalViewProps {
-  session: { session_id: string; running: boolean };
+  session: SessionSummary;
   operatorToken: string;
   busy: boolean;
   canStop?: boolean;
@@ -304,11 +304,21 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
               <strong>Swarm terminal session</strong>
               <code>{session.session_id}</code>
               <small>This identifies the durable terminal for diagnostics. Your Claude or Codex conversation is separate.</small>
+              {session.recovery_attempt && <>
+                <strong>Conversation recovery startup</strong>
+                <small>{session.recovery_attempt.step.kind === "continue"
+                  ? "Started with provider-native continuation after the saved conversation was unavailable. Swarm has not verified which conversation was restored."
+                  : session.recovery_attempt.step.kind === "fresh"
+                    ? "Started with a fresh-context attempt. Prior conversation recovery is not confirmed; use the provider's resume command if needed."
+                    : "Started with the selected conversation. Process startup alone does not confirm restored context."}</small>
+                <small>Recovery attempt {session.recovery_attempt.number} · {session.recovery_attempt.recovery_id}</small>
+              </>}
               <button type="button" className="secondary-button" onClick={() => void copySessionId()}>{sessionCopyState === "copied" ? "Copied" : "Copy session ID"}</button>
               {sessionCopyState === "error" ? <small role="alert">Copy was blocked. Select the ID above to copy it manually.</small> : null}
             </div>
           </details>
           {detail && <small>{detail}</small>}
+          {session.recovery_attempt?.step.kind === "continue" && <small>Continuation fallback · see Session details</small>}
           {control !== "owned" && <small role="status">{control === "unsupported" ? "Viewing only · a safe worker-engine update is needed for terminal control." : control === "checking" ? "Checking terminal control…" : control === "elsewhere" ? "Viewing only · another view controls this terminal." : "Viewing only · ready to resume here."}</small>}
           {(control === "elsewhere" || control === "available") && <button type="button" className="secondary-button" onClick={() => controller.resumeHere()}>Resume Here</button>}
           {attachmentState !== "idle" && (

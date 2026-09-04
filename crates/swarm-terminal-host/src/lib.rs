@@ -9,8 +9,9 @@ use std::{
 
 use nix::unistd::Uid;
 use swarm_domain::{
-    ConversationRecovery, ConversationRecoveryEvidence, ConversationRecoveryState,
-    ConversationRecoveryStep, ProviderConversationId, ProviderKind, WorkerSessionId,
+    ConversationRecovery, ConversationRecoveryAttempt, ConversationRecoveryEvidence,
+    ConversationRecoveryState, ConversationRecoveryStep, ProviderConversationId, ProviderKind,
+    WorkerSessionId,
 };
 use swarm_terminal::{
     AlphaProviderAdapter, ClaudeCodeAdapter, ClaudeConversationStart, CodexAdapter, HostRequest,
@@ -33,6 +34,11 @@ use tracing::{info, warn};
 /// incident that left seventeen workers unstartable.
 const CONVERSATION_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 
+struct ClaudeStartSelection {
+    conversation: ClaudeConversationStart,
+    recovery_attempt: Option<ConversationRecoveryAttempt>,
+}
+
 /// Replaces a guess about Claude's history with Claude's own answer.
 ///
 /// ⚠️ THE ORACLE HAS TO RUN WHERE CLAUDE RUNS, WHICH IS WHY THIS LIVES IN THE
@@ -54,9 +60,12 @@ const CONVERSATION_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 fn conversation_claude_can_open(
     conversation: ClaudeConversationStart,
     holds_no_such_conversation: impl Fn(ProviderConversationId) -> bool,
-) -> ClaudeConversationStart {
+) -> ClaudeStartSelection {
     let ClaudeConversationStart::Resume { session_id } = conversation else {
-        return conversation;
+        return ClaudeStartSelection {
+            conversation,
+            recovery_attempt: None,
+        };
     };
     if holds_no_such_conversation(session_id) {
         let mut recovery = ConversationRecovery::new(Some(session_id), true);
@@ -72,10 +81,16 @@ fn conversation_claude_can_open(
                 attempt = attempt.number,
                 "Claude cannot restore the saved conversation; attempting native continuation, context not yet verified"
             );
-            return ClaudeConversationStart::Continue;
+            return ClaudeStartSelection {
+                conversation: ClaudeConversationStart::Continue,
+                recovery_attempt: Some(attempt),
+            };
         }
     }
-    conversation
+    ClaudeStartSelection {
+        conversation,
+        recovery_attempt: None,
+    }
 }
 
 /// Asks the real Claude, read-only.
@@ -540,29 +555,37 @@ fn dispatch_blocking(
             conversation,
             mcp_config,
             allow_outside_roots,
-        } => ClaudeCodeAdapter
-            .command_for_with_configuration(
-                &workspace,
-                conversation_claude_can_open(conversation, |session_id| {
-                    claude_holds_no_such_conversation(session_id, &workspace)
-                }),
-                mcp_config.as_deref(),
-                claude_settings_for(mcp_config.as_deref()).as_deref(),
-            )
-            .map_err(|error| error.to_string())
-            .and_then(|command| {
-                registry
-                    .spawn_provider_session(
-                        &command,
-                        size,
-                        allow_outside_roots,
-                        Some(ProviderKind::ClaudeCode),
-                    )
-                    .map_err(|error| error.to_string())
-            })
-            .map(|session| HostResponse::SessionStarted {
-                session_id: session.id(),
-            }),
+        } => {
+            let selection = conversation_claude_can_open(conversation, |session_id| {
+                claude_holds_no_such_conversation(session_id, &workspace)
+            });
+            ClaudeCodeAdapter
+                .command_for_with_configuration(
+                    &workspace,
+                    selection.conversation,
+                    mcp_config.as_deref(),
+                    claude_settings_for(mcp_config.as_deref()).as_deref(),
+                )
+                .map_err(|error| error.to_string())
+                .and_then(|command| {
+                    registry
+                        .spawn_provider_session(
+                            &command,
+                            size,
+                            allow_outside_roots,
+                            Some(ProviderKind::ClaudeCode),
+                        )
+                        .map_err(|error| error.to_string())
+                })
+                .map(|session| {
+                    if let Some(attempt) = selection.recovery_attempt {
+                        session.record_recovery_attempt(attempt);
+                    }
+                    HostResponse::SessionStarted {
+                        session_id: session.id(),
+                    }
+                })
+        }
         HostRequest::StartCodex {
             workspace,
             size,
@@ -625,6 +648,7 @@ fn dispatch_blocking(
                         running: state.running,
                         resources: state.resources,
                         last_output_at: Some(state.last_output_at),
+                        recovery_attempt: state.recovery_attempt,
                     })
                     .collect(),
             })
@@ -1307,7 +1331,8 @@ mod conversation_oracle_tests {
     fn missing_exact_conversation_attempts_native_continue_before_fresh() {
         let session_id = pinned();
         assert_eq!(
-            conversation_claude_can_open(ClaudeConversationStart::Resume { session_id }, |_| true),
+            conversation_claude_can_open(ClaudeConversationStart::Resume { session_id }, |_| true)
+                .conversation,
             ClaudeConversationStart::Continue,
             "missing exact context must not skip native continuation or reuse the pin for fresh context"
         );
@@ -1325,10 +1350,15 @@ mod conversation_oracle_tests {
                 true
             },
         );
+        let attempt = start
+            .recovery_attempt
+            .expect("fallback carries its attempt");
+        assert_eq!(attempt.number, 2);
+        assert_eq!(attempt.step, ConversationRecoveryStep::Continue);
         let command = ClaudeCodeAdapter
             .command_for_with_configuration(
                 Path::new("/workspace"),
-                start,
+                start.conversation,
                 Some(Path::new("/state/worker.json")),
                 Some(Path::new("/state/settings.json")),
             )
@@ -1355,7 +1385,8 @@ mod conversation_oracle_tests {
     fn anything_short_of_an_explicit_no_still_resumes() {
         let session_id = pinned();
         assert_eq!(
-            conversation_claude_can_open(ClaudeConversationStart::Resume { session_id }, |_| false),
+            conversation_claude_can_open(ClaudeConversationStart::Resume { session_id }, |_| false)
+                .conversation,
             ClaudeConversationStart::Resume { session_id },
             "an unanswered question is not an answer"
         );
@@ -1373,11 +1404,12 @@ mod conversation_oracle_tests {
             true
         };
         assert_eq!(
-            conversation_claude_can_open(ClaudeConversationStart::New { session_id }, spy),
+            conversation_claude_can_open(ClaudeConversationStart::New { session_id }, spy)
+                .conversation,
             ClaudeConversationStart::New { session_id }
         );
         assert_eq!(
-            conversation_claude_can_open(ClaudeConversationStart::Continue, spy),
+            conversation_claude_can_open(ClaudeConversationStart::Continue, spy).conversation,
             ClaudeConversationStart::Continue
         );
         assert!(
