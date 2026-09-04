@@ -26,7 +26,21 @@ pub(super) fn migrate_generation(
     if version >= super::TASK_DISPATCH_GENERATION_SCHEMA_VERSION {
         return Ok(());
     }
-    transaction.execute_batch("ALTER TABLE task_dispatches ADD COLUMN generation INTEGER NOT NULL DEFAULT 0 CHECK(typeof(generation) = 'integer' AND generation >= 0);")?;
+    let dispatches_exist: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+         WHERE type = 'table' AND name = 'task_dispatches')",
+        [],
+        |row| row.get(0),
+    )?;
+    let has_generation: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('task_dispatches')
+         WHERE name = 'generation')",
+        [],
+        |row| row.get(0),
+    )?;
+    if dispatches_exist && !has_generation {
+        transaction.execute_batch("ALTER TABLE task_dispatches ADD COLUMN generation INTEGER NOT NULL DEFAULT 0 CHECK(typeof(generation) = 'integer' AND generation >= 0);")?;
+    }
     transaction.pragma_update(
         None,
         "user_version",

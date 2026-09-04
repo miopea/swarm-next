@@ -11,7 +11,7 @@ pub(super) fn migrate(tx: &Transaction<'_>, version: i64) -> rusqlite::Result<()
         return Ok(());
     }
     tx.execute_batch(
-        "CREATE TABLE worker_startup_context (
+        "CREATE TABLE IF NOT EXISTS worker_startup_context (
         worker_id TEXT PRIMARY KEY REFERENCES worker_profiles(id) ON DELETE CASCADE,
         session_id TEXT NOT NULL UNIQUE,
         selected_conversation TEXT,
@@ -359,9 +359,25 @@ pub(super) fn migrate_selection(tx: &Transaction<'_>, version: i64) -> rusqlite:
     if version >= crate::CONVERSATION_SELECTION_SCHEMA_VERSION {
         return Ok(());
     }
-    tx.execute_batch("ALTER TABLE worker_startup_context ADD COLUMN selection_revision INTEGER NOT NULL DEFAULT 0 CHECK(selection_revision >= 0);
-        ALTER TABLE worker_startup_context ADD COLUMN selection_suspended INTEGER NOT NULL DEFAULT 0 CHECK(selection_suspended IN (0,1));
-        UPDATE worker_startup_context SET selection_suspended = 1;")?;
+    let has_revision: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('worker_startup_context')
+         WHERE name = 'selection_revision')",
+        [],
+        |row| row.get(0),
+    )?;
+    let has_suspended: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('worker_startup_context')
+         WHERE name = 'selection_suspended')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_revision {
+        tx.execute_batch("ALTER TABLE worker_startup_context ADD COLUMN selection_revision INTEGER NOT NULL DEFAULT 0 CHECK(selection_revision >= 0);")?;
+    }
+    if !has_suspended {
+        tx.execute_batch("ALTER TABLE worker_startup_context ADD COLUMN selection_suspended INTEGER NOT NULL DEFAULT 0 CHECK(selection_suspended IN (0,1));
+            UPDATE worker_startup_context SET selection_suspended = 1;")?;
+    }
     tx.pragma_update(
         None,
         "user_version",

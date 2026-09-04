@@ -4,6 +4,25 @@ Approved program: [scope and acceptance](45-daily-driver-maturity-plan.md).
 Branch: `codex/daily-driver-maturity`. Starting revision: `36420b3`.
 Local commits authorized; no push, deployment, releases, or live worker interruption.
 
+## Post-reconciliation migration replay closure — 2026-09-04
+
+- Closed the 39 failures exposed by the mainline reconciliation instead of
+  accepting them as permanent test debt. Schemas 125–134 now follow the
+  repository's established replay contract: additive tables and indexes are
+  idempotent, columns are added only when their owning table exists and the
+  column is absent, conversation-selection backfill runs only when its suspended
+  marker is introduced, and message-delivery backfill cannot duplicate receipts.
+- `RECENT_SCHEMA_STEPS` now records every published maturity migration from 124
+  through the combined Ops ceiling at 135. The ledger no longer jumps over ten
+  schema identities, and its probes/undo shapes cover multi-column migrations.
+- The 42-test Windows schema regression slice passes, as do the three previously
+  failing non-schema replay cases. A newly built Linux persistence harness then
+  passed all 524 tests, including the seven home/path cases that are not valid
+  Windows acceptance evidence.
+- This is migration and regression evidence, not a live database corruption or
+  restore drill. No operator database, worker, push, deployment or release was
+  touched.
+
 ## Mainline reconciliation checkpoint — 2026-09-04
 
 - Audited all 11 `origin/main` commits since the maturity branch diverged,
@@ -27,9 +46,8 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 - That broader Windows persistence run passed 485 tests and exposed 39 failures:
   32 are stale synthetic downgrade fixtures which leave maturity artifacts in a
   database whose `user_version` they rewind below those artifacts; seven are Linux
-  home/path expectations executed on Windows. This is recorded test debt rather
-  than claimed green evidence, and no failure is being hidden to call the merge
-  complete.
+  home/path expectations executed on Windows. The follow-up checkpoint above
+  closes those failures rather than hiding them to call the merge complete.
 - No push, deployment, release or live worker action was performed. This local
   combined branch is the dogfood candidate.
 

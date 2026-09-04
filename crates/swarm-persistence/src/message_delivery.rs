@@ -55,7 +55,7 @@ pub(super) fn migrate(tx: &rusqlite::Transaction<'_>, version: i64) -> rusqlite:
         return Ok(());
     }
     tx.execute_batch(
-        "CREATE TABLE task_message_deliveries (
+        "CREATE TABLE IF NOT EXISTS task_message_deliveries (
             message_id TEXT PRIMARY KEY REFERENCES task_messages(id) ON DELETE CASCADE,
             state TEXT NOT NULL CHECK(state IN
               ('queued','dispatching','delivered','uncertain','rejected','cancelled','resolved')),
@@ -67,8 +67,8 @@ pub(super) fn migrate(tx: &rusqlite::Transaction<'_>, version: i64) -> rusqlite:
             attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
             CHECK(state != 'dispatching' OR (claim_id IS NOT NULL AND session_id IS NOT NULL))
          );
-         CREATE INDEX task_message_deliveries_pending ON task_message_deliveries(state, message_id);
-         INSERT INTO task_message_deliveries(message_id, state, session_id, updated_at)
+         CREATE INDEX IF NOT EXISTS task_message_deliveries_pending ON task_message_deliveries(state, message_id);
+         INSERT OR IGNORE INTO task_message_deliveries(message_id, state, session_id, updated_at)
            SELECT id, CASE WHEN delivered_at IS NULL THEN 'queued' ELSE 'delivered' END,
                   delivered_session_id, COALESCE(delivered_at, created_at) FROM task_messages;",
     )?;

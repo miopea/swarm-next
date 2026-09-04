@@ -32,12 +32,12 @@ pub(super) fn migrate(tx: &Transaction<'_>, version: i64) -> rusqlite::Result<()
         return Ok(());
     }
     tx.execute_batch(
-        "CREATE TABLE browser_evidence (
+        "CREATE TABLE IF NOT EXISTS browser_evidence (
             capture_id TEXT PRIMARY KEY,
             hour INTEGER NOT NULL CHECK(hour >= 0 AND hour % 3600 = 0),
             payload TEXT NOT NULL CHECK(length(CAST(payload AS BLOB)) <= 4096)
         );
-        CREATE INDEX browser_evidence_hour ON browser_evidence(hour, capture_id);",
+        CREATE INDEX IF NOT EXISTS browser_evidence_hour ON browser_evidence(hour, capture_id);",
     )?;
     tx.pragma_update(None, "user_version", crate::DOGFOOD_EVIDENCE_SCHEMA_VERSION)
 }

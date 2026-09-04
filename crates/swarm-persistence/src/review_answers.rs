@@ -48,11 +48,23 @@ pub(super) fn migrate(tx: &rusqlite::Transaction<'_>, version: i64) -> rusqlite:
     if version >= crate::REVIEW_ANSWERS_SCHEMA_VERSION {
         return Ok(());
     }
-    tx.execute_batch(
-        "ALTER TABLE task_returned_reviews ADD COLUMN request_message_id TEXT REFERENCES task_messages(id);
-         ALTER TABLE task_returned_reviews ADD COLUMN request_worker_id TEXT REFERENCES worker_profiles(id);
-         ALTER TABLE task_returned_reviews ADD COLUMN answer_message_id TEXT REFERENCES task_messages(id);",
-    )?;
+    for (column, definition) in [
+        ("request_message_id", "TEXT REFERENCES task_messages(id)"),
+        ("request_worker_id", "TEXT REFERENCES worker_profiles(id)"),
+        ("answer_message_id", "TEXT REFERENCES task_messages(id)"),
+    ] {
+        let present: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('task_returned_reviews')
+             WHERE name = ?1)",
+            [column],
+            |row| row.get(0),
+        )?;
+        if !present {
+            tx.execute_batch(&format!(
+                "ALTER TABLE task_returned_reviews ADD COLUMN {column} {definition};"
+            ))?;
+        }
+    }
     tx.pragma_update(None, "user_version", crate::REVIEW_ANSWERS_SCHEMA_VERSION)
 }
 

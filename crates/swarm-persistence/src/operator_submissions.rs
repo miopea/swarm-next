@@ -30,14 +30,14 @@ pub(super) fn migrate(tx: &Transaction<'_>, version: i64) -> rusqlite::Result<()
         return Ok(());
     }
     tx.execute_batch(
-        "CREATE TABLE operator_submissions (
+        "CREATE TABLE IF NOT EXISTS operator_submissions (
         id TEXT PRIMARY KEY,
         worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
         session_id TEXT NOT NULL REFERENCES worker_sessions(session_id),
         operator_id TEXT NOT NULL,
         text TEXT NOT NULL CHECK(length(CAST(text AS BLOB)) BETWEEN 1 AND 65536),
         recorded_at INTEGER NOT NULL CHECK(recorded_at >= 0)
-    ); CREATE INDEX operator_submissions_time ON operator_submissions(recorded_at, id);",
+    ); CREATE INDEX IF NOT EXISTS operator_submissions_time ON operator_submissions(recorded_at, id);",
     )?;
     tx.pragma_update(
         None,

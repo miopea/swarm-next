@@ -31,10 +31,10 @@ pub(super) fn migrate_resolutions(tx: &Transaction<'_>, version: i64) -> rusqlit
     if version >= crate::OPERATOR_STATEMENT_RESOLUTIONS_SCHEMA_VERSION {
         return Ok(());
     }
-    tx.execute_batch("CREATE TABLE operator_statement_resolutions (
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS operator_statement_resolutions (
         statement_id TEXT PRIMARY KEY REFERENCES operator_statements(id) ON DELETE CASCADE,
         decision_id TEXT NOT NULL REFERENCES decision_requests(id) ON DELETE CASCADE
-    ); CREATE INDEX operator_statement_resolution_decision ON operator_statement_resolutions(decision_id);")?;
+    ); CREATE INDEX IF NOT EXISTS operator_statement_resolution_decision ON operator_statement_resolutions(decision_id);")?;
     tx.pragma_update(
         None,
         "user_version",
@@ -61,7 +61,7 @@ pub(super) fn migrate(tx: &Transaction<'_>, version: i64) -> rusqlite::Result<()
         return Ok(());
     }
     tx.execute_batch(
-        "CREATE TABLE operator_statements (
+        "CREATE TABLE IF NOT EXISTS operator_statements (
             id TEXT PRIMARY KEY,
             decision_id TEXT NOT NULL REFERENCES decision_requests(id) ON DELETE CASCADE,
             worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
@@ -71,7 +71,7 @@ pub(super) fn migrate(tx: &Transaction<'_>, version: i64) -> rusqlite::Result<()
             answer TEXT NOT NULL CHECK(length(CAST(answer AS BLOB)) BETWEEN 1 AND 16384),
             recorded_at INTEGER NOT NULL CHECK(recorded_at >= 0)
         );
-        CREATE INDEX operator_statements_decision ON operator_statements(decision_id, recorded_at);"
+        CREATE INDEX IF NOT EXISTS operator_statements_decision ON operator_statements(decision_id, recorded_at);"
     )?;
     tx.pragma_update(
         None,

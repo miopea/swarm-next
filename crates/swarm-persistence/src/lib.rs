@@ -8646,6 +8646,74 @@ mod tests {
             undo_sql: "",
             probe_sql: "",
         },
+        // 125-134. These entries make the migration ledger match every
+        // published maturity schema instead of jumping from 124 to 135.
+        SchemaStep {
+            table: "operator_night_watch",
+            artifact: "",
+            undo_sql: "",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "browser_evidence",
+            artifact: "",
+            undo_sql: "",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "worker_startup_context",
+            artifact: "",
+            undo_sql: "",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "worker_startup_context",
+            artifact: "selection_revision",
+            undo_sql: "ALTER TABLE worker_startup_context DROP COLUMN selection_suspended;
+                       ALTER TABLE worker_startup_context DROP COLUMN selection_revision",
+            probe_sql: "SELECT (SELECT COUNT(*) FROM pragma_table_info('worker_startup_context')
+                 WHERE name IN ('selection_revision','selection_suspended')) = 2",
+        },
+        SchemaStep {
+            table: "task_dispatches",
+            artifact: "generation",
+            undo_sql: "",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "operator_statements",
+            artifact: "",
+            undo_sql: "",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "operator_statement_resolutions",
+            artifact: "",
+            undo_sql: "",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "operator_submissions",
+            artifact: "",
+            undo_sql: "",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "task_returned_reviews",
+            artifact: "request_message_id",
+            undo_sql: "DROP TABLE IF EXISTS task_message_deliveries;
+                       ALTER TABLE task_returned_reviews DROP COLUMN answer_message_id;
+                       ALTER TABLE task_returned_reviews DROP COLUMN request_worker_id;
+                       ALTER TABLE task_returned_reviews DROP COLUMN request_message_id",
+            probe_sql: "SELECT (SELECT COUNT(*) FROM pragma_table_info('task_returned_reviews')
+                 WHERE name IN ('request_message_id','request_worker_id','answer_message_id')) = 3",
+        },
+        SchemaStep {
+            table: "task_message_deliveries",
+            artifact: "",
+            undo_sql: "",
+            probe_sql: "",
+        },
         // 135 after integration. Additive provenance preserves existing task
         // and activity rows; 124-134 belong to the maturity branch migrations.
         SchemaStep {
