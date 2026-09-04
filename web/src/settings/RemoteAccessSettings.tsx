@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
+import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
 import { readTunnel, startTunnel, stopTunnel, type TunnelStatus } from "../api";
 
@@ -39,16 +40,15 @@ export default function RemoteAccessSettings({ busy, operatorToken, status: shar
     onStatusChange?.(next);
   }, [onStatusChange]);
 
-  const refresh = useCallback(async () => {
+  const readStatus = useCallback(async (signal: AbortSignal) => {
     try {
-      setStatus(await readTunnel(operatorToken));
+      const next = await readTunnel(operatorToken, signal);
+      if (!signal.aborted) setStatus(next);
     } catch {
       // A Hive that cannot answer shows the card as unavailable rather than
       // raising an error about a feature the operator may never use.
     }
   }, [operatorToken, setStatus]);
-
-  useEffect(() => { void refresh(); }, [refresh]);
 
   // Keep asking while the address is being checked.
   //
@@ -58,11 +58,7 @@ export default function RemoteAccessSettings({ busy, operatorToken, status: shar
   // up or the tunnel was stopped for never serving. An asynchronous answer
   // nobody reads is not an answer.
   const awaitingAddress = status?.running === true && status.serving === false;
-  useEffect(() => {
-    if (!awaitingAddress) return undefined;
-    const timer = window.setInterval(() => { void refresh(); }, 2_000);
-    return () => window.clearInterval(timer);
-  }, [awaitingAddress, refresh]);
+  useVisiblePolling(readStatus, !working, awaitingAddress ? 2_000 : null);
 
   async function run(action: (token: string) => Promise<TunnelStatus>, failure: string) {
     setWorking(true);
@@ -71,7 +67,6 @@ export default function RemoteAccessSettings({ busy, operatorToken, status: shar
       setStatus(await action(operatorToken));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : failure);
-      await refresh();
     } finally {
       setWorking(false);
     }

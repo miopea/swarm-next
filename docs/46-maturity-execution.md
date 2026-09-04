@@ -6,6 +6,22 @@ Local commits authorized; no push, deployment, releases, or live worker interrup
 
 ## Cross-phase regression checkpoint — 2026-09-04
 
+### P3: bounded temporary-address polling
+
+- Replaced the settings card's independent two-second reads with the shared
+  visible-page polling owner. Slow reads coalesce; hide, unmount and a start/stop
+  operation cancel the outstanding read. Abandoned responses cannot publish
+  status. Returning to the page or completing an operation refreshes status;
+  recurring reads stop once the address is no longer being checked.
+- All 16 remote-access/polling tests passed, including slow reads, hidden-tab
+  cancellation and a late response during a start operation. Updated the start
+  fixture to retain its successful state on subsequent reads. Production web
+  build and diff checks passed; the existing terminal chunk warning remains.
+- Before this delta, the full frontend checkpoint at `ca1439e` passed 1,042
+  tests across 125 files in 107.42 seconds. This is regression evidence, not a
+  measured improvement in whole-app CPU or long-session responsiveness.
+- No push, deployment, release or live worker interruption.
+
 ### P3: feedback editing no longer amplifies readiness traffic
 
 - Source inspection confirmed normal diagnostics already share the App resource

@@ -1,10 +1,39 @@
-import { cleanup, render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import RemoteAccessSettings from "./RemoteAccessSettings";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 beforeEach(() => vi.restoreAllMocks());
+
+test("address polling coalesces slow reads and discards hidden-tab results", async () => {
+  vi.useFakeTimers();
+  let visibility: DocumentVisibilityState = "visible";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+  const checking = { available: true, running: true, serving: false, error: null, url: null, started_at: 1, qr_svg: null };
+  const signals: AbortSignal[] = [];
+  let finish!: (result: ReturnType<typeof reply>) => void;
+  const fetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+    signals.push(init!.signal!);
+    return new Promise<ReturnType<typeof reply>>((resolve) => { finish = resolve; });
+  });
+  vi.stubGlobal("fetch", fetch);
+  const changed = vi.fn();
+  const view = render(<RemoteAccessSettings busy={false} operatorToken="token" status={checking} onStatusChange={changed} />);
+  await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
+  expect(fetch).toHaveBeenCalledTimes(1);
+  visibility = "hidden";
+  act(() => document.dispatchEvent(new Event("visibilitychange")));
+  expect(signals[0].aborted).toBe(true);
+  await act(async () => { finish(reply(checking)); await vi.advanceTimersByTimeAsync(10_000); });
+  expect(changed).not.toHaveBeenCalled();
+  expect(fetch).toHaveBeenCalledTimes(1);
+  visibility = "visible";
+  await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+  expect(fetch).toHaveBeenCalledTimes(2);
+  view.unmount();
+  expect(signals[1].aborted).toBe(true);
+});
 
 function reply(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
@@ -27,10 +56,13 @@ test("says what is missing when cloudflared is not installed", async () => {
  * silently stops working.
  */
 test("shows the address with a QR and says the address will not last", async () => {
-  vi.stubGlobal("fetch", vi.fn(async (url: string) =>
-    reply(String(url).includes("/start")
+  let started = false;
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (String(url).includes("/start")) started = true;
+    return reply(started
       ? { available: true, running: true, serving: true, error: null, url: "https://neat-lion.trycloudflare.com", started_at: 1787452543, qr_svg: "<svg role='img'></svg>" }
-      : { available: true, running: false, serving: false, error: null, url: null, started_at: null, qr_svg: null })));
+      : { available: true, running: false, serving: false, error: null, url: null, started_at: null, qr_svg: null });
+  }));
 
   render(<RemoteAccessSettings busy={false} operatorToken="secret" />);
   fireEvent.click(await screen.findByRole("button", { name: "Open on my phone" }));
@@ -40,6 +72,32 @@ test("shows the address with a QR and says the address will not last", async () 
   expect(screen.getByText(/This address is temporary/)).toBeInTheDocument();
   expect(screen.getByText(/will not follow it/)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Stop sharing" })).toBeInTheDocument();
+});
+
+test("starting cancels an older status read and ignores its late result", async () => {
+  const stopped = { available: true, running: false, serving: false, error: null, url: null, started_at: null, qr_svg: null };
+  const live = { ...stopped, running: true, serving: true, url: "https://live.trycloudflare.com" };
+  let finishRead!: (response: Response) => void;
+  let finishStart!: (response: Response) => void;
+  let readSignal!: AbortSignal;
+  let reads = 0;
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith("/start")) return new Promise<Response>((resolve) => { finishStart = resolve; });
+    if (reads++ > 0) return Promise.resolve(reply(live));
+    readSignal = init!.signal!;
+    return new Promise<Response>((resolve) => { finishRead = resolve; });
+  }));
+  const changed = vi.fn();
+  render(<RemoteAccessSettings busy={false} operatorToken="token" onStatusChange={changed} />);
+  await waitFor(() => expect(finishRead).toBeDefined());
+  fireEvent.click(screen.getByRole("button", { name: "Open on my phone" }));
+  expect(readSignal.aborted).toBe(true);
+  await act(async () => { finishRead(reply(stopped)); });
+  expect(changed).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Opening the address…" })).toBeDisabled();
+  await act(async () => { finishStart(reply(live)); });
+  expect(await screen.findByRole("link", { name: live.url! })).toBeInTheDocument();
+  expect(changed).toHaveBeenCalledWith(live);
 });
 
 test("never puts the operator token in the shared address", async () => {
