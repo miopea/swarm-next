@@ -8,6 +8,23 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Blocked recovery and API-preserved Queen reviews (September 5)
+
+Live inspection found 31 Blocked tasks with recorded notes, but only one with
+explicit prerequisite edges; 13 had no assignee. These are measurements, not
+permission to infer dependencies or bulk-unblock work. Queen automation was
+Uncertain. Source inspection found API startup invalidated even confirmed
+Running reviews while the independent Queen session remained open.
+Recovery now preserves that confirmed run only for its exact open session;
+unconfirmed delivery and missing/ended sessions still become Uncertain. All
+33 conductor tests passed in the isolated Linux workspace, including preserved
+run identity, duplicate-run refusal, continued autonomy restrictions, exact
+session replacement, missing identity and interrupted delivery. Live acceptance
+of this recovery fix remains open. Full QUEUE-01/QUEEN-02 remain incomplete:
+cleared blockers must return through Ready, actionable queue ordering must be
+reconciled by Queen, and genuine operator decisions need concise cause/action
+copy with supporting history collapsed, not a prose-only recovery mechanism.
+
 ### Blocked work can return to Ready (September 5)
 
 The operator found that Tasks offered only Resume work, which requested Active
@@ -16,7 +33,9 @@ blocked-task action now says Mark ready and requests the existing Blocked-to-Rea
 transition. It does not request activation or worker startup; unresolved
 prerequisites still prevent the action. The one-active-task guard is unchanged.
 TypeScript and all 50 TaskBoard tests passed, including same-worker active work
-and a sleeping assignee. Deployment and live isolated-demo acceptance remain open.
+and a sleeping assignee; the full frontend suite passed 1,181 tests. Commit
+`9a2d1570` deployed successfully with healthy API and unchanged engine build
+identity. Live isolated-demo acceptance remains open.
 
 ### Paired cold-return attribution (September 5, 20:03 UTC)
 

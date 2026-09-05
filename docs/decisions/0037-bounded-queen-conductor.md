@@ -38,6 +38,12 @@ Delivery and completion are durable:
   provider output or a fresh resting prompt to prove that Enter was consumed;
 - a crash before confirmed delivery becomes **uncertain** and is never silently
   replayed;
+- an API restart preserves a confirmed Running review bound to its exact,
+  still-open worker-session record. The terminal host owns that execution;
+  replacing the API does not undo delivery evidence. A missing or ended session
+  still enters recovery, and unconfirmed Delivering always becomes Uncertain.
+  This does not declare the review completed, extend its deadline, or permit a
+  duplicate run. Existing session reconciliation and completion rules remain;
 - a running marker expires to **uncertain** after one hour rather than assuming
   completion;
 - repeated observations of the same actionable fingerprint do not create

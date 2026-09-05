@@ -624,7 +624,7 @@ impl TaskStore {
         Ok(policy.permits(presence, action, false))
     }
 
-    /// Converts API-interrupted delivery or execution into explicit uncertainty without replay.
+    /// Recovers interrupted delivery without invalidating a confirmed review on a live session.
     ///
     /// # Errors
     /// Returns an error when the durable marker cannot be recovered.
@@ -633,7 +633,12 @@ impl TaskStore {
         let transaction = connection.transaction()?;
         let changed = transaction.execute(
             "UPDATE queen_automation SET state = 'uncertain', updated_at = unixepoch()
-             WHERE state IN ('delivering', 'running')",
+             WHERE state = 'delivering'
+                OR (state = 'running' AND NOT EXISTS (
+                    SELECT 1 FROM worker_sessions session
+                    WHERE session.session_id = queen_automation.delivery_session_id
+                      AND session.ended_at IS NULL
+                ))",
             [],
         )?;
         if changed > 0 {
@@ -1850,7 +1855,7 @@ mod tests {
     }
 
     #[test]
-    fn api_restart_recovers_a_running_review_for_operator_retry() {
+    fn api_restart_preserves_a_confirmed_review_on_the_same_live_session() {
         let store = TaskStore::in_memory().unwrap();
         let queen = store.ensure_queen("/workspace/queen").unwrap();
         store
@@ -1865,17 +1870,73 @@ mod tests {
                 .unwrap()
         );
 
-        assert_eq!(store.recover_inflight_queen_automation().unwrap(), 1);
+        assert_eq!(store.recover_inflight_queen_automation().unwrap(), 0);
         let interrupted = store.queen_automation_status(13).unwrap();
-        assert_eq!(interrupted.state, QueenAutomationState::Uncertain);
+        assert_eq!(interrupted.state, QueenAutomationState::Running);
         assert_eq!(
             interrupted.run_id.as_deref(),
             Some(original_run_id.as_str())
         );
 
-        let resumed = store.request_queen_automation_run(14).unwrap();
-        assert_eq!(resumed.state, QueenAutomationState::Queued);
-        assert_eq!(resumed.run_id.as_deref(), Some(original_run_id.as_str()));
+        assert!(store.claim_queen_automation(14).unwrap().is_none());
+        assert!(store.request_queen_automation_run(14).is_err());
+        assert!(
+            !store
+                .queen_automation_permits(QueenActionClass::ExternalSideEffect, 14)
+                .unwrap()
+        );
+        assert_eq!(
+            store
+                .finish_queen_automation_run(
+                    &original_run_id,
+                    QueenAutomationOutcome::Completed,
+                    15
+                )
+                .unwrap(),
+            QueenAutomationFinish::Closed
+        );
+    }
+
+    #[test]
+    fn api_restart_does_not_preserve_a_confirmed_review_without_its_live_session() {
+        for missing_identity in [false, true] {
+            let store = TaskStore::in_memory().unwrap();
+            let queen = store.ensure_queen("/workspace/queen").unwrap();
+            let session = WorkerSessionId::new();
+            store.bind_worker_session(queen.id, session).unwrap();
+            store.request_queen_automation_run(10).unwrap();
+            let delivery = store.claim_queen_automation(11).unwrap().unwrap();
+            store
+                .complete_queen_automation_delivery(&delivery.run_id, 12)
+                .unwrap();
+            if missing_identity {
+                store
+                    .connection()
+                    .unwrap()
+                    .execute(
+                        "UPDATE queen_automation SET delivery_session_id = NULL WHERE id = 1",
+                        [],
+                    )
+                    .unwrap();
+            } else {
+                store.release_worker_session(session).unwrap();
+                store
+                    .bind_worker_session(queen.id, WorkerSessionId::new())
+                    .unwrap();
+            }
+            assert_eq!(store.recover_inflight_queen_automation().unwrap(), 1);
+            assert_eq!(store.recover_inflight_queen_automation().unwrap(), 0);
+            let state: String = store
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT state FROM queen_automation WHERE id = 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(state, "uncertain");
+        }
     }
 
     #[test]
