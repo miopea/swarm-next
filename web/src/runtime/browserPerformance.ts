@@ -1,5 +1,5 @@
 /** Browser-owned, content-free evidence. Never pass input or terminal bytes here. */
-export const BROWSER_METRICS = ["long_task", "interaction", "route", "terminal_render", "terminal_reconnect"] as const;
+export const BROWSER_METRICS = ["long_task", "interaction", "route", "terminal_render", "terminal_reconnect", "terminal_grant", "terminal_socket", "terminal_restore"] as const;
 export type BrowserMetric = typeof BROWSER_METRICS[number];
 type Aggregate = { count: number; total_ms: number; max_ms: number };
 type Bucket = { at: number; metrics: Partial<Record<BrowserMetric, Aggregate>> };

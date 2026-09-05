@@ -8,6 +8,25 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Reconnect phase attribution (September 5)
+
+Terminal connection capture now separates grant acquisition, WebSocket opening,
+and open-to-applied-initial-state using the existing recorder and hourly Dogfood
+pipeline. Captures contain only the allowlisted metric and numeric timing;
+ownership, retries, snapshots, provider sessions and input are unchanged. Hidden
+or suspended intervals discard pending phases and total-connection timing.
+Completed phase attempts can outnumber completed connections; the UI explains
+that phase means are not additive and initial state overlaps apply latency.
+Older pending/stored captures read as zero samples for new fields, never zero
+latency. ADR 0063 records ownership and expiry of this additive compatibility.
+
+The final frontend run passed 1,153 tests across 130 files; the project TypeScript
+check passed. Isolated Linux checks passed five domain, four persistence and
+three API evidence tests, including phase round-trip, regression rejection,
+old-capture defaults and existing privacy/authentication/retention constraints.
+Deployment and actual demo phase measurements remain pending. This instrumentation
+does not by itself close PERF-01/02 or establish a reconnect cause.
+
 ### Performance measurement integrity (September 5)
 
 The 17:48Z diagnostic-tab report on frontend a8e84036 / API cd7db41f

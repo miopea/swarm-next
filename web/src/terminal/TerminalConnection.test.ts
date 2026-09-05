@@ -373,8 +373,60 @@ test("terminal timing records duration without session identity or content", asy
   sockets[0].message(snapshotFrame(0n, 24, 80, "private terminal text"));
   await vi.waitFor(() => expect(handlers.onSnapshot).toHaveBeenCalled());
   expect(record).toHaveBeenCalledWith("terminal_reconnect", 50);
+  expect(record).toHaveBeenCalledWith("terminal_grant", 0);
+  expect(record).toHaveBeenCalledWith("terminal_socket", 0);
+  expect(record).toHaveBeenCalledWith("terminal_restore", 50);
   expect(record).toHaveBeenCalledWith("terminal_render", 0);
   expect(JSON.stringify(record.mock.calls)).not.toMatch(/private|session-1|secret/);
+  connection.dispose();
+});
+
+test("attach phases separate access, socket and applied initial state", async () => {
+  const record = vi.spyOn(browserPerformance, "record");
+  const clock = vi.spyOn(performance, "now").mockReturnValue(100);
+  const { connection, fetch, handlers, sockets } = harness();
+  let grant!: (response: unknown) => void;
+  const response = await fetch();
+  fetch.mockReturnValueOnce(new Promise((resolve) => { grant = resolve; }));
+  let apply!: () => void;
+  handlers.onSnapshot = vi.fn(() => new Promise<void>((resolve) => { apply = resolve; }));
+  connection.start(handlers);
+  clock.mockReturnValue(150);
+  grant(response);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  clock.mockReturnValue(230);
+  sockets[0].open();
+  clock.mockReturnValue(300);
+  sockets[0].message(snapshotFrame(0n, 24, 80, "private"));
+  await vi.waitFor(() => expect(handlers.onSnapshot).toHaveBeenCalled());
+  expect(record).not.toHaveBeenCalledWith("terminal_restore", expect.anything());
+  clock.mockReturnValue(350);
+  apply();
+  await vi.waitFor(() => expect(record).toHaveBeenCalledWith("terminal_restore", 120));
+  expect(record).toHaveBeenCalledWith("terminal_grant", 50);
+  expect(record).toHaveBeenCalledWith("terminal_socket", 80);
+  expect(record).toHaveBeenCalledWith("terminal_reconnect", 250);
+  connection.dispose();
+});
+
+test("hidden initial restoration does not become a foreground reconnect sample", async () => {
+  const record = vi.spyOn(browserPerformance, "record");
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  const { connection, handlers, sockets } = harness();
+  let apply!: () => void;
+  handlers.onSnapshot = vi.fn(() => new Promise<void>((resolve) => { apply = resolve; }));
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(0n, 24, 80, "screen"));
+  await vi.waitFor(() => expect(handlers.onSnapshot).toHaveBeenCalled());
+  visibility.mockReturnValue("hidden");
+  document.dispatchEvent(new Event("visibilitychange"));
+  visibility.mockReturnValue("visible");
+  apply();
+  await vi.waitFor(() => expect(handlers.onState).toHaveBeenCalledWith("connected", undefined));
+  expect(record).not.toHaveBeenCalledWith("terminal_restore", expect.anything());
+  expect(record).not.toHaveBeenCalledWith("terminal_reconnect", expect.anything());
   connection.dispose();
 });
 

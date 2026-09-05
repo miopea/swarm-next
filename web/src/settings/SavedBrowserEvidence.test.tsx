@@ -8,7 +8,8 @@ afterEach(() => { cleanup(); vi.resetAllMocks(); });
 function capture(build: string, count: number, total: number): BrowserEvidenceHour {
   const timing = { count: 0, total_ms: 0, max_ms: 0 };
   return { capture_id: "id", build, hour: 3600, revision: 1, long_task: timing, interaction: timing,
-    route: { count, total_ms: total, max_ms: total / count }, terminal_render: timing, terminal_reconnect: timing };
+    route: { count, total_ms: total, max_ms: total / count }, terminal_render: timing, terminal_reconnect: timing,
+    terminal_grant: timing, terminal_socket: timing, terminal_restore: timing };
 }
 
 test("build summaries use sample-weighted means and separate builds", () => {

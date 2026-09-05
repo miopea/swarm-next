@@ -38,6 +38,9 @@ export class HourlyBrowserEvidence {
         route: { count: 0, total_ms: 0, max_ms: 0 },
         terminal_render: { count: 0, total_ms: 0, max_ms: 0 },
         terminal_reconnect: { count: 0, total_ms: 0, max_ms: 0 },
+        terminal_grant: { count: 0, total_ms: 0, max_ms: 0 },
+        terminal_socket: { count: 0, total_ms: 0, max_ms: 0 },
+        terminal_restore: { count: 0, total_ms: 0, max_ms: 0 },
       };
       this.#pending.push(capture);
       this.#current = capture;
@@ -126,7 +129,11 @@ function validateCapture(input: unknown, now: number): BrowserEvidenceHour | und
     || !Number.isSafeInteger(value.revision) || value.revision < 1 || value.revision > 0xffff_ffff) return undefined;
   const result = { capture_id: value.capture_id, build: value.build, hour: value.hour, revision: value.revision } as BrowserEvidenceHour;
   for (const metric of BROWSER_METRICS) {
-    const timing = value[metric];
+    // Old pending captures predate phase collection. Absence means no samples,
+    // never zero latency. This reader owns compatibility until 24h expiry has
+    // removed captures from the last supported pre-phase build.
+    const phase = metric === "terminal_grant" || metric === "terminal_socket" || metric === "terminal_restore";
+    const timing = value[metric] === undefined && phase ? { count: 0, total_ms: 0, max_ms: 0 } : value[metric];
     if (!timing || !Number.isSafeInteger(timing.count) || timing.count < 0 || timing.count > MAX_SAMPLES
       || !Number.isSafeInteger(timing.total_ms) || timing.total_ms < 0
       || !Number.isSafeInteger(timing.max_ms) || timing.max_ms < 0 || timing.max_ms > MAX_AGE_MS

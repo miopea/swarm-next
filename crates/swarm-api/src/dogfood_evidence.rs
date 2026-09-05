@@ -141,6 +141,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn phase_evidence_round_trips_and_rejects_regression() {
+        let app = app(true);
+        let mut value: serde_json::Value = serde_json::from_str(&payload()).unwrap();
+        for name in ["terminal_grant", "terminal_socket", "terminal_restore"] {
+            value[name] = serde_json::json!({"count":1,"total_ms":25,"max_ms":25});
+        }
+        let response = app
+            .clone()
+            .oneshot(request("POST", true, value.to_string()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = app
+            .clone()
+            .oneshot(request("GET", true, String::new()))
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        for name in ["terminal_grant", "terminal_socket", "terminal_restore"] {
+            assert_eq!(saved[0][name], value[name]);
+        }
+        value["revision"] = serde_json::json!(2);
+        value["terminal_restore"] = serde_json::json!({"count":0,"total_ms":0,"max_ms":0});
+        let response = app
+            .oneshot(request("POST", true, value.to_string()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
     async fn evidence_is_private_bounded_and_retry_safe() {
         let app = app(true);
         for updated in [true, false] {

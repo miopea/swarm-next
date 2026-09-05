@@ -16,6 +16,21 @@ duration must be possible for the number of appended samples. A same-revision
 retry with different contents is a conflict, not an overwrite.
 Fixed allowlisted metrics are
 long tasks, interaction, navigation, terminal paint, and terminal reconnect.
+The September 5 phase extension adds terminal grant acquisition (request through
+validated response), socket opening (construction through open), and initial
+state (open through applied canonical state). These use the same bounded numeric
+aggregates and owner. Completed phase attempts need not have a completed overall
+connection, and initial state overlaps terminal apply latency; means must not be
+summed or presented as matched end-to-end traces. Visibility loss or view
+suspension discards in-flight phase and total-connection timings. No session IDs,
+grant values, transport paths, or contents enter these measurements.
+
+The evidence reader defaults absent phase aggregates to zero **samples** for
+retained pre-extension records and older clients, not a measured zero duration.
+It owns this additive compatibility for the 90-day retention / supported-client
+window; remove defaults only after both have aged out. Frontend pending-capture
+restore likewise accepts missing phases for its 24-hour queue window. No new
+database table, timer, retention budget, or external export is introduced.
 No arbitrary labels, prompts, paths, input, errors, screenshots, or timestamps for
 individual actions are accepted. Zero samples differ from a zero duration.
 

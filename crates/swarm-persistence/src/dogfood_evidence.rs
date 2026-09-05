@@ -169,6 +169,9 @@ mod tests {
             route: TimingAggregate::default(),
             terminal_render: TimingAggregate::default(),
             terminal_reconnect: TimingAggregate::default(),
+            terminal_grant: TimingAggregate::default(),
+            terminal_socket: TimingAggregate::default(),
+            terminal_restore: TimingAggregate::default(),
         }
     }
 

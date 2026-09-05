@@ -2,6 +2,28 @@ import { expect, test } from "vitest";
 import { HourlyBrowserEvidence } from "./hourlyBrowserEvidence";
 import { BrowserPerformanceRecorder } from "./browserPerformance";
 
+test("pre-phase pending captures restore with no phase samples, and new phases survive retry", () => {
+  const source = new HourlyBrowserEvidence("old", () => "00000000-0000-0000-0000-000000000001");
+  source.record("route", 10, 3_600_000);
+  const stored = JSON.parse(source.serialize(3_600_000));
+  for (const key of ["terminal_grant", "terminal_socket", "terminal_restore"]) delete stored.captures[0][key];
+  const restored = new HourlyBrowserEvidence("new", () => "00000000-0000-0000-0000-000000000002");
+  expect(restored.restore(JSON.stringify(stored), 3_600_000)).toBe(true);
+  const old = restored.next(3_600_000)!;
+  expect(old.terminal_restore).toEqual({ count: 0, total_ms: 0, max_ms: 0 });
+  restored.acknowledge(old);
+  restored.record("terminal_grant", 12, 3_601_000);
+  restored.record("terminal_socket", 23, 3_601_010);
+  restored.record("terminal_restore", 34, 3_601_020);
+  const next = restored.next(3_601_020)!;
+  expect(next.terminal_grant).toEqual({ count: 1, total_ms: 12, max_ms: 12 });
+  expect(next.terminal_socket).toEqual({ count: 1, total_ms: 23, max_ms: 23 });
+  expect(next.terminal_restore).toEqual({ count: 1, total_ms: 34, max_ms: 34 });
+  const retry = new HourlyBrowserEvidence("new");
+  expect(retry.restore(restored.serialize(3_601_020), 3_601_020)).toBe(true);
+  expect(retry.next(3_601_020)).toEqual(next);
+});
+
 test("reload preserves pending identity and build without appending to restored captures", () => {
   const id = "00000000-0000-0000-0000-000000000001";
   const old = new HourlyBrowserEvidence("old-build", () => id);

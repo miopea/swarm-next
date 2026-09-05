@@ -19,7 +19,8 @@ test("browser evidence uses authenticated cancellable requests without adding re
   const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("{}", { status: 200 }));
   const timing = { count: 0, total_ms: 0, max_ms: 0 };
   const evidence = { capture_id: "capture", build: "build", hour: 3600, revision: 1,
-    long_task: timing, interaction: timing, route: timing, terminal_render: timing, terminal_reconnect: timing };
+    long_task: timing, interaction: timing, route: timing, terminal_render: timing, terminal_reconnect: timing,
+    terminal_grant: timing, terminal_socket: timing, terminal_restore: timing };
   try {
     const controller = new AbortController();
     await fetchBrowserEvidence("token", controller.signal);

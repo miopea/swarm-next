@@ -55,6 +55,14 @@ pub struct BrowserEvidenceHour {
     pub route: TimingAggregate,
     pub terminal_render: TimingAggregate,
     pub terminal_reconnect: TimingAggregate,
+    // Existing retained captures contain no phase samples. The persistence
+    // reader owns these defaults for the 90-day historical retention window.
+    #[serde(default)]
+    pub terminal_grant: TimingAggregate,
+    #[serde(default)]
+    pub terminal_socket: TimingAggregate,
+    #[serde(default)]
+    pub terminal_restore: TimingAggregate,
 }
 
 impl BrowserEvidenceHour {
@@ -74,13 +82,16 @@ impl BrowserEvidenceHour {
             && self.metrics().into_iter().all(TimingAggregate::valid)
     }
 
-    fn metrics(&self) -> [TimingAggregate; 5] {
+    fn metrics(&self) -> [TimingAggregate; 8] {
         [
             self.long_task,
             self.interaction,
             self.route,
             self.terminal_render,
             self.terminal_reconnect,
+            self.terminal_grant,
+            self.terminal_socket,
+            self.terminal_restore,
         ]
     }
 
@@ -122,6 +133,39 @@ mod tests {
             route: TimingAggregate::default(),
             terminal_render: TimingAggregate::default(),
             terminal_reconnect: TimingAggregate::default(),
+            terminal_grant: TimingAggregate::default(),
+            terminal_socket: TimingAggregate::default(),
+            terminal_restore: TimingAggregate::default(),
+        }
+    }
+
+    #[test]
+    fn old_captures_have_no_phase_samples_and_phase_growth_is_validated() {
+        let mut wire = serde_json::to_value(capture()).unwrap();
+        for name in ["terminal_grant", "terminal_socket", "terminal_restore"] {
+            wire.as_object_mut().unwrap().remove(name);
+        }
+        let old: BrowserEvidenceHour = serde_json::from_value(wire).unwrap();
+        assert_eq!(old.terminal_grant, TimingAggregate::default());
+        assert_eq!(old.terminal_socket, TimingAggregate::default());
+        assert_eq!(old.terminal_restore, TimingAggregate::default());
+        for field in 0..3 {
+            let mut next = old.clone();
+            next.revision += 1;
+            let timing = match field {
+                0 => &mut next.terminal_grant,
+                1 => &mut next.terminal_socket,
+                _ => &mut next.terminal_restore,
+            };
+            *timing = TimingAggregate {
+                count: 1,
+                total_ms: 20,
+                max_ms: 20,
+            };
+            assert!(next.extends(&old));
+            let mut regression = old.clone();
+            regression.revision = next.revision + 1;
+            assert!(!regression.extends(&next));
         }
     }
 

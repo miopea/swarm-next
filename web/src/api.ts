@@ -1845,6 +1845,9 @@ export type BrowserEvidenceHour = {
   route: EvidenceTiming;
   terminal_render: EvidenceTiming;
   terminal_reconnect: EvidenceTiming;
+  terminal_grant: EvidenceTiming;
+  terminal_socket: EvidenceTiming;
+  terminal_restore: EvidenceTiming;
 };
 
 export async function fetchBrowserEvidence(operatorToken: string, signal: AbortSignal): Promise<BrowserEvidenceHour[]> {

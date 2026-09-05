@@ -48,6 +48,7 @@ type GrantResponse = {
 };
 
 type WebSocketFactory = (url: string, protocols: string[]) => WebSocket;
+type AttachPhaseName = "terminal_grant" | "terminal_socket" | "terminal_restore";
 
 export interface TerminalConnectionOptions {
   sessionId: string;
@@ -159,6 +160,7 @@ export class TerminalConnection {
   #connectionConfirmed = false;
   #rendererConfirmed = false;
   #attachStartedAt: number | undefined;
+  #attachPhase: { name: AttachPhaseName; startedAt: number } | undefined;
   #processExited = false;
   #size: { rows: number; columns: number } | undefined;
   #probeId: string | undefined;
@@ -269,6 +271,7 @@ export class TerminalConnection {
     if (this.#disposed) return;
     this.releaseControl();
     this.#disposed = true;
+    this.#clearAttachTiming();
     this.#renderWait?.cancel();
     if (typeof document !== "undefined") {
       document.removeEventListener("visibilitychange", this.#handleVisibilityChange);
@@ -293,7 +296,8 @@ export class TerminalConnection {
     if (this.#disposed || this.#fatal) return;
     this.#unconfirmControl();
     this.#probeId = undefined;
-    this.#attachStartedAt ??= performance.now();
+    if (this.#rendering && document.visibilityState === "visible") this.#attachStartedAt ??= performance.now();
+    this.#beginAttachPhase("terminal_grant");
     this.#handlers?.onState("connecting");
     const grantAbortController = new AbortController();
     this.#grantAbortController = grantAbortController;
@@ -320,8 +324,10 @@ export class TerminalConnection {
         this.#fail("Update the Swarm App/API to enable safe terminal control. This client will not use legacy input.");
         return;
       }
+      this.#finishAttachPhase();
       const websocketUrl = new URL(grant.websocket_path, this.#locationOrigin);
       websocketUrl.protocol = websocketUrl.protocol === "https:" ? "wss:" : "ws:";
+      this.#beginAttachPhase("terminal_socket");
       const socket = this.#websocketFactory(websocketUrl.toString(), [
         grant.protocol,
         `${GRANT_PROTOCOL_PREFIX}${grant.grant}`,
@@ -362,6 +368,7 @@ export class TerminalConnection {
   /// reconnects through the ordinary path. No new recovery machinery, and a
   /// healthy connection pays one message.
   #handleVisibilityChange = (): void => {
+    if (document.visibilityState !== "visible") this.#clearAttachTiming();
     this.#renderWait?.refreshVisibility();
     if (this.#disposed || this.#fatal) return;
     this.#unconfirmControl();
@@ -377,6 +384,8 @@ export class TerminalConnection {
 
   #handleOpen(socket: WebSocket): void {
     if (socket !== this.#socket || this.#disposed) return;
+    this.#finishAttachPhase();
+    this.#beginAttachPhase("terminal_restore");
     this.#sendResume(socket);
   }
 
@@ -481,6 +490,7 @@ export class TerminalConnection {
    * unless they scrolled up themselves.
    */
   suspendRendering(): void {
+    this.#clearAttachTiming();
     if (this.#rendering && this.#pendingRenderBytes > 0) {
       // Frames accepted while visible may still be waiting for the parser.
       // Retire those callbacks as well as dropping newly arriving frames. The
@@ -725,6 +735,7 @@ export class TerminalConnection {
    * failure is still visible rather than looking like a routine blip.
    */
   #scheduleReconnect(detail: string): void {
+    this.#attachPhase = undefined;
     this.#unconfirmControl();
     if (this.#disposed || this.#fatal || this.#retryTimer !== undefined) return;
     const ladder = this.#retryDelaysMs;
@@ -758,6 +769,7 @@ export class TerminalConnection {
   }
 
   #fail(detail: string): void {
+    this.#clearAttachTiming();
     this.#unconfirmControl();
     this.#fatal = true;
     this.#renderGeneration += 1;
@@ -788,12 +800,31 @@ export class TerminalConnection {
     if (this.#probeId === undefined) this.#clearConfirmationTimer();
     this.#confirmConnection();
     if (this.#rendererConfirmed && detail === undefined) return;
+    this.#finishAttachPhase();
     if (this.#attachStartedAt !== undefined) {
       if (document.visibilityState === "visible") browserPerformance.record("terminal_reconnect", performance.now() - this.#attachStartedAt);
       this.#attachStartedAt = undefined;
     }
     this.#rendererConfirmed = true;
     this.#handlers?.onState("connected", detail);
+  }
+
+  #beginAttachPhase(name: AttachPhaseName): void {
+    this.#attachPhase = this.#rendering && document.visibilityState === "visible"
+      ? { name, startedAt: performance.now() } : undefined;
+  }
+
+  #finishAttachPhase(): void {
+    const phase = this.#attachPhase;
+    this.#attachPhase = undefined;
+    if (phase && this.#rendering && document.visibilityState === "visible") {
+      browserPerformance.record(phase.name, performance.now() - phase.startedAt);
+    }
+  }
+
+  #clearAttachTiming(): void {
+    this.#attachStartedAt = undefined;
+    this.#attachPhase = undefined;
   }
 
   #armConfirmationTimer(socket: WebSocket): void {
