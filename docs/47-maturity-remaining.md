@@ -35,7 +35,15 @@ of the initial fix despite the green activity-service test. The follow-up aligns
 both reads with durable worker ownership and adds a complete authenticated MCP
 response regression after session replacement, including unrelated-task denial.
 All 31 application and 62 MCP adapter tests pass for the follow-up in the isolated
-Linux validation directory. Live acceptance of that follow-up remains pending.
+Linux validation directory. Follow-up commit `7ba532de` deployed as
+`1.5.0-dev-7ba532deb5b3-20260905194311-2502635`; health is ok with no degraded
+subsystem. Engine PID 2456733 and all eleven worker session IDs were unchanged.
+Without restarting its conversation, the same Contract worker repeated the exact
+task/limit request successfully: six events, approved documentation-only exemption,
+no deployments or messages, null review request and truncated=false. The expanded
+native tool response was inspected in the separate Edge tab, not just the worker's
+summary. This closes the observed completed-history access defect, not the wider
+Queen/queue acceptance program. No real worker received test input or decisions.
 
 ### Ten retained views: bounded browser baseline (September 5)
 
