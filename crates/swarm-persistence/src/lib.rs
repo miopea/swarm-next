@@ -2832,7 +2832,7 @@ impl TaskStore {
 /// Returns a persistence error when the file cannot be opened, reports a
 /// different schema version than expected, or fails an integrity check.
 pub fn verify_backup_at(path: &Path, expected_version: i64) -> Result<(), TaskStoreError> {
-    let connection = Connection::open(path)?;
+    let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if version != expected_version {
         return Err(TaskStoreError::IntegrityFailure(format!(
@@ -3803,6 +3803,29 @@ fn migrate_ops_intake_schema_steps(
     // before the maturity branch was combined and therefore skipped the other
     // schema-124 artifact while still advancing through schema 135.
     terminal_control_projection::repair_version_collision(transaction, schema_version)
+}
+
+/// Checks that a recovery candidate already contains a supported Hive schema.
+/// This must precede normal opening, which may create or migrate a database.
+///
+/// # Errors
+/// Rejects missing, empty, unrelated, future-schema, or corrupt candidates
+/// without creating or changing the selected file.
+pub fn verify_existing_hive_backup(path: &Path) -> Result<(), TaskStoreError> {
+    let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let has_tasks: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks')",
+        [],
+        |row| row.get(0),
+    )?;
+    if version <= 0 || version > CURRENT_SCHEMA_VERSION || !has_tasks {
+        return Err(TaskStoreError::IntegrityFailure(
+            "recovery candidate is not an existing supported Hive database".into(),
+        ));
+    }
+    drop(connection);
+    verify_backup_at(path, version)
 }
 
 fn migrate_maturity_schema_steps(
@@ -7297,6 +7320,31 @@ mod tests {
     }
 
     #[test]
+    fn backup_preflight_rejects_missing_empty_unrelated_and_corrupt_files_without_mutation() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("candidate.sqlite3");
+        assert!(verify_existing_hive_backup(&path).is_err());
+        assert!(
+            !path.exists(),
+            "verification must not create its own evidence"
+        );
+        for bytes in [b"".as_slice(), b"not a SQLite database".as_slice()] {
+            std::fs::write(&path, bytes).unwrap();
+            assert!(verify_existing_hive_backup(&path).is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
+        let unrelated = directory.path().join("unrelated.sqlite3");
+        let connection = Connection::open(&unrelated).unwrap();
+        connection
+            .execute_batch("CREATE TABLE notes(body TEXT); PRAGMA user_version=1;")
+            .unwrap();
+        drop(connection);
+        let before = std::fs::read(&unrelated).unwrap();
+        assert!(verify_existing_hive_backup(&unrelated).is_err());
+        assert_eq!(std::fs::read(&unrelated).unwrap(), before);
+    }
+
+    #[test]
     fn backup_is_consistent_and_reopenable() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("source.sqlite3");
@@ -7304,6 +7352,22 @@ mod tests {
         let store = TaskStore::open(source).unwrap();
         let task = store.create_task("Backed up", "/workspace").unwrap();
         store.backup_to(&backup).unwrap();
+
+        let before = std::fs::read(&backup).unwrap();
+        verify_existing_hive_backup(&backup).unwrap();
+        assert_eq!(std::fs::read(&backup).unwrap(), before);
+
+        let truncated = directory.path().join("truncated.sqlite3");
+        let damaged = &before[..before.len() / 2];
+        std::fs::write(&truncated, damaged).unwrap();
+        assert!(verify_existing_hive_backup(&truncated).is_err());
+        assert_eq!(std::fs::read(&truncated).unwrap(), damaged);
+
+        let truncated = directory.path().join("truncated.sqlite3");
+        let damaged = &before[..before.len() / 2];
+        std::fs::write(&truncated, damaged).unwrap();
+        assert!(verify_existing_hive_backup(&truncated).is_err());
+        assert_eq!(std::fs::read(&truncated).unwrap(), damaged);
 
         let restored = TaskStore::open(backup).unwrap();
         restored.verify_integrity().unwrap();

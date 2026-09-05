@@ -54,6 +54,25 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Evidence from the September 4–5 demo run
 
+### Database recovery audit
+
+The CLI verifier used normal database opening before checking integrity, which
+can initialize a missing/empty candidate. A read-only existing-Hive preflight now
+rejects missing, empty, unrelated and corrupt inputs before initialization or
+migration. Two real-SQLite persistence tests pass, including a truncated valid
+backup, byte-preservation checks, and reopening a valid snapshot with its task.
+The version-specific backup verifier also no longer creates missing files.
+Strict CLI lint passed against the Linux target. The Windows CLI check correctly
+cannot compile its Unix-only host client; no compatibility shim was added.
+CLI runtime integration and an actual isolated package restore remain unproven.
+
+Full REC-02 remains open: package restore requires a successful online export
+of current state before replacement. If corruption prevents that export, the
+current restore path cannot recover. A separately explicit offline/quarantine
+path must preserve the damaged database and sidecars with the API confirmed
+stopped, then verify a restored isolated instance. Never test corruption by
+damaging the live Hive or silently discard a failed pre-restore export.
+
 ### Follow-up reconciliation trace and queue presentation
 
 Strict application/persistence lint and 43 decision-related tests passed for

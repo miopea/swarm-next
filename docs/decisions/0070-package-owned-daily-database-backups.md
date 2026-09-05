@@ -33,6 +33,15 @@ guard is package-owned until pre-feature release rollback is no longer supported
 
 ## Verification and remaining work
 
+The CLI's candidate verification first opens the existing file read-only and
+requires a supported nonzero Hive schema with its task table and SQLite integrity.
+Missing, empty, unrelated, future-schema and corrupt candidates cannot enter the
+normal open/migration path. Normal opening may initialize an empty file, so using
+it as the initial verifier could certify an accidentally blank recovery snapshot.
+The selected file is not created or changed by preflight; migration of accepted
+older candidates still belongs to the package's private staging copy. The
+version-specific pre-update verifier also uses read-only opening.
+
 The package publishes one atomic `daily-backup.status` file under managed state.
 Failures use the existing bounded failure shape (step, sanitized detail, changed);
 success replaces it with `state=ready` and the available UTC snapshot day. A

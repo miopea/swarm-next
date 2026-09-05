@@ -329,6 +329,9 @@ fn inspect_table(
 /// # Errors
 /// Returns an error when the database cannot be opened, migrated, or verified.
 pub fn verify_database(path: impl AsRef<std::path::Path>) -> Result<(), CliError> {
+    let path = path.as_ref();
+    swarm_persistence::verify_existing_hive_backup(path)
+        .map_err(|error| CliError::Database(error.to_string()))?;
     let store = swarm_persistence::TaskStore::open(path)
         .map_err(|error| CliError::Database(error.to_string()))?;
     store
@@ -579,6 +582,11 @@ mod tests {
     fn verifies_a_real_database_and_rejects_non_database_input() {
         let directory = TempDir::new().unwrap();
         let database = directory.path().join("hive.sqlite3");
+        assert!(verify_database(&database).is_err());
+        assert!(!database.exists());
+        std::fs::write(&database, b"").unwrap();
+        assert!(verify_database(&database).is_err());
+        assert_eq!(std::fs::metadata(&database).unwrap().len(), 0);
         swarm_persistence::TaskStore::open(&database).unwrap();
         verify_database(&database).unwrap();
         let invalid = directory.path().join("not-a-database");
