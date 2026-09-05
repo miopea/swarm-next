@@ -69,11 +69,14 @@ without indexing or modifying the live Hive.
 Schema 138 adds task/sequence history, pending-decision/task and task/state/
 sequence outcome indexes. The file-reopen test preserves activity and checks
 that the lookup plans use each index without temporary sorting. All 540 Linux
-persistence tests and strict API lint passed. Deployment is pending; no
-blocker-text fields are added in this slice.
+persistence tests and strict API lint passed. No blocker-text fields are added
+in this slice.
 Before deployment, three local `/api/v1/tasks` calls took 1.817797, 1.846777 and
-1.838573 seconds. Repeat the same route after deployment before claiming its
-operator-facing benefit.
+1.838573 seconds. After normal development reload to `ac861860`, the identical
+three requests took 0.021745, 0.022475 and 0.018136 seconds. Live schema 138
+contains all three indexes. Health was ok with no degraded subsystems; terminal
+host PID 2058454 and engine build identity stayed unchanged. This establishes
+the task-route improvement, not end-to-end mobile latency or browser CPU.
 
 The completed 600-second run `20260905T055555Z-live` collected 60 samples with
 four initial sessions, stable API/host PIDs and no drop counter increase. API
