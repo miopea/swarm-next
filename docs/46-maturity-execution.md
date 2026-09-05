@@ -9,6 +9,26 @@ authorized. No release is authorized.
 
 ### Follow-up: meaningful Queen delivery invalidations
 
+- Deployment verified at `/health` as
+  `1.5.0-dev-c0771d6fdda8-20260905020757-1964589`, with no degraded subsystems
+  and the unchanged worker-engine build ID. The standard reload job succeeded.
+  The pre-deployment feed showed four task and four worker events per minute.
+  Post-deployment traffic is lower, but the queued outcome also became delivered
+  and its hold cleared, so this is not a controlled workload comparison.
+- A new separate Edge audit tab reaches this build but needs operator unlock.
+  Browser acceptance behind authentication remains pending.
+
+### Follow-up: queue reasons belong to their own work
+
+- Briefings retain worker grouping by stable ID. A common reason is shown once;
+  distinct predecessor or policy holds stay with their own task instead of
+  inheriting the first row's reason. Removed the blanket claim that nothing is
+  wrong with every held briefing.
+- Delivery reasons are visible without expanding diagnostic timestamps; scoped
+  `queen-run:` deliveries correctly name Queen even without a worker label.
+- All 19 held-briefing/Queues tests and TypeScript checking pass. Authenticated
+  rendered acceptance and the broader owner/action queue integration remain open.
+
 - Removed broad task/worker refresh events from internal outcome/review claims
   and unchanged guarded deferrals. Durable claims, attempts and crash recovery
   remain intact. Changed actionable counts still publish.

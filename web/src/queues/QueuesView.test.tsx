@@ -13,6 +13,15 @@ function task(overrides: Partial<Task>): Task {
 }
 
 describe("QueuesView", () => {
+  test("an exact Queen run keeps its owner and reason visible without expanding details", () => {
+    render(<QueuesView tasks={[]} workers={[]} onOpenTask={vi.fn()} heldDeliveries={[{
+      kind: "delivery_held_unsent_text", subject: "queen-run:current-run", worker_name: null,
+      reason: "The prompt contains an unsent operator draft", first_observed_at: 1, observations: 2,
+    }]} />);
+    expect(screen.getByRole("heading", { name: "Queen" })).toBeInTheDocument();
+    expect(screen.getByText("The prompt contains an unsent operator draft")).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Unknown worker" })).not.toBeInTheDocument();
+  });
   test("assigns uncertain message reconciliation to Queen without claiming a stopped prompt", () => {
     const props = { tasks: [], workers: [], onOpenTask: vi.fn() };
     const { rerender } = render(<QueuesView {...props} heldDeliveries={[{

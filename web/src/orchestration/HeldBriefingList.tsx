@@ -35,8 +35,7 @@ export default function HeldBriefingList({ briefings, onOpenTask }: Props) {
         {briefings.length === 1 ? "One briefing is queued" : `${briefings.length} briefings are queued`}
       </h4>
       <p className="held-briefing-note">
-        Nothing is wrong with these — Swarm is holding them until the worker is free. Worth a look
-        only if one has been waiting far longer than the task ahead of it should take.
+        These briefings have not reached their workers. The recorded reason below explains each wait; age alone does not require your approval.
       </p>
       {/* GROUPED BY WORKER, because that is what the repetition actually is.
           The operator's screenshot showed seven rows each ending
@@ -50,10 +49,10 @@ export default function HeldBriefingList({ briefings, onOpenTask }: Props) {
           explains nothing. "Four of these are behind one worker" is the fact
           worth seeing, and it is what tells the operator whether to look. */}
       {groupByWorker(briefings).map((group) => (
-        <section className="held-briefing-group" key={group.workerName}>
+        <section className="held-briefing-group" key={group.workerId}>
           <p className="held-briefing-group-heading">
             <strong>{group.workerName}</strong>
-            {" · "}{holdReason(group.briefings[0])}
+            {group.sharedReason && <> · {group.sharedReason}</>}
             {" · "}
             {group.briefings.length === 1
               ? `waiting ${waitedFor(now - group.briefings[0].queued_at)}`
@@ -74,6 +73,7 @@ export default function HeldBriefingList({ briefings, onOpenTask }: Props) {
                 >
                   {briefing.title}
                 </button>
+                {!group.sharedReason && <p className="queue-task-meta">{holdReason(briefing)}</p>}
               </li>
             ))}
           </ul>
@@ -89,14 +89,20 @@ export default function HeldBriefingList({ briefings, onOpenTask }: Props) {
  * Insertion order rather than sorted, so a list the operator has already looked
  * at does not reshuffle under them when one group gains a briefing.
  */
-function groupByWorker(briefings: HeldBriefing[]): { workerName: string; briefings: HeldBriefing[] }[] {
+function groupByWorker(briefings: HeldBriefing[]): { workerId: string; workerName: string; sharedReason: string | null; briefings: HeldBriefing[] }[] {
   const groups = new Map<string, HeldBriefing[]>();
   for (const briefing of briefings) {
-    const existing = groups.get(briefing.worker_name);
+    const existing = groups.get(briefing.worker_id);
     if (existing) existing.push(briefing);
-    else groups.set(briefing.worker_name, [briefing]);
+    else groups.set(briefing.worker_id, [briefing]);
   }
-  return [...groups].map(([workerName, grouped]) => ({ workerName, briefings: grouped }));
+  return [...groups].map(([workerId, grouped]) => ({
+    workerId,
+    workerName: grouped[0].worker_name,
+    sharedReason: grouped.every((briefing) => holdReason(briefing) === holdReason(grouped[0]))
+      ? holdReason(grouped[0]) : null,
+    briefings: grouped,
+  }));
 }
 
 /**

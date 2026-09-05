@@ -4,7 +4,8 @@ export default function DeliveryWaitList({ held }: { held: HeldDelivery[] }) {
   if (held.length === 0) return null;
   const groups = new Map<string, HeldDelivery[]>();
   for (const entry of held) {
-    const owner = entry.subject === "queen-review" ? "Queen" : entry.worker_name ?? "Unknown worker";
+    const owner = entry.subject === "queen-review" || entry.subject.startsWith("queen-run:")
+      ? "Queen" : entry.worker_name ?? "Unknown worker";
     const entries = groups.get(owner);
     if (entries) entries.push(entry);
     else groups.set(owner, [entry]);
@@ -18,8 +19,8 @@ export default function DeliveryWaitList({ held }: { held: HeldDelivery[] }) {
       <h3>{owner}</h3>
       <ul>{entries.map((entry) => <li key={`${entry.kind}:${entry.subject}`}>
         <span className="queue-task-title">{entry.kind === "task_message_reconciliation" ? "Queen: reconcile message delivery" : entry.kind === "delivery_held_unsent_text" ? "Last observed hold: unsent text" : "Last observed hold: prompt not ready"}</span>
+        <p className="queue-task-meta">{entry.reason}</p>
         <details><summary>Recorded details</summary>
-          <p>{entry.reason}</p>
           <p>First observed {new Date(entry.first_observed_at * 1000).toLocaleString()} · {entry.observations} observations</p>
           <p>{entry.last_observed_at == null ? "Last observation time unavailable." : `Last observed ${new Date(entry.last_observed_at * 1000).toLocaleString()}.`} No resolution has been confirmed.</p>
         </details>

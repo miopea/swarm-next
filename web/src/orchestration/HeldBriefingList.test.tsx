@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import type { HeldBriefing } from "../api";
@@ -108,7 +108,7 @@ test("briefings behind one worker are stated once, not once per row", () => {
     briefing({ task_id: "a", title: "Procedural texture engines", worker_name: "BFG Watchfaces", reason: "worker_already_working", queued_at: queued - 2_460 }),
     briefing({ task_id: "b", title: "Detect the target watch", worker_name: "BFG Watchfaces", reason: "worker_already_working", queued_at: queued - 2_460 }),
     briefing({ task_id: "c", title: "Complication spacing", worker_name: "BFG Watchfaces", reason: "worker_already_working", queued_at: queued - 2_460 }),
-    briefing({ task_id: "d", title: "Correct a logged set's load", worker_name: "Sculpt Studio", reason: "worker_already_working", queued_at: queued - 1_260 }),
+    briefing({ task_id: "d", title: "Correct a logged set's load", worker_id: "worker-2", worker_name: "Sculpt Studio", reason: "worker_already_working", queued_at: queued - 1_260 }),
   ]} />);
 
   // Every title still reachable — grouping must not hide work.
@@ -130,4 +130,28 @@ test("a single briefing keeps its own waiting time", () => {
   expect(heading).toContain("Platform");
   expect(heading).toMatch(/waiting /);
   expect(heading).not.toContain("1 briefings");
+});
+
+test("different blockers stay attached to their own briefing within one owner group", () => {
+  render(<HeldBriefingList briefings={[
+    briefing({ task_id: "a", title: "First", blocked_by: "Schema migration" }),
+    briefing({ task_id: "b", title: "Second", blocked_by: "API rollout" }),
+    briefing({ task_id: "c", title: "Third", reason: "experimental_during_night_watch" }),
+  ]} />);
+  expect(screen.getAllByText("Platform")).toHaveLength(1);
+  for (const [title, reason] of [["First", "behind Schema migration"], ["Second", "behind API rollout"], ["Third", "experimental provider — queued until Night Watch ends"]]) {
+    const row = screen.getByRole("button", { name: title }).closest("li")!;
+    expect(within(row).getByText(reason)).toBeVisible();
+  }
+  expect(screen.queryByText(/Nothing is wrong with these/)).not.toBeInTheDocument();
+});
+
+test("different worker identities with the same name do not share a blocker", () => {
+  render(<HeldBriefingList briefings={[
+    briefing({ task_id: "a", worker_id: "first", blocked_by: "Schema migration" }),
+    briefing({ task_id: "b", worker_id: "second", blocked_by: "API rollout" }),
+  ]} />);
+  expect(screen.getAllByText("Platform")).toHaveLength(2);
+  expect(screen.getByText(/behind Schema migration/)).toBeVisible();
+  expect(screen.getByText(/behind API rollout/)).toBeVisible();
 });
