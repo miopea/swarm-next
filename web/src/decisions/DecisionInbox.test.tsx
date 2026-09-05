@@ -202,6 +202,47 @@ test("reveals and focuses a resolved decision selected through global navigation
   expect(scrollIntoView).toHaveBeenCalled();
 });
 
+test("decision navigation leaves Activity and focuses once after the request arrives", async () => {
+  const scrollIntoView = vi.fn();
+  Element.prototype.scrollIntoView = scrollIntoView;
+  const props = { tasks: [], workers: [], busy: false, onResolve: vi.fn() };
+  const { rerender } = render(<DecisionInbox {...props} decisions={[]} />);
+  fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+  rerender(<DecisionInbox {...props} decisions={[]} focusDecisionId={pending.id} focusRequest={1} />);
+  expect(screen.getByRole("tab", { name: "Needs you 0" })).toHaveAttribute("aria-selected", "true");
+  rerender(<DecisionInbox {...props} decisions={[pending]} focusDecisionId={pending.id} focusRequest={1} />);
+  await waitFor(() => expect(screen.getByRole("article")).toHaveFocus());
+  expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+  rerender(<DecisionInbox {...props} decisions={[{ ...pending }]} focusDecisionId={pending.id} focusRequest={1} />);
+  expect(screen.getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
+  expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  rerender(<DecisionInbox {...props} decisions={[pending]} focusDecisionId={pending.id} focusRequest={2} />);
+  await waitFor(() => expect(screen.getByRole("article")).toHaveFocus());
+  expect(scrollIntoView).toHaveBeenCalledTimes(2);
+});
+
+test("attention tabs support manual keyboard activation without starting reads on focus", () => {
+  const onFetchActivity = vi.fn().mockResolvedValue({ entries: [], next_before: null });
+  render(<DecisionInbox decisions={[]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} onFetchActivity={onFetchActivity} />);
+  const attention = screen.getByRole("tab", { name: "Needs you 0" });
+  const activity = screen.getByRole("tab", { name: "Activity" });
+  attention.focus();
+  fireEvent.keyDown(attention, { key: "ArrowRight" });
+  expect(activity).toHaveFocus();
+  expect(attention).toHaveAttribute("aria-selected", "true");
+  expect(activity).toHaveAttribute("tabindex", "-1");
+  expect(onFetchActivity).not.toHaveBeenCalled();
+  fireEvent.keyDown(activity, { key: "Home" });
+  expect(attention).toHaveFocus();
+  fireEvent.keyDown(attention, { key: "End" });
+  expect(activity).toHaveFocus();
+  fireEvent.click(activity);
+  expect(activity).toHaveAttribute("tabindex", "0");
+  expect(attention).toHaveAttribute("tabindex", "-1");
+  expect(screen.getByRole("tabpanel", { name: "Activity" })).toHaveAttribute("id", activity.getAttribute("aria-controls"));
+});
+
 test("requires confirmation before dismissing without a proposed action", () => {
   const onResolve = vi.fn().mockResolvedValue(undefined);
   render(

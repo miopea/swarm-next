@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import type { DecisionRequest, DecisionSurface, Task, TaskActivityPage, Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
@@ -48,6 +48,10 @@ type Props = {
 
 export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, additionalPendingCount = 0, attentionCards, coordinatorUnavailable = false, trailingCards, onOpenTask, onFetchActivity, onResolve, onAnswer }: Props) {
   const [view, setView] = useState<"attention" | "activity">("attention");
+  const tabId = useId();
+  const attentionTab = useRef<HTMLButtonElement>(null);
+  const activityTab = useRef<HTMLButtonElement>(null);
+  const pendingNavigation = useRef(false);
   const [showResolved, setShowResolved] = useState(false);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [dismissConfirmId, setDismissConfirmId] = useState<string>();
@@ -109,27 +113,41 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
     setDismissConfirmId((id) => id && pendingIds.has(id) ? id : undefined);
   }, [decisions]);
 
+  // Navigation owns one focus request, including when its data arrives later.
+  // Refreshes cannot create another request or pull the operator out of Activity.
   useEffect(() => {
-    if (!focusDecisionId) return;
-    if (decisions.some((decision) => decision.id === focusDecisionId && decision.state !== "pending")) setShowResolved(true);
-  }, [decisions, focusDecisionId]);
+    pendingNavigation.current = Boolean(focusDecisionId);
+    if (focusDecisionId) setView("attention");
+  }, [focusDecisionId, focusRequest]);
 
-  // Deliberately not keyed on `decisions`. Navigation asking for a decision is
-  // what should move the page, and `focusRequest` is how it asks; every live
-  // refresh of the list is not. Keyed on the list, this scrolled and refocused
-  // the card whenever anything in the Hive changed, which on a busy Hive moves
-  // the card between the operator reading an action and clicking it.
-  // `showResolved` stays because revealing history is what puts the card in the
-  // document in the first place.
   useEffect(() => {
+    if (!pendingNavigation.current || view !== "attention") return;
     if (!focusDecisionId) return;
+    if (!showResolved && decisions.some((decision) => decision.id === focusDecisionId && decision.state !== "pending")) {
+      setShowResolved(true);
+      return;
+    }
     const frame = requestAnimationFrame(() => {
       const card = document.querySelector<HTMLElement>(`[data-decision-id="${CSS.escape(focusDecisionId)}"]`);
+      if (!card) return;
+      pendingNavigation.current = false;
       card?.scrollIntoView({ behavior: "smooth", block: "center" });
       card?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
-  }, [focusDecisionId, focusRequest, showResolved]);
+  }, [focusDecisionId, focusRequest, showResolved, view, decisions]);
+
+  // Manual activation: arrows move focus; Enter/Space selects a tab. Merely
+  // exploring tabs must not launch the asynchronous Activity read.
+  const moveTabFocus = (event: KeyboardEvent<HTMLButtonElement>) => {
+    let target: HTMLButtonElement | null;
+    if (event.key === "Home") target = attentionTab.current;
+    else if (event.key === "End") target = activityTab.current;
+    else if (event.key === "ArrowLeft" || event.key === "ArrowRight") target = event.currentTarget === attentionTab.current ? activityTab.current : attentionTab.current;
+    else return;
+    event.preventDefault();
+    target?.focus();
+  };
 
   const readActivity = useCallback(async (signal: AbortSignal) => {
     if (!onFetchActivity) return;
@@ -160,9 +178,10 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
     <section className="decision-inbox" aria-labelledby="decision-inbox-heading">
       <h3 id="decision-inbox-heading" className="sr-only">What needs you</h3>
       <div className="attention-tabs" role="tablist" aria-label="Attention workspace">
-        <button role="tab" aria-selected={view === "attention"} onClick={() => setView("attention")}>Needs you <small>{pendingTotal}</small></button>
-        <button role="tab" aria-selected={view === "activity"} onClick={() => { if (view === "activity") void loadActivity(); else setView("activity"); }}>Activity</button>
+        <button ref={attentionTab} id={`${tabId}-attention`} role="tab" aria-controls={`${tabId}-panel`} tabIndex={view === "attention" ? 0 : -1} aria-selected={view === "attention"} onKeyDown={moveTabFocus} onClick={() => setView("attention")}>Needs you <small>{pendingTotal}</small></button>
+        <button ref={activityTab} id={`${tabId}-activity`} role="tab" aria-controls={`${tabId}-panel`} tabIndex={view === "activity" ? 0 : -1} aria-selected={view === "activity"} onKeyDown={moveTabFocus} onClick={() => { pendingNavigation.current = false; if (view === "activity") void loadActivity(); else setView("activity"); }}>Activity</button>
       </div>
+      <div id={`${tabId}-panel`} role="tabpanel" aria-labelledby={`${tabId}-${view}`}>
       {view === "activity" ? <WorkActivity activity={activity} tasks={tasks} workers={workers} loading={activityLoading} failed={activityFailed} onRetry={() => void loadActivity()} onOpenTask={onOpenTask} /> : <>
       <div className="decision-inbox-intro">
         <label className="decision-history-toggle">
@@ -345,6 +364,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
         </div>
       )}
       </>}
+      </div>
       {trailingCards}
     </section>
   );

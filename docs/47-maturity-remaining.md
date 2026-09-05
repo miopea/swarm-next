@@ -81,6 +81,30 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Evidence from the September 4–5 demo run
 
+### Direct attention navigation and keyboard tabs
+
+Navigating to a decision while the inbox showed Activity did not reveal the
+card. One navigation-owned focus request now selects Needs You, waits for its
+card if data is delayed, reveals resolved history when explicitly requested,
+and consumes focus once. Ordinary refreshes neither refocus the card nor leave
+Activity. The tabs now expose their panel and support manual arrow/Home/End
+focus movement; Enter/Space activates the selected view, so focus alone does
+not trigger the asynchronous Activity read. All 74 focused App/inbox/activity
+tests and TypeScript checking pass. Edge verified the full-App route from
+Activity through quick navigation to the specific focused card, without a second
+click, and the final full frontend suite passed 1,123 tests across 129 files.
+This does not close provider-answer capture or native mobile notification testing.
+
+### Recovery and Queen deployment checkpoint
+
+Build `c93ea3d7` is deployed through the ordinary development reload. Health is
+ok, `database_recovery_required` is false, no subsystems are degraded, and the
+engine build identity remains unchanged. This deploy includes provider-label
+preservation, capacity-admitted automatic recovery, and Queen's guarded start
+contract. Local gates passed 456 Linux API tests, strict API lint and the earlier
+1,121-test frontend suite. Actual pressure-recovery and Queen/provider journeys
+remain separate acceptance items; deployment is not evidence of their completion.
+
 ### Fixed-build one-hour server observation
 
 Read-only run `20260905T085228Z-live` completed 3,600 seconds on `fc7af9f4`,
