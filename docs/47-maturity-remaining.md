@@ -55,6 +55,17 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Evidence from the September 4–5 demo run
 
+### Task briefing refresh churn
+
+Task briefing claims and guarded deferrals now follow the quiet outcome-delivery
+pattern: repeated internal retries do not emit broad task refreshes. Completion,
+failure and crash recovery still publish. Assignment/briefing repair publishes
+even if a busy worker prevents delivery, which the previous candidate-count
+condition missed. All 25 dispatch regressions passed, including ten repeated
+holds, final delivery/recovery and repair while busy. Strict API lint passed.
+Deployment is pending; representative held-briefing browser resource acceptance
+remains open.
+
 ### Offline restore implementation and real isolated drill
 
 `restore-offline` now provides a recovery path that does not need an export from
@@ -83,7 +94,8 @@ corruption consequence routing and write/dispatch containment acceptance.
 The normal file-backed open path now checks integrity before journal-mode or
 migration changes, in addition to post-migration checks. The targeted regression
 preserves a damaged schema-137 database byte-for-byte and does not migrate it.
-All 542 persistence tests and strict API lint passed; deployment is pending. Runtime
+All 542 persistence tests and strict API lint passed. Normal development reload
+activated `21125e1b` with healthy API status and unchanged host PID 2088305. Runtime
 `IntegrityFailure` still shares a generic unavailable response; a clear operator
 consequence and runtime containment must not be claimed from this startup fix.
 

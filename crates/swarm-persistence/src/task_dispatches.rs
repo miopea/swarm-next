@@ -344,8 +344,8 @@ impl TaskStore {
     ) -> Result<Vec<TaskDispatch>, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        repoint_assignments_left_on_a_dead_session(&transaction)?;
-        Self::rebrief_ready_work_without_a_briefing(&transaction)?;
+        let repointed = repoint_assignments_left_on_a_dead_session(&transaction)?;
+        let rebriefed = Self::rebrief_ready_work_without_a_briefing(&transaction)?;
         // A briefing is TYPED INTO A LIVE TERMINAL. Arriving mid-turn it does
         // not queue, it interrupts -- and a worker that follows it abandons what
         // it was doing. The operator watched exactly that: "the queen will insert
@@ -377,7 +377,10 @@ impl TaskStore {
                 ));
             }
         }
-        if !candidates.is_empty() {
+        // Internal claim ownership does not change the visible pending brief.
+        // Actual assignment/briefing repairs still need a refresh, even when
+        // the repaired worker is currently busy and cannot be claimed.
+        if repointed > 0 || rebriefed > 0 {
             insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         }
         transaction.commit()?;
@@ -430,9 +433,8 @@ impl TaskStore {
              WHERE assignment_id = ?1 AND state = 'dispatching' AND generation = ?3",
             params![assignment_id, now, generation],
         )? == 1;
-        if changed {
-            insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
-        }
+        // The same brief remains pending. The refusal owner publishes changed
+        // reasons; retrying an unchanged hold is not new task progress.
         transaction.commit()?;
         Ok(changed)
     }
@@ -711,6 +713,82 @@ fn task_dispatch_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskDispa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeated_briefing_holds_are_quiet_but_completion_and_recovery_publish() {
+        for recover in [false, true] {
+            let (store, _, _) = assigned_task();
+            let cursor = store.list_control_room_events(0).unwrap().next_cursor;
+            for now in 100..110 {
+                let dispatch = store
+                    .claim_task_dispatches(now, &HashSet::new())
+                    .unwrap()
+                    .remove(0);
+                assert!(
+                    store
+                        .defer_task_dispatch(&dispatch.assignment_id, dispatch.generation, now)
+                        .unwrap()
+                );
+            }
+            let dispatch = store
+                .claim_task_dispatches(110, &HashSet::new())
+                .unwrap()
+                .remove(0);
+            assert!(
+                store
+                    .list_control_room_events(cursor)
+                    .unwrap()
+                    .events
+                    .is_empty()
+            );
+            if recover {
+                assert_eq!(store.recover_inflight_task_dispatches().unwrap(), 1);
+                assert_eq!(store.recover_inflight_task_dispatches().unwrap(), 0);
+            } else {
+                assert!(
+                    store
+                        .complete_task_dispatch(&dispatch.assignment_id, dispatch.generation, 111)
+                        .unwrap()
+                );
+            }
+            let page = store.list_control_room_events(cursor).unwrap();
+            assert_eq!(page.events.len(), 1);
+            assert_eq!(page.events[0].kind, ControlRoomEventKind::TasksChanged);
+        }
+    }
+
+    #[test]
+    fn repaired_briefing_publishes_even_when_the_worker_is_busy() {
+        let (store, _, session) = assigned_task();
+        store
+            .connection()
+            .unwrap()
+            .execute("DELETE FROM task_dispatches", [])
+            .unwrap();
+        let cursor = store.list_control_room_events(0).unwrap().next_cursor;
+        assert!(
+            store
+                .claim_task_dispatches(100, &HashSet::from([session]))
+                .unwrap()
+                .is_empty()
+        );
+        let page = store.list_control_room_events(cursor).unwrap();
+        assert_eq!(page.events.len(), 1);
+        assert_eq!(page.events[0].kind, ControlRoomEventKind::TasksChanged);
+        assert!(
+            store
+                .claim_task_dispatches(101, &HashSet::from([session]))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .list_control_room_events(page.next_cursor)
+                .unwrap()
+                .events
+                .is_empty()
+        );
+    }
 
     #[test]
     fn returned_work_rejects_results_and_holds_from_the_prior_briefing() {

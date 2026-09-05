@@ -64,6 +64,13 @@ Returned-work generations retain pacing. This changes neither claim eligibility
 nor terminal observation, unsent-draft protection and acceptance verification.
 No uncertain delivery is replayed by this exemption.
 
+Claiming a pending briefing and returning it to the same queue after a guarded
+hold do not publish task-progress events. Changed refusal reasons remain owned
+by the refusal projection; completion, failure and crash recovery still publish.
+Repairing an assignment/session binding or inserting a missing briefing publishes
+even when the worker is mid-turn and nothing can be claimed. This avoids retry
+refresh churn without hiding durable repairs or weakening delivery ownership.
+
 Schema 129 adds a nonnegative integer briefing generation, initially zero for
 existing assignments. Returning Review/Blocked work to Active increments it in
 the same task transition transaction. Overflow fails that transaction rather
