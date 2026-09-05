@@ -55,6 +55,20 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Evidence from the September 4–5 demo run
 
+### Continuous four-session server sample
+
+`observe-live-soak.sh` completed 600 seconds / 20 samples on `baa304ef`, with
+four running sessions and unchanged API PID 2114060 / host PID 2088305. Across
+the 573-second first-to-last sample interval, API CPU averaged 1.384% of one core
+(maximum 30-second sample 2.292%); host cgroup CPU averaged 5.443% (maximum
+sample 8.209%). API cgroup memory ranged 70,963,200–98,988,032 bytes and host
+cgroup memory 1,159,593,984–1,178,288,128 bytes. These are cgroup counters, not
+browser memory or per-process RSS. Retained history grew by 1,158 bytes and
+reported no dropped bytes. No leak/plateau or burst-latency acceptance is claimed.
+Content-free evidence is retained at
+`/home/bschleifer/.local/state/swarm-next/soak/20260905T073502Z-live-summary.json`
+and the matching samples CSV. Representative 10–15-worker/browser work remains.
+
 ### Removed Jira workflow drift
 
 The removal guard ran after whole-batch status validation. A dismissed issue
@@ -63,6 +77,7 @@ the guard ran. Mapping validation now follows the dismissal check inside the
 transaction. Retained unmapped work still rejects atomically. All ten Jira
 persistence tests and strict API lint passed, including both removed-status drift
 and rollback of an earlier valid import when a retained mapping is missing.
+The full persistence suite subsequently passed all 544 tests.
 
 ### Compact attention and visible Reachable status
 
