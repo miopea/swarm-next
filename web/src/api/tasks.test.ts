@@ -1,4 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
+import { changeTaskPrerequisite } from "./tasks";
 
 import {
   assignTask,
@@ -46,6 +47,14 @@ const activity = {
 };
 
 afterEach(() => vi.unstubAllGlobals());
+
+test("prerequisite changes encode identity and send only the explicit operation and reason", async () => {
+  const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(task)));
+  vi.stubGlobal("fetch", fetch);
+  const input = { prerequisite_id: "contract", operation: "remove" as const, reason: "No longer needed" };
+  await expect(changeTaskPrerequisite("operator", task.id, input)).resolves.toEqual(task);
+  expect(fetch).toHaveBeenCalledWith("/api/v1/tasks/task%2Fone/prerequisites", expect.objectContaining({ method: "POST", body: JSON.stringify(input), cache: "no-store" }));
+});
 
 test("recent activity forwards its owner's cancellation signal", async () => {
   const controller = new AbortController();

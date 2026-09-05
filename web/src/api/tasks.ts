@@ -141,6 +141,17 @@ export async function fetchTasks(operatorToken: string, signal?: AbortSignal): P
   return response.json() as Promise<Task[]>;
 }
 
+export async function changeTaskPrerequisite(operatorToken: string, taskId: string, input: {
+  prerequisite_id: string;
+  operation: "add" | "remove";
+  reason: string;
+}): Promise<Task> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/prerequisites`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+  });
+  return response.json() as Promise<Task>;
+}
+
 /**
  * Settled work — abandoned, or completed with evidence or a recorded
  * unverifiable closure. Deliberately NOT part of the board list.

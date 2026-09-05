@@ -53,6 +53,16 @@ test("links prerequisites from the task card and does not offer premature resump
   expect(screen.getByText("Prerequisites completed · Queen checks remaining blockers before resuming")).toBeVisible();
 });
 
+test("opens the prerequisite editor from a blocked task's actions", () => {
+  renderBoard({ tasks: [{ ...task, state: "blocked" }], onPrerequisiteChanged: vi.fn() });
+  fireEvent.click(screen.getByRole("button", { name: `Actions for ${task.title}` }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Manage prerequisites" }));
+  expect(screen.getByRole("dialog", { name: "Prerequisites" })).toBeVisible();
+  expect(screen.getByLabelText("Why change this link?")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Close", exact: true }));
+  expect(screen.queryByRole("dialog", { name: "Prerequisites" })).not.toBeInTheDocument();
+});
+
 test("keeps active work above the fold on phones until task creation is requested", async () => {
   vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
   renderBoard({ tasks: [] });

@@ -18,6 +18,7 @@ import TaskAssignment from "./TaskAssignment";
 import TaskDetailDialog from "./TaskDetailDialog";
 import TaskMetadata from "./TaskMetadata";
 import TaskPrerequisiteList from "../queues/TaskPrerequisiteList";
+import TaskPrerequisiteDialog from "./TaskPrerequisiteDialog";
 
 export type TaskCardProps = {
   task: Task;
@@ -33,6 +34,8 @@ export type TaskCardProps = {
   onStartWorker: (task: Task) => Promise<void>;
   onOpenWorker: (sessionId: string) => void;
   onOpenTask?: (taskId: string) => void;
+  prerequisiteCandidates?: Task[];
+  onPrerequisiteChanged?: (updated: Task) => void;
   onFetchActivity: (taskId: string) => Promise<TaskActivityPage>;
   onFetchJiraComments: (taskId: string) => Promise<JiraComment[]>;
   onAddJiraComment: (taskId: string, body: string) => Promise<{ state: string }>;
@@ -49,7 +52,7 @@ export type TaskCardProps = {
   onDragEnd: () => void;
 };
 
-export default function TaskCard({ task, jiraLink, emailSources, operatorToken, workers, busy, onUpdate, onRemove, onTransition, onAssign, onStartWorker, onOpenWorker, onOpenTask, onFetchActivity, onFetchJiraComments, onAddJiraComment, onRetryJira, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, dropTarget, onDragTarget, onDragLeave, onDragStart, onDragEnd }: TaskCardProps) {
+export default function TaskCard({ task, jiraLink, emailSources, operatorToken, workers, busy, onUpdate, onRemove, onTransition, onAssign, onStartWorker, onOpenWorker, onOpenTask, prerequisiteCandidates = [], onPrerequisiteChanged, onFetchActivity, onFetchJiraComments, onAddJiraComment, onRetryJira, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, dropTarget, onDragTarget, onDragLeave, onDragStart, onDragEnd }: TaskCardProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [activity, setActivity] = useState<TaskActivityPage>();
   const [historyError, setHistoryError] = useState(false);
@@ -60,6 +63,7 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
   const [emailDetailsOpen, setEmailDetailsOpen] = useState(false);
   const [emailDetailsMounted, setEmailDetailsMounted] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [prerequisitesOpen, setPrerequisitesOpen] = useState(false);
 
   function runMenuAction(action: () => void) {
     setMenuPoint(undefined);
@@ -140,6 +144,7 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
         <CursorMenu className="task-menu" point={menuPoint} onClose={() => setMenuPoint(undefined)} label={`${task.title} actions`}>
           <button role="menuitem" onClick={() => runMenuAction(() => setDetailsOpen(true))}>Review and edit</button>
           <button role="menuitem" onClick={() => runMenuAction(toggleHistory)}>{historyOpen ? "Hide history" : "Show history"}</button>
+          {onPrerequisiteChanged && (task.state === "blocked" || Boolean(task.prerequisites?.length)) && <button role="menuitem" disabled={busy} onClick={() => runMenuAction(() => setPrerequisitesOpen(true))}>Manage prerequisites</button>}
           {task.state !== "completed" && <button role="menuitem" disabled={busy || !canMoveEarlier} onClick={() => runMenuAction(onMoveEarlier)}>Move earlier</button>}
           {task.state !== "completed" && <button role="menuitem" disabled={busy || !canMoveLater} onClick={() => runMenuAction(onMoveLater)}>Move later</button>}
           {task.state === "active" && <button className="danger-text" role="menuitem" disabled={busy} onClick={() => runMenuAction(() => void onTransition(task, "blocked"))}>Block task</button>}
@@ -155,6 +160,7 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
       {discussionMounted && jiraLink && <div className="task-card-panel" hidden={!discussionOpen}><JiraDiscussion taskId={task.id} issueKey={jiraLink.issue_key} onFetch={onFetchJiraComments} onAdd={onAddJiraComment} /></div>}
       {emailDetailsMounted && emailSources.length > 0 && <div className="task-card-panel" hidden={!emailDetailsOpen}><EmailResolutionPanel operatorToken={operatorToken} task={task} sources={emailSources} /></div>}
       {detailsOpen && <TaskDetailDialog task={task} jiraLink={jiraLink} emailSources={emailSources} operatorToken={operatorToken} busy={busy} onClose={() => setDetailsOpen(false)} onSave={(input) => onUpdate(task, input)} onRemove={() => onRemove(task)} />}
+      {prerequisitesOpen && onPrerequisiteChanged && <TaskPrerequisiteDialog task={task} candidates={prerequisiteCandidates} operatorToken={operatorToken} onChanged={onPrerequisiteChanged} onClose={() => setPrerequisitesOpen(false)} />}
     </article>
   );
 }

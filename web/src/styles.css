@@ -2824,6 +2824,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .queue-task-meta { flex: 0 0 auto; color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
 .queue-group li > .queue-task-meta { white-space: normal; overflow-wrap: anywhere; }
 .queue-prerequisites { margin: 0.35rem 0.5rem 0.65rem; padding-left: 0.75rem; border-left: 2px solid var(--line); }
+.task-prerequisite-dialog { max-width: 720px; }
+.task-prerequisite-dialog select { width: 100%; max-width: 100%; min-height: 44px; }
 .queue-prerequisites .queue-task-meta { white-space: normal; overflow-wrap: anywhere; }
 .queue-prerequisites summary { color: var(--muted); font-size: 0.8rem; }
 .queue-prerequisite-list li { padding-block: 0.2rem; }

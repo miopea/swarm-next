@@ -14,6 +14,7 @@ import { App } from "../App";
 import { SURFACE_STORAGE_KEY } from "../navigation/startSurface";
 import QueuesView from "../queues/QueuesView";
 import TaskBoard from "../tasks/TaskBoard";
+import TaskPrerequisiteDialog from "../tasks/TaskPrerequisiteDialog";
 import WorkerRosterItem from "../workers/WorkerRosterItem";
 import WorkerSettings from "../settings/WorkerSettings";
 import { demoBlocked, demoBriefings, demoDecision, demoTasks, demoWorkers } from "./productFixtures";
@@ -525,6 +526,18 @@ export const SURFACES: Surface[] = [
       { task_id: demoTasks[2].id, title: demoTasks[2].title, worker_id: demoTasks[2].assigned_worker_id!,
         worker_name: "Orchard API", queued_at: now - 120, reason: "waiting_its_turn", blocked_by: "Verify the export schema" },
     ]} onOpenTask={() => undefined} />,
+  },
+  {
+    id: "prerequisite-editor",
+    title: "Prerequisite editor",
+    why: "synthetic operator form; no live task mutations",
+    render: () => <TaskPrerequisiteDialog task={demoTasks[3]} candidates={demoTasks} operatorToken="harness" onChanged={noop} onClose={noop} />,
+  },
+  {
+    id: "prerequisite-editor-phone",
+    title: "Phone prerequisite editor",
+    why: "390px layout only, not native mobile acceptance",
+    render: () => <iframe title="Phone prerequisite editor" src="/harness.html?surface=prerequisite-editor" style={{ display: "block", width: 390, height: 844, border: 0 }} />,
   },
   {
     id: "queues-prerequisites",

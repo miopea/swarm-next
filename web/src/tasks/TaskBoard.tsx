@@ -61,6 +61,7 @@ type Props = {
   onStartWorker: (task: Task) => Promise<void>;
   onOpenWorker: (sessionId: string) => void;
   onOpenTask?: (taskId: string) => void;
+  onPrerequisiteChanged?: (updated: Task) => void;
   onFetchActivity: (taskId: string) => Promise<TaskActivityPage>;
   onFetchJiraComments: (taskId: string) => Promise<JiraComment[]>;
   onAddJiraComment: (taskId: string, body: string) => Promise<{ state: string }>;
@@ -140,6 +141,7 @@ export default function TaskBoard({
   onStartWorker,
   onOpenWorker,
   onOpenTask,
+  onPrerequisiteChanged,
   onFetchActivity,
   onFetchJiraComments,
   onAddJiraComment,
@@ -575,6 +577,8 @@ export default function TaskBoard({
                 onStartWorker={onStartWorker}
                 onOpenWorker={onOpenWorker}
                 onOpenTask={onOpenTask}
+                prerequisiteCandidates={tasks}
+                onPrerequisiteChanged={onPrerequisiteChanged}
                 onFetchActivity={onFetchActivity}
                 onFetchJiraComments={onFetchJiraComments}
                 onAddJiraComment={onAddJiraComment}
@@ -667,6 +671,8 @@ export default function TaskBoard({
                 onStartWorker={onStartWorker}
                 onOpenWorker={onOpenWorker}
                 onOpenTask={onOpenTask}
+                prerequisiteCandidates={tasks}
+                onPrerequisiteChanged={onPrerequisiteChanged}
                 onFetchActivity={onFetchActivity}
                 onFetchJiraComments={onFetchJiraComments}
                 onAddJiraComment={onAddJiraComment}
@@ -759,6 +765,8 @@ export default function TaskBoard({
                 onStartWorker={onStartWorker}
                 onOpenWorker={onOpenWorker}
                 onOpenTask={onOpenTask}
+                prerequisiteCandidates={tasks}
+                onPrerequisiteChanged={onPrerequisiteChanged}
                 onFetchActivity={onFetchActivity}
                 onFetchJiraComments={onFetchJiraComments}
                 onAddJiraComment={onAddJiraComment}

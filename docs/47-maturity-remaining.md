@@ -8,6 +8,23 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Operator prerequisite editor checkpoint (2026-09-05)
+
+Task actions now offer an audited prerequisite editor for blocked tasks and
+tasks with existing links. It retains choices after refusal or uncertain network
+responses, guards accidental dismissal and duplicate submission, and rechecks
+eligibility when live task state changes. It does not start or stop workers.
+Candidate rendering is bounded and searchable; server lifecycle/cycle checks
+remain authoritative. Accepted responses refresh both open and loaded history.
+
+The frontend suite passed 1,135 tests across 130 files, followed by all 48 task
+board tests after adding the menu-to-dialog integration test. Production build
+passed (the existing terminal chunk-size warning remains). Edge fixture visual
+checks covered desktop and a 390-by-844 narrow viewport with readable controls
+and no visible horizontal overflow. This is not Android/iOS keyboard acceptance
+or signed-in live-Hive visual acceptance. Queen cross-worker orchestration and
+the broader queue completion gate remain open.
+
 - [x] Restore the browser task-list/settled-history split at the HTTP boundary.
   On `12ec47b4`, five localhost `/api/v1/tasks` reads returned 3,118,493 bytes
   each in 17.0–17.4 ms. The response contained 786 tasks, including 703 Completed
