@@ -46,4 +46,6 @@ test("only treats interrupted or operator-blocked Queen reviews as attention", (
 
   // An unconfirmed delivery is a real stall either way, and is untouched.
   expect(queenAutomationNeedsAttention({ ...idle, state: "uncertain" }, false)).toBe(true);
+  expect(queenAutomationNeedsAttention({ ...idle, state: "uncertain" }, true, true)).toBe(true);
+  expect(queenAutomationNeedsAttention(blocked, true, true)).toBe(false);
 });

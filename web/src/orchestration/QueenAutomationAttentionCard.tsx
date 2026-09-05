@@ -22,7 +22,7 @@ type Props = {
 export default function QueenAutomationAttentionCard({ status, coveredBySpecificDecision = false, queenRequestPending = false, onOpenQueen, onReviewSettings, onRetry }: Props) {
   const [retrying, setRetrying] = useState(false);
   const [failed, setFailed] = useState(false);
-  if (!queenAutomationNeedsAttention(status, queenRequestPending) || coveredBySpecificDecision) return null;
+  if (!queenAutomationNeedsAttention(status, queenRequestPending, coveredBySpecificDecision)) return null;
   // The card said what was wrong in three places and offered no way to end it;
   // the only control that resolved this lived in settings. Opening Queen stays
   // first, because the message asks the operator to check her terminal before
@@ -57,7 +57,7 @@ export default function QueenAutomationAttentionCard({ status, coveredBySpecific
           >{retrying ? "Resuming…" : "Resume review"}</button>
         ) : null}
         <button className="secondary-button" type="button" onClick={onReviewSettings}>Review automation</button>
-        {failed ? <small role="alert">Queen could not resume the review. Her current work was not changed.</small> : null}
+        {failed ? <small role="alert">Swarm could not confirm whether the review resumed. Check Queen before trying again.</small> : null}
       </div>
     </section>
   );

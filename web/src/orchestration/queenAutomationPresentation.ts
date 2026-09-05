@@ -73,9 +73,12 @@ export function queenAutomationStateTone(status: QueenAutomationStatus | undefin
 export function queenAutomationNeedsAttention(
   status: QueenAutomationStatus | undefined,
   queenRequestPending = false,
+  coveredBySpecificDecision = false,
 ) {
+  // A pending decision is not evidence that an interrupted delivery recovered.
   if (status?.state === "uncertain") return true;
   return status?.state === "completed"
     && status.outcome === "needs_operator"
-    && queenRequestPending;
+    && queenRequestPending
+    && !coveredBySpecificDecision;
 }

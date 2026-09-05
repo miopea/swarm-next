@@ -7,6 +7,19 @@ authorized. No release is authorized.
 
 ## Live dogfood follow-ups — 2026-09-05
 
+### Needs You: unrelated decisions cannot hide delivery uncertainty
+
+- The Queen attention card and its badge count now use the same visibility
+  predicate. A specific decision still replaces the duplicate needs-operator
+  summary, but cannot suppress an unrelated uncertain review delivery. Recovery
+  to Running removes that warning even while the decision remains pending.
+- Failed resume requests no longer assert that the worker was unchanged: a
+  transport failure can occur after acceptance. The card tells the operator to
+  check Queen before retrying rather than promising that no action occurred.
+- All 37 orchestration frontend tests and TypeScript checking pass. This closes
+  a visibility defect, not the entire safe-recovery-first escalation workflow.
+  Authenticated live visual acceptance remains pending.
+
 ### Follow-up: meaningful Queen delivery invalidations
 
 - Deployment verified at `/health` as

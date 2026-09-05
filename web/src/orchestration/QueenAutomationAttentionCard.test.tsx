@@ -41,7 +41,7 @@ test("stays absent for a safe completed review", () => {
 });
 
 test("stays absent when Queen already filed a concrete decision", () => {
-  const { container } = render(<QueenAutomationAttentionCard status={status} coveredBySpecificDecision onOpenQueen={() => undefined} onReviewSettings={() => undefined} />);
+  const { container } = render(<QueenAutomationAttentionCard status={status} queenRequestPending coveredBySpecificDecision onOpenQueen={() => undefined} onReviewSettings={() => undefined} />);
   expect(container).toBeEmptyDOMElement();
 });
 
@@ -82,7 +82,8 @@ test("says so when resuming fails, without claiming anything changed", async () 
 
   fireEvent.click(screen.getByRole("button", { name: "Resume review" }));
 
-  expect(await screen.findByRole("alert")).toHaveTextContent("Her current work was not changed");
+  expect(await screen.findByRole("alert")).toHaveTextContent("could not confirm whether the review resumed");
+  expect(screen.getByRole("alert")).toHaveTextContent("Check Queen before trying again");
 });
 
 test("says something different from the settings panel about the same state", () => {
@@ -117,4 +118,14 @@ test("an unconfirmed delivery still speaks for itself", () => {
   );
 
   expect(screen.getByRole("heading")).toBeInTheDocument();
+});
+
+test("a pending Queen decision does not hide unrelated delivery uncertainty, but recovery does", () => {
+  const props = { queenRequestPending: true, coveredBySpecificDecision: true,
+    onOpenQueen: vi.fn(), onReviewSettings: vi.fn(), onRetry: vi.fn() };
+  const { rerender } = render(<QueenAutomationAttentionCard {...props} status={uncertain} />);
+  expect(screen.getByRole("heading", { name: "Review needs attention" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Resume review" })).toBeInTheDocument();
+  rerender(<QueenAutomationAttentionCard {...props} status={{ ...uncertain, state: "running" }} />);
+  expect(screen.queryByRole("heading")).not.toBeInTheDocument();
 });

@@ -1531,8 +1531,7 @@ export function App() {
   // Counted only when it is not already counted as the specific request it
   // refers to, so one thing needing the operator is one item in the queue.
   const queenAutomationAttentionCount =
-    queenAutomationNeedsAttention(queenAutomation, pendingQueenDecisionCount > 0)
-      && pendingQueenDecisionCount === 0
+    queenAutomationNeedsAttention(queenAutomation, pendingQueenDecisionCount > 0, pendingQueenDecisionCount > 0)
       ? 1
       : 0;
   // Held work is one card however many deliveries are behind it, the same way
