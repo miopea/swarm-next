@@ -77,6 +77,18 @@ geometry/interaction acceptance; the five-renderer policy stays off by default.
 
 ### Accepted evidence retry feedback (September 5)
 
+Live follow-through on `f921af28`: the Contract demo received browser input,
+ran `pwd` in the expected isolated workspace and printed HONEYCOMB-INPUT-PASS
+with exit 0. It read completed task 01a07375-2e04-7f83-95c3-e02124f47792 and
+made one requested duplicate no-deployment claim. Its displayed result reported
+the exact corrected "already approved; this task is completed" error and
+instructions to read accepted evidence/history instead of rewriting it. This
+was an explicitly bounded single-call test, not proof that all agents naturally
+stop retrying. SSH confirmed a clean demo tree, healthy serving revision and
+unchanged engine PID 2456733. The tab was left in Settings. Basic post-optimization
+terminal input and the live MCP error message are verified; real-device geometry
+and sustained performance remain open.
+
 The isolated blocked-ready recovery task auto-completed after its empty commit
 report. A later no-deployment claim was rejected with misleading instructions
 to supply concise evidence, causing unnecessary retries. An already-approved
