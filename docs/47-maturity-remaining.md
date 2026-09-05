@@ -25,9 +25,12 @@ After at least 30 seconds without switching: heap 42,469,016 bytes, nodes 3,494,
 listeners 2,754. No forced GC. Different starting gauges show natural activity
 between intervals; do not subtract across them as one uninterrupted CPU window.
 
-The reduced second-pass task time does not close the degradation report. Listener
-growth and non-settled heap warrant longer observation and allocation/lifecycle
-inspection; these short samples alone cannot establish a leak. Performance
+At a later idle follow-up, heap had fallen to 38,914,764 bytes and listeners to
+1,105, with 3,495 nodes. No reload or forced garbage collection was used. The
+listener decline weakens the accumulating-listener hypothesis: do not present
+the earlier peak as a confirmed leak. The reduced second-pass task time does not
+close the degradation report; longer observation and allocation/lifecycle
+inspection remain necessary. Performance
 collection was disabled and the same tab preserved for continued measurement.
 
 ### Authenticated fresh passive-browser baseline (September 5)
