@@ -312,10 +312,10 @@ impl TaskStore {
             .map(|mapping| (mapping.jira_status_id, mapping.task_state))
             .collect::<HashMap<_, _>>();
         let mut issue_ids = HashSet::new();
-        if !issues.iter().all(|issue| {
-            issue_ids.insert(issue.issue_id.trim().to_owned())
-                && states.contains_key(issue.status_id.trim())
-        }) {
+        if !issues
+            .iter()
+            .all(|issue| issue_ids.insert(issue.issue_id.trim().to_owned()))
+        {
             return Err(TaskStoreError::InvalidJiraWorkflowMapping);
         }
 
@@ -345,7 +345,12 @@ impl TaskStore {
             let summary = issue.summary.trim();
             let status_id = issue.status_id.trim();
             let status_name = issue.status_name.trim();
-            let target_state = states[status_id];
+            // Dismissed work is outside synchronization, including subsequent
+            // remote workflow changes. Only retained work needs a mapped state.
+            // The transaction still rolls back the whole batch on a real gap.
+            let target_state = *states
+                .get(status_id)
+                .ok_or(TaskStoreError::InvalidJiraWorkflowMapping)?;
             let existing = transaction
                 .query_row(
                     "SELECT link.task_id, task.state, delivery.id, delivery.target_task_state,
@@ -1769,6 +1774,37 @@ mod tests {
             ));
             assert_eq!(store.list_jira_issue_links(binding.id).unwrap().len(), 2);
         }
+        let removed_unmapped = JiraIssueSnapshot {
+            status_id: "removed-status",
+            status_name: "New remote workflow",
+            ..removed
+        };
+        let synced = store
+            .sync_jira_issues(binding.id, &[removed_unmapped, available.clone()])
+            .unwrap();
+        assert_eq!(synced.len(), 1);
+        assert_eq!(synced[0].title, available.summary);
+        assert!(matches!(
+            store.get_task(task.id),
+            Err(TaskStoreError::NotFound)
+        ));
+
+        // An unmapped retained issue still refuses atomically. Moving validation
+        // inside the transaction must not leave an earlier new issue imported.
+        let new_issue = JiraIssueSnapshot {
+            issue_id: "20005",
+            issue_key: "WEB-46",
+            ..available.clone()
+        };
+        let retained_unmapped = JiraIssueSnapshot {
+            status_id: "unknown",
+            ..available
+        };
+        assert!(matches!(
+            store.sync_jira_issues(binding.id, &[new_issue, retained_unmapped]),
+            Err(TaskStoreError::InvalidJiraWorkflowMapping)
+        ));
+        assert_eq!(store.list_jira_issue_links(binding.id).unwrap().len(), 2);
     }
 
     #[test]
