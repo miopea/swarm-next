@@ -1308,7 +1308,7 @@ pub(super) fn queen_automation_message(delivery: &QueenAutomationDelivery) -> Co
         delivery.actionable_count,
         delivery.presence,
         delivery.run_id,
-        guidance = format_args!("{} {}", crate::agent::QUEEN_JUDGMENT_GUIDANCE, crate::agent::QUEEN_BLOCK_RECOVERY_GUIDANCE),
+        guidance = format_args!("{} {} {}", crate::agent::QUEEN_JUDGMENT_GUIDANCE, crate::agent::QUEEN_BLOCK_RECOVERY_GUIDANCE, crate::agent::QUEEN_EVIDENCE_GUIDANCE),
         wake_guidance = crate::agent::QUEEN_WAKE_GUIDANCE,
     )
     .into_bytes();
@@ -3021,6 +3021,7 @@ mod tests {
         assert!(message.contains("Never retry a superseded review question"));
         assert!(message.contains("not because of age"));
         assert!(message.contains(crate::agent::QUEEN_BLOCK_RECOVERY_GUIDANCE));
+        assert!(message.contains(crate::agent::QUEEN_EVIDENCE_GUIDANCE));
         // An approval must cite what it rests on, or the second pair of eyes
         // is a click. A stamp under load is what approved a false claim.
         assert!(

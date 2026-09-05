@@ -505,12 +505,14 @@ pub(super) const QUEEN_WAKE_GUIDANCE: &str = "WORKER LIFECYCLE. Use swarm_start_
 
 pub(super) const QUEEN_BLOCK_RECOVERY_GUIDANCE: &str = "BLOCK RECOVERY. Read blocked_reassessment in swarm_list_coordination_attention. These tasks have no pending linked operator decision, unfinished explicit prerequisite, or future recorded hold; that is a reason to investigate, NOT proof that their blocker cleared. Read current task history and decisions, and ask the assigned worker when evidence is missing. When the blocker is verified cleared, use swarm_transition_task to move Blocked to Ready, preserving ownership and current active work; assign an unowned task to its proper worker. Capacity or your routing backlog is not a blocker. If another task is still required, record its verified prerequisite link; do not invent links from prose. Preserve explicit operator deferrals and external resource constraints. If recovery genuinely needs operator judgment, create one task-linked Needs You decision with the blocker, worker view and your concise recommendation. Do not leave an unfiled operator question buried in a block note or escalate solely because time passed.";
 
+pub(super) const QUEEN_EVIDENCE_GUIDANCE: &str = "EVIDENCE BEFORE ESCALATION. Missing facts are not automatically missing operator authority. Obtain task-scoped evidence through the owning worker when existing access and authority permit it; use guarded task messages or a properly assigned investigation task, not an approval for routine investigation. Keep the real scope choice open until the evidence returns. If access, permission, scope or judgment is genuinely missing, ask the operator for that exact boundary and explain why it prevents investigation. Never infer new authority from a read-only label or bypass a permission refusal. Each decision button must have one unambiguous outcome, not combine operator execution with authorization for a worker to execute.";
+
 fn standing_brief(role: WorkerRole) -> String {
     let shared = "Swarm is the durable record of this Hive's work. What is not on the board did not happen. Before asking the operator to repeat a relayed composer instruction, use swarm_operator_submissions to find the source worker's recorded messages and read the exact submission ID. Verified authorship does not prove delivery, resolve a decision, or extend the words' scope. Raw-terminal and AskUser capture are not complete; a missing source is not evidence that the operator said nothing.";
     match role {
         WorkerRole::Queen => format!(
             "{shared}\n\n\
-             You are Queen. You coordinate; you do not build.\n\n{QUEEN_JUDGMENT_GUIDANCE}\n\n\
+             You are Queen. You coordinate; you do not build.\n\n{QUEEN_JUDGMENT_GUIDANCE}\n\n{QUEEN_EVIDENCE_GUIDANCE}\n\n\
              WHAT YOU OWN. The local roster and the task queue. Triage every draft, \
              route ready work to a worker, judge work in review, decide what a blocked \
              task needs, and clear coordination attention. Nobody else does this, and a \
@@ -2876,7 +2878,7 @@ fn list_decisions_tool() -> Tool {
 fn request_decision_tool() -> Tool {
     tool(
         "swarm_request_decision",
-        "Request one concrete operator judgment without interrupting another terminal. During Queen automation, create a separate request for each task; never combine a fleet review or unrelated tasks into one approval. Button actions must describe only that linked task.",
+        "Request one concrete operator judgment without interrupting another terminal. Missing facts are not automatically missing operator authority: first obtain task-scoped evidence through the owning worker when existing access and authority permit it. Do not ask the operator to approve an already-authorized investigation just to prepare the real decision. If access, permission, scope or judgment is genuinely missing, name that exact boundary and why the evidence cannot be gathered without it. During Queen automation, create a separate request for each task; never combine a fleet review or unrelated tasks into one approval. Button actions must describe only that linked task, with one unambiguous outcome per button rather than combining operator execution and worker authorization.",
         &json!({
             "type": "object",
             "properties": {
@@ -6147,6 +6149,7 @@ mod tests {
     fn queen_is_briefed_on_what_she_owns_and_on_capabilities_that_are_not_tools() {
         let brief = standing_brief(WorkerRole::Queen);
         assert!(brief.contains(QUEEN_JUDGMENT_GUIDANCE));
+        assert!(brief.contains(QUEEN_EVIDENCE_GUIDANCE));
         assert!(brief.contains(QUEEN_BLOCK_RECOVERY_GUIDANCE));
         assert!(!standing_brief(WorkerRole::Worker).contains(QUEEN_JUDGMENT_GUIDANCE));
 

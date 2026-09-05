@@ -36,6 +36,17 @@ Verify existing read authority and route safe evidence gathering before asking
 the operator to make the actual scope choice. No real decision was answered or
 withdrawn during inspection. The generic blocked backlog remains unproven.
 
+Follow-up guidance now distinguishes missing facts from missing authority in
+Queen's standing brief, each automation submission (including existing sessions),
+and the decision tool description. It directs already-authorized investigation
+through the owning worker before escalation and preserves permission/access
+refusals. Buttons must not combine operator execution with worker authorization.
+This is prompt-contract work, not a deterministic classifier or proof of model
+compliance. Isolated live investigation-to-decision acceptance remains open;
+existing real requests are not silently withdrawn or answered by this change.
+The focused standing-brief and per-run-brief tests both passed in the isolated
+Linux workspace. Deployment and live behavioral acceptance remain pending.
+
 Queen's completed-prerequisite read missed blocks with no explicit edge. The
 existing coordination-attention response now also supplies `blocked_reassessment`:
 up to 64 current local Blocked tasks without a pending linked decision, unresolved
