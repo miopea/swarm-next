@@ -69,7 +69,16 @@ This is lifecycle evidence, not a measured production CPU or heap improvement.
 Detached Queues URLs now parse consistently with all five other detachable
 surfaces. The all-surface round-trip test reproduced the missing Queues branch
 before the fix. All 1,103 frontend tests and TypeScript checks pass. These
-browser-only changes are not deployed yet.
+browser-only changes deployed as `90dbcbff`, healthy with no degraded subsystems.
+The engine retained PID 2058454 and build identity `490b3f3c...99ebf1c` through
+this browser-only update.
+
+Queues now keeps ordinary worker-owned Active tasks in a collapsed "Marked
+active" section, separate from waiting counts. Queued/uncertain dispatch and
+returned reviews remain visible. The label makes no provider-progress claim.
+Edge verified collapse and expansion with synthetic work, and the regression
+tests cover active-only queues and visible delivery exceptions. This does not
+yet provide full dependency/blocker reasoning or live multi-worker acceptance.
 
 ### Current review obligation in Queues
 

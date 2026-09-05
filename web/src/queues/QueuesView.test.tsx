@@ -13,6 +13,34 @@ function task(overrides: Partial<Task>): Task {
 }
 
 describe("QueuesView", () => {
+  test("ordinary active work is inspectable but collapsed outside waiting groups", () => {
+    render(<QueuesView workers={[]} onOpenTask={vi.fn()} tasks={[
+      task({ id: "active", title: "Doing the work", state: "active", next_move_owner: "worker", dispatch_state: "delivered" }),
+      task({ id: "review", title: "Answer Queen", next_move_owner: "worker" }),
+    ]} />);
+    const active = screen.getByText("Doing the work").closest("details");
+    expect(active).not.toBeNull();
+    expect(active).not.toHaveAttribute("open");
+    expect(active?.querySelector("summary")).toHaveTextContent("Marked active 1");
+    expect(screen.getByRole("heading", { name: "Waiting on a worker 1" })).toBeVisible();
+    expect(screen.getByText("Answer Queen")).toBeVisible();
+  });
+
+  test("active delivery problems remain visible rather than folded into ordinary work", () => {
+    render(<QueuesView workers={[]} onOpenTask={vi.fn()} tasks={[
+      task({ state: "active", next_move_owner: "worker", dispatch_state: "uncertain" }),
+    ]} />);
+    expect(screen.getByText(/Briefing delivery unconfirmed/)).toBeVisible();
+    expect(screen.getByText("Some work").closest("details")).toBeNull();
+  });
+
+  test("an active-only queue keeps its collapsed inspection instead of claiming no work", () => {
+    render(<QueuesView workers={[]} onOpenTask={vi.fn()} tasks={[
+      task({ state: "active", next_move_owner: "worker", dispatch_state: "delivered" }),
+    ]} />);
+    expect(screen.getByText("Some work").closest("details")).not.toBeNull();
+    expect(screen.queryByText("Nothing is waiting on anyone.")).not.toBeInTheDocument();
+  });
   test("long review requests keep their complete text in a collapsed disclosure", () => {
     const question = "Verify the failure case. ".repeat(30);
     render(<QueuesView workers={[]} onOpenTask={vi.fn()} tasks={[task({ next_move_owner: "worker", review_request_id: "request-long", review_request: question })]} />);
@@ -106,7 +134,7 @@ describe("QueuesView", () => {
     ]} />);
 
     expect(screen.getByRole("heading", { name: /Waiting on Queen 2/ })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /Waiting on a worker 1/ })).toBeInTheDocument();
+    expect(screen.getByText("Mine").closest("details")?.querySelector("summary")).toHaveTextContent("Marked active 1");
     expect(screen.getByRole("heading", { name: /Blocked on something else 1/ })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /Waiting on you 1/ })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /Next owner not recorded/ })).not.toBeInTheDocument();

@@ -2822,6 +2822,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 /* Blocked is not a slow queue, it is a different kind of thing: nothing here
    can move it. Marked so it does not read as somebody failing to act. */
 .queue-group[data-owner="blocked"] { border-style: dashed; }
+.queue-active > summary { cursor: pointer; font-weight: 600; min-height: 44px; padding-block: 0.6rem; }
+.queue-active[open] > .queue-meaning { margin-bottom: 0.6rem; }
 
 /* Broadcast to every worker. A header icon and a modal, NOT a panel in the
    rail: the first version put a full-width primary button above the worker

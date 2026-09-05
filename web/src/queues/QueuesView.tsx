@@ -45,8 +45,8 @@ const GROUP_TITLES: Record<Group["owner"], string> = {
 const GROUP_MEANINGS: Record<Group["owner"], string> = {
   unknown: "Open work without a known next owner. This is missing evidence, not a healthy queue.",
   queen: "Work whose next recorded move belongs to Queen.",
-  operator: "Reviewed work with a decision open on it. Nobody in the Hive can move these — answering the decision releases them.",
-  worker: "Work a worker owns — in progress, or handed back for something missing.",
+  operator: "Work with a decision open for you. Recovered or obsolete requests can be withdrawn by Queen.",
+  worker: "Worker-owned work awaiting delivery or a requested follow-up.",
   blocked: "Blocked work. Queen coordinates dependencies and recovery; task context explains the recorded block.",
   release: "Finished and accepted. These close themselves when the work ships.",
   nobody: "Closed.",
@@ -89,6 +89,11 @@ function taskProgress(task: Task): string {
   return "Draft · awaiting triage";
 }
 
+function ordinaryActiveWork(task: Task): boolean {
+  return task.state === "active" && task.next_move_owner === "worker"
+    && (task.dispatch_state == null || task.dispatch_state === "delivered");
+}
+
 export default function QueuesView({
   tasks,
   workers,
@@ -124,7 +129,7 @@ export default function QueuesView({
   );
 
   const groups = useMemo<Group[]>(() => {
-    const open = tasks.filter((task) => isOpenTaskState(task.state));
+    const open = tasks.filter((task) => isOpenTaskState(task.state) && !ordinaryActiveWork(task));
     return GROUP_ORDER.map((owner) => ({
       owner,
       title: GROUP_TITLES[owner],
@@ -138,6 +143,8 @@ export default function QueuesView({
     })).filter((group) => group.tasks.length > 0);
   }, [tasks]);
 
+  const activeWork = useMemo(() => tasks.filter(ordinaryActiveWork), [tasks]);
+
   const total = groups.reduce((sum, group) => sum + group.tasks.length, 0);
   const waits = new Map(blockedWaits.map((wait) => [wait.task_id, wait]));
   // Do not duplicate a task already in the main queue or resurrect one known
@@ -145,7 +152,7 @@ export default function QueuesView({
   const known = new Set(tasks.map((task) => task.id));
   const extraWaits = blockedWaits.filter((wait) => !known.has(wait.task_id));
 
-  if (total === 0 && extraWaits.length === 0) {
+  if (total === 0 && extraWaits.length === 0 && activeWork.length === 0) {
     return (
       <section className="queues" aria-label="Queues">
         {coordinatorUnavailable && <p role="status">Coordination status could not refresh. Showing last known work; it may have changed.</p>}
@@ -209,6 +216,14 @@ export default function QueuesView({
         </button></li>)}</ul>
       </article>}
       <HeldBriefingList briefings={heldBriefings} onOpenTask={onOpenTask} />
+      {activeWork.length > 0 && <details className="queue-group queue-active">
+        <summary>Marked active <span className="queue-count">{activeWork.length}</span></summary>
+        <p className="queue-meaning">Recorded task state, not proof of current provider activity. Delivery exceptions remain visible above.</p>
+        <ul>{activeWork.map((task) => <li key={task.id}><button type="button" onClick={() => onOpenTask(task.id)}>
+          <span className="queue-task-title">{task.title}</span>
+          <span className="queue-task-meta">{task.assigned_worker_id ? workerNames.get(task.assigned_worker_id) ?? "assigned" : "unassigned"}</span>
+        </button></li>)}</ul>
+      </details>}
     </section>
   );
 }
