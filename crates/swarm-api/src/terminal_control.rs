@@ -184,7 +184,24 @@ pub(super) async fn stop(
             .cancel_session_revival(session_id)
             .map_err(|error| task_store_error(&error))?;
     }
-    let response = authorized_request(&state, &headers, HostRequest::Stop { session_id }).await?;
+    let bound_worker = state
+        .task_store
+        .as_ref()
+        .map(|store| match store.provider_for_active_session(session_id) {
+            Ok(_) => Ok(true),
+            Err(swarm_persistence::TaskStoreError::WorkerSessionNotActive) => Ok(false),
+            Err(error) => Err(error),
+        })
+        .transpose()
+        .map_err(|error| task_store_error(&error))?
+        .unwrap_or(false);
+    let response = if bound_worker {
+        crate::worker_runtime::stop_worker_session_preserving_context(&state, session_id).await?;
+        Json(HostResponse::Acknowledged)
+    } else {
+        // Standalone shells have no durable worker conversation to preserve.
+        authorized_request(&state, &headers, HostRequest::Stop { session_id }).await?
+    };
     if let Some(store) = &state.task_store {
         store
             .release_worker_session(session_id)

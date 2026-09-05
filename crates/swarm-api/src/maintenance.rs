@@ -780,6 +780,15 @@ mod tests {
 
     #[tokio::test]
     async fn restart_all_saves_final_selection_and_retains_binding_on_cleanup_failure() {
+        assert_stop_route_preserves_context(false).await;
+    }
+
+    #[tokio::test]
+    async fn direct_worker_stop_saves_selection_and_retains_binding_on_cleanup_failure() {
+        assert_stop_route_preserves_context(true).await;
+    }
+
+    async fn assert_stop_route_preserves_context(direct_stop: bool) {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
         let directory = tempfile::tempdir().unwrap();
@@ -830,7 +839,19 @@ mod tests {
                 axum::http::header::AUTHORIZATION,
                 "Bearer fixture".parse().unwrap(),
             );
-            assert!(restart_all_workers(State(state), headers).await.is_err());
+            if direct_stop {
+                assert!(
+                    crate::terminal_control::stop(
+                        State(state),
+                        headers,
+                        axum::extract::Path(session.to_string()),
+                    )
+                    .await
+                    .is_err()
+                );
+            } else {
+                assert!(restart_all_workers(State(state), headers).await.is_err());
+            }
             assert_eq!(
                 store.get_worker_profile(worker.id).unwrap().active_session_id,
                 Some(session)

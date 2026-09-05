@@ -66,6 +66,18 @@ conversation remained persistence-confirmed after API replacement. Main push
 again bypassed four expected checks; no release was cut. This validates app-only
 deployment continuity, not a new end-to-end provider restart acceptance.
 
+Direct terminal-stop follow-up: bound worker sessions now use the same retained
+context handshake before binding/assignment release. Standalone terminals keep
+their existing stop path; persistence errors cannot be mistaken for an unbound
+terminal. The two isolated restart/direct-stop failure regressions passed, proving
+selection commit precedes cleanup and a failed cleanup keeps the binding.
+The first compile encountered a Rust 1.97.1 incremental fingerprint compiler
+error; retry with `CARGO_INCREMENTAL=0` passed. This was a validation-cache failure,
+not live service disruption. No provider restart was performed for these checks.
+The complete API library suite then passed 467 tests in 108.72 seconds with
+incremental compilation disabled. Local-only formatting expansion followed the
+remote source copy; runtime behavior and tested assertions were unchanged.
+
 ### Disposed renderer fit cancellation (September 5)
 
 Disposal previously checked only after font/frame waits resumed. Two regressions
