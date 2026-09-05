@@ -8,6 +8,25 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Terminal-specific font readiness (September 5)
+
+The fit path awaited `document.fonts.ready`, coupling terminal startup to all
+page fonts. It now loads the configured terminal font for the cell-measurement
+character W, then retains existing stable-frame and geometry-ownership checks.
+Failed font loading proceeds to measured fallback rendering. The standard
+[FontFaceSet.load contract](https://developer.mozilla.org/en-US/docs/Web/API/FontFaceSet/load)
+supports scoped font loading and rejects failed loads. No new timer or retry.
+
+Both regressions failed before the change: unrelated font readiness held forever,
+with terminal-font success or failure. All 38 surface tests and TypeScript checks
+passed afterward. Edge's real renderer pool fixture reached connected with one
+attached renderer; the separate synthetic 36-column question fixture repainted
+question two and restored its canonical buffer without question-one text.
+This is compatibility evidence, not measured latency improvement, native AskUser
+acceptance or attribution of the operator's 4–8 second stalls. Undeployed during
+the fixed-build baseline; scoped-font pending time and real-device acceptance
+remain part of the broader performance/recovery gates.
+
 ### Rendered mobile fixture acceptance (September 5)
 
 Edge's separate isolated harness tab exercised local composer Send. A DOM snapshot

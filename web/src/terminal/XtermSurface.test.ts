@@ -330,6 +330,32 @@ test("ownership lost during asynchronous fit prevents local grid mutation", asyn
   surface.dispose();
 });
 
+test.each([false, true])("fit waits only for terminal fonts and tolerates load failure: %s", async (fontFailure) => {
+  const previousFonts = Object.getOwnPropertyDescriptor(document, "fonts");
+  const load = vi.fn(() => fontFailure ? Promise.reject(new Error("font unavailable")) : Promise.resolve([]));
+  Object.defineProperty(document, "fonts", { configurable: true, value: { ready: new Promise(() => {}), load } });
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.push(callback); return frames.length; });
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  xterm.propose.mockReturnValue({ rows: 38, cols: 132 });
+  const surface = new XtermSurface();
+  try {
+    surface.open(document.createElement("div"));
+    const fitting = surface.fit();
+    expect(load).toHaveBeenCalledWith(`14px ${xterm.options?.fontFamily}`, "W");
+    for (let step = 0; step < 4; step++) await Promise.resolve();
+    expect(frames).toHaveLength(1);
+    frames.shift()?.(0);
+    await Promise.resolve();
+    frames.shift()?.(16);
+    expect(await fitting).toEqual({ rows: 38, columns: 132 });
+  } finally {
+    surface.dispose();
+    if (previousFonts) Object.defineProperty(document, "fonts", previousFonts);
+    else Reflect.deleteProperty(document, "fonts");
+  }
+});
+
 test("authoritative fit waits until xterm can propose real dimensions", async () => {
   const frames: FrameRequestCallback[] = [];
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {

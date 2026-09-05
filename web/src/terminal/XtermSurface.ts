@@ -327,7 +327,12 @@ export class XtermSurface implements TerminalSurface {
     try {
       if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
       this.#cancelScheduledFit();
-      await document.fonts?.ready;
+      // Wait for the face used to measure terminal cells, not unrelated UI
+      // fonts on the page. A failed web font uses the configured fallbacks;
+      // stable measured frames below still govern geometry readiness.
+      try {
+        await document.fonts?.load(`${this.#terminal.options.fontSize}px ${this.#terminal.options.fontFamily}`, "W");
+      } catch { /* Font loading failure must not prevent fallback rendering. */ }
       let previous: { rows: number; columns: number } | undefined;
       let stableFrames = 0;
       for (let frame = 0; frame < MAX_FIT_FRAMES; frame += 1) {
