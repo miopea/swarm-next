@@ -151,7 +151,7 @@ export const demoTasks: Task[] = [
     1,
     "high",
   ),
-  task(
+  { ...task(
     "0199bbbb-0000-7000-8000-000000000003",
     "Give the search index a way to say it is stale",
     "It currently answers confidently from whatever it last built. A reader cannot tell a fresh answer from a week-old one.",
@@ -159,7 +159,7 @@ export const demoTasks: Task[] = [
     "/home/you/projects/orchard-api",
     null,
     2,
-  ),
+  ), blocked_note: "Waiting for the API contract task before choosing the stale-response format." },
   { ...task(
     "0199bbbb-0000-7000-8000-000000000004",
     "Field notes lose their attachment when the upload is retried",

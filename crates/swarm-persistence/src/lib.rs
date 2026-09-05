@@ -1814,7 +1814,13 @@ impl TaskStore {
                    -- it, so it unsets itself the moment they answer.
                    EXISTS(SELECT 1 FROM decision_requests dr
                           WHERE dr.task_id = t.id AND dr.state = 'pending'),
-                   review_message.id, review_message.body
+                   review_message.id, review_message.body,
+                   CASE WHEN t.state = 'blocked' THEN
+                     (SELECT CASE WHEN block.to_state = 'blocked' THEN NULLIF(block.note, '') END
+                      FROM task_activity block
+                      WHERE block.task_id = t.id AND block.kind = 'state_changed'
+                      ORDER BY block.sequence DESC LIMIT 1)
+                   END
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
@@ -5922,6 +5928,7 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         closed_unverifiable: row.get(18)?,
         review_request_id: row.get(21)?,
         review_request: row.get(22)?,
+        blocked_note: row.get(23)?,
         next_move_owner: swarm_domain::NextMoveOwner::derive(
             TaskState::from_str(&state).unwrap_or(TaskState::Draft),
             has_assignee,
@@ -6033,12 +6040,16 @@ mod tests {
         let task = store.create_task("Indexed history", "/workspace").unwrap();
         store.transition_task(task.id, TaskState::Ready).unwrap();
         let original = store.list_task_activity(task.id, 100).unwrap();
-        store.connection().unwrap().execute_batch(
-            "DROP INDEX task_activity_by_task_sequence;
+        store
+            .connection()
+            .unwrap()
+            .execute_batch(
+                "DROP INDEX task_activity_by_task_sequence;
              DROP INDEX decision_requests_pending_by_task;
              DROP INDEX task_outcomes_by_task_state;
              PRAGMA user_version = 137;",
-        ).unwrap();
+            )
+            .unwrap();
         drop(store);
         let migrated = TaskStore::open(path).unwrap();
         assert_eq!(migrated.list_task_activity(task.id, 100).unwrap(), original);
@@ -6048,18 +6059,32 @@ mod tests {
             "EXPLAIN QUERY PLAN SELECT sequence, note FROM task_activity WHERE task_id = ?1 ORDER BY sequence DESC LIMIT 100",
         ] {
             let mut statement = connection.prepare(query).unwrap();
-            let plan = statement.query_map([task.id.to_string()], |row| row.get::<_, String>(3))
-                .unwrap().collect::<Result<Vec<_>, _>>().unwrap().join("\n");
+            let plan = statement
+                .query_map([task.id.to_string()], |row| row.get::<_, String>(3))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+                .join("\n");
             assert!(plan.contains("task_activity_by_task_sequence"), "{plan}");
             assert!(!plan.contains("TEMP B-TREE"), "{plan}");
         }
         for (query, index) in [
-            ("EXPLAIN QUERY PLAN SELECT 1 FROM decision_requests WHERE task_id = ?1 AND state = 'pending'", "decision_requests_pending_by_task"),
-            ("EXPLAIN QUERY PLAN SELECT state FROM task_outcome_deliveries WHERE task_id = ?1 AND target_state = 'review' ORDER BY activity_sequence DESC LIMIT 1", "task_outcomes_by_task_state"),
+            (
+                "EXPLAIN QUERY PLAN SELECT 1 FROM decision_requests WHERE task_id = ?1 AND state = 'pending'",
+                "decision_requests_pending_by_task",
+            ),
+            (
+                "EXPLAIN QUERY PLAN SELECT state FROM task_outcome_deliveries WHERE task_id = ?1 AND target_state = 'review' ORDER BY activity_sequence DESC LIMIT 1",
+                "task_outcomes_by_task_state",
+            ),
         ] {
             let mut statement = connection.prepare(query).unwrap();
-            let plan = statement.query_map([task.id.to_string()], |row| row.get::<_, String>(3))
-                .unwrap().collect::<Result<Vec<_>, _>>().unwrap().join("\n");
+            let plan = statement
+                .query_map([task.id.to_string()], |row| row.get::<_, String>(3))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+                .join("\n");
             assert!(plan.contains(index), "{plan}");
             assert!(!plan.contains("TEMP B-TREE"), "{plan}");
         }
@@ -9195,6 +9220,73 @@ mod tests {
             .transition_task_with_note(task.id, TaskState::Blocked, "Blocked on Queen deciding")
             .unwrap();
         assert_eq!(deadline(&store), None);
+    }
+
+    #[test]
+    fn blocked_note_tracks_only_the_current_block_across_reopen_and_recovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("blocks.sqlite3");
+        let store = TaskStore::open(&path).unwrap();
+        let task = store.create_task("Dependency", "/workspace").unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        let blocked = store
+            .transition_task_with_note(task.id, TaskState::Blocked, "Waiting for the API contract")
+            .unwrap();
+        assert_eq!(
+            blocked.blocked_note.as_deref(),
+            Some("Waiting for the API contract")
+        );
+        drop(store);
+        let store = TaskStore::open(path).unwrap();
+        assert_eq!(
+            store.list_board_tasks().unwrap()[0].blocked_note,
+            blocked.blocked_note
+        );
+        assert_eq!(
+            store.list_tasks().unwrap()[0].blocked_note,
+            blocked.blocked_note
+        );
+        assert!(
+            store
+                .transition_task(task.id, TaskState::Active)
+                .unwrap()
+                .blocked_note
+                .is_none()
+        );
+        assert!(
+            store
+                .transition_task(task.id, TaskState::Blocked)
+                .unwrap()
+                .blocked_note
+                .is_none()
+        );
+        assert!(store.get_task(task.id).unwrap().blocked_note.is_none());
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        let blocked = store
+            .transition_task_with_note(
+                task.id,
+                TaskState::Blocked,
+                "Waiting for a different dependency",
+            )
+            .unwrap();
+        assert_eq!(
+            blocked.blocked_note.as_deref(),
+            Some("Waiting for a different dependency")
+        );
+        assert!(
+            store
+                .transition_task(task.id, TaskState::Abandoned)
+                .unwrap()
+                .blocked_note
+                .is_none()
+        );
+        assert!(
+            store.list_settled_tasks().unwrap()[0]
+                .blocked_note
+                .is_none()
+        );
+        store.verify_integrity().unwrap();
     }
 
     #[test]

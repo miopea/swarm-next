@@ -54,6 +54,19 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Evidence from the September 4–5 demo run
 
+### Current blocking context in Queues
+
+Task projections now include the note on the current transition into Blocked.
+The note disappears on recovery and a later empty blocking episode cannot reuse
+the old reason. Queues shows short notes directly and long notes in expandable
+previews, explicitly labeled as recorded context. A file-backed reopen/recovery
+regression passed, as did 16 Queues tests and TypeScript checks. The dedicated
+Edge fixture confirmed the visible note and existing collapsed active-work area.
+All 541 persistence tests, 46 Queues/style tests, strict API lint and formatting
+checks passed. The live EXPLAIN uses the task/sequence index, not a whole-history
+scan. This slice is not deployed yet. This improves blocker visibility but does not close dependency ownership,
+recovery-action integration, or authenticated live visual acceptance.
+
 ### Measured task projection scans
 
 The live schema-137 database has 832 tasks and 6,940 activity rows, with no

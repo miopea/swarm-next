@@ -13,6 +13,26 @@ function task(overrides: Partial<Task>): Task {
 }
 
 describe("QueuesView", () => {
+  test("shows the recorded blocker and removes it when work resumes", () => {
+    const blocked = task({ state: "blocked", next_move_owner: "blocked", blocked_note: "Waiting for the API contract" });
+    const props = { workers: [], onOpenTask: vi.fn() };
+    const { rerender } = render(<QueuesView {...props} tasks={[blocked]} />);
+    expect(screen.getByText("Recorded when blocked: Waiting for the API contract")).toBeVisible();
+    rerender(<QueuesView {...props} tasks={[{ ...blocked, state: "ready", next_move_owner: "worker" }]} />);
+    expect(screen.queryByText(/Recorded when blocked/)).not.toBeInTheDocument();
+    rerender(<QueuesView {...props} tasks={[{ ...blocked, blocked_note: null }]} />);
+    expect(screen.getByText("Blocked · reason not recorded")).toBeVisible();
+    expect(screen.queryByText(/Waiting for the API contract/)).not.toBeInTheDocument();
+  });
+
+  test("long blocker notes have a concise preview with the full statement available", () => {
+    const note = "Waiting for the shared contract. ".repeat(20);
+    render(<QueuesView workers={[]} onOpenTask={vi.fn()} tasks={[task({ state: "blocked", next_move_owner: "blocked", blocked_note: note })]} />);
+    const details = screen.getByText(note.trim()).closest("details");
+    expect(details).not.toHaveAttribute("open");
+    expect(details?.querySelector("summary")).toHaveTextContent(`Recorded when blocked: ${note.slice(0, 240)}…`);
+  });
+
   test("ordinary active work is inspectable but collapsed outside waiting groups", () => {
     render(<QueuesView workers={[]} onOpenTask={vi.fn()} tasks={[
       task({ id: "active", title: "Doing the work", state: "active", next_move_owner: "worker", dispatch_state: "delivered" }),

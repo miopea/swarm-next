@@ -91,6 +91,17 @@ This slice does not make terminal output the task-completion authority. Workers
 continue to report Blocked or Review through typed MCP transitions; Queen or the
 operator approves completion.
 
+### Recorded blocker visibility — 2026-09-05
+
+Task reads expose `blocked_note` from the latest state-transition activity only
+while the task is Blocked. A missing or empty note is unknown, never filled from
+an earlier blocking episode. Leaving Blocked clears the projection without
+deleting history. The indexed task-history lookup is shared by board, settled,
+single-task and agent reads; no new polling or mutable blocker cache is added.
+Queues labels this as the note recorded when blocked, not proof that an external
+dependency remains blocked now. Long statements have a concise expandable
+preview. This does not infer a dependency owner or authorize automatic recovery.
+
 ## Validation
 
 Missing-briefing repair inserts at most the remaining active queue capacity,

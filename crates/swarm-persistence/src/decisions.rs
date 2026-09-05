@@ -1916,8 +1916,14 @@ mod tests {
             .unwrap();
         drop(store);
         let reopened = TaskStore::open(path).unwrap();
-        assert_eq!(reopened.get_decision_request(pending.id).unwrap(), withdrawn);
-        assert_eq!(reopened.get_decision_request(resolved.id).unwrap(), resolved);
+        assert_eq!(
+            reopened.get_decision_request(pending.id).unwrap(),
+            withdrawn
+        );
+        assert_eq!(
+            reopened.get_decision_request(resolved.id).unwrap(),
+            resolved
+        );
         reopened.verify_integrity().unwrap();
     }
 

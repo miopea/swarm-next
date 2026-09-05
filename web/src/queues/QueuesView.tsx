@@ -84,7 +84,7 @@ function taskProgress(task: Task): string {
     if (task.outcome_delivery_state === "queued" || task.outcome_delivery_state === "dispatching") return "Review handoff awaiting confirmed delivery";
     return "In review";
   }
-  if (task.state === "blocked") return "Blocked · open task for the recorded context";
+  if (task.state === "blocked") return task.blocked_note?.trim() ? "Blocked" : "Blocked · reason not recorded";
   if (task.state === "awaiting_release") return "Awaiting release";
   return "Draft · awaiting triage";
 }
@@ -192,6 +192,14 @@ export default function QueuesView({
                     </span>
                     {task.state === "blocked" && waits.has(task.id) && <span className="queue-task-meta">Blocked for {ageLabel(Math.max(0, Math.floor(waits.get(task.id)!.blocked_for_seconds / 3600)))} · Queen coordinates the next move</span>}
                   </button>
+                  {task.state === "blocked" && task.blocked_note?.trim() && (
+                    task.blocked_note.length <= 240
+                      ? <p className="queue-task-meta">Recorded when blocked: {task.blocked_note}</p>
+                      : <details className="decision-argument">
+                          <summary>Recorded when blocked: {task.blocked_note.slice(0, 240)}…</summary>
+                          <p className="decision-prose">{task.blocked_note}</p>
+                        </details>
+                  )}
                   {task.state === "review" && task.next_move_owner === "worker" && task.review_request_id && task.review_request && (
                     task.review_request.length <= 240
                       ? <p className="queue-task-meta">Queen asks: {task.review_request}</p>

@@ -611,6 +611,10 @@ pub struct Task {
     pub review_request_id: Option<String>,
     #[serde(default)]
     pub review_request: Option<String>,
+    /// Note on the current transition into Blocked, not an inferred dependency
+    /// or a reason retained from an earlier block. Absent outside Blocked.
+    #[serde(default)]
+    pub blocked_note: Option<String>,
     #[serde(default)]
     pub deployment_recorded: bool,
     /// Whether this task has evidence that can close it: a recorded deployment,
