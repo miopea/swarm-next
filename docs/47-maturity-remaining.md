@@ -140,6 +140,18 @@ changing sequence numbers and a host that accepts a request but never replies.
 All 464 Linux API tests and strict API all-target lint pass. This bounds submission
 observation specifically; it is not evidence that every other IPC phase is bounded
 or that the full Queen workflow is accepted.
+Deployed as `5ccaaed3`: the normal reload completed successfully, health reported
+no degraded subsystem or database-recovery requirement, and the engine build
+identity remained unchanged.
+
+The next real workflow drill is task `01a07193-7d88-7cb1-888a-602a0e533cb3` in
+the existing disposable workflow fixture. Normal assignment delivered it and
+it reached Active. A new sleeping `Swarm Dogfood Contract` worker owns the
+disposable `contract-fixture` repository. The consumer is instructed to request
+Queen-owned upstream task creation, assignment, explicit prerequisite recording
+and eventual resumption. The harness does not create an edge or upstream task,
+resolve a decision or complete work. Re-running the script inspects the same
+task instead of duplicating it. Actual Queen completion is still pending.
 
 ### Explicit prerequisites — deployed API drill; Queen journey still open
 
