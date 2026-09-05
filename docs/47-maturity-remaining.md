@@ -61,6 +61,20 @@ The complete frontend suite also passed: 1,187 tests across 132 files.
 Live speed, geometry and real-device acceptance remain pending; the fast path
 does not claim that the full performance or terminal maturity scope is complete.
 
+Live `f921af28` acceptance: healthy API and unchanged engine build identity.
+Fresh Edge five-renderer experiment, 13 running workers, six cold returns all
+completed with zero failed/interrupted/pending. Slowest/p95 770 ms: 48 ms setup,
+723 ms connection/application; setup was 38 ms opening, 9 ms fonts, 1 ms layout
+(rounded values). Prior sample had 1,963 ms layout. This demonstrates the intended
+fast sizing path on the live build, not an overall 500 ms acceptance. The sequence
+used Swarm Dogfood instead of Contract plus the same Nexus/Public Website/Real
+Truth/Scout/Admin views. Automation had a toggle timeout before enabling and a
+label mismatch when the demo became With you; state was inspected before retry.
+No terminal input was sent. Visibility was checked after successful selections,
+not continuously. The experiment was stopped. Remaining work includes larger
+matched fresh/aged samples, connection/application latency and real-device
+geometry/interaction acceptance; the five-renderer policy stays off by default.
+
 ### Accepted evidence retry feedback (September 5)
 
 The isolated blocked-ready recovery task auto-completed after its empty commit
