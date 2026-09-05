@@ -548,6 +548,13 @@ export const SURFACES: Surface[] = [
       style={{ display: "block", width: 390, height: 844, border: 0 }} />,
   },
   {
+    id: "needs-you-phone",
+    title: "Phone Needs you layout",
+    why: "the full fictional App in a real 390px frame viewport; not a native PWA/device test",
+    render: () => <iframe title="Phone Needs you preview" src="/harness.html?surface=app&screen=decisions"
+      style={{ display: "block", width: 390, height: 844, border: 0 }} />,
+  },
+  {
     id: "tasks",
     title: "Tasks",
     why: "the board, against invented work — the source for the README screenshot",

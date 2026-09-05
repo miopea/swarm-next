@@ -6,6 +6,14 @@ import DecisionInbox from "./DecisionInbox";
 
 afterEach(cleanup);
 
+test("keeps its accessible name on Activity without repeating the page introduction", async () => {
+  render(<DecisionInbox decisions={[]} workers={[]} tasks={[]} busy={false} onResolve={vi.fn()} />);
+  expect(screen.getByRole("region", { name: "What needs you" })).toBeInTheDocument();
+  expect(screen.queryByText("One calm queue")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+  expect(screen.getByRole("region", { name: "What needs you" })).toBeInTheDocument();
+});
+
 const pending: DecisionRequest = {
   id: "decision-1",
   hive_id: "hive-1",

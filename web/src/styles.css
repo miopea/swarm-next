@@ -561,6 +561,7 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .header-actions > * { flex: 0 0 auto; }
 .operator-presence-chip { display: inline-flex; box-sizing: border-box; min-height: var(--pill-height); align-items: center; gap: 7px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--panel-raised); font-size: .72rem; font-weight: 500; white-space: nowrap; }
 .operator-presence-chip.at_hive .state-dot { background: var(--good); }
+.operator-presence-chip .state-dot { background: var(--quiet); }
 .operator-presence-chip.away .state-dot { background: var(--quiet); }
 .operator-presence-chip.night_watch { color: var(--blocked); background: var(--blocked-soft); }
 .operator-presence-chip.night_watch .state-dot { background: var(--blocked); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blocked) 18%, transparent); }
@@ -2352,6 +2353,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .terminal-session-details.has-recovery summary { display: flex; align-items: center; min-height: 44px; }
   .terminal-session-details.has-recovery .terminal-session-popover { position: fixed; left: 12px; right: 12px; top: auto; width: auto; max-height: 60dvh; overflow: auto; }
   .decision-inbox { padding: 16px; }
+  .decision-card > header { flex-direction: column; gap: 8px; }
+  .decision-card > header .decision-urgency { order: -1; align-self: flex-end; }
   .apiary-attention-card, .queen-attention-card { align-items: stretch; flex-direction: column; gap: 11px; padding: 14px; }
   .apiary-attention-card button { width: 100%; min-height: 44px; }
   .queen-attention-card { display: grid; grid-template-columns: 38px minmax(0, 1fr); }

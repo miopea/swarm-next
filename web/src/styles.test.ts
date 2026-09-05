@@ -470,6 +470,12 @@ test("makes emphasis in What's New heavier than the global strong reset", () => 
  * based check would pass whatever the CSS said, which is the shape of test this
  * repository keeps deleting.
  */
+test("presence has a visible fallback and phone decision titles are not squeezed by urgency", () => {
+  expect(stylesheet).toContain(".operator-presence-chip .state-dot { background: var(--quiet); }");
+  expect(stylesheet).toContain(".decision-card > header { flex-direction: column; gap: 8px; }");
+  expect(stylesheet).toContain(".decision-card > header .decision-urgency { order: -1; align-self: flex-end; }");
+});
+
 test("queue explanations wrap and phone rows give the title its own line", () => {
   expect(stylesheet).toMatch(/\.queue-group li > \.queue-task-meta\s*\{[^}]*white-space: normal;[^}]*overflow-wrap: anywhere;/);
   const phone = stylesheet.slice(stylesheet.indexOf("@media (max-width: 640px)", stylesheet.indexOf(".queue-task-meta {")));

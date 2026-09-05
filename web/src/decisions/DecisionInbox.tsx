@@ -158,17 +158,13 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
 
   return (
     <section className="decision-inbox" aria-labelledby="decision-inbox-heading">
+      <h3 id="decision-inbox-heading" className="sr-only">What needs you</h3>
       <div className="attention-tabs" role="tablist" aria-label="Attention workspace">
         <button role="tab" aria-selected={view === "attention"} onClick={() => setView("attention")}>Needs you <small>{pendingTotal}</small></button>
         <button role="tab" aria-selected={view === "activity"} onClick={() => { if (view === "activity") void loadActivity(); else setView("activity"); }}>Activity</button>
       </div>
       {view === "activity" ? <WorkActivity activity={activity} tasks={tasks} workers={workers} loading={activityLoading} failed={activityFailed} onRetry={() => void loadActivity()} onOpenTask={onOpenTask} /> : <>
       <div className="decision-inbox-intro">
-        <div>
-          <p className="eyebrow">One calm queue</p>
-          <h3 id="decision-inbox-heading">What needs you</h3>
-          <p>Workers ask here instead of interrupting another terminal. Resolve the judgment; Swarm keeps the context.</p>
-        </div>
         <label className="decision-history-toggle">
           <input type="checkbox" checked={showResolved} onChange={(event) => setShowResolved(event.target.checked)} />
           Show history

@@ -55,6 +55,27 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Evidence from the September 4–5 demo run
 
+### Removed Jira workflow drift
+
+The removal guard ran after whole-batch status validation. A dismissed issue
+moving to an unmapped remote status could therefore reject retained work before
+the guard ran. Mapping validation now follows the dismissal check inside the
+transaction. Retained unmapped work still rejects atomically. All ten Jira
+persistence tests and strict API lint passed, including both removed-status drift
+and rollback of an earlier valid import when a retained mapping is missing.
+
+### Compact attention and visible Reachable status
+
+Needs You no longer repeats an introductory heading and explanation above its
+cards. Its accessible section name now also survives switching to Activity.
+At phone width the urgency badge no longer squeezes the question beside the bee.
+The same Edge full-App fixture confirmed the desktop card still retains its
+recommendation, context, optional note and answer controls. Reachable's dot had
+been transparent because only the old Away selector supplied its color; a scoped
+fallback restores the visible phone indicator without changing presence policy.
+TypeScript and all 1,115 frontend tests passed. These are fixture presentation
+checks, not closure of decision reconciliation or native mobile acceptance.
+
 ### Task briefing refresh churn
 
 Task briefing claims and guarded deferrals now follow the quiet outcome-delivery
