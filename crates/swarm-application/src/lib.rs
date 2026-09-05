@@ -2401,13 +2401,7 @@ impl TaskService {
         principal: AgentPrincipal,
         task_id: TaskId,
     ) -> Result<Vec<swarm_persistence::TaskMessage>, ApplicationError> {
-        let visible = self
-            .list_visible_tasks(principal)?
-            .into_iter()
-            .any(|task| task.id == task_id);
-        if !visible {
-            return Err(ApplicationError::NotAuthorized);
-        }
+        self.task_this_worker_finished(principal, task_id)?;
         Ok(self.store.task_messages(task_id)?)
     }
 
@@ -2426,13 +2420,7 @@ impl TaskService {
         principal: AgentPrincipal,
         task_id: TaskId,
     ) -> Result<swarm_persistence::TaskEvidenceRecord, ApplicationError> {
-        let visible = self
-            .list_visible_tasks(principal)?
-            .into_iter()
-            .any(|task| task.id == task_id);
-        if !visible {
-            return Err(ApplicationError::NotAuthorized);
-        }
+        self.task_this_worker_finished(principal, task_id)?;
         Ok(self.store.task_evidence_record(task_id)?)
     }
 
@@ -3961,6 +3949,11 @@ mod tests {
         );
         let history = service.read_task_history(principal, task.id, 50).unwrap();
         assert!(!history.events.is_empty());
+        service.read_task_evidence(principal, task.id).unwrap();
+        service.read_task_messages(principal, task.id).unwrap();
+        service
+            .read_returned_review_request(principal, task.id)
+            .unwrap();
     }
 
     /// Reading durable history does not grant a worker unrelated task access.

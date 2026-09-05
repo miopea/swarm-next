@@ -67,6 +67,11 @@ in a capped current-session work list. This grants no mutation, routing, review
 approval or unrelated-task access. Reassignment to another worker changes that
 ownership; this is not a new historical-participant access policy. Regression
 tests cover completion, session replacement and denial of unrelated history.
+The complete MCP history response includes activity, evidence, messages and the
+returned review request. Every read uses that same durable ownership boundary;
+an adapter-level regression must exercise the assembled response, not only the
+activity service. The first live check exposed the two remaining current-session
+filters on evidence and messages even after activity access had been corrected.
 
 ### A busy provider is not an unanswered question
 

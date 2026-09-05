@@ -5360,6 +5360,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn completed_history_tool_survives_worker_session_replacement() {
+        let (bridge, store, _queen_id, worker_id, _) = setup();
+        let token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let original = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(worker_id, original).unwrap();
+        let task = store
+            .create_task("Finished history", "/workspace/petal")
+            .unwrap();
+        store.assign_task_to_worker(task.id, worker_id).unwrap();
+        for state in [
+            TaskState::Ready,
+            TaskState::Active,
+            TaskState::Review,
+            TaskState::Completed,
+        ] {
+            store.transition_task(task.id, state).unwrap();
+        }
+        store.release_worker_session(original).unwrap();
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let response = call_review_test_tool(
+            bridge.clone(),
+            &token,
+            "swarm_read_task_history",
+            json!({"task_id": task.id.to_string(), "limit": 10}),
+        )
+        .await;
+        assert_eq!(response["result"]["isError"], false, "{response}");
+        let content = &response["result"]["structuredContent"];
+        assert!(!content["events"].as_array().unwrap().is_empty());
+        assert!(content["evidence"].is_object());
+        assert!(content["messages"].is_array());
+        assert!(content["review_request"].is_null());
+
+        let unrelated = store
+            .create_task("Another worker's work", "/workspace/other")
+            .unwrap();
+        let denied = call_review_test_tool(
+            bridge,
+            &token,
+            "swarm_read_task_history",
+            json!({"task_id": unrelated.id.to_string()}),
+        )
+        .await;
+        assert_eq!(denied["result"]["isError"], true, "{denied}");
+    }
+
+    #[tokio::test]
     async fn review_handback_commits_one_request_without_losing_review_state() {
         let (bridge, store, queen_id, worker_id, _) = setup();
         let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());

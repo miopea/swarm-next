@@ -8,6 +8,35 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Worker access to completed task history (September 5)
+
+Live Queues contained a worker report that `swarm_read_task_history` denied its
+own completed work. Code inspection confirmed history authorization depended on
+the current-session visible task list. Commit `51ef3233` instead uses the existing
+stable-worker evidence ownership check: Queen or the task's durable assigned
+worker may read its bounded history. Completion and session replacement no longer
+remove access. Unrelated work remains denied; reassignment changes ownership.
+Mutation and review permissions are unchanged. This also removes the task-list
+scan from a single-task history read.
+
+All 31 application tests passed in the isolated Linux validation directory. The
+first new fixture correctly hit WorkerAlreadyRunning; after releasing the original
+session before binding its replacement, the real lifecycle regression passed.
+Development build `1.5.0-dev-51ef32333da1-20260905192819-2495193` deployed with
+health ok and no degraded subsystem. All eleven running workers still had matching
+launch, selection and restored-conversation records, including corrected D365
+conversation `c4d71311-c854-4ac8-b637-542b4b280401`.
+
+The live Contract worker then called the actual MCP tool for completed task
+`01a07199-fef1-76e0-b908-4ad528774904`. It still returned NotAuthorized: the adapter
+assembles history, evidence, messages and review request, and evidence/messages
+retained their old current-session filters. This contradicts end-to-end completion
+of the initial fix despite the green activity-service test. The follow-up aligns
+both reads with durable worker ownership and adds a complete authenticated MCP
+response regression after session replacement, including unrelated-task denial.
+All 31 application and 62 MCP adapter tests pass for the follow-up in the isolated
+Linux validation directory. Live acceptance of that follow-up remains pending.
+
 ### Ten retained views: bounded browser baseline (September 5)
 
 On `034f24db`, CDP Performance counters were enabled only for bounded samples
