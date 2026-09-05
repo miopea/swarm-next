@@ -66,6 +66,40 @@ test("makes runtime failure visible", async () => {
   expect(await screen.findByText("Runtime unavailable")).toBeInTheDocument();
 });
 
+test("refreshes the runtime evidence after returning without reloading the app", async () => {
+  let version = "0.1.0";
+  let unavailable = false;
+  let visibility: DocumentVisibilityState = "visible";
+  const visibilitySpy = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+  const base = bootFetch();
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => String(input) === "/health"
+    ? unavailable ? Promise.reject(new Error("offline")) : Promise.resolve(ok({ status: "ok", version }))
+    : base(input)));
+  try {
+    render(<App />);
+    await screen.findByText("Runtime 0.1.0");
+    const returnToApp = async () => {
+      visibility = "hidden";
+      await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+      visibility = "visible";
+      await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    };
+    version = "0.2.0";
+    await returnToApp();
+    await screen.findByText("Runtime 0.2.0");
+    unavailable = true;
+    await returnToApp();
+    expect(screen.getByText("Runtime 0.2.0")).toBeInTheDocument();
+    unavailable = false;
+    version = "0.3.0";
+    await returnToApp();
+    await screen.findByText("Runtime 0.3.0");
+  } finally {
+    cleanup();
+    visibilitySpy.mockRestore();
+  }
+});
+
 test("creates a durable browser session without storing the operator token", async () => {
   const fetch = vi
     .fn()

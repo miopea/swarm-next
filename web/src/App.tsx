@@ -367,7 +367,15 @@ export function App() {
   const refreshServerVersion = useCallback(async (signal: AbortSignal) => {
     try {
       const health = await fetchHealth(signal);
-      if (!signal.aborted) setServerVersion(health.version);
+      if (!signal.aborted) {
+        setServerVersion(health.version);
+        // The runtime footer and diagnostics must follow the same current
+        // evidence as the bundle-update notice, including recovered subsystems.
+        // Reuse unchanged state so this poll does not force a whole-app render.
+        setLoadState((current) => current.kind === "ready" && JSON.stringify(current.health) === JSON.stringify(health)
+          ? current : { kind: "ready", health });
+        if (health.attachment_max_bytes) configureTerminalImageLimit(health.attachment_max_bytes);
+      }
     } catch { /* An unavailable version read does not invalidate the loaded UI. */ }
   }, []);
   // Startup already reads health; returning to the tab must still refresh immediately.

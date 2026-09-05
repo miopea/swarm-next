@@ -82,6 +82,18 @@ explanations. Phone rows now place the title on its own wrapping line; status,
 worker names and blocker/review context wrap underneath. Before/after screenshots
 show readable titles and no horizontal scrollbar. This is responsive fixture
 evidence, not authenticated live-Hive or Android/iOS PWA acceptance.
+Commit `750c5d5d` deployed healthy through the normal reload; terminal-host PID
+2088305 was unchanged. TypeScript and all 88 focused tests passed.
+
+### Runtime evidence freshness
+
+The existing health poll updated the bundle notice but left the footer and
+diagnostics at the initial response indefinitely. It now updates the shared
+health snapshot (and attachment limit) while retaining identical state without
+another render. No polling timer was added. A return/unavailable/recovery
+integration test passes, and the complete frontend suite passes 1,113 tests in
+129 files. This does not add runtime database integrity detection: that still
+needs an owned failure latch and consequence path independent of SQLite.
 
 ### Offline restore implementation and real isolated drill
 
