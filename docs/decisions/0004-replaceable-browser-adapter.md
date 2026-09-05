@@ -41,6 +41,14 @@ the bounded engine snapshot rather than keeping a second browser snapshot cache.
 Production adoption requires the plan's restore-speed, fidelity, and measured
 resource gates; tests of the eviction algorithm alone do not satisfy them.
 
+Independently of that opt-in experiment, a successful authoritative session
+snapshot retires inactive browser controllers for sessions no longer running.
+This includes remote sleep and provider replacement; local button clicks are
+not the only lifecycle source. An attached ended terminal stays readable until
+detached, including across document visibility changes. Drafts and host history
+are preserved, and failed reads must not be substituted with empty snapshots.
+This cleanup does not stop a provider or evict a still-running worker's warm view.
+
 ## Consequences
 
 - React can be upgraded or replaced without changing backend domain modules,

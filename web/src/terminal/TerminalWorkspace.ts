@@ -27,6 +27,15 @@ export class TerminalWorkspace {
   get rendererRetention() { return this.#controllers.retention; }
   get coldRestoreEvidence() { return this.#controllers.coldRestoreEvidence; }
 
+  /** Call only with a successful authoritative session read, not a failed fetch. */
+  reconcileSessions(runningSessionIds: Iterable<string>): void {
+    const running = new Set(runningSessionIds);
+    this.#controllers.reconcileSessions(running);
+    for (const id of this.#pendingFocus.keys()) {
+      if (!running.has(id)) this.#pendingFocus.delete(id);
+    }
+  }
+
   controllerFor(
     sessionId: string,
     surfaceFactory: TerminalSurfaceFactory,

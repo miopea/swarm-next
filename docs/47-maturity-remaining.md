@@ -54,6 +54,23 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Evidence from the September 4–5 demo run
 
+### Browser session retention and detached Queues
+
+Successful session snapshots now retire inactive browser controllers for ended
+or replaced sessions. Previously only local stop/reset/logout paths disposed
+these renderers, so remote lifecycle changes could accumulate obsolete copies
+with the warm-pool experiment off. Still-running warm views are retained; an
+attached ended terminal remains readable across background/return until detach.
+No worker stop is sent and drafts remain intact. The 100-incarnation test keeps
+one renderer; Edge's synthetic fixture shows one after replacement, two after
+switching to another live worker, and two after replacing that second session.
+This is lifecycle evidence, not a measured production CPU or heap improvement.
+
+Detached Queues URLs now parse consistently with all five other detachable
+surfaces. The all-surface round-trip test reproduced the missing Queues branch
+before the fix. All 1,103 frontend tests and TypeScript checks pass. These
+browser-only changes are not deployed yet.
+
 ### Current review obligation in Queues
 
 Withdrawal revision `b1577fe8` is deployed: runtime health is ok, schema 137

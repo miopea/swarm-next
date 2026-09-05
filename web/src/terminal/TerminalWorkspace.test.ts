@@ -81,3 +81,53 @@ test("taking a worker whose terminal is not mounted here is harmless", () => {
 
   expect(() => workspace.redrawSession("never-opened")).not.toThrow();
 });
+
+test("authoritative session replacement releases only inactive old browser resources", () => {
+  const workspace = new TerminalWorkspace();
+  workspace.authenticate("operator");
+  const oldSurface = fakeSurface();
+  const oldConnection = fakeConnection();
+  workspace.controllerFor("old", () => oldSurface, () => oldConnection);
+  const current = workspace.controllerFor("current", fakeSurface, fakeConnection);
+  workspace.reconcileSessions(["current"]);
+  expect(oldSurface.dispose).toHaveBeenCalledOnce();
+  expect(oldConnection.dispose).toHaveBeenCalledOnce();
+  expect(workspace.controllerFor("current", fakeSurface, fakeConnection)).toBe(current);
+  expect(workspace.rendererRetention.retained).toBe(1);
+  workspace.logout();
+});
+
+test("ended terminal remains readable while attached and retires on detach", () => {
+  const workspace = new TerminalWorkspace();
+  workspace.authenticate("operator");
+  const surface = fakeSurface();
+  let renderable: ((visible: boolean) => void) | undefined;
+  surface.onRenderable = (listener) => { renderable = listener; return { dispose: vi.fn() }; };
+  const connection = fakeConnection();
+  const controller = workspace.controllerFor("ended", () => surface, () => connection);
+  controller.attach(document.createElement("div"));
+  terminalDraft.update("ended", "Keep my unsent text");
+  workspace.reconcileSessions([]);
+  expect(surface.dispose).not.toHaveBeenCalled();
+  renderable?.(false);
+  expect(surface.dispose).not.toHaveBeenCalled();
+  renderable?.(true);
+  controller.detach();
+  expect(surface.dispose).toHaveBeenCalledOnce();
+  expect(connection.dispose).toHaveBeenCalledOnce();
+  expect(workspace.rendererRetention.retained).toBe(0);
+  expect(terminalDraft.snapshot().draft?.text).toBe("Keep my unsent text");
+  workspace.logout();
+});
+
+test("one hundred provider incarnations do not accumulate inactive renderers", () => {
+  const workspace = new TerminalWorkspace();
+  workspace.authenticate("operator");
+  for (let index = 0; index < 100; index += 1) {
+    const id = `session-${index}`;
+    workspace.controllerFor(id, fakeSurface, fakeConnection);
+    workspace.reconcileSessions([id]);
+    expect(workspace.rendererRetention.retained).toBe(1);
+  }
+  workspace.logout();
+});

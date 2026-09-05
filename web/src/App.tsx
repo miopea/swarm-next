@@ -229,6 +229,11 @@ export function App() {
     setJiraTaskLinks, setDecisions,
   } = controlRoomModel;
   const loadControlRoom = controlRoomModel.load;
+  useEffect(() => {
+    if (operatorToken) terminalWorkspace.reconcileSessions(
+      sessions.filter((session) => session.running).map((session) => session.session_id),
+    );
+  }, [operatorToken, sessions]);
   /**
    * SETTLED WORK, HELD SEPARATELY FROM THE BOARD SNAPSHOT.
    *

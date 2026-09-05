@@ -155,10 +155,10 @@ export class TerminalController {
     // Keep the surface, but stop output work while its host is detached. The
     // connection restores current canonical state if output was abandoned.
     this.#attached = false;
-    this.#lifecycle?.inactive();
     this.#connection.releaseControl?.();
     this.#updateRendering();
     this.#host.remove();
+    this.#lifecycle?.inactive();
   }
 
   /**
@@ -424,6 +424,7 @@ export class TerminalController {
 
 export class TerminalControllerRegistry {
   readonly #controllers = new Map<string, TerminalController>();
+  #runningSessions: Set<string> | undefined;
   #retainedLimit: number | undefined;
   #evictions = 0;
   readonly #recentlyEvicted = new Set<string>();
@@ -474,7 +475,13 @@ export class TerminalControllerRegistry {
         this.#touch(sessionId);
         this.#trim(sessionId);
       },
-      inactive: () => { finish?.("interrupted"); finish = undefined; },
+      inactive: () => {
+        finish?.("interrupted"); finish = undefined;
+        const inactive = this.#controllers.get(sessionId);
+        if (inactive && !inactive.attached && this.#runningSessions && !this.#runningSessions.has(sessionId)) {
+          this.closeSession(sessionId);
+        }
+      },
       stateChanged: (state) => {
         if (state === "connected") {
           finish?.(document.visibilityState === "visible" ? "rendered" : "interrupted");
@@ -501,11 +508,20 @@ export class TerminalControllerRegistry {
   closeSession(sessionId: string): void {
     const controller = this.#controllers.get(sessionId);
     if (!controller) return;
-    controller.dispose();
     this.#controllers.delete(sessionId);
+    controller.dispose();
+  }
+
+  /** Successful host snapshots retire inactive browser copies, never workers. */
+  reconcileSessions(runningSessionIds: Iterable<string>): void {
+    this.#runningSessions = new Set(runningSessionIds);
+    for (const [id, controller] of this.#controllers) {
+      if (!this.#runningSessions.has(id) && !controller.attached) this.closeSession(id);
+    }
   }
 
   closeAll(): void {
+    this.#runningSessions = undefined;
     for (const controller of this.#controllers.values()) controller.dispose();
     this.#controllers.clear();
     this.#evictions = 0;
