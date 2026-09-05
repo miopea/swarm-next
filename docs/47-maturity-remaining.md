@@ -16,14 +16,25 @@ to supply concise evidence, causing unnecessary retries. An already-approved
 claim now returns a distinct conflict with the current task state and directs
 the caller to read accepted evidence/history. Approved evidence remains immutable.
 Validation: 20 completion-evidence tests, 16 task-outcome tests, and the focused
-API error-mapping test passed in the isolated Linux workspace. Live acceptance
-of the new error is pending deployment. This does not prove backlog recovery.
+API error-mapping test passed in the isolated Linux workspace. Commit `936352af`
+deployed successfully: health reports that revision with no degraded subsystems,
+engine PID 2456733 unchanged, and Edge shows 13 running workers. Live acceptance
+of the new MCP error remains pending. This does not prove backlog recovery.
 
 The worker roster also renders "awaiting release" rather than the internal
 `awaiting_release` identifier. TypeScript checking and all 11 worker-work tests
-passed; deployed visual acceptance remains pending.
+passed; live Edge inspection confirms the human-readable labels on Platform and
+Real Truth and the matching deployed runtime revision.
 
 ### Blocked reassessment discovery (September 5)
+
+Live Edge inspection after reassessment started found five task-linked operator
+decisions. One recommends "Read platform's push-subscriber count first, then
+decide" while the count remains unread. This is evidence of an unfinished
+worker-first investigation path, not proof that every escalation is necessary.
+Verify existing read authority and route safe evidence gathering before asking
+the operator to make the actual scope choice. No real decision was answered or
+withdrawn during inspection. The generic blocked backlog remains unproven.
 
 Queen's completed-prerequisite read missed blocks with no explicit edge. The
 existing coordination-attention response now also supplies `blocked_reassessment`:
