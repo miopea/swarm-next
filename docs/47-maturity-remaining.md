@@ -54,6 +54,21 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Evidence from the September 4–5 demo run
 
+### Needs You presentation check
+
+The existing network-isolated harness served the actual DecisionInbox component
+at `http://127.0.0.1:5209/harness.html?surface=needs-you-demo` in a dedicated Edge
+tab. Desktop before/after screenshots and DOM inspection confirmed optional notes
+no longer reserve a textarea on every card; the requester recommendation, risk,
+and choices remain visible. Opening the note and entering fixture text worked,
+and the summary changed to Edit your note. Interviews use the same optional-note
+disclosure. No live Hive data or API was used by this fixture.
+
+All 61 decision tests and the TypeScript project check passed, then 36 focused
+inbox/interview tests passed with the new collapsed-note regression. This is
+targeted presentation work, not approval of a broader mockup or acceptance of
+mobile layout, live decision reconciliation, or the whole Needs You surface.
+
 ### Database recovery audit
 
 The CLI verifier used normal database opening before checking integrity, which

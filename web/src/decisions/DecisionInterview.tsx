@@ -101,10 +101,13 @@ function InterviewAnswers({ questions, busy, onAnswer }: DecisionInterviewProps)
           </fieldset>
         );
       })}
-      <label>
-        <span>Anything else the worker should know</span>
-        <textarea value={note} maxLength={4000} disabled={busy} onChange={(event) => setNote(event.target.value)} placeholder="Optional" />
-      </label>
+      <details className="decision-argument decision-note">
+        <summary>{note.trim() ? "Edit your note" : "Add an optional note"}</summary>
+        <label>
+          <span>Anything else the worker should know</span>
+          <textarea value={note} maxLength={4000} disabled={busy} onChange={(event) => setNote(event.target.value)} placeholder="Optional" />
+        </label>
+      </details>
       <div className="decision-actions">
         <button
           type="button"

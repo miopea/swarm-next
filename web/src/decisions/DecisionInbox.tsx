@@ -223,7 +223,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                     the live inbox they ran to about five thousand characters
                     together — so they fold behind it rather than in front. */}
                 {decision.summary ? <div className="decision-summary"><LongText text={decision.summary} label="the summary" foldAbove={300} /></div> : null}
-                <p className="decision-ask"><span>Asking the operator to</span> {decision.suggested_action}</p>
+                {decision.suggested_action && <p className="decision-ask"><span>{requester} recommends</span> {humanize(decision.suggested_action)}</p>}
                 <details className="decision-argument">
                   <summary>Why, and what it rests on</summary>
                   <DecisionReason reason={decision.reason} />
@@ -279,7 +279,10 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                         </small>
                       </div>
                     ) : null}
-                    <label><span>Optional note</span><textarea value={note} maxLength={4000} onChange={(event) => setNotes((current) => ({ ...current, [decision.id]: event.target.value }))} placeholder="Add context for the worker" /></label>
+                    <details className="decision-argument decision-note">
+                      <summary>{note.trim() ? "Edit your note" : "Add an optional note"}</summary>
+                      <label><span>Optional note</span><textarea value={note} maxLength={4000} disabled={busy} onChange={(event) => setNotes((current) => ({ ...current, [decision.id]: event.target.value }))} placeholder="Add context for the worker" /></label>
+                    </details>
                     <div className="decision-actions">
                       {decision.allowed_actions.map((action) => (
                         <button key={action} type="button" className={humanize(action).trim().toLowerCase() === humanize(decision.suggested_action).trim().toLowerCase() ? "primary-action" : "secondary-button"} disabled={busy} onClick={() => { setDismissConfirmId(undefined); void onResolve(decision, action, note, "inbox_action"); }}>{humanize(action)}</button>

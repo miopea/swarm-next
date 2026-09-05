@@ -51,6 +51,19 @@ const uncertain = { ...resolved, id: "decision-5", title: "Uncertain release", d
 const task = { id: "task-1", title: "Stabilize reloads" } as Task;
 const worker = { id: "worker-1", name: "Petal" } as Worker;
 
+test("optional notes start folded without hiding the risk or choices", () => {
+  const { rerender } = render(<DecisionInbox decisions={[pending]} tasks={[task]} workers={[worker]} busy={false} onResolve={vi.fn()} />);
+  const note = screen.getByLabelText("Optional note");
+  expect(note.closest("details")).not.toHaveAttribute("open");
+  expect(screen.getByText(pending.risk)).toBeVisible();
+  expect(screen.getByRole("button", { name: "Durable path" })).toBeVisible();
+  fireEvent.change(note, { target: { value: "Keep my condition" } });
+  expect(screen.getByText("Edit your note")).toBeInTheDocument();
+  rerender(<DecisionInbox decisions={[pending]} tasks={[task]} workers={[worker]} busy={true} onResolve={vi.fn()} />);
+  expect(screen.getByLabelText("Optional note")).toBeDisabled();
+  expect(screen.getByLabelText("Optional note")).toHaveValue("Keep my condition");
+});
+
 test("names the repository the decision is about, and the ask, without opening the argument", () => {
   // The reported card: Queen raising an approval about another repository. Her
   // own workspace is the Queen directory, so the requester is the wrong source
@@ -74,7 +87,7 @@ test("names the repository the decision is about, and the ask, without opening t
   expect(screen.queryByText("queen")).not.toBeInTheDocument();
 
   // The ask is on the card, not the last row of a list under a folded details.
-  const ask = screen.getByText("Asking the operator to").closest("p");
+  const ask = screen.getByText(/recommends$/).closest("p");
   expect(ask).toHaveTextContent("Merge PR #419");
   expect(ask?.closest("details")).toBeNull();
 });
