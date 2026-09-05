@@ -8,6 +8,29 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Paired cold-return attribution (September 5, 20:03 UTC)
+
+Commit `a7248caf` adds a connection-start boundary to each bounded cold-return
+experiment sample. The UI/report shows renderer setup and connection-through-state
+for the same slowest return, not independent maxima or p95 phases. Missing or
+invalid boundaries are null; late callbacks after stop/reset are inert. Existing
+200-sample/one-hour limits remain, with no timer, backend field or export added.
+TypeScript and all 1,178 frontend tests across 132 files passed, including paired
+phases, duplicate boundaries, expiry, unavailable phases, lifecycle wiring and UI.
+
+Build `1.5.0-dev-a7248cafdc46-20260905200300-2513916` deployed with healthy API,
+no degraded subsystem and unchanged engine PID 2456733. In a separate Edge tab,
+the experiment revisited idle views without terminal input to evict and return
+to the demo. Two completed cold returns had a slowest total of 2334 ms, split
+into **1991 ms renderer setup and 343 ms connection through applied state**.
+Rendered text and a screenshot confirmed the paired readout. This localizes that
+sample before transport start but does not identify font versus layout/frame
+readiness, browser scheduling or automation effects as its cause. The experiment
+was stopped and the off control verified. No default-retention change or release.
+The screenshot also exposed a UX issue for the finish pass: the shared Settings
+grid stretches the short Hive identity card beside the entire Dogfood panel,
+leaving a large blank column. That layout is not accepted as final polish.
+
 ### Bounded output and five-renderer experiment (September 5, 19:49–19:56 UTC)
 
 Serving build `7ba532deb5b3` was tested in a separate Edge tab at 1465×1339 CSS
