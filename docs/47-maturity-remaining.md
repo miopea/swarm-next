@@ -50,6 +50,17 @@ snapshot connection must be gated on the pre-connection sizing loop; preserve
 explicit geometry ownership and initial-size correctness. No optimization or
 500 ms acceptance is claimed from these seven samples.
 
+Initial attachment optimization now measures current usable terminal dimensions
+after font readiness without requiring two animation frames. The measurement is
+non-mutating; unavailable metrics retain bounded stable-frame recovery, and
+ordinary resize/ownership guards are unchanged. Controller tests prove the
+measured size precedes connection without waiting on ordinary refit; surface
+tests prove immediate readiness with a never-fired frame callback and fallback
+recovery without local grid mutation. TypeScript and 82 focused tests passed.
+The complete frontend suite also passed: 1,187 tests across 132 files.
+Live speed, geometry and real-device acceptance remain pending; the fast path
+does not claim that the full performance or terminal maturity scope is complete.
+
 ### Accepted evidence retry feedback (September 5)
 
 The isolated blocked-ready recovery task auto-completed after its empty commit

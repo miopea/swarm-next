@@ -22,6 +22,8 @@ export interface TerminalSurface {
   open(element: HTMLElement): void;
   focus(): void;
   fit(onMilestone?: (phase: FitMilestone) => void): Promise<{ rows: number; columns: number }>;
+  /** Initial attachment may use current usable metrics before frame scheduling. */
+  fitInitial?(onMilestone?: (phase: FitMilestone) => void): Promise<{ rows: number; columns: number }>;
   /**
    * What this viewport would fit, WITHOUT applying it. Optional so a test
    * double that does not model it keeps working; a surface without it simply
@@ -342,7 +344,9 @@ export class TerminalController {
     this.#surface.observeGeometrySuspension?.(() => this.#geometrySuspended);
     // No canonical screen exists yet. Initial fit waits for usable metrics;
     // once attached, passive views only measure and accept engine dimensions.
-    const measured = await this.#measureForResize(this.#lifecycle?.fitMilestone);
+    const measured = !this.#geometrySuspended && this.#surface.fitInitial
+      ? await this.#surface.fitInitial(this.#lifecycle?.fitMilestone)
+      : await this.#measureForResize(this.#lifecycle?.fitMilestone);
     if (!measured) return;
     const { rows, columns } = measured;
     if (this.#disposed || this.#started || !this.#host.parentElement) return;

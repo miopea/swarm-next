@@ -306,6 +306,36 @@ test("updates the palette in place when the application theme changes", async ()
   delete document.documentElement.dataset.theme;
 });
 
+test("initial attachment reads usable metrics without waiting for a scheduled frame or resizing", async () => {
+  const frame = vi.fn(() => 1); // Deliberately never fires: a throttled browser.
+  vi.stubGlobal("requestAnimationFrame", frame);
+  xterm.propose.mockReturnValue({ rows: 38, cols: 132 });
+  const surface = new XtermSurface();
+  xterm.resize.mockClear();
+  try {
+    await expect(surface.fitInitial()).resolves.toEqual({ rows: 38, columns: 132 });
+    expect(frame).not.toHaveBeenCalled();
+    expect(xterm.resize).not.toHaveBeenCalled();
+  } finally { surface.dispose(); }
+});
+
+test("initial attachment with unavailable metrics uses bounded stable-frame recovery without resizing", async () => {
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.push(callback); return frames.length; });
+  xterm.propose.mockReturnValueOnce(undefined).mockReturnValue({ rows: 38, cols: 132 });
+  const surface = new XtermSurface();
+  xterm.resize.mockClear();
+  try {
+    const fitting = surface.fitInitial();
+    await Promise.resolve();
+    frames.shift()?.(0);
+    await Promise.resolve();
+    frames.shift()?.(16);
+    await expect(fitting).resolves.toEqual({ rows: 38, columns: 132 });
+    expect(xterm.resize).not.toHaveBeenCalled();
+  } finally { surface.dispose(); }
+});
+
 test("ownership lost during asynchronous fit prevents local grid mutation", async () => {
   const frames: FrameRequestCallback[] = [];
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {

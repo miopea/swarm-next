@@ -42,6 +42,19 @@ function fakeSurface(): FakeSurface {
   return surface;
 }
 
+test("initial transport uses measured attachment metrics without waiting on ordinary refit", async () => {
+  const surface = fakeSurface();
+  surface.fitInitial = vi.fn().mockResolvedValue({ rows: 38, columns: 132 });
+  surface.fit = vi.fn(() => new Promise<never>(() => {}));
+  const connection = fakeConnection();
+  const controller = new TerminalController(() => surface, () => connection);
+  controller.attach(document.createElement("div"));
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledOnce());
+  expect(connection.resize).toHaveBeenCalledWith(38, 132, "echo");
+  expect(surface.fit).not.toHaveBeenCalled();
+  controller.dispose();
+});
+
 test("a requested desktop focus follows the session into its mounted terminal", async () => {
   const surface = fakeSurface();
   const controller = new TerminalController(() => surface, fakeConnection);

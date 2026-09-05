@@ -101,6 +101,14 @@ the verified pre-update database backup.
 
 ## Verification
 
+Initial browser attachment may read usable terminal-cell and container metrics
+after font readiness without waiting for scheduled animation frames. This is a
+non-mutating measurement, not a control grant or local screen reflow. When those
+metrics are unavailable, the bounded stable-frame fallback remains. The measured
+size still precedes the v4 handshake; the engine alone grants control and supplies
+canonical screen geometry. Later refits retain stable-frame and oscillation
+guards. No guessed dimensions, protocol downgrade or unmeasured claim is added.
+
 Domain tests cover passive reads, competing views, compare-and-swap takeover,
 stale input/resize/renew/release, reconnect, expiry, generation exhaustion, and
 discarded failed proposals. Engine tests must additionally prove serialization

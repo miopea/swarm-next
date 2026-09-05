@@ -326,6 +326,14 @@ export class XtermSurface implements TerminalSurface {
   }
 
   async fit(onMilestone?: (phase: FitMilestone) => void): Promise<{ rows: number; columns: number }> {
+    return this.#fitMeasured(onMilestone, false);
+  }
+
+  async fitInitial(onMilestone?: (phase: FitMilestone) => void): Promise<{ rows: number; columns: number }> {
+    return this.#fitMeasured(onMilestone, true);
+  }
+
+  async #fitMeasured(onMilestone: ((phase: FitMilestone) => void) | undefined, initial: boolean): Promise<{ rows: number; columns: number }> {
     try {
       if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
       this.#cancelScheduledFit();
@@ -340,6 +348,13 @@ export class XtermSurface implements TerminalSurface {
       } catch { /* Font loading failure must not prevent fallback rendering. */ }
       if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
       onMilestone?.("fonts_ready");
+      // Attachment needs real metrics, not two scheduled paints. The canonical
+      // engine snapshot supplies the screen; control is claimed separately.
+      // This read does not mutate the local grid or claim resize authority.
+      if (initial) {
+        const measured = usableDimensions(this.#fit.proposeDimensions());
+        if (measured) return measured;
+      }
       let previous: { rows: number; columns: number } | undefined;
       let stableFrames = 0;
       for (let frame = 0; frame < MAX_FIT_FRAMES; frame += 1) {
@@ -357,6 +372,7 @@ export class XtermSurface implements TerminalSurface {
         else stableFrames = 1;
         previous = usable;
         if (stableFrames < STABLE_FIT_FRAMES) continue;
+        if (initial) return usable;
         if (this.#geometrySuspended()) {
           this.#refreshViewport();
           return { rows: this.#terminal.rows, columns: this.#terminal.cols };
