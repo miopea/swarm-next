@@ -18,8 +18,19 @@ shared cooldown and all terminal/operator guards; no task is bulk-unblocked.
 The isolated Linux overlay workspace passed 34 conductor tests, 38 delivery
 tests, and the real-PTY regression that now queues a second outcome, proves
 both remain held during cooldown, then proves the review lands first while
-the second outcome stays Queued. Deployment and live recovery evidence remain
-to be collected; this alone does not close blocked-task reassessment or QUEUE-01.
+the second outcome stays Queued.
+
+Commit `75f03f46` deployed successfully through the development reload. Health
+reported `1.5.0-dev-75f03f4672ca-20260905210838-2563328`, no degraded subsystems,
+and unchanged engine PID 2456733/build identity. All ten pre-deployment running
+worker session IDs were preserved. The previously starved exact run became
+Running with one attempt and confirmed delivery at 21:09:52 UTC. The separate
+Edge tab showed Queen Buzzing and the deployed Queues page. At 21:13:01 the run
+was still Running, 31 tasks remained Blocked, and no open task's updated_at was
+newer than delivery. Delivery recovery is proven; task recovery is not. The
+rendered queue still groups 31 diverse holds under "Blocked on something else"
+with note excerpts rather than a complete actionable owner/dependency model.
+Blocked-task reassessment and QUEUE-01 remain open.
 
 ### Queen pacing visibility (September 5)
 
