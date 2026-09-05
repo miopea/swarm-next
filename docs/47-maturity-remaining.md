@@ -36,6 +36,20 @@ sample is not proven. TypeScript checking and 83 focused restore/controller/
 surface/settings tests passed. Deployment and measured frame-count acceptance
 remain pending; the underlying performance issue is not fixed by instrumentation.
 
+Frame-count acceptance: `1b6b98e8` deployed healthy with unchanged engine build
+identity. After compilation, a fresh separate Edge tab traversed Contract,
+Nexus, Public Website, Real Truth, Scout and Admin, then repeated returns without
+terminal input. Visibility read "visible" after every selection (not continuous
+visibility or proof the OS window was unoccluded). Seven attempts all completed;
+zero interrupted/failed/pending. p95/max was 2,267 ms, paired setup 1,984 ms and
+connection/application 282 ms. Setup: 19 ms opening, 3 ms fonts, 1,963 ms layout;
+only TWO sizing frames, longest interval 998 ms. This rules out repeated sizing
+attempts for that slowest sample, not browser scheduling or measurement cost.
+The five-renderer experiment was stopped. Investigate whether passive canonical
+snapshot connection must be gated on the pre-connection sizing loop; preserve
+explicit geometry ownership and initial-size correctness. No optimization or
+500 ms acceptance is claimed from these seven samples.
+
 ### Accepted evidence retry feedback (September 5)
 
 The isolated blocked-ready recovery task auto-completed after its empty commit
