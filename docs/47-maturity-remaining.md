@@ -8,7 +8,7 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
-- [ ] Restore the browser task-list/settled-history split at the HTTP boundary.
+- [x] Restore the browser task-list/settled-history split at the HTTP boundary.
   On `12ec47b4`, five localhost `/api/v1/tasks` reads returned 3,118,493 bytes
   each in 17.0–17.4 ms. The response contained 786 tasks, including 703 Completed
   and 36 Abandoned. `fetchTasks` uses that endpoint; its adapter calls the all-task
@@ -20,7 +20,10 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
   The HTTP adapter now calls `list_board_tasks`; all 461 API tests and strict
   API lint pass. The endpoint regression preserves open and unverified finished
   work, serves abandoned history separately, and keeps the agent all-task reader
-  complete. Deployment and same-endpoint measurement are next.
+  complete. Deployed on `7cac7f3c`: the same endpoint returned 47 tasks and
+  237,740 bytes in five 3.45–4.39 ms localhost reads, versus 786 tasks and
+  3,118,493 bytes before (92.4% less payload). This is endpoint evidence, not a
+  claim that the browser's long-session degradation is fully solved.
 
 - [ ] Queen's explicit `swarm_start_worker` must honor Night Watch provider
   eligibility as well as capacity. Its current adapter checks capacity only.
@@ -95,7 +98,7 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Evidence from the September 4–5 demo run
 
-### Explicit prerequisites — local implementation, not deployed yet
+### Explicit prerequisites — deployed API drill; Queen journey still open
 
 ADR 0076 introduces bounded, audited same-Hive prerequisite edges, distinct from
 queue ordering. Queen and the operator may add/remove them; ordinary workers
@@ -106,7 +109,7 @@ and next-move projection without silently resuming blocked work. Removed or
 abandoned prerequisites remain unresolved and visible.
 
 Schema 139, shared application commands, operator HTTP and Queen MCP adapters,
-and a shared Queues/task-card display are implemented locally. Tool discovery is
+and a shared Queues/task-card display are deployed on `7cac7f3c`. Tool discovery is
 revision 18; existing provider sessions must refresh before they can use the new
 tool. The database upgrade fixture catalog and tool fingerprint were corrected
 after full regression runs caught their omissions. A second-Hive fixture was
@@ -120,8 +123,29 @@ Queues prerequisite link opens and focuses its actual target task card, and a
 not live Hive/Queen or native-phone acceptance. The final frontend rerun includes
 task-card linkage and removal of premature Resume/Start actions. Shared links were
 visually corrected to remain text links on the task board, with mobile-sized touch
-targets. Remaining gates: deployment, isolated real Queen coordination, representative
+targets. The installed API drill passed persistence, identical retry, cycle and
+premature-resume refusal, abandoned-upstream visibility, explicit removal, and
+ordinary resumption. Its two unassigned demo tasks were abandoned with audit
+history: consumer `01a07163-c3e9-7ca0-8c67-35fa61289450`, upstream
+`01a07163-c3f8-7260-baa5-37bdb51554e3`. No real project task was altered.
+Remaining gates: isolated real Queen coordination, representative populated-graph
 projection overhead and operator-facing dependency editing. QUEUE-01 stays open.
+
+### Engine replacement and automatic return during this deployment
+
+The linked `swarm-domain` changes deliberately changed the conservative engine
+fingerprint. Contrary to the initial expectation of an API-only reload, the
+idle reconciler replaced engine PID 2088305 with 2201959. Four sessions ended
+and all four workers returned automatically in staged starts: Queen, Platform,
+Nexus and Swarm Dogfood. No revival intents remained. The tool surface reported
+revision 18, four current sessions, zero stale and zero unknown. This proves
+this particular engine-return/tool-refresh journey, not every recovery path.
+The reconciler's first service run was interrupted by the service swap; the
+following run confirmed the current engine. Health remained/recovered ok, with
+no database-recovery requirement or degraded subsystem. Avoid claiming future
+domain edits are API-only; the fingerprint intentionally covers linked crates.
+The live Edge tab still requires operator unlock, so authenticated browser and
+native-device acceptance remain explicitly open.
 
 ### Direct attention navigation and keyboard tabs
 
