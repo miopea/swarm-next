@@ -107,6 +107,47 @@ did not); its reported formatting changes were applied locally after the test
 source copy. Live batched return timing remains untested and this batch is not
 yet deployed.
 
+### Live lifecycle-helper deletion defect (September 5 afternoon)
+
+`c94b5332a95d` deployed as `1.5.0-dev-c94b5332a95d-20260905162955-2359342`;
+health remained clean and engine PID 2323268/build identity unchanged. Before the
+isolated test, all eleven workers retained their sessions. Batch return latency
+itself has not been exercised live. No release was cut.
+
+The authenticated separate Edge tab became available. In Swarm Dogfood Contract
+only, Claude `/resume` visibly failed its SessionStart callback because its hook
+executable under release `1.5.0-dev-17c46d45b23e-20260905153337-2319994` no longer
+existed. `/proc/2323268/exe` confirmed that exact binary was `(deleted)`.
+This contradicts the claimed live-host release-pruning protection. Installed
+package source includes the `/proc` guard; why that guard failed remains open.
+Do not perform more app updates until this deletion risk is resolved.
+
+Immediate mitigation restored only that missing `bin/swarm-terminal-host` from
+`/proc/2323268/exe`; both SHA256 hashes matched
+`09bb6036b24e1a305ef5de4a256a0d7bc189587e325bdb11424e2f8394254feb`.
+This is an explicitly partial rescued release, not a valid complete rollback
+bundle. It did not restart the engine or any worker. Existing providers' future
+callbacks could then execute. Lost earlier callbacks cannot be reconstructed.
+
+Demo acceptance created a second conversation with `/clear` and a harmless
+`honeycomb-beta-20260905` marker. After returning to the original conversation,
+restoring the helper, and using `/resume` to select the marker conversation,
+engine revision 2 and persistence `confirmed_selection` both named
+`c4435eee-57b0-4546-b6ef-dc182080e7b5`. Direct stop acknowledged, and waking only
+demo worker `01a07193-7d79-7113-93f4-8e9a43db6964` created session
+`01a07270-e63a-7241-9929-3d7132d908e0` with that exact target. The browser showed
+the marker transcript restored. The other ten session IDs remained unchanged.
+
+However, the new demo's hook path now literally ends in ` (deleted)` because
+`std::env::current_exe()` still reports the deleted mapped inode even after its
+pathname is restored. Its provider-start receipt is absent, so complete recovery
+acceptance remains failed. A permanent fix must prevent deletion and refuse or
+safely resolve non-executable helper paths; never claim callback success from a
+visible transcript. Demo remains running in the marker conversation. The Edge
+tab is retained for continued inspection. An early typing timeout produced a
+partial unsent marker prompt; its visible contents were checked before Enter,
+and no duplicate prompt was replayed.
+
 ### Disposed renderer fit cancellation (September 5)
 
 Disposal previously checked only after font/frame waits resumed. Two regressions
