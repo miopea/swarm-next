@@ -8,6 +8,34 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Idle baseline and Event Timing interpretation (September 5, 19:02 UTC)
+
+On build `906a4d42`, eleven workers were loaded. Five one-second vmstat intervals
+showed 92–99% CPU idle, no swap-in/out and no IO wait. The nearby resource sample
+reported 15.81% memory used, normal pressure and 8 logical CPUs. This is a short
+mostly-idle baseline, not burst or aged-session acceptance. Queen's latest review
+was completed with `needs_operator`; the conductor rechecks changed fingerprints
+or unchanged actionable work after fifteen minutes, without a global pending-
+decision veto. A later worker event burst coincided with that next review window;
+this does not prove all unrelated task routing is correct.
+
+The displayed diagnostic report at 19:02:36 UTC separates current-page evidence:
+terminal grant 170 ms, socket 439 ms, restore 1,427 ms, total reconnect 2,036 ms;
+three renderer samples totaled 1,385 ms (maximum 1,381). Route samples were
+18/43/51/67 ms. Three Event Timing buckets counted 11/15/12 entries with a maximum
+of 1,064 ms each. These are NOT established unique human-interaction counts:
+`installBrowserPerformanceCapture` records every event entry as `interaction`
+without grouping by `interactionId`. The W3C Event Timing specification explains
+that several entries can belong to one interaction, and its example groups by ID
+using the maximum duration: https://www.w3.org/TR/2026/WD-event-timing-20260223/
+
+Next diagnostics work must distinguish observed event entries from grouped
+interactions, preserve bounded ownership and numeric-only privacy, and keep old
+hourly evidence semantically distinguishable. Do not deduplicate by matching
+duration, infer that automation caused the latency, or call the delays fixed.
+The old persisted route summary still shows 35,535 ms across twenty samples;
+do not attribute that cross-reload summary to this current build's four routes.
+
 ### Queues opens the operator's decision directly (September 5)
 
 Operator-owned queue task navigation now uses the exact linked pending decision,
