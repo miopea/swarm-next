@@ -146,9 +146,11 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(onQueenPolicyChange).toHaveBeenCalledWith({ at_hive: "coordinate", away: "advisory", night_watch: "local_execution" });
 
   // Who this Hive is, and what it is connected to.
+  rerender(<SettingsWorkspace {...props} section="settings-hive" />);
+  expect(screen.getByText("Bea")).toBeInTheDocument();
   rerender(<SettingsWorkspace {...props} section="settings-connections" />);
   expect(screen.getAllByText("Meadow Hive").length).toBeGreaterThan(0);
-  expect(screen.getByText("Bea")).toBeInTheDocument();
+  expect(screen.queryByRole("region", { name: "Your Hive" })).toBeNull();
   expect(screen.getAllByText("Personal Hive").length).toBeGreaterThan(0);
   expect(await screen.findByText("Jira not connected", {}, { timeout: 5_000 })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Bring Jira into your Hive" }).closest("section")).toHaveTextContent("Owned tasks continue; new shared claims wait.");
@@ -664,6 +666,19 @@ function minimalProps() {
 function ok(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 }
+
+test("identity belongs to Your Hive and obeys the same settings search as other cards", () => {
+  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+  const props = minimalProps();
+  const { rerender } = render(<SettingsWorkspace {...props} />);
+  expect(screen.getByRole("region", { name: "Your Hive" })).toBeInTheDocument();
+  rerender(<SettingsWorkspace {...props} section="settings-dogfood" />);
+  expect(screen.queryByRole("region", { name: "Your Hive" })).toBeNull();
+  rerender(<SettingsWorkspace {...props} section="settings-dogfood" query="membership" />);
+  expect(screen.getByRole("region", { name: "Your Hive" })).toBeInTheDocument();
+  rerender(<SettingsWorkspace {...props} query="unmatched-setting-xyz" />);
+  expect(screen.queryByRole("region", { name: "Your Hive" })).toBeNull();
+});
 
 function queenAutomation(overrides: Record<string, unknown> = {}) {
   return {

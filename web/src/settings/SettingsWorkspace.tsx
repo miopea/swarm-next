@@ -484,7 +484,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
         </section>
       )}
 
-      <section className="settings-card" aria-labelledby="identity-heading">
+      {shows("settings-identity") && <section id="settings-identity" className="settings-card" aria-labelledby="identity-heading">
         <div><p className="eyebrow">Identity</p><h3 id="identity-heading">Your Hive</h3></div>
         <p>This local boundary owns its workers, tasks, repositories, and provider sessions.</p>
         <dl className="diagnostic-list">
@@ -492,7 +492,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
           <div><dt>Operator</dt><dd>{hiveIdentity?.operator.display_name ?? "Unavailable"}</dd></div>
           <div><dt>Membership</dt><dd>{apiaryMembershipLabel(hiveIdentity)}</dd></div>
         </dl>
-      </section>
+      </section>}
 
       {shows("settings-apiary") && (
     <ApiarySettings busy={busy} hiveIdentity={hiveIdentity} operatorToken={operatorToken} onHiveIdentityChange={onHiveIdentityChange} />

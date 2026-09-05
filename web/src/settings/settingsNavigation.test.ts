@@ -65,6 +65,7 @@ test("every card belongs to a real section", () => {
   expect(SETTINGS_CARDS.map((card) => card.id)).toContain("settings-remote");
   expect(SETTINGS_CARDS.map((card) => card.id)).toContain("settings-appearance");
   expect(SETTINGS_CARDS.map((card) => card.id)).toContain("settings-email");
+  expect(SETTINGS_CARDS.find((card) => card.id === "settings-identity")?.section).toBe("settings-hive");
 });
 
 test("no two cards claim the same anchor", () => {
@@ -81,6 +82,7 @@ test("finds a control by the word someone would actually type", () => {
   expect(titles("token")).toEqual(["Operator access"]);
   expect(titles("outlook")).toEqual(["Email"]);
   expect(titles("upgrade")).toEqual(["App and API"]);
+  expect(titles("membership")).toEqual(["Your Hive"]);
 });
 
 test("matches the section name too, so browsing by group still works", () => {

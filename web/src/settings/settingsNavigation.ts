@@ -39,6 +39,8 @@ export type SettingsCard = {
 };
 
 export const SETTINGS_CARDS: readonly SettingsCard[] = [
+  { id: "settings-identity", section: "settings-hive", title: "Your Hive",
+    keywords: ["identity", "hive name", "operator", "membership"] },
   { id: "settings-dogfood", section: "settings-dogfood", title: "Developer Dogfood",
     keywords: ["developer", "dogfood", "performance", "soak", "evidence", "regression"] },
   { id: "settings-crew", section: "settings-workers", title: "Crew",
