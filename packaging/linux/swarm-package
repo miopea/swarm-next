@@ -622,10 +622,25 @@ prune_superseded_releases() {
   keep_current=$(release_from_link "$install_root/current")
   keep_previous=$(release_from_link "$install_root/previous")
   keep_host=$(release_from_link "$install_root/host-current")
+  # ProtectHome's mount sandbox can deny /proc/PID/exe even for our own UID.
+  # An unreadable process link is not evidence that its release is unused.
+  # Ask the running engine over the owned socket before deleting any release.
+  pruning_host_version=
+  if pruning_status=$(SWARM_TERMINAL_SOCKET=$(terminal_socket) \
+    timeout 3 "$keep_current/bin/swarmctl" status 2>/dev/null); then
+    pruning_host_version=$(printf '%s\n' "$pruning_status" \
+      | sed -n 's/.*"host_version":[[:space:]]*"\([^"]*\)".*/\1/p')
+  fi
+  case "$pruning_host_version" in
+    ''|.|..|*[!A-Za-z0-9._-]*)
+      printf 'swarm-package: release cleanup deferred: running engine release is unconfirmed\n' >&2
+      return 0;;
+  esac
+  keep_running="$releases_root/$pruning_host_version"
   for candidate in "$releases_root"/*; do
     [ -d "$candidate" ] || continue
     case "$candidate" in
-      "$keep_current"|"$keep_previous"|"$keep_host") continue;;
+      "$keep_current"|"$keep_previous"|"$keep_host"|"$keep_running") continue;;
       "$releases_root"/*)
         release_serves_running_host "$candidate" && continue
         rm -rf -- "$candidate"

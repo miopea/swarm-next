@@ -8,6 +8,25 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Live-host release retention repair (September 5)
+
+The deployment unit's mount protections deny `/proc/2323268/exe` inspection
+even to the same user. A transient unit with matching NoNewPrivileges,
+PrivateTmp, ProtectSystem and ProtectHome settings reproduced that denial.
+The same sandbox successfully queried the engine socket in 43 ms, reporting
+the original `17c46d45b23e` release and eleven running sessions. Release cleanup
+now protects that socket-reported version, independently of moved symlinks,
+and defers deletion on unconfirmed identity with a three-second deadline.
+
+Isolated `test-release-apply.sh` passed, including two consecutive unchanged-
+engine updates (the live release is no longer previous), missing/unsafe identity,
+unavailable status, failed status with valid-looking output, timeout, and later
+successful reclamation. Its status fixture now reports busy/unreadable counts;
+the previously missing fields correctly prevented its deferred migration from
+completing. `test-package-lifecycle.sh` also passed. This repair is not yet live
+and does not repair the old process's deleted executable mapping. The Contract
+demo's new launch still lacks a provider callback; REC-01 remains open.
+
 ### Engine update and D365 conversation regression (September 5)
 
 Development revision `17c46d45b23e` deployed without cutting a release. App/API

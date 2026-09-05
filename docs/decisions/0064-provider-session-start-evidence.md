@@ -75,6 +75,18 @@ to an identical engine build. The old release becomes removable only after the
 host actually restarts. A mapped `(deleted)` executable is insufficient: the host
 would keep running while every later lifecycle callback failed to execute.
 
+Live development deployment on September 5 reproduced that failure under the
+systemd mount sandbox: reading another same-user process's `/proc/PID/exe`
+failed while the owned engine socket remained readable. Cleanup therefore first
+queries the running engine's `host_version` through `swarmctl status`, with a
+three-second coreutils `timeout` deadline, and protects that release independently
+of current, previous, and host-current links. Missing, failed, timed-out, or unsafe
+release identity defers all release deletion. The `/proc` check is supplemental,
+never evidence that an unreadable process no longer owns files. Subsequent cleanup
+can reclaim obsolete releases once running identity is confirmed; no retry loop
+or background task is added. This does not repair an already-deleted executable
+mapping or establish conversation intent from a successful exact resume.
+
 Interactive selection uses a separate bounded state machine. Claude's documented
 SessionEnd(reason=resume) names the conversation being left by interactive /resume;
 the next SessionStart(source=resume) names the resumed one. A matching end arms one

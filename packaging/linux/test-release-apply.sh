@@ -93,7 +93,11 @@ if [ "$(basename "$0")" = "swarmctl" ]; then
   if [ "$command" = "status" ]; then
     running=0
     [ ! -f "$HOME/running-sessions" ] || running=$(cat "$HOME/running-sessions")
-    printf '{"protocol_version":5,"running_sessions":%s}\n' "$running"
+    [ "${SWARM_TEST_STATUS_FAILURE:-0}" != 1 ] || exit 1
+    [ "${SWARM_TEST_STATUS_FAILURE:-0}" != hang ] || sleep 10
+    host_version=${SWARM_TEST_HOST_VERSION-$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")}
+    printf '{"protocol_version":5,"running_sessions":%s,"busy_sessions":%s,"unreadable_sessions":0,"host_version":"%s"}\n' "$running" "$running" "$host_version"
+    [ "${SWARM_TEST_STATUS_FAILURE:-0}" != 2 ] || exit 1
   fi
 fi
 exit 0
@@ -233,12 +237,17 @@ make_bundle 7.0.0
 printf 'engine-same\n' > "$test_root/bundle-7.0.0/WORKER_ENGINE_BUILD_ID"
 printf 'engine-same\n' > "$SWARM_INSTALL_ROOT/current/WORKER_ENGINE_BUILD_ID"
 host_before=$(basename "$(readlink "$SWARM_INSTALL_ROOT/host-current")")
-export SWARM_RUNNING_HOST_RELEASE="$SWARM_INSTALL_ROOT/releases/$host_before"
+export SWARM_TEST_HOST_VERSION="$host_before"
 sh "$test_root/bundle-7.0.0/swarm-package" update "$test_root/bundle-7.0.0" >/dev/null
 host_after=$(basename "$(readlink "$SWARM_INSTALL_ROOT/host-current")")
 [ "$host_after" = "7.0.0" ] || fail "an unchanged engine did not move to the new release ($host_before -> $host_after)"
-[ -d "$SWARM_RUNNING_HOST_RELEASE" ] || fail "pruning removed the release still serving provider lifecycle hooks"
-unset SWARM_RUNNING_HOST_RELEASE
+# A second carry-forward moves previous as well: only the socket identity now
+# protects the original process's helper, not one of the retained symlinks.
+make_bundle 7.0.1
+printf 'engine-same\n' > "$test_root/bundle-7.0.1/WORKER_ENGINE_BUILD_ID"
+sh "$test_root/bundle-7.0.1/swarm-package" update "$test_root/bundle-7.0.1" >/dev/null
+[ -d "$SWARM_INSTALL_ROOT/releases/$host_before" ] || fail "pruning removed the release still serving provider lifecycle hooks"
+unset SWARM_TEST_HOST_VERSION
 # Nothing was drained or restarted to do it.
 if grep -q 'drain' "$HOME/swarmctl.log" 2>/dev/null; then
   fail "carrying an unchanged engine forward must not drain the terminal host"
@@ -249,9 +258,36 @@ make_bundle 8.0.0
 printf 'engine-different\n' > "$test_root/bundle-8.0.0/WORKER_ENGINE_BUILD_ID"
 sh "$test_root/bundle-8.0.0/swarm-package" update "$test_root/bundle-8.0.0" >/dev/null
 host_changed=$(basename "$(readlink "$SWARM_INSTALL_ROOT/host-current")")
-[ "$host_changed" = "7.0.0" ] || fail "a changed engine must not be swapped under running workers ($host_changed)"
+[ "$host_changed" = "7.0.1" ] || fail "a changed engine must not be swapped under running workers ($host_changed)"
 
 printf 'release apply smoke passed\n'
+
+# An unavailable or unsafe engine identity is not permission to remove files.
+# The directory represents an old release that no symlink protects.
+mkdir -p "$SWARM_INSTALL_ROOT/releases/cleanup-sentinel"
+prune_case=0
+for unknown_identity in '' '..' '../escape' 'bad/version'; do
+  prune_case=$((prune_case + 1))
+  export SWARM_TEST_HOST_VERSION="$unknown_identity"
+  make_bundle "8.1.$prune_case"
+  sh "$test_root/bundle-8.1.$prune_case/swarm-package" update "$test_root/bundle-8.1.$prune_case" >/dev/null
+  [ -d "$SWARM_INSTALL_ROOT/releases/cleanup-sentinel" ] \
+    || fail "unknown engine identity authorized release deletion"
+done
+unset SWARM_TEST_HOST_VERSION
+for status_failure in 1 2 hang; do
+  export SWARM_TEST_STATUS_FAILURE="$status_failure"
+  make_bundle "8.2.$status_failure"
+  sh "$test_root/bundle-8.2.$status_failure/swarm-package" update "$test_root/bundle-8.2.$status_failure" >/dev/null
+  [ -d "$SWARM_INSTALL_ROOT/releases/cleanup-sentinel" ] \
+    || fail "failed or timed-out engine status authorized release deletion"
+done
+unset SWARM_TEST_STATUS_FAILURE
+make_bundle 8.3.0
+sh "$test_root/bundle-8.3.0/swarm-package" update "$test_root/bundle-8.3.0" >/dev/null
+[ ! -d "$SWARM_INSTALL_ROOT/releases/cleanup-sentinel" ] \
+  || fail "confirmed engine identity did not allow obsolete release cleanup"
+printf 'release cleanup identity guards passed\n'
 
 # LAST, because it moves the Hive to a new protocol: A PROTOCOL CHANGE INSTALLS FROM THE CONTROL ROOM, which it could not.
 #
