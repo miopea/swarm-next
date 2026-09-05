@@ -2597,51 +2597,16 @@ impl TaskService {
         &self,
         principal: Option<AgentPrincipal>,
     ) -> Result<Vec<DecisionRequest>, ApplicationError> {
-        let decisions = self.store.list_decision_requests()?;
-        Ok(match principal {
-            None
-            | Some(AgentPrincipal {
-                role: WorkerRole::Queen,
-                ..
-            }) => decisions,
-            // A WORKER ALSO SEES RULINGS ON ITS OWN WORK, not only the ones it
-            // raised itself.
-            //
-            // Verifying a decision by id has always been open to anyone — the
-            // tool says so. What was closed was DISCOVERY: a worker assigned to
-            // a task could not find the id of the operator ruling attached to
-            // that task, and the only remaining route was to be told it by
-            // Queen. For a task whose gate says "do not touch this on a Queen
-            // note or a peer relay", being told the id IS the relay. So a
-            // worker that took its own gate seriously had to block, and one
-            // that satisfied the gate had necessarily broken it. The safer the
-            // worker, the more reliably it stalled.
-            //
-            // That happened on 2026-08-26 to a syslog forwarder cutover
-            // carrying 919k requests a day. The ruling existed, was correctly
-            // linked to the task, and was invisible to the one worker that
-            // needed it.
-            //
-            // Scoped to tasks this worker is ASSIGNED. It does not open the
-            // decision log; it hands a worker the authority that governs the
-            // work it was given, which is the thing it was already being asked
-            // to act on.
-            Some(principal) => {
-                let mine = self
-                    .list_tasks()?
-                    .into_iter()
-                    .filter(|task| task.assigned_worker_id == Some(principal.worker_id))
-                    .map(|task| task.id)
-                    .collect::<std::collections::HashSet<_>>();
-                decisions
-                    .into_iter()
-                    .filter(|decision| {
-                        decision.requesting_worker_id == principal.worker_id
-                            || decision.task_id.is_some_and(|task| mine.contains(&task))
-                    })
-                    .collect()
-            }
-        })
+        // Scope before the persistence read cap, not after a global history page.
+        let decisions = match principal {
+            Some(principal) if principal.role != WorkerRole::Queen => self
+                .store
+                .list_worker_decision_requests(principal.worker_id)?,
+            _ => self.store.list_decision_requests()?,
+        };
+        // Workers discover both their own requests and rulings on currently
+        // assigned work, so they need not rely on Queen relaying an authority ID.
+        Ok(decisions)
     }
 
     /// Creates a typed request for operator judgment using the authenticated agent identity.
@@ -3509,6 +3474,39 @@ mod tests {
             deadline: None,
             requested_command: None,
         }
+    }
+
+    #[test]
+    fn unrelated_pending_decisions_cannot_hide_a_workers_resolved_ruling() {
+        let (service, queen, worker) = setup();
+        let principal = AgentPrincipal::from(&worker);
+        let own = service
+            .create_decision(
+                principal,
+                &decision_input(None, DecisionRequestKind::Input, "My question", &["wait"]),
+            )
+            .unwrap();
+        service
+            .resolve_operator_decision(own.id, "wait", "", "test")
+            .unwrap();
+        for _ in 0..swarm_persistence::MAX_DECISION_RESULTS {
+            service
+                .create_decision(
+                    AgentPrincipal::from(&queen),
+                    &decision_input(None, DecisionRequestKind::Input, "Other work", &["wait"]),
+                )
+                .unwrap();
+        }
+        assert!(
+            service
+                .list_visible_decisions(None)
+                .unwrap()
+                .iter()
+                .all(|d| d.id != own.id)
+        );
+        let visible = service.list_visible_decisions(Some(principal)).unwrap();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].id, own.id);
     }
 
     #[test]

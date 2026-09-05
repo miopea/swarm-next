@@ -442,17 +442,42 @@ impl TaskStore {
     /// # Errors
     /// Returns a database or persisted-data integrity error.
     pub fn list_decision_requests(&self) -> Result<Vec<DecisionRequest>, TaskStoreError> {
+        self.list_scoped_decisions(None)
+    }
+
+    /// Lists a worker's requests and rulings on its assigned work before capping
+    /// results, so unrelated Hive history cannot hide its operator instructions.
+    ///
+    /// # Errors
+    /// Returns database or persisted-data integrity failures.
+    pub fn list_worker_decision_requests(
+        &self,
+        worker_id: WorkerId,
+    ) -> Result<Vec<DecisionRequest>, TaskStoreError> {
+        self.list_scoped_decisions(Some(worker_id))
+    }
+
+    fn list_scoped_decisions(
+        &self,
+        worker_id: Option<WorkerId>,
+    ) -> Result<Vec<DecisionRequest>, TaskStoreError> {
         let connection = self.connection()?;
         let mut statement = connection.prepare(&format!(
             "{DECISION_COLUMNS}
              FROM decision_requests d
              JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1
+             WHERE (?2 IS NULL OR d.requesting_worker_id = ?2 OR EXISTS(
+                 SELECT 1 FROM tasks t WHERE t.id = d.task_id
+                 AND t.removed_at IS NULL AND t.assigned_worker_id = ?2))
              ORDER BY state = 'pending' DESC, urgency = 'time_sensitive' DESC,
                       deadline IS NULL, deadline, created_at DESC, id DESC
              LIMIT ?1",
         ))?;
         statement
-            .query_map([MAX_DECISION_RESULTS], decision_from_row)?
+            .query_map(
+                params![MAX_DECISION_RESULTS, worker_id.map(|id| id.to_string())],
+                decision_from_row,
+            )?
             .collect::<Result<Vec<_>, _>>()
             .map_err(Into::into)
     }

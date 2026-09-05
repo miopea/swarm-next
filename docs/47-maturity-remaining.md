@@ -56,6 +56,12 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ### Follow-up reconciliation trace and queue presentation
 
+Worker decision discovery now filters requester/current assignment before the
+read cap. The application regression fills the global pending inbox and confirms
+the worker can still discover its own resolved ruling without seeing unrelated
+requests. Both decision application tests passed. Direct-input capture is still
+separate; this fixes discoverability of already-recorded decisions only.
+
 The full frontend suite passed 1,085 tests across 127 files before the queue
 progression change; its nine focused tests and project TypeScript check passed
 afterward. Queue commit `b0a3758` deployed through the normal development reload:

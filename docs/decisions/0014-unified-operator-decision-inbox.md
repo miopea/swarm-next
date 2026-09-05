@@ -53,6 +53,13 @@ must extend the typed record and engagement guard rather than bypass them.
 
 ## Validation
 
+Worker discovery applies its existing requester/current-task-assignee scope
+inside the persistence query before the result bound. Filtering a global page
+after reading it lets unrelated pending requests hide a worker's resolved ruling.
+Operator and Queen still read the bounded local-Hive inbox. This does not grant
+agents resolution authority or replace full-ID verification; older worker-visible
+history beyond its own page remains bounded.
+
 - Domain and migration tests cover typed values, schema upgrade, bounds,
   same-Hive references, ordering, atomic resolution, and audit events.
 - Application tests prove worker visibility and task-correlation authority.
