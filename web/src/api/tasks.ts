@@ -96,6 +96,8 @@ export type Task = {
   review_request?: string | null;
   /** Recorded on the current block; not an inferred current dependency. */
   blocked_note?: string | null;
+  /** Explicit recorded hold deadline, Unix seconds; not inferred from prose. */
+  blocked_until?: number | null;
   prerequisites?: TaskPrerequisite[];
   assigned_worker_id: string | null;
   assigned_session_id: string | null;

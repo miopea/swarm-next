@@ -14,6 +14,20 @@ function task(overrides: Partial<Task>): Task {
 }
 
 describe("QueuesView", () => {
+  test("shows recorded holds, due reassessment and clears stale deadlines outside Blocked", () => {
+    const blocked = task({ state: "blocked", next_move_owner: "blocked", blocked_until: 200 });
+    const props = { workers: [], onOpenTask: vi.fn() };
+    const { rerender } = render(<QueuesView {...props} tasks={[blocked]} now={100_000} />);
+    expect(screen.getByText(`Scheduled hold until ${new Date(200_000).toLocaleString()}`)).toBeVisible();
+    rerender(<QueuesView {...props} tasks={[blocked]} now={200_000} />);
+    expect(screen.getByText("Recorded hold ended · Queen reassesses remaining blockers")).toBeVisible();
+    rerender(<QueuesView {...props} tasks={[{ ...blocked, state: "ready", next_move_owner: "worker" }]} now={200_000} />);
+    expect(screen.queryByText(/Recorded hold|Scheduled hold/)).not.toBeInTheDocument();
+    rerender(<QueuesView {...props} tasks={[{ ...blocked, blocked_until: null, blocked_note: "Maybe tomorrow" }]} now={200_000} />);
+    expect(screen.queryByText(/Recorded hold|Scheduled hold/)).not.toBeInTheDocument();
+    rerender(<QueuesView {...props} tasks={[{ ...blocked, blocked_until: Number.NaN }]} now={200_000} />);
+    expect(screen.getByText("Recorded hold deadline unavailable")).toBeVisible();
+  });
   test("shows Queen's recorded pacing without inventing a task or retaining it after progress", () => {
     const status: QueenAutomationStatus = { enabled: true, state: "queued", run_id: "run", trigger: "actionable_work", actionable_count: 1, attempts: 0, requested_at: 1, delivered_at: null, finished_at: null, outcome: null, waiting_reason: "Pacing Queen's next review after a recent delivery" };
     const props = { tasks: [], workers: [], onOpenTask: vi.fn() };

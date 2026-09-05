@@ -615,6 +615,9 @@ pub struct Task {
     /// or a reason retained from an earlier block. Absent outside Blocked.
     #[serde(default)]
     pub blocked_note: Option<String>,
+    /// Recorded explicit hold deadline; absent outside the current block.
+    #[serde(default)]
+    pub blocked_until: Option<i64>,
     /// Explicit local prerequisites, independent of dispatch order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prerequisites: Vec<crate::TaskPrerequisite>,

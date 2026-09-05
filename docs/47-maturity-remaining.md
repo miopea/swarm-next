@@ -8,6 +8,17 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Recorded hold visibility in Queues (September 5)
+
+The shared task projection now exposes the existing explicit blocked-until
+deadline, only while Blocked. Queues shows the recorded local date/time for a
+future hold, or Queen reassessment when it has elapsed. Missing notes/dates are
+not inferred; invalid dates remain unavailable. No scheduling, authority or
+automatic state transition changes. TypeScript, 21 Queue tests, the API compile
+check and all 569 persistence tests passed in the isolated Linux workspace.
+No real task currently carries the explicit marker in its current block note;
+live visual acceptance will use an isolated fixture and is still pending.
+
 ### Post-build cold-return phase evidence (September 5)
 
 Commit `023aac85` deployed healthy with no degraded subsystems and unchanged

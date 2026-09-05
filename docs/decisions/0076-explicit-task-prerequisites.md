@@ -69,3 +69,10 @@ existing source. No task state, dependency, decision or operator hold is changed
 by reading this list. Verified cleared work returns through Blocked to Ready;
 capacity and unperformed routing are queue work, not persistent blockers. This
 does not classify free text into new automatic recovery authority.
+
+The shared task read also exposes the existing explicit `blocked_until` value
+while the task is Blocked. Queues labels future recorded holds and deadlines
+that have passed separately from dependencies. An expired date means Queen
+reassesses remaining blockers, never automatic readiness or operator escalation.
+Leaving Blocked clears the value through the existing transition boundary;
+clients additionally suppress it outside Blocked when snapshots are stale.

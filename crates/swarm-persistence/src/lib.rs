@@ -1854,7 +1854,8 @@ impl TaskStore {
                        'removed', json(CASE WHEN prerequisite.removed_at IS NULL THEN 'false' ELSE 'true' END),
                        'reason', p.reason, 'created_at', p.created_at))
                     FROM task_prerequisites p LEFT JOIN tasks prerequisite ON prerequisite.id = p.prerequisite_id
-                    WHERE p.task_id = t.id)
+                    WHERE p.task_id = t.id),
+                   CASE WHEN t.state = 'blocked' THEN t.blocked_until END
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
@@ -5974,6 +5975,7 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         review_request_id: row.get(21)?,
         review_request: row.get(22)?,
         blocked_note: row.get(23)?,
+        blocked_until: row.get(25)?,
         next_move_owner: swarm_domain::NextMoveOwner::derive(
             TaskState::from_str(&state).unwrap_or(TaskState::Draft),
             has_assignee,
@@ -9300,8 +9302,21 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(deadline(&store), Some(1_787_852_133));
+        assert_eq!(
+            store.get_task(task.id).unwrap().blocked_until,
+            Some(1_787_852_133)
+        );
+        assert_eq!(
+            store.list_board_tasks().unwrap()[0].blocked_until,
+            Some(1_787_852_133)
+        );
+        assert_eq!(
+            store.list_tasks().unwrap()[0].blocked_until,
+            Some(1_787_852_133)
+        );
 
         store.transition_task(task.id, TaskState::Active).unwrap();
+        assert_eq!(store.get_task(task.id).unwrap().blocked_until, None);
         assert_eq!(
             deadline(&store),
             None,
@@ -9313,6 +9328,7 @@ mod tests {
             .transition_task_with_note(task.id, TaskState::Blocked, "Blocked on Queen deciding")
             .unwrap();
         assert_eq!(deadline(&store), None);
+        assert_eq!(store.list_board_tasks().unwrap()[0].blocked_until, None);
     }
 
     #[test]

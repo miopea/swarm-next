@@ -194,6 +194,13 @@ export default function QueuesView({
                   </button>
                   {briefing && <p className="queue-task-meta">Briefing held: {holdReason(briefing)} · queued {waitedFor(now / 1000 - briefing.queued_at)}</p>}
                   <TaskPrerequisiteList task={task} workerNames={workerNames} onOpenTask={onOpenTask} />
+                  {task.state === "blocked" && task.blocked_until != null && <p className="queue-task-meta">
+                    {Number.isFinite(task.blocked_until) && Number.isFinite(new Date(task.blocked_until * 1000).getTime())
+                      ? task.blocked_until * 1000 > now
+                        ? `Scheduled hold until ${new Date(task.blocked_until * 1000).toLocaleString()}`
+                        : "Recorded hold ended · Queen reassesses remaining blockers"
+                      : "Recorded hold deadline unavailable"}
+                  </p>}
                   {task.state === "blocked" && task.blocked_note?.trim() && (
                     task.blocked_note.length <= 240
                       ? <p className="queue-task-meta">Recorded when blocked: {task.blocked_note}</p>
