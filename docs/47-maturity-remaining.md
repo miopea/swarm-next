@@ -8,6 +8,19 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Pending-decision roster semantics (September 5)
+
+Tracing Queen's `Awaiting you · 19h` label found that the API gives any pending
+decision precedence over provider activity. Its age is the oldest pending
+request's creation time, not evidence that Queen stopped for 19 hours. The local
+presentation now says `Decision pending` when that durable timestamp is present;
+provider-only awaiting-input status retains `Awaiting you`. Existing attention
+state, engagement/runtime/sleep precedence, decisions and delivery guards are
+unchanged. The new regression failed before the fix; all 26 focused worker
+presentation tests and TypeScript check passed afterward. Not deployed during
+the fixed-revision baseline. This is not proof that those decisions remain
+relevant or that direct-terminal answer reconciliation is complete.
+
 ### Authenticated ten-worker switching baseline (September 5)
 
 On unchanged live `6ea9c93f`, the separate Edge tab traversed ten already-awake

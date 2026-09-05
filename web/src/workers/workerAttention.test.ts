@@ -24,6 +24,19 @@ test("an expired operator lease presents as resting everywhere", () => {
   });
 });
 
+test("a pending decision does not claim the worker stopped at a terminal question", () => {
+  const pending = { ...worker, attention_state: "awaiting_operator" as const, held_for_answer_since: 100 };
+  expect(workerAttention(pending)).toMatchObject({
+    state: "awaiting_operator", label: "Decision pending", compactLabel: "decision pending", presence: "waiting",
+  });
+  expect(workerSwitcherDetail(pending, "Review the release", true)).toBe("Decision pending · Review the release");
+  // Removing the durable decision must not hide a provider-native question.
+  expect(workerAttention({ ...pending, held_for_answer_since: undefined }).label).toBe("Awaiting you");
+  for (const state of ["sleeping", "blocked", "with_operator"] as const) {
+    expect(workerAttention({ ...pending, attention_state: state }).label).not.toBe("Decision pending");
+  }
+});
+
 test("mobile worker details keep operational state visible before task context", () => {
   expect(workerSwitcherDetail({ ...worker, attention_state: "resting" }, "Review the release")).toBe("Resting · Review the release");
   expect(workerSwitcherDetail({ ...worker, running: false, attention_state: "sleeping" }, "Review the release")).toBe("Sleeping · Review the release");

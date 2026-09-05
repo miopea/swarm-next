@@ -45,10 +45,7 @@ export default function WorkerRosterItem({ worker, selected, detail, workSummary
   const primaryAction = worker.running ? onOpen : onStart;
   const primaryActionLabel = worker.running ? "Open worker" : worker.runtime_error ? "Retry worker" : "Wake worker";
   const attention = workerAttention(worker);
-  // A worker holding for an answer reports how long the answer has been owed,
-  // not how long its terminal has been quiet. Silence age looks right for a
-  // held worker by coincidence — it stopped producing output because it
-  // stopped — and measures the wrong thing.
+  // Pending-decision age is not terminal silence or proof that work stopped.
   const held = heldForAnswer(worker);
   const pausedTitle = busy
     ? `${busyReason ?? "Swarm is working"} — worker controls pause until it finishes. ${worker.name} keeps running.`

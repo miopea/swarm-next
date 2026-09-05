@@ -25,6 +25,11 @@ export function workerAttention(worker: Worker, now = Date.now()): WorkerAttenti
     ? "resting"
     : worker.attention_state;
   const shown = presentation[state];
+  // The legacy held-for-answer field is the oldest pending decision timestamp,
+  // not proof that the provider stopped. Queen can keep coordinating other work.
+  if (state === "awaiting_operator" && worker.held_for_answer_since !== undefined) {
+    return { state, ...shown, label: "Decision pending", compactLabel: "decision pending" };
+  }
   // A WAKE IS COMING, AND SAYING SO IS THE WHOLE FIX. Two tasks were routed to
   // a sleeping worker; the coordinator woke it four and a half minutes later.
   // In between nothing said anything, so the operator concluded "the queen
@@ -138,16 +143,14 @@ export function workerSwitcherDetail(
 }
 
 /**
- * How long this worker has been holding for an operator answer.
+ * Age of this worker's oldest pending operator decision.
  *
- * Distinct from silence: a held worker stopped producing output as a
- * consequence of stopping, so silence age happens to look right and measures
- * the wrong thing. What the operator needs to see is how long an answer has
- * been owed, which is when the request was filed.
+ * The legacy field name does not prove that the terminal stopped: a worker may
+ * continue other work while its decision remains pending. Never use this age
+ * as terminal silence or as evidence that orchestration cannot progress.
  *
- * Shown from the first minute rather than suppressed like silence is. A
- * one-minute silence is noise; a worker pinned for a minute waiting on you is
- * already the fact.
+ * Recent requests show "just now"; older ones show their age independently of
+ * terminal output.
  */
 export function heldForAnswer(worker: Worker, now = Date.now()): string | undefined {
   if (worker.held_for_answer_since === undefined) return undefined;

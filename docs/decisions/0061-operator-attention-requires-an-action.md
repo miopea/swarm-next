@@ -24,6 +24,15 @@ When independently refreshed observations overlap, present one task once. A task
 known to be closed takes precedence over an older blocked observation. Unknown
 next ownership is explicitly unknown, never an empty queue or an invented owner.
 
+The roster labels a known pending decision as `Decision pending`, not as proof
+that the worker has stopped at a terminal question. The legacy
+`held_for_answer_since` field is the oldest pending decision's creation time;
+it is not a terminal stop timestamp. This presentation does not clear decisions,
+change attention-state precedence, or authorize orchestration to bypass a hold.
+Provider-derived awaiting-input status without a known pending decision retains
+the `Awaiting you` label. Sleeping, runtime failures and operator engagement keep
+their existing precedence.
+
 Ordinary prompt/unsent-text delivery holds are coordination observations, not
 operator escalations. Show them in Queues with their recorded reason and target;
 do not infer that Queen stopped working or that nothing can route. An explicit
