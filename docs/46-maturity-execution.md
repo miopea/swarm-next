@@ -29,14 +29,31 @@ authorized. No release is authorized.
 
 ### First-briefing pacing: regression verification
 
+- `add51e5` verified live as `1.5.0-dev-add51e513173-20260905023200-1978879`,
+  with no degraded subsystems and unchanged worker-engine build identity.
+- Two isolated documentation tasks completed through worker-reported evidence
+  and routine settlement: `01a06f6b-91c9-7862-b903-a8ba3b13f10e` produced
+  `4979e94`; `01a06f6d-2859-7670-a0d3-961c57049194` produced `9655b38`.
+  Durable generation-zero dispatches landed 5 and 3 seconds after task creation,
+  at 02:35:20 and 02:37:02 UTC respectively. The second was delivered 102 seconds
+  after the first, within the former 300-second cooldown. Both are Completed.
+- `scripts/dogfood/initial-briefing-check.sh` limits itself to the existing demo
+  worker and repository, bounds observation, preserves evidence on failure and
+  supports resuming observation without duplicating a task. Initial observation
+  hit an unsupported single-task GET; corrected to the supported list endpoints
+  and resumed the same task. A trailing CR from Windows stdin caused a final
+  shell error after both tasks completed; explicit exit fixes that harness issue.
+  Bash syntax check passes. The demo worker was stopped only after completion;
+  its clean repository, tasks and conversation remain available.
+
 The first briefing of a durable assignment now bypasses coordination pacing;
 returned-work generations remain cooled. Existing readiness, policy and delivery
 verification paths are unchanged. Tests explicitly cover generation zero versus
 later generations and both cadence classes at the experimental-provider gate.
 The freshly built Linux API harness `swarm_api-fc94efeadfeb47ca` passes all 32
 coordination-delivery tests, including the renamed pacing regression. The 22
-persistence dispatch tests also pass. Live initial-task timing remains required;
-component evidence does not establish the actual provider receipt latency.
+persistence dispatch tests also pass. Live timing is recorded above; this does
+not prove all provider or multi-worker workload latency budgets.
 The local cross-build requires the architecture-specific OpenSSL include
 directory in `CFLAGS_x86_64_unknown_linux_gnu` in addition to the common headers:
 `-fno-sanitize=undefined -I<temporary-root>/openssl-linux/usr/include/x86_64-linux-gnu`.

@@ -12,8 +12,10 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
   valid work. Recheck the recurring WWD reconciliation error after deployment.
 - [ ] Unchanged Queen/outcome deferrals stop producing broad control-room refresh
   events. Preserve durable delivery ownership and visible failure/recovery changes.
-- [ ] New assigned work starts promptly when its worker is ready. Reconcile the
-  five-minute follow-up cooldown with first task delivery and operator engagement.
+- [x] Reconcile the five-minute follow-up cooldown with first task delivery.
+  Two live demo tasks delivered in 5/3 seconds from creation, 102 seconds apart,
+  and completed automatically. Follow-up pacing and engagement guards remain.
+  Representative multi-worker performance remains under PERF-01/02 below.
 - [ ] Task status distinguishes waking, briefing delivery, and actual active work.
 - [ ] A blocked Queen has an actionable escalation path when she cannot recover;
   her own blocked input must not make that escalation impossible.
