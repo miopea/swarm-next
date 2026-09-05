@@ -8,6 +8,17 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Cleared blocks must produce a new briefing (September 5)
+
+An isolated regression reproduced Blocked to Ready retaining a Delivered
+dispatch even after its explicit prerequisite completed. The transition now
+re-arms the assignment with a new generation. The regression passes and proves
+unresolved prerequisites still refuse recovery, another Active task is preserved,
+the recovered briefing waits for that task, an old receipt cannot settle the new
+briefing, and Ready to Active does not duplicate it. All 26 dispatch tests passed.
+This is transition/outbox evidence; live demo recovery and broader blocker
+classification remain open. Existing real Blocked tasks were not changed.
+
 ### Queen review delivery fairness (September 5)
 
 At 21:06:27 UTC the same review requested at 20:30:03 remained Queued with

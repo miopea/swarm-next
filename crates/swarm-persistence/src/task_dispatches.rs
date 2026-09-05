@@ -725,6 +725,90 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cleared_block_returns_to_ready_with_a_new_briefing_without_preempting_work() {
+        use swarm_domain::{TaskActivityActor, TaskState};
+        let (store, task, session) = assigned_task();
+        let old = store
+            .claim_task_dispatches(100, &HashSet::new())
+            .unwrap()
+            .remove(0);
+        store
+            .complete_task_dispatch(&old.assignment_id, old.generation, 101)
+            .unwrap();
+        store.transition_task(task, TaskState::Active).unwrap();
+        store.transition_task(task, TaskState::Blocked).unwrap();
+
+        let current = store
+            .create_task("Current work", "/workspace/petal")
+            .unwrap();
+        store.transition_task(current.id, TaskState::Ready).unwrap();
+        store.assign_task(current.id, session).unwrap();
+        store
+            .transition_task(current.id, TaskState::Active)
+            .unwrap();
+        let upstream = store
+            .create_task("Required contract", "/workspace/petal")
+            .unwrap();
+        store
+            .add_task_prerequisite(
+                task,
+                upstream.id,
+                "Contract first",
+                &TaskActivityActor::operator(),
+                102,
+            )
+            .unwrap();
+        assert!(store.transition_task(task, TaskState::Ready).is_err());
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Blocked);
+        for state in [
+            TaskState::Ready,
+            TaskState::Active,
+            TaskState::Review,
+            TaskState::Completed,
+        ] {
+            store.transition_task(upstream.id, state).unwrap();
+        }
+        store.transition_task(task, TaskState::Ready).unwrap();
+        assert_eq!(
+            store.get_task(task).unwrap().dispatch_state,
+            Some(swarm_domain::TaskDispatchState::Queued)
+        );
+        assert_eq!(store.get_task(current.id).unwrap().state, TaskState::Active);
+        assert!(store.transition_task(task, TaskState::Active).is_err());
+        let claims = store.claim_task_dispatches(103, &HashSet::new()).unwrap();
+        assert!(claims.iter().all(|claim| claim.task_id != task));
+        store
+            .transition_task(current.id, TaskState::Review)
+            .unwrap();
+        let new = store
+            .claim_task_dispatches(104, &HashSet::new())
+            .unwrap()
+            .into_iter()
+            .find(|claim| claim.task_id == task)
+            .expect("recovered work owes a briefing");
+        assert_eq!(new.assignment_id, old.assignment_id);
+        assert_eq!(new.generation, old.generation + 1);
+        assert!(
+            !store
+                .complete_task_dispatch(&old.assignment_id, old.generation, 105)
+                .unwrap()
+        );
+        assert!(
+            store
+                .complete_task_dispatch(&new.assignment_id, new.generation, 105)
+                .unwrap()
+        );
+        store.transition_task(task, TaskState::Active).unwrap();
+        assert!(
+            store
+                .claim_task_dispatches(106, &HashSet::new())
+                .unwrap()
+                .is_empty(),
+            "starting recovered work must not rebrief it again"
+        );
+    }
+
+    #[test]
     fn repeated_briefing_holds_are_quiet_but_completion_and_recovery_publish() {
         for recover in [false, true] {
             let (store, _, _) = assigned_task();

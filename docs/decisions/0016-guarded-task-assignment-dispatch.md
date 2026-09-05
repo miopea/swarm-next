@@ -111,6 +111,13 @@ preview. This does not infer a dependency owner or authorize automatic recovery.
 
 ## Validation
 
+Blocked to Ready re-arms an existing assignment's briefing with a new generation,
+just as returned Active work does. Merely inserting a missing dispatch leaves an
+already-delivered assignment silent. This recovery transition does not activate
+the task, preempt other work, bypass prerequisites, or exempt the returned brief
+from pacing. The new generation rejects late acknowledgements from its earlier
+delivery. Ready to Active still never re-arms the briefing just consumed.
+
 Rendered marker recognition ignores CR/LF row boundaries only, retaining the
 original position when comparing a marker with a following prompt. Terminal width
 must not turn the same visible identity into an uncertain delivery. Spaces and

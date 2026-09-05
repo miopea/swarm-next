@@ -2569,8 +2569,12 @@ impl TaskStore {
         // Re-entry only. A worker moving its own Ready -> Active is starting
         // the work it was just briefed on, and re-arming there would replay a
         // briefing it has already acted on.
-        let returning_to_a_worker = target == TaskState::Active
-            && matches!(current, TaskState::Review | TaskState::Blocked);
+        // Clearing a block into the queue also owes a NEW briefing, even when
+        // the earlier assignment was already delivered. INSERT-if-missing
+        // alone leaves that delivered row inert and the Ready worker silent.
+        let returning_to_a_worker = (target == TaskState::Active
+            && matches!(current, TaskState::Review | TaskState::Blocked))
+            || (current == TaskState::Blocked && target == TaskState::Ready);
         if returning_to_a_worker {
             rearm_briefing_for_returned_work(&transaction, id)?;
         }
