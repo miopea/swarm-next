@@ -20,6 +20,15 @@ passed. The first full run had one existing blocked-age navigation test time out
 acceptance are pending. Do not treat this navigation fix as completion of queue
 ownership reconciliation or direct-terminal answer capture.
 
+The second full run passed all 1,170 tests across 131 files. Commit `906a4d42`
+deployed as `1.5.0-dev-906a4d4216b8-20260905185109-2478114`; health was ok with no
+degraded subsystems and engine PID 2456733 unchanged. Edge inspection timed out
+and reset the browser tool session, but reconnecting recovered the same dedicated
+tab. After its explicit Reload, clicking the D365 operator-owned queue row went
+directly to Needs You and focused decision `01a072b0-0fff-7301-bb05-6f9813db60ba`.
+Read-only DOM evidence confirmed the exact title, focus ID and offered buttons.
+No response was submitted. The browser roster still showed eleven awake workers.
+
 ### Conversation observations versus operator actions (September 5)
 
 Commit `fc04d95d` routes transcript-recency-only observations to collapsed runtime
