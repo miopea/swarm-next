@@ -21,7 +21,7 @@ export default function TerminalPoolFixture() {
     </nav>
     <button onClick={() => setGenerations((current) => current.map((generation, index) => index === worker - 1 ? generation + 1 : generation))}>Replace selected session</button>
     <button onClick={() => setRetained(inspectRetention())}>Inspect retained renderers</button>
-    {retained !== undefined && <p role="status">{retained.retained} retained browser renderers · {retained.attached} attached · {retained.inactive} inactive · {retained.evictions} evicted</p>}
+    {retained !== undefined && <p role="status">{retained.retained} retained browser renderers · {retained.attached} attached · {retained.inactive} inactive · {retained.evictions} evicted · page {retained.visibility} · {retained.focused ? "focused" : "unfocused"}</p>}
     <div style={{ height: 480, display: "flex", flexDirection: "column" }}>
       <TerminalView session={{ session_id: `fixture-pool-${worker}-${generations[worker - 1]}`, running: true }} operatorToken="fixture-only" busy={false} />
     </div>
@@ -29,4 +29,6 @@ export default function TerminalPoolFixture() {
   </main>;
 }
 
-function inspectRetention() { return terminalWorkspace.rendererRetention; }
+function inspectRetention() {
+  return { ...terminalWorkspace.rendererRetention, visibility: document.visibilityState, focused: document.hasFocus() };
+}

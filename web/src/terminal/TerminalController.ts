@@ -358,7 +358,11 @@ export class TerminalController {
         // nor a viewport resize is an implicit request to take control.
         if (documentHasFocus() && this.#connection.ownsGeometry !== false) {
           try {
-            const fitted = await this.#measureForResize();
+            // A canonical grid already matching this viewport needs no second
+            // layout wait. Later geometry changes still reach ResizeObserver.
+            const proposed = this.#surface.proposeFit?.();
+            const matchesSnapshot = proposed?.rows === snapshot.rows && proposed.columns === snapshot.columns;
+            const fitted = matchesSnapshot ? undefined : await this.#measureForResize();
             if (fitted && this.#mayResizeNow()) {
               this.#connection.resize(fitted.rows, fitted.columns, "echo");
             }

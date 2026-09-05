@@ -184,6 +184,16 @@ foreground/layout/restore timing with controlled completed returns before drawin
 a causal conclusion; transport here is in-memory and rendering is the harness's
 DOM renderer. TypeScript checking passed. PERF-01/02 remain open.
 
+Follow-up inspection found canonical snapshot completion always awaited another
+multi-frame fit for an owning foreground view, even if viewport dimensions already
+matched the restored grid. The controller now skips only that redundant fit and
+resize echo; mismatched/unknown metrics retain the existing guarded fit path.
+All 242 terminal tests and TypeScript checking passed, including the new exact-match
+regression. This proves removal of redundant work, not the cause or resolution of
+the four-second sample. The fixture now reports visibility/focus with retention;
+a fresh check reported visible and focused, which does not retroactively establish
+foreground conditions for the earlier run. Controlled timing remains outstanding.
+
 ### Bounded submission observation and wrapped-message recovery
 
 The stranded-message baseline used contiguous matching while normal delivery

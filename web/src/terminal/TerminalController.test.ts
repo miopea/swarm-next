@@ -411,6 +411,23 @@ test("only explicit session close disposes the controller", () => {
   expect(registry.size).toBe(0);
 });
 
+test("a matching canonical snapshot finishes without another asynchronous fit", async () => {
+  const surface = fakeSurface();
+  const connection = fakeConnection();
+  const controller = new TerminalController(() => surface, () => connection);
+  controller.attach(document.createElement("div"));
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledOnce());
+  const handlers = vi.mocked(connection.start).mock.calls[0][0];
+  vi.mocked(surface.fit).mockClear();
+  vi.mocked(connection.resize).mockClear();
+  const snapshot = { sequence: 1, rows: 24, columns: 80, truncated: false, reason: "attached" as const, bytes: new Uint8Array() };
+  await handlers.onSnapshot(snapshot);
+  expect(surface.restore).toHaveBeenCalledWith(snapshot);
+  expect(surface.fit).not.toHaveBeenCalled();
+  expect(connection.resize).not.toHaveBeenCalled();
+  controller.dispose();
+});
+
 test("canonical snapshots reset the renderer through its controller", async () => {
   const surface = fakeSurface();
   vi.mocked(surface.fit)
