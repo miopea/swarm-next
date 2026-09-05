@@ -93,6 +93,11 @@ operator approves completion.
 
 ## Validation
 
+Missing-briefing repair inserts at most the remaining active queue capacity,
+ordered by task position and identity. A regression fills that bound, proves
+further repair is a no-op, then frees a slot and verifies the remaining work is
+admitted without loss. The repair path shares the normal 256-row active bound.
+
 - Persistence tests cover sleeping-worker ownership, restart rebinding,
   engagement deferral, active-session targeting, acknowledged completion,
   queued cancellation on reassignment and stop, and crash recovery to

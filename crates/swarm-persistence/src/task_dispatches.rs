@@ -248,8 +248,10 @@ impl TaskStore {
                AND NOT EXISTS (
                    SELECT 1 FROM task_dispatches dispatch
                    WHERE dispatch.assignment_id = assignment.id
-               )",
-            [],
+               )
+             ORDER BY t.position, t.id
+             LIMIT ?1",
+            [MAX_PENDING_DISPATCHES - queued],
         )?)
     }
 
@@ -1679,6 +1681,69 @@ mod tests {
     /// order was decided on task position alone, it also held up every later
     /// task for that worker. Measured 2026-08-24: sixteen briefings queued and
     /// zero claimable.
+    #[test]
+    fn missing_briefing_repair_respects_capacity_and_resumes_when_space_opens() {
+        let (store, _, session) = assigned_task();
+        store
+            .connection()
+            .unwrap()
+            .execute("DELETE FROM task_dispatches", [])
+            .unwrap();
+        for index in 0..MAX_PENDING_DISPATCHES {
+            let task = store
+                .create_task(&format!("Repair {index}"), "/workspace/petal")
+                .unwrap();
+            store
+                .transition_task(task.id, swarm_domain::TaskState::Ready)
+                .unwrap();
+            store.assign_task(task.id, session).unwrap();
+            store
+                .connection()
+                .unwrap()
+                .execute("DELETE FROM task_dispatches", [])
+                .unwrap();
+        }
+        let mut connection = store.connection().unwrap();
+        let transaction = connection.transaction().unwrap();
+        assert_eq!(
+            TaskStore::rebrief_ready_work_without_a_briefing(&transaction).unwrap(),
+            usize::try_from(MAX_PENDING_DISPATCHES).unwrap()
+        );
+        assert_eq!(
+            TaskStore::rebrief_ready_work_without_a_briefing(&transaction).unwrap(),
+            0
+        );
+        let missing: i64 = transaction
+            .query_row(
+                "SELECT COUNT(*) FROM task_assignments a WHERE NOT EXISTS
+             (SELECT 1 FROM task_dispatches d WHERE d.assignment_id = a.id)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(missing, 1, "unadmitted work remains discoverable");
+        transaction
+            .execute(
+            "UPDATE task_dispatches SET state = 'delivered', delivered_at = 100 WHERE assignment_id =
+             (SELECT assignment_id FROM task_dispatches ORDER BY task_id LIMIT 1)",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            TaskStore::rebrief_ready_work_without_a_briefing(&transaction).unwrap(),
+            1
+        );
+        let pending: i64 = transaction
+            .query_row(
+                "SELECT COUNT(*) FROM task_dispatches WHERE state IN ('queued','dispatching')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending, MAX_PENDING_DISPATCHES);
+        transaction.commit().unwrap();
+    }
+
     #[test]
     fn ready_work_that_was_never_briefed_is_briefed_rather_than_stranded() {
         let (store, session) = engaged_worker();

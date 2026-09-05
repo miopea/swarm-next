@@ -7,6 +7,23 @@ authorized. No release is authorized.
 
 ## Live dogfood follow-ups — 2026-09-05
 
+### Bounded briefing repair
+
+- The repair path checked only whether the active outbox was full, then inserted
+  all missing briefings. It now limits insertion to remaining capacity within
+  the same transaction, in stable task order. Excess work remains discoverable.
+- A 257-assignment regression admits 256, verifies a repeat is a no-op, then
+  frees a slot and admits the remaining briefing. All 23 dispatch tests and
+  strict persistence Clippy pass. This is bounded repair evidence, not live
+  saturation testing on the operator's Hive.
+- The preceding Needs You correction is verified live as
+  `1.5.0-dev-81288d1401c9-20260905024418-1985241`, healthy with the same engine
+  build identity. Its authenticated visual acceptance remains pending.
+- Code-only routine completion remains open: current evidence establishes commit
+  presence/classification, but the inspected settlement boundary has no trusted
+  test-result plus non-deployment contract. Removing `BuiltCode` rejection alone
+  would substitute worker assertion for the approved machine-verification gate.
+
 ### Needs You: unrelated decisions cannot hide delivery uncertainty
 
 - The Queen attention card and its badge count now use the same visibility
