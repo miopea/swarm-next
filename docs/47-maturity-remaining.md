@@ -8,6 +8,32 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Selected worker continuity through process replacement (September 5)
+
+The UI now retains configured worker identity independently of process session
+identity. Live-feed refresh, manual refresh and the maintenance completion path
+resolve that worker's current running session instead of falling back to Queen
+when its old process disappears. With no active session, the chosen worker stays
+named and the view says its place is saved; it contains no terminal input and
+does not start a process. Another explicit selection wins over a later return.
+Explicit sleep still moves away, and removing the selected worker permits a
+normal fallback. Unconfigured live sessions retain session-only selection.
+
+One bounded v2 selection object persists the worker across reload during a gap;
+the UI owns a read-only migration of the old session preference through a current
+worker binding, without guessing historical ownership. Unchanged snapshots reuse
+selection identity instead of causing extra state/storage writes. Storage denial
+is nonfatal. Seven model tests and 43 App tests passed, including event-driven
+absence/return, manual refresh, deliberate alternate selection and no start/stop
+request during passive recovery. Full frontend validation and live demo acceptance
+are still pending; no provider conversation or engine lifecycle rule changed.
+
+The full frontend run passed 1,163 tests across 131 files. TypeScript caught a
+test-only mock Response type mismatch; after using a real Response, TypeScript
+and all 43 App tests passed again. Roster and mobile selection markers now use
+worker identity too, rather than comparing absent session IDs; the final focused
+run passed all 50 App/model tests. Live acceptance remains pending.
+
 ### Reconnect phase attribution (September 5)
 
 Terminal connection capture now separates grant acquisition, WebSocket opening,

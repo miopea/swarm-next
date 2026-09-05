@@ -90,7 +90,6 @@ import {
   type HeldBriefing,
   type HeldDelivery,
   type QueenAutomationStatus,
-  type SessionSummary,
   type Task,
   type TaskDraftInput,
   type TaskState,
@@ -158,6 +157,7 @@ import {
   surfaceIsDetached,
 } from "./navigation/surfaceWindow";
 import { measureRoutePaint } from "./runtime/routePaint";
+import { reconcileTerminalSelection, restoreTerminalSelection, saveTerminalSelection, selectTerminal, type TerminalSelection } from "./navigation/terminalSelection";
 import { workerEngineMatches } from "./runtime/workerEngine";
 
 const loadTerminalView = () => import("./terminal/TerminalView");
@@ -176,7 +176,6 @@ const MemberControlRoom = lazy(() => import("./apiary/MemberControlRoom"));
  */
 const HELD_DELIVERY_POLL_MS = 20_000;
 
-const ACTIVE_SESSION_STORAGE_KEY = "swarm-next.active-session.v1";
 const WORKER_VISIBILITY_STORAGE_KEY = "swarm-next.worker-visibility.v1";
 
 type LoadState = { kind: "loading" } | { kind: "ready"; health: Health } | { kind: "unavailable" };
@@ -264,7 +263,8 @@ export function App() {
   const boardTasks = useMemo(() => [...tasks, ...settledTasks], [tasks, settledTasks]);
   const keeper = hiveIdentity?.apiary_context?.mode === "federated" && hiveIdentity.apiary_context.local_role === "keeper";
   const federated = hiveIdentity?.apiary_context?.mode === "federated";
-  const [activeSessionId, setActiveSessionId] = useState<string>();
+  const [terminalSelection, setTerminalSelection] = useState<TerminalSelection>({});
+  const activeSessionId = terminalSelection.sessionId;
   /**
    * Scratch shells, held here rather than read from the control room.
    *
@@ -524,8 +524,8 @@ export function App() {
     if (surface === "apiary" && hiveIdentity && !federated) setSurface("tasks");
   }, [federated, hiveIdentity, surface]);
   useEffect(() => {
-    if (activeSessionId) saveActiveSessionId(activeSessionId);
-  }, [activeSessionId]);
+    if (terminalSelection.workerId || terminalSelection.sessionId) saveTerminalSelection(terminalSelection);
+  }, [terminalSelection]);
 
   useEffect(() => { void loadTerminalView().catch(() => undefined); }, []);
   useEffect(() => {
@@ -694,7 +694,7 @@ export function App() {
         if (controller.signal.aborted) return;
         terminalWorkspace.authenticate(BROWSER_SESSION_AUTH);
         setOperatorToken(BROWSER_SESSION_AUTH);
-        setActiveSessionId(restoredSessionId(nextControlRoom.workers, nextControlRoom.sessions));
+        setTerminalSelection(restoreTerminalSelection(nextControlRoom.workers, nextControlRoom.sessions));
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
@@ -755,11 +755,7 @@ export function App() {
           setMobileKeysVisible(refreshedPresentation.terminal_keys_visible);
           rememberMobileKeysVisibility(refreshedPresentation.terminal_keys_visible);
         }
-        if (controlRoom) setActiveSessionId((current) =>
-          current && controlRoom.sessions.some((session) => session.session_id === current)
-            ? current
-            : preferredSessionId(controlRoom.workers, controlRoom.sessions),
-        );
+        if (controlRoom) setTerminalSelection((current) => reconcileTerminalSelection(current, controlRoom.workers, controlRoom.sessions));
       },
       setLiveFeedState,
     );
@@ -791,7 +787,7 @@ export function App() {
       terminalWorkspace.authenticate(BROWSER_SESSION_AUTH);
       setOperatorToken(BROWSER_SESSION_AUTH);
       controlRoomModel.replace(controlRoom);
-      setActiveSessionId((current) => current ?? preferredSessionId(controlRoom.workers, controlRoom.sessions));
+      setTerminalSelection((current) => reconcileTerminalSelection(current, controlRoom.workers, controlRoom.sessions));
       setTokenDraft("");
     });
   }
@@ -876,11 +872,7 @@ export function App() {
       // who presses refresh does not wait out the next tick.
       void refreshRuntimeUpdate();
       setHeldDeliveryRefresh((current) => current + 1);
-      setActiveSessionId((current) =>
-        current && controlRoom.sessions.some((session) => session.session_id === current)
-          ? current
-          : preferredSessionId(controlRoom.workers, controlRoom.sessions),
-      );
+      setTerminalSelection((current) => reconcileTerminalSelection(current, controlRoom.workers, controlRoom.sessions));
     });
   }
 
@@ -938,6 +930,7 @@ export function App() {
       const controlRoom = await loadControlRoom(operatorToken);
       setWorkers(controlRoom.workers);
       setWorkspaces(controlRoom.workspaces);
+      setTerminalSelection((current) => reconcileTerminalSelection(current, controlRoom.workers, controlRoom.sessions));
     });
   }
 
@@ -954,7 +947,7 @@ export function App() {
       const controlRoom = await loadControlRoom(operatorToken);
       controlRoomModel.replace(controlRoom);
       releaseEngagementWhenSwitching(activeSessionId, sessionId);
-      setActiveSessionId(sessionId);
+      setTerminalSelection(selectTerminal(sessionId, controlRoom.workers));
       setSurface("workers");
       startedSessionId = sessionId;
     });
@@ -970,7 +963,10 @@ export function App() {
       terminalWorkspace.closeSession(sessionId);
       const controlRoom = await loadControlRoom(operatorToken);
       controlRoomModel.replace(controlRoom);
-      setActiveSessionId((current) => current === sessionId ? preferredSessionId(controlRoom.workers, controlRoom.sessions) : current);
+      setTerminalSelection((current) => reconcileTerminalSelection(
+        current.sessionId === sessionId || (profile && current.workerId === profile.id) ? {} : current,
+        controlRoom.workers, controlRoom.sessions,
+      ));
     });
   }
 
@@ -983,7 +979,7 @@ export function App() {
       const controlRoom = await loadControlRoom(operatorToken);
       controlRoomModel.replace(controlRoom);
       releaseEngagementWhenSwitching(activeSessionId, sessionId);
-      setActiveSessionId(sessionId);
+      setTerminalSelection(selectTerminal(sessionId, controlRoom.workers));
       setSurface("workers");
       startedSessionId = sessionId;
     });
@@ -1153,7 +1149,7 @@ export function App() {
 
   function openWorker(sessionId: string) {
     releaseEngagementWhenSwitching(activeSessionId, sessionId);
-    setActiveSessionId(sessionId);
+    setTerminalSelection(selectTerminal(sessionId, workers));
     setSurface("workers");
     focusTerminalAfterRender(sessionId);
   }
@@ -1339,7 +1335,7 @@ export function App() {
         controlRoomModel.replace(controlRoom);
         setProviders(nextProviders);
         setProviderCapabilitiesUnavailable(false);
-        setActiveSessionId(preferredSessionId(controlRoom.workers, controlRoom.sessions));
+        setTerminalSelection((current) => reconcileTerminalSelection(current, controlRoom.workers, controlRoom.sessions));
       }, "Restarting worker engine…");
     } finally {
       setWorkerEngineProgress(undefined);
@@ -1441,7 +1437,7 @@ export function App() {
     controlRoomModel.clear();
     setNotificationSettings(undefined);
     setNotificationState("unsupported");
-    setActiveSessionId(undefined);
+    setTerminalSelection({});
     setOperationError(undefined);
   }
 
@@ -1522,7 +1518,9 @@ export function App() {
   }
 
   const activeSession = sessions.find((session) => session.session_id === activeSessionId);
-  const activeWorker = workers.find((worker) => worker.active_session_id === activeSessionId);
+  const activeWorker = terminalSelection.workerId
+    ? workers.find((worker) => worker.id === terminalSelection.workerId)
+    : activeSessionId ? workers.find((worker) => worker.active_session_id === activeSessionId) : undefined;
   const openTaskCount = tasks.filter((task) => isOpenTaskState(task.state)).length;
   // Count waiting task identities, not ordinary active work or duplicate
   // coordinator observations. The queue page uses this same projection.
@@ -1957,7 +1955,7 @@ export function App() {
                       <WorkerRosterItem
                         key={worker.id}
                         worker={worker}
-                        selected={sessionId === activeSessionId}
+                        selected={worker.id === terminalSelection.workerId}
                         detail={worker.runtime_error ?? task?.title ?? (worker.role === "queen" ? "Always-active command terminal" : worker.running ? `${repositoryName(worker.workspace)} · Ready for work` : `${repositoryName(worker.workspace)} · Sleeping`)}
                         workSummary={work?.summary}
                         busy={busy}
@@ -2206,7 +2204,7 @@ export function App() {
                     <button
                       type="button"
                       className="mobile-worker-choice"
-                      aria-current={sessionId === activeSessionId ? "page" : undefined}
+                      aria-current={worker.id === terminalSelection.workerId ? "page" : undefined}
                       disabled={busy}
                       onClick={() => {
                         if (sessionId) openWorker(sessionId);
@@ -2232,7 +2230,7 @@ export function App() {
                               a worker from a phone is not engaging it, and
                               conflating the two would say something false about
                               who is driving. */}
-                          {sessionId === activeSessionId ? <em className="mobile-worker-here">You&rsquo;re here</em> : null}
+                          {worker.id === terminalSelection.workerId ? <em className="mobile-worker-here">You&rsquo;re here</em> : null}
                         </span>
                         <small>{worker.runtime_error ?? workerSwitcherDetail(worker, assignedTask?.title, assignedTask?.state === "active")}</small>
                         {work?.summary ? <span className="worker-work-summary" title={`${worker.name}'s open work: ${work.summary}`}>Open work · {work.summary}</span> : null}
@@ -2340,7 +2338,7 @@ export function App() {
                   terminalWorkspace.authenticate(BROWSER_SESSION_AUTH);
                   setOperatorToken(BROWSER_SESSION_AUTH);
                   controlRoomModel.replace(controlRoom);
-                  setActiveSessionId((current) => current ?? preferredSessionId(controlRoom.workers, controlRoom.sessions));
+                  setTerminalSelection((current) => reconcileTerminalSelection(current, controlRoom.workers, controlRoom.sessions));
                 })}
               >
                 Use a passkey
@@ -2487,6 +2485,8 @@ export function App() {
               <TerminalView operatorToken={operatorToken} session={activeSession} busy={busy} canStop={activeWorker?.role !== "queen"} mobileKeysVisible={mobileKeysVisible} onMobileKeysVisibleChange={changeMobileKeysVisibility} onRefresh={reloadTerminalView} queenAutomation={activeWorker?.role === "queen" ? queenAutomation : undefined} queenAutonomy={activeWorker?.role === "queen" ? queenPolicy?.[presence?.mode ?? "at_hive"] : undefined} onOpenQueenSettings={activeWorker?.role === "queen" ? () => openSettings("settings-workers") : undefined} onConnectionStateChange={setTerminalConnection} />
             </Suspense>
           </TerminalLoadBoundary>
+        ) : activeWorker ? (
+          <div className="terminal-empty" role="status"><BeeMascot className="empty-bee" expression="sleeping" /><p className="eyebrow">Your place is saved</p><h3>{activeWorker.name} has no active terminal</h3><p>This view will reconnect when this worker has a session. You can choose another worker without losing any running work.</p></div>
         ) : (
           <div className="terminal-empty"><BeeMascot className="empty-bee" expression="sleeping" /><p className="eyebrow">No active session</p><h3>Start with a task or workspace</h3><p>Launch Claude from a ready task to preserve its assignment, or start an unassigned worker from the sidebar.</p></div>
         )}
@@ -2497,32 +2497,6 @@ export function App() {
 
 function WorkspaceLoading({ label }: { label: string }) {
   return <div className="workspace-loading" role="status"><BeeMascot expression="available" /><span>Opening {label}…</span></div>;
-}
-
-function preferredSessionId(workers: Worker[], sessions: SessionSummary[]): string | undefined {
-  return workers.find((worker) => worker.role === "queen" && worker.running)?.active_session_id
-    ?? workers.find((worker) => worker.running)?.active_session_id
-    ?? sessions.find((session) => session.running)?.session_id;
-}
-
-function restoredSessionId(workers: Worker[], sessions: SessionSummary[]): string | undefined {
-  try {
-    const saved = window.localStorage.getItem(ACTIVE_SESSION_STORAGE_KEY);
-    if (saved && sessions.some((session) => session.running && session.session_id === saved)) {
-      return saved;
-    }
-  } catch {
-    // Selection persistence is a non-critical convenience.
-  }
-  return preferredSessionId(workers, sessions);
-}
-
-function saveActiveSessionId(sessionId: string) {
-  try {
-    window.localStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, sessionId);
-  } catch {
-    // Selection persistence is a non-critical convenience.
-  }
 }
 
 function readWorkerVisibility(): WorkerVisibility {

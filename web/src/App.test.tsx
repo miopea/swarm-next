@@ -430,6 +430,55 @@ test("restores the last selected live worker after reload", async () => {
   expect(screen.getByRole("button", { name: /^Daisy/ })).toHaveAttribute("aria-current", "page");
 });
 
+test.each([["refresh", false], ["events", false], ["events", true]] as const)("keeps worker identity through an engine gap via %s, operator switch %s", async (source, switchAway) => {
+  window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
+  window.localStorage.setItem("swarm-next.terminal-selection.v2", JSON.stringify({ workerId: "daisy", sessionId: "old" }));
+  let phase: "before" | "gap" | "returned" = "before";
+  let sendEvent: ((response: Response) => void) | undefined;
+  let sequence = 0;
+  const base = bootFetch();
+  const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const daisySession = phase === "gap" ? null : phase === "before" ? "old" : "replacement";
+    if (url.includes("/control-room/events")) return new Promise<Response>((resolve, reject) => {
+      sendEvent = resolve;
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    });
+    if (url === "/api/v1/workers") return Promise.resolve(ok([
+      { id: "queen", hive_id: "hive-1", name: "Queen", role: "queen", provider: "claude_code", workspace: "/queen", autostart: true, position: 0, active_session_id: "q", running: true, attention_state: "resting", created_at: 1, updated_at: 1 },
+      { id: "daisy", hive_id: "hive-1", name: "Daisy", role: "worker", provider: "claude_code", workspace: "/daisy", autostart: false, position: 1, active_session_id: daisySession, running: !!daisySession, attention_state: "resting", created_at: 1, updated_at: 1 },
+    ]));
+    if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: ["q", ...(daisySession ? [daisySession] : [])].map((session_id) => ({ session_id, running: true })) }));
+    return base(input);
+  });
+  vi.stubGlobal("fetch", fetch);
+  const refresh = async () => {
+    if (source === "refresh") {
+      fireEvent.click(screen.getByRole("button", { name: "Refresh control room" }));
+      return;
+    }
+    await waitFor(() => expect(sendEvent).toBeDefined());
+    await act(async () => {
+      const send = sendEvent!;
+      sendEvent = undefined;
+      sequence++;
+      send(new Response(JSON.stringify({ events: [{ sequence, kind: "sessions_changed", occurred_at: 1 }], next_cursor: sequence, reset_required: false }), { status: 200 }));
+    });
+  };
+  render(<App />);
+  await waitFor(() => expect(screen.getByTestId("terminal-view")).toHaveAttribute("data-session-id", "old"));
+  phase = "gap";
+  await refresh();
+  expect(await screen.findByRole("heading", { name: "Daisy has no active terminal" })).toBeInTheDocument();
+  expect(screen.queryByTestId("terminal-view")).not.toBeInTheDocument();
+  expect(JSON.parse(window.localStorage.getItem("swarm-next.terminal-selection.v2")!)).toEqual({ workerId: "daisy" });
+  if (switchAway) fireEvent.click(screen.getByRole("button", { name: /^Queen Resting/ }));
+  phase = "returned";
+  await refresh();
+  await waitFor(() => expect(screen.getByTestId("terminal-view")).toHaveAttribute("data-session-id", switchAway ? "q" : "replacement"));
+  expect(fetch.mock.calls.some(([url]) => /\/(start|stop)$/.test(String(url)))).toBe(false);
+});
+
 test("removes completed assignments from the live worker roster", async () => {
   window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
   const workerSession = "019fedfc-1c30-70e1-a5e2-9a3c94268083";
