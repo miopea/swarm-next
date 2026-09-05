@@ -32,6 +32,19 @@ by that fixture correction. Nine focused API conversation tests passed. Rustfmt
 was applied to the changed Rust files; `git diff --check` passed. This is explicit
 test evidence, not a claim that the original full-suite run was green.
 
+Live acceptance passed on `1.5.0-dev-cd7db41f6953-20260905173609-2438090`.
+Managed deployment completed successfully without replacing engine PID 2420200.
+In Contract demo only, native `/resume` selected the original conversation and
+then marker `c4435eee-57b0-4546-b6ef-dc182080e7b5`; revisions 2 and 3 were each
+persistence-confirmed. Direct retained stop and wake created session
+`01a072a8-78d7-7390-b297-5c0d1c1838d9`. Its revision-one provider selection and
+confirmed selection both name the marker, with an exact Restored outcome.
+The conversation freshness endpoint now reports Current instead of Stale.
+All ten other worker session IDs stayed unchanged; all eleven remain running.
+This verifies durable explicit-choice confirmation through an actual provider
+switch and restart. No intent was backfilled for other workers. No release was
+cut; main push bypassed four expected GitHub checks.
+
 ### Decision risk and answer readability (September 5)
 
 Live desktop inspection found long risk prose squeezed beside the task into half
