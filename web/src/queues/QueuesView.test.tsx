@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 import QueuesView from "./QueuesView";
 import type { Task } from "../api/tasks";
+import type { QueenAutomationStatus } from "../api";
 
 function task(overrides: Partial<Task>): Task {
   return {
@@ -13,6 +14,18 @@ function task(overrides: Partial<Task>): Task {
 }
 
 describe("QueuesView", () => {
+  test("shows Queen's recorded pacing without inventing a task or retaining it after progress", () => {
+    const status: QueenAutomationStatus = { enabled: true, state: "queued", run_id: "run", trigger: "actionable_work", actionable_count: 1, attempts: 0, requested_at: 1, delivered_at: null, finished_at: null, outcome: null, waiting_reason: "Pacing Queen's next review after a recent delivery" };
+    const props = { tasks: [], workers: [], onOpenTask: vi.fn() };
+    const { rerender } = render(<QueuesView {...props} queenAutomation={status} />);
+    expect(screen.getByText(status.waiting_reason!)).toBeVisible();
+    expect(screen.queryByText("Nothing is waiting on anyone.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("article")).not.toBeInTheDocument();
+    rerender(<QueuesView {...props} tasks={[task({ next_move_owner: "queen" })]} queenAutomation={status} />);
+    expect(screen.getAllByText(status.waiting_reason!)).toHaveLength(1);
+    rerender(<QueuesView {...props} queenAutomation={{ ...status, state: "running" }} />);
+    expect(screen.queryByText(status.waiting_reason!)).not.toBeInTheDocument();
+  });
   test("explicit prerequisites link to their task and completion waits for Queen", () => {
     const prerequisite = { task_id: "t1", prerequisite_id: "upstream", title: "Shared API contract", state: "active" as const, assigned_worker_id: null, removed: false, reason: "The response shape must be settled first", created_at: 1 };
     const blocked = task({ state: "blocked", next_move_owner: "blocked", prerequisites: [prerequisite] });

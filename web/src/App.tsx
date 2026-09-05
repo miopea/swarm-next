@@ -2402,6 +2402,7 @@ export function App() {
           <Suspense fallback={<WorkspaceLoading label="queues" />}>
             <QueuesView
               coordinatorUnavailable={coordinatorUnavailable}
+              queenAutomation={queenAutomation}
               tasks={tasks}
               workers={workers}
               heldBriefings={heldBriefings}

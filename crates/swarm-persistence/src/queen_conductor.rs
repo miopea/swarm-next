@@ -939,11 +939,24 @@ fn waiting_reason(
     if takeover {
         return Ok(Some("Paused during Steward takeover".into()));
     }
-    let running: bool = connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM worker_profiles queen JOIN worker_sessions session ON session.worker_id = queen.id WHERE queen.role = 'queen' AND session.ended_at IS NULL)",
-        [], |row| row.get(0),
-    )?;
-    Ok((!running).then(|| "Waiting for Queen to wake".into()))
+    let session: Option<String> = connection
+        .query_row(
+            "SELECT session.session_id FROM worker_profiles queen
+         JOIN worker_sessions session ON session.worker_id = queen.id
+         WHERE queen.role = 'queen' AND session.ended_at IS NULL
+         ORDER BY session.started_at DESC, session.session_id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(session) = session else {
+        return Ok(Some("Waiting for Queen to wake".into()));
+    };
+    let session = WorkerSessionId::from_str(&session).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    Ok(
+        crate::workers::coordination_is_cooling_down_from_connection(connection, session, now)?
+            .then(|| "Pacing Queen's next review after a recent delivery".into()),
+    )
 }
 
 fn parse_outcome(value: &str) -> Result<QueenAutomationOutcome, rusqlite::Error> {
@@ -1006,6 +1019,57 @@ pub(super) fn migrate_queen_delivery_session(
 mod tests {
     use super::*;
     use swarm_domain::{ProviderKind, TaskActivityActor, TaskPriority, TaskState};
+
+    #[test]
+    fn queued_queen_review_explains_pacing_and_clears_at_the_shared_boundary() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        store.request_queen_automation_run(100).unwrap();
+        assert_eq!(
+            store.queen_automation_status(100).unwrap().waiting_reason,
+            None
+        );
+        store.record_coordination_delivery(session, 100).unwrap();
+        let boundary = 100 + crate::COORDINATION_DELIVERY_COOLDOWN_SECONDS;
+        assert_eq!(
+            store
+                .queen_automation_status(boundary - 1)
+                .unwrap()
+                .waiting_reason
+                .as_deref(),
+            Some("Pacing Queen's next review after a recent delivery")
+        );
+        assert!(
+            store
+                .coordination_is_cooling_down(session, boundary - 1)
+                .unwrap()
+        );
+        assert_eq!(
+            store
+                .queen_automation_status(boundary)
+                .unwrap()
+                .waiting_reason,
+            None
+        );
+        assert!(
+            !store
+                .coordination_is_cooling_down(session, boundary)
+                .unwrap()
+        );
+        store
+            .renew_worker_engagement(session, None, 101, 60)
+            .unwrap();
+        assert_eq!(
+            store
+                .queen_automation_status(102)
+                .unwrap()
+                .waiting_reason
+                .as_deref(),
+            Some("Waiting while you are working with Queen")
+        );
+    }
 
     #[test]
     fn delivery_exception_alone_requests_queen_review_and_resolution_goes_quiet() {

@@ -15,6 +15,25 @@ use super::{
     insert_control_room_event,
 };
 
+pub(super) fn coordination_is_cooling_down_from_connection(
+    connection: &rusqlite::Connection,
+    session_id: WorkerSessionId,
+    now: i64,
+) -> Result<bool, TaskStoreError> {
+    let last: Option<Option<i64>> = connection
+        .query_row(
+            "SELECT last_coordination_delivery_at FROM worker_sessions
+             WHERE session_id = ?1 AND ended_at IS NULL",
+            [session_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    // New and ended sessions have no applicable pacing hold.
+    Ok(last
+        .flatten()
+        .is_some_and(|at| now.saturating_sub(at) < crate::COORDINATION_DELIVERY_COOLDOWN_SECONDS))
+}
+
 /// Durable routing evidence, not a live terminal-idle or dispatch guarantee.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct ScoutRoutingFacts {
@@ -1756,19 +1775,7 @@ impl TaskStore {
         now: i64,
     ) -> Result<bool, TaskStoreError> {
         let connection = self.connection()?;
-        let last: Option<Option<i64>> = connection
-            .query_row(
-                "SELECT last_coordination_delivery_at FROM worker_sessions
-                 WHERE session_id = ?1 AND ended_at IS NULL",
-                [session_id.to_string()],
-                |row| row.get(0),
-            )
-            .optional()?;
-        // A session nobody has written to, and a session that has ended, both
-        // read as not cooling. The second cannot be delivered to anyway.
-        Ok(last.flatten().is_some_and(|at| {
-            now.saturating_sub(at) < crate::COORDINATION_DELIVERY_COOLDOWN_SECONDS
-        }))
+        coordination_is_cooling_down_from_connection(&connection, session_id, now)
     }
 
     /// Records that coordination has just written to this terminal.

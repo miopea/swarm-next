@@ -153,6 +153,31 @@ and eventual resumption. The harness does not create an edge or upstream task,
 resolve a decision or complete work. Re-running the script inspects the same
 task instead of duplicating it. Actual Queen completion is still pending.
 
+Queen subsequently created upstream task `01a07199-fef1-76e0-b908-4ad528774904`,
+assigned it to worker `01a07193-7d79-7113-93f4-8e9a43db6964`, and recorded the
+prerequisite. Its new provider stopped at folder trust for the empty fixture;
+the test operator selected and confirmed trust explicitly. This is first-run
+setup assistance, not autonomous onboarding acceptance. The upstream completed
+and the downstream projection changed from Blocked ownership to Queen while
+remaining Blocked, as required. Queen-owned downstream resumption is pending.
+
+### Explain Queen's known pacing without adding attention
+
+During this drill a queued Queen review had no waiting reason despite a current
+delivery pacing timestamp. Status reads now reuse the delivery gate's exact
+persistence helper and report the pacing hold, with existing engagement/takeover
+and sleeping precedence. No scheduling interval or delivery policy changed.
+Queues renders the reason without creating a task row or increasing Needs You;
+it disappears when the review leaves Queued. The empty queue no longer claims
+nothing is waiting while this known hold exists.
+
+The 32 Queen conductor and 49 worker tests passed, including exact cooldown
+expiry and engagement precedence. Strict persistence library lint passed. All
+1,137 frontend tests passed, and production build passed before the final
+fixture-only addition; final TypeScript checking passed. Edge fixture inspection
+covered the 390-by-844 queue layout, not authenticated live or native-mobile
+acceptance. This change is not yet deployed.
+
 ### Explicit prerequisites — deployed API drill; Queen journey still open
 
 ADR 0076 introduces bounded, audited same-Hive prerequisite edges, distinct from

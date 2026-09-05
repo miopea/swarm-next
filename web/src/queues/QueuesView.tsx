@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import HeldBriefingList, { holdReason, waitedFor } from "../orchestration/HeldBriefingList";
-import type { BlockedEscalation, HeldBriefing, HeldDelivery } from "../api";
+import type { BlockedEscalation, HeldBriefing, HeldDelivery, QueenAutomationStatus } from "../api";
 import DeliveryWaitList from "./DeliveryWaitList";
 import TaskPrerequisiteList from "./TaskPrerequisiteList";
 import type { NextMoveOwner, Task } from "../api/tasks";
@@ -98,6 +98,7 @@ export default function QueuesView({
   blockedWaits: sourceBlockedWaits = [],
   heldDeliveries = [],
   coordinatorUnavailable = false,
+  queenAutomation,
   now = Date.now(),
 }: {
   tasks: Task[];
@@ -117,6 +118,7 @@ export default function QueuesView({
   blockedWaits?: BlockedEscalation[];
   heldDeliveries?: HeldDelivery[];
   coordinatorUnavailable?: boolean;
+  queenAutomation?: QueenAutomationStatus;
   now?: number;
 }) {
   const workerNames = useMemo(
@@ -144,12 +146,14 @@ export default function QueuesView({
   const briefings = new Map(heldBriefings.map((briefing) => [briefing.task_id, briefing]));
   const visibleTaskIds = new Set(waitingTasks.map((task) => task.id));
   const extraBriefings = heldBriefings.filter((briefing) => !visibleTaskIds.has(briefing.task_id));
+  const queenWait = queenAutomation?.state === "queued" ? queenAutomation.waiting_reason : null;
 
   if (total === 0 && extraWaits.length === 0 && activeWork.length === 0) {
     return (
       <section className="queues" aria-label="Queues">
         {coordinatorUnavailable && <p role="status">Coordination status could not refresh. Showing last known work; it may have changed.</p>}
-        {!coordinatorUnavailable && heldBriefings.length === 0 && heldDeliveries.length === 0 && <p className="queues-empty">Nothing is waiting on anyone.</p>}
+        {queenWait && <p className="queue-meaning">{queenWait}</p>}
+        {!queenWait && !coordinatorUnavailable && heldBriefings.length === 0 && heldDeliveries.length === 0 && <p className="queues-empty">Nothing is waiting on anyone.</p>}
         <DeliveryWaitList held={heldDeliveries} />
         <HeldBriefingList briefings={heldBriefings} onOpenTask={onOpenTask} />
       </section>
@@ -159,6 +163,7 @@ export default function QueuesView({
   return (
     <section className="queues" aria-label="Queues">
       {coordinatorUnavailable && <p role="status">Coordination status could not refresh. Showing last known work; it may have changed.</p>}
+      {queenWait && <p className="queue-meaning">{queenWait}</p>}
       {groups.map((group) => {
         const hours = oldestAgeHours(group.tasks, now);
         return (
