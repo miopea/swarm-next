@@ -2304,8 +2304,9 @@ impl TaskService {
     /// excerpt points at task history, and until now nothing let her read it,
     /// so she was asked to judge work on evidence she could not see.
     ///
-    /// Visibility follows the same rule as the task list: Queen sees any task,
-    /// a worker sees only one assigned to its own live session.
+    /// History is evidence, not authority to act. Queen sees any task; a worker
+    /// retains read access through its durable task ownership after completion
+    /// or session replacement, just as for reading its finished-work evidence.
     ///
     /// # Errors
     /// Denies a task the caller cannot see, and propagates persistence failures.
@@ -2315,13 +2316,7 @@ impl TaskService {
         task_id: TaskId,
         limit: usize,
     ) -> Result<swarm_domain::TaskActivityPage, ApplicationError> {
-        let visible = self
-            .list_visible_tasks(principal)?
-            .into_iter()
-            .any(|task| task.id == task_id);
-        if !visible {
-            return Err(ApplicationError::NotAuthorized);
-        }
+        self.task_this_worker_finished(principal, task_id)?;
         Ok(self.store.list_task_activity(task_id, limit)?)
     }
 
@@ -3920,8 +3915,55 @@ mod tests {
         );
     }
 
-    /// A worker sees its own assignment and nothing else, the same rule the
-    /// task list already enforces. Reading history must not be a way around it.
+    #[test]
+    fn worker_history_survives_completion_and_session_replacement() {
+        let (service, _queen, worker) = setup();
+        let session = WorkerSessionId::new();
+        service
+            .store
+            .bind_worker_session(worker.id, session)
+            .unwrap();
+        let task = service
+            .store
+            .create_task_with_details(
+                "Finished evidence",
+                "",
+                TaskPriority::Normal,
+                "/workspace/petal",
+            )
+            .unwrap();
+        service.store.assign_task(task.id, session).unwrap();
+        for state in [
+            TaskState::Ready,
+            TaskState::Active,
+            TaskState::Review,
+            TaskState::Completed,
+        ] {
+            service.store.transition_task(task.id, state).unwrap();
+        }
+        let replacement = WorkerSessionId::new();
+        service.store.release_worker_session(session).unwrap();
+        service
+            .store
+            .bind_worker_session(worker.id, replacement)
+            .unwrap();
+        let principal = AgentPrincipal {
+            worker_id: worker.id,
+            role: WorkerRole::Worker,
+            active_session_id: Some(replacement),
+        };
+        assert!(
+            !service
+                .list_visible_tasks(principal)
+                .unwrap()
+                .iter()
+                .any(|item| item.id == task.id)
+        );
+        let history = service.read_task_history(principal, task.id, 50).unwrap();
+        assert!(!history.events.is_empty());
+    }
+
+    /// Reading durable history does not grant a worker unrelated task access.
     #[test]
     fn a_worker_cannot_read_the_history_of_a_task_that_is_not_its_own() {
         let (service, _queen, worker) = setup();

@@ -57,6 +57,17 @@ lifetimes remain unchanged.
 
 ## Acceptance
 
+### Workers can read their own finished evidence
+
+Task history uses the existing stable-worker ownership check also used by
+finished-work evidence reads. Queen may read any task; a worker may read a task
+whose durable assigned worker is itself, including after completion or replacement
+of its process session. The bounded history read must not depend on membership
+in a capped current-session work list. This grants no mutation, routing, review
+approval or unrelated-task access. Reassignment to another worker changes that
+ownership; this is not a new historical-participant access policy. Regression
+tests cover completion, session replacement and denial of unrelated history.
+
 ### A busy provider is not an unanswered question
 
 Initial delivery observations distinguish Active, AwaitingOperator and Unknown.
