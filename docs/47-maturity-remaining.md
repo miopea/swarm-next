@@ -178,6 +178,17 @@ Deployed as `5ccaaed3`: the normal reload completed successfully, health reporte
 no degraded subsystem or database-recovery requirement, and the engine build
 identity remained unchanged.
 
+Follow-up local implementation bounds the remaining delivery transport calls:
+baseline, paste acknowledgement, Enter acknowledgement, render reads and the
+uncertain Queen recovery read each use a ten-second IPC deadline. A baseline
+timeout defers as unknown provider state before any input; timeout after input
+returns uncertainty, never permission to replay. The existing whole submission
+observation deadline remains. The socket-level baseline/paste/render stall
+regression passed and verified no subsequent request after the timed-out phase.
+The full 465-test API suite and strict API all-target lint passed. Deployment
+remains pending alongside the shared-domain ownership fix; this does not claim
+every IPC user in the app is bounded.
+
 The next real workflow drill is task `01a07193-7d88-7cb1-888a-602a0e533cb3` in
 the existing disposable workflow fixture. Normal assignment delivered it and
 it reached Active. A new sleeping `Swarm Dogfood Contract` worker owns the

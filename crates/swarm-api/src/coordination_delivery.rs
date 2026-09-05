@@ -509,6 +509,19 @@ enum Baseline {
     Refused(TerminalSubmission),
 }
 
+/// Bounds transport observation without inferring whether a write landed.
+async fn coordination_request(
+    client: &HostClient,
+    request: &HostRequest,
+) -> Result<Option<HostResponse>, swarm_terminal::IpcError> {
+    // Dropping this request closes its socket, not the provider session. A
+    // timed-out write may already have landed; callers must never replay it.
+    match tokio::time::timeout(Duration::from_secs(10), client.request(request)).await {
+        Ok(response) => response.map(Some),
+        Err(_) => Ok(None),
+    }
+}
+
 /// Reads the terminal and decides whether coordination may write to it.
 ///
 /// Coordination owns only a truly empty resting prompt. Active turns, provider
@@ -525,12 +538,19 @@ async fn delivery_baseline(
     provider: ProviderKind,
     marker: &[u8],
 ) -> Result<Baseline, swarm_terminal::IpcError> {
-    let response = client
-        .request(&HostRequest::Read {
+    let Some(response) = coordination_request(
+        client,
+        &HostRequest::Read {
             session_id,
             after_sequence: None,
-        })
-        .await?;
+        },
+    )
+    .await?
+    else {
+        return Ok(Baseline::Refused(TerminalSubmission::Deferred(
+            DeferralReason::ProviderStateUnknown,
+        )));
+    };
     Ok(baseline_from_response(
         session_id, provider, marker, response,
     ))
@@ -647,13 +667,18 @@ async fn submit_terminal_message(
             }
             Baseline::Refused(outcome) => return Ok(outcome),
         };
-    let response = client
-        .request(&HostRequest::Write {
+    let Some(response) = coordination_request(
+        client,
+        &HostRequest::Write {
             session_id,
             bytes,
             provenance: TerminalWriteProvenance::coordination(),
-        })
-        .await?;
+        },
+    )
+    .await?
+    else {
+        return Ok(TerminalSubmission::Uncertain);
+    };
     match response {
         HostResponse::Acknowledged if submit => {}
         HostResponse::Acknowledged => return Ok(TerminalSubmission::Acknowledged),
@@ -729,14 +754,16 @@ async fn submit_rendered_message(
 ) -> Result<TerminalSubmission, swarm_terminal::IpcError> {
     let mut observed_sequence = rendered_sequence;
     for attempt in 0..3 {
-        let submit_response = client
-            .request(&HostRequest::Write {
+        let submit_response = coordination_request(
+            client,
+            &HostRequest::Write {
                 session_id,
                 bytes: vec![b'\r'],
                 provenance: TerminalWriteProvenance::coordination(),
-            })
-            .await;
-        if !matches!(submit_response, Ok(HostResponse::Acknowledged)) {
+            },
+        )
+        .await;
+        if !matches!(submit_response, Ok(Some(HostResponse::Acknowledged))) {
             return Ok(TerminalSubmission::Uncertain);
         }
 
@@ -778,19 +805,21 @@ async fn observe_stable_marker(
     let mut last_rendered: Option<(u64, Option<Vec<u8>>)> = None;
     loop {
         sleep(Duration::from_millis(50)).await;
-        let snapshot = match client
-            .request(&HostRequest::Read {
+        let snapshot = match coordination_request(
+            client,
+            &HostRequest::Read {
                 session_id,
                 after_sequence: None,
-            })
-            .await?
+            },
+        )
+        .await?
         {
-            HostResponse::Output {
+            Some(HostResponse::Output {
                 resume: swarm_terminal::Resume::Snapshot { snapshot },
                 running: true,
                 ..
-            } => snapshot,
-            HostResponse::Error { code, message } => {
+            }) => snapshot,
+            Some(HostResponse::Error { code, message }) => {
                 return Ok(MarkerObservation::Rejected { code, message });
             }
             _ => return Ok(MarkerObservation::Uncertain),
@@ -1241,15 +1270,17 @@ pub(super) async fn settle_uncertain_queen_review(state: &AppState) {
     let Some(client) = &state.terminal_host else {
         return;
     };
-    let Ok(HostResponse::Output {
+    let Ok(Some(HostResponse::Output {
         resume: swarm_terminal::Resume::Snapshot { snapshot },
         ..
-    }) = client
-        .request(&HostRequest::Read {
+    })) = coordination_request(
+        client,
+        &HostRequest::Read {
             session_id,
             after_sequence: None,
-        })
-        .await
+        },
+    )
+    .await
     else {
         return;
     };
@@ -1751,6 +1782,55 @@ mod tests {
             matches!(result, Ok(Ok(SubmissionObservation::Uncertain))),
             "observation must return uncertainty before the outer test deadline"
         );
+    }
+
+    #[tokio::test]
+    async fn stalled_coordination_phases_defer_before_writing_and_never_replay_afterward() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        for result in join_all((1..=3).map(|stall_at| async move {
+            let directory = tempfile::tempdir().unwrap();
+            let socket = directory.path().join("host.sock");
+            let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+            let session = WorkerSessionId::new();
+            let server = tokio::spawn(async move {
+                for phase in 1..=stall_at {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut reader = BufReader::new(stream);
+                    let mut line = String::new();
+                    reader.read_line(&mut line).await.unwrap();
+                    let request = serde_json::from_str::<HostRequest>(&line).unwrap();
+                    if phase == 2 {
+                        assert!(matches!(request, HostRequest::Write { bytes, .. } if bytes == b"[Swarm delivery bounded]"));
+                    } else {
+                        assert!(matches!(request, HostRequest::Read { .. }));
+                    }
+                    if phase == stall_at {
+                        // Keep the unanswered socket open. Any further request
+                        // would demonstrate a blind replay after uncertainty.
+                        assert!(tokio::time::timeout(Duration::from_secs(12), listener.accept()).await.is_err());
+                        return;
+                    }
+                    let response = if phase == 1 {
+                        prompt_observation(session, "● Done.\r\n\r\n❯ \r\n  ? for shortcuts", true)
+                    } else {
+                        HostResponse::Acknowledged
+                    };
+                    let mut bytes = serde_json::to_vec(&response).unwrap();
+                    bytes.push(b'\n');
+                    reader.get_mut().write_all(&bytes).await.unwrap();
+                }
+            });
+            let outcome = tokio::time::timeout(Duration::from_secs(12), submit_terminal_message(
+                &HostClient::new(socket), session, ProviderKind::ClaudeCode,
+                b"[Swarm delivery bounded]\r".to_vec(), b"[Swarm delivery bounded]",
+            )).await.unwrap().unwrap();
+            server.await.unwrap();
+            (stall_at, outcome)
+        })).await {
+            assert_eq!(result.1, if result.0 == 1 {
+                TerminalSubmission::Deferred(DeferralReason::ProviderStateUnknown)
+            } else { TerminalSubmission::Uncertain });
+        }
     }
 
     #[tokio::test]
