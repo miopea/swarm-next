@@ -55,7 +55,16 @@ adapter preservation remains to audit. No live worker was restarted for this tes
 The complete isolated API library suite passed 466 tests in 113.73 seconds;
 subsequent local edits only expanded test formatting. Rustfmt validation was
 unavailable in the remote stable toolchain. No release or deployment of this
-follow-up fix has occurred yet.
+follow-up fix had occurred at that test checkpoint.
+
+Deployment follow-up: `bbe2a75f8803` is now serving as development build
+`1.5.0-dev-bbe2a75f8803-20260905160634-2345644`. Managed reload completed
+successfully; API PID became 2346696 while engine PID 2323268 and its build ID
+were unchanged. All eleven original session IDs matched the pre-update sample,
+with no runtime errors and no degraded health. D365's revision-2 corrected
+conversation remained persistence-confirmed after API replacement. Main push
+again bypassed four expected checks; no release was cut. This validates app-only
+deployment continuity, not a new end-to-end provider restart acceptance.
 
 ### Disposed renderer fit cancellation (September 5)
 
