@@ -71,6 +71,24 @@ function ageLabel(hours: number): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
+/** Display recorded lifecycle facts, not inferred provider activity. */
+function taskProgress(task: Task): string {
+  if (task.state === "ready" || task.state === "active") {
+    if (task.dispatch_state === "uncertain") return "Briefing delivery unconfirmed · Queen must reconcile before retrying";
+    if (task.dispatch_state === "queued" || task.dispatch_state === "dispatching") return "Briefing awaiting confirmed delivery";
+    if (task.state === "ready" && task.dispatch_state === "delivered") return "Briefing delivered · work has not been marked active";
+    return task.state === "active" ? "Marked active · live progress not established by task status" : "Ready · briefing delivery not recorded";
+  }
+  if (task.state === "review") {
+    if (task.outcome_delivery_state === "uncertain") return "Handoff delivery unconfirmed · Queen must reconcile before retrying";
+    if (task.outcome_delivery_state === "queued" || task.outcome_delivery_state === "dispatching") return "Review handoff awaiting confirmed delivery";
+    return "In review";
+  }
+  if (task.state === "blocked") return "Blocked · open task for the recorded context";
+  if (task.state === "awaiting_release") return "Awaiting release";
+  return "Draft · awaiting triage";
+}
+
 export default function QueuesView({
   tasks,
   workers,
@@ -151,7 +169,7 @@ export default function QueuesView({
               </h2>
               <p className="queue-meaning">{group.meaning}</p>
               {hours === undefined ? null : (
-                <p className="queue-oldest">Oldest {ageLabel(hours)}</p>
+                <p className="queue-oldest">Longest since task update {ageLabel(hours)}</p>
               )}
             </header>
             <ul>
@@ -159,6 +177,7 @@ export default function QueuesView({
                 <li key={task.id}>
                   <button type="button" onClick={() => onOpenTask(task.id)}>
                     <span className="queue-task-title">{task.title}</span>
+                    <span className="queue-task-meta">{taskProgress(task)}</span>
                     <span className="queue-task-meta">
                       {task.assigned_worker_id
                         ? (workerNames.get(task.assigned_worker_id) ?? "assigned")

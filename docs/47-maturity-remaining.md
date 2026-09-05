@@ -54,6 +54,23 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Evidence from the September 4–5 demo run
 
+### Follow-up reconciliation trace and queue presentation
+
+Direct-terminal answer reconciliation remains unwired: the API has verification
+reads, but no production caller of `resolve_operator_statement_interview`.
+ADR 0065's authenticated provider-consumption and exact-question correlation
+boundary is still required; the receipt-store tests alone cannot close ATT-01.
+Do not infer a resolved decision from arbitrary terminal input or worker claims.
+
+Queue task rows now expose the existing dispatch/outcome-delivery state instead
+of presenting every worker-owned item identically. Queued, delivered-but-not-active,
+and uncertain briefings are distinct; pending review transport is visible.
+Task update age is explicitly labeled as update age, not time waiting on an owner.
+Nine focused queue tests and the project TypeScript build check passed. This is
+not full owner/blocker/recovery integration or live visual acceptance.
+The dedicated Edge test tab reached the deployed runtime unlock screen; signed-in
+visual checks await operator unlock. No authentication workaround was attempted.
+
 The isolated workflow-fixture worker produced documentation commit `11ad126` and
 code/test commit `b7c8e07`; all six Node tests passed. Documentation auto-settled;
 the code task remained in Review behind Queen's unsent prompt. Ordinary sleep/wake

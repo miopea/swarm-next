@@ -13,6 +13,26 @@ function task(overrides: Partial<Task>): Task {
 }
 
 describe("QueuesView", () => {
+  test("shows delivery progression without claiming a queued worker is actively working", () => {
+    const props = { workers: [], onOpenTask: vi.fn() };
+    const ready = task({ state: "ready", next_move_owner: "worker", dispatch_state: "queued" });
+    const { rerender } = render(<QueuesView {...props} tasks={[ready]} />);
+    expect(screen.getByText("Briefing awaiting confirmed delivery")).toBeVisible();
+    rerender(<QueuesView {...props} tasks={[{ ...ready, dispatch_state: "delivered" }]} />);
+    expect(screen.getByText("Briefing delivered · work has not been marked active")).toBeVisible();
+    expect(screen.queryByText("Briefing awaiting confirmed delivery")).not.toBeInTheDocument();
+    rerender(<QueuesView {...props} tasks={[{ ...ready, dispatch_state: "uncertain" }]} />);
+    expect(screen.getByText("Briefing delivery unconfirmed · Queen must reconcile before retrying")).toBeVisible();
+    rerender(<QueuesView {...props} tasks={[{ ...ready, state: "completed", next_move_owner: "nobody" }]} />);
+    expect(screen.queryByText(/Briefing delivery unconfirmed/)).not.toBeInTheDocument();
+  });
+
+  test("distinguishes pending review transport and does not label update age as wait age", () => {
+    render(<QueuesView tasks={[task({ next_move_owner: "queen", outcome_delivery_state: "queued" })]} workers={[]} onOpenTask={vi.fn()} now={3_600_000} />);
+    expect(screen.getByText("Review handoff awaiting confirmed delivery")).toBeVisible();
+    expect(screen.getByText(/Longest since task update/)).toBeVisible();
+    expect(screen.queryByText(/^Oldest /)).not.toBeInTheDocument();
+  });
   test("an exact Queen run keeps its owner and reason visible without expanding details", () => {
     render(<QueuesView tasks={[]} workers={[]} onOpenTask={vi.fn()} heldDeliveries={[{
       kind: "delivery_held_unsent_text", subject: "queen-run:current-run", worker_name: null,
