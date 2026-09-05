@@ -8,6 +8,31 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Conversation observations versus operator actions (September 5)
+
+Commit `fc04d95d` routes transcript-recency-only observations to collapsed runtime
+details, with worker links and the original timestamps. These do not prove the
+saved conversation is wrong and no longer contribute to Needs You or its count.
+Server-marked filesystem faults retain their actionable card; explicit decisions
+are unchanged. No worker is woken or conversation switched by observation or
+refresh. Deliberately opening the worker keeps the existing wake behavior.
+All 1,165 frontend tests across 131 files and TypeScript passed. Mixed fault and
+recency tests verify matching attention, retained evidence, and automatic removal
+after a successful current-history read. Development deployment and live visual
+acceptance were pending at the initial entry. Live acceptance then passed on
+`1.5.0-dev-fc04d95d45ad-20260905184201-2473761`: health ok, no degraded subsystems,
+same engine PID 2456733 and all eleven session IDs preserved. The separate Edge
+tab offered Reload; after loading the frontend, Needs You and its tab both showed
+one genuine pending approval, with the two recency observations retained in
+expandable runtime details. Expanding them did not wake either sleeping worker.
+Desktop screenshot verified layout; the raw ISO timestamps could be more readable
+and remain a polish item. No real-device mobile acceptance is claimed.
+
+Live Queues inspection also confirmed that operator-owned rows currently navigate
+to task details. The next workflow change should connect genuine pending decisions
+directly to Needs You, while retaining task navigation for other owners. Do not
+infer a new decision from prose saying a task is blocked on the operator.
+
 ### Selected worker continuity through process replacement (September 5)
 
 The UI now retains configured worker identity independently of process session
