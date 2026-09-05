@@ -43,7 +43,8 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 - [ ] PRES-01: real desktop lock/return, Reachable and scheduled/manual Night Watch.
 - [ ] REC-01: explicit conversation changes and missing-context fallback through
   updates/shutdown; ordinary demo sleep/wake is already proven, not the full ladder.
-- [ ] REC-02: isolated corruption/restore drill and graceful failure behavior.
+- [ ] REC-02: corruption consequence routing and write/dispatch containment.
+  Real isolated API/SQLite restore and package failure-path drills now pass.
 - [ ] OPS-01: rolling update convergence including Queen, tool freshness and
   automatic work admission after machine pressure eases.
 - [ ] PROV-01: capability checklist, experimental opt-in and unattended gates;
@@ -54,7 +55,7 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Evidence from the September 4–5 demo run
 
-### Offline restore implementation and remaining drill
+### Offline restore implementation and real isolated drill
 
 `restore-offline` now provides a recovery path that does not need an export from
 the broken API. It verifies the chosen backup copy, confirms API stop, archives
@@ -63,13 +64,29 @@ stopped where confirmable, with damaged evidence retained rather than reinstalle
 The complete isolated package lifecycle suite passed, including unavailable
 export, invalid input, concurrent restore refusal, unknown stop state, source
 migration preservation, private archive permissions, three-archive admission,
-failed health and refused failure-stop reporting. This is mocked service/CLI
-evidence; the real isolated API/SQLite corruption-and-restore drill remains open.
-No restoration or corruption was performed on the development Hive.
+failed health and refused failure-stop reporting.
+
+`offline-restore-drill.py` then ran the installed `a6c2ef39` API and verifier
+against newly created private state, without real Hive credentials, integration
+configuration or a terminal-host connection. It created a marker task, stopped
+the API, saved the database, corrupted only that disposable DB, proved API
+startup failed, and ran the actual offline restore command. The restored API
+returned the same task ID/title; backup SHA-256 stayed unchanged and the archive
+matched the corrupted bytes. The process adapter served only API start/stop/state
+requests; this was real API/SQLite evidence, not a real-systemd fault drill.
+The API was stopped at drill exit. Private evidence remains at
+`/home/bschleifer/.swarm-recovery-drill-kc0gz1rc`; the earlier refused fixture is
+retained separately at `.swarm-recovery-drill-t2u_s0ha`. No restoration or
+corruption was performed on the development Hive. REC-02 still needs explicit
+corruption consequence routing and write/dispatch containment acceptance.
 
 The engine update after `5972db76` was not stuck without a cause: its active
 reconciliation timer reported one of four sessions mid-turn. No force restart
-was requested. Safe deferred convergence still needs confirmation.
+was requested. It subsequently converged automatically to engine `8d22d71b816d`
+with PID 2088305. The demo worker returned running/resting in session
+`01a07048-0f97-7e90-a60d-b770b46e4bbb`; settled tasks and the withdrawn decision
+remained intact. This proves that deferred update/return, not all provider
+conversation and Queen freshness acceptance paths.
 
 ### Current blocking context in Queues
 
@@ -297,7 +314,7 @@ Health was ok with no degraded subsystems and unchanged engine build identity.
 No restore or worker/service operation occurred during the drill. Isolated
 package restore and offline corruption recovery remain open.
 
-Full REC-02 remains open pending the real restored-isolated-instance drill.
+Full REC-02 remains open for corruption consequence/containment acceptance.
 The explicit offline/quarantine implementation above addresses the former
 online-export prerequisite without weakening the existing online restore.
 Never test corruption by damaging the live Hive or silently discard a failed

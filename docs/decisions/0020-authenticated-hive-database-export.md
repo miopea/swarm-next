@@ -106,5 +106,8 @@ terminal host and repositories remain outside the restore operation.
 Package lifecycle tests cover invalid input, competing restore, unreadable stop
 state, unavailable export, source preservation during migration, raw sidecar
 preservation, archive permissions/bounds, failed health and refused failure stop.
-Real isolated API/SQLite corruption-and-restore acceptance remains required;
-mocked service tests alone do not close REC-02.
+The real isolated API/SQLite drill additionally proves corrupt startup refusal,
+restored task identity, unchanged source backup and preserved damaged bytes.
+It uses an owned-process service adapter, not the live systemd units, and leaves
+the production Hive untouched. Corruption consequence routing and containment
+remain separate REC-02 acceptance gates.
