@@ -508,6 +508,30 @@ export const SURFACES: Surface[] = [
     ),
   },
   {
+    id: "needs-you-long-risk",
+    title: "Long risk and interview choices",
+    why: "Invented long-form decision to check readable risk previews and complete answer choices",
+    render: () => <DecisionInbox decisions={[{
+      ...demoDecision,
+      title: "Choose how to preserve existing contact details",
+      summary: "Some records already contain manually maintained values. Choose a route before any update.",
+      suggested_action: "Use a separate field and preserve existing values",
+      risk: "Updating the existing field could replace manually maintained values.\n\n" +
+        "A separate field preserves those values, but readers must choose which field to use. ".repeat(8),
+      questions: [{ header: "Update strategy", question: "Which route should this task take?", multi_select: false,
+        options: ["Use a separate field. Preserve existing values and document which field each reader should use.",
+          "Update only empty records. Existing values stay untouched, but the result will not be a continuously synchronized mirror.",
+          "Pause the update while the data owner reviews conflicting values and chooses the authoritative source."] }],
+    }]} tasks={demoTasks} workers={demoWorkers} busy={false} onResolve={async () => undefined} onAnswer={async () => undefined} />,
+  },
+  {
+    id: "needs-you-long-risk-phone",
+    title: "Long decision at phone width",
+    why: "A 390px frame tests layout only, not native PWA or provider terminal behavior",
+    render: () => <iframe title="Long decision phone preview" src="/harness.html?surface=needs-you-long-risk"
+      style={{ display: "block", width: 390, height: 844, border: 0 }} />,
+  },
+  {
     id: "needs-you-withdrawn",
     title: "Withdrawn request history",
     why: "An obsolete request is quiet and never represented as operator approval",

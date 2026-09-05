@@ -490,6 +490,22 @@ test("long summaries expand without hiding the ask or losing source text", () =>
   expect(screen.getByText(summary.trim())).not.toHaveClass("clamped");
 });
 
+test("risk preview stays visible and expands without losing the decision or draft", () => {
+  const risk = "Changing this field affects existing records. ".repeat(12).trim();
+  render(<DecisionInbox decisions={[{ ...pending, risk }]} tasks={[task]} workers={[worker]} busy={false} onResolve={vi.fn()} />);
+  const preview = screen.getByText(risk);
+  expect(preview.closest(".decision-risk")).not.toBeNull();
+  expect(preview.closest("details")).toBeNull();
+  expect(preview).toHaveClass("clamped");
+  fireEvent.change(screen.getByLabelText("Optional note"), { target: { value: "Preserve existing values" } });
+  fireEvent.click(screen.getByRole("button", { name: "Show all of the risk" }));
+  expect(preview).not.toHaveClass("clamped");
+  expect(screen.getByRole("button", { name: "Durable path" })).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Show less of the risk" }));
+  expect(preview).toHaveClass("clamped");
+  expect(screen.getByLabelText("Optional note")).toHaveValue("Preserve existing values");
+});
+
 test("action emphasis follows the stated suggestion rather than array order", () => {
   const props = { tasks: [task], workers: [worker], busy: false, onResolve: vi.fn() };
   const view = render(<DecisionInbox {...props} decisions={[{ ...pending, suggested_action: "minimal_path" }]} />);

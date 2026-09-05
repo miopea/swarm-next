@@ -246,7 +246,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                 </details>
                 <dl className="decision-context">
                   {decision.task_id && <div><dt>Task</dt><dd>{onOpenTask ? <button type="button" className="decision-task-link" onClick={() => onOpenTask(decision.task_id!)}>{taskNames.get(decision.task_id) ?? "Linked task"}</button> : taskNames.get(decision.task_id) ?? "Linked task"}</dd></div>}
-                  {decision.risk && <div><dt>Risk</dt><dd><LongText text={decision.risk} label="the risk" /></dd></div>}
+                  {decision.risk && <div className="decision-risk"><dt>Risk</dt><dd><LongText text={decision.risk} label="the risk" foldAbove={300} /></dd></div>}
                 </dl>
                 {decision.state === "pending" && decision.questions?.length ? (
                   <div className="decision-resolution">

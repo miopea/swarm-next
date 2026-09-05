@@ -8,6 +8,25 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Decision risk and answer readability (September 5)
+
+Live desktop inspection found long risk prose squeezed beside the task into half
+the card width, consuming vertical space ahead of the answers. Risk remains
+visible and precedes choices, but now uses the full context width, previews three
+lines above 300 characters, and expands the unchanged source text on demand.
+Narrow layouts stack context labels above their values. Answer choices retain
+their original order and text, use start alignment and wrapping, and specify
+44px minimum height rather than 36px. No decision or approval semantics changed.
+
+The isolated fictional long-risk fixture was inspected in Edge at desktop and
+inside its configured 390px phone frame. Expansion exposed the full text, choosing
+an option enabled Send answers, and tests cover folding without losing the draft.
+All 68 decision tests and TypeScript check passed; the fixture-data test also
+passed. The phone frame is layout evidence, not native Android/iOS/PWA acceptance.
+The browser measurement attempt read the outer page, not the child frame, so no
+measured mobile touch-target or overflow result is claimed. Deployment remains
+pending; ATT-01 and the full Needs You content/reconciliation pass remain open.
+
 ### Live-host release retention repair (September 5)
 
 The deployment unit's mount protections deny `/proc/2323268/exe` inspection
