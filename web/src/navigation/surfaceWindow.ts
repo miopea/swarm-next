@@ -92,7 +92,7 @@ export function detachedSurface(
   const query = new URLSearchParams(location.search);
   if (query.get("detached") !== "1") return undefined;
   const asked = query.get("surface");
-  return asked === "decisions" || asked === "tasks" || asked === "workers"
+  return asked === "decisions" || asked === "queues" || asked === "tasks" || asked === "workers"
     || asked === "apiary" || asked === "settings"
     ? asked
     : undefined;

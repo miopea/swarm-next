@@ -67,6 +67,14 @@ test("reads which surface this window was detached to show", () => {
   expect(detachedSurface({ search: "?surface=nonsense&detached=1" })).toBeUndefined();
 });
 
+test.each(["decisions", "queues", "tasks", "workers", "apiary", "settings"] as const)(
+  "round trips the detached %s address",
+  (surface) => {
+    const url = new URL(surfaceWindowUrl({ pathname: "/" }, surface), "https://example.test");
+    expect(detachedSurface(url)).toBe(surface);
+  },
+);
+
 test("a notification deep link opens the whole control room, not a detached window", () => {
   // `surface` on its own already means "open Swarm here", which is what a
   // notification carries. Treating that as a detach request would land the
