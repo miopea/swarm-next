@@ -1,5 +1,5 @@
-export type FitMilestone = "fit_started" | "fonts_ready";
-type FitPhases = { opening_ms: number; font_ms: number; layout_ms: number };
+export type FitMilestone = "fit_started" | "fonts_ready" | "fit_frame";
+type FitPhases = { opening_ms: number; font_ms: number; layout_ms: number; frame_count?: number; max_frame_gap_ms?: number };
 type RestoreSample = { at: number; ms: number; setup_ms: number | null; connection_ms: number | null; fit: FitPhases | null };
 
 /** Content-free, browser-lifetime experiment evidence. No worker IDs or output. */
@@ -33,12 +33,25 @@ export class TerminalRestoreEvidence {
     let connectionAt: number | undefined;
     let fitAt: number | undefined;
     let fontsAt: number | undefined;
+    let frameCount = 0;
+    let previousFrameAt: number | undefined;
+    let maxFrameGap = 0;
     this.#started += 1;
     this.#pending += 1;
     return (outcome) => {
       if (settled || generation !== this.#generation) return;
       if (outcome === "fit_started") { fitAt ??= this.#now(); return; }
       if (outcome === "fonts_ready") { fontsAt ??= this.#now(); return; }
+      if (outcome === "fit_frame") {
+        const at = this.#now();
+        const previous = previousFrameAt ?? fontsAt;
+        if (previous !== undefined && Number.isFinite(at) && at >= previous) {
+          frameCount += 1;
+          maxFrameGap = Math.max(maxFrameGap, at - previous);
+          previousFrameAt = at;
+        }
+        return;
+      }
       if (outcome === "connection_started") {
         connectionAt ??= this.#now();
         return;
@@ -56,7 +69,8 @@ export class TerminalRestoreEvidence {
         && Number.isFinite(fitAt) && Number.isFinite(fontsAt)
         && startedAt <= fitAt && fitAt <= fontsAt && fontsAt <= connectionAt!;
       this.#samples.push({ at, ms, setup_ms: phased ? connectionAt! - startedAt : null, connection_ms: phased ? at - connectionAt! : null,
-        fit: fitPhased ? { opening_ms: fitAt! - startedAt, font_ms: fontsAt! - fitAt!, layout_ms: connectionAt! - fontsAt! } : null });
+        fit: fitPhased ? { opening_ms: fitAt! - startedAt, font_ms: fontsAt! - fitAt!, layout_ms: connectionAt! - fontsAt!,
+          ...(frameCount ? { frame_count: frameCount, max_frame_gap_ms: maxFrameGap } : {}) } : null });
       if (this.#samples.length > 200) this.#samples.shift();
     };
   }

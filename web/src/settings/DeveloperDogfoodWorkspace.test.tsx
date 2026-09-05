@@ -56,10 +56,11 @@ test("shows paired slowest-return phases without labeling them as percentiles", 
   vi.spyOn(terminalWorkspace, "coldRestoreEvidence", "get").mockReturnValue({
     started: 20, pending: 0, interrupted: 0, failed: 0, samples: 20, p95_ms: 400, max_ms: 1000,
     slowest: { total_ms: 1000, setup_ms: 700, connection_ms: 300 },
-    slowest_fit: { opening_ms: 10, font_ms: 20, layout_ms: 670 },
+    slowest_fit: { opening_ms: 10, font_ms: 20, layout_ms: 670, frame_count: 2, max_frame_gap_ms: 640 },
   });
   render(<DeveloperDogfoodWorkspace runtime={runtime} version="test" reachable />);
   expect(screen.getByText("Slowest cold return: 1000 ms total · 700 ms renderer setup · 300 ms connection through applied state.")).toBeInTheDocument();
   expect(screen.getByText(/same slowest return, not independent maxima or p95 phases/)).toBeInTheDocument();
   expect(screen.getByText("Setup breakdown for that return: 10 ms opening · 20 ms font readiness · 670 ms layout and initial sizing.")).toBeInTheDocument();
+  expect(screen.getByText(/Sizing frames for that return: 2 · longest interval 640 ms/)).toBeInTheDocument();
 });

@@ -95,6 +95,29 @@ test("fit breakdown stays paired, copied, and unavailable for out-of-order miles
   expect(evidence.snapshot()).toMatchObject({ samples: 0, pending: 0, slowest_fit: null });
 });
 
+test("sizing intervals belong to the same return and ignore late callbacks", () => {
+  let now = 0;
+  const evidence = new TerminalRestoreEvidence(() => now);
+  const finish = evidence.begin();
+  finish("fit_frame"); // No font boundary yet: unavailable, not zero wait.
+  now = 10; finish("fit_started");
+  now = 20; finish("fonts_ready");
+  now = 1020; finish("fit_frame");
+  now = 1036; finish("fit_frame");
+  now = 1040; finish("connection_started");
+  now = 1100; finish("rendered");
+  now = 9000; finish("fit_frame");
+  expect(evidence.snapshot().slowest_fit).toEqual({
+    opening_ms: 10, font_ms: 10, layout_ms: 1020,
+    frame_count: 2, max_frame_gap_ms: 1000,
+  });
+  const late = evidence.begin();
+  late("fit_started"); late("fonts_ready");
+  evidence.reset();
+  late("fit_frame"); late("rendered");
+  expect(evidence.snapshot()).toMatchObject({ samples: 0, slowest_fit: null });
+});
+
 test("invalid or missing phase boundaries remain unavailable", () => {
   let now = 0;
   const evidence = new TerminalRestoreEvidence(() => now);

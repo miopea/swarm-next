@@ -25,6 +25,17 @@ CPU attribution, confirmed paint, a leak, an aged-session baseline or acceptable
 performance. The experiment was stopped and the tab left in Settings. No worker
 commands, decisions or lifecycle changes were issued during this measurement.
 
+Follow-up sizing evidence counts measured animation frames and the longest
+interval from font readiness/previous frame, paired with that same slowest
+return. This distinguishes many sizing attempts from delayed frame callbacks;
+intervals include scheduling and preceding measurement work, not CPU time.
+It adds only numeric counters to the existing bounded restore sample, with no
+new timer, retained frame list, geometry change or background observer. The
+new test tab reported visible, but historical visibility during the prior slow
+sample is not proven. TypeScript checking and 83 focused restore/controller/
+surface/settings tests passed. Deployment and measured frame-count acceptance
+remain pending; the underlying performance issue is not fixed by instrumentation.
+
 ### Accepted evidence retry feedback (September 5)
 
 The isolated blocked-ready recovery task auto-completed after its empty commit

@@ -345,6 +345,7 @@ export class XtermSurface implements TerminalSurface {
       for (let frame = 0; frame < MAX_FIT_FRAMES; frame += 1) {
         await nextAnimationFrame(this.#fitLifetime.signal);
         if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
+        onMilestone?.("fit_frame");
         const dimensions = this.#fit.proposeDimensions();
         const usable = usableDimensions(dimensions);
         if (!usable) {
