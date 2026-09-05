@@ -8,6 +8,12 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+- [ ] Blocked tasks with a pending operator decision still derive next owner
+  `blocked`, not `operator`. The prerequisite discovery regression exposed this
+  existing domain limitation. The discovery read excludes pending decisions,
+  but that alone does not fix owner grouping. Add domain/projection coverage
+  and account for the engine's domain-source fingerprint before deployment.
+
 ### Operator prerequisite editor checkpoint (2026-09-05)
 
 Task actions now offer an audited prerequisite editor for blocked tasks and
@@ -177,6 +183,25 @@ expiry and engagement precedence. Strict persistence library lint passed. All
 fixture-only addition; final TypeScript checking passed. Edge fixture inspection
 covered the 390-by-844 queue layout, not authenticated live or native-mobile
 acceptance. This change is not yet deployed.
+It subsequently deployed successfully as `99aa11c8`, with healthy status and
+unchanged engine build identity.
+
+### Make completed prerequisites discoverable to Queen
+
+After the upstream completed, Queen finished review run
+`01a07194-6b96-7870-9e8c-cdc618540340`, but the consumer remained Blocked with
+next owner Queen. Inspection found no explicit ready-prerequisite population in
+`swarm_list_coordination_attention`, despite the changed review fingerprint.
+The existing tool now returns `prerequisite_ready` tasks, a truncation flag and
+the guarded next action. Tool inputs and metadata are unchanged; this is an
+additive response, not a new tool requiring provider schema refresh.
+
+The bounded persistence read filters before its 64-task limit and excludes
+future block dates, pending operator decisions, removed/locality-mismatched
+tasks and incomplete prerequisites. It does not transition or notify workers.
+All 13 prerequisite tests, the actual Queen-only MCP response/refusal test,
+all 464 Linux API tests and strict API lint pass. Live downstream resumption
+after this fix remains to be checked; no manual task transition was applied.
 
 ### Explicit prerequisites — deployed API drill; Queen journey still open
 

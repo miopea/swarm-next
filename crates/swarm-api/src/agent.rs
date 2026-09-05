@@ -719,7 +719,14 @@ impl ServerHandler for AgentMcp {
                         .current_coordinator_attention(crate::unix_timestamp())
                         .map_err(ApplicationError::Store)
                         .and_then(|attention| {
+                            let (prerequisite_ready, prerequisite_ready_truncated) = self.tasks
+                                .store().tasks_ready_after_prerequisites(crate::unix_timestamp())?;
                             structured(json!({
+                                "prerequisite_ready": {
+                                    "tasks": prerequisite_ready,
+                                    "truncated": prerequisite_ready_truncated,
+                                    "next_action": "Queen must check the recorded block and current worker, then resume through the ordinary guarded task transition if no other blocker remains. Completed prerequisites alone do not authorize automatic resumption."
+                                },
                                 "attention": attention.into_iter().map(|item| json!({
                                     "action_id": item.action_id,
                                     "kind": item.kind,
@@ -5088,7 +5095,36 @@ mod tests {
 
     #[tokio::test]
     async fn coordination_attention_tool_is_queen_read_only() {
-        let (bridge, _, queen_id, worker_id, _) = setup();
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        let consumer = store
+            .create_task("Dependency consumer", "/workspace")
+            .unwrap();
+        let upstream = store
+            .create_task("Completed contract", "/workspace")
+            .unwrap();
+        store
+            .transition_task(consumer.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store
+            .transition_task(consumer.id, swarm_domain::TaskState::Blocked)
+            .unwrap();
+        for state in [
+            swarm_domain::TaskState::Ready,
+            swarm_domain::TaskState::Active,
+            swarm_domain::TaskState::Review,
+            swarm_domain::TaskState::Completed,
+        ] {
+            store.transition_task(upstream.id, state).unwrap();
+        }
+        store
+            .add_task_prerequisite(
+                consumer.id,
+                upstream.id,
+                "Contract first",
+                &swarm_domain::TaskActivityActor::operator(),
+                10,
+            )
+            .unwrap();
         let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
         let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
         let request = |token: &str| {
@@ -5102,6 +5138,10 @@ mod tests {
         let attention =
             response_json(handle(bridge.clone(), plain_state(), request(&queen_token)).await).await;
         assert!(attention["result"]["structuredContent"]["attention"].is_array());
+        let ready = &attention["result"]["structuredContent"]["prerequisite_ready"];
+        assert_eq!(ready["tasks"][0]["id"], consumer.id.to_string());
+        assert_eq!(ready["tasks"][0]["state"], "blocked");
+        assert_eq!(ready["truncated"], false);
 
         let denied =
             response_json(handle(bridge, plain_state(), request(&worker_token)).await).await;

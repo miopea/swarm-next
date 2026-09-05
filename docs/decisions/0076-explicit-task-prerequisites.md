@@ -50,3 +50,11 @@ and reopen, removal/abandonment, completion and reopening, transition/dispatch
 guards, truthful task/owner projection, and browser navigation to the prerequisite.
 Finish with isolated demo Queen cross-worker coordination. Never synthesize
 dependencies in the operator's existing backlog from prose.
+
+Queen's existing coordination-attention read explicitly exposes due Blocked tasks
+whose prerequisites are all completed. A changed review fingerprint alone is not
+enough: the reader must identify the new obligation. The read excludes pending
+operator decisions, future block-until dates, removed tasks and unresolved edges,
+and returns at most 64 tasks with an explicit truncation flag. It shares the task
+projection and does not transition work, create a human alert or infer that all
+other blockers are gone. Queen still owns the guarded resumption decision.

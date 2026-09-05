@@ -90,6 +90,39 @@ fn audit(
 }
 
 impl TaskStore {
+    /// Blocked work whose explicit prerequisites finished and whose next review is due.
+    /// Returns at most 64 tasks and an explicit overflow indication. This is
+    /// discovery for Queen, never authorization to resume or bypass other blocks.
+    ///
+    /// # Errors
+    /// Returns an error when current dependency evidence cannot be read safely.
+    pub fn tasks_ready_after_prerequisites(
+        &self,
+        now: i64,
+    ) -> Result<(Vec<swarm_domain::Task>, bool), TaskStoreError> {
+        let connection = self.connection()?;
+        let sql = format!(
+            "{} WHERE t.state = 'blocked' AND t.removed_at IS NULL
+             AND t.hive_id = (SELECT hive_id FROM local_hive_identity WHERE singleton = 1)
+             AND (t.blocked_until IS NULL OR t.blocked_until <= ?1)
+             AND EXISTS(SELECT 1 FROM task_prerequisites p WHERE p.task_id = t.id)
+             AND NOT EXISTS(SELECT 1 FROM task_prerequisites p
+                 LEFT JOIN tasks upstream ON upstream.id = p.prerequisite_id
+                 WHERE p.task_id = t.id AND (upstream.id IS NULL
+                     OR upstream.removed_at IS NOT NULL OR upstream.state != 'completed'))
+             AND NOT EXISTS(SELECT 1 FROM decision_requests d WHERE d.task_id = t.id AND d.state = 'pending')
+             ORDER BY t.position, t.id LIMIT 65",
+            Self::TASK_PROJECTION,
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let mut tasks = statement
+            .query_map([now], crate::task_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        let truncated = tasks.len() > 64;
+        tasks.truncate(64);
+        Ok((tasks, truncated))
+    }
+
     /// Rechecks the immutable briefing claim before any terminal contact.
     ///
     /// # Errors
@@ -361,6 +394,144 @@ mod tests {
         store.transition_task(task.id, TaskState::Ready).unwrap();
         store.transition_task(task.id, TaskState::Blocked).unwrap();
         task.id
+    }
+
+    fn completed_contract(store: &TaskStore) -> TaskId {
+        let id = blocked(store, "Contract");
+        store.transition_task(id, TaskState::Active).unwrap();
+        store.transition_task(id, TaskState::Review).unwrap();
+        store.transition_task(id, TaskState::Completed).unwrap();
+        id
+    }
+
+    #[test]
+    fn ready_prerequisite_discovery_respects_due_dates_and_current_upstream_state() {
+        let store = TaskStore::in_memory().unwrap();
+        let consumer = blocked(&store, "Consumer");
+        let upstream = completed_contract(&store);
+        store
+            .add_task_prerequisite(
+                consumer,
+                upstream,
+                "Contract first",
+                &TaskActivityActor::operator(),
+                10,
+            )
+            .unwrap();
+        let (tasks, truncated) = store.tasks_ready_after_prerequisites(20).unwrap();
+        assert!(!truncated);
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].id, consumer);
+        assert_eq!(tasks[0].state, TaskState::Blocked);
+        assert_eq!(tasks[0].next_move_owner, swarm_domain::NextMoveOwner::Queen);
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET blocked_until = 30 WHERE id = ?1",
+                [consumer.to_string()],
+            )
+            .unwrap();
+        assert!(
+            store
+                .tasks_ready_after_prerequisites(29)
+                .unwrap()
+                .0
+                .is_empty()
+        );
+        assert_eq!(
+            store.tasks_ready_after_prerequisites(30).unwrap().0.len(),
+            1
+        );
+        for (state, removed) in [
+            ("active", None),
+            ("abandoned", None),
+            ("completed", Some(31)),
+        ] {
+            store
+                .connection()
+                .unwrap()
+                .execute(
+                    "UPDATE tasks SET state = ?2, removed_at = ?3 WHERE id = ?1",
+                    params![upstream.to_string(), state, removed],
+                )
+                .unwrap();
+            assert!(
+                store
+                    .tasks_ready_after_prerequisites(40)
+                    .unwrap()
+                    .0
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn ready_prerequisite_discovery_filters_before_its_explicit_page_bound() {
+        let store = TaskStore::in_memory().unwrap();
+        for _ in 0..70 {
+            blocked(&store, "Unrelated blocked work");
+        }
+        let upstream = completed_contract(&store);
+        for _ in 0..65 {
+            let consumer = blocked(&store, "Ready for Queen");
+            store
+                .add_task_prerequisite(
+                    consumer,
+                    upstream,
+                    "Contract first",
+                    &TaskActivityActor::operator(),
+                    10,
+                )
+                .unwrap();
+        }
+        let (tasks, truncated) = store.tasks_ready_after_prerequisites(20).unwrap();
+        assert!(truncated);
+        assert_eq!(tasks.len(), 64);
+        assert!(tasks.iter().all(|task| task.title == "Ready for Queen"));
+    }
+
+    #[test]
+    fn ready_prerequisite_discovery_does_not_override_a_pending_operator_decision() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let consumer = blocked(&store, "Consumer");
+        let upstream = completed_contract(&store);
+        store
+            .add_task_prerequisite(
+                consumer,
+                upstream,
+                "Contract first",
+                &TaskActivityActor::operator(),
+                10,
+            )
+            .unwrap();
+        store
+            .create_decision_request(&crate::NewDecisionRequest {
+                requesting_worker_id: queen.id,
+                task_id: Some(consumer),
+                kind: swarm_domain::DecisionRequestKind::Input,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "Choose the scope",
+                summary: "The contract is ready but scope needs judgment.",
+                reason: "Two valid approaches",
+                risk: "",
+                evidence: "",
+                suggested_action: "Proceed",
+                allowed_actions: &["Proceed".to_owned()],
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+            })
+            .unwrap();
+        assert!(
+            store
+                .tasks_ready_after_prerequisites(20)
+                .unwrap()
+                .0
+                .is_empty()
+        );
+        assert_eq!(store.get_task(consumer).unwrap().state, TaskState::Blocked);
     }
 
     #[test]
