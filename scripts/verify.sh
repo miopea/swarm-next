@@ -63,8 +63,13 @@ if [ "$mode" = "rust" ] || [ "$mode" = "all" ]; then
   step "release terminal resize" cargo +1.97.1 test --release -p swarm-terminal resize_updates_pty_and_canonical_dimensions
 fi
 
+web_audit() (
+  cd web
+  sh ../scripts/audit-web.sh
+)
+
 if [ "$mode" = "web" ] || [ "$mode" = "all" ]; then
-  step "web audit" pnpm audit --prod --audit-level high
+  step "web audit" web_audit
   step "web check" pnpm check
   step "web test" pnpm test
   step "dogfood test" pnpm test:dogfood

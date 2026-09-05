@@ -8,6 +8,21 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Integrated frontend verification (September 5)
+
+At local `c699afb3`, the complete frontend suite passed 1,141 tests across 130
+files with one test worker, and the production TypeScript/Vite build passed.
+Vite retained its warning about the terminal chunk exceeding 500 kB; this is not
+a browser-runtime performance result. No live deployment or release occurred.
+
+The complete dogfood suite exposed CI/local audit drift: CI calls the existing
+registry-aware audit wrapper from `web`, while the local entrypoint called raw
+pnpm audit. The entrypoint now uses the same wrapper and working directory.
+Parity tests include shell-script commands and execute an isolated audit adapter
+to verify the directory and failure propagation without registry access. All 11
+dogfood tests passed, including audit failure followed by remaining checks.
+These adapter tests do not constitute a fresh dependency advisory audit.
+
 ### Mobile submission key ordering (September 5)
 
 An isolated regression reproduced toolbar keys interleaving between Send's
