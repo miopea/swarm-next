@@ -19,7 +19,9 @@ export default function TaskPrerequisiteList({ task, workerNames, onOpenTask }: 
     </li>)}
   </ul>;
   if (unresolved.length === 0) return <div className="queue-prerequisites">
-    {task.state === "blocked" && <p className="queue-task-meta">Prerequisites completed · Queen checks remaining blockers before resuming</p>}
+    {task.state === "blocked" && <p className="queue-task-meta">{task.next_move_owner === "operator"
+      ? "Prerequisites completed · your decision is still needed"
+      : "Prerequisites completed · Queen checks remaining blockers before resuming"}</p>}
     <details><summary>{prerequisites.length} completed prerequisite{prerequisites.length === 1 ? "" : "s"}</summary>{rows}</details>
   </div>;
   return <div className="queue-prerequisites">

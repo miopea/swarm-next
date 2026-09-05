@@ -41,6 +41,12 @@ live invocation. Earlier pending-journey notes below are historical checkpoints.
   Queues tests passed. The final build passed the new withdrawal test and the
   decision-resolution projection test; strict domain/persistence library lint
   passed. Deployment remains pending an engine-refresh window, not API-only.
+  The accompanying queue copy now respects operator ownership: completed
+  prerequisites explicitly retain the pending human decision, and blocked-age
+  text no longer overrides ownership with a blanket Queen attribution. All 20
+  Queues tests and TypeScript checking passed. Edge inspection of the 390px
+  fixture confirmed readable, distinct operator/Queen groups. The separate live
+  tab remains at unlock; this is fixture evidence, not authenticated acceptance.
 
 ### Operator prerequisite editor checkpoint (2026-09-05)
 

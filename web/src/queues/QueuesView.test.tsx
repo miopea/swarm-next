@@ -40,6 +40,12 @@ describe("QueuesView", () => {
     expect(screen.getByText("Prerequisites completed · Queen checks remaining blockers before resuming")).toBeVisible();
     expect(screen.getByText("1 completed prerequisite").closest("details")).not.toHaveAttribute("open");
     expect(screen.queryByText("1 unresolved prerequisite")).not.toBeInTheDocument();
+    rerender(<QueuesView tasks={[{ ...blocked, next_move_owner: "operator", prerequisites: [{ ...prerequisite, state: "completed" }] }]} workers={[]} onOpenTask={onOpenTask}
+      blockedWaits={[{ task_id: "t1", title: "Some work", worker_name: "Worker", workspace: "/w", blocked_for_seconds: 7200 }]} />);
+    expect(screen.getByRole("heading", { name: "Waiting on you 1" })).toBeVisible();
+    expect(screen.getByText("Prerequisites completed · your decision is still needed")).toBeVisible();
+    expect(screen.getByText("Blocked for 2h")).toBeVisible();
+    expect(screen.queryByText(/Queen (checks remaining blockers|coordinates the next move)/)).not.toBeInTheDocument();
   });
 
   test("removed and reopened prerequisites stay visible without claiming the worker stopped", () => {

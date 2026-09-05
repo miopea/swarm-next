@@ -190,7 +190,7 @@ export default function QueuesView({
                         ? (workerNames.get(task.assigned_worker_id) ?? "assigned")
                         : "unassigned"}
                     </span>
-                    {task.state === "blocked" && waits.has(task.id) && <span className="queue-task-meta">Blocked for {ageLabel(Math.max(0, Math.floor(waits.get(task.id)!.blocked_for_seconds / 3600)))} · Queen coordinates the next move</span>}
+                    {task.state === "blocked" && waits.has(task.id) && <span className="queue-task-meta">Blocked for {ageLabel(Math.max(0, Math.floor(waits.get(task.id)!.blocked_for_seconds / 3600)))}</span>}
                   </button>
                   {briefing && <p className="queue-task-meta">Briefing held: {holdReason(briefing)} · queued {waitedFor(now / 1000 - briefing.queued_at)}</p>}
                   <TaskPrerequisiteList task={task} workerNames={workerNames} onOpenTask={onOpenTask} />
