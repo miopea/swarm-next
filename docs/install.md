@@ -382,6 +382,22 @@ sh ~/.local/lib/swarm/current/swarm-package restore /path/to/swarm.sqlite3
 The backup is put through a full integrity verification before anything is
 replaced, and the database it displaces is kept until the new one is in place.
 
+If corruption prevents the API from exporting that pre-restore backup, use the
+explicit offline recovery command with a known-good backup beneath your home:
+
+```sh
+sh ~/.local/lib/swarm/current/swarm-package restore-offline "$HOME/backups/swarm.sqlite3"
+```
+
+Do not run an update or installation concurrently with a restore. Offline
+recovery stops only the API and preserves the original database and sidecars
+in a private `backups/offline-restore-*` directory. These are damaged-file
+evidence, not a verified backup. The command prints the archive path. If startup
+fails, the API is stopped again where possible; inspect the reported failure
+before restarting. It does not silently reinstall the corrupt database.
+Three archives are retained at most; inspect and move one before another attempt
+once that bound is reached. The chosen backup is never modified.
+
 ## Removing it
 
 ```

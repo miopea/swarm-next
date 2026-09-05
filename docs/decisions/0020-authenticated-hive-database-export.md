@@ -80,6 +80,31 @@ renaming it, restarts only the API, and verifies health. An incomplete rollback
 is reported as such with the retained recovery path, not hidden behind ignored
 command failures. No terminal-host stop is authorized by this recovery path.
 
-This does not yet make corrupt/offline databases restorable: acquiring the
-pre-restore snapshot still requires the API. That separate REC-02 gap must not
-be confused with the source-preservation and rollback-admission safeguards here.
+### Explicit offline corruption recovery — 2026-09-05
+
+`restore-offline DATABASE` is a separate operator command, never an automatic
+fallback from a failed online export. It verifies a private copy of the selected
+backup before stopping anything, confirms the API is inactive, and copies the
+original database and any WAL/SHM sidecars into a private recovery archive before
+replacement. The original files are unverified evidence, not a healthy rollback
+snapshot. A copy-complete marker distinguishes a finished archive from a partial
+copy failure. The selected backup remains unchanged.
+
+Both restore modes share a nonblocking process-owned restore lock. Offline
+archives are bounded to three; a fourth recovery refuses before stopping the
+API and asks the operator to inspect and move an archive. No damaged evidence
+is automatically pruned. Normal backup retention does not touch these archives.
+Offline recovery must not overlap installation/update operations; the restore
+lock serializes restores, not all package actions.
+
+After replacement, only the API starts. Failed startup or an interrupted restore
+attempts to stop it and reports whether that stop was confirmed. Damaged files
+are never automatically reinstalled. Failed recovery leaves the candidate and
+available archive for inspection and does not claim rollback succeeded. The
+terminal host and repositories remain outside the restore operation.
+
+Package lifecycle tests cover invalid input, competing restore, unreadable stop
+state, unavailable export, source preservation during migration, raw sidecar
+preservation, archive permissions/bounds, failed health and refused failure stop.
+Real isolated API/SQLite corruption-and-restore acceptance remains required;
+mocked service tests alone do not close REC-02.

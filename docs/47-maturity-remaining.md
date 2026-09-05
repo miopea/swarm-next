@@ -54,6 +54,23 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Evidence from the September 4–5 demo run
 
+### Offline restore implementation and remaining drill
+
+`restore-offline` now provides a recovery path that does not need an export from
+the broken API. It verifies the chosen backup copy, confirms API stop, archives
+the original DB/WAL/SHM, and starts only the API. Failed health leaves the API
+stopped where confirmable, with damaged evidence retained rather than reinstalled.
+The complete isolated package lifecycle suite passed, including unavailable
+export, invalid input, concurrent restore refusal, unknown stop state, source
+migration preservation, private archive permissions, three-archive admission,
+failed health and refused failure-stop reporting. This is mocked service/CLI
+evidence; the real isolated API/SQLite corruption-and-restore drill remains open.
+No restoration or corruption was performed on the development Hive.
+
+The engine update after `5972db76` was not stuck without a cause: its active
+reconciliation timer reported one of four sessions mid-turn. No force restart
+was requested. Safe deferred convergence still needs confirmation.
+
 ### Current blocking context in Queues
 
 Task projections now include the note on the current transition into Blocked.
@@ -280,12 +297,11 @@ Health was ok with no degraded subsystems and unchanged engine build identity.
 No restore or worker/service operation occurred during the drill. Isolated
 package restore and offline corruption recovery remain open.
 
-Full REC-02 remains open: package restore requires a successful online export
-of current state before replacement. If corruption prevents that export, the
-current restore path cannot recover. A separately explicit offline/quarantine
-path must preserve the damaged database and sidecars with the API confirmed
-stopped, then verify a restored isolated instance. Never test corruption by
-damaging the live Hive or silently discard a failed pre-restore export.
+Full REC-02 remains open pending the real restored-isolated-instance drill.
+The explicit offline/quarantine implementation above addresses the former
+online-export prerequisite without weakening the existing online restore.
+Never test corruption by damaging the live Hive or silently discard a failed
+pre-restore export.
 
 ### Follow-up reconciliation trace and queue presentation
 

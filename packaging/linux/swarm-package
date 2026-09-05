@@ -25,6 +25,8 @@ restore_rollback=
 restore_candidate=
 restore_auth=
 restore_incoming=
+restore_offline_armed=
+restore_quarantine=
 daily_incoming=
 daily_auth=
 daily_status=
@@ -353,6 +355,14 @@ rollback_restore_database() {
 on_exit() {
   result=$?
   trap - EXIT
+  if [ -n "$restore_offline_armed" ]; then
+    fail_changed=partial
+    if stop_restore_api; then
+      printf 'OFFLINE RESTORE INCOMPLETE. API is stopped; available recovery evidence is retained at %s. Inspect this recovery before restarting.\n' "$restore_quarantine" >&2
+    else
+      printf 'OFFLINE RESTORE INCOMPLETE. API stop could not be confirmed; original evidence is retained at %s. Inspect service state immediately.\n' "$restore_quarantine" >&2
+    fi
+  fi
   [ -z "$restore_auth" ] || rm -f "$restore_auth"
   [ -z "$restore_incoming" ] || rm -f "$restore_incoming"
   [ -z "$restore_candidate" ] || rm -f "$restore_candidate"
@@ -687,12 +697,20 @@ restore_database() {
   current=$(release_from_link "$install_root/current")
   [ -n "$current" ] || die "no current release is installed"
   umask 077
+  exec 8>"$state_root/.restore.lock"
+  flock -n 8 || die "another database restore is already running"
+  trap 'exit 143' TERM
+  trap 'exit 130' INT
   restore_incoming=$(mktemp "$state_root/.restore-incoming-XXXXXX.sqlite3")
   cp "$backup" "$restore_incoming"
   # Verification can migrate an older schema. Only the installation candidate
   # may change; the operator's selected recovery file must remain untouched.
   "$current/bin/swarmctl" verify-database "$restore_incoming" >/dev/null || die "restore database failed integrity verification"
   database="$state_root/swarm.sqlite3"
+  if [ "${1:-}" = offline ]; then
+    restore_database_offline
+    return
+  fi
   restore_candidate=$(mktemp "$state_root/.restore-candidate-XXXXXX.sqlite3")
   restore_auth="$state_root/.restore-auth-$$"
   token=$(sed -n 's/^SWARM_OPERATOR_TOKEN=//p' "$config_root/swarm.env")
@@ -728,6 +746,42 @@ restore_database() {
     case "$candidate" in "$state_root"/backups/pre-restore-*.sqlite3) rm -f -- "$candidate";; *) die "restore backup cleanup path escapes managed state";; esac
   done
   printf 'Hive database restored and verified; terminal host and repositories were preserved. Previous database retained at %s\n' "$restore_saved"
+}
+
+restore_database_offline() {
+  # Explicit recovery from an unreadable Hive, not a fallback from failed curl.
+  # Never try to verify/migrate or automatically reinstall damaged evidence.
+  mkdir -p "$state_root/backups"
+  chmod 0700 "$state_root/backups"
+  quarantine_count=$(find "$state_root/backups" -maxdepth 1 -type d -name 'offline-restore-*' | wc -l)
+  [ "$quarantine_count" -lt 3 ] || die "three offline recovery archives are retained; inspect and move an archive before another restore"
+  for original in "$database" "$database-wal" "$database-shm"; do
+    [ ! -L "$original" ] || die "offline database files must not be symbolic links"
+    [ ! -e "$original" ] || [ -f "$original" ] || die "offline database paths must be regular files"
+  done
+  restore_quarantine=$(mktemp -d "$state_root/backups/offline-restore-XXXXXXXX")
+  if ! stop_restore_api; then
+    rmdir "$restore_quarantine"
+    die "API stop could not be confirmed; offline database was not replaced"
+  fi
+  restore_offline_armed=1
+  printf 'Original database recovery evidence: %s\n' "$restore_quarantine"
+  # These raw files are forensic evidence, not a verified SQLite backup.
+  for original in "$database" "$database-wal" "$database-shm"; do
+    [ ! -e "$original" ] || {
+      cp -- "$original" "$restore_quarantine/$(basename "$original")" || die "could not preserve offline database evidence; database was not replaced"
+      cmp -s -- "$original" "$restore_quarantine/$(basename "$original")" || die "offline evidence copy differs; database was not replaced"
+    }
+  done
+  printf 'Original database and any existing sidecars were copied before replacement.\n' > "$restore_quarantine/original-copy-complete.txt"
+  chmod 0600 "$restore_incoming"
+  mv -f "$restore_incoming" "$database"
+  restore_incoming=
+  rm -f "$database-wal" "$database-shm"
+  run_systemctl start swarm-api.service
+  wait_for_health || die "offline restored API failed health verification; damaged files will not be restored automatically"
+  restore_offline_armed=
+  printf 'Offline Hive restore verified; terminal host and repositories were preserved. Original unverified database evidence retained at %s\n' "$restore_quarantine"
 }
 trap on_exit EXIT
 
@@ -1893,6 +1947,7 @@ case "$action" in
   apply-release) apply_release;;
   uninstall) uninstall_product;;
   restore) restore_database;;
+  restore-offline) restore_database offline;;
   backup-daily) daily_database_backup;;
-  *) die "usage: swarm-package <install|update|migrate-protocol> RELEASE_DIR | apply-release | enable-development CHECKOUT | disable-development | reload-development | backup-daily | restore DATABASE | rollback | reconcile-host | reconcile-host-if-idle | reconcile-host-requested | uninstall";;
+  *) die "usage: swarm-package <install|update|migrate-protocol> RELEASE_DIR | apply-release | enable-development CHECKOUT | disable-development | reload-development | backup-daily | restore DATABASE | restore-offline DATABASE | rollback | reconcile-host | reconcile-host-if-idle | reconcile-host-requested | uninstall";;
 esac

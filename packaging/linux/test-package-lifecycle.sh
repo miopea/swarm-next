@@ -1027,6 +1027,68 @@ if grep -q 'swarm-terminal-host.service' "$HOME/systemctl.log"; then
   exit 1
 fi
 
+# Offline corruption recovery must not depend on an export from the broken API.
+: > "$HOME/systemctl.log"
+: > "$HOME/verify-fails"
+if "$package" restore-offline "$HOME/hive-backup.sqlite3"; then
+  echo "offline restore accepted an invalid input" >&2; exit 1
+fi
+[ ! -s "$HOME/systemctl.log" ]
+rm "$HOME/verify-fails"
+if flock "$SWARM_STATE_ROOT/.restore.lock" "$package" restore-offline "$HOME/hive-backup.sqlite3"; then
+  echo "concurrent offline restore was admitted" >&2; exit 1
+fi
+[ ! -s "$HOME/systemctl.log" ]
+printf 'damaged database\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
+printf 'damaged wal\n' > "$SWARM_STATE_ROOT/swarm.sqlite3-wal"
+printf 'damaged shm\n' > "$SWARM_STATE_ROOT/swarm.sqlite3-shm"
+: > "$HOME/restore-state-unreadable"
+if "$package" restore-offline "$HOME/hive-backup.sqlite3"; then
+  echo "offline restore proceeded without confirmed API stop" >&2; exit 1
+fi
+[ "$(cat "$SWARM_STATE_ROOT/swarm.sqlite3")" = 'damaged database' ]
+[ "$(cat "$SWARM_STATE_ROOT/swarm.sqlite3-wal")" = 'damaged wal' ]
+rm "$HOME/restore-state-unreadable"
+: > "$HOME/restore-download-partial"
+: > "$HOME/restore-migration"
+: > "$HOME/systemctl.log"
+"$package" restore-offline "$HOME/hive-backup.sqlite3"
+[ "$(cat "$SWARM_STATE_ROOT/swarm.sqlite3")" = migrated-restore ]
+[ "$(cat "$HOME/hive-backup.sqlite3")" = restored-database ]
+[ ! -e "$SWARM_STATE_ROOT/swarm.sqlite3-wal" ]
+[ ! -e "$SWARM_STATE_ROOT/swarm.sqlite3-shm" ]
+quarantine=$(find "$SWARM_STATE_ROOT/backups" -maxdepth 1 -type d -name 'offline-restore-*')
+[ "$(cat "$quarantine/swarm.sqlite3")" = 'damaged database' ]
+[ "$(cat "$quarantine/swarm.sqlite3-wal")" = 'damaged wal' ]
+[ "$(cat "$quarantine/swarm.sqlite3-shm")" = 'damaged shm' ]
+[ "$(stat -c %a "$quarantine")" = 700 ]
+[ "$(stat -c %a "$quarantine/swarm.sqlite3")" = 600 ]
+[ -f "$quarantine/original-copy-complete.txt" ]
+if grep -q 'swarm-terminal-host.service' "$HOME/systemctl.log"; then
+  echo "offline restore touched the terminal host" >&2; exit 1
+fi
+rm "$HOME/restore-download-partial" "$HOME/restore-migration"
+# Failed startup must leave the candidate stopped, not reinstall corrupt files.
+printf 'another damaged database\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
+: > "$HOME/restore-health-fails"
+offline_report=$("$package" restore-offline "$HOME/hive-backup.sqlite3" 2>&1 && exit 1 || true)
+case "$offline_report" in *"OFFLINE RESTORE INCOMPLETE. API is stopped"*) :;; *) echo "$offline_report" >&2; exit 1;; esac
+[ ! -f "$HOME/unit-state/swarm-api.service" ]
+[ "$(cat "$SWARM_STATE_ROOT/swarm.sqlite3")" = restored-database ]
+[ "$(find "$SWARM_STATE_ROOT/backups" -maxdepth 1 -type d -name 'offline-restore-*' | wc -l)" -eq 2 ]
+# If even the failure stop is refused, say so rather than claim it stopped.
+: > "$HOME/restore-health-fails"
+: > "$HOME/restore-block-rollback"
+offline_report=$("$package" restore-offline "$HOME/hive-backup.sqlite3" 2>&1 && exit 1 || true)
+case "$offline_report" in *"API stop could not be confirmed; original evidence"*) :;; *) echo "$offline_report" >&2; exit 1;; esac
+rm "$HOME/restore-block-rollback" "$HOME/restore-stop-refused"
+: > "$HOME/systemctl.log"
+if "$package" restore-offline "$HOME/hive-backup.sqlite3"; then
+  echo "offline restore exceeded archive bound" >&2; exit 1
+fi
+[ ! -s "$HOME/systemctl.log" ]
+[ "$(find "$SWARM_STATE_ROOT/backups" -maxdepth 1 -type d -name 'offline-restore-*' | wc -l)" -eq 3 ]
+
 printf 'keep\n' > "$SWARM_STATE_ROOT/operator-data"
 if SWARM_INSTALL_ROOT="$HOME/.local/lib/not-swarm" "$package" uninstall; then
   echo "unsafe uninstall root unexpectedly succeeded" >&2
