@@ -8,6 +8,35 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Ten retained views: bounded browser baseline (September 5)
+
+On `034f24db`, CDP Performance counters were enabled only for bounded samples
+and disabled afterwards. Diagnostics idle: 16.26 seconds, 39.47 ms task time,
+8.19 ms script time, one layout, 716 DOM nodes and 24.68→25.27 MB JS heap.
+Selected Contract idle: 44.60 seconds, 155.39 ms task time, 36.51 ms script,
+three layouts, 1,397→1,395 nodes and 27.17→29.92 MB JS heap.
+
+The separate Edge tab then visited Platform, Nexus, Public Website, Real Truth,
+Member Services, D365 Solutions, RCG Networks, BFG Watchfaces and Swarm Dogfood,
+returning to Contract without terminal input or task changes. Across the 72.88
+second navigation interval: 1.787 seconds task time, 0.771 seconds script time,
+102 layouts and 28.77→38.39 MB heap. Subsequent 52.11-second idle: 203.38 ms task
+time, 62.06 ms script, six layouts, 2,258→2,261 nodes and 38.39→40.83 MB heap.
+Listener counts rose during samples, but these short ungc'd snapshots do not prove
+a retained listener leak or a memory plateau. CDP counters are not Edge Task
+Manager's CPU percentage or total browser/GPU memory.
+
+Rendered Dogfood UI confirmed 10 retained / 0 attached / 10 inactive / 0 evicted
+after entering Settings, with the five-renderer experiment still off. It showed
+10 completed connection samples: mean 319 ms, max 415 ms; access mean 59 ms,
+socket mean 173 ms, initial state mean 87 ms. These are completed phase attempts,
+not a matched p95 distribution. Event-entry latency simultaneously had 233 samples,
+mean 4,700 ms and max 18,448 ms; only two long-task samples (max 106 ms) were
+recorded. Do not equate those event entries to separate slow actions or attribute
+the discrepancy to a specific component without further evidence. Foreground/
+presentation and longer aged-session evidence remain necessary before declaring
+the original sluggishness fixed or adopting renderer eviction by default.
+
 ### Accurate event and interaction diagnostics (September 5)
 
 Commit `034f24db` preserves the historical `interaction` wire field's event-entry
