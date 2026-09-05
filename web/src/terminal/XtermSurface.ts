@@ -94,6 +94,7 @@ export class XtermSurface implements TerminalSurface {
   #geometryPublicationQueued = false;
   #geometryPublicationForced = false;
   #disposed = false;
+  readonly #fitLifetime = new AbortController();
   readonly #search = new SearchAddon();
   #findRequested?: () => void;
   readonly #renderableListeners = new Set<(renderable: boolean) => void>();
@@ -331,12 +332,15 @@ export class XtermSurface implements TerminalSurface {
       // fonts on the page. A failed web font uses the configured fallbacks;
       // stable measured frames below still govern geometry readiness.
       try {
-        await document.fonts?.load(`${this.#terminal.options.fontSize}px ${this.#terminal.options.fontFamily}`, "W");
+        const loading = document.fonts?.load(`${this.#terminal.options.fontSize}px ${this.#terminal.options.fontFamily}`, "W");
+        if (loading) await untilDisposed(loading, this.#fitLifetime.signal);
+        else await Promise.resolve();
       } catch { /* Font loading failure must not prevent fallback rendering. */ }
+      if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
       let previous: { rows: number; columns: number } | undefined;
       let stableFrames = 0;
       for (let frame = 0; frame < MAX_FIT_FRAMES; frame += 1) {
-        await nextAnimationFrame();
+        await nextAnimationFrame(this.#fitLifetime.signal);
         if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
         const dimensions = this.#fit.proposeDimensions();
         const usable = usableDimensions(dimensions);
@@ -452,6 +456,7 @@ export class XtermSurface implements TerminalSurface {
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
+    this.#fitLifetime.abort();
     this.#cancelScheduledFit();
     this.#cancelScheduledRedraw();
     this.#themeObserver?.disconnect();
@@ -859,6 +864,36 @@ function usableDimensions(dimensions: { rows: number; cols: number } | undefined
   return { rows, columns };
 }
 
-function nextAnimationFrame(): Promise<void> {
-  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+function untilDisposed<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new Error("Terminal renderer disposed"));
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      signal.removeEventListener("abort", abort);
+      reject(new Error("Terminal renderer disposed"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    pending.then((value) => {
+      signal.removeEventListener("abort", abort);
+      resolve(value);
+    }, (error: unknown) => {
+      signal.removeEventListener("abort", abort);
+      reject(error);
+    });
+  });
+}
+
+function nextAnimationFrame(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new Error("Terminal renderer disposed"));
+  return new Promise((resolve, reject) => {
+    const frame = requestAnimationFrame(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    });
+    const abort = () => {
+      cancelAnimationFrame(frame);
+      signal.removeEventListener("abort", abort);
+      reject(new Error("Terminal renderer disposed"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+  });
 }

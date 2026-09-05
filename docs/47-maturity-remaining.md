@@ -8,6 +8,20 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Disposed renderer fit cancellation (September 5)
+
+Disposal previously checked only after font/frame waits resumed. Two regressions
+proved the fit promise remained pending when fonts or animation frames did not
+resume. Renderer lifetime now aborts its font wait and cancels/rejects pending
+fit frames. Browser-owned font loading itself is not canceled; late font/frame
+completion cannot resize the disposed surface. Ordinary hiding/detaching retains
+its existing behavior and does not abort the worker or renderer.
+
+All 70 surface/controller tests passed; the strengthened late-completion tests
+and TypeScript check passed afterward. No browser stall root cause or broad
+hidden-view recovery closure is claimed. This is local lifecycle cleanup, not a
+deployment; waiting on fonts in a live renderer remains separate from disposal.
+
 ### Terminal-specific font readiness (September 5)
 
 The fit path awaited `document.fonts.ready`, coupling terminal startup to all

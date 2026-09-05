@@ -356,6 +356,40 @@ test.each([false, true])("fit waits only for terminal fonts and tolerates load f
   }
 });
 
+test.each(["font", "frame"])("disposal settles a fit waiting for %s without resuming layout", async (stage) => {
+  const previousFonts = Object.getOwnPropertyDescriptor(document, "fonts");
+  let releaseFont: () => void = () => {};
+  const pendingFont = new Promise<never[]>((resolve) => { releaseFont = () => resolve([]); });
+  Object.defineProperty(document, "fonts", { configurable: true, value: {
+    load: () => stage === "font" ? pendingFont : Promise.resolve([]),
+  } });
+  const cancel = vi.fn();
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.push(callback); return 42; });
+  vi.stubGlobal("cancelAnimationFrame", cancel);
+  const surface = new XtermSurface();
+  xterm.resize.mockClear();
+  let outcome = "pending";
+  const fitting = surface.fit().then(() => { outcome = "resolved"; }, () => { outcome = "rejected"; });
+  try {
+    for (let step = 0; step < 8; step++) await Promise.resolve();
+    surface.dispose();
+    for (let step = 0; step < 8; step++) await Promise.resolve();
+    expect(outcome).toBe("rejected");
+    await fitting;
+    if (stage === "frame") expect(cancel).toHaveBeenCalledWith(42);
+    releaseFont();
+    frames.shift()?.(16);
+    for (let step = 0; step < 8; step++) await Promise.resolve();
+    expect(frames).toHaveLength(0);
+    expect(xterm.resize).not.toHaveBeenCalled();
+  } finally {
+    surface.dispose();
+    if (previousFonts) Object.defineProperty(document, "fonts", previousFonts);
+    else Reflect.deleteProperty(document, "fonts");
+  }
+});
+
 test("authoritative fit waits until xterm can propose real dimensions", async () => {
   const frames: FrameRequestCallback[] = [];
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
