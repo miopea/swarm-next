@@ -8,6 +8,34 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Accurate event and interaction diagnostics (September 5)
+
+Commit `034f24db` preserves the historical `interaction` wire field's event-entry
+meaning and labels it Event-entry latency in current and saved Dogfood summaries.
+Local diagnostics now separately groups positive native interaction IDs across
+callbacks, retaining up to 200 IDs observed in the last minute. It reports the
+slowest retained entry's input delay, handler processing and estimated presentation
+time, with threshold/coverage limitations. No ID, event name, target or input is
+reported or persisted; hourly data is not silently reinterpreted. No new timer,
+backend schema or worker lifecycle change is introduced.
+
+TypeScript and all 1,175 tests across 132 files passed. New tests cover grouping,
+preserving the worst entry's paired phases, malformed/unknown IDs, bounded volume,
+expiry, clock reversal, quantized durations, numeric-only reporting and capture
+owner restart. Live development deployment and phase-report acceptance are pending.
+This improves causal evidence; it is not a claim that browser sluggishness is fixed.
+
+Live deployment passed on `1.5.0-dev-034f24db876d-20260905191154-2487493`, with
+health ok, no degraded subsystem, engine PID 2456733 unchanged and eleven awake
+workers in Edge. The dedicated tab was reloaded; the expanded diagnostic layout
+and displayed report were inspected. At 19:14:20 UTC, thirteen event entries did
+not establish a valid grouped interaction. After keyboard activation of Preview
+report, the 19:14:45 UTC report had one grouped interaction: 264 ms duration,
+0.30 ms input delay, 0.20 ms processing, 263.50 ms estimated presentation.
+These are observed phases, not attribution to Swarm, Edge, an extension or the
+server. No native timing entries or identifiers were exported. Positive native
+grouping is live-verified; broader aged-session and real-device acceptance remain.
+
 ### Idle baseline and Event Timing interpretation (September 5, 19:02 UTC)
 
 On build `906a4d42`, eleven workers were loaded. Five one-second vmstat intervals
