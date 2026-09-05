@@ -54,6 +54,37 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Evidence from the September 4–5 demo run
 
+### Measured task projection scans
+
+The live schema-137 database has 832 tasks and 6,940 activity rows, with no
+task-activity index. EXPLAIN shows a correlated full activity scan per task,
+plus scans for pending decisions and outcome delivery. On a disposable copy
+of the verified backup (6,936 activity rows), the unchanged worker-evidence
+lookup returned 769 before/after: three baseline runs took 1.200–1.219 seconds
+and three indexed runs took 2 ms. The decision/outcome probes returned the
+same 3/9 totals and fell from 137 ms to 1 ms. These are isolated query timings,
+not whole-application speedups. `benchmark-task-history.sh` reproduces them
+without indexing or modifying the live Hive.
+
+Schema 138 adds task/sequence history, pending-decision/task and task/state/
+sequence outcome indexes. The file-reopen test preserves activity and checks
+that the lookup plans use each index without temporary sorting. All 540 Linux
+persistence tests and strict API lint passed. Deployment is pending; no
+blocker-text fields are added in this slice.
+Before deployment, three local `/api/v1/tasks` calls took 1.817797, 1.846777 and
+1.838573 seconds. Repeat the same route after deployment before claiming its
+operator-facing benefit.
+
+The completed 600-second run `20260905T055555Z-live` collected 60 samples with
+four initial sessions, stable API/host PIDs and no drop counter increase. API
+memory ranged 19,345,408–57,544,704 bytes; the host cgroup (including workers)
+ranged 1,230,163,968–1,306,046,464 bytes. API CPU averaged 2.37% of one core,
+with a maximum interval average of 55.60%; host-cgroup values were 7.21% and
+16.33%. This includes the three explicit API timing requests and overlaps the
+separate SQLite-copy benchmark; it is not an undisturbed idle baseline.
+The private CSV is `~/.local/state/swarm-next/soak/20260905T055555Z-live-samples.csv`.
+This does not close representative 10–15-worker, aged-browser or mobile soak.
+
 ### Browser session retention and detached Queues
 
 Successful session snapshots now retire inactive browser controllers for ended

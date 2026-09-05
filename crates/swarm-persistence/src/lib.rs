@@ -234,7 +234,8 @@ const OPS_TICKETS_SCHEMA_VERSION: i64 = 135;
 // Repair that published collision explicitly rather than trusting user_version.
 const TERMINAL_CONTROL_PROJECTION_REPAIR_SCHEMA_VERSION: i64 = 136;
 const DECISION_WITHDRAWAL_SCHEMA_VERSION: i64 = 137;
-const CURRENT_SCHEMA_VERSION: i64 = DECISION_WITHDRAWAL_SCHEMA_VERSION;
+const TASK_HISTORY_LOOKUP_SCHEMA_VERSION: i64 = 138;
+const CURRENT_SCHEMA_VERSION: i64 = TASK_HISTORY_LOOKUP_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -3808,6 +3809,19 @@ fn migrate_ops_intake_schema_steps(
     if schema_version < DECISION_WITHDRAWAL_SCHEMA_VERSION {
         decisions::migrate_decision_withdrawal(transaction)?;
     }
+    if schema_version < TASK_HISTORY_LOOKUP_SCHEMA_VERSION {
+        // Both the task projection's worker-evidence probe and ordered history
+        // reads must search one task, not rescan the whole Hive for every row.
+        transaction.execute_batch(
+            "CREATE INDEX IF NOT EXISTS task_activity_by_task_sequence
+             ON task_activity(task_id, sequence);
+             CREATE INDEX IF NOT EXISTS decision_requests_pending_by_task
+             ON decision_requests(task_id) WHERE state = 'pending';
+             CREATE INDEX IF NOT EXISTS task_outcomes_by_task_state
+             ON task_outcome_deliveries(task_id, target_state, activity_sequence DESC);",
+        )?;
+        transaction.pragma_update(None, "user_version", TASK_HISTORY_LOOKUP_SCHEMA_VERSION)?;
+    }
     Ok(())
 }
 
@@ -6009,6 +6023,48 @@ mod tests {
         assert_eq!(activity.events[1].to_state, Some(TaskState::Ready));
         assert_eq!(activity.events[2].kind, TaskActivityKind::Assigned);
         assert_eq!(activity.events[5].to_state, Some(TaskState::Completed));
+    }
+
+    #[test]
+    fn history_lookup_index_migrates_without_changing_rows_and_serves_both_reads() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("history.sqlite3");
+        let store = TaskStore::open(&path).unwrap();
+        let task = store.create_task("Indexed history", "/workspace").unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        let original = store.list_task_activity(task.id, 100).unwrap();
+        store.connection().unwrap().execute_batch(
+            "DROP INDEX task_activity_by_task_sequence;
+             DROP INDEX decision_requests_pending_by_task;
+             DROP INDEX task_outcomes_by_task_state;
+             PRAGMA user_version = 137;",
+        ).unwrap();
+        drop(store);
+        let migrated = TaskStore::open(path).unwrap();
+        assert_eq!(migrated.list_task_activity(task.id, 100).unwrap(), original);
+        let connection = migrated.connection().unwrap();
+        for query in [
+            "EXPLAIN QUERY PLAN SELECT 1 FROM task_activity WHERE task_id = ?1 AND actor_kind = 'worker'",
+            "EXPLAIN QUERY PLAN SELECT sequence, note FROM task_activity WHERE task_id = ?1 ORDER BY sequence DESC LIMIT 100",
+        ] {
+            let mut statement = connection.prepare(query).unwrap();
+            let plan = statement.query_map([task.id.to_string()], |row| row.get::<_, String>(3))
+                .unwrap().collect::<Result<Vec<_>, _>>().unwrap().join("\n");
+            assert!(plan.contains("task_activity_by_task_sequence"), "{plan}");
+            assert!(!plan.contains("TEMP B-TREE"), "{plan}");
+        }
+        for (query, index) in [
+            ("EXPLAIN QUERY PLAN SELECT 1 FROM decision_requests WHERE task_id = ?1 AND state = 'pending'", "decision_requests_pending_by_task"),
+            ("EXPLAIN QUERY PLAN SELECT state FROM task_outcome_deliveries WHERE task_id = ?1 AND target_state = 'review' ORDER BY activity_sequence DESC LIMIT 1", "task_outcomes_by_task_state"),
+        ] {
+            let mut statement = connection.prepare(query).unwrap();
+            let plan = statement.query_map([task.id.to_string()], |row| row.get::<_, String>(3))
+                .unwrap().collect::<Result<Vec<_>, _>>().unwrap().join("\n");
+            assert!(plan.contains(index), "{plan}");
+            assert!(!plan.contains("TEMP B-TREE"), "{plan}");
+        }
+        drop(connection);
+        migrated.verify_integrity().unwrap();
     }
 
     /// THE REFUSAL MUST NAME THE TASK HOLDING THE SLOT.
@@ -8834,6 +8890,15 @@ mod tests {
             undo_sql: include_str!("fixtures/undo-decision-withdrawal.sql"),
             probe_sql: "SELECT COUNT(*) = 3 FROM pragma_table_info('decision_requests')
                 WHERE name IN ('withdrawn_at','withdrawn_by_worker_id','withdrawal_reason')",
+        },
+        SchemaStep {
+            table: "task_activity",
+            artifact: "task_activity_by_task_sequence",
+            undo_sql: "DROP INDEX task_activity_by_task_sequence;
+                DROP INDEX decision_requests_pending_by_task;
+                DROP INDEX task_outcomes_by_task_state",
+            probe_sql: "SELECT COUNT(*) = 3 FROM sqlite_master WHERE type = 'index'
+                AND name IN ('task_activity_by_task_sequence', 'decision_requests_pending_by_task', 'task_outcomes_by_task_state')",
         },
     ];
 
