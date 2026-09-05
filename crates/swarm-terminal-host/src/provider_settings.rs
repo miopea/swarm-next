@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
-    os::unix::fs::OpenOptionsExt,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
@@ -70,6 +70,13 @@ pub(super) fn startup_settings(
     mcp_config: &Path,
     executable: &Path,
 ) -> Result<PathBuf, String> {
+    // A running process can outlive its unlinked binary. Never publish the
+    // resulting `current_exe()` path (including a Linux " (deleted)" suffix)
+    // as a callback command or silently substitute another release's helper.
+    let helper = fs::metadata(executable).map_err(|_| "helper executable unavailable")?;
+    if !executable.is_absolute() || !helper.is_file() || helper.permissions().mode() & 0o111 == 0 {
+        return Err("helper executable unavailable".into());
+    }
     let mut document = if let Some(base) = base {
         read_settings(base)?
     } else {
@@ -130,7 +137,8 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
         let mcp = root.path().join("worker.json");
-        let target = startup_settings(None, &mcp, Path::new("/host")).unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let target = startup_settings(None, &mcp, &executable).unwrap();
         let before = fs::read(&target).unwrap();
         assert_eq!(
             fs::metadata(&target).unwrap().permissions().mode() & 0o777,
@@ -138,7 +146,7 @@ mod tests {
         );
         let invalid = root.path().join("bad.json");
         fs::write(&invalid, "{broken").unwrap();
-        assert!(startup_settings(Some(&invalid), &mcp, Path::new("/host")).is_err());
+        assert!(startup_settings(Some(&invalid), &mcp, &executable).is_err());
         assert_eq!(fs::read(&target).unwrap(), before);
         assert_eq!(fs::read_to_string(invalid).unwrap(), "{broken");
     }
@@ -160,7 +168,34 @@ mod tests {
         )
         .unwrap();
         let mcp = root.path().join("worker.json");
-        assert!(startup_settings(Some(&base), &mcp, Path::new("/host")).is_err());
+        assert!(startup_settings(Some(&base), &mcp, &std::env::current_exe().unwrap()).is_err());
         assert!(!mcp.with_extension("startup.settings.json").exists());
+    }
+
+    #[test]
+    fn unavailable_helper_cannot_replace_an_existing_overlay() {
+        let root = tempfile::tempdir().unwrap();
+        let mcp = root.path().join("worker.json");
+        let executable = std::env::current_exe().unwrap();
+        let target = startup_settings(None, &mcp, &executable).unwrap();
+        let original = fs::read(&target).unwrap();
+        let non_executable = root.path().join("host");
+        fs::write(&non_executable, "not executable").unwrap();
+        fs::set_permissions(&non_executable, fs::Permissions::from_mode(0o600)).unwrap();
+        for invalid in [
+            root.path().join("missing"),
+            root.path().join("host (deleted)"),
+            root.path().to_path_buf(),
+            non_executable,
+            PathBuf::from("relative-host"),
+        ] {
+            assert_eq!(
+                startup_settings(None, &mcp, &invalid).unwrap_err(),
+                "helper executable unavailable"
+            );
+            assert_eq!(fs::read(&target).unwrap(), original);
+        }
+        // A later valid launch can regenerate its own overlay.
+        assert_eq!(startup_settings(None, &mcp, &executable).unwrap(), target);
     }
 }

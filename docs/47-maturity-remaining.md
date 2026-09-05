@@ -27,6 +27,15 @@ completing. `test-package-lifecycle.sh` also passed. This repair is not yet live
 and does not repair the old process's deleted executable mapping. The Contract
 demo's new launch still lacks a provider callback; REC-01 remains open.
 
+Retention repair deployed as
+`1.5.0-dev-cfd31e1b4d81-20260905165830-2413633`: managed reload finished successfully,
+health was ok with no degraded subsystems, all eleven session IDs were unchanged,
+engine PID remained 2323268, and the restored original helper remained executable.
+Main push bypassed four expected checks; no release was cut. Engine overlay
+creation now additionally rejects missing, non-executable, relative or directory
+helper paths without overwriting an existing overlay. All 26 isolated engine
+library tests passed; that engine guard is not yet deployed.
+
 ### Engine update and D365 conversation regression (September 5)
 
 Development revision `17c46d45b23e` deployed without cutting a release. App/API

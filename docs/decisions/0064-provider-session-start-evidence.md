@@ -87,6 +87,12 @@ can reclaim obsolete releases once running identity is confirmed; no retry loop
 or background task is added. This does not repair an already-deleted executable
 mapping or establish conversation intent from a successful exact resume.
 
+Overlay creation also requires the engine's own helper path to be absolute and
+name an existing executable regular file. A deleted mapping or invalid path
+cannot publish a broken command or substitute another release's binary. Failure
+retains the existing base-settings fallback and unconfirmed recovery semantics;
+an old overlay is not selected. A later valid launch can regenerate the overlay.
+
 Interactive selection uses a separate bounded state machine. Claude's documented
 SessionEnd(reason=resume) names the conversation being left by interactive /resume;
 the next SessionStart(source=resume) names the resumed one. A matching end arms one
