@@ -520,7 +520,11 @@ export const SURFACES: Surface[] = [
     id: "queues-demo",
     title: "Queues (publishable)",
     why: "invented task, blocked-age and briefing evidence; no operator data",
-    render: () => <QueuesView tasks={demoTasks} workers={demoWorkers} blockedWaits={demoBlocked} heldBriefings={demoBriefings} onOpenTask={() => undefined} />,
+    render: () => <QueuesView tasks={demoTasks} workers={demoWorkers} blockedWaits={demoBlocked} heldBriefings={[
+      ...demoBriefings,
+      { task_id: demoTasks[2].id, title: demoTasks[2].title, worker_id: demoTasks[2].assigned_worker_id!,
+        worker_name: "Orchard API", queued_at: now - 120, reason: "waiting_its_turn", blocked_by: "Verify the export schema" },
+    ]} onOpenTask={() => undefined} />,
   },
   {
     id: "app",

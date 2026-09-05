@@ -55,6 +55,16 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Evidence from the September 4–5 demo run
 
+### One queue row per known held task
+
+Known held briefings now show their recorded reason and queued age inside the
+task's existing owner row instead of repeating the task in a second list.
+Coordinator-only briefings remain inspectable; confirmed delivery removes the
+old reason even when a stale coordinator snapshot remains. The dedicated Edge
+fixture verified the combined row. Thirty-two queue/briefing tests and the
+58-test App/queue/fixture gate passed, along with TypeScript checking. This is
+presentation deduplication, not completion of dependency and recovery routing.
+
 ### Runtime database containment
 
 ADR 0075 adds a shared persistence latch after a confirmed integrity failure.

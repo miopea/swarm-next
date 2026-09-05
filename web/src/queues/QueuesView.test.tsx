@@ -13,6 +13,23 @@ function task(overrides: Partial<Task>): Task {
 }
 
 describe("QueuesView", () => {
+  test("a held task appears once with its recorded reason and clears that reason after delivery", () => {
+    const ready = task({ state: "ready", next_move_owner: "worker", dispatch_state: "queued" });
+    const props = { workers: [], onOpenTask: vi.fn(), now: 120_000, heldBriefings: [{
+      task_id: ready.id, title: ready.title, worker_id: "worker", worker_name: "Orchard",
+      reason: "waiting_its_turn", blocked_by: "Earlier task", queued_at: 60,
+    }] };
+    const { rerender } = render(<QueuesView {...props} tasks={[ready]} />);
+    expect(screen.getAllByText(ready.title)).toHaveLength(1);
+    expect(screen.getByText("Briefing held: behind Earlier task · queued under a minute")).toBeVisible();
+    expect(screen.queryByText("One briefing is queued")).not.toBeInTheDocument();
+    rerender(<QueuesView {...props} tasks={[{ ...ready, dispatch_state: "delivered" }]} />);
+    expect(screen.queryByText(/Briefing held:/)).not.toBeInTheDocument();
+    expect(screen.getAllByText(ready.title)).toHaveLength(1);
+    rerender(<QueuesView {...props} tasks={[]} />);
+    expect(screen.getByText("One briefing is queued")).toBeVisible();
+    expect(screen.getAllByText(ready.title)).toHaveLength(1);
+  });
   test("shows the recorded blocker and removes it when work resumes", () => {
     const blocked = task({ state: "blocked", next_move_owner: "blocked", blocked_note: "Waiting for the API contract" });
     const props = { workers: [], onOpenTask: vi.fn() };

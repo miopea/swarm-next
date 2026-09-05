@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import HeldBriefingList from "../orchestration/HeldBriefingList";
+import HeldBriefingList, { holdReason, waitedFor } from "../orchestration/HeldBriefingList";
 import type { BlockedEscalation, HeldBriefing, HeldDelivery } from "../api";
 import DeliveryWaitList from "./DeliveryWaitList";
 import type { NextMoveOwner, Task } from "../api/tasks";
@@ -140,6 +140,9 @@ export default function QueuesView({
 
   const total = groups.reduce((sum, group) => sum + group.tasks.length, 0);
   const waits = new Map(blockedWaits.map((wait) => [wait.task_id, wait]));
+  const briefings = new Map(heldBriefings.map((briefing) => [briefing.task_id, briefing]));
+  const visibleTaskIds = new Set(waitingTasks.map((task) => task.id));
+  const extraBriefings = heldBriefings.filter((briefing) => !visibleTaskIds.has(briefing.task_id));
 
   if (total === 0 && extraWaits.length === 0 && activeWork.length === 0) {
     return (
@@ -169,7 +172,9 @@ export default function QueuesView({
               )}
             </header>
             <ul>
-              {group.tasks.map((task) => (
+              {group.tasks.map((task) => {
+                const briefing = briefings.get(task.id);
+                return (
                 <li key={task.id}>
                   <button type="button" onClick={() => onOpenTask(task.id)}>
                     <span className="queue-task-title">{task.title}</span>
@@ -181,6 +186,7 @@ export default function QueuesView({
                     </span>
                     {task.state === "blocked" && waits.has(task.id) && <span className="queue-task-meta">Blocked for {ageLabel(Math.max(0, Math.floor(waits.get(task.id)!.blocked_for_seconds / 3600)))} · Queen coordinates the next move</span>}
                   </button>
+                  {briefing && <p className="queue-task-meta">Briefing held: {holdReason(briefing)} · queued {waitedFor(now / 1000 - briefing.queued_at)}</p>}
                   {task.state === "blocked" && task.blocked_note?.trim() && (
                     task.blocked_note.length <= 240
                       ? <p className="queue-task-meta">Recorded when blocked: {task.blocked_note}</p>
@@ -198,7 +204,8 @@ export default function QueuesView({
                         </details>
                   )}
                 </li>
-              ))}
+                );
+              })}
             </ul>
           </article>
         );
@@ -212,7 +219,7 @@ export default function QueuesView({
           <span className="queue-task-meta">{wait.worker_name} · blocked {ageLabel(Math.max(0, Math.floor(wait.blocked_for_seconds / 3600)))}</span>
         </button></li>)}</ul>
       </article>}
-      <HeldBriefingList briefings={heldBriefings} onOpenTask={onOpenTask} />
+      <HeldBriefingList briefings={extraBriefings} onOpenTask={onOpenTask} />
       {activeWork.length > 0 && <details className="queue-group queue-active">
         <summary>Marked active <span className="queue-count">{activeWork.length}</span></summary>
         <p className="queue-meaning">Recorded task state, not proof of current provider activity. Delivery exceptions remain visible above.</p>

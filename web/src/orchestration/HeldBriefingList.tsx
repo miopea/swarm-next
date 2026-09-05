@@ -112,7 +112,7 @@ function groupByWorker(briefings: HeldBriefing[]): { workerId: string; workerNam
  * persistence layer after sixteen briefings reported it at once and named
  * nothing to go and look at. When the earlier task is known, it is named.
  */
-function holdReason(briefing: HeldBriefing): string {
+export function holdReason(briefing: HeldBriefing): string {
   switch (briefing.reason) {
     case "experimental_during_night_watch":
       return "experimental provider — queued until Night Watch ends";
@@ -128,7 +128,7 @@ function holdReason(briefing: HeldBriefing): string {
 }
 
 /** Coarse on purpose: the question is hours-or-minutes, not the exact figure. */
-function waitedFor(seconds: number): string {
+export function waitedFor(seconds: number): string {
   if (seconds < 90) return "under a minute";
   const minutes = Math.round(seconds / 60);
   if (minutes < 60) return `${minutes} minutes`;
