@@ -8,6 +8,28 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Authenticated ten-worker switching baseline (September 5)
+
+On unchanged live `6ea9c93f`, the separate Edge tab traversed ten already-awake
+workers twice, returning to RCG Networks each time. Queen and sleeping workers
+were excluded; no terminal input, Resume Here, deployment or reload. Each worker
+heading was verified after navigation; this is not a measured input-ready or
+paint-complete latency. Automatic foreground attachment behavior remains enabled.
+
+First route: 50.524 seconds, 3.028% main-thread task time, 643.140 ms script,
+87.945 ms layout, 88 layouts. Heap 29,716,856 to 38,979,852 bytes; nodes
+1,872 to 2,762; listeners 586 to 1,026. Second route: 43.868 seconds, 2.183%
+task time, 293.030 ms script, 74.751 ms layout, 60 layouts. Heap 31,830,200
+to 51,605,084 bytes; nodes 2,755 to 3,509; listeners 929 to 2,081.
+After at least 30 seconds without switching: heap 42,469,016 bytes, nodes 3,494,
+listeners 2,754. No forced GC. Different starting gauges show natural activity
+between intervals; do not subtract across them as one uninterrupted CPU window.
+
+The reduced second-pass task time does not close the degradation report. Listener
+growth and non-settled heap warrant longer observation and allocation/lifecycle
+inspection; these short samples alone cannot establish a leak. Performance
+collection was disabled and the same tab preserved for continued measurement.
+
 ### Authenticated fresh passive-browser baseline (September 5)
 
 The separate Edge test tab became authenticated and showed 11 active workers on
