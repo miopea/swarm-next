@@ -127,6 +127,13 @@ manifest, or any log.
 
 ### 7. Installing is a request, not a call
 
+September 5 maturity correction: the engine reconciliation service must also
+survive replacement of the engine it manages. It uses `Wants` and `After`, not
+`Requires`, `BindsTo` or `PartOf` on the terminal host. Those stop-propagating
+dependencies terminated the updater during its own restart on the development
+Hive, bypassing its post-restart verification/rollback. The package still owns
+host-readiness checks and failure recovery; this does not weaken update admission.
+
 The API cannot install a release, because installing restarts `swarm-api`
 — the process making the call would be killed mid-command and the result
 reported to nobody. This is the same shape as the migration script, which runs

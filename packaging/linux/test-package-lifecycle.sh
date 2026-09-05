@@ -284,6 +284,11 @@ grep -q "$SWARM_INSTALL_ROOT/current/bin/swarm-api" "$SWARM_SYSTEMD_USER_ROOT/sw
 grep -q "$SWARM_INSTALL_ROOT/host-current/bin/swarm-terminal-host" "$SWARM_SYSTEMD_USER_ROOT/swarm-terminal-host.service"
 grep -q "$SWARM_INSTALL_ROOT/current/swarm-package reconcile-host-requested" "$SWARM_SYSTEMD_USER_ROOT/swarm-host-reconcile.service"
 grep -q "ReadWritePaths=$SWARM_STATE_ROOT" "$SWARM_SYSTEMD_USER_ROOT/swarm-host-reconcile.service"
+grep -q '^Wants=swarm-terminal-host.service$' "$SWARM_SYSTEMD_USER_ROOT/swarm-host-reconcile.service"
+if grep -Eq '^(Requires|BindsTo|PartOf)=.*swarm-terminal-host.service' "$SWARM_SYSTEMD_USER_ROOT/swarm-host-reconcile.service"; then
+  echo "Engine updater must survive the host restart to verify health or roll back" >&2
+  exit 1
+fi
 grep -q "PathChanged=$SWARM_STATE_ROOT/worker-engine-maintenance.request" "$SWARM_SYSTEMD_USER_ROOT/swarm-host-reconcile.path"
 tr -d '\r' < "$SWARM_SYSTEMD_USER_ROOT/swarm-host-reconcile.timer" | grep -q '^OnUnitActiveSec=2min$'
 grep -q 'swarm-host-reconcile.path' "$SWARM_SYSTEMD_USER_ROOT/swarm.target"

@@ -8,6 +8,25 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Engine updater survives its own restart (September 5)
+
+The f1dfb661 app deployment completed healthy, but the subsequent automatic
+host reconciliation at 23:16:40 UTC was killed by systemd during its own host
+restart. The updater had Requires=swarm-terminal-host.service. All 13 workers
+were subsequently recovered, but that is not uninterrupted service or proof
+that the terminated updater ran its verification/rollback path.
+
+The unit now uses Wants plus the existing After ordering. Package lifecycle
+regressions reject stop-propagating host dependencies on this updater; the full
+isolated Linux package lifecycle smoke passed. An isolated real user-systemd
+experiment reproduced Requires killing/restarting the updater until start-limit;
+the first Wants check reused that latched host and failed. After stopping and
+resetting those temporary units, a fresh independent Wants fixture restarted its
+host, reached the post-restart active check and exited successfully. Temporary
+test hosts were stopped. No real worker lifecycle action was issued by the test.
+Production unit deployment remains pending; full rolling-update acceptance is
+still broader than this correction.
+
 ### Recorded hold visibility in Queues (September 5)
 
 The shared task projection now exposes the existing explicit blocked-until
@@ -18,6 +37,15 @@ automatic state transition changes. TypeScript, 21 Queue tests, the API compile
 check and all 569 persistence tests passed in the isolated Linux workspace.
 No real task currently carries the explicit marker in its current block note;
 live visual acceptance will use an isolated fixture and is still pending.
+
+Live f1dfb661 acceptance: a separate Edge tab showed the isolated fixture's
+Scheduled hold until 9/9/2026, 8:00:00 PM, matching API Unix deadline 1788998400
+(September 10 00:00 UTC). This is DOM evidence; the captured screenshot showed
+the upper Queue groups, not the offscreen fixture. The normal state API then
+retired task 01a073da-9816-7cc2-845f-d072d42ff58d as Abandoned; blocked_until
+cleared, the open-task API excluded it, and Edge's Queue count went 46 to 45
+with no fixture row remaining. Its history was preserved. This closes future
+hold display/removal, not expiry scheduling or full blocker reconciliation.
 
 ### Post-build cold-return phase evidence (September 5)
 

@@ -1,7 +1,9 @@
 [Unit]
 Description=Apply a requested or safely deferred Swarm worker engine update
 After=swarm-terminal-host.service swarm-api.service
-Requires=swarm-terminal-host.service
+# Reconciliation restarts this service itself. Requires would stop the updater
+# mid-command, skipping health verification and rollback after the restart.
+Wants=swarm-terminal-host.service
 
 [Service]
 Type=oneshot
