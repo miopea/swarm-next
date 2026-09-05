@@ -79,15 +79,11 @@ test("a briefing waiting its turn is not on the operator's attention page", () =
 });
 
 /**
- * A worker about to resume the wrong conversation IS the operator's, and only
- * theirs — the card says so itself: "Swarm does not switch for you: which
- * thread is the right one is a judgement about your work."
- *
- * It rendered and counted nothing, which is the third instance of this file's
- * subject. The operator called this class critical when Scout hit it: "this is
- * a critical thing as it can regress a state of a worker."
+ * Actionable conversation faults still render and count together. Transcript
+ * recency alone now belongs in runtime details under ADR 0061; App behavior
+ * tests cover that classification and mixed fault/recency observations.
  */
-test("conversation drift both renders and counts", () => {
+test("actionable conversation faults both render and count", () => {
   expect(appSource).toContain("<ConversationDriftCard");
   const badge = countsIn(/const attentionCount = [^;]+;/);
   expect(badge.has("conversationDriftAttentionCount")).toBe(true);

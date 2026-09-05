@@ -1549,13 +1549,13 @@ export function App() {
   // The card carries the number itself, so the operator sees how much without
   // opening anything; the badge counts things to deal with, not rows.
   const unsettledReviewAttentionCount = unsettledReview.length > 0 ? 1 : 0;
-  // A reviewable default is distinct from a scan that cannot establish history.
-  // Actual filesystem faults also have an operator action; benign never-run,
-  // empty-history and bounded-scan outcomes remain runtime diagnostics.
+  // Transcript recency is an observation, not proof of the wrong conversation.
+  // Only server-confirmed filesystem faults require attention here. Explicit
+  // conversation decisions keep their own actionable decision channel.
+  const newerConversationHistories = workerConversations.filter((worker) => worker.freshness.state === "stale");
   const uncheckedConversations = workerConversations.filter((worker) => worker.freshness.state === "unknown");
   const actionableConversationChecks = workerConversations.filter(
-    (worker) => worker.freshness.state === "stale"
-      || (worker.freshness.state === "unknown" && worker.freshness.cause?.fault === true),
+    (worker) => worker.freshness.state === "unknown" && worker.freshness.cause?.fault === true,
   );
   // One card, one badge count. The card reads the same actionable collection;
   // do not count unknowns that only appear in runtime diagnostics.
@@ -2023,6 +2023,22 @@ export function App() {
               <p className="runtime-update-detail">Conversation status is unconfirmed. Existing results may be out of date.</p>
               <button type="button" className="runtime-update-run" onClick={() => void retryConversationChecks()}>Retry conversation checks</button>
             </div>
+          ) : null}
+          {operatorToken && newerConversationHistories.length > 0 ? (
+            <details className="runtime-update-card">
+              <summary>Newer conversation history · {newerConversationHistories.length}</summary>
+              <p className="runtime-update-detail">A newer transcript does not prove the saved conversation is wrong. Swarm has not changed these defaults. If you want a different conversation, open that worker and use the provider's resume command.</p>
+              <ul>
+                {newerConversationHistories.map((worker) => <li key={worker.worker_id}>
+                  <button type="button" className="runtime-update-run" onClick={() => openWorkerProfile(worker.worker_id)}>{worker.name}</button>
+                  {worker.freshness.state === "stale" ? <small>
+                    {" · Saved conversation last entry: "}{worker.freshness.pinned_last_entry ?? "no recorded entry"}
+                    {" · Newest history: "}{worker.freshness.newest_last_entry}
+                  </small> : null}
+                </li>)}
+              </ul>
+              <button type="button" className="runtime-update-run" onClick={() => void retryConversationChecks()}>Retry conversation checks</button>
+            </details>
           ) : null}
           {operatorToken && uncheckedConversations.length > 0 ? (
             <details className="runtime-update-card">

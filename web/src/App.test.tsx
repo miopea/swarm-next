@@ -1167,8 +1167,12 @@ test.each([true, false])("conversation review opens the actual terminal (already
   });
   vi.stubGlobal("fetch", fetch);
   render(<App />);
-  const card = await screen.findByRole("article", { name: "Worker conversations" });
-  fireEvent.click(within(card).getByRole("button", { name: "Scout" }));
+  const summary = await screen.findByText("Newer conversation history · 1");
+  const details = summary.closest("details")!;
+  expect(screen.queryByRole("article", { name: "Worker conversations" })).not.toBeInTheDocument();
+  expect(fetch.mock.calls.filter(([url]) => String(url).endsWith(`/workers/${worker.id}/start`))).toHaveLength(0);
+  fireEvent.click(summary);
+  fireEvent.click(within(details).getByRole("button", { name: "Scout" }));
   await waitFor(() => expect(screen.getByTestId("terminal-view")).toHaveAttribute("data-session-id", sessionId));
   const starts = fetch.mock.calls.filter(([url]) => String(url).endsWith(`/workers/${worker.id}/start`));
   expect(starts).toHaveLength(awake ? 0 : 1);
@@ -1273,6 +1277,40 @@ test("unknown conversation history stays in runtime details and clears without a
   fireEvent.click(system);
   expect(system).toHaveAttribute("aria-expanded", "false");
   expect(screen.getByRole("region", { name: "Runtime and system status" })).not.toHaveClass("mobile-open");
+});
+
+test.each([false, true])("newer history is runtime evidence while filesystem fault attention is %s", async (fault) => {
+  const base = bootFetch();
+  let recovered = false;
+  const fetch = vi.fn((input: string | URL | Request) => {
+    const url = String(input);
+    if (url.endsWith("/preferences/start-surface")) return Promise.resolve(ok({ start_surface: "decisions" }));
+    if (url.endsWith("/workers/conversations")) return Promise.resolve(ok({ workers: recovered ? [] : [
+      { worker_id: "stale", name: "Older default", freshness: { state: "stale", newest_conversation: "newer", pinned_last_entry: "2026-09-01T12:00:00Z", newest_last_entry: "2026-09-05T12:00:00Z" } },
+      ...(fault ? [{ worker_id: "fault", name: "Unreadable history", freshness: { state: "unknown", cause: { kind: "filesystem", fault: true }, reason: "History cannot be read" } }] : []),
+    ] }));
+    return base(input);
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(<App />);
+  const summary = await screen.findByText("Newer conversation history · 1");
+  const details = summary.closest("details")!;
+  expect(details).not.toHaveAttribute("open");
+  expect(screen.getByRole("region", { name: "Runtime and system status" })).toContainElement(details);
+  expect(within(details).getByText("Older default")).toBeInTheDocument();
+  expect(within(details).getByText(/does not prove the saved conversation is wrong/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^Needs you/ })).toHaveTextContent(fault ? "1" : "0");
+  const card = screen.queryByRole("article", { name: "Worker conversations" });
+  if (fault) {
+    expect(card).toHaveTextContent("Unreadable history");
+    expect(card).not.toHaveTextContent("Older default");
+  } else expect(card).not.toBeInTheDocument();
+  recovered = true;
+  fireEvent.click(within(details).getByRole("button", { name: "Retry conversation checks" }));
+  await waitFor(() => expect(screen.queryByText("Newer conversation history · 1")).not.toBeInTheDocument());
+  expect(screen.queryByRole("article", { name: "Worker conversations" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^Needs you/ })).toHaveTextContent("0");
+  expect(fetch.mock.calls.some(([url]) => /\/(start|stop|resume)$/.test(String(url)))).toBe(false);
 });
 
 test("hidden windows defer transcript scans and background status polls until visible", async () => {

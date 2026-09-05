@@ -97,6 +97,15 @@ the persistence boundary so the family-specific checks can be reviewed together.
 
 ## Consequences and verification
 
+Transcript recency alone is also an observation, not proof that a worker's
+saved conversation is wrong. Place these observations in expandable runtime
+details with worker identity and timestamps, without an attention count or
+automatic wake/switch. Server-marked filesystem failures retain their actionable
+Needs You card. An explicit request to choose a conversation remains a decision;
+this routing does not resolve requests or weaken context-recovery safeguards.
+Verify mixed stale/fault observations, matching page and badge counts, and removal
+after a successful current-history observation without acknowledgement.
+
 A failed coordinator read is not evidence that held work resolved. Preserve the
 last successful observation until a successful replacement or logout. Needs You
 and Queues qualify that evidence as unavailable for refresh, without adding an
