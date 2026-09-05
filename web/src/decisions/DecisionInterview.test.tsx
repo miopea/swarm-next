@@ -5,6 +5,25 @@ import DecisionInterview from "./DecisionInterview";
 
 afterEach(cleanup);
 
+test("a selected custom answer must be completed or deselected before sending", () => {
+  const onAnswer = vi.fn();
+  render(<DecisionInterview questions={[{ header: "Areas", question: "Which areas?", options: ["Web", "API"], multi_select: true }]} busy={false} onAnswer={onAnswer} />);
+  fireEvent.click(screen.getByRole("button", { name: "Web" }));
+  fireEvent.click(screen.getByRole("button", { name: "Something else" }));
+  const send = screen.getByRole("button", { name: "Send answers" });
+  expect(send).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Your answer"), { target: { value: "   " } });
+  expect(send).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Your answer"), { target: { value: "Mobile" } });
+  expect(send).toBeEnabled();
+  fireEvent.click(send);
+  expect(onAnswer).toHaveBeenCalledWith({ Areas: ["Web", "Mobile"] }, "");
+  fireEvent.change(screen.getByLabelText("Your answer"), { target: { value: "" } });
+  expect(send).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Something else" }));
+  expect(send).toBeEnabled();
+});
+
 const questions = [
   { header: "Scope", question: "How wide should this go?", options: ["This repo", "Every repo"] },
   { header: "Timing", question: "When?", options: ["Now", "After the release"] },

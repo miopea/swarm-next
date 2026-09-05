@@ -45,7 +45,8 @@ function InterviewAnswers({ questions, busy, onAnswer }: DecisionInterviewProps)
     return resolved;
   };
   const answers = Object.fromEntries(questions.map((q) => [q.header, answerFor(q)]));
-  const unanswered = questions.filter((q) => answers[q.header].length === 0);
+  const unanswered = questions.filter((q) => answers[q.header].length === 0
+    || ((choices[q.header] ?? []).includes(OTHER) && !(other[q.header] ?? "").trim()));
 
   function choose(question: DecisionQuestion, option: string) {
     setChoices((current) => {
@@ -91,6 +92,7 @@ function InterviewAnswers({ questions, busy, onAnswer }: DecisionInterviewProps)
               <label>
                 <span>Your answer</span>
                 <input
+                  required
                   value={other[question.header] ?? ""}
                   maxLength={200}
                   disabled={busy}

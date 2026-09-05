@@ -8,6 +8,19 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Local validation and interview-form correction (September 5 morning)
+
+Fetched main: no new upstream commits beyond the deployed `6ea9c93f`. The five
+local follow-ups through `a0166a7c` passed all 1,138 frontend tests and production
+build; the existing terminal bundle-size warning remains. They are not deployed.
+
+A further Needs You regression reproduced multi-select submission silently
+discarding a selected but blank "Something else" answer when a preset option was
+also selected. The form now requires completing or deselecting that custom answer.
+The new regression covers whitespace, completion, clearing and deselection.
+All 67 decision tests and TypeScript checking passed. This is a separate form
+correctness fix, not closure of direct-terminal answer correlation.
+
 ### Latest cross-worker acceptance checkpoint (2026-09-05)
 
 The isolated Queen-owned prerequisite journey completed. Source task
