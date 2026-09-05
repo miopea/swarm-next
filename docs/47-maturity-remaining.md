@@ -8,6 +8,44 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Current Queen prompt hold and default-browser sample (September 5)
+
+Build 79364c74 deployed healthy with engine PID 2640474 unchanged and 13 workers
+running. Queen follow-through is not yet demonstrated: her current queued run
+01a073e4-93fd-7761-b34d-4cfa73758700 is repeatedly held by PromptHoldsUnsentText,
+while the status API returned waiting_reason=null. No prompt was cleared or sent.
+The status read now exposes only an unresolved prompt observation matching the
+current run and live session, after existing engagement/takeover/pacing checks.
+It says last delivery check, not continuous observation, and copies no prompt
+content. Clearing the refusal or replacing the session removes the explanation.
+All 35 Queen-conductor tests and 21 Queue tests passed. All-target persistence
+lint found an unrelated 101-line Jira test; this is not a full strict-lint pass.
+Live waiting-reason deployment/visual acceptance remains pending.
+
+Read-only 180-second sample 20260905T234259Z-live completed with 18 observations
+and all 13 original sessions, unchanged API PID 2663910 and engine PID 2640474.
+Content-free CSV: /home/bschleifer/.local/state/swarm-next/soak/20260905T234259Z-live-samples.csv.
+API memory ranged 45,731,840–146,948,096 bytes; engine cgroup (including workers)
+ranged 4,476,952,576–4,577,308,672 bytes. Across the 176 seconds between first and
+last samples, API CPU averaged 14.72 percent of one core (maximum interval 74.98);
+engine cgroup averaged 24.06 percent (maximum interval 64.85). Neither is browser
+CPU or eight-core machine utilization. Short warm-up growth is not a leak proof.
+
+A fresh separate Edge tab kept the normal renderer policy (experiment off).
+Six passive first visits and two retained returns produced six completed
+connection samples: mean 470 ms, maximum 1,117 ms; grant mean 227/max 878,
+socket mean 148/max 176, initial state mean 94/max 104 ms. Seven renderers were
+retained, none evicted. Immediate snapshots during the initial rapid sequence
+still said connecting; later explicit checks confirmed Admin, demo and Nexus
+connected. These samples are not full journey completion or a p95 acceptance.
+Event-entry timing reached 9,536 ms with only one 69 ms long-task observation.
+A subsequent short navigation sequence's grouped observation measured 3,512 ms:
+0.4 ms input delay, 0 ms handler processing, 3,511.6 ms presentation estimate.
+The older 9,536 ms entry had expired from the one-minute grouped window, so its
+phases are unknown. Browser automation/OS occlusion are not ruled out. Investigate
+presentation/scheduling under confirmed foreground conditions before attributing
+this to application CPU. No new observer or speculative timing fix was added.
+
 ### Queen and Queue ownership discrepancy (September 5)
 
 Operator screenshots showed Queen claiming nothing waited on her while Queues

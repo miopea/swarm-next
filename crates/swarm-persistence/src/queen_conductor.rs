@@ -979,20 +979,42 @@ fn waiting_reason(
         return Ok(Some("Waiting for Queen to wake".into()));
     };
     let session = WorkerSessionId::from_str(&session).map_err(|_| rusqlite::Error::InvalidQuery)?;
-    Ok(
-        crate::workers::coordination_cooldown_until_from_connection(connection, session, now)?.map(
-            |until| match chrono::DateTime::from_timestamp(until, 0) {
-                Some(time) => format!(
-                    "Pacing Queen's next review until {} after a recent delivery",
-                    time.format("%Y-%m-%d %H:%M:%S UTC")
-                ),
-                None => {
-                    "Queen's review has an invalid pacing timestamp; runtime diagnostics are needed"
-                        .into()
-                }
-            },
+    let pacing = crate::workers::coordination_cooldown_until_from_connection(
+        connection, session, now,
+    )?
+    .map(|until| match chrono::DateTime::from_timestamp(until, 0) {
+        Some(time) => format!(
+            "Pacing Queen's next review until {} after a recent delivery",
+            time.format("%Y-%m-%d %H:%M:%S UTC")
         ),
-    )
+        None => {
+            "Queen's review has an invalid pacing timestamp; runtime diagnostics are needed".into()
+        }
+    });
+    if pacing.is_some() {
+        return Ok(pacing);
+    }
+    // Match the current run AND live session. An old prompt observation must
+    // not explain a replacement session or a subsequent review request.
+    let hold: Option<String> = connection
+        .query_row(
+            "SELECT refusal.kind FROM coordinator_refusals refusal
+         JOIN queen_automation run ON refusal.subject = 'queen-run:' || run.run_id
+         JOIN worker_sessions session ON session.session_id = refusal.session_id
+         WHERE run.id = 1 AND refusal.session_id = ?1
+           AND refusal.worker_id = session.worker_id AND session.ended_at IS NULL
+           AND refusal.cleared_at IS NULL
+           AND refusal.kind IN ('delivery_held_open_prompt', 'delivery_held_unsent_text')
+         ORDER BY refusal.last_observed_at DESC LIMIT 1",
+            [session.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(hold.map(|kind| if kind == "delivery_held_unsent_text" {
+        "Last delivery check found unsent text at Queen's prompt; automatic delivery will not alter it".into()
+    } else {
+        "Last delivery check found Queen waiting for input; automatic delivery is held".into()
+    }))
 }
 
 fn parse_outcome(value: &str) -> Result<QueenAutomationOutcome, rusqlite::Error> {
@@ -1137,6 +1159,91 @@ mod tests {
                 .waiting_reason
                 .as_deref(),
             Some("Waiting while you are working with Queen")
+        );
+    }
+
+    #[test]
+    fn queued_queen_review_names_only_its_current_session_prompt_hold() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        let run = store.request_queen_automation_run(100).unwrap();
+        let subject = format!("queen-run:{}", run.run_id.unwrap());
+        let kind = crate::REFUSAL_DELIVERY_HELD_UNSENT_TEXT;
+        store
+            .record_coordinator_refusal(
+                kind,
+                "queen-run:old",
+                Some(queen.id),
+                Some(session),
+                "private text must not be exposed",
+                100,
+            )
+            .unwrap();
+        assert_eq!(
+            store.queen_automation_status(101).unwrap().waiting_reason,
+            None
+        );
+        store
+            .record_coordinator_refusal(
+                kind,
+                &subject,
+                Some(queen.id),
+                Some(session),
+                "private text must not be exposed",
+                101,
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .queen_automation_status(102)
+                .unwrap()
+                .waiting_reason
+                .as_deref(),
+            Some(
+                "Last delivery check found unsent text at Queen's prompt; automatic delivery will not alter it"
+            )
+        );
+        store
+            .clear_coordinator_refusal(kind, &subject, 103)
+            .unwrap();
+        assert_eq!(
+            store.queen_automation_status(104).unwrap().waiting_reason,
+            None
+        );
+        store
+            .record_coordinator_refusal(
+                crate::REFUSAL_DELIVERY_HELD,
+                &subject,
+                Some(queen.id),
+                Some(session),
+                "not included in output",
+                105,
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .queen_automation_status(106)
+                .unwrap()
+                .waiting_reason
+                .as_deref(),
+            Some("Last delivery check found Queen waiting for input; automatic delivery is held")
+        );
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE worker_sessions SET ended_at = 107 WHERE session_id = ?1",
+                [session.to_string()],
+            )
+            .unwrap();
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        assert_eq!(
+            store.queen_automation_status(108).unwrap().waiting_reason,
+            None
         );
     }
 
