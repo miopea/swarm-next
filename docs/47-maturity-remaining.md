@@ -8,6 +8,55 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Bounded output and five-renderer experiment (September 5, 19:49–19:56 UTC)
+
+Serving build `7ba532deb5b3` was tested in a separate Edge tab at 1465×1339 CSS
+pixels, DPR 1, with eleven running workers initially. The Contract demo alone
+received a content-only request for 200 numbered lines and an end marker, without
+tools, file edits or task changes. Screenshots showed streaming output and the
+final 200/end-marker after switching to the other demo and returning. This is a
+bounded streaming fixture, not a sustained high-throughput transport benchmark.
+
+Across the 39.21-second submit/output/two-switch interval, CDP counters measured
+458.88 ms main-thread task time, 162.35 ms script time and 37 layouts. Heap was
+31.02→29.95 MB; DOM nodes 957→1116. The five concurrent one-second server samples
+(excluding vmstat's since-boot first row) showed 95–98% idle CPU, no swap I/O and
+no I/O wait. CDP collection was disabled afterwards. These counters include test
+interaction overhead and do not measure Edge Task Manager CPU or screen latency.
+
+The existing five-renderer experiment was then enabled only in that tab. Two
+ten-worker cycles visited Platform, Nexus, Public Website, Real Truth, Member
+Services, D365, RCG Networks, BFG Watchfaces and both demos, waiting for connected
+state after each visit without sending terminal input. One measured cold cycle
+took 61.53 seconds wall time including automation: 2.054 seconds task time,
+634.64 ms script, 109 layouts, heap 37.87→40.11 MB and nodes 4700→5531. No forced
+GC was used; these snapshots do not prove a leak or retained-memory savings.
+Counters were disabled before the next attempted cycle.
+
+Platform subsequently showed operator engagement, so it was skipped. A Nexus
+connected-state wait timed out but a fresh inspection showed connected; it was
+not restarted. Other fleet state changed during that follow-up (eleven to ten
+running workers and D365 engagement), so the controlled comparison was stopped
+rather than assuming an unchanged workload or waking a worker. API/engine health
+remained ok and the engine PID stayed 2456733.
+
+Rendered Dogfood evidence reported **13 completed cold returns, p95/max 3321 ms**,
+13 attempted, zero pending/interrupted/failed, five retained renderers and 17
+evictions. Cold-return timing covers attachment through applied snapshot, not
+confirmed paint or ownership. This small automation-influenced sample does not
+meet the 500 ms target and cannot justify adopting five renderers by default.
+The experiment was stopped through its UI and the off-state button verified.
+The next performance investigation must correlate pre-connection renderer setup
+with transport/restore for the same attempt; independent maxima cannot identify
+which stage caused that slow cold return. Normal-day/real-phone and aged-session
+acceptance remain open.
+
+The local diagnostics report also showed a grouped native interaction of 3048 ms
+with 2.2 ms input delay, 0.1 ms processing and 3045.7 ms estimated presentation,
+despite no long-task samples and fast terminal apply samples. Treat presentation/
+automation effects as unresolved, not as proof of a server or JavaScript CPU
+bottleneck. Do not relabel these samples as unique slow actions or full-page INP.
+
 ### Worker access to completed task history (September 5)
 
 Live Queues contained a worker report that `swarm_read_task_history` denied its
