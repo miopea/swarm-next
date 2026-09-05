@@ -162,7 +162,6 @@ def main():
             except urllib.error.HTTPError as failure:
                 assert failure.code == 503, endpoint
                 assert json.load(failure)["code"] == "database_recovery_required", endpoint
-                assert json.load(failure)["code"] == "database_recovery_required", endpoint
         assert request("/health")["database_recovery_required"] is True
         stop()
         # Destructive bytes are confined to this newly created disposable DB.
