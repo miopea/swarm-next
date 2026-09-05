@@ -1267,6 +1267,11 @@ impl TaskStore {
             [worker_id.to_string()],
         )?;
         if previous.as_deref() == Some(selected.as_str()) {
+            crate::conversation_recovery::record_explicit_choice(
+                &transaction,
+                &worker_id.to_string(),
+                &selected,
+            )?;
             transaction.commit()?;
             return Ok(());
         }
@@ -1275,6 +1280,11 @@ impl TaskStore {
              SET provider_conversation_id = ?1, updated_at = unixepoch()
              WHERE id = ?2 AND archived_at IS NULL",
             params![selected, worker_id.to_string()],
+        )?;
+        crate::conversation_recovery::record_explicit_choice(
+            &transaction,
+            &worker_id.to_string(),
+            &selected,
         )?;
         insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
         transaction.commit()?;
@@ -2323,6 +2333,10 @@ fn move_worker_repository(
     // provider keys its history by project path, so carrying the identity
     // across would resume the wrong thread in the wrong place. Moving a worker
     // starts it fresh where it now lives.
+    transaction.execute(
+        "DELETE FROM worker_explicit_conversation_choices WHERE worker_id = ?1",
+        [worker_id.to_string()],
+    )?;
     transaction.execute(
         "UPDATE worker_profiles
          SET workspace = ?2, provider_conversation_id = NULL,

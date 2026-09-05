@@ -28,6 +28,36 @@ pub(super) fn migrate(tx: &Transaction<'_>, version: i64) -> rusqlite::Result<()
     )
 }
 
+pub(super) fn migrate_explicit_choice(tx: &Transaction<'_>, version: i64) -> rusqlite::Result<()> {
+    if version >= crate::EXPLICIT_CONVERSATION_CHOICE_SCHEMA_VERSION {
+        return Ok(());
+    }
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS worker_explicit_conversation_choices (
+        worker_id TEXT PRIMARY KEY REFERENCES worker_profiles(id) ON DELETE CASCADE,
+        provider TEXT NOT NULL, workspace TEXT NOT NULL, conversation TEXT NOT NULL
+    );",
+    )?;
+    tx.pragma_update(
+        None,
+        "user_version",
+        crate::EXPLICIT_CONVERSATION_CHOICE_SCHEMA_VERSION,
+    )
+}
+
+pub(super) fn record_explicit_choice(
+    tx: &Transaction<'_>,
+    worker: &str,
+    conversation: &str,
+) -> rusqlite::Result<()> {
+    tx.execute("INSERT INTO worker_explicit_conversation_choices(worker_id, provider, workspace, conversation)
+        SELECT id, provider, workspace, ?2 FROM worker_profiles WHERE id = ?1
+        ON CONFLICT(worker_id) DO UPDATE SET provider = excluded.provider,
+            workspace = excluded.workspace, conversation = excluded.conversation",
+        params![worker, conversation])?;
+    Ok(())
+}
+
 impl TaskStore {
     /// Returns the current owner only while startup recovery may still advance.
     /// A manual choice, completed startup, archive or replacement cancels it.
@@ -152,9 +182,9 @@ impl TaskStore {
             params![previous.to_string(), successor.to_string()], |row| row.get(0))?)
     }
 
-    /// Confirms engine selections only when their exact revision and conversation
-    /// are already the durable default of the current binding. A manual fence is
-    /// not a provider selection, even when it advanced the stored revision.
+    /// Confirms a committed paired revision, or a new binding's exact restored
+    /// startup backed by a durable explicit choice. A manual fence is not a
+    /// provider selection, even when it advanced the stored revision.
     /// # Errors
     /// Returns storage errors or rejects more than 256 candidates.
     pub fn confirmed_provider_selections(
@@ -179,6 +209,16 @@ impl TaskStore {
                AND worker.provider = 'claude_code' AND worker.archived_at IS NULL AND session.ended_at IS NULL)"
         )?;
         let mut confirmed = std::collections::HashMap::new();
+        let mut inherited = connection.prepare(
+            "SELECT context.outcome FROM worker_startup_context context
+             JOIN worker_profiles worker ON worker.id = context.worker_id
+             JOIN worker_sessions session ON session.worker_id = worker.id AND session.session_id = context.session_id
+             JOIN worker_explicit_conversation_choices choice ON choice.worker_id = worker.id
+             WHERE context.session_id = ?1 AND context.status = 'settled'
+               AND context.selection_revision = 0 AND context.selection_suspended = 0
+               AND worker.provider_conversation_id = ?2 AND context.selected_conversation = ?2
+               AND choice.conversation = ?2 AND choice.provider = worker.provider AND choice.workspace = worker.workspace
+               AND worker.provider = 'claude_code' AND worker.archived_at IS NULL AND session.ended_at IS NULL")?;
         for (session, selection) in candidates {
             let Ok(revision) = i64::try_from(selection.revision) else {
                 continue;
@@ -194,6 +234,29 @@ impl TaskStore {
                 )?
             {
                 confirmed.insert(*session, *selection);
+            } else if revision == 1 {
+                let payload: Option<String> = inherited
+                    .query_row(
+                        params![session.to_string(), selection.conversation.to_string()],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if let Some(payload) = payload {
+                    let outcome: ConversationRecoveryState = serde_json::from_str(&payload)
+                        .map_err(|_| {
+                            TaskStoreError::IntegrityFailure(
+                                "invalid stored recovery outcome".into(),
+                            )
+                        })?;
+                    if outcome
+                        == (ConversationRecoveryState::Restored {
+                            conversation: selection.conversation,
+                            via_continue: false,
+                        })
+                    {
+                        confirmed.insert(*session, *selection);
+                    }
+                }
             }
         }
         Ok(confirmed)
@@ -251,6 +314,7 @@ impl TaskStore {
         tx.execute("UPDATE worker_startup_context SET selection_revision = ?2,
                     status = CASE WHEN status = 'pending' THEN 'canceled' ELSE status END WHERE worker_id = ?1", params![worker, revision])?;
         tx.execute("UPDATE worker_profiles SET provider_conversation_id = ?2, updated_at = unixepoch() WHERE id = ?1", params![worker, selection.conversation.to_string()])?;
+        record_explicit_choice(&tx, &worker, &selection.conversation.to_string())?;
         insert_control_room_event(&tx, ControlRoomEventKind::WorkersChanged)?;
         tx.commit()?;
         Ok(true)
@@ -812,6 +876,18 @@ mod tests {
         );
         assert_eq!(
             store
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM worker_explicit_conversation_choices",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            store
                 .get_worker_profile(worker.id)
                 .unwrap()
                 .provider_conversation_id,
@@ -836,6 +912,227 @@ mod tests {
             panic!("attempt");
         };
         attempt
+    }
+
+    fn exact_attempt(conversation: ProviderConversationId) -> ConversationRecoveryAttempt {
+        let ConversationRecoveryState::Attempt { attempt } =
+            ConversationRecovery::new(Some(conversation), true).state()
+        else {
+            panic!("expected exact attempt");
+        };
+        attempt
+    }
+
+    #[test]
+    fn explicit_choice_migration_does_not_backfill_existing_defaults() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("migration.sqlite");
+        let store = TaskStore::open(&path).unwrap();
+        let worker = store
+            .create_worker("Poppy", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let conversation = worker.provider_conversation_id.unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute_batch(
+                "DROP TABLE worker_explicit_conversation_choices; PRAGMA user_version = 139;",
+            )
+            .unwrap();
+        drop(store);
+        let store = TaskStore::open(&path).unwrap();
+        assert_eq!(
+            store
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM worker_explicit_conversation_choices",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            store
+                .get_worker_profile(worker.id)
+                .unwrap()
+                .provider_conversation_id,
+            Some(conversation)
+        );
+    }
+
+    #[test]
+    fn explicit_choice_survives_reopen_but_requires_exact_startup_confirmation() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("choice.sqlite");
+        let store = TaskStore::open(&path).unwrap();
+        let worker = store
+            .create_worker("Poppy", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let first = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, first).unwrap();
+        let conversation = ProviderConversationId::new();
+        store
+            .reconcile_provider_selection(
+                first,
+                swarm_domain::ProviderConversationSelection {
+                    revision: 2,
+                    conversation,
+                },
+            )
+            .unwrap();
+        store.release_worker_session(first).unwrap();
+        drop(store);
+        let store = TaskStore::open(&path).unwrap();
+        let next = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, next).unwrap();
+        let selection = swarm_domain::ProviderConversationSelection {
+            revision: 1,
+            conversation,
+        };
+        let candidates = [(next, selection)];
+        assert!(
+            store
+                .confirmed_provider_selections(&candidates)
+                .unwrap()
+                .is_empty()
+        );
+        store
+            .reconcile_provider_start(
+                next,
+                exact_attempt(conversation),
+                ProviderSessionStartKind::Resumed,
+                conversation,
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .confirmed_provider_selections(&candidates)
+                .unwrap()
+                .get(&next),
+            Some(&selection)
+        );
+        assert!(
+            store
+                .confirmed_provider_selections(&[(first, selection)])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .confirmed_provider_selections(&[(
+                    next,
+                    swarm_domain::ProviderConversationSelection {
+                        conversation: ProviderConversationId::new(),
+                        ..selection
+                    }
+                )])
+                .unwrap()
+                .is_empty()
+        );
+        store
+            .repoint_provider_conversation_fenced(worker.id, &conversation, Some((next, 3)))
+            .unwrap();
+        assert!(
+            store
+                .confirmed_provider_selections(&candidates)
+                .unwrap()
+                .is_empty()
+        );
+        store.release_worker_session(next).unwrap();
+        let last = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, last).unwrap();
+        // Native continuation is not exact restoration of the explicit choice.
+        store
+            .reconcile_provider_start(
+                last,
+                attempt(),
+                ProviderSessionStartKind::Resumed,
+                conversation,
+            )
+            .unwrap();
+        assert!(
+            store
+                .confirmed_provider_selections(&[(last, selection)])
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn startup_match_without_explicit_choice_does_not_acquire_intent() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Poppy", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let conversation = worker.provider_conversation_id.unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        store
+            .reconcile_provider_start(
+                session,
+                exact_attempt(conversation),
+                ProviderSessionStartKind::Resumed,
+                conversation,
+            )
+            .unwrap();
+        let candidates = [(
+            session,
+            swarm_domain::ProviderConversationSelection {
+                revision: 1,
+                conversation,
+            },
+        )];
+        assert!(
+            store
+                .confirmed_provider_selections(&candidates)
+                .unwrap()
+                .is_empty()
+        );
+        // Selecting even the existing default records intent, but does not claim
+        // that the current terminal moved or bypass its suspended binding.
+        store
+            .repoint_provider_conversation(worker.id, &conversation)
+            .unwrap();
+        assert!(
+            store
+                .confirmed_provider_selections(&candidates)
+                .unwrap()
+                .is_empty()
+        );
+        store.release_worker_session(session).unwrap();
+        let next = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, next).unwrap();
+        store
+            .reconcile_provider_start(
+                next,
+                exact_attempt(conversation),
+                ProviderSessionStartKind::Resumed,
+                conversation,
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .confirmed_provider_selections(&[(next, candidates[0].1)])
+                .unwrap()
+                .len(),
+            1
+        );
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE worker_profiles SET workspace = '/different' WHERE id = ?1",
+                [worker.id.to_string()],
+            )
+            .unwrap();
+        assert!(
+            store
+                .confirmed_provider_selections(&[(next, candidates[0].1)])
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

@@ -241,7 +241,8 @@ const TERMINAL_CONTROL_PROJECTION_REPAIR_SCHEMA_VERSION: i64 = 136;
 const DECISION_WITHDRAWAL_SCHEMA_VERSION: i64 = 137;
 const TASK_HISTORY_LOOKUP_SCHEMA_VERSION: i64 = 138;
 const TASK_PREREQUISITES_SCHEMA_VERSION: i64 = 139;
-const CURRENT_SCHEMA_VERSION: i64 = TASK_PREREQUISITES_SCHEMA_VERSION;
+const EXPLICIT_CONVERSATION_CHOICE_SCHEMA_VERSION: i64 = 140;
+const CURRENT_SCHEMA_VERSION: i64 = EXPLICIT_CONVERSATION_CHOICE_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -3862,6 +3863,7 @@ fn migrate_ops_intake_schema_steps(
     if schema_version < TASK_PREREQUISITES_SCHEMA_VERSION {
         task_prerequisites::migrate(transaction)?;
     }
+    conversation_recovery::migrate_explicit_choice(transaction, schema_version)?;
     Ok(())
 }
 
@@ -9001,6 +9003,12 @@ mod tests {
             probe_sql: "SELECT COUNT(*) = 2 FROM sqlite_master
                 WHERE (type = 'table' AND name = 'task_prerequisites')
                    OR (type = 'index' AND name = 'task_prerequisites_by_target')",
+        },
+        SchemaStep {
+            table: "worker_explicit_conversation_choices",
+            artifact: "",
+            undo_sql: "DROP TABLE worker_explicit_conversation_choices",
+            probe_sql: "",
         },
     ];
 

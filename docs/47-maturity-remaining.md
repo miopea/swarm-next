@@ -8,6 +8,30 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Explicit conversation choice across restart (September 5)
+
+ADR 0078 adds schema 140's one-row-per-worker explicit choice, scoped to provider,
+workspace and conversation. A paired provider selection or explicit default
+command records it atomically with the saved default. Existing pins are not
+backfilled. Revision-one startup can confirm only a settled exact restoration
+matching that choice and current binding; suspended, stale, mismatched, continued
+or fresh results do not acquire confirmation. Workspace moves remove the choice.
+
+Focused recovery tests passed, including disk reopen and restart, rejection before
+the startup callback, old bindings, manual fences, ordinary unchosen defaults,
+workspace mismatch, schema-139 migration and event-failure rollback. Full
+persistence and focused API checks are running. This is not deployed or accepted
+live yet; the demo must make a paired choice on the new build and retain its
+confirmation after restart without a contradictory timestamp warning.
+
+Validation completed: the full persistence run passed 564 tests and failed the
+previous-schema fixture because its newest-step list still ended at schema 139.
+After adding schema 140 to that list, all three previous-schema migration tests
+passed, including a database carrying related rows. Runtime code was unchanged
+by that fixture correction. Nine focused API conversation tests passed. Rustfmt
+was applied to the changed Rust files; `git diff --check` passed. This is explicit
+test evidence, not a claim that the original full-suite run was green.
+
 ### Decision risk and answer readability (September 5)
 
 Live desktop inspection found long risk prose squeezed beside the task into half
