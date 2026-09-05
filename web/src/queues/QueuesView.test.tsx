@@ -14,7 +14,7 @@ function task(overrides: Partial<Task>): Task {
 
 describe("QueuesView", () => {
   test("a held task appears once with its recorded reason and clears that reason after delivery", () => {
-    const ready = task({ state: "ready", next_move_owner: "worker", dispatch_state: "queued" });
+    const ready = task({ state: "ready", next_move_owner: "worker", dispatch_state: "queued", assigned_worker_id: "worker" });
     const props = { workers: [], onOpenTask: vi.fn(), now: 120_000, heldBriefings: [{
       task_id: ready.id, title: ready.title, worker_id: "worker", worker_name: "Orchard",
       reason: "waiting_its_turn", blocked_by: "Earlier task", queued_at: 60,

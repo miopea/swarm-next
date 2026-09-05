@@ -39,3 +39,16 @@ test("stale holds cannot resurrect closed work or a cleared block", () => {
   expect(projection.blockedWaits).toEqual([]);
   expect(projection.taskCount).toBe(1);
 });
+
+test("reassignment and unassignment discard the former worker's hold without hiding queued work", () => {
+  const current = task("ready", { assigned_worker_id: "w" });
+  expect(projectTaskQueues([current], [held("ready")], []).heldBriefings).toHaveLength(1);
+  for (const assigned_worker_id of ["other-worker", null]) {
+    const projection = projectTaskQueues([{ ...current, assigned_worker_id }], [held("ready")], []);
+    expect(projection.heldBriefings).toEqual([]);
+    expect(projection.waitingTasks).toHaveLength(1);
+    expect(projection.taskCount).toBe(1);
+  }
+  const reassigned = { ...current, assigned_worker_id: "other-worker" };
+  expect(projectTaskQueues([reassigned], [{ ...held("ready"), worker_id: "other-worker" }], []).heldBriefings).toHaveLength(1);
+});

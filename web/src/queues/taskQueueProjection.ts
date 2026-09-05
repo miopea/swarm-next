@@ -16,6 +16,7 @@ export function projectTaskQueues(tasks: Task[], held: HeldBriefing[], blocked: 
   const heldBriefings = held.filter((brief) => {
     const task = known.get(brief.task_id);
     return !task || ((task.state === "ready" || task.state === "active")
+      && task.assigned_worker_id === brief.worker_id
       && task.dispatch_state !== "delivered" && task.dispatch_state !== "uncertain"
       && !ordinaryActiveWork(task));
   });

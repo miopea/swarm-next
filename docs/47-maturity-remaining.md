@@ -64,6 +64,10 @@ old reason even when a stale coordinator snapshot remains. The dedicated Edge
 fixture verified the combined row. Thirty-two queue/briefing tests and the
 58-test App/queue/fixture gate passed, along with TypeScript checking. This is
 presentation deduplication, not completion of dependency and recovery routing.
+The follow-up assignment check also rejects a former worker's held briefing after
+reassignment or unassignment without hiding the task. Sixty-one App/queue tests
+and TypeScript checking passed for that correction. The full frontend gate on
+the preceding queue change passed all 1,117 tests.
 
 ### Runtime database containment
 
