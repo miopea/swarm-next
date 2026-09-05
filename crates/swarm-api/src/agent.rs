@@ -724,11 +724,22 @@ impl ServerHandler for AgentMcp {
                         .current_coordinator_attention(crate::unix_timestamp())
                         .map_err(ApplicationError::Store)
                         .and_then(|attention| {
+                            let queue = self.tasks.queen_queue_snapshot(self.principal)?;
                             let (prerequisite_ready, prerequisite_ready_truncated) = self.tasks
                                 .store().tasks_ready_after_prerequisites(crate::unix_timestamp())?;
                             let (blocked_reassessment, blocked_reassessment_truncated) = self.tasks
                                 .store().blocked_tasks_for_reassessment(crate::unix_timestamp())?;
                             structured(json!({
+                                "queue_snapshot": {
+                                    "observed_at": crate::unix_timestamp(),
+                                    "open_tasks": queue.open_tasks,
+                                    "by_state": queue.by_state.into_iter().map(|(state, count)| json!({"state": state, "count": count})).collect::<Vec<_>>(),
+                                    "by_owner": queue.by_owner.into_iter().map(|(owner, count)| json!({"owner": owner, "count": count})).collect::<Vec<_>>(),
+                                    "queen_tasks": queue.queen_tasks.into_iter().map(|task| json!({"task_id": task.id, "title": task.title, "state": task.state, "next_move_owner": task.next_move_owner, "assigned_worker_id": task.assigned_worker_id})).collect::<Vec<_>>(),
+                                    "queen_tasks_truncated": queue.queen_tasks_truncated,
+                                    "scope": "Full open task board, including ordinary Active work; not the waiting-only navigation count. Owners use the same task projection as Queues. Recovery candidates below are subsets, not backlog totals.",
+                                    "next_action": "Triage Draft tasks and account for every Queen-owned item before saying nothing waits on you. Read current task facts/history before routing, deferring or settling. A prose explanation does not change recorded ownership. When details are truncated, use swarm_list_tasks for the remaining items. Counts are observations, not permission to clear blockers."
+                                },
                                 "blocked_reassessment": {
                                     "tasks": blocked_reassessment.into_iter().map(|task| json!({
                                         "task_id": task.id,
@@ -5114,6 +5125,9 @@ mod tests {
     #[tokio::test]
     async fn coordination_attention_tool_is_queen_read_only() {
         let (bridge, store, queen_id, worker_id, _) = setup();
+        let draft = store
+            .create_task("Queen must triage this", "/workspace")
+            .unwrap();
         let unlinked = store
             .create_task("Block needs reassessment", "/workspace")
             .unwrap();
@@ -5165,6 +5179,22 @@ mod tests {
         let attention =
             response_json(handle(bridge.clone(), plain_state(), request(&queen_token)).await).await;
         assert!(attention["result"]["structuredContent"]["attention"].is_array());
+        let queue = &attention["result"]["structuredContent"]["queue_snapshot"];
+        assert_eq!(queue["open_tasks"], 3);
+        assert_eq!(queue["by_state"][0], json!({"state": "draft", "count": 1}));
+        let queen_tasks = queue["queen_tasks"].as_array().unwrap();
+        assert!(
+            queen_tasks
+                .iter()
+                .any(|task| task["task_id"] == draft.id.to_string()
+                    && task["next_move_owner"] == "queen")
+        );
+        assert!(
+            !queen_tasks
+                .iter()
+                .any(|task| task["task_id"] == upstream.id.to_string())
+        );
+        assert_eq!(queue["queen_tasks_truncated"], false);
         let ready = &attention["result"]["structuredContent"]["prerequisite_ready"];
         assert_eq!(ready["tasks"][0]["id"], consumer.id.to_string());
         assert_eq!(ready["tasks"][0]["state"], "blocked");

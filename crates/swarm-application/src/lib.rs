@@ -31,7 +31,9 @@ use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
 
 mod ops_tickets;
+mod queue_snapshot;
 pub use ops_tickets::{OpsTicketError, OpsTicketProgress, OpsTicketService};
+pub use queue_snapshot::QueenQueueSnapshot;
 
 /// The durable agent identity resolved before an application command is invoked.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

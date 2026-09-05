@@ -76,3 +76,14 @@ that have passed separately from dependencies. An expired date means Queen
 reassesses remaining blockers, never automatic readiness or operator escalation.
 Leaving Blocked clears the value through the existing transition boundary;
 clients additionally suppress it outside Blocked when snapshots are stale.
+
+Queen's attention response also carries a full open-board count by task state
+and recorded next-move owner, derived from the same shared task projection as
+the browser. A separate ordered list identifies at most 64 Queen-owned tasks,
+including Draft triage, with explicit truncation. Full counts are not computed
+from that capped list or from filtered recovery candidates. Active work is
+included in these board counts, unlike the waiting-only navigation badge; the
+response states that distinction. This read does not grant new routing authority
+or rewrite blockers. Queen must account for recorded obligations before declaring
+her queue clear. Failure to read the board fails the response rather than
+presenting an empty/healthy snapshot.

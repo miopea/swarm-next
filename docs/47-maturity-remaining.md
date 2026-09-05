@@ -8,6 +8,26 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Queen and Queue ownership discrepancy (September 5)
+
+Operator screenshots showed Queen claiming nothing waited on her while Queues
+listed four Draft tasks awaiting triage. The live open-task read confirmed those
+four unassigned drafts and 32 Blocked tasks, versus her approximate 24. The
+attention tool exposed filtered recovery categories but no full-board ownership
+summary or draft-triage list. Reviews returned to Member Services did agree with
+the browser's worker-owned group; not every difference was erroneous.
+
+The application now derives a Queen-only summary from the same board projection
+the UI uses: complete open counts by state/owner and at most 64 ordered Queen
+tasks, with explicit truncation. The MCP response labels ordinary Active work as
+included and distinguishes these counts from the waiting-only navigation badge
+and recovery subsets. It instructs Queen to account for triage before claiming
+no obligations. This is not permission to clear real blockers or proof of Queen's
+subsequent behavior. All 32 application tests and 63 agent tests passed in the
+isolated Linux workspace, including full counts beyond the 64-item detail cap,
+retirement clearing the item, Queen authorization and MCP draft visibility.
+Strict application lint passed. Live deployment/Queen follow-through remain open.
+
 ### Engine updater survives its own restart (September 5)
 
 The f1dfb661 app deployment completed healthy, but the subsequent automatic
@@ -26,6 +46,12 @@ host, reached the post-restart active check and exited successfully. Temporary
 test hosts were stopped. No real worker lifecycle action was issued by the test.
 Production unit deployment remains pending; full rolling-update acceptance is
 still broader than this correction.
+
+Deployment a86aa983 completed healthy and installed Wants=swarm-terminal-host.service
+on the updater. Engine PID 2640474 and build identity eaabda97c781 remained
+unchanged during this deployment. No release was cut. The isolated lifecycle
+experiment above proves stop-propagation behavior; a full real engine replacement
+with post-restart failure/rollback is still a separate acceptance gate.
 
 ### Recorded hold visibility in Queues (September 5)
 
