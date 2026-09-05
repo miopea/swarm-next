@@ -59,7 +59,7 @@ test("opens the prerequisite editor from a blocked task's actions", () => {
   fireEvent.click(screen.getByRole("menuitem", { name: "Manage prerequisites" }));
   expect(screen.getByRole("dialog", { name: "Prerequisites" })).toBeVisible();
   expect(screen.getByLabelText("Why change this link?")).toBeVisible();
-  fireEvent.click(screen.getByRole("button", { name: "Close", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
   expect(screen.queryByRole("dialog", { name: "Prerequisites" })).not.toBeInTheDocument();
 });
 
