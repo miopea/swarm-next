@@ -615,6 +615,15 @@ export const SURFACES: Surface[] = [
     ),
   },
   {
+    id: "worker-experimental",
+    title: "Existing experimental worker",
+    why: "Preserve the actual provider while editing an existing worker; never display it as Claude.",
+    render: () => <WorkerSettings workers={[{ ...demoWorkers[1], provider: "gemini", running: false }]}
+      workspaces={[]} busy={false} providers={{ claude_code: true, codex: true }}
+      onCreate={asyncNoop} onUpdate={asyncNoop} onChooseMark={asyncNoop} onRemove={asyncNoop}
+      onDraftDescription={async () => "Fixture description"} onReorder={asyncNoop} />,
+  },
+  {
     id: "workers",
     title: "Workers",
     why: "the roster, in its four attention states — the terminal itself is a canvas and is never captured",

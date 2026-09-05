@@ -10,6 +10,23 @@ const studio = worker("studio", "Poppy", "/projects/sculpt-studio", 2);
 
 afterEach(cleanup);
 
+test.each(["gemini", "grok", "opencode"] as const)("preserves and identifies an existing %s worker instead of displaying Claude", (provider) => {
+  const onUpdate = vi.fn().mockResolvedValue(undefined);
+  render(<WorkerSettings workers={[{ ...budget, provider }]} workspaces={[]} busy={false}
+    providers={{ claude_code: true, codex: true }} onCreate={vi.fn()} onUpdate={onUpdate}
+    onChooseMark={vi.fn()} onRemove={vi.fn()} onDraftDescription={vi.fn()} onReorder={vi.fn()} />);
+  fireEvent.change(screen.getByRole("searchbox", { name: "Find a worker" }), { target: { value: provider } });
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  const editor = screen.getByRole("form", { name: "Edit Daisy" });
+  const selector = within(editor).getByRole("combobox", { name: "Default coding provider" });
+  expect(selector).toHaveValue(provider);
+  expect(within(selector).getByRole("option", { name: /existing experimental provider/, selected: true })).toBeInTheDocument();
+  expect(within(screen.getByLabelText("Coding provider")).queryByRole("option", { name: /experimental/ })).not.toBeInTheDocument();
+  fireEvent.change(within(editor).getByLabelText("Worker name"), { target: { value: "Daisy renamed" } });
+  fireEvent.click(within(editor).getByRole("button", { name: "Save worker" }));
+  expect(onUpdate).toHaveBeenCalledWith(budget.id, "Daisy renamed", budget.description ?? "", provider, budget.autostart, undefined, false);
+});
+
 test("configures and reorders durable workers with progressive path completion", async () => {
   const onCreate = vi.fn().mockResolvedValue(undefined);
   const onUpdate = vi.fn().mockResolvedValue(undefined);

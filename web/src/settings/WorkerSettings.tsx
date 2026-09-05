@@ -409,6 +409,7 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
           {customRepository && <label className="outside-workspace-warning"><input type="checkbox" checked={allowOutsideRoots} onChange={(event) => setAllowOutsideRoots(event.target.checked)} /><span><strong>Use this path outside discovered project folders</strong><small>Only continue if you recognize and trust this folder. Swarm still requires an existing real directory and blocks files, symlinks, and filesystem roots.</small></span></label>}
           <div className="worker-description-field"><span className="worker-description-heading"><label htmlFor={`worker-description-${worker.id}`}>Queen routing description</label><span className="worker-description-actions"><button type="button" className="secondary-button" disabled={busy || draftingDescription || improvingDescription} onClick={() => void draftDescription()}>{draftingDescription ? "Reading repository…" : description ? "Refresh local draft" : "Draft locally"}</button>{onImproveDescription && <button type="button" className="secondary-button" disabled={busy || draftingDescription || improvingDescription} onClick={() => void improveDescription()}>{improvingDescription ? "Claude is generating…" : draftSource === "claude" ? "Generate again with Claude" : "Generate with Claude"}</button>}</span></span><textarea className={draftSource ? "worker-description-generated" : undefined} id={`worker-description-${worker.id}`} value={description} onChange={(event) => { setDescription(event.target.value); setDraftSource(undefined); setDraftStatus(""); }} maxLength={2000} rows={3} placeholder="What this repository owns and when Queen should route work here" />{improvingDescription && <div className="worker-description-progress" role="status" aria-live="polite"><span aria-hidden="true" /><p><strong>Claude is generating a routing draft</strong><small>This usually takes 10–30 seconds. Keep this worker editor open.</small></p></div>}{draftStatus && <div className={`worker-description-result ${draftSource === "claude" ? "claude-result" : ""}`} role="status" aria-live="polite"><strong>{draftStatus}</strong><span>Review the editable text, then choose <b>Save description to worker</b>. Queen cannot use this draft until it is saved.</span></div>}<small>Claude receives only bounded README and manifest metadata in one tool-free turn (up to $0.10). Saving makes the description visible on this worker and available to Queen for routing.</small>{draftError && <small className="field-error" role="alert">{draftError}</small>}</div>
           <div className="worker-provider-field"><label htmlFor={`worker-provider-${worker.id}`}>Default coding provider</label><select id={`worker-provider-${worker.id}`} value={provider} disabled={worker.running || providerCapabilitiesUnavailable} onChange={(event) => setProvider(event.target.value as ProviderKind)}>
+            {worker.provider !== "claude_code" && worker.provider !== "codex" && <option value={worker.provider}>{providerLabel(worker.provider)} · existing experimental provider</option>}
             <option value="claude_code" disabled={!providers.claude_code}>Claude Code{providers.claude_code ? "" : " · unavailable"}</option>
             <option value="codex" disabled={!providers.codex}>Codex{providers.codex ? "" : " · unavailable"}</option>
           </select><small>{worker.running ? "Put this worker to sleep before changing provider." : providerCapabilitiesUnavailable ? "Provider availability could not be checked. Refresh Swarm before changing this setting." : "Used the next time this worker wakes. Existing history remains available."}</small></div>
@@ -437,7 +438,14 @@ function repositoryName(workspace: string): string {
 }
 
 function providerLabel(provider: ProviderKind): string {
-  return provider === "codex" ? "Codex" : "Claude";
+  switch (provider) {
+    case "claude_code": return "Claude";
+    case "codex": return "Codex";
+    case "gemini": return "Gemini";
+    case "grok": return "Grok";
+    case "opencode": return "OpenCode";
+    default: return "Unrecognized provider";
+  }
 }
 
 function workerMatches(worker: Worker, query: string): boolean {

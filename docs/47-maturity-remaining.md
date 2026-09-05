@@ -55,6 +55,22 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Evidence from the September 4–5 demo run
 
+### Provider policy and truthful settings
+
+The provider acceptance template is now in `48-provider-acceptance.md`. Current
+Night Watch exclusions were rechecked with the existing Linux API/persistence
+test binaries: one final-submission gate test and three presence/wake/briefing
+tests passed. Wake and briefing tests verify resumed eligibility without losing
+queued work or spending attempts. This is not real-provider promotion evidence.
+
+Settings previously labeled every non-Codex provider as Claude and omitted an
+existing experimental binding from its selector. The correction preserves that
+binding and its real label, including when renaming or searching for the worker.
+Eighteen worker-settings tests and TypeScript checking passed; Edge verified
+Gemini selected in the actual component fixture. The explicit experimental
+opt-in/availability contract remains open. This UI correction is not deployed
+yet: the fixed-build one-hour server soak must finish first.
+
 ### One queue row per known held task
 
 Known held briefings now show their recorded reason and queued age inside the
