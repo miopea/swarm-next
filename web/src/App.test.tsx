@@ -1178,6 +1178,48 @@ test.each([true, false])("conversation review opens the actual terminal (already
   expect(starts).toHaveLength(awake ? 0 : 1);
 });
 
+test.each(["pending", "resolved", "withdrawn", "other-task", "worker-owned"])("queue navigation follows only the matching pending operator decision: %s", async (scenario) => {
+  const originalScroll = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+  try {
+  const base = bootFetch();
+  const fetch = vi.fn((input: string | URL | Request, _init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/preferences/start-surface")) return Promise.resolve(ok({ start_surface: "queues" }));
+    if (url === "/api/v1/tasks") return Promise.resolve(ok([{
+      id: "task-queue", hive_id: "h", title: "Queue navigation fixture", description: "", operator_instruction: "",
+      workspace: "/fixture", state: "blocked", priority: "normal", position: 0, created_at: 1, updated_at: 1,
+      assigned_worker_id: null, assigned_session_id: null, next_move_owner: scenario === "worker-owned" ? "worker" : "operator",
+      blocked_note: "Waiting on the operator is not enough to infer a decision",
+    }]));
+    if (url === "/api/v1/decisions") return Promise.resolve(ok([{
+      id: "decision-queue", hive_id: "h", requesting_worker_id: "queen", task_id: scenario === "other-task" ? "unrelated" : "task-queue",
+      kind: "approval", urgency: "normal", title: "Choose a queue route", summary: "Choose a route", reason: "Two routes", risk: "", evidence: "",
+      suggested_action: "Keep context", allowed_actions: ["Keep context", "Hold"], deadline: null,
+      state: scenario === "resolved" || scenario === "withdrawn" ? scenario : "pending",
+      resolution_action: null, resolution_note: "", resolved_by_operator_id: null, created_at: 1, updated_at: 1, resolved_at: null, delivery_state: null,
+    }]));
+    return base(input);
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: /^Queues/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Queue navigation fixture/ }));
+  if (scenario === "pending") {
+    expect(await screen.findByRole("heading", { name: "Needs you" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Choose a queue route" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Task board" })).not.toBeInTheDocument();
+  } else expect(await screen.findByRole("heading", { name: "Task board" })).toBeInTheDocument();
+  expect(fetch.mock.calls.some(([url, init]) => init?.method && !["GET", "HEAD"].includes(init.method) && /decisions/.test(String(url)))).toBe(false);
+  expect(fetch.mock.calls.some(([url]) => /\/(resolve|answer|dismiss|start)$/.test(String(url)))).toBe(false);
+  if (scenario === "pending") await waitFor(() => expect(document.activeElement).toHaveAttribute("data-decision-id", "decision-queue"));
+  } finally {
+    cleanup();
+    if (originalScroll) Object.defineProperty(HTMLElement.prototype, "scrollIntoView", originalScroll);
+    else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+  }
+});
+
 function bootFetch() {
   return vi.fn((input: string | URL | Request) => {
     const url = String(input);

@@ -106,6 +106,13 @@ this routing does not resolve requests or weaken context-recovery safeguards.
 Verify mixed stale/fault observations, matching page and badge counts, and removal
 after a successful current-history observation without acknowledgement.
 
+Opening a queue task whose recorded next owner is the operator navigates directly
+to its linked pending decision and focuses that card. With several pending
+requests, the oldest request is the entry point; the inbox retains all requests.
+Resolved, withdrawn, unrelated requests and blocker prose never supply that link.
+If refreshed data no longer contains a matching pending request, open task details
+instead. Navigation never resolves, dismisses, answers or creates a request.
+
 A failed coordinator read is not evidence that held work resolved. Preserve the
 last successful observation until a successful replacement or logout. Needs You
 and Queues qualify that evidence as unavailable for refresh, without adding an

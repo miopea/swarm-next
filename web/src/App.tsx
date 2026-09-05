@@ -2422,7 +2422,24 @@ export function App() {
               heldBriefings={heldBriefings}
               blockedWaits={blockedEscalations}
               heldDeliveries={queuedDeliveryObservations}
-              onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }}
+              onOpenTask={(taskId) => {
+                // Navigate from recorded ownership and exact task linkage, not
+                // a blocker note. Never resurrect a resolved/withdrawn request.
+                const request = tasks.find((task) => task.id === taskId)?.next_move_owner === "operator"
+                  ? decisions.filter((decision) => decision.task_id === taskId && decision.state === "pending")
+                    .sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id))[0]
+                  : undefined;
+                if (request) {
+                  setDecisionFocus((current) => ({ id: request.id, request: (current?.request ?? 0) + 1 }));
+                  setSurface("decisions");
+                } else {
+                  // Independently refreshed data may no longer have that
+                  // pending request. Keep task evidence reachable, without
+                  // pointing at another task's decision or making a new one.
+                  setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 }));
+                  setSurface("tasks");
+                }
+              }}
             />
           </Suspense>
         ) : surface === "tasks" ? (

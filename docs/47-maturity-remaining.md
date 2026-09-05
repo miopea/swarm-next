@@ -8,6 +8,18 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Queues opens the operator's decision directly (September 5)
+
+Operator-owned queue task navigation now uses the exact linked pending decision,
+opens Needs You and focuses its card. Multiple pending requests use the oldest
+as the entry point, leaving the full inbox available. Missing, resolved, withdrawn
+or unrelated requests fall back to task evidence, as does non-operator ownership.
+No decision mutation or worker start is sent. The 50 App tests and TypeScript
+passed. The first full run had one existing blocked-age navigation test time out
+(1,169 passed); that test then passed alone. A second full run and live deployment
+acceptance are pending. Do not treat this navigation fix as completion of queue
+ownership reconciliation or direct-terminal answer capture.
+
 ### Conversation observations versus operator actions (September 5)
 
 Commit `fc04d95d` routes transcript-recency-only observations to collapsed runtime
