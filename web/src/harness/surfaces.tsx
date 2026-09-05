@@ -497,8 +497,8 @@ export const SURFACES: Surface[] = [
       <div className="attention-workspace">
         <DecisionInbox
           decisions={[demoDecision]}
-          tasks={[]}
-          workers={[]}
+          tasks={demoTasks}
+          workers={demoWorkers}
           busy={false}
           onResolve={async () => undefined}
         />

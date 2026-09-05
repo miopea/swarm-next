@@ -47,7 +47,7 @@ const GROUP_MEANINGS: Record<Group["owner"], string> = {
   queen: "Work whose next recorded move belongs to Queen.",
   operator: "Reviewed work with a decision open on it. Nobody in the Hive can move these — answering the decision releases them.",
   worker: "Work a worker owns — in progress, or handed back for something missing.",
-  blocked: "Nothing here can move these. A hard reason, such as waiting on another task.",
+  blocked: "Blocked work. Queen coordinates dependencies and recovery; task context explains the recorded block.",
   release: "Finished and accepted. These close themselves when the work ships.",
   nobody: "Closed.",
 };
@@ -77,7 +77,7 @@ function taskProgress(task: Task): string {
     if (task.dispatch_state === "uncertain") return "Briefing delivery unconfirmed · Queen must reconcile before retrying";
     if (task.dispatch_state === "queued" || task.dispatch_state === "dispatching") return "Briefing awaiting confirmed delivery";
     if (task.state === "ready" && task.dispatch_state === "delivered") return "Briefing delivered · work has not been marked active";
-    return task.state === "active" ? "Marked active · live progress not established by task status" : "Ready · briefing delivery not recorded";
+    return task.state === "active" ? "Marked active" : "Ready · briefing delivery not recorded";
   }
   if (task.state === "review") {
     if (task.outcome_delivery_state === "uncertain") return "Handoff delivery unconfirmed · Queen must reconcile before retrying";

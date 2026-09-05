@@ -36,6 +36,12 @@ function task(
     priority,
     workspace,
     state,
+    // Explicit fictional lifecycle evidence; never used to derive live owners.
+    next_move_owner: state === "completed" || state === "abandoned" ? "nobody"
+      : state === "blocked" ? "blocked"
+      : state === "awaiting_release" ? "release"
+      : state === "active" || (state === "ready" && worker) ? "worker" : "queen",
+    dispatch_state: state === "active" ? "delivered" : state === "ready" && worker ? "queued" : null,
     assigned_worker_id: worker,
     assigned_session_id: null,
     position,
@@ -149,7 +155,7 @@ export const demoTasks: Task[] = [
     "0199bbbb-0000-7000-8000-000000000003",
     "Give the search index a way to say it is stale",
     "It currently answers confidently from whatever it last built. A reader cannot tell a fresh answer from a week-old one.",
-    "ready",
+    "blocked",
     "/home/you/projects/orchard-api",
     null,
     2,
@@ -177,9 +183,9 @@ export const demoTasks: Task[] = [
 
 export const demoDecision: DecisionRequest = {
   id: "demo-decision-1",
-  hive_id: "demo-hive",
-  requesting_worker_id: "demo-orchard-api",
-  task_id: "demo-task-export",
+  hive_id: "0199ffff-0000-7000-8000-000000000000",
+  requesting_worker_id: "0199aaaa-0000-7000-8000-000000000003",
+  task_id: "0199bbbb-0000-7000-8000-000000000002",
   kind: "input",
   urgency: "normal",
   title: "Should a slow source fail the export, or write what it has?",
@@ -199,12 +205,12 @@ export const demoDecision: DecisionRequest = {
   created_at: now - 5_400,
   updated_at: now - 5_400,
   resolved_at: null,
-  delivery_state: "delivered",
+  delivery_state: null,
 };
 
 export const demoBlocked: BlockedEscalation[] = [
   {
-    task_id: "demo-task-index",
+    task_id: "0199bbbb-0000-7000-8000-000000000003",
     title: "Give the search index a way to say it is stale",
     worker_name: "Orchard API",
     workspace: "/home/you/projects/orchard-api",
@@ -218,7 +224,7 @@ export const demoBriefings: HeldBriefing[] = [
 ].map(([title, worker, age], index) => ({
   task_id: `demo-briefing-${index}`,
   title: title as string,
-  worker_id: `demo-worker-${index}`,
+  worker_id: "0199aaaa-0000-7000-8000-000000000004",
   worker_name: worker as string,
   queued_at: now - (age as number),
   reason: "worker_already_working",

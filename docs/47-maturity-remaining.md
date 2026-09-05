@@ -56,6 +56,16 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ### Needs You presentation check
 
+Dev health subsequently confirmed `c728a823c1d7` with no degraded subsystems and
+unchanged worker-engine identity. The queue fixture had stale missing owner fields
+and mismatched correlation IDs; these now use consistent fictional identities and
+explicit lifecycle evidence. A dedicated fixture invariant test plus nine queue
+tests passed, as did the TypeScript check. Edge DOM/screenshot inspection then
+showed Queen, worker and blocked groups and correctly grouped held briefings.
+Blocked copy no longer claims nobody can move that work. This makes presentation
+inspection representative; it does not supply missing production dependency or
+next-action records or prove that live queues reconcile correctly.
+
 The existing network-isolated harness served the actual DecisionInbox component
 at `http://127.0.0.1:5209/harness.html?surface=needs-you-demo` in a dedicated Edge
 tab. Desktop before/after screenshots and DOM inspection confirmed optional notes
