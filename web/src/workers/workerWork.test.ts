@@ -115,7 +115,7 @@ test("a worker's finished-but-unshipped work is counted, summarised, and never c
   expect(work.openCount).toBe(27);
   // The summary must account for every open task, or it disagrees with the
   // badge printed next to it by exactly the states it forgot.
-  expect(work.summary).toBe("1 review · 25 awaiting_release · 1 blocked");
+  expect(work.summary).toBe("1 review · 25 awaiting release · 1 blocked");
   // AND THE HEADER MUST NOT LEAD WITH FINISHED WORK. `indexOf` returned -1 for
   // awaiting_release and -1 sorts before 0, so it outranked everything.
   expect(work.current?.state).toBe("review");

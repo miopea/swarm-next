@@ -457,6 +457,10 @@ pub enum TaskStoreError {
     TaskPrerequisite(#[from] swarm_domain::TaskPrerequisiteError),
     #[error("completed work requires concise verification evidence")]
     CompletionEvidenceRequired,
+    #[error(
+        "the no-deployment claim is already approved; this task is {task_state}. Read its current evidence and history rather than retrying or rewriting the accepted claim"
+    )]
+    CompletionExemptionAlreadyApproved { task_state: TaskState },
     // ⚠️ NAMES THE MISSING RECORD, NOT THE BASIS. This case used to return
     // CompletionEvidenceRequired, whose text is "completed work requires
     // concise verification evidence" -- so an approver with a perfectly good

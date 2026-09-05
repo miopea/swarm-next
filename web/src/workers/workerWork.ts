@@ -89,7 +89,8 @@ export function workerWork(tasks: Task[]): WorkerWork {
   const summary = WORK_ORDER
     .map((state) => {
       const count = counts.get(state) ?? 0;
-      return count ? `${count} ${state}` : undefined;
+      const label = state === "awaiting_release" ? "awaiting release" : state;
+      return count ? `${count} ${label}` : undefined;
     })
     .filter(Boolean)
     .join(" · ");

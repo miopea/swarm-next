@@ -1141,7 +1141,14 @@ impl TaskStore {
             |row| row.get(0),
         )?;
         if approved {
-            return Err(TaskStoreError::CompletionEvidenceRequired);
+            let task_state: String = connection.query_row(
+                "SELECT state FROM tasks WHERE id = ?1",
+                [task_id.to_string()],
+                |row| row.get(0),
+            )?;
+            let task_state = TaskState::from_str(&task_state)
+                .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?;
+            return Err(TaskStoreError::CompletionExemptionAlreadyApproved { task_state });
         }
         // A CLAIM MADE ON A TASK THAT ALREADY DEPLOYED IS BORN SUPERSEDED, and
         // it has to carry the same mark as one superseded from the other
@@ -1808,11 +1815,27 @@ mod completion_evidence_tests {
             .approve_completion_exemption(spike, "queen", "Read the handoff.", 2_000)
             .unwrap();
 
-        assert!(
-            store
+        for expected_state in [TaskState::Review, TaskState::Completed] {
+            if expected_state == TaskState::Completed {
+                store.transition_task(spike, TaskState::Completed).unwrap();
+            }
+            let error = store
                 .claim_completion_exemption(spike, "Actually it shipped, trust me.", None, 3_000)
-                .is_err()
-        );
+                .unwrap_err();
+            assert!(
+                matches!(error, TaskStoreError::CompletionExemptionAlreadyApproved { task_state } if task_state == expected_state)
+            );
+            assert!(error.to_string().contains("already approved"));
+            assert_eq!(
+                store
+                    .task_evidence_record(spike)
+                    .unwrap()
+                    .exemption
+                    .unwrap()
+                    .approved_at,
+                Some(2_000)
+            );
+        }
         assert_eq!(
             store.completion_exemption_reason(spike).unwrap().as_deref(),
             Some("A duplicate of an earlier task.")

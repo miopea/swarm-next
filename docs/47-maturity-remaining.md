@@ -8,6 +8,21 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Accepted evidence retry feedback (September 5)
+
+The isolated blocked-ready recovery task auto-completed after its empty commit
+report. A later no-deployment claim was rejected with misleading instructions
+to supply concise evidence, causing unnecessary retries. An already-approved
+claim now returns a distinct conflict with the current task state and directs
+the caller to read accepted evidence/history. Approved evidence remains immutable.
+Validation: 20 completion-evidence tests, 16 task-outcome tests, and the focused
+API error-mapping test passed in the isolated Linux workspace. Live acceptance
+of the new error is pending deployment. This does not prove backlog recovery.
+
+The worker roster also renders "awaiting release" rather than the internal
+`awaiting_release` identifier. TypeScript checking and all 11 worker-work tests
+passed; deployed visual acceptance remains pending.
+
 ### Blocked reassessment discovery (September 5)
 
 Queen's completed-prerequisite read missed blocks with no explicit edge. The

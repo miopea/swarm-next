@@ -8680,6 +8680,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "no_no_deployment_claim_to_approve",
             error.to_string(),
         ),
+        TaskStoreError::CompletionExemptionAlreadyApproved { .. } => ApiError::new(
+            StatusCode::CONFLICT,
+            "no_deployment_claim_already_approved",
+            error.to_string(),
+        ),
         // ITS OWN CODE, because it is not a malformed request and the caller is
         // not at fault for asking. The claim was refused because the recorded
         // commits disagree with it, and a client that can tell this apart can
@@ -9046,6 +9051,17 @@ fn require_valid_size(rows: u16, columns: u16) -> Result<(), ApiError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn approved_exemption_refusal_is_a_state_conflict_not_invalid_evidence() {
+        let error = super::task_store_error(
+            &swarm_persistence::TaskStoreError::CompletionExemptionAlreadyApproved {
+                task_state: swarm_domain::TaskState::Completed,
+            },
+        );
+        assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(error.code, "no_deployment_claim_already_approved");
+        assert!(error.message.contains("this task is completed"));
+    }
     /// Filing feedback must never turn a Hive into a recipient of somebody
     /// else's issue backlog.
     ///
