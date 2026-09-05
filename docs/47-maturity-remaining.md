@@ -56,6 +56,18 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ### Current review obligation in Queues
 
+Development reload verified `664abff3` healthy with no degraded subsystems.
+The worker-engine identity has changed since the earlier baseline; this check
+does not establish uninterrupted engine continuity across that interval.
+
+Completion review follow-up found that a late approval could stamp an already
+withdrawn exemption as approved, even though it remained ineffective evidence.
+The approval update now requires a live claim. A regression covers all three
+authorized approvers, unchanged withdrawn history, and a corrected new claim
+that can subsequently be approved. All 20 completion-evidence tests passed.
+This does not resolve the broader local-code/no-deployment policy gap exposed
+by the demo heartbeat task, or prove a live Queen review round trip.
+
 Task reads now include the current unanswered review message ID/text only for
 Review work bound to its current request worker. Answering clears the projection;
 supersession replaces it; reassignment removes it. Queues shows short requests

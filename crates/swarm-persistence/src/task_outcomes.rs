@@ -1315,7 +1315,7 @@ impl TaskStore {
         let updated = connection.execute(
             "UPDATE task_completion_exemptions
              SET approved_at = ?2, approved_by = ?3, approved_basis = ?4
-             WHERE task_id = ?1 AND approved_at IS NULL",
+             WHERE task_id = ?1 AND approved_at IS NULL AND withdrawn_at IS NULL",
             params![task_id.to_string(), now, approver, basis],
         )?;
         drop(connection);
@@ -1743,6 +1743,41 @@ mod completion_evidence_tests {
             .unwrap();
         assert_eq!(record.withdrawn_at, None);
         assert_eq!(record.withdrawn_by, None);
+    }
+
+    #[test]
+    fn a_withdrawn_claim_cannot_receive_a_late_approval() {
+        let store = TaskStore::in_memory().unwrap();
+        let id = task(&store);
+        store
+            .claim_completion_exemption(id, "Investigation only.", None, 1_000)
+            .unwrap();
+        store
+            .withdraw_completion_exemption(id, "queen", 1_100)
+            .unwrap();
+        for actor in ["queen", "operator", "coordinator"] {
+            assert!(matches!(
+                store.approve_completion_exemption(id, actor, "Late review.", 1_200),
+                Err(TaskStoreError::NoCompletionExemptionToApprove)
+            ));
+        }
+        let record = store.task_evidence_record(id).unwrap().exemption.unwrap();
+        assert_eq!(record.approved_at, None);
+        assert_eq!(record.withdrawn_at, Some(1_100));
+        assert_eq!(
+            store.completion_evidence(id).unwrap(),
+            CompletionEvidence::None
+        );
+
+        store
+            .claim_completion_exemption(id, "Corrected claim.", None, 1_300)
+            .unwrap();
+        assert_eq!(
+            store
+                .approve_completion_exemption(id, "queen", "Checked corrected claim.", 1_400)
+                .unwrap(),
+            CompletionEvidence::ExemptionApproved
+        );
     }
 
     /// An assertion with no argument behind it is what this gate exists to
