@@ -64,7 +64,16 @@ regression passed, as did 16 Queues tests and TypeScript checks. The dedicated
 Edge fixture confirmed the visible note and existing collapsed active-work area.
 All 541 persistence tests, 46 Queues/style tests, strict API lint and formatting
 checks passed. The live EXPLAIN uses the task/sequence index, not a whole-history
-scan. This slice is not deployed yet. This improves blocker visibility but does not close dependency ownership,
+scan. Normal development reload activated `5972db76` with healthy API status.
+The isolated API task `01a07043-4539-7263-9361-d17400613d43` proved the note
+appears, clears on recovery, does not return on an empty reblock, and remains
+absent after abandonment. The test created no assignment or worker work.
+`check-blocker-context.sh` reproduces the sequence in the demo workspace.
+Three task-route reads remained 17.5–17.8 ms. Actual host PID 2058454 and demo
+session `01a0700b-9d8f-71d2-a44c-1cce6b27d2dd` were unchanged; the API advertises
+the new engine build while host-current still points to the earlier package.
+Do not confuse API activation with complete rolling-engine convergence.
+This improves blocker visibility but does not close dependency ownership,
 recovery-action integration, or authenticated live visual acceptance.
 
 ### Measured task projection scans
