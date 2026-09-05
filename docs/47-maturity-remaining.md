@@ -36,6 +36,24 @@ creation now additionally rejects missing, non-executable, relative or directory
 helper paths without overwriting an existing overlay. All 26 isolated engine
 library tests passed; that engine guard is not yet deployed.
 
+Engine guard deployment and live maintenance then completed on
+`1.5.0-dev-0d4929315a38-20260905170406-2418046`. All 32 terminal-host library/binary
+tests and rustfmt passed before deployment. Managed maintenance reported eleven
+stopped sessions and replaced engine PID 2323268 with 2420200, build
+`b0178a9cc149998172b1e8b1b0b95b0a0f3c0c3489bd73edf7435e00d0ff692c`.
+The new process executable resolves to its intact release, without `(deleted)`.
+All eleven original worker IDs returned automatically. For every returned worker,
+the exact recovery target and provider-start conversation match the pre-maintenance
+selected ID, and the API reports Restored. In particular, D365 reopened its
+corrected `c4d71311-c854-4ac8-b637-542b4b280401`, and Contract demo reopened
+`c4435eee-57b0-4546-b6ef-dc182080e7b5` with an actual callback this time.
+The first and last new session UUID creation timestamps span 58.471 seconds;
+this measures the allocation span, not per-worker interactive readiness.
+Health remains ok, no degraded subsystems, eleven sessions and no drain.
+No release was cut; main pushes bypassed four expected GitHub checks.
+This closes the demonstrated helper-deletion/restart journey, not all of REC-01
+or the unproven historical point where D365's earlier default became stale.
+
 ### Engine update and D365 conversation regression (September 5)
 
 Development revision `17c46d45b23e` deployed without cutting a release. App/API
