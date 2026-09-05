@@ -800,6 +800,13 @@ impl TaskStore {
             std::fs::create_dir_all(parent)?;
         }
         let connection = Connection::open(path)?;
+        // Refuse damaged existing state before journal-mode changes or schema
+        // migration can alter the evidence. Post-migration checks still apply.
+        let integrity: String =
+            connection.pragma_query_value(None, "quick_check", |row| row.get(0))?;
+        if integrity != "ok" {
+            return Err(TaskStoreError::IntegrityFailure(integrity));
+        }
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         Self::from_connection(connection)
@@ -6030,6 +6037,38 @@ mod tests {
         assert_eq!(activity.events[1].to_state, Some(TaskState::Ready));
         assert_eq!(activity.events[2].kind, TaskActivityKind::Assigned);
         assert_eq!(activity.events[5].to_state, Some(TaskState::Completed));
+    }
+
+    #[test]
+    fn corrupt_existing_state_is_refused_before_journal_changes_or_migration() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("damaged.sqlite3");
+        let store = TaskStore::open(&path).unwrap();
+        store
+            .create_task("Preserve evidence", "/workspace")
+            .unwrap();
+        drop(store);
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "PRAGMA journal_mode = DELETE;
+             PRAGMA ignore_check_constraints = ON;
+             UPDATE tasks SET state = 'invalid-state';
+             PRAGMA user_version = 137;",
+            )
+            .unwrap();
+        drop(connection);
+        let original = std::fs::read(&path).unwrap();
+        assert!(matches!(
+            TaskStore::open(&path),
+            Err(TaskStoreError::IntegrityFailure(_))
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        let connection = Connection::open(&path).unwrap();
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 137);
     }
 
     #[test]

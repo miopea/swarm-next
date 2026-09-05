@@ -111,3 +111,9 @@ restored task identity, unchanged source backup and preserved damaged bytes.
 It uses an owned-process service adapter, not the live systemd units, and leaves
 the production Hive untouched. Corruption consequence routing and containment
 remain separate REC-02 acceptance gates.
+
+Normal file-backed startup also checks SQLite integrity before changing journal
+mode or running schema migrations. Post-migration validation remains in place.
+A regression seeds an invalid checked value at an older schema and proves that
+refusal preserves the exact database bytes and old schema version. This is a
+startup safeguard, not a runtime integrity-failure latch or operator notification.

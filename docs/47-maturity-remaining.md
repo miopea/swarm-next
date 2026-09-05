@@ -80,6 +80,13 @@ retained separately at `.swarm-recovery-drill-t2u_s0ha`. No restoration or
 corruption was performed on the development Hive. REC-02 still needs explicit
 corruption consequence routing and write/dispatch containment acceptance.
 
+The normal file-backed open path now checks integrity before journal-mode or
+migration changes, in addition to post-migration checks. The targeted regression
+preserves a damaged schema-137 database byte-for-byte and does not migrate it.
+All 542 persistence tests and strict API lint passed; deployment is pending. Runtime
+`IntegrityFailure` still shares a generic unavailable response; a clear operator
+consequence and runtime containment must not be claimed from this startup fix.
+
 The engine update after `5972db76` was not stuck without a cause: its active
 reconciliation timer reported one of four sessions mid-turn. No force restart
 was requested. It subsequently converged automatically to engine `8d22d71b816d`
