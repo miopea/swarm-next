@@ -106,9 +106,8 @@ impl TaskStore {
                 ));
             }
         }
-        if !candidates.is_empty() {
-            insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
-        }
+        // Claiming is internal delivery ownership, not new task progress.
+        // Completion, failure and recovery publish the observable transition.
         transaction.commit()?;
         Ok(candidates)
     }
@@ -148,9 +147,8 @@ impl TaskStore {
              WHERE id = ?1 AND state = 'dispatching'",
             params![id, now],
         )? == 1;
-        if changed {
-            insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
-        }
+        // A guarded deferral leaves the same handoff pending. Its blocker is
+        // published by the refusal owner, not by every retry of this queue.
         transaction.commit()?;
         Ok(changed)
     }
@@ -229,6 +227,44 @@ mod tests {
         task_id: TaskId,
         worker_session: WorkerSessionId,
         queen_session: WorkerSessionId,
+    }
+
+    #[test]
+    fn held_outcome_retries_are_quiet_but_delivery_and_recovery_publish() {
+        for recover in [false, true] {
+            let fixture = active_assignment();
+            let store = &fixture.store;
+            store
+                .transition_worker_task(
+                    fixture.task_id,
+                    TaskState::Blocked,
+                    "Need a ruling",
+                    fixture.worker_session,
+                )
+                .unwrap();
+            let cursor = store.list_control_room_events(0).unwrap().next_cursor;
+            for now in 100..110 {
+                let outcome = store.claim_task_outcomes(now).unwrap().remove(0);
+                assert!(store.defer_task_outcome(&outcome.id, now).unwrap());
+            }
+            let outcome = store.claim_task_outcomes(110).unwrap().remove(0);
+            assert!(
+                store
+                    .list_control_room_events(cursor)
+                    .unwrap()
+                    .events
+                    .is_empty()
+            );
+            if recover {
+                assert_eq!(store.recover_inflight_task_outcomes().unwrap(), 1);
+                assert_eq!(store.recover_inflight_task_outcomes().unwrap(), 0);
+            } else {
+                assert!(store.complete_task_outcome(&outcome.id, 111).unwrap());
+            }
+            let page = store.list_control_room_events(cursor).unwrap();
+            assert_eq!(page.events.len(), 1);
+            assert_eq!(page.events[0].kind, ControlRoomEventKind::TasksChanged);
+        }
     }
 
     #[test]

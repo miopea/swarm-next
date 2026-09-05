@@ -292,7 +292,7 @@ impl TaskStore {
             params![MAX_AUTOMATION_ATTEMPTS, now],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?, row.get::<_, String>(4)?)),
         ).optional()?;
-        let Some((run_id, session_id, trigger, _queued_count, queen_id)) = candidate else {
+        let Some((run_id, session_id, trigger, queued_count, queen_id)) = candidate else {
             transaction.commit()?;
             return Ok(None);
         };
@@ -342,7 +342,11 @@ impl TaskStore {
             ));
         }
         let presence = operator_presence_from_connection(&transaction, now)?.mode;
-        insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        // Internal delivery ownership does not mean Queen accepted the work.
+        // Still publish a changed board count while a run was waiting.
+        if count != queued_count {
+            insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        }
         transaction.commit()?;
         Ok(Some(QueenAutomationDelivery {
             run_id,
@@ -470,9 +474,8 @@ impl TaskStore {
              WHERE id = 1 AND run_id = ?1 AND state = 'delivering'",
             params![run_id, now],
         )? == 1;
-        if changed {
-            insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
-        }
+        // The same review remains pending; the refusal owner publishes any
+        // changed blocker. Rechecking it must not refresh the whole Hive.
         transaction.commit()?;
         Ok(changed)
     }
@@ -626,12 +629,18 @@ impl TaskStore {
     /// # Errors
     /// Returns an error when the durable marker cannot be recovered.
     pub fn recover_inflight_queen_automation(&self) -> Result<usize, TaskStoreError> {
-        let connection = self.connection()?;
-        Ok(connection.execute(
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let changed = transaction.execute(
             "UPDATE queen_automation SET state = 'uncertain', updated_at = unixepoch()
              WHERE state IN ('delivering', 'running')",
             [],
-        )?)
+        )?;
+        if changed > 0 {
+            insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        }
+        transaction.commit()?;
+        Ok(changed)
     }
 }
 
@@ -1068,6 +1077,48 @@ mod tests {
             first.0, next.0,
             "same time and count, different failed attempt"
         );
+    }
+
+    #[test]
+    fn held_review_retries_are_quiet_but_delivery_and_recovery_publish() {
+        for recover in [false, true] {
+            let store = TaskStore::in_memory().unwrap();
+            let queen = store.ensure_queen("/workspace/queen").unwrap();
+            store
+                .bind_worker_session(queen.id, WorkerSessionId::new())
+                .unwrap();
+            store.request_queen_automation_run(100).unwrap();
+            let cursor = store.list_control_room_events(0).unwrap().next_cursor;
+            for now in 101..111 {
+                let delivery = store.claim_queen_automation(now).unwrap().unwrap();
+                assert!(
+                    store
+                        .defer_queen_automation_delivery(&delivery.run_id, now)
+                        .unwrap()
+                );
+            }
+            let delivery = store.claim_queen_automation(111).unwrap().unwrap();
+            assert!(
+                store
+                    .list_control_room_events(cursor)
+                    .unwrap()
+                    .events
+                    .is_empty()
+            );
+            if recover {
+                assert_eq!(store.recover_inflight_queen_automation().unwrap(), 1);
+                assert_eq!(store.recover_inflight_queen_automation().unwrap(), 0);
+            } else {
+                assert!(
+                    store
+                        .complete_queen_automation_delivery(&delivery.run_id, 112)
+                        .unwrap()
+                );
+            }
+            let page = store.list_control_room_events(cursor).unwrap();
+            assert_eq!(page.events.len(), 1);
+            assert_eq!(page.events[0].kind, ControlRoomEventKind::WorkersChanged);
+        }
     }
 
     #[test]

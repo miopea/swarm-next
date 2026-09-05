@@ -16,6 +16,29 @@ const MAX_STALE_CANDIDATES: i64 = 32;
 const MAX_EXITED_WORK_CANDIDATES: i64 = 32;
 const MAX_UNSTARTED_WORK_CANDIDATES: i64 = 32;
 
+fn refusal_matches(
+    connection: &rusqlite::Connection,
+    kind: &str,
+    subject: &str,
+    worker_id: Option<WorkerId>,
+    session_id: Option<WorkerSessionId>,
+    reason: &str,
+) -> rusqlite::Result<bool> {
+    connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM coordinator_refusals
+         WHERE kind = ?1 AND subject = ?2 AND worker_id IS ?3
+           AND session_id IS ?4 AND reason = ?5 AND cleared_at IS NULL)",
+        params![
+            kind,
+            subject,
+            worker_id.map(|id| id.to_string()),
+            session_id.map(|id| id.to_string()),
+            reason
+        ],
+        |row| row.get(0),
+    )
+}
+
 /// The last moment a worker or the operator did something to a task itself.
 ///
 /// One definition, because two flags need it and a second copy is how they
@@ -3452,8 +3475,57 @@ mod tests {
         assert_eq!(standing[0].observations, 30);
     }
 
-    /// One row per stuck thing, not one per attempt. The measured case retried
-    /// 1503 times in twenty-four hours; that is a count, not 1503 entries.
+    #[test]
+    fn refusal_changes_publish_but_repeated_checks_do_not() {
+        let store = TaskStore::in_memory().unwrap();
+        store.ensure_queen("/workspace/queen").unwrap();
+        let cursor = store.list_control_room_events(0).unwrap().next_cursor;
+        for now in 100..110 {
+            store
+                .record_coordinator_refusal(
+                    REFUSAL_DELIVERY_HELD,
+                    "queen-review",
+                    None,
+                    None,
+                    "Waiting on input",
+                    now,
+                )
+                .unwrap();
+        }
+        let page = store.list_control_room_events(cursor).unwrap();
+        assert_eq!(page.events.len(), 1);
+        store
+            .record_coordinator_refusal(
+                REFUSAL_DELIVERY_HELD,
+                "queen-review",
+                None,
+                None,
+                "Changed blocker",
+                110,
+            )
+            .unwrap();
+        let changed = store.list_control_room_events(page.next_cursor).unwrap();
+        assert_eq!(changed.events.len(), 1);
+        assert!(
+            store
+                .clear_coordinator_refusal(REFUSAL_DELIVERY_HELD, "queen-review", 111)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .clear_coordinator_refusal(REFUSAL_DELIVERY_HELD, "queen-review", 112)
+                .unwrap()
+        );
+        assert_eq!(
+            store
+                .list_control_room_events(changed.next_cursor)
+                .unwrap()
+                .events
+                .len(),
+            1
+        );
+    }
+
     #[test]
     fn repeated_refusals_are_one_row_with_a_count() {
         let store = TaskStore::in_memory().unwrap();
@@ -5825,6 +5897,9 @@ impl TaskStore {
     ) -> Result<(), TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
+        // Retry counters are diagnostic evidence, not a changed blocker.
+        let unchanged =
+            refusal_matches(&transaction, kind, subject, worker_id, session_id, reason)?;
         if matches!(
             kind,
             REFUSAL_DELIVERY_HELD | REFUSAL_DELIVERY_HELD_UNSENT_TEXT
@@ -5887,32 +5962,7 @@ impl TaskStore {
             )?;
         }
         transaction.execute(
-            "INSERT INTO coordinator_refusals
-                 (kind, subject, worker_id, session_id, reason,
-                  first_observed_at, last_observed_at, observations, cleared_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 1, NULL)
-             ON CONFLICT(kind, subject) DO UPDATE SET
-                 last_observed_at = excluded.last_observed_at,
-                 observations = CASE
-                     WHEN coordinator_refusals.cleared_at IS NULL
-                       AND coordinator_refusals.worker_id IS excluded.worker_id
-                       AND coordinator_refusals.session_id IS excluded.session_id
-                     THEN coordinator_refusals.observations + 1
-                     ELSE 1
-                 END,
-                 -- A refusal that had cleared and is happening again is a new
-                 -- occurrence, not a continuation of the old one.
-                 first_observed_at = CASE
-                     WHEN coordinator_refusals.cleared_at IS NULL
-                       AND coordinator_refusals.worker_id IS excluded.worker_id
-                       AND coordinator_refusals.session_id IS excluded.session_id
-                     THEN coordinator_refusals.first_observed_at
-                     ELSE excluded.first_observed_at
-                 END,
-                 reason = excluded.reason,
-                 worker_id = excluded.worker_id,
-                 session_id = excluded.session_id,
-                 cleared_at = NULL",
+            include_str!("coordinator_refusal_upsert.sql"),
             params![
                 kind,
                 subject,
@@ -5922,6 +5972,9 @@ impl TaskStore {
                 now
             ],
         )?;
+        if !unchanged {
+            insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        }
         transaction.commit()?;
         Ok(())
     }
@@ -5936,12 +5989,18 @@ impl TaskStore {
         subject: &str,
         now: i64,
     ) -> Result<bool, TaskStoreError> {
-        let connection = self.connection()?;
-        Ok(connection.execute(
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let changed = transaction.execute(
             "UPDATE coordinator_refusals SET cleared_at = ?3
              WHERE kind = ?1 AND subject = ?2 AND cleared_at IS NULL",
             params![kind, subject, now],
-        )? > 0)
+        )? > 0;
+        if changed {
+            insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        }
+        transaction.commit()?;
+        Ok(changed)
     }
 
     /// Legacy freshness window for non-prompt refusal kinds. Prompt observations

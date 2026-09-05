@@ -7,6 +7,25 @@ authorized. No release is authorized.
 
 ## Live dogfood follow-up: removed Jira work — 2026-09-05
 
+### Follow-up: meaningful Queen delivery invalidations
+
+- Removed broad task/worker refresh events from internal outcome/review claims
+  and unchanged guarded deferrals. Durable claims, attempts and crash recovery
+  remain intact. Changed actionable counts still publish.
+- Refusal records now own publication of new/changed/resolved blockers; repeated
+  observations only update their diagnostic counters. Previously these records
+  relied on unrelated refresh traffic. Queen crash recovery now commits its
+  uncertainty and invalidation atomically.
+- Pending delivery no longer claims Queen is already reviewing. Task handoff
+  copy also avoids inventing a quiet-moment blocker from the queue state alone.
+- Focused refusal regressions (11), Queen/outcome suites (30/16), frontend
+  presentation/task-board tests (48), TypeScript checking and strict persistence
+  Clippy pass. Live event-rate comparison is still required; this is not yet a
+  claim that overall CPU or interaction latency is fixed.
+- The preceding Jira build is confirmed live by `/health` as
+  `1.5.0-dev-a319f69484da-20260905015037-1957242`, with no degraded subsystems.
+  The reload job completed successfully and API/engine services are active.
+
 - Added `47-maturity-remaining.md` as the explicit remaining implementation and
   acceptance checklist; the full program goal is active again.
 - Repeated WWD sync failures were traced to a linked, locally removed task.

@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
 import type { QueenAutomationStatus } from "../api";
-import { queenAutomationNeedsAttention } from "./queenAutomationPresentation";
+import { queenAutomationNeedsAttention, queenAutomationStateLabel, queenAutomationCompactLabel, queenAutomationStateTone } from "./queenAutomationPresentation";
 
 const idle: QueenAutomationStatus = {
   enabled: false,
@@ -16,6 +16,17 @@ const idle: QueenAutomationStatus = {
   outcome: null,
   waiting_reason: null,
 };
+
+test("claiming delivery does not claim Queen has started reviewing", () => {
+  for (const state of ["queued", "delivering"] as const) {
+    const status = { ...idle, state };
+    expect(queenAutomationStateLabel(status)).toBe("Review queued");
+    expect(queenAutomationCompactLabel(status)).toBe("Review queued");
+    expect(queenAutomationStateTone(status)).toBe("waiting");
+  }
+  expect(queenAutomationCompactLabel({ ...idle, state: "running" })).toBe("Reviewing work");
+  expect(queenAutomationStateTone({ ...idle, state: "running" })).toBe("online");
+});
 
 test("only treats interrupted or operator-blocked Queen reviews as attention", () => {
   expect(queenAutomationNeedsAttention(undefined)).toBe(false);

@@ -35,6 +35,22 @@ must be assessed with Dogfood evidence rather than treated as a universal budget
 
 ## Consequences
 
+### Internal delivery claims (2026-09-05)
+
+Queen review and worker-outcome claims remain durable, session-bound and
+recoverable, but acquiring and releasing an internal claim does not publish a
+whole-control-room invalidation. A claim has not proved provider acceptance;
+queued and delivering Queen reviews therefore both present as pending work.
+Changes to the Queen's actionable count still publish, as do acknowledged
+delivery, definitive failure, uncertainty and crash recovery. The refusal owner
+continues to publish changed blocker evidence. No delivery guards or retry
+limits are removed. Repeated unchanged deferrals must not rebuild the Hive.
+
+Regression tests exercise repeated claim/defer cycles followed by confirmed
+delivery or crash recovery, and require exactly one final invalidation. Queen
+recovery commits its uncertainty and event atomically, with no event on a
+second no-op recovery pass. Live event-rate comparison remains required.
+
 - Bursts of ordinary lifecycle changes drive at most one full snapshot rebuild
   per settling interval in this feed path.
 - Action and safety changes keep their immediate behavior.

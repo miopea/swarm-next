@@ -2,8 +2,7 @@ import type { QueenAutomationStatus } from "../api";
 
 export function queenAutomationStateLabel(status: QueenAutomationStatus | undefined) {
   if (!status) return "Checking Queen…";
-  if (status.state === "queued") return "Review queued";
-  if (status.state === "delivering") return "Sending work to Queen";
+  if (status.state === "queued" || status.state === "delivering") return "Review queued";
   if (status.state === "running") return "Queen is reviewing work";
   if (status.state === "uncertain") return "Review needs attention";
   if (status.state === "completed" && status.outcome === "needs_operator") return "Queen needs you";
@@ -15,8 +14,8 @@ export function queenAutomationStateLabel(status: QueenAutomationStatus | undefi
 export function queenAutomationCompactLabel(status: QueenAutomationStatus) {
   if (status.state === "uncertain") return "Automation needs review";
   if (status.state === "completed" && status.outcome === "needs_operator") return "Queen needs you";
-  if (status.state === "queued") return "Review queued";
-  if (status.state === "delivering" || status.state === "running") return "Reviewing work";
+  if (status.state === "queued" || status.state === "delivering") return "Review queued";
+  if (status.state === "running") return "Reviewing work";
   return status.enabled ? "Automation on" : "Automation off";
 }
 
@@ -55,7 +54,7 @@ export function queenAutomationStateDetail(
 
 export function queenAutomationStateTone(status: QueenAutomationStatus | undefined) {
   if (status?.state === "uncertain" || (status?.state === "completed" && status.outcome === "needs_operator")) return "offline";
-  if (status?.state === "running" || status?.state === "delivering") return "online";
+  if (status?.state === "running") return "online";
   return "waiting";
 }
 

@@ -15,8 +15,8 @@ const dispatchLabels = {
 } as const;
 
 const outcomeDeliveryLabels = {
-  queued: "This task's handoff waits for a quiet moment before reaching Queen",
-  dispatching: "Sending this task's handoff to Queen",
+  queued: "This task's handoff is queued for Queen",
+  dispatching: "This task's handoff is queued for Queen",
   delivered: "Queen has this task's handoff",
   uncertain: "Handoff delivery unconfirmed — the task record remains authoritative",
 } as const;
