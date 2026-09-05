@@ -3593,7 +3593,7 @@ fn record_deployment_tool() -> Tool {
 fn record_no_deployment_tool() -> Tool {
     tool(
         "swarm_record_no_deployment",
-        "State that this task has nothing to deploy, and why. For work that genuinely does not ship — a spike, a document, an investigation that found no defect, a duplicate, or explicitly local code/test work. Report commits first, including code commits. For code, Queen must check task scope and verification results; the deterministic coordinator does not approve it. This does not complete the task: Queen approves the claim, because you cannot both decide your own work needs no evidence and accept that decision. If something did ship, use swarm_record_deployment instead; a reason given here that turns out to be wrong is worse than no claim at all, because it reads as evidence.",
+        "State that this task has nothing to deploy, and why. For work that genuinely does not ship — a spike, a document, an investigation that found no defect, a duplicate, or explicitly local code/test work. Report commits first, including code commits. Review work with an explicit empty commit report or verified documentation-only commits may already be settled automatically by the coordinator, with a recorded approval basis; that is the intended routine path and needs no extra Queen countersignature. Read current task evidence and history before making a redundant claim. An already-approved claim cannot be rewritten: do not retry it with a different reason. For code, Queen must check task scope and verification results; the deterministic coordinator does not approve it. Recording a pending claim is not approval and does not itself complete the task. If something did ship, use swarm_record_deployment instead; a reason given here that turns out to be wrong is worse than no claim at all, because it reads as evidence.",
         &json!({
             "type": "object",
             "properties": {
@@ -6145,6 +6145,16 @@ mod tests {
     /// waking is a side effect of assignment and nothing said so outside the
     /// assign tool's own description. A brief that lists only what she may call
     /// reproduces that exactly.
+    #[test]
+    fn no_deployment_help_preserves_routine_settlement_and_code_judgment() {
+        let description = record_no_deployment_tool().description.unwrap();
+        assert!(description.contains("settled automatically by the coordinator"));
+        assert!(description.contains("needs no extra Queen countersignature"));
+        assert!(description.contains("do not retry it with a different reason"));
+        assert!(description.contains("For code, Queen must check task scope"));
+        assert!(description.contains("Recording a pending claim is not approval"));
+    }
+
     #[test]
     fn queen_is_briefed_on_what_she_owns_and_on_capabilities_that_are_not_tools() {
         let brief = standing_brief(WorkerRole::Queen);

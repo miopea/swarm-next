@@ -45,7 +45,21 @@ This is prompt-contract work, not a deterministic classifier or proof of model
 compliance. Isolated live investigation-to-decision acceptance remains open;
 existing real requests are not silently withdrawn or answered by this change.
 The focused standing-brief and per-run-brief tests both passed in the isolated
-Linux workspace. Deployment and live behavioral acceptance remain pending.
+Linux workspace. Commit `87cad0d6` deployed with healthy API, no degraded
+subsystems, engine PID 2456733 unchanged and 13 workers running. Live behavioral
+acceptance remains pending; guidance delivery is not proof of compliance.
+
+Recent task activity supplies one concrete reassessment outcome: sequence 7140
+records Queen filing the previously unfiled memberStatus operator question as
+a task-linked decision. It does not show that the remaining backlog has cleared.
+Sequence 7142 also shows Queen interpreting routine automatic settlement as a
+missing mandatory countersignature. The no-deployment tool description still
+claimed universal Queen approval despite the approved routine-settlement path.
+That description is corrected to distinguish coordinator-approved empty/docs-only
+reports from code exemptions requiring Queen judgment. Existing sessions may
+cache tool descriptions; this is not yet live provider-consumption evidence.
+The focused no-deployment description-contract test passed in isolation. This
+additional description correction is not yet deployed.
 
 Queen's completed-prerequisite read missed blocks with no explicit edge. The
 existing coordination-attention response now also supplies `blocked_reassessment`:
