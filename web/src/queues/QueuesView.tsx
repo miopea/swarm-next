@@ -185,6 +185,14 @@ export default function QueuesView({
                     </span>
                     {task.state === "blocked" && waits.has(task.id) && <span className="queue-task-meta">Blocked for {ageLabel(Math.max(0, Math.floor(waits.get(task.id)!.blocked_for_seconds / 3600)))} · Queen coordinates the next move</span>}
                   </button>
+                  {task.state === "review" && task.next_move_owner === "worker" && task.review_request_id && task.review_request && (
+                    task.review_request.length <= 240
+                      ? <p className="queue-task-meta">Queen asks: {task.review_request}</p>
+                      : <details className="decision-argument">
+                          <summary>Queen asks: {task.review_request.slice(0, 240)}…</summary>
+                          <p className="decision-prose">{task.review_request}</p>
+                        </details>
+                  )}
                 </li>
               ))}
             </ul>

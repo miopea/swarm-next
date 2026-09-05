@@ -77,6 +77,8 @@ export type Task = {
   workspace: string;
   state: TaskState;
   next_move_owner?: NextMoveOwner;
+  review_request_id?: string | null;
+  review_request?: string | null;
   assigned_worker_id: string | null;
   assigned_session_id: string | null;
   dispatch_state?: "queued" | "dispatching" | "delivered" | "uncertain" | null;

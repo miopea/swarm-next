@@ -48,6 +48,14 @@ reply selector; ordinary messaging stays available without falsely settling work
 
 ## Verification
 
+The task read projection includes the current request ID and exact bounded
+message text only while the task remains in Review, unanswered, and bound to
+the current assignee. Queues can therefore show what Queen requested without
+another per-row fetch or inferring a question from message order. Answering,
+reassigning, superseding or leaving Review removes/replaces the projection on
+the same subsequent task read. The immutable message remains in task history.
+This read adds no delivery claim and does not settle the task.
+
 Cover migration without fabricated links, atomic save/event failures, exact
 duplicate and conflicting replies, superseded requests, changed assignment,
 ordinary messages, role isolation, and a real MCP hand-back/answer round trip.

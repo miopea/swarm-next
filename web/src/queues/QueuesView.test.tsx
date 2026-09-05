@@ -13,6 +13,23 @@ function task(overrides: Partial<Task>): Task {
 }
 
 describe("QueuesView", () => {
+  test("long review requests keep their complete text in a collapsed disclosure", () => {
+    const question = "Verify the failure case. ".repeat(30);
+    render(<QueuesView workers={[]} onOpenTask={vi.fn()} tasks={[task({ next_move_owner: "worker", review_request_id: "request-long", review_request: question })]} />);
+    const disclosure = screen.getByText(question.trim()).closest("details");
+    expect(disclosure).not.toHaveAttribute("open");
+    expect(disclosure?.querySelector("summary")).toHaveTextContent("Queen asks:");
+    expect(disclosure?.querySelector("p")?.textContent).toBe(question);
+  });
+  test("shows the exact current review question and clears it when answered", () => {
+    const request = task({ next_move_owner: "worker", review_request_id: "request-1", review_request: "Which SHA?" });
+    const props = { workers: [], onOpenTask: vi.fn() };
+    const { rerender } = render(<QueuesView {...props} tasks={[request]} />);
+    expect(screen.getByText("Queen asks: Which SHA?")).toBeVisible();
+    rerender(<QueuesView {...props} tasks={[{ ...request, next_move_owner: "queen", review_request_id: null, review_request: null }]} />);
+    expect(screen.queryByText("Queen asks: Which SHA?")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Waiting on Queen/ })).toBeVisible();
+  });
   test("shows delivery progression without claiming a queued worker is actively working", () => {
     const props = { workers: [], onOpenTask: vi.fn() };
     const ready = task({ state: "ready", next_move_owner: "worker", dispatch_state: "queued" });

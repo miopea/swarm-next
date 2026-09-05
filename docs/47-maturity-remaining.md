@@ -54,6 +54,22 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Evidence from the September 4–5 demo run
 
+### Current review obligation in Queues
+
+Task reads now include the current unanswered review message ID/text only for
+Review work bound to its current request worker. Answering clears the projection;
+supersession replaces it; reassignment removes it. Queues shows short requests
+directly and retains complete longer requests under disclosure, without per-task
+network reads. Edge fixture DOM inspection confirmed the specific Queen request
+under the correct worker-owned task. No provider delivery is inferred.
+
+All 41 review-related persistence tests passed in the newly built Linux harness
+`swarm_persistence-dd4a06d4f2c77429`. The Windows broad filter had three migration
+fixtures fail while constructing home-based workspaces; these passed on Linux.
+The six focused review lifecycle tests passed on Windows too. Strict persistence
+lint, TypeScript checking and 12 queue/fixture tests passed. Live task/Queen round
+trip and the rest of the queue ownership model remain acceptance work.
+
 ### Needs You presentation check
 
 Dev health subsequently confirmed `c728a823c1d7` with no degraded subsystems and

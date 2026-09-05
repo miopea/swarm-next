@@ -606,6 +606,11 @@ pub struct Task {
     /// with the state and assignment it is derived from.
     #[serde(default = "default_next_move_owner")]
     pub next_move_owner: NextMoveOwner,
+    /// Exact current unanswered review request, not inferred terminal activity.
+    #[serde(default)]
+    pub review_request_id: Option<String>,
+    #[serde(default)]
+    pub review_request: Option<String>,
     #[serde(default)]
     pub deployment_recorded: bool,
     /// Whether this task has evidence that can close it: a recorded deployment,

@@ -227,6 +227,12 @@ mod tests {
             Some(request.as_str())
         );
         assert_eq!(current.status, "awaiting_answer");
+        let projected = store.get_task(task).unwrap();
+        assert_eq!(
+            projected.review_request_id.as_deref(),
+            Some(request.as_str())
+        );
+        assert_eq!(projected.review_request.as_deref(), Some("Which SHA?"));
         store
             .message_queen_from_worker(task, worker, "Checking", None, 101)
             .unwrap();
@@ -250,6 +256,8 @@ mod tests {
             .message_queen_from_worker(task, worker, "abc123", Some(&request), 103)
             .unwrap();
         assert_eq!(store.get_task(task).unwrap().state, TaskState::Review);
+        assert!(store.get_task(task).unwrap().review_request.is_none());
+        assert!(store.get_task(task).unwrap().review_request_id.is_none());
         assert_eq!(
             store.get_task(task).unwrap().next_move_owner,
             NextMoveOwner::Queen
@@ -273,6 +281,10 @@ mod tests {
         let next = store
             .return_review_to_worker(task, "Which environment?", 105)
             .unwrap();
+        assert_eq!(
+            store.get_task(task).unwrap().review_request.as_deref(),
+            Some("Which environment?")
+        );
         assert!(
             store
                 .message_queen_from_worker(task, worker, "abc123", Some(&request), 106)
@@ -332,6 +344,8 @@ mod tests {
             )
             .unwrap();
         store.assign_task_to_worker(task, other.id).unwrap();
+        assert!(store.get_task(task).unwrap().review_request.is_none());
+        assert!(store.get_task(task).unwrap().review_request_id.is_none());
         assert_eq!(
             store.get_task(task).unwrap().next_move_owner,
             NextMoveOwner::Queen

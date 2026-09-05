@@ -160,7 +160,7 @@ export const demoTasks: Task[] = [
     null,
     2,
   ),
-  task(
+  { ...task(
     "0199bbbb-0000-7000-8000-000000000004",
     "Field notes lose their attachment when the upload is retried",
     "The retry reuses the draft id but not the attachment reference, so the second attempt saves the note without the photo.",
@@ -168,7 +168,8 @@ export const demoTasks: Task[] = [
     "/home/you/projects/field-notes",
     "0199aaaa-0000-7000-8000-000000000004",
     3,
-  ),
+  ), next_move_owner: "worker", review_request_id: "demo-review-request-1",
+  review_request: "Please show that retrying the upload keeps the original attachment, including the failure-and-retry test." },
   task(
     "0199bbbb-0000-7000-8000-000000000005",
     "Write the upgrade note for the 2.0 config change",

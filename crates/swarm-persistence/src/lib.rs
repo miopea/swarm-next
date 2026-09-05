@@ -1817,10 +1817,17 @@ impl TaskStore {
                    -- Queen's. Read from the decision rather than stored beside
                    -- it, so it unsets itself the moment they answer.
                    EXISTS(SELECT 1 FROM decision_requests dr
-                          WHERE dr.task_id = t.id AND dr.state = 'pending')
+                          WHERE dr.task_id = t.id AND dr.state = 'pending'),
+                   review_message.id, review_message.body
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
+            LEFT JOIN task_returned_reviews review_request
+              ON review_request.task_id = t.id AND t.state = 'review'
+              AND review_request.answered_at IS NULL
+              AND review_request.request_worker_id = t.assigned_worker_id
+            LEFT JOIN task_messages review_message
+              ON review_message.id = review_request.request_message_id
 ";
 
     /// Work that is finished and needs nobody: abandoned, or completed with
@@ -5900,6 +5907,8 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         closed_on_evidence: row.get(16)?,
         worked_here: row.get(17)?,
         closed_unverifiable: row.get(18)?,
+        review_request_id: row.get(21)?,
+        review_request: row.get(22)?,
         next_move_owner: swarm_domain::NextMoveOwner::derive(
             TaskState::from_str(&state).unwrap_or(TaskState::Draft),
             has_assignee,
