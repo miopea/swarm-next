@@ -1,6 +1,6 @@
 # ADR 0075: Contain confirmed runtime database damage
 
-Status: Accepted for the approved REC-02 outcome; implementation in progress.
+Status: Accepted and implemented for the approved REC-02 outcome.
 
 ## Decision
 

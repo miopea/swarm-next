@@ -43,7 +43,7 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 - [ ] PRES-01: real desktop lock/return, Reachable and scheduled/manual Night Watch.
 - [ ] REC-01: explicit conversation changes and missing-context fallback through
   updates/shutdown; ordinary demo sleep/wake is already proven, not the full ladder.
-- [ ] REC-02: corruption consequence routing and write/dispatch containment.
+- [x] REC-02: corruption consequence routing and write/dispatch containment.
   Real isolated API/SQLite restore and package failure-path drills now pass.
 - [ ] OPS-01: rolling update convergence including Queen, tool freshness and
   automatic work admission after machine pressure eases.
@@ -70,9 +70,18 @@ show the recovery notice without creating a stored decision.
 All 546 persistence tests and 450 API tests passed, including shared-clone refusal,
 healthy reopen, busy/interrupted probes, authenticated admission and monitor
 shutdown. Strict API lint and 1,116 frontend tests passed. The dedicated Edge
-fixture verified the narrow warning and its recovery disclosure. Deployment and
-the extended real-API containment/restore drill are still pending; REC-02 is not
-closed from these component checks alone.
+fixture verified the narrow warning and its recovery disclosure. Build `981bd57d`
+is deployed with healthy status, no degraded subsystems and unchanged worker-engine
+identity. The extended real-API drill passed on that binary: confirmed runtime
+damage refused a new task with 503, health reported recovery required, corrupt
+startup was refused, and explicit offline restore retained the marker task and
+cleared the consequence after reopening. Backup source and original damaged bytes
+were preserved. Evidence: `/home/bschleifer/.swarm-recovery-drill-8v0wmv_4`, marker
+`01a070b8-b943-7820-bb32-a51b854fc401`. Only isolated owned API processes were
+started/stopped; the live Hive was untouched and remained healthy. The first
+extended drill exposed a duplicate response-body read in its assertion, corrected
+in `ed3c8cf2` before the passing run. Hourly detection remains opportunistic; this
+does not claim continuous detection or real-device notification acceptance.
 
 ### Continuous four-session server sample
 
