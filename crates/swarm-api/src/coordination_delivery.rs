@@ -573,11 +573,7 @@ fn baseline_from_response(
                 // carries THIS delivery's marker it is our own stranded
                 // message, and appending is not what it needs — Enter is.
                 let visible = snapshot_plain_text(&snapshot.bytes, snapshot.rows, snapshot.columns);
-                let ours = !marker.is_empty()
-                    && visible
-                        .as_bytes()
-                        .windows(marker.len())
-                        .any(|part| part == marker)
+                let ours = visible_marker_position(visible.as_bytes(), marker).is_some()
                     && !resting_prompt_follows_marker(visible.as_bytes(), marker);
                 if ours {
                     return Baseline::HoldsOurUnsentMessage {
@@ -873,7 +869,31 @@ async fn observe_terminal_submission(
     submitted_paste_placeholder: Option<&[u8]>,
     observed_sequence: u64,
 ) -> Result<SubmissionObservation, swarm_terminal::IpcError> {
-    let acceptance_deadline = Instant::now() + Duration::from_secs(10);
+    // Own the entire observation deadline, including IPC and redraw branches.
+    // An unresponsive host or changing input must not retain delivery ownership.
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        observe_terminal_submission_inner(
+            client,
+            session_id,
+            provider,
+            marker,
+            submitted_paste_placeholder,
+            observed_sequence,
+        ),
+    )
+    .await
+    .unwrap_or(Ok(SubmissionObservation::Uncertain))
+}
+
+async fn observe_terminal_submission_inner(
+    client: &HostClient,
+    session_id: WorkerSessionId,
+    provider: ProviderKind,
+    marker: &[u8],
+    submitted_paste_placeholder: Option<&[u8]>,
+    observed_sequence: u64,
+) -> Result<SubmissionObservation, swarm_terminal::IpcError> {
     let mut resting_stability = SequenceStability::default();
     loop {
         sleep(Duration::from_millis(50)).await;
@@ -936,9 +956,6 @@ async fn observe_terminal_submission(
                 }
             }
             ProviderActivity::Unknown => resting_stability.reset(),
-        }
-        if Instant::now() >= acceptance_deadline {
-            return Ok(SubmissionObservation::Uncertain);
         }
     }
 }
@@ -1633,6 +1650,117 @@ mod tests {
             matches!(ours, Baseline::HoldsOurUnsentMessage { .. }),
             "{ours:?}"
         );
+    }
+
+    #[test]
+    fn stranded_message_recovery_recognizes_wrapped_identity_but_not_other_input() {
+        let session = WorkerSessionId::new();
+        let marker = b"[Swarm delivery exact-id]";
+        for (text, ours) in [
+            ("❯ [Swarm delivery\r\nexact-id]\r\nauto mode on", false),
+            ("❯ [Swarm delivery ex\r\nact-id]\r\nauto mode on", true),
+            (
+                "❯ [Swarm delivery ex\r\notheract-id]\r\nauto mode on",
+                false,
+            ),
+            (
+                "❯ [Swarm delivery ex\r\nact-id]\r\n● Done.\r\n❯ operator draft\r\nauto mode on",
+                false,
+            ),
+        ] {
+            let observed = baseline_from_response(
+                session,
+                ProviderKind::ClaudeCode,
+                marker,
+                prompt_observation(session, text, true),
+            );
+            if ours {
+                assert!(
+                    matches!(observed, Baseline::HoldsOurUnsentMessage { .. }),
+                    "{observed:?}"
+                );
+            } else {
+                assert!(
+                    matches!(
+                        observed,
+                        Baseline::Refused(TerminalSubmission::Deferred(
+                            DeferralReason::PromptHoldsUnsentText
+                        ))
+                    ),
+                    "{observed:?}"
+                );
+            }
+        }
+    }
+
+    async fn assert_submission_observation_is_bounded(stall: bool) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("host.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let session = WorkerSessionId::new();
+        let server = tokio::spawn(async move {
+            let mut sequence = 1;
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut request = String::new();
+                reader.read_line(&mut request).await.unwrap();
+                assert!(matches!(
+                    serde_json::from_str::<HostRequest>(&request).unwrap(),
+                    HostRequest::Read { .. }
+                ));
+                if stall {
+                    std::future::pending::<()>().await;
+                }
+                let mut response = prompt_observation(
+                    session,
+                    "❯ [Swarm delivery exact-id]\r\nauto mode on",
+                    true,
+                );
+                if let HostResponse::Output {
+                    resume: swarm_terminal::Resume::Snapshot { snapshot },
+                    ..
+                } = &mut response
+                {
+                    snapshot.sequence = sequence;
+                }
+                sequence += 1;
+                let mut bytes = serde_json::to_vec(&response).unwrap();
+                bytes.push(b'\n');
+                if reader.get_mut().write_all(&bytes).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let result = tokio::time::timeout(
+            Duration::from_secs(12),
+            observe_terminal_submission(
+                &HostClient::new(socket),
+                session,
+                ProviderKind::ClaudeCode,
+                b"[Swarm delivery exact-id]",
+                None,
+                0,
+            ),
+        )
+        .await;
+        server.abort();
+        let _ = server.await;
+        assert!(
+            matches!(result, Ok(Ok(SubmissionObservation::Uncertain))),
+            "observation must return uncertainty before the outer test deadline"
+        );
+    }
+
+    #[tokio::test]
+    async fn changing_unsent_input_cannot_extend_submission_deadline() {
+        assert_submission_observation_is_bounded(false).await;
+    }
+
+    #[tokio::test]
+    async fn unresponsive_terminal_host_cannot_extend_submission_deadline() {
+        assert_submission_observation_is_bounded(true).await;
     }
 
     fn message_worker_fixture() -> (TaskStore, swarm_domain::WorkerProfile, WorkerSessionId) {

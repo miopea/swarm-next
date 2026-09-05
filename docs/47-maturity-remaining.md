@@ -25,6 +25,16 @@ and no visible horizontal overflow. This is not Android/iOS keyboard acceptance
 or signed-in live-Hive visual acceptance. Queen cross-worker orchestration and
 the broader queue completion gate remain open.
 
+The first server build of `8a9b7564` refused an unsupported TypeScript option
+in the subsequently added integration test. The previous healthy installation
+continued serving. Correction `5b461722` removes that option; the production
+frontend build was rerun successfully on the corrected source before retrying
+deployment. Do not treat the earlier build as validation of later test edits.
+The corrected server reload subsequently completed successfully: health serves
+`1.5.0-dev-5b461722f6e3-20260905121835-2214431`, with no degraded subsystem or
+database recovery requirement. Engine PID 2201959 and its build identity stayed
+unchanged. All 48 task-board tests passed again after the query correction.
+
 - [x] Restore the browser task-list/settled-history split at the HTTP boundary.
   On `12ec47b4`, five localhost `/api/v1/tasks` reads returned 3,118,493 bytes
   each in 17.0–17.4 ms. The response contained 786 tasks, including 703 Completed
@@ -115,6 +125,22 @@ the broader queue completion gate remain open.
 
 ## Evidence from the September 4–5 demo run
 
+### Bounded submission observation and wrapped-message recovery
+
+The stranded-message baseline used contiguous matching while normal delivery
+already allowed CR/LF row boundaries. A regression reproduced its refusal of an
+exact wrapped identity; the shared matcher now recognizes it while refusing
+missing spaces, intervening text and a later operator draft.
+
+Inspection also found that continuous unsent-input redraw skipped the acceptance
+deadline through an early `continue`. Submission observation now owns a ten-second
+timeout around the entire operation, including IPC reads. Timeout returns
+Uncertain and does not replay input. Socket-level regressions cover continuously
+changing sequence numbers and a host that accepts a request but never replies.
+All 464 Linux API tests and strict API all-target lint pass. This bounds submission
+observation specifically; it is not evidence that every other IPC phase is bounded
+or that the full Queen workflow is accepted.
+
 ### Explicit prerequisites — deployed API drill; Queen journey still open
 
 ADR 0076 introduces bounded, audited same-Hive prerequisite edges, distinct from
@@ -145,8 +171,9 @@ premature-resume refusal, abandoned-upstream visibility, explicit removal, and
 ordinary resumption. Its two unassigned demo tasks were abandoned with audit
 history: consumer `01a07163-c3e9-7ca0-8c67-35fa61289450`, upstream
 `01a07163-c3f8-7260-baa5-37bdb51554e3`. No real project task was altered.
-Remaining gates: isolated real Queen coordination, representative populated-graph
-projection overhead and operator-facing dependency editing. QUEUE-01 stays open.
+Remaining gates: isolated real Queen coordination and representative populated-graph
+projection overhead. Operator-facing dependency editing is covered by the later
+checkpoint above; signed-in live acceptance remains open. QUEUE-01 stays open.
 
 ### Engine replacement and automatic return during this deployment
 
