@@ -3,7 +3,7 @@ import { browserPerformance } from "./browserPerformance";
 export type RoutePaintSample = {
   /** Which workspace section was opened. */
   surface: string;
-  /** Milliseconds from the route change to the first frame after it painted. */
+  /** Visible-page milliseconds from the route effect to a second animation frame. */
   duration_ms: number;
   observed_at: number;
 };
@@ -76,13 +76,15 @@ export function routePaintSummary(samples: RoutePaintSample[]): RoutePaintSummar
 }
 
 /**
- * Measures one route change, from the moment it is requested to the first frame
- * after the browser has painted it.
+ * Measures from the mounted route effect to a second animation frame. This
+ * excludes work before that effect and is a paint opportunity, not compositor
+ * presentation acknowledgment or complete click-to-ready latency.
  *
  * A single animation frame runs *before* that frame is painted, so the callback
  * is deferred one further frame: when the second fires, the frame carrying the
- * new surface has been presented. This is the closest a browser lets an
- * application observe its own paint for a client-side route change.
+ * new surface has had a paint opportunity. Hidden pages may suspend these
+ * callbacks, so a visibility interruption cancels the sample rather than
+ * recording time away from the app as navigation delay.
  *
  * Returns a cancel function, so a route abandoned before it paints records
  * nothing rather than attributing the next surface's time to it.
@@ -93,16 +95,35 @@ export function measureRoutePaint(
   cancel: (handle: number) => void,
   clock: () => number = () => performance.now(),
   record: (surface: string, durationMs: number) => void = recordRoutePaint,
+  page: Pick<Document, "visibilityState" | "addEventListener" | "removeEventListener"> = document,
 ): () => void {
+  if (page.visibilityState !== "visible") return () => undefined;
   const startedAt = clock();
+  let finished = false;
+  let outer: number | undefined;
   let inner: number | undefined;
-  const outer = schedule(() => {
-    inner = schedule(() => record(surface, clock() - startedAt));
-  });
-  return () => {
-    cancel(outer);
+  const stop = () => {
+    if (finished) return;
+    finished = true;
+    page.removeEventListener("visibilitychange", onVisibilityChange);
+    if (outer !== undefined) cancel(outer);
     if (inner !== undefined) cancel(inner);
   };
+  const onVisibilityChange = () => {
+    if (page.visibilityState !== "visible") stop();
+  };
+  page.addEventListener("visibilitychange", onVisibilityChange);
+  outer = schedule(() => {
+    if (finished) return;
+    if (page.visibilityState !== "visible") { stop(); return; }
+    inner = schedule(() => {
+      if (finished) return;
+      const visible = page.visibilityState === "visible";
+      stop();
+      if (visible) record(surface, clock() - startedAt);
+    });
+  });
+  return stop;
 }
 
 function isRoutePaintSample(value: unknown): value is RoutePaintSample {

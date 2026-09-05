@@ -8,6 +8,36 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Performance measurement integrity (September 5)
+
+The 17:48Z diagnostic-tab report on frontend a8e84036 / API cd7db41f
+contained route maxima of 35,535 ms and a retained 63,784 ms, alongside
+30–67 ms route samples. Inspection found route measurement allowed animation
+frames to span hidden-tab intervals. This proves a contamination path, not that
+those specific historical outliers were entirely suspension rather than delay.
+Route samples now cancel on visibility loss, do not start hidden, and dispose
+their listener on completion/cancellation. Late callbacks cannot publish after
+cancellation. Documentation now describes the actual route-effect-to-second-frame
+interval, not full click-to-ready or confirmed compositor presentation.
+
+Nineteen route/recorder tests and the project TypeScript check passed locally.
+This change is not deployed yet. Old aggregates remain historical evidence and
+must not be treated as a clean baseline. No delay threshold was raised or real
+slow visible sample suppressed based on duration alone.
+
+That report also contained reconnect samples of 1,288–2,740 ms. Its latest
+server sample reported 16.63% memory used, CPU pressure 0.4%, and zero memory/I/O
+pressure. A separate five-interval vmstat sample at 17:51Z showed 84–98% machine
+CPU idle and no interval swap-in/out or I/O wait. The initial vmstat since-boot
+row is excluded. These are short observations, not causal attribution, a
+process-level CPU profile, or aged-session acceptance. Only the separate test
+tab was reloaded onto cd7db41f; the operator's tab and all workers were untouched.
+At 17:52:31–36Z, systemd CPU accounting increased by 37,066,000 ns for the
+API service and 1,115,836,000 ns for the terminal-host service group (including
+providers). Over approximately five seconds that is 0.7% and 22% of one core,
+respectively, not machine-capacity percentages or host-process-only utilization.
+Both service PIDs remained unchanged. This sample does not attribute browser lag.
+
 ### Explicit conversation choice across restart (September 5)
 
 ADR 0078 adds schema 140's one-row-per-worker explicit choice, scoped to provider,
