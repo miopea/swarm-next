@@ -8,6 +8,24 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Rendered mobile fixture acceptance (September 5)
+
+Edge's separate isolated harness tab exercised local composer Send. A DOM snapshot
+captured `Sending…` with all nine terminal keys disabled; the subsequent snapshot
+showed an empty draft, restored keys, and the source-recording failure warning.
+No worker received input. At an actual emulated 390×844 viewport, measured page
+width and scroll width both equaled 390. Composer toolbar controls measured at
+least 44×44 CSS pixels, and the warning remained readable in the screenshot.
+
+The prerequisite Queues fixture at the same viewport displayed distinct operator
+and Queen ownership/copy, wrapped long titles, and had no horizontal overflow.
+Full-page capture timed out; a subsequent viewport screenshot succeeded and was
+inspected. The Needs You demo likewise had no horizontal overflow and all measured
+action buttons were at least 44 pixels high. Its worker recommendation, collapsed
+details, and answer actions were visible. These are synthetic browser-emulation
+checks, not live decision relevance, native AskUser, real-device keyboard/picker,
+or OS suspension acceptance. The live baseline tab was preserved unchanged.
+
 ### Integrated frontend verification (September 5)
 
 At local `c699afb3`, the complete frontend suite passed 1,141 tests across 130
