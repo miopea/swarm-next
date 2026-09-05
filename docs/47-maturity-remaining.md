@@ -27,6 +27,17 @@ The browser measurement attempt read the outer page, not the child frame, so no
 measured mobile touch-target or overflow result is claimed. Deployment remains
 pending; ATT-01 and the full Needs You content/reconciliation pass remain open.
 
+Deployment subsequently passed as
+`1.5.0-dev-a8e840369caf-20260905171747-2427143`, with healthy API, no degraded
+subsystems, unchanged engine PID 2420200, eleven running sessions and no drain.
+The full remaining recovery issue is visible independently: Contract demo still
+appears in the timestamp-based drift card after a proven chosen-chat restart.
+`confirmed_provider_selections` requires revision greater than one, while the new
+binding starts at one. Preserve durable explicit-choice provenance across bindings
+instead of treating every startup match as proof of intent. No fix for that issue
+is included in the layout commit. Main push bypassed four expected checks;
+no release was cut.
+
 ### Live-host release retention repair (September 5)
 
 The deployment unit's mount protections deny `/proc/2323268/exe` inspection
