@@ -7,6 +7,28 @@ authorized. No release is authorized.
 
 ## Live dogfood follow-ups — 2026-09-05
 
+### Content-free live resource baseline
+
+- Updated the read-only sampler from legacy `swarm-next-*` units to packaged
+  `swarm-*` defaults with explicit unit overrides. PID zero and nonnumeric
+  service metrics now fail; API metric parse failures cannot become blank CSV
+  fields. Added cumulative API/engine cgroup CPU counters. Final timestamp
+  alignment also records collection duration; Bash syntax validation passes.
+- Live run `20260905T025445Z-live` captured 12 samples over 120 seconds on
+  `99ce748`, with two sessions, API PID 1989712 and engine PID 1863379 unchanged.
+  API cgroup memory ranged 172027904–185196544 bytes; engine cgroup memory
+  ranged 1425530880–1528754176 bytes. History grew from 536213125 to 536314657
+  bytes, with zero dropped bytes. Between first/last observations (113 seconds),
+  API CPU accumulated 15.293305 seconds and engine cgroup CPU 9.828031 seconds.
+  These include observer overhead and worker activity; they do not prove a leak,
+  establish CPU attribution, or represent the required 10–15-worker workload.
+- An explicit nonexistent-unit check failed with the expected PID-zero error.
+  No worker/service action or terminal input occurred during either observation.
+  Reports are under `/home/bschleifer/.local/state/swarm-next/soak/` with the run
+  identifier above. Results now say `observed`, not performance `passed`.
+- The queue-capacity repair is live and healthy as
+  `1.5.0-dev-99ce7488c867-20260905025140-1988687`, with the same engine build ID.
+
 ### Bounded briefing repair
 
 - The repair path checked only whether the active outbox was full, then inserted

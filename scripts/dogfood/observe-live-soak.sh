@@ -9,6 +9,18 @@ base_url="${SWARM_SOAK_BASE_URL:-http://127.0.0.1:8766}"
 duration_seconds="${SWARM_SOAK_DURATION_SECONDS:-3600}"
 sample_seconds="${SWARM_SOAK_SAMPLE_SECONDS:-30}"
 report_dir="${SWARM_SOAK_REPORT_DIR:-${HOME}/.local/state/swarm-next/soak}"
+api_unit="${SWARM_SOAK_API_UNIT:-swarm-api.service}"
+host_unit="${SWARM_SOAK_HOST_UNIT:-swarm-terminal-host.service}"
+
+metric() {
+  local value
+  value=$(systemctl --user show "$1" -p "$2" --value)
+  if [[ ! $value =~ ^[0-9]+$ ]]; then
+    echo "Unavailable metric $2 for $1; refusing a misleading sample" >&2
+    return 1
+  fi
+  printf '%s' "$value"
+}
 
 if [[ -z "${SWARM_OPERATOR_TOKEN:-}" ]]; then
   echo "SWARM_OPERATOR_TOKEN is required" >&2
@@ -48,11 +60,15 @@ fi
 
 initial_host="$(api_json "${base_url}/api/v1/runtime/terminal-host")"
 host_version="$(jq -er '.status.host_version' <<<"${initial_host}")"
-host_pid="$(systemctl --user show swarm-next-terminal-host.service -p MainPID --value)"
+host_pid="$(metric "$host_unit" MainPID)"
 initial_health="$(curl --fail --silent --show-error --max-time 5 "${base_url}/health")"
 api_version="$(jq -er '.version' <<<"${initial_health}")"
-api_pid="$(systemctl --user show swarm-next-api.service -p MainPID --value)"
-printf 'timestamp_utc,elapsed_seconds,api_memory_bytes,api_tasks,terminal_host_memory_bytes,terminal_host_tasks,running_sessions,retained_sessions,history_bytes,dropped_history_bytes\n' >"${samples_file}"
+api_pid="$(metric "$api_unit" MainPID)"
+if (( host_pid == 0 || api_pid == 0 )); then
+  echo 'Both measured services must be running; PID zero is not continuity evidence' >&2
+  exit 1
+fi
+printf 'timestamp_utc,elapsed_seconds,api_memory_bytes,api_tasks,terminal_host_memory_bytes,terminal_host_tasks,running_sessions,retained_sessions,history_bytes,dropped_history_bytes,api_cpu_nanoseconds,terminal_host_cpu_nanoseconds,collection_seconds\n' >"${samples_file}"
 
 started_at="$(date +%s)"
 deadline=$((started_at + duration_seconds))
@@ -64,28 +80,34 @@ while (( $(date +%s) < deadline )); do
   for session_id in "${session_ids[@]}"; do
     jq -e --arg id "${session_id}" '.sessions[] | select(.session_id == $id and .running == true)' <<<"${sessions}" >/dev/null
   done
-  current_host_pid="$(systemctl --user show swarm-next-terminal-host.service -p MainPID --value)"
+  current_host_pid="$(metric "$host_unit" MainPID)"
   if [[ "${current_host_pid}" != "${host_pid}" ]]; then
     echo "terminal host changed from ${host_pid} to ${current_host_pid}" >&2
     exit 1
   fi
-  current_api_pid="$(systemctl --user show swarm-next-api.service -p MainPID --value)"
+  current_api_pid="$(metric "$api_unit" MainPID)"
   if [[ "${current_api_pid}" != "${api_pid}" ]]; then
     echo "API changed from ${api_pid} to ${current_api_pid}; its memory series is no longer continuous" >&2
     exit 1
   fi
   host_status="$(api_json "${base_url}/api/v1/runtime/terminal-host")"
   history="$(api_json "${base_url}/api/v1/terminal/history/diagnostics")"
-  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$((now - started_at))" \
-    "$(systemctl --user show swarm-next-api.service -p MemoryCurrent --value)" \
-    "$(systemctl --user show swarm-next-api.service -p TasksCurrent --value)" \
-    "$(systemctl --user show swarm-next-terminal-host.service -p MemoryCurrent --value)" \
-    "$(systemctl --user show swarm-next-terminal-host.service -p TasksCurrent --value)" \
-    "$(jq -er '.status.running_sessions | numbers' <<<"${host_status}")" \
-    "$(jq -er '.status.retained_sessions | numbers' <<<"${host_status}")" \
-    "$(jq -er '.diagnostics.retained_bytes | numbers' <<<"${history}")" \
-    "$(jq -er '.diagnostics.dropped_bytes | numbers' <<<"${history}")" >>"${samples_file}"
+  api_memory=$(metric "$api_unit" MemoryCurrent)
+  api_tasks=$(metric "$api_unit" TasksCurrent)
+  host_memory=$(metric "$host_unit" MemoryCurrent)
+  host_tasks=$(metric "$host_unit" TasksCurrent)
+  api_cpu=$(metric "$api_unit" CPUUsageNSec)
+  host_cpu=$(metric "$host_unit" CPUUsageNSec)
+  running_sessions=$(jq -er '.status.running_sessions | numbers' <<<"$host_status")
+  retained_sessions=$(jq -er '.status.retained_sessions | numbers' <<<"$host_status")
+  history_bytes=$(jq -er '.diagnostics.retained_bytes | numbers' <<<"$history")
+  dropped_bytes=$(jq -er '.diagnostics.dropped_bytes | numbers' <<<"$history")
+  sampled_at=$(date +%s)
+  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$((sampled_at - started_at))" \
+    "$api_memory" "$api_tasks" "$host_memory" "$host_tasks" \
+    "$running_sessions" "$retained_sessions" "$history_bytes" "$dropped_bytes" \
+    "$api_cpu" "$host_cpu" "$((sampled_at - now))" >>"${samples_file}"
   sample_count=$((sample_count + 1))
   sleep "${sample_seconds}"
 done
@@ -111,6 +133,7 @@ jq -n \
   --argjson host_memory_min "${host_min}" --argjson host_memory_max "${host_max}" \
   --argjson history_bytes_min "${history_min}" --argjson history_bytes_max "${history_max}" \
   --argjson dropped_history_bytes_max "${dropped_max}" \
-  '{run_id:$run_id,result:"passed",mode:"read_only_live",duration_seconds:$duration_seconds,sample_count:$sample_count,observed_sessions:$observed_sessions,api:{version:$api_version,pid:$api_pid},terminal_host:{version:$host_version,pid:$host_pid},memory_bytes:{api:{min:$api_memory_min,max:$api_memory_max},terminal_host_cgroup:{min:$host_memory_min,max:$host_memory_max}},history_bytes:{min:$history_bytes_min,max:$history_bytes_max,dropped_max:$dropped_history_bytes_max},samples_file:$samples_file}' \
+  '{run_id:$run_id,result:"observed",mode:"read_only_live",performance_acceptance:"not_evaluated",duration_seconds:$duration_seconds,sample_count:$sample_count,observed_sessions:$observed_sessions,api:{version:$api_version,pid:$api_pid},terminal_host:{version:$host_version,pid:$host_pid},memory_bytes:{api:{min:$api_memory_min,max:$api_memory_max},terminal_host_cgroup:{min:$host_memory_min,max:$host_memory_max}},history_bytes:{min:$history_bytes_min,max:$history_bytes_max,dropped_max:$dropped_history_bytes_max},samples_file:$samples_file}' \
   >"${summary_file}"
 cat "${summary_file}"
+exit 0

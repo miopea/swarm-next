@@ -149,15 +149,25 @@ closed after the verdict.
 `scripts/dogfood/observe-live-soak.sh` monitors the actual dogfood crew without
 changing it. It snapshots every session that is running when observation
 begins, proves each remains running, pins the terminal-host PID, and samples
-service memory, task counts, retained history, and dropped history. It makes no
+service memory, task counts, cumulative CPU nanoseconds, retained history, and dropped history. It makes no
 POST, PUT, PATCH, or DELETE request and never restarts a service. The API PID is
 pinned as well, so restarting either owned process fails the run instead of
 making a growing memory series appear healthy by resetting it midway.
 
 This is the safe choice while the operator is doing real work. It complements
-the synthetic harness: live observation proves that normal use remains bounded,
+the synthetic harness: live observation collects evidence about normal use,
 while the synthetic run remains responsible for deliberate API replacement and
 worker cleanup behavior.
+
+The packaged defaults are `swarm-api.service` and `swarm-terminal-host.service`.
+Older/custom installations can explicitly set `SWARM_SOAK_API_UNIT` and
+`SWARM_SOAK_HOST_UNIT`. Missing or nonnumeric service metrics and PID zero fail
+the observation rather than silently recording invalid samples. API metric
+parsing failures also stop the run instead of becoming empty CSV fields.
+The summary reports `result: observed` and `performance_acceptance: not_evaluated`:
+continuity alone does not prove acceptable growth, CPU use or responsiveness.
+CPU counters in the CSV are cumulative cgroup values; compare their deltas over
+elapsed time, not their absolute values or a sum with the host cgroup's workers.
 
 The first bounded validation on 2026-08-13 observed three existing sessions for
 six samples over 60 seconds. Terminal-host PID `400662` remained unchanged, API
