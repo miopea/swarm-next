@@ -60,7 +60,13 @@ export function hiveFixture(path: string): unknown | undefined {
         ? [{ worker_id: "demo-history-worker", name: "Petal", freshness: { state: "unknown", reason: "No readable conversation entry in this synthetic workspace" } }]
         : [] };
     case "/api/v1/tasks":
-      return demoTasks;
+      return new URLSearchParams(window.location.search).get("dependencies") === "linked"
+        ? demoTasks.map((task, index) => index === 3 ? { ...task, prerequisites: [{
+          task_id: task.id, prerequisite_id: demoTasks[2].id, title: demoTasks[2].title,
+          state: demoTasks[2].state, assigned_worker_id: demoTasks[2].assigned_worker_id,
+          removed: false, reason: "The API task must finish before this view can consume its contract.", created_at: now,
+        }] } : task)
+        : demoTasks;
     case "/api/v1/decisions":
       // An EMPTY queue is a poor advertisement for the product's main screen:
       // the first capture showed "Nothing needs your attention", which is true

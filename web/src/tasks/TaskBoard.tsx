@@ -574,6 +574,7 @@ export default function TaskBoard({
                 onAssign={onAssign}
                 onStartWorker={onStartWorker}
                 onOpenWorker={onOpenWorker}
+                onOpenTask={onOpenTask}
                 onFetchActivity={onFetchActivity}
                 onFetchJiraComments={onFetchJiraComments}
                 onAddJiraComment={onAddJiraComment}
@@ -665,6 +666,7 @@ export default function TaskBoard({
                 onAssign={onAssign}
                 onStartWorker={onStartWorker}
                 onOpenWorker={onOpenWorker}
+                onOpenTask={onOpenTask}
                 onFetchActivity={onFetchActivity}
                 onFetchJiraComments={onFetchJiraComments}
                 onAddJiraComment={onAddJiraComment}
@@ -756,6 +758,7 @@ export default function TaskBoard({
                 onAssign={onAssign}
                 onStartWorker={onStartWorker}
                 onOpenWorker={onOpenWorker}
+                onOpenTask={onOpenTask}
                 onFetchActivity={onFetchActivity}
                 onFetchJiraComments={onFetchJiraComments}
                 onAddJiraComment={onAddJiraComment}

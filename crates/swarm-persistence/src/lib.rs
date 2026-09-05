@@ -24,6 +24,7 @@ mod apiary;
 mod attention;
 mod coordinator;
 mod database_integrity;
+mod task_prerequisites;
 pub use coordinator::{
     AUTOMATIC_WAKE_BATCH_LIMIT, AssignedReadyWorkNotStartedCandidate, BackgroundWorkReading,
     CoordinatorAttention, CoordinatorRefusal, CoordinatorStatus, CoordinatorWorkerWake,
@@ -239,7 +240,8 @@ const OPS_TICKETS_SCHEMA_VERSION: i64 = 135;
 const TERMINAL_CONTROL_PROJECTION_REPAIR_SCHEMA_VERSION: i64 = 136;
 const DECISION_WITHDRAWAL_SCHEMA_VERSION: i64 = 137;
 const TASK_HISTORY_LOOKUP_SCHEMA_VERSION: i64 = 138;
-const CURRENT_SCHEMA_VERSION: i64 = TASK_HISTORY_LOOKUP_SCHEMA_VERSION;
+const TASK_PREREQUISITES_SCHEMA_VERSION: i64 = 139;
+const CURRENT_SCHEMA_VERSION: i64 = TASK_PREREQUISITES_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -450,6 +452,8 @@ pub enum TaskStoreError {
     InvalidOperatorInstruction,
     #[error("task handoff note must not exceed {MAX_TASK_ACTIVITY_NOTE_BYTES} bytes")]
     InvalidTaskActivityNote,
+    #[error(transparent)]
+    TaskPrerequisite(#[from] swarm_domain::TaskPrerequisiteError),
     #[error("completed work requires concise verification evidence")]
     CompletionEvidenceRequired,
     // ⚠️ NAMES THE MISSING RECORD, NOT THE BASIS. This case used to return
@@ -1837,7 +1841,15 @@ impl TaskStore {
                       FROM task_activity block
                       WHERE block.task_id = t.id AND block.kind = 'state_changed'
                       ORDER BY block.sequence DESC LIMIT 1)
-                   END
+                   END,
+                   (SELECT json_group_array(json_object(
+                       'task_id', p.task_id, 'prerequisite_id', p.prerequisite_id,
+                       'title', prerequisite.title, 'state', prerequisite.state,
+                       'assigned_worker_id', prerequisite.assigned_worker_id,
+                       'removed', json(CASE WHEN prerequisite.removed_at IS NULL THEN 'false' ELSE 'true' END),
+                       'reason', p.reason, 'created_at', p.created_at))
+                    FROM task_prerequisites p LEFT JOIN tasks prerequisite ON prerequisite.id = p.prerequisite_id
+                    WHERE p.task_id = t.id)
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
@@ -2525,6 +2537,9 @@ impl TaskStore {
         }
         if target == TaskState::Active {
             ensure_worker_has_no_other_active_task(&transaction, id)?;
+        }
+        if matches!(target, TaskState::Ready | TaskState::Active) {
+            task_prerequisites::ensure_satisfied(&transaction, id)?;
         }
         jira::queue_jira_transition(&transaction, id, target)?;
         if current == TaskState::Review && target != TaskState::Review {
@@ -3843,6 +3858,9 @@ fn migrate_ops_intake_schema_steps(
              ON task_outcome_deliveries(task_id, target_state, activity_sequence DESC);",
         )?;
         transaction.pragma_update(None, "user_version", TASK_HISTORY_LOOKUP_SCHEMA_VERSION)?;
+    }
+    if schema_version < TASK_PREREQUISITES_SCHEMA_VERSION {
+        task_prerequisites::migrate(transaction)?;
     }
     Ok(())
 }
@@ -5861,6 +5879,7 @@ fn validate_description(description: &str) -> Result<(), TaskStoreError> {
 }
 
 fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
+    let prerequisites = task_prerequisites::from_projection(row, 24)?;
     let id: String = row.get(0)?;
     let hive_id: String = row.get(1)?;
     let priority: String = row.get(4)?;
@@ -5950,7 +5969,9 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
             has_assignee,
             row.get(19)?,
             row.get(20)?,
-        ),
+        )
+        .after_prerequisites(row.get(20)?, &prerequisites),
+        prerequisites,
         outcome_delivery_state: outcome_delivery_state
             .map(|value| TaskOutcomeDeliveryState::from_str(&value))
             .transpose()
@@ -8972,6 +8993,14 @@ mod tests {
                 DROP INDEX task_outcomes_by_task_state",
             probe_sql: "SELECT COUNT(*) = 3 FROM sqlite_master WHERE type = 'index'
                 AND name IN ('task_activity_by_task_sequence', 'decision_requests_pending_by_task', 'task_outcomes_by_task_state')",
+        },
+        SchemaStep {
+            table: "task_prerequisites",
+            artifact: "",
+            undo_sql: "DROP TABLE task_prerequisites",
+            probe_sql: "SELECT COUNT(*) = 2 FROM sqlite_master
+                WHERE (type = 'table' AND name = 'task_prerequisites')
+                   OR (type = 'index' AND name = 'task_prerequisites_by_target')",
         },
     ];
 

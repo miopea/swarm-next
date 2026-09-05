@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import HeldBriefingList, { holdReason, waitedFor } from "../orchestration/HeldBriefingList";
 import type { BlockedEscalation, HeldBriefing, HeldDelivery } from "../api";
 import DeliveryWaitList from "./DeliveryWaitList";
+import TaskPrerequisiteList from "./TaskPrerequisiteList";
 import type { NextMoveOwner, Task } from "../api/tasks";
 import { projectTaskQueues } from "./taskQueueProjection";
 import type { Worker } from "../api/workers";
@@ -84,7 +85,7 @@ function taskProgress(task: Task): string {
     if (task.outcome_delivery_state === "queued" || task.outcome_delivery_state === "dispatching") return "Review handoff awaiting confirmed delivery";
     return "In review";
   }
-  if (task.state === "blocked") return task.blocked_note?.trim() ? "Blocked" : "Blocked · reason not recorded";
+  if (task.state === "blocked") return task.blocked_note?.trim() || task.prerequisites?.length ? "Blocked" : "Blocked · reason not recorded";
   if (task.state === "awaiting_release") return "Awaiting release";
   return "Draft · awaiting triage";
 }
@@ -187,6 +188,7 @@ export default function QueuesView({
                     {task.state === "blocked" && waits.has(task.id) && <span className="queue-task-meta">Blocked for {ageLabel(Math.max(0, Math.floor(waits.get(task.id)!.blocked_for_seconds / 3600)))} · Queen coordinates the next move</span>}
                   </button>
                   {briefing && <p className="queue-task-meta">Briefing held: {holdReason(briefing)} · queued {waitedFor(now / 1000 - briefing.queued_at)}</p>}
+                  <TaskPrerequisiteList task={task} workerNames={workerNames} onOpenTask={onOpenTask} />
                   {task.state === "blocked" && task.blocked_note?.trim() && (
                     task.blocked_note.length <= 240
                       ? <p className="queue-task-meta">Recorded when blocked: {task.blocked_note}</p>

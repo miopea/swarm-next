@@ -687,6 +687,10 @@ fn queue_run(
 const ACTIONABLE_TASKS: &str = "task.removed_at IS NULL
              AND (
                  task.state IN ('draft','blocked','review')
+                 OR (task.state = 'active' AND EXISTS (
+                     SELECT 1 FROM task_prerequisites p LEFT JOIN tasks upstream ON upstream.id = p.prerequisite_id
+                     WHERE p.task_id = task.id AND (upstream.id IS NULL OR upstream.removed_at IS NOT NULL OR upstream.state != 'completed')
+                 ))
                  OR (task.state = 'ready' AND task.assigned_worker_id IS NULL)
                  OR (task.state = 'ready'
                      AND task.assigned_worker_id IS NOT NULL
@@ -775,10 +779,41 @@ fn actionable_fingerprint(
             })?
             .collect::<Result<Vec<_>, _>>()?,
     );
+    rows.push(prerequisite_fingerprint(connection)?);
     Ok((
         format!("{}|{}", count, rows.join("|")),
         usize::try_from(count).unwrap_or_default(),
     ))
+}
+
+/// Upstream changes can unblock work without changing the blocked task's own
+/// activity. Hash only bounded identity/state/owner facts, not task content.
+fn prerequisite_fingerprint(connection: &rusqlite::Connection) -> Result<String, TaskStoreError> {
+    use sha2::{Digest, Sha256};
+    let mut query = connection.prepare(
+        "SELECT p.task_id, p.prerequisite_id, COALESCE(upstream.state, 'missing'),
+                upstream.removed_at IS NOT NULL, COALESCE(upstream.assigned_worker_id, '')
+         FROM task_prerequisites p JOIN tasks source ON source.id = p.task_id
+         LEFT JOIN tasks upstream ON upstream.id = p.prerequisite_id
+         WHERE source.removed_at IS NULL AND source.state NOT IN ('completed','abandoned')
+         ORDER BY p.task_id, p.prerequisite_id LIMIT ?1",
+    )?;
+    let mut rows = query.query([i64::try_from(swarm_domain::MAX_HIVE_PREREQUISITES + 1)
+        .map_err(|_| swarm_domain::TaskPrerequisiteError::Capacity)?])?;
+    let mut count = 0;
+    let mut digest = Sha256::new();
+    while let Some(row) = rows.next()? {
+        count += 1;
+        if count > swarm_domain::MAX_HIVE_PREREQUISITES {
+            return Err(swarm_domain::TaskPrerequisiteError::Capacity.into());
+        }
+        for column in [0, 1, 2, 4] {
+            digest.update(row.get::<_, String>(column)?.as_bytes());
+            digest.update([0]);
+        }
+        digest.update([u8::from(row.get::<_, bool>(3)?)]);
+    }
+    Ok(format!("prerequisites:{:x}", digest.finalize()))
 }
 
 /// Resumes a review whose delivery was written to a Queen terminal that has
@@ -1077,6 +1112,39 @@ mod tests {
             first.0, next.0,
             "same time and count, different failed attempt"
         );
+    }
+
+    #[test]
+    fn prerequisite_completion_changes_review_fingerprint_without_rewriting_blocked_work() {
+        let store = TaskStore::in_memory().unwrap();
+        let a = store.create_task("Consumer", "/consumer").unwrap();
+        let b = store.create_task("Contract", "/contract").unwrap();
+        store.transition_task(a.id, TaskState::Ready).unwrap();
+        store.transition_task(a.id, TaskState::Blocked).unwrap();
+        store.transition_task(b.id, TaskState::Ready).unwrap();
+        store.transition_task(b.id, TaskState::Active).unwrap();
+        store
+            .add_task_prerequisite(
+                a.id,
+                b.id,
+                "Private contract reason",
+                &swarm_domain::TaskActivityActor::operator(),
+                10,
+            )
+            .unwrap();
+        let before = actionable_fingerprint(&store.connection().unwrap()).unwrap();
+        assert_eq!(
+            before,
+            actionable_fingerprint(&store.connection().unwrap()).unwrap()
+        );
+        assert!(!before.0.contains("Private contract reason"));
+        store.transition_task(b.id, TaskState::Review).unwrap();
+        store.transition_task(b.id, TaskState::Completed).unwrap();
+        let after = actionable_fingerprint(&store.connection().unwrap()).unwrap();
+        assert_eq!(before.1, after.1);
+        assert_ne!(before.0, after.0);
+        assert_eq!(store.get_task(a.id).unwrap().updated_at, 10);
+        assert_eq!(store.get_task(a.id).unwrap().state, TaskState::Blocked);
     }
 
     #[test]

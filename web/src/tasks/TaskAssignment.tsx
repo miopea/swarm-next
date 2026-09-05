@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 
 import type { Task, TaskState, Worker } from "../api";
+import { prerequisiteSatisfied } from "../api/tasks";
 import { workerAttention } from "../workers/workerAttention";
 
 // Both sets describe the delivery of a MESSAGE, not the state of the task.
@@ -61,7 +62,7 @@ export default function TaskAssignment({ task, workers, busy, onAssign, onOpenWo
           ))}
         </select>
       </div>
-      {task.dispatch_state && <p className={`task-dispatch task-dispatch-${task.dispatch_state}`} role="status">{dispatchLabels[task.dispatch_state]}</p>}
+      {task.dispatch_state && <p className={`task-dispatch task-dispatch-${task.dispatch_state}`} role="status">{task.dispatch_state === "queued" && task.prerequisites?.some((item) => !prerequisiteSatisfied(item)) ? "This task's briefing waits for its prerequisites" : dispatchLabels[task.dispatch_state]}</p>}
       {task.outcome_delivery_state && <p className={`task-dispatch task-dispatch-${task.outcome_delivery_state}`} role="status">{outcomeDeliveryLabels[task.outcome_delivery_state]}</p>}
       {(targetWorker || task.state !== "ready") && (
         <PrimaryTaskAction task={task} workerRunning={workerRunning} targetWorker={targetWorker} busy={busy} onTransition={onTransition} onStartWorker={onStartWorker} />
@@ -78,6 +79,9 @@ function PrimaryTaskAction({ task, workerRunning, targetWorker, busy, onTransiti
   onTransition: (task: Task, state: TaskState, note?: string) => Promise<void>;
   onStartWorker: (task: Task) => Promise<void>;
 }) {
+  if (["draft", "ready", "blocked"].includes(task.state) && task.prerequisites?.some((item) => !prerequisiteSatisfied(item))) {
+    return <p className="task-dispatch" role="status">Waiting for prerequisites · Queen coordinates the next move</p>;
+  }
   if (task.state === "draft") return <button disabled={busy} onClick={() => void onTransition(task, "ready")}>Mark ready</button>;
   if (task.state === "ready" && !workerRunning) return <button disabled={busy || !targetWorker} onClick={() => void onStartWorker(task)}>{targetWorker ? `Wake ${targetWorker.name}` : "Choose worker"}</button>;
   if (task.state === "ready") return <button disabled={busy} onClick={() => void onTransition(task, "active")}>Start work</button>;

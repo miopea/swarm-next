@@ -124,6 +124,8 @@ pub enum TaskDispatchFailure {
 pub enum DispatchHold {
     /// Experimental providers wait for attended operation without consuming retries.
     ExperimentalDuringNightWatch,
+    /// An explicitly recorded prerequisite has not completed.
+    PrerequisiteUnresolved,
     /// Somebody is using that terminal. Delivering would type into their work.
     OperatorInTheTerminal,
     /// The worker is already on something. Two briefs at once is two tasks.
@@ -298,7 +300,9 @@ impl TaskStore {
                               AND earlier_brief.state IN ('delivered','uncertain')
                               AND earlier_brief.updated_at + ?2 <= ?1)
                       ORDER BY earlier.position, earlier.id LIMIT 1) AS blocked_by,
-                    w.provider
+                    w.provider,
+                    EXISTS(SELECT 1 FROM task_prerequisites p LEFT JOIN tasks upstream ON upstream.id = p.prerequisite_id
+                           WHERE p.task_id = t.id AND (upstream.id IS NULL OR upstream.removed_at IS NOT NULL OR upstream.state != 'completed'))
              FROM task_dispatches td
              JOIN tasks t ON t.id = td.task_id
              JOIN worker_profiles w ON w.id = td.worker_id
@@ -316,7 +320,9 @@ impl TaskStore {
                 worker_name: row.get(3)?,
                 queued_at: row.get(4)?,
                 blocked_by: blocked_by.clone(),
-                reason: if night_watch
+                reason: if row.get::<_, bool>(9)? {
+                    DispatchHold::PrerequisiteUnresolved
+                } else if night_watch
                     && !swarm_domain::ProviderKind::from_stored(&row.get::<_, String>(8)?)
                         .night_watch_approved()
                 {
@@ -617,6 +623,10 @@ fn deliverable_briefings(
              -- sitting at a blank prompt.
              WHERE td.state = 'queued' AND t.removed_at IS NULL
                AND t.state IN ('ready', 'active')
+               AND NOT EXISTS (
+                   SELECT 1 FROM task_prerequisites p LEFT JOIN tasks upstream ON upstream.id = p.prerequisite_id
+                   WHERE p.task_id = t.id AND (upstream.id IS NULL OR upstream.removed_at IS NOT NULL OR upstream.state != 'completed')
+               )
                AND (NOT ?4 OR provider.provider IN (?5, ?6))
                AND NOT EXISTS (
                    SELECT 1 FROM worker_engagements e

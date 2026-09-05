@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 17;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 18;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -403,7 +403,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 17;
 #[cfg(test)]
 /// The served surface as of revision 17. Update this and the revision together.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "9a570a6a74ba3f3041aac7b5e7319c291c4d80e5788d72c85ef45b68283787c5";
+    "611f1ac9a6ee08cdedb353ee5de0e621a16635a2fcdeffc503f9ee7247ba6719";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -599,6 +599,7 @@ impl ServerHandler for AgentMcp {
                 list_coordination_attention_tool(),
                 reconcile_task_message_tool(),
                 assign_task_tool(),
+                task_prerequisite_tool(),
                 approve_no_deployment_tool(),
                 retire_task_tool(),
                 hold_reviewed_work_tool(),
@@ -648,6 +649,7 @@ impl ServerHandler for AgentMcp {
             let action = match request.name.as_ref() {
                 "swarm_create_task"
                 | "swarm_assign_task"
+                | "swarm_set_task_prerequisite"
                 | "swarm_transition_task"
                 | "swarm_reconcile_task_message" => QueenActionClass::Coordinate,
                 "swarm_create_apiary_task"
@@ -769,6 +771,9 @@ impl ServerHandler for AgentMcp {
                     )
                     .and_then(structured)
             }),
+            "swarm_set_task_prerequisite" => parse::<swarm_domain::TaskPrerequisiteChange>(arguments)
+                .and_then(|input| self.tasks.change_task_prerequisite(self.principal, &input, crate::unix_timestamp()))
+                .and_then(structured),
             "swarm_assign_task" => parse::<AssignTaskInput>(arguments).and_then(|input| {
                 let task_id = TaskId::from_str(&input.task_id)
                     .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
@@ -3197,6 +3202,20 @@ fn assign_task_tool() -> Tool {
     )
 }
 
+fn task_prerequisite_tool() -> Tool {
+    tool(
+        "swarm_set_task_prerequisite",
+        "Queen only: add or remove an explicit local task prerequisite with a reason. Add only to Blocked work, never rewind Review or Active work to create a link. Self-links, cycles and graph limits are enforced. Only a present Completed prerequisite satisfies the link; removed or abandoned work does not. Completion returns the next move to Queen to reassess other blockers, not an automatic resume. Read prerequisites on swarm_list_tasks; use full task IDs. Workers stay in their own repository; Queen creates and assigns cross-worker work.",
+        &json!({"type":"object", "properties": {
+            "task_id":{"type":"string","format":"uuid"},
+            "prerequisite_id":{"type":"string","format":"uuid"},
+            "operation":{"type":"string","enum":["add","remove"]},
+            "reason":{"type":"string","minLength":1,"maxLength":2048}
+        }, "required":["task_id","prerequisite_id","operation","reason"],"additionalProperties":false}),
+        false,
+    )
+}
+
 fn list_apiary_tasks_tool() -> Tool {
     tool(
         "swarm_list_apiary_tasks",
@@ -3835,6 +3854,7 @@ mod tests {
         "swarm_reconcile_task_message",
         "swarm_assign_task",
         "swarm_list_jira_projects",
+        "swarm_set_task_prerequisite",
         // A reviewer's dissent is a reviewer's to record. A worker holding its
         // own work is just a worker declining to finish it, which the lifecycle
         // already expresses.
@@ -3906,6 +3926,50 @@ mod tests {
                 .to_string(),
             ))
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn prerequisite_tool_routes_queen_changes_and_refuses_worker_changes() {
+        let (bridge, store, queen_id, worker_id, _directory) = setup();
+        let task = store.create_task("Consumer", "/workspace/petal").unwrap();
+        let upstream = store.create_task("Contract", "/workspace/queen").unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Blocked)
+            .unwrap();
+        for (worker, expected) in [(worker_id, 0), (queen_id, 1)] {
+            let token = bearer_from_path(&bridge.ensure_worker_config(worker).unwrap());
+            let response = response_json(
+                handle(
+                    bridge.clone(),
+                    plain_state(),
+                    mcp_request(
+                        Some(&token),
+                        "tools/call",
+                        &json!({
+                            "name": "swarm_set_task_prerequisite",
+                            "arguments": {
+                                "task_id": task.id, "prerequisite_id": upstream.id,
+                                "operation": "add", "reason": "Needs the shared contract"
+                            }
+                        }),
+                    ),
+                )
+                .await,
+            )
+            .await;
+            assert_eq!(
+                store.get_task(task.id).unwrap().prerequisites.len(),
+                expected,
+                "{response}"
+            );
+            assert_eq!(
+                store.get_task(task.id).unwrap().state,
+                swarm_domain::TaskState::Blocked
+            );
+        }
     }
 
     fn listed_tool_names(response: &Value) -> Vec<&str> {

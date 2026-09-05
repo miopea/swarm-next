@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 import QueuesView from "./QueuesView";
 import type { Task } from "../api/tasks";
@@ -13,6 +13,30 @@ function task(overrides: Partial<Task>): Task {
 }
 
 describe("QueuesView", () => {
+  test("explicit prerequisites link to their task and completion waits for Queen", () => {
+    const prerequisite = { task_id: "t1", prerequisite_id: "upstream", title: "Shared API contract", state: "active" as const, assigned_worker_id: null, removed: false, reason: "The response shape must be settled first", created_at: 1 };
+    const blocked = task({ state: "blocked", next_move_owner: "blocked", prerequisites: [prerequisite] });
+    const onOpenTask = vi.fn();
+    const { rerender } = render(<QueuesView tasks={[blocked]} workers={[]} onOpenTask={onOpenTask} />);
+    expect(screen.getByText("1 unresolved prerequisite")).toBeVisible();
+    expect(screen.getByText(/No worker assigned/)).toBeVisible();
+    expect(screen.queryByText("Blocked · reason not recorded")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: prerequisite.title }));
+    expect(onOpenTask).toHaveBeenCalledWith("upstream");
+    rerender(<QueuesView tasks={[{ ...blocked, next_move_owner: "queen", prerequisites: [{ ...prerequisite, state: "completed" }] }]} workers={[]} onOpenTask={onOpenTask} />);
+    expect(screen.getByText("Prerequisites completed · Queen checks remaining blockers before resuming")).toBeVisible();
+    expect(screen.getByText("1 completed prerequisite").closest("details")).not.toHaveAttribute("open");
+    expect(screen.queryByText("1 unresolved prerequisite")).not.toBeInTheDocument();
+  });
+
+  test("removed and reopened prerequisites stay visible without claiming the worker stopped", () => {
+    const prerequisite = { task_id: "t1", prerequisite_id: "upstream", title: "Shared API contract", state: "completed" as const, assigned_worker_id: null, removed: true, reason: "Contract first", created_at: 1 };
+    render(<QueuesView tasks={[task({ state: "active", next_move_owner: "worker", dispatch_state: "delivered", prerequisites: [prerequisite] })]} workers={[]} onOpenTask={vi.fn()} />);
+    expect(screen.getByText(/Queen must reconcile; running work has not been stopped/)).toBeVisible();
+    expect(screen.getByText(/Removed · Queen must reconcile/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: prerequisite.title })).not.toBeInTheDocument();
+    expect(screen.queryByText("Marked active", { selector: "summary" })).not.toBeInTheDocument();
+  });
   test("a held task appears once with its recorded reason and clears that reason after delivery", () => {
     const ready = task({ state: "ready", next_move_owner: "worker", dispatch_state: "queued", assigned_worker_id: "worker" });
     const props = { workers: [], onOpenTask: vi.fn(), now: 120_000, heldBriefings: [{

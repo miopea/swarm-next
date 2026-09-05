@@ -7,9 +7,11 @@ pub mod bundled_feedback;
 mod control_room;
 mod coordination_delivery;
 mod ops_mcp;
+#[cfg(test)]
+use coordination_delivery::task_dispatch_message;
 use coordination_delivery::{
     TerminalSubmission, decision_delivery_message, queen_automation_message,
-    submit_coordination_message, task_dispatch_message, task_outcome_message,
+    submit_coordination_message, task_outcome_message,
 };
 mod database_integrity;
 mod decisions;
@@ -1604,15 +1606,18 @@ impl AppState {
             }
         };
         for action in actions {
-            let result = worker_runtime::start_worker_process(
+            let result = worker_runtime::start_coordinator_worker_process(
                 self,
-                action.worker_id,
+                &action,
                 TerminalSize::default(),
             )
             .await;
             let outcome = match result {
-                Ok(_) => {
+                Ok(Some(_)) => {
                     store.complete_coordinator_worker_wake(&action.action_id, unix_timestamp())
+                }
+                Ok(None) => {
+                    store.defer_coordinator_worker_wake(&action.action_id, unix_timestamp())
                 }
                 Err(error) => {
                     tracing::warn!(
@@ -2049,13 +2054,7 @@ impl AppState {
                     return;
                 }
             };
-        let settled = coordination_delivery::submit_to_each_terminal_at_once(
-            store,
-            client,
-            deliveries,
-            |delivery| (delivery.session_id, task_dispatch_message(delivery)),
-        )
-        .await;
+        let settled = coordination_delivery::submit_task_briefs(store, client, deliveries).await;
         for (delivery, submission) in settled {
             let outcome = match submission {
                 Ok(TerminalSubmission::Acknowledged) => {
@@ -3838,6 +3837,10 @@ fn api_router(state: AppState) -> Router {
             get(tasks::task_activity),
         )
         .route("/api/v1/tasks/{task_id}/restore", post(tasks::restore_task))
+        .route(
+            "/api/v1/tasks/{task_id}/prerequisites",
+            post(tasks::change_prerequisite),
+        )
         .route(
             "/api/v1/tasks/{task_id}/completion-exemption",
             post(tasks::approve_completion_exemption),
@@ -8320,6 +8323,15 @@ fn email_attachment_error(error: email_attachments::EmailAttachmentError) -> Api
 #[allow(clippy::too_many_lines)]
 fn task_store_error(error: &TaskStoreError) -> ApiError {
     match error {
+        TaskStoreError::TaskPrerequisite(reason) => ApiError::new(
+            if *reason == swarm_domain::TaskPrerequisiteError::Unauthorized {
+                StatusCode::FORBIDDEN
+            } else {
+                StatusCode::CONFLICT
+            },
+            "task_prerequisite_refused",
+            reason.to_string(),
+        ),
         TaskStoreError::ConnectionRevoked => ApiError::new(
             StatusCode::FORBIDDEN,
             "connection_revoked",
@@ -15266,6 +15278,71 @@ mod tests {
             store.get_worker_profile(worker.id),
             Err(TaskStoreError::WorkerNotFound)
         ));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn task_prerequisite_route_authenticates_and_returns_current_relations() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("Consumer", "/workspace").unwrap();
+        let upstream = store.create_task("Contract", "/workspace").unwrap();
+        for id in [task.id, upstream.id] {
+            store
+                .transition_task(id, swarm_domain::TaskState::Ready)
+                .unwrap();
+            store
+                .transition_task(id, swarm_domain::TaskState::Blocked)
+                .unwrap();
+        }
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone()),
+        );
+        for (source, target, token, operation, status) in [
+            (
+                task.id,
+                upstream.id,
+                "wrong",
+                "add",
+                StatusCode::UNAUTHORIZED,
+            ),
+            (task.id, upstream.id, "secret", "add", StatusCode::OK),
+            (task.id, upstream.id, "secret", "add", StatusCode::OK),
+            (upstream.id, task.id, "secret", "add", StatusCode::CONFLICT),
+            (task.id, upstream.id, "secret", "remove", StatusCode::OK),
+        ] {
+            let response = app.clone().oneshot(Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/tasks/{source}/prerequisites"))
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::json!({
+                    "prerequisite_id": target, "operation": operation, "reason": "Needs contract"
+                }).to_string())).unwrap()).await.unwrap();
+            assert_eq!(response.status(), status);
+            if status == StatusCode::OK {
+                assert_eq!(response.headers()["cache-control"], "no-store");
+                let body = response_json(response).await;
+                assert_eq!(body["state"], "blocked");
+                if operation == "add" {
+                    assert_eq!(
+                        body["prerequisites"][0]["prerequisite_id"],
+                        upstream.id.to_string()
+                    );
+                } else {
+                    assert!(body.get("prerequisites").is_none());
+                }
+            }
+        }
+        assert!(store.get_task(task.id).unwrap().prerequisites.is_empty());
+        assert!(
+            store
+                .get_task(upstream.id)
+                .unwrap()
+                .prerequisites
+                .is_empty()
+        );
     }
 
     #[tokio::test]

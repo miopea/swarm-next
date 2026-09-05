@@ -1908,6 +1908,57 @@ impl TaskService {
         self.store.list_tasks().map_err(Into::into)
     }
 
+    /// Queen owns cross-worker prerequisites; workers must ask her to route them.
+    ///
+    /// # Errors
+    /// Denies ordinary workers and propagates atomic graph validation failures.
+    pub fn change_task_prerequisite(
+        &self,
+        principal: AgentPrincipal,
+        change: &swarm_domain::TaskPrerequisiteChange,
+        now: i64,
+    ) -> Result<Task, ApplicationError> {
+        require_queen(principal)?;
+        self.apply_prerequisite_change(&TaskActivityActor::worker(principal.worker_id), change, now)
+    }
+
+    /// Apply an authenticated operator's explicit prerequisite change.
+    ///
+    /// # Errors
+    /// Propagates atomic graph validation and persistence failures.
+    pub fn change_operator_task_prerequisite(
+        &self,
+        change: &swarm_domain::TaskPrerequisiteChange,
+        now: i64,
+    ) -> Result<Task, ApplicationError> {
+        self.apply_prerequisite_change(&TaskActivityActor::operator(), change, now)
+    }
+
+    fn apply_prerequisite_change(
+        &self,
+        actor: &TaskActivityActor,
+        change: &swarm_domain::TaskPrerequisiteChange,
+        now: i64,
+    ) -> Result<Task, ApplicationError> {
+        match change.operation {
+            swarm_domain::PrerequisiteOperation::Add => self.store.add_task_prerequisite(
+                change.task_id,
+                change.prerequisite_id,
+                &change.reason,
+                actor,
+                now,
+            )?,
+            swarm_domain::PrerequisiteOperation::Remove => self.store.remove_task_prerequisite(
+                change.task_id,
+                change.prerequisite_id,
+                &change.reason,
+                actor,
+                now,
+            )?,
+        }
+        self.store.get_task(change.task_id).map_err(Into::into)
+    }
+
     /// Settled work, which the board fetches once rather than on every poll.
     ///
     /// # Errors
@@ -2842,6 +2893,58 @@ mod tests {
             )
             .unwrap();
         (TaskService::new(store), queen, worker)
+    }
+
+    #[test]
+    fn prerequisite_commands_require_queen_or_operator_and_preserve_state() {
+        let (service, queen, worker) = setup();
+        let task = service
+            .store
+            .create_task("Consumer", "/workspace/petal")
+            .unwrap();
+        let upstream = service
+            .store
+            .create_task("Contract", "/workspace/queen")
+            .unwrap();
+        service
+            .store
+            .transition_task(task.id, TaskState::Ready)
+            .unwrap();
+        service
+            .store
+            .transition_task(task.id, TaskState::Blocked)
+            .unwrap();
+        let mut change = swarm_domain::TaskPrerequisiteChange {
+            task_id: task.id,
+            prerequisite_id: upstream.id,
+            operation: swarm_domain::PrerequisiteOperation::Add,
+            reason: "Needs the contract".into(),
+        };
+        assert!(
+            service
+                .change_task_prerequisite(AgentPrincipal::from(&worker), &change, 10)
+                .is_err()
+        );
+        assert!(
+            service
+                .store
+                .get_task(task.id)
+                .unwrap()
+                .prerequisites
+                .is_empty()
+        );
+        let linked = service
+            .change_task_prerequisite(AgentPrincipal::from(&queen), &change, 11)
+            .unwrap();
+        assert_eq!(linked.state, TaskState::Blocked);
+        assert_eq!(linked.prerequisites.len(), 1);
+        change.operation = swarm_domain::PrerequisiteOperation::Remove;
+        change.reason = "Operator removed the dependency".into();
+        let unlinked = service
+            .change_operator_task_prerequisite(&change, 12)
+            .unwrap();
+        assert!(unlinked.prerequisites.is_empty());
+        assert_eq!(unlinked.state, TaskState::Blocked);
     }
 
     /// Nineteen finished tasks sat "waiting on evidence" for ten days and the

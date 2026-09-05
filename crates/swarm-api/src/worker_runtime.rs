@@ -110,6 +110,35 @@ pub(super) async fn start_queen_worker_process(
     start_worker_process_unlocked(state, worker_id, size).await
 }
 
+/// A claimed wake must still own eligible work after waiting for lifecycle access.
+pub(super) async fn start_coordinator_worker_process(
+    state: &AppState,
+    action: &swarm_persistence::CoordinatorWorkerWake,
+    size: TerminalSize,
+) -> Result<Option<crate::WorkerView>, ApiError> {
+    let _guard = state.worker_lifecycle.lock().await;
+    let store = task_store(state)?;
+    if !store
+        .coordinator_wake_can_start(action)
+        .map_err(|error| task_store_error(&error))?
+    {
+        return Ok(None);
+    }
+    let profile = store
+        .get_worker_profile(action.worker_id)
+        .map_err(|error| task_store_error(&error))?;
+    if !automation_admitted(state, profile.provider)
+        || !crate::runtime::coordinator_start_admission(state)
+            .await
+            .permits_start()
+    {
+        return Ok(None);
+    }
+    start_worker_process_unlocked(state, action.worker_id, size)
+        .await
+        .map(Some)
+}
+
 /// None means cancelled, policy-deferred, or draining, not a failed attempt.
 pub(super) async fn revive_worker_process(
     state: &AppState,
@@ -2141,6 +2170,48 @@ mod tests {
                 .active_session_id
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn coordinator_start_rechecks_task_after_waiting_for_lifecycle_ownership() {
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/queen").unwrap();
+        let worker = store
+            .create_worker("Petal", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let task = store.create_task("Consumer", "/workspace").unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store
+            .assign_task_to_worker_as(
+                task.id,
+                worker.id,
+                &swarm_domain::TaskActivityActor::worker(queen.id),
+            )
+            .unwrap();
+        let wake = store.claim_coordinator_worker_wakes(10).unwrap().remove(0);
+        assert!(store.coordinator_wake_can_start(&wake).unwrap());
+        // No host is configured: contacting it would fail rather than return a hold.
+        let state = AppState::default().with_task_store(store.clone());
+        let guard = state.worker_lifecycle.lock().await;
+        let pending_state = state.clone();
+        let pending = tokio::spawn(async move {
+            start_coordinator_worker_process(&pending_state, &wake, TerminalSize::default()).await
+        });
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Blocked)
+            .unwrap();
+        drop(guard);
+        assert!(pending.await.unwrap().unwrap().is_none());
+        assert!(
+            store
+                .get_worker_profile(worker.id)
+                .unwrap()
+                .active_session_id
+                .is_none()
+        );
+        assert!(state.worker_errors.read().await.is_empty());
     }
 
     /// Builds the start request for a worker whose workspace is `workspace`,

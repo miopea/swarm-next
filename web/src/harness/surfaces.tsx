@@ -527,6 +527,22 @@ export const SURFACES: Surface[] = [
     ]} onOpenTask={() => undefined} />,
   },
   {
+    id: "queues-prerequisites",
+    title: "Explicit task prerequisites",
+    why: "fictional blocked, completed and reopened prerequisite states; layout only",
+    render: () => <QueuesView workers={demoWorkers} onOpenTask={() => undefined} tasks={[
+      { ...demoTasks[3], prerequisites: [{ task_id: demoTasks[3].id, prerequisite_id: demoTasks[2].id, title: "Publish the shared API response contract before the mobile stale-state indicator can choose its fallback behavior", state: "active", assigned_worker_id: demoWorkers[2].id, removed: false, reason: "The API worker needs to settle the response shape before this worker implements its view.", created_at: now - 300 }] },
+      { ...demoTasks[3], id: "ready-for-queen", title: "Use the completed API contract in the search view", next_move_owner: "queen", prerequisites: [{ task_id: "ready-for-queen", prerequisite_id: demoTasks[2].id, title: "Publish the shared API response contract", state: "completed", assigned_worker_id: demoWorkers[2].id, removed: false, reason: "Contract first", created_at: now - 300 }] },
+      { ...demoTasks[1], prerequisites: [{ task_id: demoTasks[1].id, prerequisite_id: demoTasks[2].id, title: "Confirm the signed-out request contract", state: "completed", assigned_worker_id: demoWorkers[2].id, removed: true, reason: "The previous contract task was removed and needs reconciliation.", created_at: now - 300 }] },
+    ]} />,
+  },
+  {
+    id: "queues-prerequisites-phone",
+    title: "Phone prerequisite layout",
+    why: "the prerequisite surface in a real 390px frame, not native mobile acceptance",
+    render: () => <iframe title="Phone prerequisite preview" src="/harness.html?surface=queues-prerequisites" style={{ display: "block", width: 390, height: 844, border: 0 }} />,
+  },
+  {
     id: "app",
     title: "The whole control room",
     why: "the REAL App against fixtures — rail, header and content in one frame. Add &screen=decisions|tasks|workers to pick the screen",

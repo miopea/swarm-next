@@ -2823,8 +2823,17 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .queue-task-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .queue-task-meta { flex: 0 0 auto; color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
 .queue-group li > .queue-task-meta { white-space: normal; overflow-wrap: anywhere; }
+.queue-prerequisites { margin: 0.35rem 0.5rem 0.65rem; padding-left: 0.75rem; border-left: 2px solid var(--line); }
+.queue-prerequisites .queue-task-meta { white-space: normal; overflow-wrap: anywhere; }
+.queue-prerequisites summary { color: var(--muted); font-size: 0.8rem; }
+.queue-prerequisite-list li { padding-block: 0.2rem; }
+.queue-prerequisite-list li > div { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
+.queue-prerequisite-list { list-style: none; padding-left: 0; }
+.queue-group .queue-prerequisite-list button, .task-card .queue-prerequisite-list button { width: auto; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; text-decoration: underline; text-underline-offset: 0.2em; overflow-wrap: anywhere; }
+.queue-prerequisite-list p { margin: 0.2rem 0; }
 @media (max-width: 640px) {
   .queue-group li button { flex-wrap: wrap; justify-content: flex-start; gap: 0.25rem 0.75rem; min-height: 44px; }
+  .task-card .queue-prerequisite-list button, .queue-prerequisites summary { min-height: 44px; }
   .queue-task-title { flex-basis: 100%; white-space: normal; overflow-wrap: anywhere; }
   .queue-task-meta { flex-shrink: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 }

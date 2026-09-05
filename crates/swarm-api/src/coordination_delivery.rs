@@ -51,6 +51,8 @@ pub(super) enum DeferralReason {
     ProviderPolicy,
     /// A task message is held for engagement, unrelated Active work or stale ownership.
     TaskMessageHold,
+    /// The claimed briefing's task, assignment or prerequisite facts changed.
+    TaskBriefingHold,
 }
 
 impl DeferralReason {
@@ -72,6 +74,7 @@ impl DeferralReason {
             Self::RecentDelivery
             | Self::ProviderPolicy
             | Self::TaskMessageHold
+            | Self::TaskBriefingHold
             | Self::ProviderBusy
             | Self::ProviderStateUnknown => None,
         }
@@ -80,6 +83,9 @@ impl DeferralReason {
     /// Written to the operator, so it names the remedy rather than the state.
     pub(super) fn describe(self, subject: &str) -> String {
         match self {
+            Self::TaskBriefingHold => format!(
+                "{subject} is held because its task ownership or prerequisites changed; Queen can inspect the current task"
+            ),
             Self::TaskMessageHold => format!(
                 "{subject} is queued behind current work or operator engagement; delivery ownership will be rechecked"
             ),
@@ -241,6 +247,45 @@ pub(super) async fn submit_to_each_terminal_at_once<D>(
             settled
         });
     join_all(groups).await.into_iter().flatten().collect()
+}
+
+/// Recheck each briefing after preceding writes finish, before terminal contact.
+pub(super) async fn submit_task_briefs(
+    store: &TaskStore,
+    client: &HostClient,
+    deliveries: Vec<TaskDispatch>,
+) -> Vec<(
+    TaskDispatch,
+    Result<TerminalSubmission, swarm_terminal::IpcError>,
+)> {
+    join_all(
+        group_by_terminal(deliveries, |delivery: &TaskDispatch| delivery.session_id)
+            .into_iter()
+            .map(|group| async move {
+                let mut settled = Vec::with_capacity(group.len());
+                for delivery in group {
+                    let submission = if store.task_briefing_can_submit(&delivery).unwrap_or(false) {
+                        submit_coordination_message(
+                            store,
+                            client,
+                            delivery.session_id,
+                            task_dispatch_message(&delivery),
+                        )
+                        .await
+                    } else {
+                        Ok(TerminalSubmission::Deferred(
+                            DeferralReason::TaskBriefingHold,
+                        ))
+                    };
+                    settled.push((delivery, submission));
+                }
+                settled
+            }),
+    )
+    .await
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 /// Copies one write's outcome for each delivery that shared it.
@@ -1437,6 +1482,47 @@ mod tests {
     use swarm_domain::{PresenceMode, QueenAutomationTrigger, TaskId, WorkerId};
     use swarm_persistence::{QueenAutomationDelivery, TaskMessageDispatch};
     use swarm_terminal::{CanonicalTerminalState, JournalLimits, TerminalSize, TerminalSnapshot};
+
+    #[tokio::test]
+    async fn changed_task_claim_is_deferred_before_contacting_the_terminal() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store.create_task("Consumer", "/workspace").unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store.assign_task(task.id, session).unwrap();
+        let deliveries = store
+            .claim_task_dispatches(10, &std::collections::HashSet::new())
+            .unwrap();
+        assert_eq!(deliveries.len(), 1);
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Blocked)
+            .unwrap();
+        let results = submit_task_briefs(
+            &store,
+            &HostClient::new("/unreachable/terminal.sock"),
+            deliveries,
+        )
+        .await;
+        assert_eq!(results.len(), 1);
+        assert!(matches!(
+            results[0].1,
+            Ok(TerminalSubmission::Deferred(
+                DeferralReason::TaskBriefingHold
+            ))
+        ));
+    }
 
     fn prompt_observation(session_id: WorkerSessionId, text: &str, running: bool) -> HostResponse {
         let mut state = CanonicalTerminalState::new(

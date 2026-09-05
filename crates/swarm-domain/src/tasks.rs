@@ -615,6 +615,9 @@ pub struct Task {
     /// or a reason retained from an earlier block. Absent outside Blocked.
     #[serde(default)]
     pub blocked_note: Option<String>,
+    /// Explicit local prerequisites, independent of dispatch order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prerequisites: Vec<crate::TaskPrerequisite>,
     #[serde(default)]
     pub deployment_recorded: bool,
     /// Whether this task has evidence that can close it: a recorded deployment,

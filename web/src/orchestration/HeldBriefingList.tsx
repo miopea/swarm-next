@@ -114,6 +114,8 @@ function groupByWorker(briefings: HeldBriefing[]): { workerId: string; workerNam
  */
 export function holdReason(briefing: HeldBriefing): string {
   switch (briefing.reason) {
+    case "prerequisite_unresolved":
+      return "a recorded prerequisite has not completed";
     case "experimental_during_night_watch":
       return "experimental provider — queued until Night Watch ends";
     case "operator_in_the_terminal":

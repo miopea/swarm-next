@@ -1,8 +1,9 @@
 import type { BlockedEscalation, HeldBriefing } from "../api";
-import { isOpenTaskState, type Task } from "../api/tasks";
+import { isOpenTaskState, prerequisiteSatisfied, type Task } from "../api/tasks";
 
 export function ordinaryActiveWork(task: Task): boolean {
   return task.state === "active" && task.next_move_owner === "worker"
+    && (task.prerequisites ?? []).every(prerequisiteSatisfied)
     && (task.dispatch_state == null || task.dispatch_state === "delivered");
 }
 

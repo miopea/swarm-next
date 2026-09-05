@@ -40,6 +40,34 @@ pub(super) struct AssignTaskRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PrerequisiteRequest {
+    prerequisite_id: TaskId,
+    operation: swarm_domain::PrerequisiteOperation,
+    reason: String,
+}
+
+pub(super) async fn change_prerequisite(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+    Json(request): Json<PrerequisiteRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let change = swarm_domain::TaskPrerequisiteChange {
+        task_id: parse_task_id(&task_id)?,
+        prerequisite_id: request.prerequisite_id,
+        operation: request.operation,
+        reason: request.reason,
+    };
+    let task = task_service(&state)?
+        .change_operator_task_prerequisite(&change, crate::unix_timestamp())
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(task)).into_response())
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct TaskActivityQuery {
     limit: Option<usize>,
 }

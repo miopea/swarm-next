@@ -36,6 +36,23 @@ function renderBoard(overrides: Partial<React.ComponentProps<typeof TaskBoard>> 
   return { props, ...render(<TaskBoard {...props} />) };
 }
 
+test("links prerequisites from the task card and does not offer premature resumption", () => {
+  const onOpenTask = vi.fn();
+  const blocked = { ...task, state: "blocked" as const, prerequisites: [{
+    task_id: task.id, prerequisite_id: "upstream", title: "Shared API contract",
+    state: "ready" as const, assigned_worker_id: worker.id, removed: false,
+    reason: "Contract first", created_at: 1,
+  }] };
+  const { props, rerender } = renderBoard({ tasks: [blocked], onOpenTask });
+  expect(screen.queryByRole("button", { name: "Resume work" })).not.toBeInTheDocument();
+  expect(screen.getByText("Waiting for prerequisites · Queen coordinates the next move")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Shared API contract" }));
+  expect(onOpenTask).toHaveBeenCalledWith("upstream");
+  rerender(<TaskBoard {...props} tasks={[{ ...blocked, prerequisites: [{ ...blocked.prerequisites[0], state: "completed" }] }]} />);
+  expect(screen.getByRole("button", { name: "Resume work" })).toBeEnabled();
+  expect(screen.getByText("Prerequisites completed · Queen checks remaining blockers before resuming")).toBeVisible();
+});
+
 test("keeps active work above the fold on phones until task creation is requested", async () => {
   vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
   renderBoard({ tasks: [] });

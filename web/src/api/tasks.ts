@@ -1,5 +1,20 @@
 import { authenticatedFetch } from "./request";
 
+export type TaskPrerequisite = {
+  task_id: string;
+  prerequisite_id: string;
+  title: string;
+  state: TaskState;
+  assigned_worker_id: string | null;
+  removed: boolean;
+  reason: string;
+  created_at: number;
+};
+
+export function prerequisiteSatisfied(item: TaskPrerequisite): boolean {
+  return !item.removed && item.state === "completed";
+}
+
 export type TaskState =
   | "draft"
   | "ready"
@@ -81,6 +96,7 @@ export type Task = {
   review_request?: string | null;
   /** Recorded on the current block; not an inferred current dependency. */
   blocked_note?: string | null;
+  prerequisites?: TaskPrerequisite[];
   assigned_worker_id: string | null;
   assigned_session_id: string | null;
   dispatch_state?: "queued" | "dispatching" | "delivered" | "uncertain" | null;

@@ -8,6 +8,16 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+- [ ] Restore the browser task-list/settled-history split at the HTTP boundary.
+  On `12ec47b4`, five localhost `/api/v1/tasks` reads returned 3,118,493 bytes
+  each in 17.0–17.4 ms. The response contained 786 tasks, including 703 Completed
+  and 36 Abandoned. `fetchTasks` uses that endpoint; its adapter calls the all-task
+  service even though a board-specific service and separate settled endpoint
+  already exist. Preserve agent history access and unresolved evidence visibility,
+  but stop reloading settled history on each browser task event. Add an actual
+  HTTP regression, not just a persistence projection test. Baseline captures
+  contain counts/timing only, not task text.
+
 - [ ] Queen's explicit `swarm_start_worker` must honor Night Watch provider
   eligibility as well as capacity. Its current adapter checks capacity only.
   Standing and per-run instructions also contradict the available start tool by
@@ -80,6 +90,34 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 - [ ] P7: representative workday and overnight/mobile soak with recorded limits.
 
 ## Evidence from the September 4–5 demo run
+
+### Explicit prerequisites — local implementation, not deployed yet
+
+ADR 0076 introduces bounded, audited same-Hive prerequisite edges, distinct from
+queue ordering. Queen and the operator may add/remove them; ordinary workers
+cannot. New edges require already-blocked work and never rewind or stop a worker.
+Local Ready/Active transitions and automatic briefing/wake admission respect the
+current prerequisites. Completed prerequisites change Queen's review fingerprint
+and next-move projection without silently resuming blocked work. Removed or
+abandoned prerequisites remain unresolved and visible.
+
+Schema 139, shared application commands, operator HTTP and Queen MCP adapters,
+and a shared Queues/task-card display are implemented locally. Tool discovery is
+revision 18; existing provider sessions must refresh before they can use the new
+tool. The database upgrade fixture catalog and tool fingerprint were corrected
+after full regression runs caught their omissions. A second-Hive fixture was
+also corrected to respect one Hive per operator and local-only reads. All 460
+Linux API tests, all 557 persistence tests, and strict API lint now pass.
+
+Domain (100), application (30), and frontend (1,126 across 129 files) tests pass;
+TypeScript checking and the production frontend build pass. Edge verified a synthetic full-App
+Queues prerequisite link opens and focuses its actual target task card, and a
+390-by-844 layout fixture renders dependency states. These are local fixtures,
+not live Hive/Queen or native-phone acceptance. The final frontend rerun includes
+task-card linkage and removal of premature Resume/Start actions. Shared links were
+visually corrected to remain text links on the task board, with mobile-sized touch
+targets. Remaining gates: deployment, isolated real Queen coordination, representative
+projection overhead and operator-facing dependency editing. QUEUE-01 stays open.
 
 ### Direct attention navigation and keyboard tabs
 

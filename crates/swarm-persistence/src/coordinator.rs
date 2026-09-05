@@ -1776,6 +1776,10 @@ impl TaskStore {
                    AND (NOT ?2 OR worker.provider IN (?3, ?4))
                    AND task.state = 'ready' AND task.assigned_worker_id = action.worker_id
                    AND NOT EXISTS (
+                       SELECT 1 FROM task_prerequisites p LEFT JOIN tasks upstream ON upstream.id = p.prerequisite_id
+                       WHERE p.task_id = task.id AND (upstream.id IS NULL OR upstream.removed_at IS NOT NULL OR upstream.state != 'completed')
+                   )
+                   AND NOT EXISTS (
                        SELECT 1 FROM worker_sessions session
                        WHERE session.worker_id = action.worker_id AND session.ended_at IS NULL
                    )

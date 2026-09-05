@@ -17,6 +17,7 @@ import TaskActivityPanel from "./TaskActivityPanel";
 import TaskAssignment from "./TaskAssignment";
 import TaskDetailDialog from "./TaskDetailDialog";
 import TaskMetadata from "./TaskMetadata";
+import TaskPrerequisiteList from "../queues/TaskPrerequisiteList";
 
 export type TaskCardProps = {
   task: Task;
@@ -31,6 +32,7 @@ export type TaskCardProps = {
   onAssign: (task: Task, workerId: string) => Promise<void>;
   onStartWorker: (task: Task) => Promise<void>;
   onOpenWorker: (sessionId: string) => void;
+  onOpenTask?: (taskId: string) => void;
   onFetchActivity: (taskId: string) => Promise<TaskActivityPage>;
   onFetchJiraComments: (taskId: string) => Promise<JiraComment[]>;
   onAddJiraComment: (taskId: string, body: string) => Promise<{ state: string }>;
@@ -47,7 +49,7 @@ export type TaskCardProps = {
   onDragEnd: () => void;
 };
 
-export default function TaskCard({ task, jiraLink, emailSources, operatorToken, workers, busy, onUpdate, onRemove, onTransition, onAssign, onStartWorker, onOpenWorker, onFetchActivity, onFetchJiraComments, onAddJiraComment, onRetryJira, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, dropTarget, onDragTarget, onDragLeave, onDragStart, onDragEnd }: TaskCardProps) {
+export default function TaskCard({ task, jiraLink, emailSources, operatorToken, workers, busy, onUpdate, onRemove, onTransition, onAssign, onStartWorker, onOpenWorker, onOpenTask, onFetchActivity, onFetchJiraComments, onAddJiraComment, onRetryJira, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, dropTarget, onDragTarget, onDragLeave, onDragStart, onDragEnd }: TaskCardProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [activity, setActivity] = useState<TaskActivityPage>();
   const [historyError, setHistoryError] = useState(false);
@@ -144,6 +146,7 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
           {task.state === "review" && <button role="menuitem" disabled={busy} onClick={() => runMenuAction(() => void onTransition(task, "active"))}>Changes needed</button>}
         </CursorMenu>
       )}
+      {(task.prerequisites?.length ?? 0) > 0 && <div className="task-card-panel"><TaskPrerequisiteList task={task} workerNames={new Map(workers.map((worker) => [worker.id, worker.name]))} onOpenTask={onOpenTask} /></div>}
       {historyOpen && <TaskActivityPanel activity={activity} loading={historyLoading} failed={historyError} onRetry={() => void loadActivity()} />}
       {/* The wrapper is the grid item, so it carries the full-width span. The
           panels inside declare one too, which does nothing from in here — that
