@@ -280,8 +280,17 @@ unchanged. All 48 task-board tests passed again after the query correction.
 
 - [ ] Jira synchronization respects removed linked tasks and continues processing
   valid work. Recheck the recurring WWD reconciliation error after deployment.
-- [ ] Unchanged Queen/outcome deferrals stop producing broad control-room refresh
-  events. Preserve durable delivery ownership and visible failure/recovery changes.
+- [x] Unchanged Queen/outcome deferral implementation stops producing broad
+  control-room refresh events; delivery ownership and failure/recovery events
+  remain. September 5 reinspection confirmed deployed/local source SHA-256
+  equality for `task_outcomes.rs` and `queen_conductor.rs` on live `6ea9c93f`.
+  The existing persistence binary passed four `held_` tests, including ten quiet
+  retries followed by delivery/recovery publication for both families. This is
+  not a fresh rebuild: these two source files are unchanged since that binary's
+  earlier validated build. Live health was ok with no degraded subsystem.
+  A 15:16:15–15:16:19 UTC event-feed sample returned one `tasks_changed` event,
+  no reset. It does not attribute that event or close broader refresh-churn and
+  workload-overhead acceptance under PERF-01/02.
 - [x] Reconcile the five-minute follow-up cooldown with first task delivery.
   Two live demo tasks delivered in 5/3 seconds from creation, 102 seconds apart,
   and completed automatically. Follow-up pacing and engagement guards remain.
