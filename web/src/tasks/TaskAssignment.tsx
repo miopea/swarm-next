@@ -86,7 +86,7 @@ function PrimaryTaskAction({ task, workerRunning, targetWorker, busy, onTransiti
   if (task.state === "ready" && !workerRunning) return <button disabled={busy || !targetWorker} onClick={() => void onStartWorker(task)}>{targetWorker ? `Wake ${targetWorker.name}` : "Choose worker"}</button>;
   if (task.state === "ready") return <button disabled={busy} onClick={() => void onTransition(task, "active")}>Start work</button>;
   if (task.state === "active") return <button disabled={busy} onClick={() => void onTransition(task, "review")}>Send to review</button>;
-  if (task.state === "blocked") return <button disabled={busy} onClick={() => void onTransition(task, "active")}>Resume work</button>;
+  if (task.state === "blocked") return <button disabled={busy} onClick={() => void onTransition(task, "ready")}>Mark ready</button>;
   if (task.state === "review") return <CompletionReview task={task} busy={busy} onTransition={onTransition} />;
   return null;
 }

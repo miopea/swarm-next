@@ -44,13 +44,30 @@ test("links prerequisites from the task card and does not offer premature resump
     reason: "Contract first", created_at: 1,
   }] };
   const { props, rerender } = renderBoard({ tasks: [blocked], onOpenTask });
-  expect(screen.queryByRole("button", { name: "Resume work" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Mark ready" })).not.toBeInTheDocument();
   expect(screen.getByText("Waiting for prerequisites · Queen coordinates the next move")).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Shared API contract" }));
   expect(onOpenTask).toHaveBeenCalledWith("upstream");
   rerender(<TaskBoard {...props} tasks={[{ ...blocked, prerequisites: [{ ...blocked.prerequisites[0], state: "completed" }] }]} />);
-  expect(screen.getByRole("button", { name: "Resume work" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Mark ready" })).toBeEnabled();
   expect(screen.getByText("Prerequisites completed · Queen checks remaining blockers before resuming")).toBeVisible();
+});
+
+test("unblocks assigned work into Ready without starting it over the worker's active task", () => {
+  const blocked = { ...task, state: "blocked" as const, assigned_worker_id: worker.id };
+  const active = { ...task, id: "current-task", title: "Current work", state: "active" as const, assigned_worker_id: worker.id };
+  const { props } = renderBoard({ tasks: [active, blocked], workers: [{ ...worker, running: true, active_session_id: "session-1" }] });
+  fireEvent.click(within(screen.getByRole("article", { name: blocked.title })).getByRole("button", { name: "Mark ready" }));
+  expect(props.onTransition).toHaveBeenCalledExactlyOnceWith(blocked, "ready");
+  expect(props.onStartWorker).not.toHaveBeenCalled();
+});
+
+test("unblocking a sleeping worker's task does not wake it", () => {
+  const blocked = { ...task, state: "blocked" as const, assigned_worker_id: worker.id };
+  const { props } = renderBoard({ tasks: [blocked] });
+  fireEvent.click(screen.getByRole("button", { name: "Mark ready" }));
+  expect(props.onTransition).toHaveBeenCalledExactlyOnceWith(blocked, "ready");
+  expect(props.onStartWorker).not.toHaveBeenCalled();
 });
 
 test("opens the prerequisite editor from a blocked task's actions", () => {

@@ -8,6 +8,16 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Blocked work can return to Ready (September 5)
+
+The operator found that Tasks offered only Resume work, which requested Active
+and returned 409 when the assigned worker already had current work. The primary
+blocked-task action now says Mark ready and requests the existing Blocked-to-Ready
+transition. It does not request activation or worker startup; unresolved
+prerequisites still prevent the action. The one-active-task guard is unchanged.
+TypeScript and all 50 TaskBoard tests passed, including same-worker active work
+and a sleeping assignee. Deployment and live isolated-demo acceptance remain open.
+
 ### Paired cold-return attribution (September 5, 20:03 UTC)
 
 Commit `a7248caf` adds a connection-start boundary to each bounded cold-return
