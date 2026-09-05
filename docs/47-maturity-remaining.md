@@ -27,6 +27,18 @@ standing/run guidance and the real-PTY review delivery regression passed in the
 isolated Linux overlay workspace. Live interpretation of the real backlog and
 the full owner-oriented Queues composition remain unproven.
 
+The broader agent-contract suite passed 62 tests. Commit `924a7d48` deployed
+healthy as `1.5.0-dev-924a7d4886d3-20260905214246-2582089`, engine PID 2456733
+unchanged. Queen policy was already Coordinate at Hive/away and Local execution
+at Night Watch; no policy was changed. Review `01a07383-1e1b-7ca1-8a2b-fa21dfda2c7d`
+kept its 21:47:24 pacing boundary, then waited for a fresh resting prompt while
+Queen handled another coordination turn. Separate Edge inspection showed that
+turn creating a linked D365 user-provisioning decision after a classifier denial;
+Needs You displayed the task, summary and recommendation. No answer was supplied.
+After leaving Queen's terminal, the review became Running with one confirmed
+delivery at 21:49:48 UTC. That proves the updated run can reach her; it does not
+yet prove she consumed the new reassessment list or recovered the real backlog.
+
 ### Cleared blocks must produce a new briefing (September 5)
 
 An isolated regression reproduced Blocked to Ready retaining a Delivered
