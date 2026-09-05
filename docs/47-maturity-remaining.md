@@ -34,6 +34,20 @@ and all 43 App tests passed again. Roster and mobile selection markers now use
 worker identity too, rather than comparing absent session IDs; the final focused
 run passed all 50 App/model tests. Live acceptance remains pending.
 
+Live acceptance passed on `1.5.0-dev-40666a5679b0-20260905182535-2465038`.
+Managed activation completed successfully and preserved engine PID 2456733 and
+all eleven session IDs. In the separate Edge tab, Contract demo was selected on
+the new frontend. Directly stopping only session
+`01a072c4-0d5e-7bd0-9c3a-569800b87295` produced the named saved-place view with no
+terminal input through the live event feed, without a manual refresh. Starting
+the same demo produced `01a072d4-9a60-7051-802d-50670541636e`; the browser returned
+to its connected terminal without another selection click. Provider selection,
+confirmed selection and exact Restored outcome all retained conversation
+`c4435eee-57b0-4546-b6ef-dc182080e7b5`. The other ten sessions were unchanged.
+No release was cut. Main push bypassed four expected checks; the recorded local
+test runs are not GitHub CI evidence. Actual Android/iOS and reload-during-gap
+browser acceptance remain separate gates; the latter is currently model-tested.
+
 ### Reconnect phase attribution (September 5)
 
 Terminal connection capture now separates grant acquisition, WebSocket opening,
