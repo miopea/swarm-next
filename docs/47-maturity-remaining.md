@@ -56,6 +56,12 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ### Current review obligation in Queues
 
+The withdrawal correction is deployed as `d56993bd`, healthy with no degraded
+subsystems. The following completion-policy change (ADR 0073) permits a code
+no-deployment claim for Queen judgment without automatic approval or a fabricated
+deployment. All 55 task-outcome persistence tests passed, including the new
+claim/automatic-refusal/Queen-approval path. Live demo acceptance remains open.
+
 Development reload verified `664abff3` healthy with no degraded subsystems.
 The worker-engine identity has changed since the earlier baseline; this check
 does not establish uninterrupted engine continuity across that interval.

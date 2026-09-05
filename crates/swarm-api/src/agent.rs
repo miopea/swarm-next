@@ -3533,7 +3533,7 @@ fn record_deployment_tool() -> Tool {
 fn record_no_deployment_tool() -> Tool {
     tool(
         "swarm_record_no_deployment",
-        "State that this task has nothing to deploy, and why. For work that genuinely does not ship — a spike, a document, an investigation that found no defect, a duplicate. This does not complete the task: Queen approves the claim, because you cannot both decide your own work needs no evidence and accept that decision. If something did ship, use swarm_record_deployment instead; a reason given here that turns out to be wrong is worse than no claim at all, because it reads as evidence.",
+        "State that this task has nothing to deploy, and why. For work that genuinely does not ship — a spike, a document, an investigation that found no defect, a duplicate, or explicitly local code/test work. Report commits first, including code commits. For code, Queen must check task scope and verification results; the deterministic coordinator does not approve it. This does not complete the task: Queen approves the claim, because you cannot both decide your own work needs no evidence and accept that decision. If something did ship, use swarm_record_deployment instead; a reason given here that turns out to be wrong is worse than no claim at all, because it reads as evidence.",
         &json!({
             "type": "object",
             "properties": {

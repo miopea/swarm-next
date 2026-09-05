@@ -1116,23 +1116,11 @@ impl TaskStore {
         if reason.is_empty() {
             return Err(TaskStoreError::CompletionEvidenceRequired);
         }
-        // THE FACTS AND THE CLAIM MUST NOT DISAGREE. A worker saying its task
-        // had nothing to deploy, over commits that reached a ref and touched
-        // code, is the one case where a person genuinely adds something --
-        // refusing it here is what earns the automation everywhere else.
-        //
-        // ONLY ON `BuiltCode`. `Unknown` is not a contradiction: nobody
-        // reported, or something could not be checked, and refusing on a
-        // question never asked would block every worker in a workspace that is
-        // not a checkout. The refusal is narrow on purpose.
-        //
-        // The operator is not stranded by this. `approve_completion_exemption`
-        // and `record_task_unverifiable` are both still open to them, which is
-        // what makes this a route to a person rather than a dead end.
+        // Code does not establish deployment intent: local experiments and
+        // test fixtures can legitimately finish without shipping. Preserve the
+        // claim for Queen's judgment, not as automatically accepted evidence.
+        // A report is still required; silence is not proof that nothing was built.
         match commit_settlement(self.task_commit_report(task_id)?.as_ref()) {
-            CommitSettlement::BuiltCode => {
-                return Err(TaskStoreError::CommitsContradictNoDeployment);
-            }
             // ⚠️ AND NOBODY REPORTING IS NOT THE SAME AS A REPORT THAT SETTLES
             // NOTHING. Folding these together is what made reporting the only
             // route to a refusal. Unestablished still claims, which is what
@@ -1140,7 +1128,8 @@ impl TaskStore {
             CommitSettlement::NotReported => {
                 return Err(TaskStoreError::CommitsNotReported);
             }
-            CommitSettlement::Unestablished
+            CommitSettlement::BuiltCode
+            | CommitSettlement::Unestablished
             | CommitSettlement::NothingBuilt
             | CommitSettlement::DocumentationOnly => {}
         }
@@ -1310,6 +1299,14 @@ impl TaskStore {
             return Err(TaskStoreError::IntegrityFailure(format!(
                 "{approver} cannot approve a completion exemption"
             )));
+        }
+        if approver == "coordinator"
+            && matches!(
+                commit_settlement(self.task_commit_report(task_id)?.as_ref()),
+                CommitSettlement::BuiltCode
+            )
+        {
+            return Err(TaskStoreError::CommitsContradictNoDeployment);
         }
         let connection = self.connection()?;
         let updated = connection.execute(
@@ -2748,10 +2745,8 @@ mod settlement_tests {
         assert_eq!(store.get_task(task).unwrap().state, TaskState::Review);
     }
 
-    /// THE REFUSAL. A worker saying "nothing to deploy" over commits that
-    /// touched code is the one case a person genuinely improves.
     #[test]
-    fn a_claim_the_commits_contradict_is_refused() {
+    fn code_without_deployment_needs_explicit_review_not_a_false_deployment() {
         let store = TaskStore::in_memory().unwrap();
         let task = reviewed_task(&store, "Claimed nothing shipped");
         store
@@ -2764,15 +2759,35 @@ mod settlement_tests {
             )
             .unwrap();
 
+        assert_eq!(
+            store
+                .claim_completion_exemption(
+                    task,
+                    "Local experiment; no deployment in scope",
+                    None,
+                    2_000
+                )
+                .unwrap(),
+            CompletionEvidence::ExemptionClaimed
+        );
+        assert!(
+            store
+                .settle_reviewed_work_without_deployment(2_100)
+                .unwrap()
+                .is_empty()
+        );
         assert!(matches!(
-            store.claim_completion_exemption(task, "Nothing to deploy", None, 2_000),
+            store.approve_completion_exemption(task, "coordinator", "Code exists", 2_200),
             Err(TaskStoreError::CommitsContradictNoDeployment)
         ));
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Review);
         assert_eq!(
             store.completion_evidence(task).unwrap(),
-            CompletionEvidence::None,
-            "a refused claim must leave no record behind"
+            CompletionEvidence::ExemptionClaimed
         );
+        store.approve_completion_exemption(task, "queen", "Checked task scope, commit and local test results; no deployed service is requested.", 2_300).unwrap();
+        store.transition_task(task, TaskState::Completed).unwrap();
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Completed);
     }
 
     /// ⚠️ AN APPROVAL WITH NOTHING TO APPROVE MUST NOT BLAME THE BASIS.
@@ -2800,11 +2815,7 @@ mod settlement_tests {
                 1_000,
             )
             .unwrap();
-        // Refused, exactly as it was on the real task, so no row exists.
-        assert!(matches!(
-            store.claim_completion_exemption(task, "Comment-only", None, 2_000),
-            Err(TaskStoreError::CommitsContradictNoDeployment)
-        ));
+        // A commit report alone is not a no-deployment claim.
 
         let approving =
             store.approve_completion_exemption(task, "queen", "A basis that is fine", 3_000);

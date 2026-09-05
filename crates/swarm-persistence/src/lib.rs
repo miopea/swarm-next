@@ -462,16 +462,10 @@ pub enum TaskStoreError {
     // NAMES THE CONTRADICTION, not the rule. A worker reading "not authorized"
     // or "evidence required" would go looking at permissions or at what it
     // wrote; the thing to look at is the commits it reported.
-    // NAMES THE WAY FORWARD, not only the objection. A refusal whose remedy
-    // nobody can find from the message is barely better than no route at all --
-    // the protocol-migration refusal cost this Hive three hours by describing a
-    // migration without naming the command that performed it.
-    //
-    // The routes named are the ones that stay open: the claim is refused, so
-    // there is no exemption row for anyone to approve, and saying "ask Queen to
-    // approve" would send a worker after a record that does not exist.
+    // Historical error identity retained for the API contract. It now refuses
+    // deterministic approval, not recording a claim (ADR 0073).
     #[error(
-        "the commits recorded for this task touch code, which contradicts a claim that nothing was deployed. Record where it is running with a deployment, or ask the operator to write it off as unverifiable, or close it as abandoned if it was superseded"
+        "code without deployment requires Queen or operator review of task scope and verification evidence; the deterministic coordinator cannot approve this exemption"
     )]
     CommitsContradictNoDeployment,
     // ⚠️ THE REFUSAL THAT MAKES HONESTY THE CHEAP PATH. Until 2026-09-04 a task
