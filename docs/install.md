@@ -382,6 +382,13 @@ sh ~/.local/lib/swarm/current/swarm-package restore /path/to/swarm.sqlite3
 The backup is put through a full integrity verification before anything is
 replaced, and the database it displaces is kept until the new one is in place.
 
+If runtime integrity verification confirms damage, Swarm pauses new database-backed
+work and shows a recovery notice on Needs You. Running worker processes are not
+stopped. This condition is latched until the database is restored and reopened;
+repeated task retries cannot clear it. The hourly probe skips a busy database and
+an incomplete probe is not classified as corruption. Startup also verifies before
+migration. This is not continuous detection of every possible SQL failure.
+
 If corruption prevents the API from exporting that pre-restore backup, use the
 explicit offline recovery command with a known-good backup beneath your home:
 

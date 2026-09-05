@@ -227,7 +227,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     state.supervise_workers().await;
     start_background_services(&state);
+    serve_control_room(state, address).await
+}
+
+async fn serve_control_room(
+    state: AppState,
+    address: SocketAddr,
+) -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(address).await?;
+    let (stop_integrity, integrity_stopped) = tokio::sync::oneshot::channel();
+    let integrity_monitor = tokio::spawn(swarm_api::monitor_database_integrity(
+        state.clone(),
+        integrity_stopped,
+    ));
     info!(%address, "Swarm API listening");
     let app = match (
         env::var_os("SWARM_WEB_ROOT"),
@@ -237,9 +249,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         (Some(root), None) => router_with_web_root(state, root),
         (None, _) => router(state),
     };
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    let serving = axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            let _ = stop_integrity.send(());
+        })
+        .await;
+    if let Err(error) = integrity_monitor.await {
+        tracing::warn!(%error, "database integrity monitor could not join during shutdown");
+    }
+    serving?;
     Ok(())
 }
 

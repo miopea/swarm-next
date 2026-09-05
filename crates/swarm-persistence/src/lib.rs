@@ -2,7 +2,10 @@ use std::{
     collections::HashSet,
     path::Path,
     str::FromStr,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -20,6 +23,7 @@ use uuid::Uuid;
 mod apiary;
 mod attention;
 mod coordinator;
+mod database_integrity;
 pub use coordinator::{
     AUTOMATIC_WAKE_BATCH_LIMIT, AssignedReadyWorkNotStartedCandidate, BackgroundWorkReading,
     CoordinatorAttention, CoordinatorRefusal, CoordinatorStatus, CoordinatorWorkerWake,
@@ -290,10 +294,15 @@ impl Default for ReleaseCheckState {
 #[derive(Clone)]
 pub struct TaskStore {
     connection: Arc<Mutex<Connection>>,
+    recovery_required: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Error)]
 pub enum TaskStoreError {
+    #[error(
+        "database integrity failed; new database-backed work is paused until verified recovery"
+    )]
+    DatabaseRecoveryRequired,
     #[error("review reply does not match the current request, worker, or saved answer")]
     InvalidReviewReply,
     #[error("task persistence filesystem failed: {0}")]
@@ -914,6 +923,7 @@ impl TaskStore {
         }
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
+            recovery_required: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -2388,13 +2398,7 @@ impl TaskStore {
     /// Returns an integrity or persistence error when the check is not successful.
     pub fn verify_integrity(&self) -> Result<(), TaskStoreError> {
         let connection = self.connection()?;
-        let result: String =
-            connection.pragma_query_value(None, "quick_check", |row| row.get(0))?;
-        if result == "ok" {
-            Ok(())
-        } else {
-            Err(TaskStoreError::IntegrityFailure(result))
-        }
+        self.check_integrity_result(&connection)
     }
 
     /// Applies one permitted task transition without a handoff note.
@@ -2827,9 +2831,14 @@ impl TaskStore {
     }
 
     fn connection(&self) -> Result<MutexGuard<'_, Connection>, TaskStoreError> {
-        self.connection
+        let connection = self
+            .connection
             .lock()
-            .map_err(|_| TaskStoreError::LockPoisoned)
+            .map_err(|_| TaskStoreError::LockPoisoned)?;
+        if self.recovery_required.load(Ordering::Acquire) {
+            return Err(TaskStoreError::DatabaseRecoveryRequired);
+        }
+        Ok(connection)
     }
 }
 

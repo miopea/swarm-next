@@ -55,6 +55,25 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Evidence from the September 4–5 demo run
 
+### Runtime database containment
+
+ADR 0075 adds a shared persistence latch after a confirmed integrity failure.
+New database access and dispatch claims fail with a specific recovery-required
+error; generic domain failures, busy and interrupted checks do not latch. The
+API owns an hourly opportunistic probe plus an operator-authenticated check-now
+endpoint with a shared single admission permit. Probe work runs off the async
+executor and holds its permit through cancellation. SQLite progress is bounded
+to one second, excluding uninterruptible kernel IO; a busy lock is skipped.
+Health exposes the consequence without SQLite, and Needs You/runtime diagnostics
+show the recovery notice without creating a stored decision.
+
+All 546 persistence tests and 450 API tests passed, including shared-clone refusal,
+healthy reopen, busy/interrupted probes, authenticated admission and monitor
+shutdown. Strict API lint and 1,116 frontend tests passed. The dedicated Edge
+fixture verified the narrow warning and its recovery disclosure. Deployment and
+the extended real-API containment/restore drill are still pending; REC-02 is not
+closed from these component checks alone.
+
 ### Continuous four-session server sample
 
 `observe-live-soak.sh` completed 600 seconds / 20 samples on `baa304ef`, with

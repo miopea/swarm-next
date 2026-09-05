@@ -191,6 +191,8 @@ export type DegradedSubsystem = {
   reason: string;
 };
 export type Health = {
+  /** In-process integrity failure latch; recovery requires verified reopening. */
+  database_recovery_required?: boolean;
   /**
    * "degraded" means serving with something switched off, NOT failing.
    *

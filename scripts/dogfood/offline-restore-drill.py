@@ -9,13 +9,16 @@ import json
 import os
 from pathlib import Path
 import shutil
+import secrets
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import urllib.request
+import urllib.error
 
 
 def control_client():
@@ -53,12 +56,14 @@ def main():
     assert port not in (8765, 8766)
     base = f"http://127.0.0.1:{port}"
     database = state / "swarm.sqlite3"
+    operator_token = secrets.token_urlsafe(32)
     api_env = {
         "PATH": "/usr/bin:/bin", "SWARM_API_BIND": f"127.0.0.1:{port}",
         "SWARM_DATABASE_PATH": str(database), "SWARM_WORKSPACE_ROOTS": str(workspace),
         "XDG_CONFIG_HOME": str(config), "SWARM_OPERATOR_CONFIG_PATH": str(config / "operator.env"),
         "SWARM_AGENT_CONFIG_ROOT": str(root / "agents"),
         "SWARM_TERMINAL_SOCKET": str(root / "no-terminal-host.sock"),
+        "SWARM_OPERATOR_TOKEN": operator_token,
     }
     process = None
     api_log = (root / "api.log").open("ab")
@@ -77,7 +82,7 @@ def main():
     def request(path, body=None):
         payload = None if body is None else json.dumps(body).encode()
         req = urllib.request.Request(base + path, data=payload,
-                                     headers={"Content-Type": "application/json"})
+                                     headers={"Content-Type": "application/json", "Authorization": "Bearer " + operator_token})
         with urllib.request.urlopen(req, timeout=3) as response:
             return json.load(response)
 
@@ -139,6 +144,27 @@ def main():
         shutil.copyfile(database, backup)
         subprocess.run([str(release / "bin/swarmctl"), "verify-database", str(backup)], check=True, stdout=subprocess.DEVNULL)
         original_hash = hashlib.sha256(backup.read_bytes()).hexdigest()
+        # Test-only fault injection into this new disposable database, never
+        # the live Hive: prove the runtime check and containment before startup
+        # corruption refusal and the existing package restore sequence.
+        assert database.resolve().is_relative_to(root)
+        start()
+        ready()
+        with sqlite3.connect(database) as fixture:
+            fixture.executescript("CREATE TABLE integrity_fixture(value INTEGER CHECK(value>0)); PRAGMA ignore_check_constraints=ON; INSERT INTO integrity_fixture VALUES(-1);")
+        for endpoint, body in [
+            ("/api/v1/runtime/database/integrity", {}),
+            ("/api/v1/tasks", {"title": "Must not be admitted", "workspace": str(workspace)}),
+        ]:
+            try:
+                request(endpoint, body)
+                raise AssertionError("damaged database operation was admitted")
+            except urllib.error.HTTPError as failure:
+                assert failure.code == 503, endpoint
+                assert json.load(failure)["code"] == "database_recovery_required", endpoint
+                assert json.load(failure)["code"] == "database_recovery_required", endpoint
+        assert request("/health")["database_recovery_required"] is True
+        stop()
         # Destructive bytes are confined to this newly created disposable DB.
         assert database.resolve().is_relative_to(root)
         database.write_bytes(b"Deliberately corrupt disposable SQLite database\n")
@@ -147,6 +173,7 @@ def main():
         assert process.wait(timeout=30) != 0, "corrupted API unexpectedly started"
         subprocess.run(["sh", str(package), "restore-offline", str(backup)], env=env, check=True, timeout=90)
         ready()
+        assert request("/health")["database_recovery_required"] is False
         assert any(row["id"] == task["id"] and row["title"] == task["title"] for row in request("/api/v1/tasks"))
         assert hashlib.sha256(backup.read_bytes()).hexdigest() == original_hash
         archives = list((state / "backups").glob("offline-restore-*"))
@@ -157,6 +184,7 @@ def main():
         print(json.dumps({"result": "passed", "scope": "real_api_sqlite_offline_restore",
                           "task_restored": task["id"], "source_unchanged": True,
                           "corruption_preserved": True, "real_systemd_used": False,
+                          "runtime_containment_verified": True,
                           "live_hive_touched": False}), flush=True)
     finally:
         stop()

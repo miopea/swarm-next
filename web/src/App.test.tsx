@@ -100,6 +100,30 @@ test("refreshes the runtime evidence after returning without reloading the app",
   }
 });
 
+test("routes database recovery to attention without creating a stored decision and clears after recovery", async () => {
+  let recovery = true;
+  let visibility: DocumentVisibilityState = "visible";
+  const visibilitySpy = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+  const base = bootFetch();
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => String(input) === "/health"
+    ? Promise.resolve(ok({ status: recovery ? "degraded" : "ok", version: "0.1.0", database_recovery_required: recovery }))
+    : base(input)));
+  try {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Database recovery required" }));
+    expect(await screen.findByRole("heading", { name: "Swarm needs a verified database restore" })).toBeInTheDocument();
+    expect(screen.queryByText("Nothing needs your attention")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Needs you 1 waiting for you/ })).toBeInTheDocument();
+    recovery = false;
+    visibility = "hidden";
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    visibility = "visible";
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Swarm needs a verified database restore" })).not.toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Database recovery required" })).not.toBeInTheDocument();
+  } finally { cleanup(); visibilitySpy.mockRestore(); }
+});
+
 test("creates a durable browser session without storing the operator token", async () => {
   const fetch = vi
     .fn()

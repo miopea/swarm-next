@@ -11,7 +11,9 @@ use coordination_delivery::{
     TerminalSubmission, decision_delivery_message, queen_automation_message,
     submit_coordination_message, task_dispatch_message, task_outcome_message,
 };
+mod database_integrity;
 mod decisions;
+pub use database_integrity::monitor_database_integrity;
 mod dogfood_evidence;
 mod email_attachments;
 mod email_reply_ai;
@@ -229,6 +231,7 @@ pub struct AppState {
     worker_description_improvement_limit: Arc<Semaphore>,
     conversation_scan_limit: Arc<Semaphore>,
     database_export_limit: Arc<Semaphore>,
+    database_probe_limit: Arc<Semaphore>,
     development_reload: Arc<Mutex<()>>,
     coordination_delivery: Arc<Mutex<()>>,
     jira_delivery: Arc<Mutex<()>>,
@@ -360,6 +363,7 @@ impl AppState {
             )),
             conversation_scan_limit: Arc::new(Semaphore::new(1)),
             database_export_limit: Arc::new(Semaphore::new(1)),
+            database_probe_limit: Arc::new(Semaphore::new(1)),
             development_reload: Arc::new(Mutex::new(())),
             coordination_delivery: Arc::new(Mutex::new(())),
             jira_delivery: Arc::new(Mutex::new(())),
@@ -2629,6 +2633,7 @@ pub struct DegradedSubsystem {
 #[derive(Debug, Serialize)]
 struct HealthResponse {
     status: &'static str,
+    database_recovery_required: bool,
     version: &'static str,
     worker_engine_build_id: &'static str,
     /// The largest image this Hive will accept.
@@ -3657,6 +3662,10 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/runtime/limits", get(runtime::limits))
         .route("/api/v1/runtime/resources", get(runtime::resources))
         .route(
+            "/api/v1/runtime/database/integrity",
+            post(database_integrity::check),
+        )
+        .route(
             "/api/v1/runtime/terminal-host",
             get(runtime::terminal_host_status),
         )
@@ -4059,9 +4068,20 @@ async fn mcp(State(state): State<Arc<AppState>>, request: axum::extract::Request
     response
 }
 async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
-    let degraded = state.degraded_subsystems().to_vec();
+    let mut degraded = state.degraded_subsystems().to_vec();
+    let database_recovery_required = state
+        .task_store
+        .as_ref()
+        .is_some_and(TaskStore::database_recovery_required);
+    if database_recovery_required {
+        degraded.push(DegradedSubsystem {
+            subsystem: "Hive database".into(),
+            reason: "Integrity verification failed. New database-backed work is paused; verified offline recovery is required. Running workers have not been stopped.".into(),
+        });
+    }
     let protocol_migration_pending = crate::maintenance::pending_protocol_migration(&state);
     Json(HealthResponse {
+        database_recovery_required,
         // Reported honestly, and it costs nothing: no client keys on this
         // field, and the updater never reads the body at all.
         status: if degraded.is_empty() {
@@ -8782,6 +8802,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::ProviderConversationUnavailable => ApiError::new(
             StatusCode::CONFLICT,
             "provider_conversation_unavailable",
+            error.to_string(),
+        ),
+        TaskStoreError::DatabaseRecoveryRequired => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_recovery_required",
             error.to_string(),
         ),
         TaskStoreError::Io(_)

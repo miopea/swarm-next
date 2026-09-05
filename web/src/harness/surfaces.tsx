@@ -4,6 +4,7 @@ import TerminalBurstFixture from "./TerminalBurstFixture";
 import TerminalView from "../terminal/TerminalView";
 import { MobileTerminalComposer } from "../terminal/MobileTerminalComposer";
 import DeveloperDogfoodWorkspace from "../settings/DeveloperDogfoodWorkspace";
+import DatabaseRecoveryCard from "../runtime/DatabaseRecoveryCard";
 import NightWatchSettings from "../settings/NightWatchSettings";
 import TerminalPoolFixture from "./TerminalPoolFixture";
 import PerformanceEvidenceFixture from "./PerformanceEvidenceFixture";
@@ -553,6 +554,12 @@ export const SURFACES: Surface[] = [
     why: "the full fictional App in a real 390px frame viewport; not a native PWA/device test",
     render: () => <iframe title="Phone Needs you preview" src="/harness.html?surface=app&screen=decisions"
       style={{ display: "block", width: 390, height: 844, border: 0 }} />,
+  },
+  {
+    id: "database-recovery",
+    title: "Database recovery attention",
+    why: "synthetic failure notice rendered without reading or changing a database",
+    render: () => <div style={{ maxWidth: 390 }}><DatabaseRecoveryCard /></div>,
   },
   {
     id: "tasks",

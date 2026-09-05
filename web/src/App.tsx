@@ -1,5 +1,6 @@
 import { isClosedTaskState, isOpenTaskState } from "./api/tasks";
 import { projectTaskQueues } from "./queues/taskQueueProjection";
+import DatabaseRecoveryCard from "./runtime/DatabaseRecoveryCard";
 import BroadcastToWorkers from "./workers/BroadcastToWorkers";
 import ConversationDriftCard, { type WorkerConversation } from "./workers/ConversationDriftCard";
 import PublicAddressWarning from "./PublicAddressWarning";
@@ -1572,7 +1573,8 @@ export function App() {
   //
   // The maturity ruling supersedes the earlier twelve-hour escalation: age is
   // queue evidence, not a human action. Queen escalates through a real decision.
-  const attentionCount = pendingDecisionCount + pendingAssistCount + queenAutomationAttentionCount
+  const databaseRecoveryRequired = loadState.kind === "ready" && loadState.health.database_recovery_required === true;
+  const attentionCount = Number(databaseRecoveryRequired) + pendingDecisionCount + pendingAssistCount + queenAutomationAttentionCount
     + heldDeliveryAttentionCount
     + conversationDriftAttentionCount + awaitingReply.length;
   // WHEN THEY ACTUALLY LOOKED. The watermark this advances is the only thing
@@ -2000,6 +2002,7 @@ export function App() {
             is mostly a misclick risk. */}
         {detached ? null : <div id="runtime-system-status" className={`rail-footer${showMobileRuntime ? " mobile-open" : ""}`} role="region" aria-label="Runtime and system status">
           <RuntimeStatus state={loadState} developmentMode={developmentMode} />
+          {databaseRecoveryRequired && <button type="button" className="secondary-button" onClick={() => showSurface("decisions")}>Database recovery required</button>}
           {operatorToken ? (
             <button
               type="button"
@@ -2350,11 +2353,12 @@ export function App() {
               decisions={decisions}
               tasks={tasks}
               workers={workers}
-              busy={busy}
+              busy={busy || databaseRecoveryRequired}
               focusDecisionId={decisionFocus?.id}
               focusRequest={decisionFocus?.request}
-              additionalPendingCount={pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + conversationDriftAttentionCount + awaitingReply.length}
+              additionalPendingCount={Number(databaseRecoveryRequired) + pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + conversationDriftAttentionCount + awaitingReply.length}
               attentionCards={<>
+                {databaseRecoveryRequired && <DatabaseRecoveryCard />}
                 <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onReviseReply={reviseAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
                 <ConversationDriftCard workers={actionableConversationChecks} onOpenWorker={openWorkerProfile} />
