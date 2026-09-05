@@ -931,10 +931,9 @@ impl NextMoveOwner {
             // AFTER the hand-back, because that is an explicit act by Queen
             // naming what the worker owes, and a decision left open beside it
             // does not cancel the debt she named.
-            TaskState::Review if awaiting_operator_decision => Self::Operator,
-            // AFTER the hand-back, because that is an explicit act by Queen
-            // naming what the worker owes, and a decision left open beside it
-            // does not cancel the debt she named.
+            // The hard block remains, but its current requested human ruling
+            // is the next move. Resolving it re-derives the remaining owner.
+            TaskState::Review | TaskState::Blocked if awaiting_operator_decision => Self::Operator,
             // NOT Queen. The operator drew this line: blocked is a harder
             // reason than back-and-forth, such as a task waiting on another
             // task. Naming Queen here would bury the hard cases in her queue.
@@ -945,6 +944,39 @@ impl NextMoveOwner {
             // Everything left is Queen's: unfiled work to ready, unassigned
             // work to route, finished work to judge.
             TaskState::Draft | TaskState::Ready | TaskState::Review => Self::Queen,
+        }
+    }
+}
+
+#[cfg(test)]
+mod next_move_tests {
+    use super::{NextMoveOwner, TaskState};
+
+    #[test]
+    fn blocked_decisions_name_the_operator_without_changing_other_work_ownership() {
+        for assigned in [false, true] {
+            assert_eq!(
+                NextMoveOwner::derive(TaskState::Blocked, assigned, false, true),
+                NextMoveOwner::Operator
+            );
+            assert_eq!(
+                NextMoveOwner::derive(TaskState::Blocked, assigned, false, false),
+                NextMoveOwner::Blocked
+            );
+            assert_eq!(
+                NextMoveOwner::derive(TaskState::Active, assigned, false, true),
+                NextMoveOwner::Worker
+            );
+            assert_eq!(
+                NextMoveOwner::derive(TaskState::Review, assigned, true, true),
+                NextMoveOwner::Worker
+            );
+            for state in [TaskState::Completed, TaskState::Abandoned] {
+                assert_eq!(
+                    NextMoveOwner::derive(state, assigned, false, true),
+                    NextMoveOwner::Nobody
+                );
+            }
         }
     }
 }

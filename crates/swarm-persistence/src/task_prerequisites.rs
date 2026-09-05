@@ -506,7 +506,7 @@ mod tests {
                 10,
             )
             .unwrap();
-        store
+        let decision = store
             .create_decision_request(&crate::NewDecisionRequest {
                 requesting_worker_id: queen.id,
                 task_id: Some(consumer),
@@ -532,6 +532,20 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(store.get_task(consumer).unwrap().state, TaskState::Blocked);
+        assert_eq!(
+            store.get_task(consumer).unwrap().next_move_owner,
+            swarm_domain::NextMoveOwner::Operator
+        );
+        store
+            .resolve_decision_request(decision.id, "Proceed", "", "test")
+            .unwrap();
+        let task = store.get_task(consumer).unwrap();
+        assert_eq!(task.state, TaskState::Blocked);
+        assert_eq!(task.next_move_owner, swarm_domain::NextMoveOwner::Queen);
+        assert_eq!(
+            store.tasks_ready_after_prerequisites(20).unwrap().0.len(),
+            1
+        );
     }
 
     #[test]

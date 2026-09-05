@@ -204,7 +204,7 @@ describe("QueuesView", () => {
       task({ id: "b", title: "Judge me too", next_move_owner: "queen" }),
       task({ id: "c", title: "Mine", state: "active", next_move_owner: "worker" }),
       task({ id: "d", title: "Stuck", state: "blocked", next_move_owner: "blocked" }),
-      task({ id: "e", title: "Needs a ruling", next_move_owner: "operator" }),
+      task({ id: "e", title: "Needs a ruling", state: "blocked", next_move_owner: "operator" }),
     ]} />);
 
     expect(screen.getByRole("heading", { name: /Waiting on Queen 2/ })).toBeInTheDocument();

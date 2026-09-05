@@ -8,11 +8,39 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Latest cross-worker acceptance checkpoint (2026-09-05)
+
+The isolated Queen-owned prerequisite journey completed. Source task
+`01a07193-7d88-7cb1-888a-602a0e533cb3` requested cross-worker coordination;
+Queen created and assigned upstream task `01a07199-fef1-76e0-b908-4ad528774904`
+and authored its prerequisite edge (activity 6972). The harness did not create
+that task/edge or resume the source. The new provider required one manual
+first-run folder-trust confirmation, so this is not unattended onboarding proof.
+
+Upstream committed `fe873a1dde6e6fd9dc9afbd5bc7bfd01d2c4dadc`. Queen resumed
+the source at 13:19:20 UTC (activity 6978); the source committed
+`728c67abb78bbd6f57046bbc50483987afdf5e2a` and completed through documentation-only
+settlement at 13:21:02 UTC (activity 6982). Both fixture repositories were clean;
+the consumer's recorded contract hash matched the actual upstream file.
+
+These events preceded the new API process for `6ea9c93f` at 13:21:47 UTC.
+Do not attribute this live success to that commit's new discovery response:
+normal Queen coordination on the preceding build completed the journey.
+The added discovery response has regression coverage, not a separately observed
+live invocation. Earlier pending-journey notes below are historical checkpoints.
+
 - [ ] Blocked tasks with a pending operator decision still derive next owner
   `blocked`, not `operator`. The prerequisite discovery regression exposed this
   existing domain limitation. The discovery read excludes pending decisions,
   but that alone does not fix owner grouping. Add domain/projection coverage
   and account for the engine's domain-source fingerprint before deployment.
+  Local fix now derives Operator for blocked work with a pending decision.
+  Answering returns completed-prerequisite work to Queen; withdrawing returns
+  ordinary blocked work to Blocked. Neither changes task state. All 101 domain
+  tests, 561 persistence tests before adding the withdrawal regression, and 20
+  Queues tests passed. The final build passed the new withdrawal test and the
+  decision-resolution projection test; strict domain/persistence library lint
+  passed. Deployment remains pending an engine-refresh window, not API-only.
 
 ### Operator prerequisite editor checkpoint (2026-09-05)
 

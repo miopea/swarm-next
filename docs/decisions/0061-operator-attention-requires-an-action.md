@@ -9,6 +9,13 @@ to interrupt the operator. This supersedes the earlier twelve-hour UI escalation
 policy. Queen escalates when she cannot move the work and needs a specific human
 decision or action. Existing decision requests remain the actionable channel.
 
+A pending decision on a Blocked task names the operator as the next owner,
+without changing the task's state or bypassing its prerequisites. Resolving or
+withdrawing that decision re-derives ownership from the remaining facts: Queen
+may review satisfied prerequisites, while an unresolved hard block stays blocked.
+Active work remains the worker's responsibility even with a decision alongside
+it; an explicit review hand-back likewise preserves the worker's outstanding work.
+
 The same source selection must govern the Needs You page and its count. Moving an
 age-only observation to Queues removes it from both. Retain the waiting evidence;
 do not hide it or silently claim the queue is healthy.

@@ -1522,7 +1522,37 @@ mod tests {
         );
     }
 
-    /// A ruling open on work that is NOT in review changes nothing. Active work
+    #[test]
+    fn withdrawing_a_blocked_tasks_decision_restores_its_underlying_owner() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let task = store
+            .create_task("Waiting for an external repair", "/workspace/petal")
+            .unwrap();
+        for state in [TaskState::Ready, TaskState::Active, TaskState::Blocked] {
+            store.transition_task(task.id, state).unwrap();
+        }
+        let actions = vec!["ship".into(), "hold".into()];
+        let mut asking = request(queen.id, &actions);
+        asking.task_id = Some(task.id);
+        let decision = store.create_decision_request(&asking).unwrap();
+        assert_eq!(
+            store.get_task(task.id).unwrap().next_move_owner,
+            NextMoveOwner::Operator
+        );
+        store
+            .withdraw_decision_request(
+                decision.id,
+                queen.id,
+                "No human choice remains; the external repair is still pending.",
+            )
+            .unwrap();
+        let task = store.get_task(task.id).unwrap();
+        assert_eq!(task.state, TaskState::Blocked);
+        assert_eq!(task.next_move_owner, NextMoveOwner::Blocked);
+    }
+
+    /// A ruling open on active work changes nothing. Active work
     /// is still the worker's to progress; they can keep going while an operator
     /// question sits beside it, and saying otherwise would empty the worker
     /// queue every time somebody asked something.
