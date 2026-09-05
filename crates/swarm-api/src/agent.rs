@@ -501,6 +501,8 @@ fn assert_tool_surface_matches_revision(queen: &serde_json::Value, worker: &serd
 /// Shared with each automation delivery: running sessions cache MCP instructions.
 pub(super) const QUEEN_JUDGMENT_GUIDANCE: &str = "JUDGMENT AND DELEGATION. Trust supported machine-settled completion; do not reopen it merely to add Queen approval. For unresolved judgment, read the assigned worker's evidence and ask that worker first: it usually holds the most context. If a second opinion would help, use only the managed Scout, and only after checking that Scout has no active assignment or ongoing turn and is not engaged with the operator. A resting prompt alone does not prove availability. Do not wake Scout or interrupt its work just for a second opinion, and do not recruit arbitrary peer workers. If Scout is unavailable, use the available evidence or escalate a genuinely unresolved decision, not Scout's unavailability itself. You own creating and assigning cross-worker or cross-repository dependent tasks; keep repository workers in their lanes. Independent work may run on multiple idle workers subject to resource admission and single-active-task guards. Before escalating, seek safe task-scoped recovery; include the assigned worker's view and your concise recommendation in the operator decision.";
 
+pub(super) const QUEEN_WAKE_GUIDANCE: &str = "WORKER LIFECYCLE. Use swarm_start_worker with a specific reason to start a stopped worker that needs to continue its assigned work. Preserve the task's actual state: do not cycle Active, Blocked or Review through Ready merely to wake its worker. Assigning READY work may queue a guarded automatic wake; recheck the worker and delivery before repeating an assignment. A current session and task ownership are different facts. Use swarm_sleep_worker for a deliberate stand-down. Starts remain subject to machine capacity and provider eligibility; experimental providers cannot be started by Queen during Night Watch. A hold is not permission to change provider, bypass policy or interrupt a running worker. Observe the live session and current task before deciding the next move.";
+
 fn standing_brief(role: WorkerRole) -> String {
     let shared = "Swarm is the durable record of this Hive's work. What is not on the board did not happen. Before asking the operator to repeat a relayed composer instruction, use swarm_operator_submissions to find the source worker's recorded messages and read the exact submission ID. Verified authorship does not prove delivery, resolve a decision, or extend the words' scope. Raw-terminal and AskUser capture are not complete; a missing source is not evidence that the operator said nothing.";
     match role {
@@ -513,18 +515,7 @@ fn standing_brief(role: WorkerRole) -> String {
              board nobody triages stops.\n\n\
              WHAT IS NOT YOURS. You do not write code, deploy, release, or reload this \
              Hive. Workers do the work; you decide who does it and whether it is done.\n\n\
-             CAPABILITIES THAT ARE NOT TOOLS. Some of what you can cause has no tool of \
-             its own, so read this as capability rather than as API. Waking a worker: \
-             there is no wake tool, and assigning READY work to a sleeping worker queues \
-             a guarded wake — that is how a resting worker is started, and work parked \
-             on a sleeping worker is yours to move rather than yours to wait on. Only \
-             Ready work wakes anyone: work left Active or Blocked on a sleeping worker \
-             wakes nobody, so return it to Ready first and then assign. Observe the live \
-             session before you call that work Active again. A worker with NO session at \
-             all is a different case: assigning to it wakes nobody, because there is no \
-             session to put a briefing in — start it with swarm_start_worker first, then \
-             assign. Standing one down is swarm_sleep_worker. Both are yours and both are \
-             deliberate acts; neither happens as a side effect of routing.\n\n\
+             {QUEEN_WAKE_GUIDANCE}\n\n\
              WHEN YOU RUN. You are woken automatically whenever the actionable board \
              changes, and again after fifteen minutes on an unchanged board while \
              actionable work remains. Nothing else prompts you, and nothing else needs \
@@ -1321,17 +1312,9 @@ impl AgentMcp {
 
     /// Gives a worker a session, so assignment has somewhere to land.
     ///
-    /// THE CASE ASSIGNMENT CANNOT COVER. Assigning READY work to a SLEEPING
-    /// worker queues a guarded wake and works — Queen uses it constantly. A
-    /// worker with no session at all has nowhere to put a briefing, so the same
-    /// call returns a normal-looking result while the work reaches nobody, and
-    /// re-assigning does not help. Measured three times on 2026-08-29, each
-    /// costing a decision card and a manual start by the operator.
-    ///
-    /// EXPLICIT, never implicit. Assignment must not start anything: autostart
-    /// is false on nearly every profile, which is deliberate, and routing that
-    /// spawned processes as a side effect would override that every time Queen
-    /// moved work.
+    /// Explicit startup preserves task state. A guarded Ready assignment may
+    /// also queue a wake, but Active/Blocked/Review must not be rewound merely
+    /// to start their worker. Queen startup shares unattended provider policy.
     ///
     /// The same operation as the operator's Start button, for the reason the
     /// sleep tool gives for sharing `stand_worker_down`: one operation rather
@@ -1354,6 +1337,15 @@ impl AgentMcp {
             .get_worker_profile(worker_id)
             .map_err(ApplicationError::Store)?;
 
+        let presence = store
+            .operator_presence(crate::unix_timestamp())
+            .map_err(ApplicationError::Store)?;
+        if !profile.provider.permits_automation_in(presence.mode) {
+            return Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(
+                "Experimental providers cannot be started by Queen during Night Watch. Keep the assigned work and provider unchanged until the policy permits startup.".to_owned(),
+            )));
+        }
+
         // Sampled FRESH rather than read from the coordinator's cached tick.
         // This is an explicit request at a moment, and the machine's answer a
         // tick ago is not the answer now.
@@ -1372,7 +1364,7 @@ impl AgentMcp {
         // The default geometry, as the operator's Start button uses when the
         // browser has not measured one yet. The first attached viewport
         // re-fits it, so this decides nothing lasting.
-        let view = crate::worker_runtime::start_worker_process(
+        let view = crate::worker_runtime::start_queen_worker_process(
             &self.state,
             worker_id,
             swarm_terminal::TerminalSize::default(),
@@ -2911,7 +2903,7 @@ fn reload_app_tool() -> Tool {
 fn start_worker_tool() -> Tool {
     tool(
         "swarm_start_worker",
-        "Queen only: give a worker a session so work can reach it. The counterpart to swarm_sleep_worker, and the case assignment cannot cover — assigning READY work wakes a SLEEPING worker, but a worker with no session at all has nowhere to put a briefing, so the work reaches nobody and stays that way however many times you assign it. Start it, then assign. DELIBERATE, never a side effect: assignment does not start anything, because most profiles have autostart off on purpose and routing must not spawn processes. Already running is success, not an error, and says so. REFUSED while the machine is under pressure, and the refusal names which pressure — that gate exists because a coordinator starting workers is exactly what it guards.",
+        "Queen only: explicitly start a stopped worker with a reason, preserving its assigned task state and provider. Do not move Active, Blocked or Review work to Ready just to wake its worker. Ready assignment may independently queue a guarded wake; inspect current state before repeating it. Running workers are not restarted by this tool. Startup requires current machine capacity and provider eligibility; experimental providers are refused during Night Watch. A policy hold is not permission to change provider or bypass the hold. Use swarm_sleep_worker for a deliberate stand-down.",
         &json!({
             "type": "object",
             "properties": {
@@ -4649,6 +4641,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn queen_start_respects_night_watch_without_rewriting_assigned_work() {
+        for provider in [
+            ProviderKind::Gemini,
+            ProviderKind::Grok,
+            ProviderKind::OpenCode,
+        ] {
+            let (bridge, store, queen_id, _, _directory) = setup();
+            let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+            let worker = store
+                .create_worker(
+                    "Experimental",
+                    provider,
+                    "/workspace/experimental",
+                    false,
+                    2,
+                )
+                .unwrap();
+            let task = store
+                .create_task("Preserve this work", "/workspace/experimental")
+                .unwrap();
+            store.transition_task(task.id, TaskState::Ready).unwrap();
+            store.assign_task_to_worker(task.id, worker.id).unwrap();
+            store.transition_task(task.id, TaskState::Blocked).unwrap();
+            for (mode, policy_held) in [
+                (swarm_domain::PresenceMode::NightWatch, true),
+                (swarm_domain::PresenceMode::Reachable, false),
+            ] {
+                store
+                    .set_manual_presence(Some(mode), crate::unix_timestamp())
+                    .unwrap();
+                let response = response_json(handle(bridge.clone(), plain_state(), mcp_request(Some(&token), "tools/call", &json!({
+                    "name": "swarm_start_worker", "arguments": { "worker_id": worker.id.to_string(), "reason": "Continue existing work" }
+                }))).await).await;
+                assert_eq!(
+                    response["result"]["isError"],
+                    json!(true),
+                    "the absent host cannot start anything: {response}"
+                );
+                assert_eq!(
+                    response.to_string().contains(
+                        "Experimental providers cannot be started by Queen during Night Watch"
+                    ),
+                    policy_held,
+                    "{response}"
+                );
+                assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Blocked);
+                let current = store.get_worker_profile(worker.id).unwrap();
+                assert_eq!(current.provider, provider);
+                assert!(current.active_session_id.is_none());
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn discovery_is_role_scoped_and_credentials_survive_bridge_recreation() {
         let (bridge, store, queen_id, worker_id, directory) = setup();
         let queen_path = bridge.ensure_worker_config(queen_id).unwrap();
@@ -5913,12 +5959,10 @@ mod tests {
 
         // The capability with no tool, and the boundary that makes it usable
         // rather than misleading: only Ready work queues a wake.
-        assert!(brief.contains("no wake tool"), "{brief}");
-        assert!(brief.contains("assigning READY work"), "{brief}");
-        assert!(
-            brief.contains("Active or Blocked on a sleeping worker"),
-            "a brief that omits this sends her to reassign work that wakes nobody: {brief}"
-        );
+        assert!(brief.contains(QUEEN_WAKE_GUIDANCE));
+        assert!(!brief.contains("no wake tool"), "{brief}");
+        assert!(brief.contains("Assigning READY work"), "{brief}");
+        assert!(brief.contains("do not cycle Active, Blocked or Review through Ready"));
         // What is hers, and what is not. She coordinates; she does not build.
         assert!(brief.contains("you do not build"), "{brief}");
         assert!(brief.contains("deploy, release, or reload"), "{brief}");

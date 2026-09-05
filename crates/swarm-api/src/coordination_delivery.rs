@@ -756,10 +756,7 @@ async fn observe_stable_marker(
         };
         let visible = snapshot_plain_text(&snapshot.bytes, snapshot.rows, snapshot.columns);
         let marker_is_visible = snapshot.sequence > baseline
-            && visible
-                .as_bytes()
-                .windows(marker.len())
-                .any(|part| part == marker);
+            && visible_marker_position(visible.as_bytes(), marker).is_some();
         // Claude deliberately collapses a long paste into a numbered
         // `[Pasted text #N]` chip, hiding the delivery marker from the
         // canonical screen. A newly numbered, stable chip is equally strong
@@ -917,15 +914,12 @@ fn claude_input_marker_is_still_open(
     marker: &[u8],
 ) -> bool {
     provider == ProviderKind::ClaudeCode
-        && snapshot.windows(marker.len()).any(|part| part == marker)
+        && visible_marker_position(snapshot, marker).is_some()
         && !resting_prompt_follows_marker(snapshot, marker)
 }
 
 fn resting_prompt_follows_marker(snapshot: &[u8], marker: &[u8]) -> bool {
-    let Some(marker_position) = snapshot
-        .windows(marker.len())
-        .rposition(|part| part == marker)
-    else {
+    let Some(marker_position) = visible_marker_position(snapshot, marker) else {
         return false;
     };
     ["❯".as_bytes(), "›".as_bytes()]
@@ -937,6 +931,26 @@ fn resting_prompt_follows_marker(snapshot: &[u8], marker: &[u8]) -> bool {
         })
         .max()
         .is_some_and(|prompt_position| prompt_position > marker_position)
+}
+
+/// Physical row boundaries may divide an otherwise exact marker. Preserve the
+/// original byte position for prompt ordering; ignore only CR/LF, never spaces
+/// or intervening text. This is display evidence, not permission to replay.
+fn visible_marker_position(snapshot: &[u8], marker: &[u8]) -> Option<usize> {
+    let first = *marker.first()?;
+    snapshot
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(position, byte)| {
+            (*byte == first
+                && snapshot[position..]
+                    .iter()
+                    .filter(|byte| !matches!(**byte, b'\r' | b'\n'))
+                    .take(marker.len())
+                    .eq(marker.iter()))
+            .then_some(position)
+        })
 }
 
 /// A coordination message and the marker that proves it reached the screen.
@@ -1179,7 +1193,7 @@ pub(super) async fn settle_uncertain_queen_review(state: &AppState) {
     };
     let marker = format!("[Swarm automation {run_id}]");
     let visible = snapshot_plain_text(&snapshot.bytes, snapshot.rows, snapshot.columns);
-    if !visible.contains(&marker) {
+    if visible_marker_position(visible.as_bytes(), marker.as_bytes()).is_none() {
         return;
     }
     match store.confirm_queen_automation_delivered(&run_id, session_id, unix_timestamp()) {
@@ -1196,12 +1210,13 @@ pub(super) async fn settle_uncertain_queen_review(state: &AppState) {
 
 pub(super) fn queen_automation_message(delivery: &QueenAutomationDelivery) -> CoordinationMessage {
     let bytes = format!(
-        "{guidance} [Swarm automation {}] Review {} actionable records while the operator is {}. Use swarm_list_tasks, swarm_list_workers, and swarm_list_coordination_attention as the authority. Draft tasks are part of this review: a draft is work nobody has decided about yet, so triage each one into ready, blocked, or removed rather than leaving it sitting. Delivery exceptions in task_message_deliveries are also yours: read the exact message in swarm_read_task_history, then use swarm_reconcile_task_message with its observed claim_id and a reason. Resolve it without claiming receipt when already handled; authorize a retry only when necessary and possible duplication is acceptable. Never retry a superseded review question. These are coordination problems, not operator approvals or evidence a terminal stopped. Escalate only when you cannot recover within existing authority, not because of age. Coordination attention can identify Ready work whose delivered brief did not start, Active work that is unchanged while its loaded worker is resting, or work whose worker process exited; recheck the current task and worker before deciding whether to restart, steer, wait, or ask the operator. It ALSO identifies finished work nothing has settled, which is usually the largest part of this review and is yours rather than the operator's: approve a no-deployment claim with swarm_approve_no_deployment once you have read the handoff, SAYING WHAT YOUR AGREEMENT RESTS ON — a merged SHA, a recorded deployment, the handoff you read, or an explicit \"I could not verify\", which is accepted; saying nothing is not. When something is missing, hand it back with swarm_return_reviewed_work naming what you need: THE TASK STAYS IN REVIEW and the next move becomes the worker\'s. Do NOT move reviewed work to Ready to get attention — Ready means UNSTARTED to everything that reads it and erases that the work was done. When work is finished and merely waiting to ship, move it to awaiting_release: it needs no evidence to enter and COMPLETES ITSELF when a deployment is recorded, so it is the right home for anything held only because it has not shipped. When commits touch code with no deployment, check task scope first. If deployment is required, route it to the owning worker within existing authority. For explicitly local code or test work, check commits and verification results and review the no-deployment claim instead. Do not invent a deployment requirement or ask the operator for a routine write-off. You cannot deploy during this run. Work parked on a SLEEPING worker is yours to move rather than yours to wait on: there is no wake tool, and assigning READY work with swarm_assign_task queues a guarded wake, so reassigning it to the same sleeping worker is how that worker is started. Only Ready work wakes anyone — work left Active or Blocked on a SLEEPING worker wakes nobody, so return it to Ready first (Active to Blocked to Ready) and then assign. That route is for WAKING a stopped worker and nothing else; it is not how you ask a running worker for something, which is swarm_message_worker, and it is not how you hand back reviewed work, which is swarm_return_reviewed_work. You can also ask a running worker a question without interrupting it: swarm_message_worker waits until its terminal is resting, so it never lands mid-turn, and the exchange is recorded on the task. Observe the live session before calling the work Active again. Respect worker repository ownership and the configured Queen autonomy ceiling. Do not perform Jira, Apiary, email, deployment, or other external side effects during this run. When operator judgment is needed, create one swarm_request_decision per concrete task. Link its task_id, make the suggested_action exactly one allowed_actions button, and never group unrelated tasks or a fleet review into one approval. When this exact review is finished, call swarm_finish_automation_run with run_id {} and outcome completed, needs_operator, or no_action.\r",
+        "{guidance} [Swarm automation {}] Review {} actionable records while the operator is {}. Use swarm_list_tasks, swarm_list_workers, and swarm_list_coordination_attention as the authority. Draft tasks are part of this review: a draft is work nobody has decided about yet, so triage each one into ready, blocked, or removed rather than leaving it sitting. Delivery exceptions in task_message_deliveries are also yours: read the exact message in swarm_read_task_history, then use swarm_reconcile_task_message with its observed claim_id and a reason. Resolve it without claiming receipt when already handled; authorize a retry only when necessary and possible duplication is acceptable. Never retry a superseded review question. These are coordination problems, not operator approvals or evidence a terminal stopped. Escalate only when you cannot recover within existing authority, not because of age. Coordination attention can identify Ready work whose delivered brief did not start, Active work that is unchanged while its loaded worker is resting, or work whose worker process exited; recheck the current task and worker before deciding whether to restart, steer, wait, or ask the operator. It ALSO identifies finished work nothing has settled, which is usually the largest part of this review and is yours rather than the operator's: approve a no-deployment claim with swarm_approve_no_deployment once you have read the handoff, SAYING WHAT YOUR AGREEMENT RESTS ON — a merged SHA, a recorded deployment, the handoff you read, or an explicit \"I could not verify\", which is accepted; saying nothing is not. When something is missing, hand it back with swarm_return_reviewed_work naming what you need: THE TASK STAYS IN REVIEW and the next move becomes the worker\'s. Do NOT move reviewed work to Ready to get attention — Ready means UNSTARTED to everything that reads it and erases that the work was done. When work is finished and merely waiting to ship, move it to awaiting_release: it needs no evidence to enter and COMPLETES ITSELF when a deployment is recorded, so it is the right home for anything held only because it has not shipped. When commits touch code with no deployment, check task scope first. If deployment is required, route it to the owning worker within existing authority. For explicitly local code or test work, check commits and verification results and review the no-deployment claim instead. Do not invent a deployment requirement or ask the operator for a routine write-off. You cannot deploy during this run. {wake_guidance} You can also ask a running worker a question without interrupting it: swarm_message_worker waits until its terminal is resting, so it never lands mid-turn, and the exchange is recorded on the task. Observe the live session before calling the work Active again. Respect worker repository ownership and the configured Queen autonomy ceiling. Do not perform Jira, Apiary, email, deployment, or other external side effects during this run. When operator judgment is needed, create one swarm_request_decision per concrete task. Link its task_id, make the suggested_action exactly one allowed_actions button, and never group unrelated tasks or a fleet review into one approval. When this exact review is finished, call swarm_finish_automation_run with run_id {} and outcome completed, needs_operator, or no_action.\r",
         delivery.run_id,
         delivery.actionable_count,
         delivery.presence,
         delivery.run_id,
         guidance = crate::agent::QUEEN_JUDGMENT_GUIDANCE,
+        wake_guidance = crate::agent::QUEEN_WAKE_GUIDANCE,
     )
     .into_bytes();
     CoordinationMessage {
@@ -1774,6 +1789,32 @@ mod tests {
                 .coordination_is_cooling_down(session, unix_timestamp())
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn delivery_markers_survive_row_wraps_without_ignoring_other_text() {
+        let marker = b"01a070f6-10c6-7e11-b324-f960469bf310";
+        for split in 1..marker.len() {
+            let mut rendered = b"received:".to_vec();
+            rendered.extend_from_slice(&marker[..split]);
+            rendered.extend_from_slice(b"\r\n");
+            rendered.extend_from_slice(&marker[split..]);
+            assert_eq!(visible_marker_position(&rendered, marker), Some(9));
+            assert!(!resting_prompt_follows_marker(&rendered, marker));
+            rendered.extend_from_slice("\n❯ ".as_bytes());
+            assert!(resting_prompt_follows_marker(&rendered, marker));
+        }
+        assert!(
+            visible_marker_position(
+                b"01a070f6-\nother text\n10c6-7e11-b324-f960469bf310",
+                marker
+            )
+            .is_none()
+        );
+        assert!(
+            visible_marker_position(b"01a070f6- 10c6-7e11-b324-f960469bf310", marker).is_none()
+        );
+        assert!(visible_marker_position(b"anything", b"").is_none());
     }
 
     #[test]
@@ -2621,6 +2662,8 @@ mod tests {
         );
         let brief = std::str::from_utf8(&queen.bytes).unwrap();
         assert!(brief.contains(crate::agent::QUEEN_JUDGMENT_GUIDANCE));
+        assert!(brief.contains(crate::agent::QUEEN_WAKE_GUIDANCE));
+        assert!(!brief.contains("no wake tool"));
         assert!(!brief.contains('\n'));
         assert_eq!(
             operator_broadcast_message(&[broadcast("reloading in five minutes")])

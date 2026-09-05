@@ -88,6 +88,28 @@ pub(super) async fn start_worker_process(
     start_worker_process_unlocked(state, worker_id, size).await
 }
 
+/// Queen startup revalidates policy after acquiring lifecycle ownership.
+pub(super) async fn start_queen_worker_process(
+    state: &AppState,
+    worker_id: WorkerId,
+    size: TerminalSize,
+) -> Result<crate::WorkerView, ApiError> {
+    let _guard = state.worker_lifecycle.lock().await;
+    let profile = task_store(state)?
+        .get_worker_profile(worker_id)
+        .map_err(|error| task_store_error(&error))?;
+    // The adapter's earlier policy check may predate another lifecycle operation
+    // or a presence/provider change. Revalidate the actual start under ownership.
+    if !automation_admitted(state, profile.provider) {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "provider_automation_deferred",
+            "Queen startup is deferred by current provider or presence policy; assigned work is unchanged",
+        ));
+    }
+    start_worker_process_unlocked(state, worker_id, size).await
+}
+
 /// None means cancelled, policy-deferred, or draining, not a failed attempt.
 pub(super) async fn revive_worker_process(
     state: &AppState,
@@ -2083,6 +2105,42 @@ mod tests {
         assert!(store.worker_revival_pending(worker.id).unwrap());
         assert!(state.worker_errors.read().await.is_empty());
         assert!(state.worker_recovery_attempts.read().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn queen_start_rechecks_presence_after_waiting_for_lifecycle_ownership() {
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Experimental", ProviderKind::Gemini, "/workspace", false, 1)
+            .unwrap();
+        store
+            .set_manual_presence(
+                Some(swarm_domain::PresenceMode::Reachable),
+                crate::unix_timestamp(),
+            )
+            .unwrap();
+        let state = AppState::default().with_task_store(store.clone());
+        let guard = state.worker_lifecycle.lock().await;
+        let pending_state = state.clone();
+        let pending = tokio::spawn(async move {
+            start_queen_worker_process(&pending_state, worker.id, TerminalSize::default()).await
+        });
+        store
+            .set_manual_presence(
+                Some(swarm_domain::PresenceMode::NightWatch),
+                crate::unix_timestamp(),
+            )
+            .unwrap();
+        drop(guard);
+        let error = pending.await.unwrap().unwrap_err();
+        assert_eq!(error.code, "provider_automation_deferred");
+        assert!(
+            store
+                .get_worker_profile(worker.id)
+                .unwrap()
+                .active_session_id
+                .is_none()
+        );
     }
 
     /// Builds the start request for a worker whose workspace is `workspace`,

@@ -102,6 +102,22 @@ open rather than guessed at.
 
 ## Where the behaviour lives
 
+### Wake contract reconciliation (2026-09-05)
+
+The historical no-start/no-stop account above is superseded by the existing
+`swarm_start_worker` and `swarm_sleep_worker` tools. Queen's standing and per-run
+briefs now share lifecycle guidance: explicitly start a stopped worker when its
+existing work needs to continue, preserving Active/Blocked/Review task state.
+Ready assignment may still queue its guarded wake; repeating assignment or
+rewinding task state is not the general recovery operation. The explicit Queen
+start adapter enforces provider eligibility before capacity checks, so experimental
+providers cannot bypass Night Watch through this tool. Ending Night Watch removes
+that policy hold, not the separate capacity requirement. No task or provider is
+changed by a refused start, and explicit operator startup is unchanged.
+Provider policy is revalidated under lifecycle ownership before the actual start,
+so a pending start cannot use a provider/presence observation from before another
+lifecycle operation completed.
+
 ### Daily-driver judgment policy (2026-09-04)
 
 The approved maturity plan qualifies the original review-only wording: supported

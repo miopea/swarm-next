@@ -15948,7 +15948,7 @@ mod tests {
             executable: PathBuf::from("/bin/sh"),
             arguments: vec![
                 "-lc".into(),
-                "printf 'manual mode on · ? for shortcuts · ← for agents\\n❯ \\n'; while IFS= read -r value; do printf 'received:%s\\n❯ \\nmanual mode on · ? for shortcuts · ← for agents\\n' \"$value\"; done".into(),
+                "stty -icanon; printf 'manual mode on · ? for shortcuts · ← for agents\\n❯ \\n'; while IFS= read -r value; do printf 'received:%s\\n❯ \\nmanual mode on · ? for shortcuts · ← for agents\\n' \"$value\"; done".into(),
             ],
             working_directory: workspace.clone(),
         };
@@ -16030,10 +16030,18 @@ mod tests {
         state.deliver_coordination().await;
 
         let automation = store.queen_automation_status(101).unwrap();
+        let snapshot = match queen_terminal.resume_after(None).unwrap() {
+            swarm_terminal::Resume::Snapshot { snapshot } => swarm_terminal::snapshot_plain_text(
+                &snapshot.bytes,
+                snapshot.rows,
+                snapshot.columns,
+            ),
+            swarm_terminal::Resume::Deltas { .. } => "unexpected delta response".to_owned(),
+        };
         assert_eq!(
             automation.state,
             swarm_domain::QueenAutomationState::Running,
-            "and once the terminal is no longer cooling, the held run brief arrives"
+            "and once the terminal is no longer cooling, the held run brief arrives: {snapshot:?}"
         );
         assert_eq!(
             automation.trigger,

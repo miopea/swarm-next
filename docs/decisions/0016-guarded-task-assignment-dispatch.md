@@ -111,6 +111,15 @@ preview. This does not infer a dependency owner or authorize automatic recovery.
 
 ## Validation
 
+Rendered marker recognition ignores CR/LF row boundaries only, retaining the
+original position when comparing a marker with a following prompt. Terminal width
+must not turn the same visible identity into an uncertain delivery. Spaces and
+intervening text still prevent a match; an empty marker is rejected. Sequence,
+session, prompt and submission guards remain required. This does not establish
+operator authorization or permit replay of uncertain work. The long-briefing shell
+fixture disables canonical line truncation so it consumes the complete message,
+not merely echoes bytes that its input discipline later discards.
+
 Missing-briefing repair inserts at most the remaining active queue capacity,
 ordered by task position and identity. A regression fills that bound, proves
 further repair is a no-op, then frees a slot and verifies the remaining work is

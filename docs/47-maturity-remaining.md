@@ -13,6 +13,13 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
   Standing and per-run instructions also contradict the available start tool by
   saying there is no wake tool and recommending task-state rewinds to wake work.
   Reconcile the shared guidance with the actual tool and preserve task state.
+  Local implementation now shares lifecycle guidance between standing and run
+  briefings, refuses experimental Night Watch starts, and rechecks policy after
+  acquiring lifecycle ownership. All 456 Linux API tests and strict API lint pass.
+  The regression run also exposed wrapped delivery markers and a canonical-shell
+  fixture that truncated long input. Exact markers now survive physical row
+  boundaries without ignoring spaces or other text; the fixture consumes the
+  complete briefing. Deployment and actual Queen acceptance follow the soak.
 
 - [ ] Automatic crash recovery and post-update revival must honor resource
   admission without consuming attempts or clearing revival intents. Inspection
@@ -73,6 +80,25 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 - [ ] P7: representative workday and overnight/mobile soak with recorded limits.
 
 ## Evidence from the September 4–5 demo run
+
+### Fixed-build one-hour server observation
+
+Read-only run `20260905T085228Z-live` completed 3,600 seconds on `fc7af9f4`,
+with 120 samples and all four initial sessions retained. API PID 2144511 and
+engine PID 2088305 stayed fixed. There were no dropped history bytes; retained
+history grew 157,912 bytes. The samples span 3,586 seconds between first and last.
+Across that interval API CPU averaged 0.30% of one core; the engine cgroup,
+including its children, averaged 4.93%. Largest sampled interval averages were
+2.74% and 16.05%, respectively, not instantaneous peaks.
+
+API cgroup memory ranged from 13,295,616 to 99,512,320 bytes and ended at
+88,375,296 bytes. Engine cgroup memory ranged from 1,177,960,448 to
+1,267,396,608 bytes. This is continuity evidence, not a memory plateau or the
+10–15-worker browser performance acceptance gate. Native mobile and browser
+latency were not measured. Evidence is retained on the dev server at
+`/home/bschleifer/.local/state/swarm-next/soak/20260905T085228Z-live-samples.csv`.
+No matching hourly integrity-probe log was observed in the queried journal;
+the isolated containment/recovery drill is separate verified evidence.
 
 ### Provider policy and truthful settings
 
