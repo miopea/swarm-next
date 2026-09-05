@@ -66,6 +66,16 @@ Strict CLI lint passed against the Linux target. The Windows CLI check correctly
 cannot compile its Unix-only host client; no compatibility shim was added.
 CLI runtime integration and an actual isolated package restore remain unproven.
 
+Follow-up installed-binary evidence supersedes the CLI-runtime gap above:
+`scripts/dogfood/verify-backup-candidate.sh` passed against live dev build
+`56fd31a2ad24` using a 34,885,632-byte online export. Missing/empty inputs were
+rejected, the real export passed CLI and SQLite integrity verification, and an
+8,192-byte truncated copy was rejected with a normal error (not timeout) without
+changing its hash. Private temporary export/auth files were removed on exit.
+Health was ok with no degraded subsystems and unchanged engine build identity.
+No restore or worker/service operation occurred during the drill. Isolated
+package restore and offline corruption recovery remain open.
+
 Full REC-02 remains open: package restore requires a successful online export
 of current state before replacement. If corruption prevents that export, the
 current restore path cannot recover. A separately explicit offline/quarantine
