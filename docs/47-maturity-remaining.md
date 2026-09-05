@@ -8,6 +8,21 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Mobile submission key ordering (September 5)
+
+An isolated regression reproduced toolbar keys interleaving between Send's
+bracketed paste and its pending Enter frame. The composer now disables and guards
+its terminal-key toolbar while that submission is pending; it never queues those
+taps for later replay. Normal keys become available again after completion or
+the existing disconnected-input cancellation. All 36 composer/draft/source tests
+passed. This is a local input-ordering fix, not real-device AskUser rendering or
+provider-consumption proof. No live worker received test input; deployment is held
+during the fixed-build baseline.
+
+A later read of the unchanged preserved baseline tab reported 41,241,364 heap
+bytes, 3,509 nodes and 1,301 listeners. No forced GC or reload. These gauges still
+do not establish a monotonic leak or close the operator's aged-session report.
+
 ### Pending-decision roster semantics (September 5)
 
 Tracing Queen's `Awaiting you · 19h` label found that the API gives any pending

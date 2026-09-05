@@ -128,6 +128,23 @@ test("sends slash commands as bracketed paste before a separated Enter frame", a
   expect(screen.getByLabelText(/Message worker/)).toHaveValue("");
 });
 
+test("terminal keys cannot interleave with a pending composer submission", async () => {
+  vi.useFakeTimers();
+  const onInput = vi.fn(() => true);
+  render(<MobileTerminalComposer connectionState="connected" keysExpanded onInput={onInput} />);
+  fireEvent.change(screen.getByLabelText(/Message worker/), { target: { value: "one message" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  const keys = ["Enter", "Esc", "Tab", "Ctrl+C", "Cycle mode", "Arrow up", "Arrow down", "Arrow left", "Arrow right"];
+  for (const name of keys) fireEvent.click(screen.getByRole("button", { name }));
+  expect(onInput.mock.calls).toEqual([["\u001b[200~one message\u001b[201~"]]);
+  for (const name of keys) expect(screen.getByRole("button", { name })).toBeDisabled();
+  await act(async () => { await vi.advanceTimersByTimeAsync(75); });
+  expect(onInput.mock.calls).toEqual([["\u001b[200~one message\u001b[201~"], ["\r"]]);
+  for (const name of keys) expect(screen.getByRole("button", { name })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "Enter" }));
+  expect(onInput).toHaveBeenCalledTimes(3);
+});
+
 test("refused input preserves the draft instead of silently clearing it", () => {
   const onInput = vi.fn(() => false);
   render(<MobileTerminalComposer connectionState="connected" onInput={onInput} />);

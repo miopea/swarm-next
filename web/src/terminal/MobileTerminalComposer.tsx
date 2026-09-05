@@ -105,6 +105,7 @@ export function MobileTerminalComposer({ sessionId, connectionState, inputAvaila
   const [pickerReturnedNothing, setPickerReturnedNothing] = useState(pickerWasInterrupted);
   const [pickerUploadFailed, setPickerUploadFailed] = useState(false);
   const connected = connectionState === "connected" && inputAvailable;
+  const keysDisabled = !connected || submitting;
 
   useEffect(() => {
     if (!sessionId) return;
@@ -192,7 +193,9 @@ export function MobileTerminalComposer({ sessionId, connectionState, inputAvaila
   }
 
   function sendKey(value: string) {
-    if (connected) onInput(value);
+    // The pending composer Enter owns the next key. Never interleave a toolbar
+    // key with its paste, or replay a suppressed tap once submission finishes.
+    if (connected && submitTimer.current === undefined && !submitting) onInput(value);
   }
 
   function toggleKeys() {
@@ -340,17 +343,17 @@ export function MobileTerminalComposer({ sessionId, connectionState, inputAvaila
       </div>
       {keysExpanded && <div className="mobile-terminal-keys" aria-label="Terminal keys">
         <div className="terminal-dpad">
-          <button type="button" aria-label="Arrow up" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.up)} disabled={!connected}>↑</button>
-          <button type="button" aria-label="Arrow left" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.left)} disabled={!connected}>←</button>
-          <button type="button" aria-label="Arrow down" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.down)} disabled={!connected}>↓</button>
-          <button type="button" aria-label="Arrow right" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.right)} disabled={!connected}>→</button>
+          <button type="button" aria-label="Arrow up" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.up)} disabled={keysDisabled}>↑</button>
+          <button type="button" aria-label="Arrow left" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.left)} disabled={keysDisabled}>←</button>
+          <button type="button" aria-label="Arrow down" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.down)} disabled={keysDisabled}>↓</button>
+          <button type="button" aria-label="Arrow right" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.right)} disabled={keysDisabled}>→</button>
         </div>
         <div className="terminal-key-actions">
-          <button type="button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.enter)} disabled={!connected}>Enter</button>
-          <button type="button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.escape)} disabled={!connected}>Esc</button>
-          <button type="button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.tab)} disabled={!connected}>Tab</button>
-          <button type="button" className="interrupt-button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.interrupt)} disabled={!connected}>Ctrl+C</button>
-          <button type="button" className="mode-cycle-button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.modeCycle)} disabled={!connected}>Cycle mode</button>
+          <button type="button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.enter)} disabled={keysDisabled}>Enter</button>
+          <button type="button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.escape)} disabled={keysDisabled}>Esc</button>
+          <button type="button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.tab)} disabled={keysDisabled}>Tab</button>
+          <button type="button" className="interrupt-button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.interrupt)} disabled={keysDisabled}>Ctrl+C</button>
+          <button type="button" className="mode-cycle-button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.modeCycle)} disabled={keysDisabled}>Cycle mode</button>
         </div>
       </div>}
     </section>
