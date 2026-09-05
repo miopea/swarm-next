@@ -78,6 +78,20 @@ The complete API library suite then passed 467 tests in 108.72 seconds with
 incremental compilation disabled. Local-only formatting expansion followed the
 remote source copy; runtime behavior and tested assertions were unchanged.
 
+Direct-stop deployment: development build
+`1.5.0-dev-47cd75385c8f-20260905161700-2352005` passed health with no degraded
+subsystems. Managed reload completed successfully, engine PID 2323268/build
+identity stayed unchanged, and all eleven running session IDs matched their
+pre-update identities with no runtime errors. D365's revision-2 corrected default
+remained confirmed. Main push bypassed four expected checks; no release was cut.
+
+Return latency inspection found the supervisor uses a thirty-second interval in
+`main.rs` and exits revival after one successful or failed attempt per pass.
+Per-worker revival already rechecks capacity and drain state under lifecycle
+ownership. Any acceleration must retain those fresh checks, bounded work and
+fairness for workers behind a deferred or failing candidate. No scheduling fix
+has been implemented or accepted by the preceding deployment evidence.
+
 ### Disposed renderer fit cancellation (September 5)
 
 Disposal previously checked only after font/frame waits resumed. Two regressions
