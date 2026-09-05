@@ -16,8 +16,32 @@ re-arms the assignment with a new generation. The regression passes and proves
 unresolved prerequisites still refuse recovery, another Active task is preserved,
 the recovered briefing waits for that task, an old receipt cannot settle the new
 briefing, and Ready to Active does not duplicate it. All 26 dispatch tests passed.
-This is transition/outbox evidence; live demo recovery and broader blocker
-classification remain open. Existing real Blocked tasks were not changed.
+The full isolated persistence suite subsequently passed 568 tests (two test
+threads, 235.65 seconds). Commit `2f37f050` deployed healthy as
+`1.5.0-dev-2f37f050d21e-20260905212155-2571126`, with engine PID 2456733 unchanged.
+
+Live fixture `01a07375-2e04-7f83-95c3-e02124f47792` ran on Swarm Dogfood Contract:
+initial briefing -> worker Active -> intentional Blocked checkpoint -> operator
+Mark ready through the separate Edge tab -> new queued briefing -> paced delivery
+-> worker Active -> Review -> automatic Completed at 21:30:21 UTC. The worker
+re-read checkpoint sequence 7126 and the UI transition 7127 before running
+`printf HONEYCOMB-RECOVERY-PASS`; its output and exit 0 were visible in the live
+terminal screenshot. The fixture repository remained clean by independent SSH
+git status; worker session `01a072d4-9a60-7051-802d-50670541636e` was unchanged.
+No real blocked task or operator decision was changed. The existing five-minute
+returned-brief pacing remains a latency source, not a missing-delivery defect.
+Broader blocker classification and autonomous reassessment remain open.
+
+The fixture also exposed a follow-up error-quality defect: its empty commit
+report auto-settled the no-change task, then two attempted no-deployment claims
+were refused with "completed work requires concise verification evidence". The
+worker initially interpreted that as a note-length problem before reading the
+history and recognizing the task had already closed. Make this completed-state
+refusal explicit without widening evidence-write authority; not fixed here.
+
+Separate rendered Settings verification confirmed Developer Dogfood spans the
+desktop content width and does not include the Your Hive identity card. This
+closes that desktop composition check, not narrow-layout or real-device approval.
 
 ### Queen review delivery fairness (September 5)
 
