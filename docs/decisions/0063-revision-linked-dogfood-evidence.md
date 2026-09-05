@@ -58,3 +58,22 @@ sample counts, coverage, build identity, and collection limits; means/maxima are
 not p95. Capture measurements and instrumentation overhead must be validated
 before using them as release gates. Server/orchestration/recovery metrics remain
 in the approved scope and must not be replaced by these browser-only summaries.
+
+## Event entries versus interactions
+
+The historical `interaction` wire field contains individual native Event Timing
+entries, not unique actions. Preserve that meaning for retained and incoming
+hourly records; label it Event-entry latency and explain the reporting threshold.
+Never silently overwrite it with grouped data or claim it is INP.
+
+Local diagnostics additionally owns at most 200 positive interaction IDs seen in
+the past minute, grouping repeated entries by ID and retaining the slowest entry
+with its input-delay, processing, and estimated-presentation phases. Expiry runs
+on observation/read, without timers. Eviction is least recently observed, and
+capture installation resets the map. IDs, targets and event names are never
+exported or persisted. Only aggregate count and the slowest entry's numeric phases
+enter the local report. This is thresholded recent evidence, not all interactions,
+whole-page INP or a long-term percentile. Quantized duration may make the phase
+remainder slightly negative, so presentation is clamped to zero and labeled an
+estimate. Malformed/unidentified entries do not become guessed interactions.
+Reference: https://www.w3.org/TR/2026/WD-event-timing-20260223/

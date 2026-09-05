@@ -102,3 +102,27 @@ test("unsupported observation is unavailable rather than healthy by assumption",
   expect(readBrowserPerformance().supported_observers).toEqual([]);
   stop();
 });
+
+test("native event grouping is separate from historical entry counts and resets with its owner", () => {
+  let callback: PerformanceObserverCallback | undefined;
+  vi.stubGlobal("PerformanceObserver", class {
+    static supportedEntryTypes = ["event"];
+    constructor(cb: PerformanceObserverCallback) { callback = cb; }
+    observe() {}
+    disconnect() {}
+  });
+  const stop = installBrowserPerformanceCapture();
+  const before = readBrowserPerformance().current.buckets.reduce((sum, bucket) => sum + (bucket.metrics.interaction?.count ?? 0), 0);
+  const entry = { entryType: "event", interactionId: 9, duration: 200, startTime: 10, processingStart: 30, processingEnd: 50 };
+  const emit = (duration: number) => callback!({ getEntries: () => [{ ...entry, duration }] } as unknown as PerformanceObserverEntryList, {} as PerformanceObserver);
+  try {
+    emit(200);
+    emit(240);
+    const report = readBrowserPerformance();
+    expect(report.recent_interactions).toMatchObject({ observed_interactions: 1, slowest: { duration_ms: 240 } });
+    expect(report.current.buckets.reduce((sum, bucket) => sum + (bucket.metrics.interaction?.count ?? 0), 0) - before).toBe(2);
+  } finally { stop(); }
+  const restarted = installBrowserPerformanceCapture();
+  expect(readBrowserPerformance().recent_interactions.observed_interactions).toBe(0);
+  restarted();
+});

@@ -219,7 +219,16 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
       <details className="browser-performance-breakdown">
         <summary>Browser performance evidence</summary>
         <p>{browserTiming.collection === "active" ? "Local timing capture is active." : "Local timing capture is not installed in this view."} Content-free evidence is retained for up to one hour; incident snapshots expire after 24 hours.</p>
-        <p>{browserTiming.supported_observers.length ? `Native observers: ${browserTiming.supported_observers.join(", ")}.` : "Native long-task and interaction observers are unavailable; application timings may still be recorded."}</p>
+        <p>{browserTiming.supported_observers.length ? `Native observers: ${browserTiming.supported_observers.join(", ")}.` : "Native long-task and event observers are unavailable; application timings may still be recorded."}</p>
+        <p>Historical event-entry counts can include several events from one action; they are not unique interaction counts.</p>
+        <p>Recent grouped observations: {browserTiming.recent_interactions.observed_interactions} interaction IDs retained, up to 200 in the last minute. Missing observations do not establish responsiveness.</p>
+        {browserTiming.recent_interactions.slowest ? <p>
+          Slowest observed entry: {Math.round(browserTiming.recent_interactions.slowest.duration_ms)} ms
+          {" · Input delay "}{Math.round(browserTiming.recent_interactions.slowest.input_delay_ms)} ms
+          {" · Handler processing "}{Math.round(browserTiming.recent_interactions.slowest.processing_ms)} ms
+          {" · Presentation estimate "}{Math.round(browserTiming.recent_interactions.slowest.presentation_estimate_ms)} ms
+        </p> : null}
+        <p>{browserTiming.recent_interactions.coverage}</p>
         <p>{browserTiming.current.buckets.length} timing buckets · {browserTiming.current.incidents.length} recent incident captures. These are historical evidence, not unresolved alerts.</p>
         {browserTiming.before_reload ? <p>Before-reload snapshot available for comparison.</p> : null}
         <p>Preview report includes the timing evidence. Browser CPU percentage is not available here; compare with your browser task manager.</p>

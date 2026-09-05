@@ -1,3 +1,5 @@
+import { RecentInteractions } from "./recentInteractions";
+
 /** Browser-owned, content-free evidence. Never pass input or terminal bytes here. */
 export const BROWSER_METRICS = ["long_task", "interaction", "route", "terminal_render", "terminal_reconnect", "terminal_grant", "terminal_socket", "terminal_restore"] as const;
 export type BrowserMetric = typeof BROWSER_METRICS[number];
@@ -124,11 +126,13 @@ export function saveBrowserPerformance(storage: Pick<Storage, "setItem">, record
 let previous: Snapshot | undefined;
 let observed: string[] = [];
 let installed = false;
+let recentInteractions = new RecentInteractions();
 
 /** One application owner; no sampling timers, DOM walks, or per-event storage writes. */
 export function installBrowserPerformanceCapture(): () => void {
   if (installed) return () => undefined;
   installed = true;
+  recentInteractions = new RecentInteractions();
   try { previous = readPreviousBrowserPerformance(window.sessionStorage); } catch { previous = undefined; }
   const observers: PerformanceObserver[] = [];
   observed = [];
@@ -142,6 +146,7 @@ export function installBrowserPerformanceCapture(): () => void {
           for (const entry of list.getEntries()) {
             // Event Timing names and targets may expose content; retain duration only.
             browserPerformance.record(type === "longtask" ? "long_task" : "interaction", entry.duration);
+            if (type === "event") recentInteractions.record(entry);
           }
         });
         observer.observe({ type, buffered: false });
@@ -166,5 +171,6 @@ export function installBrowserPerformanceCapture(): () => void {
 
 export function readBrowserPerformance() {
   if (previous && Date.now() - previous.captured_at > EXPIRY_MS) previous = undefined;
-  return { collection: installed ? "active" : "not_installed", supported_observers: [...observed], current: browserPerformance.snapshot(), before_reload: previous };
+  return { collection: installed ? "active" : "not_installed", supported_observers: [...observed], current: browserPerformance.snapshot(), before_reload: previous,
+    recent_interactions: recentInteractions.snapshot() };
 }
