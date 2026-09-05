@@ -20,7 +20,14 @@ It says last delivery check, not continuous observation, and copies no prompt
 content. Clearing the refusal or replacing the session removes the explanation.
 All 35 Queen-conductor tests and 21 Queue tests passed. All-target persistence
 lint found an unrelated 101-line Jira test; this is not a full strict-lint pass.
-Live waiting-reason deployment/visual acceptance remains pending.
+Production-library strict lint passed separately. Build c84a1ed3 deployed healthy
+with the same engine PID 2640474. The status API and a reloaded separate Edge tab
+both showed the last-delivery unsent-text explanation, with Needs You still zero
+and 13 workers running. The pre-reload tab retained its earlier status despite
+showing the new runtime version; accepting its Reload banner and reopening Queues
+made the new explanation visible. No terminal contents were changed. Queen's
+actual triage follow-through remains blocked by the observed prompt hold, not
+proven by the new response fields or deployment.
 
 Read-only 180-second sample 20260905T234259Z-live completed with 18 observations
 and all 13 original sessions, unchanged API PID 2663910 and engine PID 2640474.
