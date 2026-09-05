@@ -56,6 +56,14 @@ sleeping, her next session binding creates the first dispatch atomically.
 
 ## Consequences
 
+The maturity program exempts an assignment's initial briefing (generation zero)
+from the per-terminal coordination cooldown. A preceding message must not leave
+an otherwise ready worker idle for five minutes before receiving new work.
+Returned-work generations retain pacing. This changes neither claim eligibility
+(operator engagement, other Active work, ordering, session and provider policy)
+nor terminal observation, unsent-draft protection and acceptance verification.
+No uncertain delivery is replayed by this exemption.
+
 Schema 129 adds a nonnegative integer briefing generation, initially zero for
 existing assignments. Returning Review/Blocked work to Active increments it in
 the same task transition transaction. Overflow fails that transaction rather

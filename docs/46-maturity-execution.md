@@ -5,7 +5,7 @@ Branch: `codex/daily-driver-maturity`. Starting revision: `36420b3`.
 Local commits, mainline push, and direct development-Hive deployment are now
 authorized. No release is authorized.
 
-## Live dogfood follow-up: removed Jira work — 2026-09-05
+## Live dogfood follow-ups — 2026-09-05
 
 ### Follow-up: meaningful Queen delivery invalidations
 
@@ -20,6 +20,29 @@ authorized. No release is authorized.
 
 ### Follow-up: queue reasons belong to their own work
 
+- Queue fixes verified live at `/health` as
+  `1.5.0-dev-9a5352c1131d-20260905021534-1969048`, no degraded subsystems,
+  unchanged engine build identity and successful development reload.
+- A subsequent bounded 30-minute API log check found zero occurrences of the
+  former `assigned Jira work could not synchronize automatically` warning.
+  This closes that observed warning check, not general Jira or CPU acceptance.
+
+### First-briefing pacing: regression verification
+
+The first briefing of a durable assignment now bypasses coordination pacing;
+returned-work generations remain cooled. Existing readiness, policy and delivery
+verification paths are unchanged. Tests explicitly cover generation zero versus
+later generations and both cadence classes at the experimental-provider gate.
+The freshly built Linux API harness `swarm_api-fc94efeadfeb47ca` passes all 32
+coordination-delivery tests, including the renamed pacing regression. The 22
+persistence dispatch tests also pass. Live initial-task timing remains required;
+component evidence does not establish the actual provider receipt latency.
+The local cross-build requires the architecture-specific OpenSSL include
+directory in `CFLAGS_x86_64_unknown_linux_gnu` in addition to the common headers:
+`-fno-sanitize=undefined -I<temporary-root>/openssl-linux/usr/include/x86_64-linux-gnu`.
+
+### Queue implementation evidence
+
 - Briefings retain worker grouping by stable ID. A common reason is shown once;
   distinct predecessor or policy holds stay with their own task instead of
   inheriting the first row's reason. Removed the blanket claim that nothing is
@@ -28,6 +51,8 @@ authorized. No release is authorized.
   `queen-run:` deliveries correctly name Queen even without a worker label.
 - All 19 held-briefing/Queues tests and TypeScript checking pass. Authenticated
   rendered acceptance and the broader owner/action queue integration remain open.
+
+### Delivery invalidation implementation evidence
 
 - Removed broad task/worker refresh events from internal outcome/review claims
   and unchanged guarded deferrals. Durable claims, attempts and crash recovery
@@ -46,6 +71,8 @@ authorized. No release is authorized.
   `1.5.0-dev-a319f69484da-20260905015037-1957242`, with no degraded subsystems.
   The reload job completed successfully and API/engine services are active.
 
+### Jira implementation evidence
+
 - Added `47-maturity-remaining.md` as the explicit remaining implementation and
   acceptance checklist; the full program goal is active again.
 - Repeated WWD sync failures were traced to a linked, locally removed task.
@@ -55,8 +82,8 @@ authorized. No release is authorized.
 - All ten Jira persistence tests pass, including repeated mixed-batch sync after
   removal; strict persistence Clippy passes with all targets/features and warnings
   denied. This uses the isolated Windows Rust toolchain. Formatting is checked.
-- Live deployment and post-deployment log/CPU comparison remain required. This
-  fixes the demonstrated result failure; it does not establish CPU attribution
+- Deployment and the warning check are recorded above. CPU comparison remains
+  required. This fixes the demonstrated result failure; it does not establish CPU attribution
   or close the broader performance, Queen, mobile or visual acceptance work.
 
 ## Queen message admission checkpoint — 2026-09-04

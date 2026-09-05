@@ -968,21 +968,18 @@ pub(super) struct CoordinationMessage {
     pub(super) cadence: Cadence,
 }
 
-/// Whether a message waits its turn or interrupts.
+/// Whether a ready message also waits for coordination pacing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Cadence {
     /// Held while the terminal is cooling down, and delivered with whatever
-    /// else has accumulated. Everything the BOARD generates is this: briefs,
-    /// messages, outcomes, decision answers, automation runs. None of it is so
-    /// urgent that five minutes matters, and all of it together is the flood.
+    /// else has accumulated: follow-up briefs, messages, outcomes, decision
+    /// answers and automation runs. Task and terminal safety gates are separate.
     Cooled,
     /// Written as soon as the terminal is resting, cooldown or not.
     ///
-    /// ONLY OPERATOR BROADCASTS. A person has just typed something to every
-    /// running worker and is waiting on it — "please pause so I can reload" is
-    /// worthless five minutes late. It is also the one message class with an
-    /// expiry: `BROADCAST_DELIVERY_WINDOW_SECONDS` is 600, and a 300 second
-    /// cooldown would silently eat half of every broadcast's window.
+    /// Operator broadcasts and an assignment's first briefing. Initial work
+    /// should not sit idle because an unrelated earlier message landed recently.
+    /// This bypasses only pacing, never provider or task admission checks.
     Immediate,
 }
 
@@ -1139,7 +1136,7 @@ pub(super) fn task_dispatch_message(delivery: &TaskDispatch) -> CoordinationMess
         )
     };
     CoordinationMessage {
-        cadence: Cadence::Cooled,
+        cadence: if delivery.generation == 0 { Cadence::Immediate } else { Cadence::Cooled },
         bytes: format!(
             "[Swarm task {} assigned] {}.{}{}{} Call swarm_list_tasks now and work from its authoritative task details and linked evidence. If this task is not visible, stop; its assignment changed.\r",
             delivery.task_id, title, instruction, ruling, requester,
@@ -1753,23 +1750,25 @@ mod tests {
         store
             .set_manual_presence(Some(PresenceMode::NightWatch), unix_timestamp())
             .unwrap();
-        let result = submit_coordination_message(
-            &store,
-            &HostClient::new("/unreachable/terminal.sock"),
-            session,
-            CoordinationMessage {
-                cadence: Cadence::Cooled,
-                bytes: b"test\r".to_vec(),
-                marker: b"test".to_vec(),
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            result,
-            TerminalSubmission::Deferred(DeferralReason::ProviderPolicy)
-        );
-        assert_eq!(DeferralReason::ProviderPolicy.refusal_kind(), None);
+        for cadence in [Cadence::Cooled, Cadence::Immediate] {
+            let result = submit_coordination_message(
+                &store,
+                &HostClient::new("/unreachable/terminal.sock"),
+                session,
+                CoordinationMessage {
+                    cadence,
+                    bytes: b"test\r".to_vec(),
+                    marker: b"test".to_vec(),
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                result,
+                TerminalSubmission::Deferred(DeferralReason::ProviderPolicy)
+            );
+            assert_eq!(DeferralReason::ProviderPolicy.refusal_kind(), None);
+        }
         assert!(
             !store
                 .coordination_is_cooling_down(session, unix_timestamp())
@@ -2360,8 +2359,7 @@ mod tests {
     /// A per-builder test would not have caught it. The flag lives in the
     /// SUBMITTER and the builders are what must satisfy it, so the assertion
     /// belongs across all of them at once.
-    /// EXACTLY ONE MESSAGE CLASS INTERRUPTS, and it is the one a person is
-    /// waiting on.
+    /// Initial briefs and operator broadcasts bypass pacing, not readiness.
     ///
     /// The cooldown exists because everything the BOARD generates arrives at
     /// whatever pause an agent next produces, so a busy agent is written to at
@@ -2378,15 +2376,14 @@ mod tests {
     /// exemption is a decision, and a second one nobody argued for is how a
     /// cooldown stops meaning anything.
     #[test]
-    fn only_an_operator_broadcast_is_allowed_past_the_cooldown() {
+    fn only_broadcasts_and_initial_briefings_bypass_coordination_pacing() {
         let session = WorkerSessionId::new();
         let task: TaskId = "01a06300-0000-7000-8000-000000000001"
             .parse()
             .expect("a fixed task id");
         let cadences: Vec<(&str, Cadence)> = vec![
-            (
-                "task brief",
-                task_dispatch_message(&TaskDispatch {
+            ("task brief", {
+                let mut dispatch = TaskDispatch {
                     generation: 0,
                     assignment_id: "assignment-1".to_owned(),
                     task_id: task,
@@ -2399,9 +2396,14 @@ mod tests {
                     operator_instruction: String::new(),
                     operator_rulings: Vec::new(),
                     email_requester: None,
-                })
-                .cadence,
-            ),
+                };
+                let initial_cadence = task_dispatch_message(&dispatch).cadence;
+                for generation in [1, 2, i64::MAX] {
+                    dispatch.generation = generation;
+                    assert_eq!(task_dispatch_message(&dispatch).cadence, Cadence::Cooled);
+                }
+                initial_cadence
+            }),
             (
                 "operator decision",
                 decision_delivery_message(&DecisionDispatch {
@@ -2458,9 +2460,8 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             immediate,
-            vec!["operator broadcast"],
-            "exactly one class may interrupt a cooling terminal, and a second one \
-             appearing here is a decision somebody has to argue for"
+            vec!["task brief", "operator broadcast"],
+            "follow-up coordination must retain pacing"
         );
     }
 
