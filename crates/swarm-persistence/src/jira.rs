@@ -329,6 +329,18 @@ impl TaskStore {
         let unassigned_scope = format!("jira://project/{}", binding.project_id);
         for issue in issues {
             let issue_id = issue.issue_id.trim();
+            // Local removal is durable even while Jira still returns the issue.
+            // Preserve its identity link so subsequent imports cannot recreate it.
+            let removed: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM jira_issue_links link
+                 JOIN tasks task ON task.id = link.task_id
+                 WHERE link.issue_id = ?1 AND task.removed_at IS NOT NULL)",
+                [issue_id],
+                |row| row.get(0),
+            )?;
+            if removed {
+                continue;
+            }
             let issue_key = issue.issue_key.trim();
             let summary = issue.summary.trim();
             let status_id = issue.status_id.trim();
@@ -1729,6 +1741,34 @@ mod tests {
             store.restore_task_as(task.id, &TaskActivityActor::operator()),
             Err(TaskStoreError::JiraTaskCannotBeRestored)
         ));
+        let removed = JiraIssueSnapshot {
+            issue_id: "20003",
+            issue_key: "WEB-44",
+            summary: "Remote edit must not resurrect removed work",
+            description: "Still assigned remotely",
+            status_id: "1",
+            status_name: "To Do",
+            assignee_account_id: None,
+            assignee_name: None,
+            remote_updated_at: "2026-08-19T12:00:00.000+0000",
+        };
+        let available = JiraIssueSnapshot {
+            issue_id: "20004",
+            issue_key: "WEB-45",
+            ..removed.clone()
+        };
+        for _ in 0..2 {
+            let synced = store
+                .sync_jira_issues(binding.id, &[removed.clone(), available.clone()])
+                .unwrap();
+            assert_eq!(synced.len(), 1);
+            assert_ne!(synced[0].id, task.id);
+            assert!(matches!(
+                store.get_task(task.id),
+                Err(TaskStoreError::NotFound)
+            ));
+            assert_eq!(store.list_jira_issue_links(binding.id).unwrap().len(), 2);
+        }
     }
 
     #[test]

@@ -44,6 +44,10 @@ Jira is an adapter-private integration behind typed application commands.
 - Imported issues retain Jira's immutable issue id and current issue key. The
   issue id is the idempotency key, so repeated synchronization updates one
   linked task rather than creating duplicates.
+- Local removal retains the issue link as its dismissal identity. Inbound sync
+  skips that removed task, including remote edits, and continues the batch for
+  other work. It neither recreates the task nor reports a post-commit lookup
+  failure merely because the removed task is absent from the active task view.
 - Jira owns the linked task's remote workflow state and human assignee. Swarm
   stores the last observed values and maps workflow state through the confirmed
   project mapping. Swarm-owned worker assignment, execution evidence, local

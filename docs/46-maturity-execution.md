@@ -5,6 +5,21 @@ Branch: `codex/daily-driver-maturity`. Starting revision: `36420b3`.
 Local commits, mainline push, and direct development-Hive deployment are now
 authorized. No release is authorized.
 
+## Live dogfood follow-up: removed Jira work — 2026-09-05
+
+- Added `47-maturity-remaining.md` as the explicit remaining implementation and
+  acceptance checklist; the full program goal is active again.
+- Repeated WWD sync failures were traced to a linked, locally removed task.
+  Synchronization committed its batch and then failed reading that removed task
+  through the active-only result projection. Inbound sync now preserves the
+  removal and identity link while continuing other work in the batch.
+- All ten Jira persistence tests pass, including repeated mixed-batch sync after
+  removal; strict persistence Clippy passes with all targets/features and warnings
+  denied. This uses the isolated Windows Rust toolchain. Formatting is checked.
+- Live deployment and post-deployment log/CPU comparison remain required. This
+  fixes the demonstrated result failure; it does not establish CPU attribution
+  or close the broader performance, Queen, mobile or visual acceptance work.
+
 ## Queen message admission checkpoint — 2026-09-04
 
 - The durable Queen-to-worker send boundary now keeps ordinary questions with
