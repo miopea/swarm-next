@@ -8,6 +8,24 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Authenticated fresh passive-browser baseline (September 5)
+
+The separate Edge test tab became authenticated and showed 11 active workers on
+live `6ea9c93f`. It viewed RCG Networks passively, explicitly reporting another
+view owned control. No Resume Here, input, navigation or reload was performed
+during capture. Supported CDP Performance counters measured 68.142 seconds:
+0.388% main-thread task time, 69.363 ms script time, 14.347 ms layout time and
+six layouts. JS heap used declined 26,801,664 to 23,334,036 bytes; DOM nodes
+17,586 to 1,869 and listeners 1,100 to 384. No forced garbage collection.
+These counters are not Edge Task Manager's whole-process CPU metric.
+
+The overlapping server vmstat interval showed 93–97% idle CPU, no swap activity,
+and one 2% I/O-wait interval. Performance collection was disabled after the sample;
+the separate tab was preserved for follow-up. This establishes a fresh passive
+view baseline, not an aged multi-terminal session or proof of a leak fix. Raw
+Memory.getDOMCounters was unavailable through this browser capability; supported
+Performance metrics supplied the content-free counts instead.
+
 ### Loaded-worker baseline, September 5 14:27–14:29 UTC
 
 The operator reported ten or eleven loaded workers. Read-only API checks at
