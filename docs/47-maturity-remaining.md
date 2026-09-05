@@ -56,6 +56,15 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ### Current review obligation in Queues
 
+Runtime `40c4f74a` is deployed and healthy. Queen's pending demo escalation
+`01a06f58-4526-76d0-adb4-858e731470fb` confirms she checked the heartbeat commit,
+six tests and mutation evidence but could not record a truthful shipping state.
+The isolated worker was woken; verification task
+`01a06fcd-5b2a-7813-91dd-abc306426f0f` reached delivered/Active through normal
+guarded assignment. It will retry the original claim and ask Queen to reassess
+the obsolete escalation. Neither the original task nor decision was manually
+settled. Acceptance is pending the actual worker/Queen result.
+
 The withdrawal correction is deployed as `d56993bd`, healthy with no degraded
 subsystems. The following completion-policy change (ADR 0073) permits a code
 no-deployment claim for Queen judgment without automatic approval or a fabricated
