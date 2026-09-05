@@ -1,7 +1,22 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { MIB, evaluateGrowth, isTransientGatewayError, processTotals, summarizeSeries } = require("./browser-soak-metrics.cjs");
+const { MIB, evaluateGrowth, growthResult, isTransientGatewayError, processTotals, summarizeSeries } = require("./browser-soak-metrics.cjs");
+
+test("missing, invalid or non-increasing measurements cannot establish a plateau", () => {
+  for (const samples of [[], [{ elapsed_seconds: 0, bytes: 1 }],
+    [{ elapsed_seconds: 0 }, { elapsed_seconds: 30 }],
+    [{ elapsed_seconds: 0, bytes: 1 }, { elapsed_seconds: 0, bytes: 1 }],
+    [{ elapsed_seconds: 30, bytes: 1 }, { elapsed_seconds: 0, bytes: 1 }],
+    [{ elapsed_seconds: 0, bytes: -1 }, { elapsed_seconds: 30, bytes: 1 }]]) {
+    assert.equal(evaluateGrowth(samples, "bytes", { warmupSamples: 0 }).passed, null);
+  }
+  assert.equal(summarizeSeries([], "bytes").min, null);
+  assert.equal(growthResult([]), "inconclusive");
+  assert.equal(growthResult([{ passed: true }, { passed: null }]), "inconclusive");
+  assert.equal(growthResult([{ passed: false }, { passed: null }]), "failed");
+  assert.equal(growthResult([{ passed: true }]), "passed");
+});
 
 test("summarizes a time series with a per-minute slope", () => {
   const summary = summarizeSeries([

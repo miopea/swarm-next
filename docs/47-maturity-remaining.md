@@ -8,6 +8,31 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Loaded-worker baseline, September 5 14:27–14:29 UTC
+
+The operator reported ten or eleven loaded workers. Read-only API checks at
+14:27:03 confirmed 11 running sessions, Queen enabled/running, and 53 actionable
+items. Runtime remained healthy on `6ea9c93f`; no deployment or input injection.
+Six five-second pidstat intervals averaged 4.40% CPU for API PID 2240717 and
+3.43% for engine PID 2201959 (one-core percentages, excluding subprocesses).
+API's largest interval was 22.2%; engine's was 8.6%. This was not sustained pressure.
+
+A separate 14:28:34–14:29:04 interval included service cgroup counters and vmstat.
+API accumulated 244,094,000 CPU nanoseconds; terminal-host including its service
+subprocesses accumulated 5,373,761,000: about 0.81% and 17.91% of one core over
+30 seconds. Both main PIDs were unchanged. Terminal-host cgroup memory changed
+4,004,491,264 to 3,999,936,512 bytes; API 267,685,888 to 267,997,184 bytes. Excluding
+vmstat's initial since-boot row, whole-server idle was 95–98%, with zero swap-in,
+swap-out and I/O-wait in these intervals. This is short-window headroom, not proof
+against later spikes or long-session browser degradation. Local Edge CPU and
+authenticated browser measurements remain outstanding.
+
+The offline browser-growth evaluator was also corrected: absent, invalid or
+non-increasing samples produce inconclusive rather than a false pass. Empty
+summaries use null instead of invented zero measurements. Any valid failed series
+still fails the overall report. All six metrics/process-sampling tests passed;
+the standalone browser harness itself was not launched.
+
 ### Performance baseline checkpoint before operator reboot
 
 At 2026-09-05 14:17:36 UTC, read-only SSH checks found the development runtime

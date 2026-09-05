@@ -5,7 +5,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { chromium } = require("playwright");
 
-const { evaluateGrowth, isTransientGatewayError, processTotals } = require("./browser-soak-metrics.cjs");
+const { evaluateGrowth, growthResult, isTransientGatewayError, processTotals } = require("./browser-soak-metrics.cjs");
 
 const baseUrl = process.env.SWARM_BASE_URL || "http://127.0.0.1:8766";
 const operatorToken = process.env.SWARM_OPERATOR_TOKEN;
@@ -118,7 +118,7 @@ async function main() {
     const storagePrivate = evaluateGrowth(samples, "storage_private_bytes", { growthLimit: 64 * 1024 * 1024, slopeLimit: 2 * 1024 * 1024 });
     const totalPrivate = evaluateGrowth(samples, "total_private_bytes", { growthLimit: 256 * 1024 * 1024, slopeLimit: 8 * 1024 * 1024 });
     const jsHeap = evaluateGrowth(samples, "js_heap_bytes", { growthLimit: 64 * 1024 * 1024, slopeLimit: 2 * 1024 * 1024 });
-    const result = browserPrivate.passed && storagePrivate.passed && totalPrivate.passed && jsHeap.passed ? "passed" : "failed";
+    const result = growthResult([browserPrivate, storagePrivate, totalPrivate, jsHeap]);
     const summary = {
       run_id: runId,
       result,
