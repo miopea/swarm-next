@@ -203,6 +203,44 @@ test("a test notification targets only the initiating browser device", async () 
   );
 });
 
+test("a permission answer after logout cannot register or enable notifications", async () => {
+  let answer!: (permission: NotificationPermission) => void;
+  vi.stubGlobal("Notification", { permission: "default", requestPermission: vi.fn(() => new Promise<NotificationPermission>((resolve) => { answer = resolve; })) });
+  const register = vi.fn();
+  Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: { getRegistration: vi.fn().mockResolvedValue(undefined), register } });
+  const fetchMock = vi.fn().mockResolvedValue(ok(settings));
+  vi.stubGlobal("fetch", fetchMock);
+  const states = vi.fn();
+  const controller = new NotificationController();
+  await controller.start("old-token", vi.fn(), states);
+  const enabling = controller.enable();
+  controller.stop();
+  answer("granted");
+  expect(await enabling).toBe(false);
+  expect(register).not.toHaveBeenCalled();
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(states).not.toHaveBeenCalledWith("enabled");
+  expect(window.localStorage.getItem("swarm-next.notifications.enabled.v1")).toBeNull();
+});
+
+test("disable supersedes a pending enable permission prompt", async () => {
+  let answer!: (permission: NotificationPermission) => void;
+  vi.stubGlobal("Notification", { permission: "default", requestPermission: vi.fn(() => new Promise<NotificationPermission>((resolve) => { answer = resolve; })) });
+  const register = vi.fn();
+  Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: { getRegistration: vi.fn().mockResolvedValue(undefined), register } });
+  vi.stubGlobal("fetch", vi.fn().mockImplementation(() => Promise.resolve(ok(settings))));
+  const controller = new NotificationController();
+  const states = vi.fn();
+  await controller.start("token", vi.fn(), states);
+  const enabling = controller.enable();
+  await controller.disable();
+  answer("granted");
+  expect(await enabling).toBe(false);
+  expect(register).not.toHaveBeenCalled();
+  expect(states).not.toHaveBeenCalledWith("enabled");
+  expect(window.localStorage.getItem("swarm-next.notifications.enabled.v1")).toBeNull();
+});
+
 function ok(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 }

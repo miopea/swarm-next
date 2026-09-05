@@ -56,6 +56,15 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ### Follow-up reconciliation trace and queue presentation
 
+Strict application/persistence lint and 43 decision-related tests passed for
+the scoped-read change. Notification lifecycle inspection also found obsolete
+enable/start operations could proceed after logout or disable. Generation checks
+now prevent later registration/save/state publication; retry callbacks retain
+their original credential rather than rereading a replacement session's token.
+Eleven notification tests passed, including late permission answers after stop
+and disable. Browser-owned operations already submitted cannot be retroactively
+canceled; this is not real-device push acceptance.
+
 Worker decision discovery now filters requester/current assignment before the
 read cap. The application regression fills the global pending inbox and confirms
 the worker can still discover its own resolved ruling without seeing unrelated

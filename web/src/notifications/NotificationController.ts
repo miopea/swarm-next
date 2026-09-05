@@ -40,6 +40,7 @@ export class NotificationController {
       this.#publish(settings);
       if (!supportsPush()) return;
       const registration = await navigator.serviceWorker.getRegistration("/");
+      if (generation !== this.#generation) return;
       if (registration) {
         try {
           await registration.update();
@@ -48,21 +49,24 @@ export class NotificationController {
         }
       }
       let subscription = await registration?.pushManager.getSubscription();
+      if (generation !== this.#generation) return;
       if (subscription) {
         const deviceId = presenceDeviceId();
         const status = await recoverTransientRuntime(() =>
           fetchNotificationSubscriptionStatus(operatorToken, deviceId));
+        if (generation !== this.#generation) return;
         if (!status.registered && registration) {
           // The push service rejected this endpoint and the API removed it.
           // Chromium can retain that same dead subscription indefinitely, so
           // explicitly rotate it before registering this device again.
           await subscription.unsubscribe();
+          if (generation !== this.#generation) return;
           subscription = await registration.pushManager.subscribe({
             userVisibleOnly: true,
             applicationServerKey: decodeUrlSafeBase64(settings.vapid_public_key),
           });
         }
-        await this.#save(subscription);
+        await this.#save(subscription, generation);
         if (generation === this.#generation) {
           rememberEnabledIntent(true);
           this.#onState("enabled");
@@ -88,25 +92,33 @@ export class NotificationController {
       this.#onState("unsupported");
       return false;
     }
+    const generation = ++this.#generation;
+    const settings = this.#settings;
     this.#onState("enabling");
     try {
       const permission = await Notification.requestPermission();
+      if (generation !== this.#generation) return false;
       if (permission !== "granted") {
         this.#onState("denied");
         return false;
       }
       const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/", updateViaCache: "none" });
+      if (generation !== this.#generation) return false;
       const existing = await registration.pushManager.getSubscription();
+      if (generation !== this.#generation) return false;
       const subscription = existing ?? await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: decodeUrlSafeBase64(this.#settings.vapid_public_key),
+        applicationServerKey: decodeUrlSafeBase64(settings.vapid_public_key),
       });
-      await this.#save(subscription);
+      await this.#save(subscription, generation);
+      if (generation !== this.#generation) return false;
       rememberEnabledIntent(true);
       this.#onState("enabled");
       return true;
     } catch {
-      if (await this.#reconcileExistingSubscription()) return true;
+      if (generation !== this.#generation) return false;
+      if (await this.#reconcileExistingSubscription(generation)) return true;
+      if (generation !== this.#generation) return false;
       this.#onState("error");
       return false;
     }
@@ -114,42 +126,73 @@ export class NotificationController {
 
   async disable(): Promise<void> {
     if (!this.#token) return;
+    const token = this.#token;
+    const generation = ++this.#generation;
     rememberEnabledIntent(false);
     const registration = supportsPush() ? await navigator.serviceWorker.getRegistration("/") : undefined;
+    if (generation !== this.#generation) return;
     const subscription = await registration?.pushManager.getSubscription();
+    if (generation !== this.#generation) return;
     if (subscription) await subscription.unsubscribe();
-    const settings = await recoverTransientRuntime(() => removeNotificationSubscription(this.#token!, presenceDeviceId()));
+    const settings = await recoverTransientRuntime(() => {
+      this.#requireCurrent(generation);
+      return removeNotificationSubscription(token, presenceDeviceId());
+    });
+    if (generation !== this.#generation) return;
     this.#publish(settings);
     this.#onState(supportsPush() && Notification.permission !== "denied" ? "available" : "denied");
   }
 
   async changePolicy(policy: NotificationPolicy): Promise<void> {
     if (!this.#token) return;
-    this.#publish(await recoverTransientRuntime(() => setNotificationPolicy(this.#token!, policy)));
+    const token = this.#token;
+    const generation = this.#generation;
+    const settings = await recoverTransientRuntime(() => {
+      this.#requireCurrent(generation);
+      return setNotificationPolicy(token, policy);
+    });
+    if (generation === this.#generation) this.#publish(settings);
   }
 
   async test(): Promise<void> {
     if (!this.#token) return;
-    this.#publish(await recoverTransientRuntime(() => sendTestNotification(this.#token!, presenceDeviceId())));
+    const token = this.#token;
+    const generation = this.#generation;
+    const settings = await recoverTransientRuntime(() => {
+      this.#requireCurrent(generation);
+      return sendTestNotification(token, presenceDeviceId());
+    });
+    if (generation === this.#generation) this.#publish(settings);
   }
 
-  async #save(subscription: PushSubscription) {
-    if (!this.#token) return;
+  async #save(subscription: PushSubscription, generation: number) {
+    this.#requireCurrent(generation);
+    const token = this.#token!;
     const json = subscription.toJSON();
     if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) throw new Error("Browser push keys are incomplete");
-    this.#publish(await recoverTransientRuntime(() => saveNotificationSubscription(this.#token!, presenceDeviceId(), {
+    const settings = await recoverTransientRuntime(() => {
+      this.#requireCurrent(generation);
+      return saveNotificationSubscription(token, presenceDeviceId(), {
       device_class: deviceClass(),
       endpoint: json.endpoint!,
       keys: { p256dh: json.keys!.p256dh!, auth: json.keys!.auth! },
-    })));
+      });
+    });
+    if (generation === this.#generation) this.#publish(settings);
   }
 
-  async #reconcileExistingSubscription(): Promise<boolean> {
+  #requireCurrent(generation: number) {
+    if (generation !== this.#generation || !this.#token) throw new DOMException("Notification operation superseded", "AbortError");
+  }
+
+  async #reconcileExistingSubscription(generation: number): Promise<boolean> {
     try {
       const registration = await navigator.serviceWorker.getRegistration("/");
+      if (generation !== this.#generation) return false;
       const subscription = await registration?.pushManager.getSubscription();
       if (!subscription) return false;
-      await this.#save(subscription);
+      await this.#save(subscription, generation);
+      if (generation !== this.#generation) return false;
       rememberEnabledIntent(true);
       this.#onState("enabled");
       return true;
