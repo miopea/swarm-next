@@ -46,6 +46,18 @@ const resolved: DecisionRequest = {
 };
 
 const queued = { ...resolved, id: "decision-3", title: "Queued release", delivery_state: "queued" } as DecisionRequest;
+
+test("withdrawn requests leave attention and history never presents them as approval", () => {
+  const request: DecisionRequest = { ...pending, state: "withdrawn", withdrawal_reason: "The defect was repaired." };
+  render(<DecisionInbox decisions={[request]} workers={[]} tasks={[]} busy={false} onResolve={vi.fn()} />);
+  expect(screen.queryByText(request.title)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Show history" }));
+  expect(screen.getByText(request.title)).toBeInTheDocument();
+  expect(screen.getByText(/The defect was repaired/)).toBeInTheDocument();
+  expect(screen.getByText("No operator decision or approval was recorded.")).toBeInTheDocument();
+  expect(screen.queryByText("Recorded before delivery tracking")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Durable path" })).not.toBeInTheDocument();
+});
 const dispatching = { ...resolved, id: "decision-4", title: "Sending release", delivery_state: "dispatching" } as DecisionRequest;
 const uncertain = { ...resolved, id: "decision-5", title: "Uncertain release", delivery_state: "uncertain" } as DecisionRequest;
 const task = { id: "task-1", title: "Stabilize reloads" } as Task;
@@ -117,7 +129,7 @@ test("keeps resolved history quiet until the operator asks for it", () => {
   expect(screen.getByText("Stabilize reloads")).toBeInTheDocument();
   expect(screen.queryByText("Approve release")).not.toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole("checkbox", { name: "Show resolved" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Show history" }));
   expect(screen.getByText("Approve release")).toBeInTheDocument();
   expect(screen.getAllByText(/Checks are green/)).toHaveLength(4);
   expect(screen.getByText("Delivered to worker")).toBeInTheDocument();
@@ -178,7 +190,7 @@ test("reveals and focuses a resolved decision selected through global navigation
 
   const card = await screen.findByRole("article", { name: "" });
   await waitFor(() => expect(card).toHaveFocus());
-  expect(screen.getByRole("checkbox", { name: "Show resolved" })).toBeChecked();
+  expect(screen.getByRole("checkbox", { name: "Show history" })).toBeChecked();
   expect(scrollIntoView).toHaveBeenCalled();
 });
 

@@ -2710,8 +2710,11 @@ mod tests {
         );
         // The one she cannot do herself is still hers to route.
         assert!(
-            message.contains("assign a task to the owning worker"),
+            message.contains("If deployment is required, route it to the owning worker"),
             "routing a deployment is coordination and must be named: {message}"
         );
+        assert!(message.contains("check task scope first"));
+        assert!(message.contains("review the no-deployment claim instead"));
+        assert!(message.contains("Do not invent a deployment requirement"));
     }
 }

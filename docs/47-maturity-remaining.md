@@ -56,6 +56,40 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ### Current review obligation in Queues
 
+Withdrawal's executable Linux MCP round trip now passes: an authenticated test requester
+creates and withdraws a request, and Queen's full-ID read reports withdrawn,
+verified=false and no operator answer. Revision 17's served-tool fingerprint
+was derived and passes its discovery check. All eight related Linux API decision
+tests pass, as do 96 frontend inbox/queue/control-room tests and TypeScript.
+The queued-push regression proves a queued delivery is canceled before claim
+after withdrawal. All 539 Linux persistence tests and all 1,094 frontend tests
+pass, with TypeScript and strict API lint passing. The newest-schema registry
+now includes migration 137; the Jira upgrade fixture retains the surrounding
+Hive schema rather than modeling a database with only one table. Deployment
+and real Queen withdrawal remain pending.
+
+The populated migration now also reopens its file-backed store and checks both
+withdrawal metadata and the existing resolved request, then verifies integrity.
+The first broad API run passed 446/448: the two failures were old assertions
+against the earlier pending cap and deployment-only Queen wording. Their
+fixtures now exercise overflow through history and the explicit local-code
+scope branch; all 448 API tests now pass on Linux and strict API lint is clean.
+A verified schema-136 live recovery
+copy is retained at `~/.local/state/swarm/pre-withdrawal.w0WAROdI/hive.sqlite3`.
+
+The verification worker reran six tests, recorded the original code exemption
+successfully, verified its stored unapproved state, and messaged Queen. Its
+verification task auto-completed; the original escalation remained pending.
+This verifies claim admission, not final Queen settlement or inbox recovery.
+
+ADR 0074 withdrawal work is local and not deployed yet: a distinct state,
+authenticated requester/Queen tool, non-approval history, and migration 137.
+Thirty-three decision persistence tests passed; the separate old-schema rebuild
+test preserved pending/resolved rows, deliveries and indexes. The stale-session
+application test and 28 inbox tests passed. Edge's isolated fixture showed zero
+pending requests and a clearly labeled withdrawn history card. Linux API/test
+compilation and tool-revision checks passed. Live Queen recovery is still required.
+
 Runtime `40c4f74a` is deployed and healthy. Queen's pending demo escalation
 `01a06f58-4526-76d0-adb4-858e731470fb` confirms she checked the heartbeat commit,
 six tests and mutation evidence but could not record a truthful shipping state.

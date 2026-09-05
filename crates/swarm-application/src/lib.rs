@@ -2683,6 +2683,28 @@ impl TaskService {
             .resolve_decision_request(id, action, note, surface)
             .map_err(Into::into)
     }
+
+    /// Withdraws an obsolete request without exercising operator authority.
+    ///
+    /// # Errors
+    /// Rejects stale agent sessions and unauthorized or invalid withdrawals.
+    pub fn withdraw_agent_decision(
+        &self,
+        principal: AgentPrincipal,
+        id: DecisionRequestId,
+        reason: &str,
+    ) -> Result<DecisionRequest, ApplicationError> {
+        let session = principal
+            .active_session_id
+            .ok_or(ApplicationError::WorkerNotRunning)?;
+        let worker = self.store.get_worker_profile(principal.worker_id)?;
+        if worker.active_session_id != Some(session) {
+            return Err(ApplicationError::WorkerNotRunning);
+        }
+        self.store
+            .withdraw_decision_request(id, principal.worker_id, reason)
+            .map_err(Into::into)
+    }
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecisionRequestInput {
@@ -3474,6 +3496,47 @@ mod tests {
             deadline: None,
             requested_command: None,
         }
+    }
+
+    #[test]
+    fn withdrawal_rejects_stale_sessions_and_allows_current_requester() {
+        let (service, _queen, worker) = setup();
+        let session = WorkerSessionId::new();
+        service
+            .store
+            .bind_worker_session(worker.id, session)
+            .unwrap();
+        let principal = AgentPrincipal {
+            worker_id: worker.id,
+            role: WorkerRole::Worker,
+            active_session_id: Some(session),
+        };
+        let request = service
+            .create_decision(
+                principal,
+                &decision_input(
+                    None,
+                    DecisionRequestKind::Help,
+                    "No longer blocked",
+                    &["Wait"],
+                ),
+            )
+            .unwrap();
+        let stale = AgentPrincipal {
+            active_session_id: Some(WorkerSessionId::new()),
+            ..principal
+        };
+        assert!(matches!(
+            service.withdraw_agent_decision(stale, request.id, "Recovered"),
+            Err(ApplicationError::WorkerNotRunning)
+        ));
+        assert_eq!(
+            service
+                .withdraw_agent_decision(principal, request.id, "Recovered")
+                .unwrap()
+                .state,
+            swarm_domain::DecisionRequestState::Withdrawn
+        );
     }
 
     #[test]

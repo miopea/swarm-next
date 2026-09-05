@@ -682,6 +682,12 @@ pub struct DecisionRequest {
     pub requested_command: Option<String>,
     pub deadline: Option<i64>,
     pub state: DecisionRequestState,
+    #[serde(default)]
+    pub withdrawn_at: Option<i64>,
+    #[serde(default)]
+    pub withdrawn_by_worker_id: Option<WorkerId>,
+    #[serde(default)]
+    pub withdrawal_reason: Option<String>,
     /// Present when this record is an interview rather than a ruling. Empty
     /// means a ruling, and such records behave exactly as they did before
     /// interviews existed.

@@ -1020,7 +1020,10 @@ export type DecisionRequest = {
   /** Non-empty makes this an interview: answered by answering, not by a button. */
   questions?: DecisionQuestion[];
   deadline: number | null;
-  state: "pending" | "resolved";
+  state: "pending" | "resolved" | "withdrawn";
+  withdrawn_at?: number | null;
+  withdrawn_by_worker_id?: string | null;
+  withdrawal_reason?: string | null;
   resolution_action: string | null;
   /** The operator's answers, keyed by question header. Empty for a ruling. */
   resolution_answers?: Record<string, string[]>;

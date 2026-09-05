@@ -233,7 +233,8 @@ const OPS_TICKETS_SCHEMA_VERSION: i64 = 135;
 // maturity migration's number without carrying its terminal-control table.
 // Repair that published collision explicitly rather than trusting user_version.
 const TERMINAL_CONTROL_PROJECTION_REPAIR_SCHEMA_VERSION: i64 = 136;
-const CURRENT_SCHEMA_VERSION: i64 = TERMINAL_CONTROL_PROJECTION_REPAIR_SCHEMA_VERSION;
+const DECISION_WITHDRAWAL_SCHEMA_VERSION: i64 = 137;
+const CURRENT_SCHEMA_VERSION: i64 = DECISION_WITHDRAWAL_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -3803,7 +3804,11 @@ fn migrate_ops_intake_schema_steps(
     // LAST. This repairs databases which received upstream's former schema 124
     // before the maturity branch was combined and therefore skipped the other
     // schema-124 artifact while still advancing through schema 135.
-    terminal_control_projection::repair_version_collision(transaction, schema_version)
+    terminal_control_projection::repair_version_collision(transaction, schema_version)?;
+    if schema_version < DECISION_WITHDRAWAL_SCHEMA_VERSION {
+        decisions::migrate_decision_withdrawal(transaction)?;
+    }
+    Ok(())
 }
 
 /// Checks that a recovery candidate already contains a supported Hive schema.
@@ -6902,10 +6907,14 @@ mod tests {
 
     #[test]
     fn migrates_schema_v23_to_opt_in_assigned_jira_sync() {
-        let mut connection = Connection::open_in_memory().unwrap();
+        // Keep the rest of the Hive schema present: this exercises the full
+        // upgrade chain, not a database containing only one unrelated table.
+        let store = TaskStore::in_memory().unwrap();
+        let mut connection = store.connection().unwrap();
         connection
             .execute_batch(
-                "CREATE TABLE jira_project_bindings (
+                "DROP TABLE jira_project_bindings;
+                 CREATE TABLE jira_project_bindings (
                      id TEXT PRIMARY KEY,
                      project_name TEXT NOT NULL
                  );
@@ -8819,6 +8828,13 @@ mod tests {
             probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
                  WHERE type = 'table' AND name = 'worker_terminal_control')",
         },
+        SchemaStep {
+            table: "decision_requests",
+            artifact: "withdrawn_at",
+            undo_sql: include_str!("fixtures/undo-decision-withdrawal.sql"),
+            probe_sql: "SELECT COUNT(*) = 3 FROM pragma_table_info('decision_requests')
+                WHERE name IN ('withdrawn_at','withdrawn_by_worker_id','withdrawal_reason')",
+        },
     ];
 
     /// The step that introduced a named artifact, rather than whichever is newest.
@@ -9361,7 +9377,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            TERMINAL_CONTROL_PROJECTION_REPAIR_SCHEMA_VERSION
+            CURRENT_SCHEMA_VERSION
         );
         drop(connection);
         assert_eq!(

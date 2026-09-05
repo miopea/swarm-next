@@ -154,12 +154,14 @@ impl std::error::Error for ParseDecisionDeliveryStateError {}
 pub enum DecisionRequestState {
     Pending,
     Resolved,
+    Withdrawn,
 }
 impl fmt::Display for DecisionRequestState {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Pending => "pending",
             Self::Resolved => "resolved",
+            Self::Withdrawn => "withdrawn",
         })
     }
 }
@@ -169,6 +171,7 @@ impl FromStr for DecisionRequestState {
         match value {
             "pending" => Ok(Self::Pending),
             "resolved" => Ok(Self::Resolved),
+            "withdrawn" => Ok(Self::Withdrawn),
             _ => Err(ParseDecisionRequestStateError),
         }
     }

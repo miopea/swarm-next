@@ -1160,6 +1160,55 @@ mod tests {
     }
 
     #[test]
+    fn withdrawing_a_request_cancels_its_queued_push_before_claim() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/queen").unwrap();
+        store
+            .save_notification_subscription(
+                &subscription(
+                    PresenceDeviceId::new(),
+                    "https://fcm.googleapis.com/fcm/send/test",
+                ),
+                10,
+            )
+            .unwrap();
+        let actions = vec!["Proceed".to_owned()];
+        let request = store
+            .create_decision_request(&decision(
+                queen.id,
+                DecisionUrgency::TimeSensitive,
+                &actions,
+            ))
+            .unwrap();
+        store
+            .set_manual_presence(Some(PresenceMode::Reachable), request.created_at)
+            .unwrap();
+        let queued: i64 = store
+            .connection()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM notification_deliveries", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(queued, 1);
+        store
+            .withdraw_decision_request(request.id, queen.id, "Recovered")
+            .unwrap();
+        assert!(
+            store
+                .claim_notification_deliveries(request.created_at + 1)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !store
+                .workers_awaiting_operator()
+                .unwrap()
+                .contains(&queen.id)
+        );
+    }
+
+    #[test]
     fn important_decisions_queue_only_while_operator_is_away() {
         let store = TaskStore::in_memory().unwrap();
         let queen = store.ensure_queen("/queen").unwrap();

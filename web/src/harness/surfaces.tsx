@@ -506,6 +506,16 @@ export const SURFACES: Surface[] = [
     ),
   },
   {
+    id: "needs-you-withdrawn",
+    title: "Withdrawn request history",
+    why: "An obsolete request is quiet and never represented as operator approval",
+    render: () => <DecisionInbox decisions={[{
+      ...demoDecision, state: "withdrawn", title: "Export recovery needed a decision",
+      withdrawal_reason: "The source recovered and the verified export completed. No operator judgment is needed.",
+      withdrawn_by_worker_id: demoWorkers[0].id, withdrawn_at: demoDecision.updated_at,
+    }]} tasks={demoTasks} workers={demoWorkers} busy={false} onResolve={async () => undefined} />,
+  },
+  {
     id: "queues-demo",
     title: "Queues (publishable)",
     why: "invented task, blocked-age and briefing evidence; no operator data",

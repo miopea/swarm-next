@@ -15,6 +15,69 @@ use super::{
     DECISION_SUMMARY_SCHEMA_VERSION, TaskStore, TaskStoreError, insert_control_room_event,
 };
 
+/// Preserves existing decision history while adding non-authorizing withdrawal.
+pub(super) fn migrate_decision_withdrawal(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    // The enclosing migration disables foreign keys before its transaction and
+    // checks every reference afterwards. Preserve the original column order and
+    // all explicit indexes/triggers while widening only the state constraints.
+    let original: String = transaction.query_row(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'decision_requests'",
+        [],
+        |row| row.get(0),
+    )?;
+    let present: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('decision_requests')
+         WHERE name IN ('withdrawn_at','withdrawn_by_worker_id','withdrawal_reason')",
+        [],
+        |row| row.get(0),
+    )?;
+    if present == 3 && original.contains("'withdrawn'") {
+        return transaction.pragma_update(
+            None,
+            "user_version",
+            super::DECISION_WITHDRAWAL_SCHEMA_VERSION,
+        );
+    }
+    if !original.contains("'pending','resolved'") || !original.contains("state = 'pending' AND") {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    let objects = {
+        let mut statement = transaction.prepare(
+            "SELECT sql FROM sqlite_master WHERE tbl_name = 'decision_requests'
+             AND type IN ('index','trigger') AND sql IS NOT NULL",
+        )?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let replacement = original
+        .replacen("decision_requests", "decision_requests_withdrawal", 1)
+        .replace("'pending','resolved'", "'pending','resolved','withdrawn'")
+        .replace(
+            "state = 'pending' AND",
+            "state IN ('pending','withdrawn') AND",
+        );
+    transaction.execute_batch(&replacement)?;
+    transaction.execute_batch(
+        "INSERT INTO decision_requests_withdrawal SELECT * FROM decision_requests;
+         DROP TABLE decision_requests;
+         ALTER TABLE decision_requests_withdrawal RENAME TO decision_requests;
+         ALTER TABLE decision_requests ADD COLUMN withdrawn_at INTEGER;
+         ALTER TABLE decision_requests ADD COLUMN withdrawn_by_worker_id TEXT REFERENCES worker_profiles(id);
+         ALTER TABLE decision_requests ADD COLUMN withdrawal_reason TEXT;",
+    )?;
+    for sql in objects {
+        transaction.execute_batch(&sql)?;
+    }
+    transaction.pragma_update(
+        None,
+        "user_version",
+        super::DECISION_WITHDRAWAL_SCHEMA_VERSION,
+    )
+}
+
 /// Carries the questions an interview asks and the answers it collects.
 ///
 /// Both default to empty, which is exactly what a ruling holds, so every record
@@ -435,6 +498,57 @@ impl TaskStore {
             |row| row.get(0),
         )?;
         Ok(usize::try_from(total).unwrap_or(usize::MAX))
+    }
+
+    /// Retracts an obsolete question without recording an operator judgment.
+    ///
+    /// # Errors
+    /// Rejects foreign actors, resolved requests and conflicting retries.
+    pub fn withdraw_decision_request(
+        &self,
+        id: DecisionRequestId,
+        actor: WorkerId,
+        reason: &str,
+    ) -> Result<DecisionRequest, TaskStoreError> {
+        let reason = reason.trim();
+        if reason.is_empty() || reason.len() > MAX_RESOLUTION_NOTE_BYTES {
+            return Err(TaskStoreError::InvalidDecisionResolution);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let allowed: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM decision_requests d
+             JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1
+             JOIN worker_profiles w ON w.id = ?2 AND w.hive_id = d.hive_id
+             WHERE d.id = ?1 AND (w.id = d.requesting_worker_id OR w.role = 'queen'))",
+            params![id.to_string(), actor.to_string()],
+            |row| row.get(0),
+        )?;
+        if !allowed {
+            return Err(TaskStoreError::DecisionNotFound);
+        }
+        let updated = transaction.execute(
+            "UPDATE decision_requests SET state = 'withdrawn', withdrawn_at = unixepoch(),
+             withdrawn_by_worker_id = ?2, withdrawal_reason = ?3, updated_at = unixepoch()
+             WHERE id = ?1 AND state = 'pending'",
+            params![id.to_string(), actor.to_string(), reason],
+        )?;
+        if updated == 0 {
+            let duplicate: bool = transaction.query_row(
+                "SELECT state = 'withdrawn' AND withdrawn_by_worker_id = ?2 AND withdrawal_reason = ?3
+                 FROM decision_requests WHERE id = ?1",
+                params![id.to_string(), actor.to_string(), reason], |row| row.get(0),
+            )?;
+            if !duplicate {
+                return Err(TaskStoreError::DecisionAlreadyResolved);
+            }
+        } else {
+            insert_control_room_event(&transaction, ControlRoomEventKind::DecisionsChanged)?;
+            insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        }
+        transaction.commit()?;
+        drop(connection);
+        self.get_decision_request(id)
     }
 
     /// Lists the bounded local-Hive inbox with pending and time-sensitive work first.
@@ -1084,7 +1198,8 @@ const DECISION_COLUMNS: &str =
                              WHERE x.removed_at IS NULL AND x.id <> COALESCE(d.task_id, '')
                                AND x.description LIKE '%' || substr(d.id, 1, 13) || '%')
                              THEN 'unknown'
-                         ELSE 'outstanding' END";
+                         ELSE 'outstanding' END,
+                     d.withdrawn_at, d.withdrawn_by_worker_id, d.withdrawal_reason";
 
 fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionRequest> {
     let actions =
@@ -1116,6 +1231,12 @@ fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionReques
         deadline: row.get(12)?,
         state: DecisionRequestState::from_str(&row.get::<_, String>(13)?)
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        withdrawn_at: row.get(27)?,
+        withdrawn_by_worker_id: row
+            .get::<_, Option<String>>(28)?
+            .map(|value| parse_id(&value))
+            .transpose()?,
+        withdrawal_reason: row.get(29)?,
         resolution_action: row.get(14)?,
         resolution_note: row.get(15)?,
         resolved_by_operator_id: row
@@ -1312,6 +1433,43 @@ mod tests {
             deadline: None,
             requested_command: None,
         }
+    }
+
+    #[test]
+    fn withdrawn_request_is_not_an_operator_resolution_or_delivery() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let actions = vec!["Proceed".to_owned()];
+        let decision = store
+            .create_decision_request(&request(queen.id, &actions))
+            .unwrap();
+        let withdrawn = store
+            .withdraw_decision_request(decision.id, queen.id, "The blocker was repaired.")
+            .unwrap();
+        assert_eq!(withdrawn.state, DecisionRequestState::Withdrawn);
+        assert_eq!(withdrawn.withdrawn_by_worker_id, Some(queen.id));
+        assert!(withdrawn.withdrawn_at.is_some());
+        assert_eq!(withdrawn.resolution_action, None);
+        assert_eq!(withdrawn.resolved_at, None);
+        assert_eq!(withdrawn.resolved_by_operator_id, None);
+        assert_eq!(withdrawn.delivery_state, None);
+        assert_eq!(withdrawn.discharge, None);
+        assert_eq!(
+            store
+                .withdraw_decision_request(decision.id, queen.id, "The blocker was repaired.")
+                .unwrap(),
+            withdrawn
+        );
+        assert!(
+            store
+                .withdraw_decision_request(decision.id, queen.id, "Different history")
+                .is_err()
+        );
+        assert!(
+            store
+                .resolve_decision_request(decision.id, "Proceed", "", "inbox")
+                .is_err()
+        );
     }
 
     /// REVIEWED WORK WITH A RULING OPEN ON IT IS THE OPERATOR'S, NOT QUEEN'S.
@@ -1589,6 +1747,178 @@ mod tests {
             Some(DecisionDischarge::Outstanding),
             "a deployment older than the ruling is not evidence the ruling was carried out"
         );
+    }
+
+    #[test]
+    fn withdrawn_request_event_failure_rolls_back_and_can_retry() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let actions = vec!["Proceed".to_owned()];
+        let decision = store
+            .create_decision_request(&request(queen.id, &actions))
+            .unwrap();
+        store.connection().unwrap().execute_batch("CREATE TEMP TRIGGER reject_withdrawal_event BEFORE INSERT ON control_room_events BEGIN SELECT RAISE(ABORT, 'test'); END;").unwrap();
+        assert!(
+            store
+                .withdraw_decision_request(decision.id, queen.id, "Recovered")
+                .is_err()
+        );
+        assert_eq!(store.get_decision_request(decision.id).unwrap(), decision);
+        store
+            .connection()
+            .unwrap()
+            .execute_batch("DROP TRIGGER reject_withdrawal_event")
+            .unwrap();
+        assert_eq!(
+            store
+                .withdraw_decision_request(decision.id, queen.id, "Recovered")
+                .unwrap()
+                .state,
+            DecisionRequestState::Withdrawn
+        );
+        let resolved = store
+            .create_decision_request(&request(queen.id, &actions))
+            .unwrap();
+        store
+            .resolve_decision_request(resolved.id, "Proceed", "", "test")
+            .unwrap();
+        assert!(
+            store
+                .withdraw_decision_request(resolved.id, queen.id, "Recovered")
+                .is_err()
+        );
+        assert_eq!(
+            store.get_decision_request(resolved.id).unwrap().state,
+            DecisionRequestState::Resolved
+        );
+    }
+
+    #[test]
+    fn withdrawn_request_authority_is_requester_or_queen_not_task_visibility() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let peer = store
+            .create_worker(
+                "Peer",
+                ProviderKind::ClaudeCode,
+                "/workspace/peer",
+                false,
+                2,
+            )
+            .unwrap();
+        let actions = vec!["Proceed".to_owned()];
+        let decision = store
+            .create_decision_request(&request(worker.id, &actions))
+            .unwrap();
+        assert!(
+            store
+                .withdraw_decision_request(decision.id, peer.id, "Not mine")
+                .is_err()
+        );
+        store
+            .withdraw_decision_request(decision.id, worker.id, "Recovered")
+            .unwrap();
+        let another = store
+            .create_decision_request(&request(worker.id, &actions))
+            .unwrap();
+        store
+            .withdraw_decision_request(another.id, queen.id, "Checked recovery")
+            .unwrap();
+    }
+
+    #[test]
+    fn withdrawal_migration_preserves_old_requests_deliveries_and_indexes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("withdrawal.sqlite3");
+        let store = TaskStore::open(&path).unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let actions = vec!["Proceed".to_owned()];
+        let pending = store
+            .create_decision_request(&request(queen.id, &actions))
+            .unwrap();
+        let decision = store
+            .create_decision_request(&request(queen.id, &actions))
+            .unwrap();
+        let resolved = store
+            .resolve_decision_request(decision.id, "Proceed", "Keep this", "test")
+            .unwrap();
+        {
+            let mut connection = store.connection().unwrap();
+            connection
+                .pragma_update(None, "foreign_keys", "OFF")
+                .unwrap();
+            let transaction = connection.transaction().unwrap();
+            // Reconstruct the actual pre-withdrawal shape, including its old
+            // CHECK constraints, so this exercises the rebuild rather than its
+            // already-migrated compatibility guard.
+            transaction
+                .execute_batch(
+                    "ALTER TABLE decision_requests DROP COLUMN withdrawn_at;
+                ALTER TABLE decision_requests DROP COLUMN withdrawn_by_worker_id;
+                ALTER TABLE decision_requests DROP COLUMN withdrawal_reason;",
+                )
+                .unwrap();
+            let sql: String = transaction
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE name = 'decision_requests'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let indexes = {
+                let mut statement = transaction.prepare("SELECT sql FROM sqlite_master WHERE tbl_name = 'decision_requests' AND type = 'index' AND sql IS NOT NULL").unwrap();
+                statement
+                    .query_map([], |row| row.get::<_, String>(0))
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap()
+            };
+            let old = sql
+                .replacen("decision_requests", "decision_requests_v136", 1)
+                .replace("'pending','resolved','withdrawn'", "'pending','resolved'")
+                .replace(
+                    "state IN ('pending','withdrawn') AND",
+                    "state = 'pending' AND",
+                );
+            transaction.execute_batch(&old).unwrap();
+            transaction.execute_batch("INSERT INTO decision_requests_v136 SELECT * FROM decision_requests;
+                DROP TABLE decision_requests; ALTER TABLE decision_requests_v136 RENAME TO decision_requests;").unwrap();
+            for index in &indexes {
+                transaction.execute_batch(index).unwrap();
+            }
+            migrate_decision_withdrawal(&transaction).unwrap();
+            transaction.commit().unwrap();
+            connection
+                .pragma_update(None, "foreign_keys", "ON")
+                .unwrap();
+            let broken: i64 = connection
+                .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(broken, 0);
+            let retained: i64 = connection.query_row("SELECT COUNT(*) FROM sqlite_master WHERE tbl_name = 'decision_requests' AND type = 'index' AND sql IS NOT NULL", [], |row| row.get(0)).unwrap();
+            assert_eq!(retained, i64::try_from(indexes.len()).unwrap());
+        }
+        assert_eq!(store.get_decision_request(pending.id).unwrap(), pending);
+        assert_eq!(store.get_decision_request(resolved.id).unwrap(), resolved);
+        let withdrawn = store
+            .withdraw_decision_request(pending.id, queen.id, "Recovered after upgrade")
+            .unwrap();
+        drop(store);
+        let reopened = TaskStore::open(path).unwrap();
+        assert_eq!(reopened.get_decision_request(pending.id).unwrap(), withdrawn);
+        assert_eq!(reopened.get_decision_request(resolved.id).unwrap(), resolved);
+        reopened.verify_integrity().unwrap();
     }
 
     #[test]

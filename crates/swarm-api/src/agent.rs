@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 16;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 17;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -401,9 +401,9 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 16;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 16. Update this and the revision together.
+/// The served surface as of revision 17. Update this and the revision together.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "694df4087f57d5561e0fc0f257dde2b2834bdb37589156c832060a46a9c7ab5b";
+    "9a570a6a74ba3f3041aac7b5e7319c291c4d80e5788d72c85ef45b68283787c5";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -596,6 +596,7 @@ impl ServerHandler for AgentMcp {
             list_decisions_tool(),
             operator_submissions_tool(),
             request_decision_tool(),
+            withdraw_decision_tool(),
             message_queen_tool(),
         ];
         if self.may_reload_this_hive() {
@@ -701,6 +702,7 @@ impl ServerHandler for AgentMcp {
             "swarm_record_task_commits" => self.record_task_commits(arguments).await,
             "swarm_record_no_deployment" => self.record_no_deployment(arguments),
             "swarm_withdraw_no_deployment" => self.withdraw_no_deployment(arguments),
+            "swarm_withdraw_decision" => self.withdraw_decision(arguments),
             "swarm_draft_email_reply" => self.draft_email_reply(arguments),
             "swarm_list_workers" => self
                 .tasks
@@ -1535,6 +1537,9 @@ impl AgentMcp {
             "decision_id": decision.id,
             "verified": resolved,
             "state": decision.state.to_string(),
+            "withdrawn_at": decision.withdrawn_at,
+            "withdrawn_by_worker_id": decision.withdrawn_by_worker_id,
+            "withdrawal_reason": decision.withdrawal_reason,
             "task_id": decision.task_id,
             "kind": decision.kind.to_string(),
             "title": decision.title,
@@ -1563,7 +1568,9 @@ impl AgentMcp {
             // that has never seen INTERVIEW_ANSWERED_ACTION will take it for
             // the operator's own word. Saying which shape this is costs one
             // field and removes the need to know anything.
-            "answered_how": if !resolved {
+            "answered_how": if decision.state == DecisionRequestState::Withdrawn {
+                "withdrawn_without_operator_answer"
+            } else if !resolved {
                 "unresolved"
             } else if decision.resolution_action.as_deref()
                 == Some(swarm_persistence::INTERVIEW_ANSWERED_ACTION)
@@ -1589,7 +1596,9 @@ impl AgentMcp {
                 swarm_domain::DecisionDischarge::Outstanding => "outstanding",
                 swarm_domain::DecisionDischarge::Unknown => "unknown",
             }),
-            "reason": if resolved {
+            "reason": if decision.state == DecisionRequestState::Withdrawn {
+                "The request was withdrawn. No operator answer or permission was recorded."
+            } else if resolved {
                 "The operator resolved this, and what they decided is read from this Hive's durable store rather than relayed — acting on it is acting on the operator, not on a peer's claim about the operator. READ answered_how FIRST: chose_an_offered_action means resolution_action is their answer; in_their_own_words means resolution_action is a placeholder and their actual words are in resolution_answers. Reading the placeholder as the answer is how two sessions concluded a ruling did not exist when it did. resolution_note may carry a condition. It authorises what it says and nothing beyond it."
             } else {
                 "The operator has not resolved this, so it authorises nothing yet."
@@ -1959,6 +1968,18 @@ impl AgentMcp {
             "evidence": format!("{evidence:?}"),
             "awaiting": "Queen's approval before this task can complete",
         }))
+    }
+
+    fn withdraw_decision(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<WithdrawDecisionInput>(arguments)?;
+        let id = DecisionRequestId::from_str(&input.decision_id)
+            .map_err(|_| ApplicationError::MalformedIdentifier("decision id"))?;
+        let decision = self
+            .tasks
+            .withdraw_agent_decision(self.principal, id, &input.reason)?;
+        structured(json!({"decision_id":decision.id, "state":decision.state,
+            "withdrawal_reason":decision.withdrawal_reason, "withdrawn_at":decision.withdrawn_at,
+            "operator_approval":false}))
     }
 
     /// Takes back a no-deployment claim that has stopped being true.
@@ -2782,6 +2803,9 @@ fn decision_index_entry(decision: &swarm_domain::DecisionRequest) -> Value {
         // index readable rather than a wall of ids.
         "summary": decision.summary,
         "state": decision.state,
+        "withdrawn_at": decision.withdrawn_at,
+        "withdrawn_by_worker_id": decision.withdrawn_by_worker_id,
+        "withdrawal_reason": decision.withdrawal_reason,
         "resolution_action": decision.resolution_action,
         // Whether the act it authorised has evidence of having happened. Absent
         // until it resolves, because an unanswered question authorises no act.
@@ -3547,6 +3571,25 @@ fn record_no_deployment_tool() -> Tool {
     )
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WithdrawDecisionInput {
+    decision_id: String,
+    reason: String,
+}
+
+fn withdraw_decision_tool() -> Tool {
+    tool(
+        "swarm_withdraw_decision",
+        "Withdraw a pending operator request whose premise is no longer true or whose problem has recovered. Give the exact decision ID and a concise evidence-based reason. Workers can withdraw only their own requests; Queen can withdraw any local Hive request after checking it. This records withdrawal, never an operator answer, approval or permission. Resolved decisions cannot be rewritten. Do not withdraw merely because a request is old or inconvenient.",
+        &json!({"type":"object","properties":{
+            "decision_id":{"type":"string","format":"uuid"},
+            "reason":{"type":"string","minLength":1,"maxLength":4000}},
+            "required":["decision_id","reason"],"additionalProperties":false}),
+        false,
+    )
+}
+
 fn withdraw_no_deployment_tool() -> Tool {
     tool(
         "swarm_withdraw_no_deployment",
@@ -3871,6 +3914,15 @@ mod tests {
                 .to_string(),
             ))
             .unwrap()
+    }
+
+    fn listed_tool_names(response: &Value) -> Vec<&str> {
+        response["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect()
     }
 
     async fn response_json(response: Response) -> Value {
@@ -4622,18 +4674,8 @@ mod tests {
             .await,
         )
         .await;
-        let queen_names = queen["result"]["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|tool| tool["name"].as_str().unwrap())
-            .collect::<Vec<_>>();
-        let worker_names = worker["result"]["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|tool| tool["name"].as_str().unwrap())
-            .collect::<Vec<_>>();
+        let queen_names = listed_tool_names(&queen);
+        let worker_names = listed_tool_names(&worker);
         assert_tool_surface_matches_revision(&queen["result"]["tools"], &worker["result"]["tools"]);
         for name in QUEEN_ONLY_TOOLS {
             assert!(queen_names.contains(name), "Queen is missing {name}");
@@ -4687,6 +4729,7 @@ mod tests {
                 "swarm_list_decisions",
                 "swarm_operator_submissions",
                 "swarm_request_decision",
+                "swarm_withdraw_decision",
                 "swarm_message_queen"
             ]
         );
@@ -6529,8 +6572,8 @@ mod tests {
         let (bridge, store, queen_id, _worker_id, _) = setup();
         let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
         let over = usize::try_from(swarm_persistence::MAX_DECISION_RESULTS).unwrap() + 1;
-        for _ in 0..over {
-            store
+        for index in 0..over {
+            let decision = store
                 .create_decision_request(&swarm_persistence::NewDecisionRequest {
                     requesting_worker_id: queen_id,
                     task_id: None,
@@ -6548,6 +6591,13 @@ mod tests {
                     requested_command: None,
                 })
                 .unwrap();
+            // Admission and the page share the pending bound. History can
+            // exceed it; an impossible extra pending request cannot.
+            if index == 0 {
+                store
+                    .resolve_decision_request(decision.id, "Ship", "", "test")
+                    .unwrap();
+            }
         }
 
         let listed = response_json(
@@ -7522,6 +7572,9 @@ mod tests {
     #[tokio::test]
     async fn worker_can_request_a_decision_and_queen_sees_the_typed_inbox() {
         let (bridge, store, queen_id, worker_id, _) = setup();
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
         let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
         let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
 
@@ -7560,7 +7613,7 @@ mod tests {
 
         let listed = response_json(
             handle(
-                bridge,
+                bridge.clone(),
                 plain_state(),
                 mcp_request(
                     Some(&queen_token),
@@ -7579,5 +7632,26 @@ mod tests {
                 .len(),
             1
         );
+        let decision_id = created["result"]["structuredContent"]["id"]
+            .as_str()
+            .unwrap();
+        let withdrawn = response_json(handle(bridge.clone(), plain_state(), mcp_request(
+            Some(&worker_token), "tools/call", &json!({"name":"swarm_withdraw_decision", "arguments":{
+                "decision_id":decision_id,"reason":"The evidence settled the choice; no operator judgment is needed."}})
+        )).await).await;
+        assert_eq!(withdrawn["result"]["isError"], false, "{withdrawn}");
+        assert_eq!(
+            withdrawn["result"]["structuredContent"]["state"],
+            "withdrawn"
+        );
+        let checked = response_json(handle(bridge, plain_state(), mcp_request(
+            Some(&queen_token), "tools/call", &json!({"name":"swarm_list_decisions", "arguments":{"decision_id":decision_id}})
+        )).await).await;
+        assert_eq!(checked["result"]["structuredContent"]["verified"], false);
+        assert_eq!(
+            checked["result"]["structuredContent"]["answered_how"],
+            "withdrawn_without_operator_answer"
+        );
+        assert_eq!(checked["result"]["structuredContent"]["state"], "withdrawn");
     }
 }

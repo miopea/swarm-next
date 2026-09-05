@@ -26,7 +26,9 @@ Swarm owns one durable, typed operator decision inbox.
 - A worker may correlate only the task currently assigned to its active
   session. It sees only requests it originated. Queen sees the full Hive inbox.
 - Agents may create and list requests through the scoped MCP bridge, but cannot
-  resolve them. Resolution is an authenticated operator action.
+  resolve them. Resolution is an authenticated operator action. ADR 0074 adds
+  non-authorizing withdrawal of obsolete pending requests by their requester or
+  Queen; withdrawal is neither an operator answer nor a command grant.
 - Resolution records the selected allowed action, optional note, operator
   identity, and timestamp atomically with a content-free control-room event.
 - Pending requests and reads are both bounded at 256. Pending-first reads must

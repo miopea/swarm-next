@@ -111,7 +111,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
 
   useEffect(() => {
     if (!focusDecisionId) return;
-    if (decisions.some((decision) => decision.id === focusDecisionId && decision.state === "resolved")) setShowResolved(true);
+    if (decisions.some((decision) => decision.id === focusDecisionId && decision.state !== "pending")) setShowResolved(true);
   }, [decisions, focusDecisionId]);
 
   // Deliberately not keyed on `decisions`. Navigation asking for a decision is
@@ -171,7 +171,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
         </div>
         <label className="decision-history-toggle">
           <input type="checkbox" checked={showResolved} onChange={(event) => setShowResolved(event.target.checked)} />
-          Show resolved
+          Show history
         </label>
       </div>
 
@@ -216,7 +216,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                       <h4>{decision.title}</h4>
                     </div>
                   </div>
-                  <span className={`decision-urgency ${decision.urgency}`}>{decision.urgency === "time_sensitive" ? "Time-sensitive" : "When ready"}</span>
+                  <span className={`decision-urgency ${decision.urgency}`}>{decision.state === "withdrawn" ? "Withdrawn" : decision.urgency === "time_sensitive" ? "Time-sensitive" : "When ready"}</span>
                 </header>
                 {/* What is being decided comes first and stays short. The
                     reason, risk and evidence are the argument behind it — on
@@ -338,6 +338,8 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                       </div>
                     ) : null}
                   </div>
+                ) : decision.state === "withdrawn" ? (
+                  <div className="decision-resolved"><p><strong>Withdrawn</strong>{decision.withdrawal_reason ? ` · ${decision.withdrawal_reason}` : ""}</p><span>No operator decision or approval was recorded.</span></div>
                 ) : (
                   <div className="decision-resolved"><p><strong>{humanize(decision.resolution_action ?? "resolved")}</strong>{decision.resolution_note ? ` · ${decision.resolution_note}` : ""}</p><span className={`delivery-state ${decision.delivery_state ?? "recorded"}`}>{deliveryLabel(decision.delivery_state)}</span></div>
                 )}
