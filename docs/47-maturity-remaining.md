@@ -8,6 +8,55 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Engine update and D365 conversation regression (September 5)
+
+Development revision `17c46d45b23e` deployed without cutting a release. App/API
+replacement initially preserved all eleven sessions. Authorized engine maintenance
+then replaced the engine with build
+`de19229db431dcf421552be59969a5bd86bc688f2a8e1621f8f1d80f2c8ae3e5`.
+All eleven original worker IDs returned automatically, with no runtime errors
+reported; API PID 2321565 and engine PID 2323268 were active and health had no
+degraded subsystems. Restoration proceeded approximately one worker per thirty
+seconds despite normal resource pressure. Recovery scheduling latency remains open.
+Push to main bypassed four expected required checks; this is not CI-green evidence.
+
+The operator reported D365 resumed the wrong conversation and corrected it using
+`/resume`. Read-only live metadata establishes that startup attempted and restored
+exact conversation `019ffdae-baf9-7012-9120-0ee870a733c9`; neither continuation nor
+fresh fallback was used. Thus exact restoration of a saved ID did not establish
+restoration of the operator's intended conversation. Pre-maintenance provider IDs
+were not captured, so the point where that default became stale is unproven.
+
+The same running session (`01a0723a-5232-7f93-a942-26f9607e9337`) subsequently
+reported selection revision 2, conversation
+`c4d71311-c854-4ac8-b637-542b4b280401`. The API's persistence-validated
+`confirmed_selection` matched both revision and ID. This verifies the corrected
+selection was saved for this binding, not just seen by the engine. No restart,
+input, manual pin update, or transcript extraction was performed during diagnosis.
+Do not close REC-01: trace stale-default provenance and exercise a real disposable
+provider `/resume` followed by maintenance, verifying conversation identity before
+and after rather than merely counting returned processes.
+
+Read-only follow-up covered all eleven open workers: each provider startup
+matched its exact recovery target with no Continue/Fresh fallback. Only D365
+reported a subsequent paired selection (revision 2, durably confirmed). The
+other ten retained startup selection revision 1. All freshness projections were
+Current, which does not establish pre-restart intent: resumed transcripts can
+become newest through use. No additional wrong selection was proven or cleared.
+
+Code inspection found engine maintenance already uses retained context-preserving
+stop, but provider-release restart and restart-all still used destructive session
+cleanup directly. Both now use the same bounded preservation handshake before
+releasing the worker binding or assignments. The new isolated Linux restart-all
+regression passed: the latest selection commits before cleanup, and an unexpected
+cleanup response leaves the binding retained. This closes two unsafe call sites,
+not the still-unproven provenance of D365's stale default. Direct terminal-stop
+adapter preservation remains to audit. No live worker was restarted for this test.
+The complete isolated API library suite passed 466 tests in 113.73 seconds;
+subsequent local edits only expanded test formatting. Rustfmt validation was
+unavailable in the remote stable toolchain. No release or deployment of this
+follow-up fix has occurred yet.
+
 ### Disposed renderer fit cancellation (September 5)
 
 Disposal previously checked only after font/frame waits resumed. Two regressions

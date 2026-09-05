@@ -180,7 +180,7 @@ pub(super) async fn restart_superseded_workers(
         let Some(session_id) = profile.active_session_id else {
             continue;
         };
-        request_host(&state, HostRequest::Stop { session_id }).await?;
+        worker_runtime::stop_worker_session_preserving_context(&state, session_id).await?;
         store
             .release_worker_session(session_id)
             .map_err(|error| task_store_error(&error))?;
@@ -361,7 +361,7 @@ pub(super) async fn restart_all_workers(
         let Some(session_id) = profile.active_session_id else {
             continue;
         };
-        request_host(&state, HostRequest::Stop { session_id }).await?;
+        worker_runtime::stop_worker_session_preserving_context(&state, session_id).await?;
         store
             .release_worker_session(session_id)
             .map_err(|error| task_store_error(&error))?;
@@ -777,6 +777,71 @@ pub(crate) async fn host_status_snapshot(state: &AppState) -> Result<TerminalHos
 mod tests {
     use super::*;
     use swarm_domain::{ProviderKind, WorkerId, WorkerProfile, WorkerRole, WorkerSessionId};
+
+    #[tokio::test]
+    async fn restart_all_saves_final_selection_and_retains_binding_on_cleanup_failure() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("restart.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let worker = store.ensure_queen("/workspace").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let selected = swarm_domain::ProviderConversationId::new();
+        let state = Arc::new(
+            AppState::default()
+                .with_task_store(store.clone())
+                .with_terminal_host(swarm_terminal::HostClient::new(&socket), "fixture"),
+        );
+        let serve = async {
+            for kind in ["ping", "stop_retained", "list_sessions", "stop"] {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut stream = BufReader::new(stream);
+                let mut line = String::new();
+                stream.read_line(&mut line).await.unwrap();
+                let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(request["type"], kind);
+                let response = match kind {
+                    "ping" | "stop" => serde_json::json!({"type":"pong","protocol_version":16}),
+                    "stop_retained" => serde_json::json!({"type":"acknowledged"}),
+                    "list_sessions" => serde_json::json!({"type":"sessions","sessions":[{
+                        "session_id":session,"running":false,"stop_pending_release":true,
+                        "resources":null,"last_output_at":null,
+                        "provider_selection":{"revision":2,"conversation":selected}
+                    }]}),
+                    _ => unreachable!(),
+                };
+                if kind == "stop" {
+                    assert_eq!(
+                        store.get_worker_profile(worker.id).unwrap().provider_conversation_id,
+                        Some(selected)
+                    );
+                }
+                let mut response = serde_json::to_vec(&response).unwrap();
+                response.push(b'\n');
+                stream.get_mut().write_all(&response).await.unwrap();
+            }
+        };
+        let restart = async {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                axum::http::header::AUTHORIZATION,
+                "Bearer fixture".parse().unwrap(),
+            );
+            assert!(restart_all_workers(State(state), headers).await.is_err());
+            assert_eq!(
+                store.get_worker_profile(worker.id).unwrap().active_session_id,
+                Some(session)
+            );
+        };
+        tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::join!(serve, restart);
+        })
+        .await
+        .unwrap();
+    }
 
     fn profile(active_session_id: Option<WorkerSessionId>) -> WorkerProfile {
         WorkerProfile {
