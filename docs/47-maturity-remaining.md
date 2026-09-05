@@ -8,6 +8,23 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Post-build cold-return phase evidence (September 5)
+
+Commit `023aac85` deployed healthy with no degraded subsystems and unchanged
+engine PID 2456733. In a fresh separate Edge tab after compilation finished,
+the five-renderer experiment traversed six resting workers without terminal
+input, then returned through them. The roster showed 13 running workers.
+Seven cold attempts produced six completed samples, one hidden/abandoned,
+zero pending and zero failed. Sample p95/max was 2,283 ms (not enough samples
+for adoption). Its paired phases were 1,980 ms setup and 304 ms connection
+through state application; setup was 17 ms opening, 2 ms font readiness and
+1,961 ms layout/initial sizing (rounding explains the sum). The earlier first
+return was 355 ms. Thus a single quick return would have hidden the problem.
+Investigate the layout/frame-wait path next; these timings do not establish
+CPU attribution, confirmed paint, a leak, an aged-session baseline or acceptable
+performance. The experiment was stopped and the tab left in Settings. No worker
+commands, decisions or lifecycle changes were issued during this measurement.
+
 ### Accepted evidence retry feedback (September 5)
 
 The isolated blocked-ready recovery task auto-completed after its empty commit
