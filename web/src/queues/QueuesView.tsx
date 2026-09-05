@@ -3,7 +3,7 @@ import HeldBriefingList from "../orchestration/HeldBriefingList";
 import type { BlockedEscalation, HeldBriefing, HeldDelivery } from "../api";
 import DeliveryWaitList from "./DeliveryWaitList";
 import type { NextMoveOwner, Task } from "../api/tasks";
-import { isOpenTaskState } from "../api/tasks";
+import { projectTaskQueues } from "./taskQueueProjection";
 import type { Worker } from "../api/workers";
 
 /**
@@ -89,17 +89,12 @@ function taskProgress(task: Task): string {
   return "Draft · awaiting triage";
 }
 
-function ordinaryActiveWork(task: Task): boolean {
-  return task.state === "active" && task.next_move_owner === "worker"
-    && (task.dispatch_state == null || task.dispatch_state === "delivered");
-}
-
 export default function QueuesView({
   tasks,
   workers,
   onOpenTask,
-  heldBriefings = [],
-  blockedWaits = [],
+  heldBriefings: sourceBriefings = [],
+  blockedWaits: sourceBlockedWaits = [],
   heldDeliveries = [],
   coordinatorUnavailable = false,
   now = Date.now(),
@@ -127,30 +122,24 @@ export default function QueuesView({
     () => new Map(workers.map((worker) => [worker.id, worker.name])),
     [workers],
   );
+  const projection = useMemo(() => projectTaskQueues(tasks, sourceBriefings, sourceBlockedWaits), [tasks, sourceBriefings, sourceBlockedWaits]);
+  const { waitingTasks, activeTasks: activeWork, heldBriefings, blockedWaits, extraBlockedWaits: extraWaits } = projection;
 
   const groups = useMemo<Group[]>(() => {
-    const open = tasks.filter((task) => isOpenTaskState(task.state) && !ordinaryActiveWork(task));
+    const open = waitingTasks;
     return GROUP_ORDER.map((owner) => ({
       owner,
       title: GROUP_TITLES[owner],
       meaning: GROUP_MEANINGS[owner],
-      // Older servers omit the field. Nothing is invented for them: a task with
-      // no stated owner is left out rather than assigned to somebody who might
-      // then be blamed for a queue that is not theirs.
+      // Missing ownership remains visible without attributing it to someone.
       tasks: open.filter((task) => owner === "unknown"
         ? !GROUP_ORDER.includes(task.next_move_owner as Group["owner"])
         : task.next_move_owner === owner),
     })).filter((group) => group.tasks.length > 0);
-  }, [tasks]);
-
-  const activeWork = useMemo(() => tasks.filter(ordinaryActiveWork), [tasks]);
+  }, [waitingTasks]);
 
   const total = groups.reduce((sum, group) => sum + group.tasks.length, 0);
   const waits = new Map(blockedWaits.map((wait) => [wait.task_id, wait]));
-  // Do not duplicate a task already in the main queue or resurrect one known
-  // to be closed from an older, independently polled coordinator response.
-  const known = new Set(tasks.map((task) => task.id));
-  const extraWaits = blockedWaits.filter((wait) => !known.has(wait.task_id));
 
   if (total === 0 && extraWaits.length === 0 && activeWork.length === 0) {
     return (

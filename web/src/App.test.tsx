@@ -1464,6 +1464,9 @@ test("a queued briefing is shown but does not inflate the Needs you count", asyn
   // The nav button, not its pop-out sibling, which shares the word.
   fireEvent.click(screen.getAllByRole("button", { name: /Queues/ })[0]);
   expect(await screen.findByText("One briefing is queued")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Queues", level: 2 })).toBeVisible();
+  expect(screen.getByText("Who has the next move")).toBeVisible();
+  expect(screen.getByRole("button", { name: /^Queues/ })).toHaveTextContent("1");
 
   const refresh = async () => {
     await act(async () => {
@@ -1489,6 +1492,7 @@ test("a queued briefing is shown but does not inflate the Needs you count", asyn
   fireEvent.click(screen.getAllByRole("button", { name: /Queues/ })[0]);
   expect(await screen.findByText("Nothing is waiting on anyone.")).toBeInTheDocument();
   expect(screen.queryByText("One briefing is queued")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^Queues/ })).toHaveTextContent("0");
 });
 
 /**

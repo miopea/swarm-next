@@ -63,8 +63,25 @@ failure and crash recovery still publish. Assignment/briefing repair publishes
 even if a busy worker prevents delivery, which the previous candidate-count
 condition missed. All 25 dispatch regressions passed, including ten repeated
 holds, final delivery/recovery and repair while busy. Strict API lint passed.
-Deployment is pending; representative held-briefing browser resource acceptance
-remains open.
+Commit `e0423a93` deployed through the normal development reload. Health reported
+that revision without degraded subsystems; the terminal host stayed at PID
+2088305. Representative held-briefing browser resource acceptance remains open.
+
+### Queues badge, heading and narrow-screen readability
+
+Navigation and queue rows now share a waiting-task projection: ordinary active
+work is excluded, task identities count once, and stale coordinator observations
+cannot resurrect known closed or resumed tasks. Coordinator-only tasks remain
+visible. The badge explicitly describes waiting tasks, not message counts.
+The full fictional App exposed a heading bug (Queen / Persistent terminal on
+Queues); the header now identifies Queues and who has the next move.
+
+The dedicated Edge fixture showed four waiting tasks versus five open tasks.
+A 390px iframe of the full App exposed squeezed-out titles and overflowing
+explanations. Phone rows now place the title on its own wrapping line; status,
+worker names and blocker/review context wrap underneath. Before/after screenshots
+show readable titles and no horizontal scrollbar. This is responsive fixture
+evidence, not authenticated live-Hive or Android/iOS PWA acceptance.
 
 ### Offline restore implementation and real isolated drill
 

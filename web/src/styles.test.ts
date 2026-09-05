@@ -470,6 +470,13 @@ test("makes emphasis in What's New heavier than the global strong reset", () => 
  * based check would pass whatever the CSS said, which is the shape of test this
  * repository keeps deleting.
  */
+test("queue explanations wrap and phone rows give the title its own line", () => {
+  expect(stylesheet).toMatch(/\.queue-group li > \.queue-task-meta\s*\{[^}]*white-space: normal;[^}]*overflow-wrap: anywhere;/);
+  const phone = stylesheet.slice(stylesheet.indexOf("@media (max-width: 640px)", stylesheet.indexOf(".queue-task-meta {")));
+  expect(phone).toMatch(/\.queue-group li button\s*\{[^}]*flex-wrap: wrap;[^}]*min-height: 44px;/);
+  expect(phone).toMatch(/\.queue-task-title\s*\{[^}]*flex-basis: 100%;[^}]*white-space: normal;/);
+});
+
 test("a scrolling surface declares both halves of the scroll", () => {
   for (const selector of [".queues {", ".task-board {"]) {
     const rule = stylesheet.split("\n").find((line: string) => line.startsWith(selector)) ?? "";

@@ -1,4 +1,5 @@
 import { isClosedTaskState, isOpenTaskState } from "./api/tasks";
+import { projectTaskQueues } from "./queues/taskQueueProjection";
 import BroadcastToWorkers from "./workers/BroadcastToWorkers";
 import ConversationDriftCard, { type WorkerConversation } from "./workers/ConversationDriftCard";
 import PublicAddressWarning from "./PublicAddressWarning";
@@ -1513,22 +1514,10 @@ export function App() {
   const activeSession = sessions.find((session) => session.session_id === activeSessionId);
   const activeWorker = workers.find((worker) => worker.active_session_id === activeSessionId);
   const openTaskCount = tasks.filter((task) => isOpenTaskState(task.state)).length;
-  // Open work somebody or something owes a move on. Deliberately excludes a
-  // task whose owner the server did not state: an older API must not be able
-  // to manufacture a queue, and the tab must agree with what the view shows.
-  // ⚠️ THIS EQUALS openTaskCount ALWAYS, and the operator noticed: the Queues
-  // and Tasks badges are the same number by construction. Every open state
-  // derives a real owner and only completed and abandoned derive "nobody", so
-  // this filter excludes nothing.
-  //
-  // NOT "fixed" by excluding blocked here. That would read 6 against 43 rows on
-  // the page, which is the badge-disagrees-with-the-page defect this repo
-  // already has a test for on Needs You — and trading one badge defect for
-  // another is not a fix. What the badge should say is a product question and
-  // it is reported rather than guessed at.
-  const queuedTaskCount = tasks.filter(
-    (task) => isOpenTaskState(task.state) && task.next_move_owner !== undefined && task.next_move_owner !== "nobody",
-  ).length;
+  // Count waiting task identities, not ordinary active work or duplicate
+  // coordinator observations. The queue page uses this same projection.
+  const queuedTaskCount = useMemo(() => projectTaskQueues(tasks, heldBriefings, blockedEscalations).taskCount,
+    [tasks, heldBriefings, blockedEscalations]);
   const pendingDecisionCount = decisions.filter((decision) => decision.state === "pending").length;
   const pendingAssistCount = stewardAssists?.incoming?.filter((request) => request.state === "pending").length ?? 0;
   const queenWorkerId = workers.find((worker) => worker.role === "queen")?.id;
@@ -1838,7 +1827,7 @@ export function App() {
                 <span><TerminalIcon /> Workers</span><small>{liveWorkerCount}/{rosterWorkerCount}</small>
               </button>{operatorToken && !detached ? <button type="button" className="surface-nav-popout" aria-label={`Open ${surfaceLabel("workers")} in a new window`} title={`Open ${surfaceLabel("workers")} in a new window. Workers keep running; a window only views them.`} onClick={() => setPopoutBlocked(!openSurfaceWindow("workers", (url, name, features) => window.open(url, name, features)))}><PopoutIcon /></button> : null}</span>
               <span className="surface-nav-item"><button className={surface === "queues" ? "selected" : ""} aria-current={surface === "queues" ? "page" : undefined} data-detached={surfaceIsDetached("queues") || undefined} onClick={() => showSurface("queues")}>
-                <span><QueuesIcon /> Queues</span><small>{queuedTaskCount}</small>
+                <span><QueuesIcon /> Queues</span><small title="Waiting tasks; active work is excluded">{queuedTaskCount}</small>
               </button>{operatorToken && !detached ? <button type="button" className="surface-nav-popout" aria-label={`Open ${surfaceLabel("queues")} in a new window`} title={`Open ${surfaceLabel("queues")} in a new window. Workers keep running; a window only views them.`} onClick={() => setPopoutBlocked(!openSurfaceWindow("queues", (url, name, features) => window.open(url, name, features)))}><PopoutIcon /></button> : null}</span>
               <span className="surface-nav-item"><button className={surface === "tasks" ? "selected" : ""} aria-current={surface === "tasks" ? "page" : undefined} data-detached={surfaceIsDetached("tasks") || undefined} onClick={() => showSurface("tasks")}>
                 <span><TaskIcon /> Tasks</span><small>{openTaskCount}</small>
@@ -2073,12 +2062,12 @@ export function App() {
       <section className="workspace" key={surface}>
         <header className="workspace-header">
           <div>
-            <p className="eyebrow">{surface === "decisions" ? "Attention without interruption" : surface === "tasks" ? "Plan and dispatch" : surface === "apiary" ? "Organization without noise" : surface === "settings" ? "Preferences and diagnostics" : "Persistent terminal"}</p>
+            <p className="eyebrow">{surface === "decisions" ? "Attention without interruption" : surface === "queues" ? "Who has the next move" : surface === "tasks" ? "Plan and dispatch" : surface === "apiary" ? "Organization without noise" : surface === "settings" ? "Preferences and diagnostics" : "Persistent terminal"}</p>
             {/* Detaching lives in the rail beside each surface's own entry, on
                 the operator's ruling. The heading names one surface; the rail
                 lists them all, which is where a per-surface action belongs. */}
             <div className="workspace-heading">
-              <h2>{surface === "decisions" ? "Needs you" : surface === "tasks" ? "Task board" : surface === "apiary" ? keeper ? "Keeper" : "Member Hive" : surface === "settings" ? "Settings" : activeSession ? activeWorker?.name ?? workerName(activeSession.session_id) : "Worker terminal"}</h2>
+              <h2>{surface === "decisions" ? "Needs you" : surface === "queues" ? "Queues" : surface === "tasks" ? "Task board" : surface === "apiary" ? keeper ? "Keeper" : "Member Hive" : surface === "settings" ? "Settings" : activeSession ? activeWorker?.name ?? workerName(activeSession.session_id) : "Worker terminal"}</h2>
 
             </div>
             <HiveContextIndicator identity={hiveIdentity} compact />

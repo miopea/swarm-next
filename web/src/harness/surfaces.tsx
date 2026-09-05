@@ -541,6 +541,13 @@ export const SURFACES: Surface[] = [
     },
   },
   {
+    id: "queues-phone",
+    title: "Phone Queues layout",
+    why: "the full fictional App in a real 390px frame viewport; not a native PWA/device test",
+    render: () => <iframe title="Phone Queues preview" src="/harness.html?surface=app&screen=queues"
+      style={{ display: "block", width: 390, height: 844, border: 0 }} />,
+  },
+  {
     id: "tasks",
     title: "Tasks",
     why: "the board, against invented work — the source for the README screenshot",
