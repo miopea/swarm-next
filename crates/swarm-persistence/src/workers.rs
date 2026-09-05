@@ -20,6 +20,14 @@ pub(super) fn coordination_is_cooling_down_from_connection(
     session_id: WorkerSessionId,
     now: i64,
 ) -> Result<bool, TaskStoreError> {
+    Ok(coordination_cooldown_until_from_connection(connection, session_id, now)?.is_some())
+}
+
+pub(super) fn coordination_cooldown_until_from_connection(
+    connection: &rusqlite::Connection,
+    session_id: WorkerSessionId,
+    now: i64,
+) -> Result<Option<i64>, TaskStoreError> {
     let last: Option<Option<i64>> = connection
         .query_row(
             "SELECT last_coordination_delivery_at FROM worker_sessions
@@ -31,7 +39,8 @@ pub(super) fn coordination_is_cooling_down_from_connection(
     // New and ended sessions have no applicable pacing hold.
     Ok(last
         .flatten()
-        .is_some_and(|at| now.saturating_sub(at) < crate::COORDINATION_DELIVERY_COOLDOWN_SECONDS))
+        .map(|at| at.saturating_add(crate::COORDINATION_DELIVERY_COOLDOWN_SECONDS))
+        .filter(|until| *until > now))
 }
 
 /// Durable routing evidence, not a live terminal-idle or dispatch guarantee.

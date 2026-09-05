@@ -959,8 +959,18 @@ fn waiting_reason(
     };
     let session = WorkerSessionId::from_str(&session).map_err(|_| rusqlite::Error::InvalidQuery)?;
     Ok(
-        crate::workers::coordination_is_cooling_down_from_connection(connection, session, now)?
-            .then(|| "Pacing Queen's next review after a recent delivery".into()),
+        crate::workers::coordination_cooldown_until_from_connection(connection, session, now)?.map(
+            |until| match chrono::DateTime::from_timestamp(until, 0) {
+                Some(time) => format!(
+                    "Pacing Queen's next review until {} after a recent delivery",
+                    time.format("%Y-%m-%d %H:%M:%S UTC")
+                ),
+                None => {
+                    "Queen's review has an invalid pacing timestamp; runtime diagnostics are needed"
+                        .into()
+                }
+            },
+        ),
     )
 }
 
@@ -1044,7 +1054,9 @@ mod tests {
                 .unwrap()
                 .waiting_reason
                 .as_deref(),
-            Some("Pacing Queen's next review after a recent delivery")
+            Some(
+                "Pacing Queen's next review until 1970-01-01 00:06:40 UTC after a recent delivery"
+            )
         );
         assert!(
             store

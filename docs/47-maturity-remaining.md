@@ -8,6 +8,19 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Queen pacing visibility (September 5)
+
+Run `01a07343-913c-7d12-9684-f494bbdf2b56` remained Queued with zero
+delivery attempts for more than 16 minutes, reporting RecentDelivery in live
+API logs. The shared coordination cooldown is 300 seconds; other channels run
+before Queen reviews and acknowledged deliveries renew it. This establishes a
+possible starvation path, not yet attribution of each renewal. The status now
+names the exact UTC eligibility deadline from the same persistence calculation
+as the delivery gate, so a moving deadline and a bad timestamp can be separated.
+Three focused tests passed for status expiry, delivery-window expiry and
+cooldown persistence. This changes diagnostics, not priority or admission, and
+does not claim that the 31 Blocked tasks have resumed.
+
 ### Renderer setup breakdown (September 5)
 
 The opt-in cold-return experiment now pairs initial-fit and font-ready milestones
