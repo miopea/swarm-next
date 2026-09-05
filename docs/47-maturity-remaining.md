@@ -8,6 +8,24 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Performance baseline checkpoint before operator reboot
+
+At 2026-09-05 14:17:36 UTC, read-only SSH checks found the development runtime
+healthy on `6ea9c93f`, API PID 2240717 and engine PID 2201959. Server load averages
+were 0.51/0.56/0.52; available memory was 28,091 MiB of 32,042 MiB. API service
+MemoryCurrent was 229,060,608 bytes and terminal-host service MemoryCurrent was
+2,166,284,288 bytes. These are service cgroup counters, not isolated renderer or
+provider heap measurements. Cumulative CPUUsageNSec was 69,168,817,000 for API
+and 1,347,873,675,000 for terminal-host; a single cumulative value is not CPU load.
+
+The operator reported a slow local computer and chose to reboot before loading
+the usual 10–15 workers. Browser testing, builds and deployments were held.
+Post-reboot measurements must be labeled a fresh-machine baseline, not continuity
+of the earlier browser session. Capture actual loaded-worker count and observation
+interval with CPU deltas before comparison. Keep live revision fixed during it.
+Six local commits (`29bfcf75` through `1160e61b`) remain unapplied to the live Hive;
+the shared-domain ownership fix requires an engine-refresh deployment window.
+
 ### Local validation and interview-form correction (September 5 morning)
 
 Fetched main: no new upstream commits beyond the deployed `6ea9c93f`. The five
