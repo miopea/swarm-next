@@ -295,6 +295,7 @@ test("cold-return measurements exclude first visits and survive a view remount",
   handlers.onState("connected");
   handlers.onState("connected");
   expect(registry.coldRestoreEvidence).toMatchObject({ started: 2, interrupted: 1, pending: 0, samples: 1 });
+  expect(registry.coldRestoreEvidence.slowest).toEqual({ total_ms: expect.any(Number), setup_ms: expect.any(Number), connection_ms: expect.any(Number) });
   cold.detach();
   cold.attach(mount);
   expect(registry.coldRestoreEvidence.started).toBe(2);

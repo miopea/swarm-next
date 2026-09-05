@@ -59,6 +59,19 @@ not p95. Capture measurements and instrumentation overhead must be validated
 before using them as release gates. Server/orchestration/recovery metrics remain
 in the approved scope and must not be replaced by these browser-only summaries.
 
+## Cold-return experiment attribution
+
+The opt-in renderer pool's existing 200-sample, one-hour browser-lifetime evidence
+retains a connection-start boundary within each cold return. Setup spans attached
+view through renderer opening/fitting; connection spans its start through applied
+state, including any retries. The report exposes the two phases of the same
+slowest completed return, not separate maxima or phases of the p95 sample.
+Missing or invalid boundaries remain null. Stop/reset invalidates late callbacks;
+failed and interrupted attempts remain separate from the completed distribution.
+This adds no timer, persistence, session identifier, protocol or automatic export.
+It measures neither confirmed compositor paint nor input ownership. A failed
+five-renderer acceptance result must not enable that policy by default.
+
 ## Event entries versus interactions
 
 The historical `interaction` wire field contains individual native Event Timing

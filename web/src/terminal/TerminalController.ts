@@ -8,6 +8,7 @@ import { TerminalRestoreEvidence } from "./TerminalRestoreEvidence";
 
 interface ControllerLifecycle {
   attached(): void;
+  connectionStarting?(): void;
   inactive(): void;
   stateChanged(state: TerminalConnectionState): void;
 }
@@ -346,6 +347,7 @@ export class TerminalController {
     if (this.#disposed || this.#started || !this.#host.parentElement) return;
     // Connecting is not a claim; the resume frame carries that intent.
     this.#connection.resize(rows, columns, "echo");
+    this.#lifecycle?.connectionStarting?.();
     this.#connection.start({
       onOutput: (bytes) => this.#disposed ? Promise.resolve() : this.#surface.write(bytes),
       onSnapshot: async (snapshot) => {
@@ -486,6 +488,7 @@ export class TerminalControllerRegistry {
           this.closeSession(sessionId);
         }
       },
+      connectionStarting: () => finish?.("connection_started"),
       stateChanged: (state) => {
         if (state === "connected") {
           finish?.(document.visibilityState === "visible" ? "rendered" : "interrupted");

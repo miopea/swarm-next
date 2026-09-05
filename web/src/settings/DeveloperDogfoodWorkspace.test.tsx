@@ -1,10 +1,10 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import type { DevelopmentRuntime } from "../api";
 import DeveloperDogfoodWorkspace from "./DeveloperDogfoodWorkspace";
 import { terminalWorkspace } from "../terminal/TerminalWorkspace";
 
-afterEach(() => { cleanup(); terminalWorkspace.logout(); });
+afterEach(() => { cleanup(); terminalWorkspace.logout(); vi.restoreAllMocks(); });
 const runtime = { enabled: true, version: "dev-test", source_revision: "abc123", source_dirty: false } as DevelopmentRuntime;
 
 test("uses development detection without another enable toggle", () => {
@@ -50,4 +50,14 @@ test("warm pool is explicit, reversible, and disabled when development mode ends
   rerender(<DeveloperDogfoodWorkspace runtime={{ ...runtime, enabled: false }} version="test" reachable />);
   expect(terminalWorkspace.rendererRetention.limit).toBeUndefined();
   expect(screen.queryByRole("button", { name: "Stop warm-pool experiment" })).not.toBeInTheDocument();
+});
+
+test("shows paired slowest-return phases without labeling them as percentiles", () => {
+  vi.spyOn(terminalWorkspace, "coldRestoreEvidence", "get").mockReturnValue({
+    started: 20, pending: 0, interrupted: 0, failed: 0, samples: 20, p95_ms: 400, max_ms: 1000,
+    slowest: { total_ms: 1000, setup_ms: 700, connection_ms: 300 },
+  });
+  render(<DeveloperDogfoodWorkspace runtime={runtime} version="test" reachable />);
+  expect(screen.getByText("Slowest cold return: 1000 ms total · 700 ms renderer setup · 300 ms connection through applied state.")).toBeInTheDocument();
+  expect(screen.getByText(/same slowest return, not independent maxima or p95 phases/)).toBeInTheDocument();
 });
