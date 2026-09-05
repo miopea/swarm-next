@@ -83,7 +83,7 @@ pub(super) async fn list_tasks(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let tasks = task_service(&state)?
-        .list_tasks()
+        .list_board_tasks()
         .map_err(application_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(tasks)).into_response())
 }

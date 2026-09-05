@@ -15282,6 +15282,51 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
+    async fn browser_task_routes_partition_history_without_hiding_unverified_work() {
+        let store = TaskStore::in_memory().unwrap();
+        let open = store.create_task("Open", "/workspace").unwrap();
+        let abandoned = store.create_task("Abandoned", "/workspace").unwrap();
+        store
+            .transition_task(abandoned.id, swarm_domain::TaskState::Abandoned)
+            .unwrap();
+        let unverified = store
+            .create_task("Finished without evidence", "/workspace")
+            .unwrap();
+        for state in [
+            swarm_domain::TaskState::Ready,
+            swarm_domain::TaskState::Active,
+            swarm_domain::TaskState::Review,
+            swarm_domain::TaskState::Completed,
+        ] {
+            store.transition_task(unverified.id, state).unwrap();
+        }
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone()),
+        );
+        let board = response_json(authorized_get(app.clone(), "/api/v1/tasks").await).await;
+        let settled = response_json(authorized_get(app, "/api/v1/tasks/settled").await).await;
+        let board_ids: Vec<_> = board
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|task| task["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(board_ids.len(), 2);
+        assert!(board_ids.contains(&open.id.to_string().as_str()));
+        assert!(board_ids.contains(&unverified.id.to_string().as_str()));
+        assert_eq!(settled.as_array().unwrap().len(), 1);
+        assert_eq!(settled[0]["id"], abandoned.id.to_string());
+        assert_eq!(
+            store.list_tasks().unwrap().len(),
+            3,
+            "agent history remains complete"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn task_prerequisite_route_authenticates_and_returns_current_relations() {
         let store = TaskStore::in_memory().unwrap();
         let task = store.create_task("Consumer", "/workspace").unwrap();

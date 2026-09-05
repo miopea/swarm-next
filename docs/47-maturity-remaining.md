@@ -17,6 +17,10 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
   but stop reloading settled history on each browser task event. Add an actual
   HTTP regression, not just a persistence projection test. Baseline captures
   contain counts/timing only, not task text.
+  The HTTP adapter now calls `list_board_tasks`; all 461 API tests and strict
+  API lint pass. The endpoint regression preserves open and unverified finished
+  work, serves abandoned history separately, and keeps the agent all-task reader
+  complete. Deployment and same-endpoint measurement are next.
 
 - [ ] Queen's explicit `swarm_start_worker` must honor Night Watch provider
   eligibility as well as capacity. Its current adapter checks capacity only.
