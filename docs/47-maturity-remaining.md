@@ -8,6 +8,13 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+- [ ] Automatic crash recovery and post-update revival must honor resource
+  admission without consuming attempts or clearing revival intents. Inspection
+  on `754acd50` found `supervise_workers` and `revive_workers_owed_a_return`
+  bypass the coordinator's resource check and can start several workers in one
+  pass. Night Watch policy is checked, but that does not establish safe machine
+  capacity. Extend the shared resource policy and test deferred-to-resumed work.
+
 - [ ] Jira synchronization respects removed linked tasks and continues processing
   valid work. Recheck the recurring WWD reconciliation error after deployment.
 - [ ] Unchanged Queen/outcome deferrals stop producing broad control-room refresh
