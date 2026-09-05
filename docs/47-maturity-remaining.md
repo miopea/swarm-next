@@ -8,6 +8,25 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Blocked reassessment discovery (September 5)
+
+Queen's completed-prerequisite read missed blocks with no explicit edge. The
+existing coordination-attention response now also supplies `blocked_reassessment`:
+up to 64 current local Blocked tasks without a pending linked decision, unresolved
+explicit prerequisite, or future recorded deadline. Notes are 240-character
+excerpts with explicit truncation. Absence of a typed hold means investigate,
+not auto-resume. Shared run/standing guidance names Blocked to Ready recovery,
+verified dependency recording, task-linked operator questions and preservation
+of genuine holds. It no longer tells Queen that no other channel prompts her or
+that a quiet Hive proves she deliberately parked everything.
+
+Fourteen prerequisite/discovery tests passed, including no-write discovery,
+unlinked blocks, deadline boundary, pending decision resolution, removed/reopened
+prerequisites and overflow. Queen-only MCP access and Unicode excerpt bounds,
+standing/run guidance and the real-PTY review delivery regression passed in the
+isolated Linux overlay workspace. Live interpretation of the real backlog and
+the full owner-oriented Queues composition remain unproven.
+
 ### Cleared blocks must produce a new briefing (September 5)
 
 An isolated regression reproduced Blocked to Ready retaining a Delivered

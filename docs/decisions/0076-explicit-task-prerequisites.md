@@ -58,3 +58,14 @@ operator decisions, future block-until dates, removed tasks and unresolved edges
 and returns at most 64 tasks with an explicit truncation flag. It shares the task
 projection and does not transition work, create a human alert or infer that all
 other blockers are gone. Queen still owns the guarded resumption decision.
+
+The same bounded discovery also supplies `blocked_reassessment`, including work
+with no prerequisite metadata. It excludes pending task-linked decisions,
+unfinished/removed prerequisites and future recorded block deadlines before its
+64-item bound. Missing structured evidence is not proof a block cleared: Queen
+must check current history, decisions and worker evidence. The agent read uses
+240-character note excerpts with explicit truncation, leaving full history at its
+existing source. No task state, dependency, decision or operator hold is changed
+by reading this list. Verified cleared work returns through Blocked to Ready;
+capacity and unperformed routing are queue work, not persistent blockers. This
+does not classify free text into new automatic recovery authority.

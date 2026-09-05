@@ -503,6 +503,8 @@ pub(super) const QUEEN_JUDGMENT_GUIDANCE: &str = "JUDGMENT AND DELEGATION. Trust
 
 pub(super) const QUEEN_WAKE_GUIDANCE: &str = "WORKER LIFECYCLE. Use swarm_start_worker with a specific reason to start a stopped worker that needs to continue its assigned work. Preserve the task's actual state: do not cycle Active, Blocked or Review through Ready merely to wake its worker. Assigning READY work may queue a guarded automatic wake; recheck the worker and delivery before repeating an assignment. A current session and task ownership are different facts. Use swarm_sleep_worker for a deliberate stand-down. Starts remain subject to machine capacity and provider eligibility; experimental providers cannot be started by Queen during Night Watch. A hold is not permission to change provider, bypass policy or interrupt a running worker. Observe the live session and current task before deciding the next move.";
 
+pub(super) const QUEEN_BLOCK_RECOVERY_GUIDANCE: &str = "BLOCK RECOVERY. Read blocked_reassessment in swarm_list_coordination_attention. These tasks have no pending linked operator decision, unfinished explicit prerequisite, or future recorded hold; that is a reason to investigate, NOT proof that their blocker cleared. Read current task history and decisions, and ask the assigned worker when evidence is missing. When the blocker is verified cleared, use swarm_transition_task to move Blocked to Ready, preserving ownership and current active work; assign an unowned task to its proper worker. Capacity or your routing backlog is not a blocker. If another task is still required, record its verified prerequisite link; do not invent links from prose. Preserve explicit operator deferrals and external resource constraints. If recovery genuinely needs operator judgment, create one task-linked Needs You decision with the blocker, worker view and your concise recommendation. Do not leave an unfiled operator question buried in a block note or escalate solely because time passed.";
+
 fn standing_brief(role: WorkerRole) -> String {
     let shared = "Swarm is the durable record of this Hive's work. What is not on the board did not happen. Before asking the operator to repeat a relayed composer instruction, use swarm_operator_submissions to find the source worker's recorded messages and read the exact submission ID. Verified authorship does not prove delivery, resolve a decision, or extend the words' scope. Raw-terminal and AskUser capture are not complete; a missing source is not evidence that the operator said nothing.";
     match role {
@@ -516,12 +518,13 @@ fn standing_brief(role: WorkerRole) -> String {
              WHAT IS NOT YOURS. You do not write code, deploy, release, or reload this \
              Hive. Workers do the work; you decide who does it and whether it is done.\n\n\
              {QUEEN_WAKE_GUIDANCE}\n\n\
+             {QUEEN_BLOCK_RECOVERY_GUIDANCE}\n\n\
              WHEN YOU RUN. You are woken automatically whenever the actionable board \
              changes, and again after fifteen minutes on an unchanged board while \
-             actionable work remains. Nothing else prompts you, and nothing else needs \
-             to. A Hive that sits still is therefore a decision you made, not a trigger \
-             that failed — if you end a run leaving work parked, say in the outcome why \
-             it is parked.\n\n\
+             actionable work remains. Task outcomes and coordination messages can also \
+             arrive through guarded delivery. Re-read the current board rather than \
+             assuming a quiet terminal proves all work is correctly parked. When a \
+             review ends, distinguish work moved forward from remaining verified holds.\n\n\
              WHERE YOU WILL BE REFUSED. During an unattended run the operator's autonomy \
              policy gates you by their presence — at the Hive, away, or night watch. \
              Advice is always allowed. Coordinating — creating, assigning, transitioning \
@@ -721,7 +724,20 @@ impl ServerHandler for AgentMcp {
                         .and_then(|attention| {
                             let (prerequisite_ready, prerequisite_ready_truncated) = self.tasks
                                 .store().tasks_ready_after_prerequisites(crate::unix_timestamp())?;
+                            let (blocked_reassessment, blocked_reassessment_truncated) = self.tasks
+                                .store().blocked_tasks_for_reassessment(crate::unix_timestamp())?;
                             structured(json!({
+                                "blocked_reassessment": {
+                                    "tasks": blocked_reassessment.into_iter().map(|task| json!({
+                                        "task_id": task.id,
+                                        "title": task.title,
+                                        "assigned_worker_id": task.assigned_worker_id,
+                                        "recorded_block_excerpt": task.blocked_note.as_deref().map(|note| note.chars().take(240).collect::<String>()),
+                                        "note_truncated": task.blocked_note.as_deref().is_some_and(|note| note.chars().count() > 240),
+                                    })).collect::<Vec<_>>(),
+                                    "truncated": blocked_reassessment_truncated,
+                                    "next_action": QUEEN_BLOCK_RECOVERY_GUIDANCE,
+                                },
                                 "prerequisite_ready": {
                                     "tasks": prerequisite_ready,
                                     "truncated": prerequisite_ready_truncated,
@@ -5096,6 +5112,15 @@ mod tests {
     #[tokio::test]
     async fn coordination_attention_tool_is_queen_read_only() {
         let (bridge, store, queen_id, worker_id, _) = setup();
+        let unlinked = store
+            .create_task("Block needs reassessment", "/workspace")
+            .unwrap();
+        store
+            .transition_task(unlinked.id, TaskState::Ready)
+            .unwrap();
+        store
+            .transition_task_with_note(unlinked.id, TaskState::Blocked, &"🐝".repeat(260))
+            .unwrap();
         let consumer = store
             .create_task("Dependency consumer", "/workspace")
             .unwrap();
@@ -5142,6 +5167,20 @@ mod tests {
         assert_eq!(ready["tasks"][0]["id"], consumer.id.to_string());
         assert_eq!(ready["tasks"][0]["state"], "blocked");
         assert_eq!(ready["truncated"], false);
+        let reassessment = &attention["result"]["structuredContent"]["blocked_reassessment"];
+        let candidates = reassessment["tasks"].as_array().unwrap();
+        assert_eq!(candidates.len(), 2);
+        let candidate = candidates
+            .iter()
+            .find(|task| task["task_id"] == unlinked.id.to_string())
+            .unwrap();
+        assert_eq!(candidate["recorded_block_excerpt"], "🐝".repeat(240));
+        assert_eq!(candidate["note_truncated"], true);
+        assert_eq!(reassessment["next_action"], QUEEN_BLOCK_RECOVERY_GUIDANCE);
+        assert_eq!(
+            store.get_task(unlinked.id).unwrap().state,
+            TaskState::Blocked
+        );
 
         let denied =
             response_json(handle(bridge, plain_state(), request(&worker_token)).await).await;
@@ -6108,6 +6147,7 @@ mod tests {
     fn queen_is_briefed_on_what_she_owns_and_on_capabilities_that_are_not_tools() {
         let brief = standing_brief(WorkerRole::Queen);
         assert!(brief.contains(QUEEN_JUDGMENT_GUIDANCE));
+        assert!(brief.contains(QUEEN_BLOCK_RECOVERY_GUIDANCE));
         assert!(!standing_brief(WorkerRole::Worker).contains(QUEEN_JUDGMENT_GUIDANCE));
 
         // The capability with no tool, and the boundary that makes it usable

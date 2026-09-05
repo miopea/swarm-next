@@ -100,12 +100,33 @@ impl TaskStore {
         &self,
         now: i64,
     ) -> Result<(Vec<swarm_domain::Task>, bool), TaskStoreError> {
+        self.blocked_review_candidates(now, true)
+    }
+
+    /// Bounded discovery of blocks without an outstanding structured hold.
+    /// Includes unlinked blocks so missing dependency metadata cannot hide work
+    /// from Queen. Absence of a hold is NOT proof that work is safe to resume.
+    ///
+    /// # Errors
+    /// Returns an error if the current task/decision/dependency evidence fails.
+    pub fn blocked_tasks_for_reassessment(
+        &self,
+        now: i64,
+    ) -> Result<(Vec<swarm_domain::Task>, bool), TaskStoreError> {
+        self.blocked_review_candidates(now, false)
+    }
+
+    fn blocked_review_candidates(
+        &self,
+        now: i64,
+        require_prerequisite: bool,
+    ) -> Result<(Vec<swarm_domain::Task>, bool), TaskStoreError> {
         let connection = self.connection()?;
         let sql = format!(
             "{} WHERE t.state = 'blocked' AND t.removed_at IS NULL
              AND t.hive_id = (SELECT hive_id FROM local_hive_identity WHERE singleton = 1)
              AND (t.blocked_until IS NULL OR t.blocked_until <= ?1)
-             AND EXISTS(SELECT 1 FROM task_prerequisites p WHERE p.task_id = t.id)
+             AND (?2 = 0 OR EXISTS(SELECT 1 FROM task_prerequisites p WHERE p.task_id = t.id))
              AND NOT EXISTS(SELECT 1 FROM task_prerequisites p
                  LEFT JOIN tasks upstream ON upstream.id = p.prerequisite_id
                  WHERE p.task_id = t.id AND (upstream.id IS NULL
@@ -116,7 +137,7 @@ impl TaskStore {
         );
         let mut statement = connection.prepare(&sql)?;
         let mut tasks = statement
-            .query_map([now], crate::task_from_row)?
+            .query_map(params![now, require_prerequisite], crate::task_from_row)?
             .collect::<Result<Vec<_>, _>>()?;
         let truncated = tasks.len() > 64;
         tasks.truncate(64);
@@ -405,6 +426,63 @@ mod tests {
     }
 
     #[test]
+    fn unlinked_blocks_are_reassessment_candidates_not_permission_to_resume() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = blocked(&store, "Missing structured blocker");
+        let cursor = store.list_control_room_events(0).unwrap().next_cursor;
+        assert!(
+            store
+                .tasks_ready_after_prerequisites(20)
+                .unwrap()
+                .0
+                .is_empty()
+        );
+        let (candidates, truncated) = store.blocked_tasks_for_reassessment(20).unwrap();
+        assert!(!truncated);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].id, task);
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Blocked);
+        assert!(
+            store
+                .list_control_room_events(cursor)
+                .unwrap()
+                .events
+                .is_empty()
+        );
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET blocked_until = 30 WHERE id = ?1",
+                [task.to_string()],
+            )
+            .unwrap();
+        assert!(
+            store
+                .blocked_tasks_for_reassessment(29)
+                .unwrap()
+                .0
+                .is_empty()
+        );
+        assert_eq!(store.blocked_tasks_for_reassessment(30).unwrap().0.len(), 1);
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET removed_at = 31 WHERE id = ?1",
+                [task.to_string()],
+            )
+            .unwrap();
+        assert!(
+            store
+                .blocked_tasks_for_reassessment(31)
+                .unwrap()
+                .0
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn ready_prerequisite_discovery_respects_due_dates_and_current_upstream_state() {
         let store = TaskStore::in_memory().unwrap();
         let consumer = blocked(&store, "Consumer");
@@ -463,6 +541,13 @@ mod tests {
                     .0
                     .is_empty()
             );
+            assert!(
+                store
+                    .blocked_tasks_for_reassessment(40)
+                    .unwrap()
+                    .0
+                    .is_empty()
+            );
         }
     }
 
@@ -489,6 +574,9 @@ mod tests {
         assert!(truncated);
         assert_eq!(tasks.len(), 64);
         assert!(tasks.iter().all(|task| task.title == "Ready for Queen"));
+        let (reassessment, truncated) = store.blocked_tasks_for_reassessment(20).unwrap();
+        assert!(truncated);
+        assert_eq!(reassessment.len(), 64);
     }
 
     #[test]
@@ -532,6 +620,13 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(store.get_task(consumer).unwrap().state, TaskState::Blocked);
+        assert!(
+            store
+                .blocked_tasks_for_reassessment(20)
+                .unwrap()
+                .0
+                .is_empty()
+        );
         assert_eq!(
             store.get_task(consumer).unwrap().next_move_owner,
             swarm_domain::NextMoveOwner::Operator
@@ -542,6 +637,7 @@ mod tests {
         let task = store.get_task(consumer).unwrap();
         assert_eq!(task.state, TaskState::Blocked);
         assert_eq!(task.next_move_owner, swarm_domain::NextMoveOwner::Queen);
+        assert_eq!(store.blocked_tasks_for_reassessment(20).unwrap().0.len(), 1);
         assert_eq!(
             store.tasks_ready_after_prerequisites(20).unwrap().0.len(),
             1
