@@ -21,7 +21,7 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
   her own blocked input must not make that escalation impossible.
 - [ ] Queues shows the known blocker, next owner and recovery action. Generic
   "quiet moment" copy is insufficient when an exact reason is known.
-- [ ] Verified code tasks that intentionally require no deployment have a truthful
+- [x] Verified code tasks that intentionally require no deployment have a truthful
   completion path, without false deployment claims or routine operator write-offs.
 
 ## Remaining original outcomes
@@ -55,6 +55,26 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 ## Evidence from the September 4–5 demo run
 
 ### Current review obligation in Queues
+
+Withdrawal revision `b1577fe8` is deployed: runtime health is ok, schema 137
+quick-check is ok, and foreign-key check returns zero violations. The engine
+identity changed to `490b3f3c203913aecd14e2f24fd5f6e4e38c9923dbb5f3f57bb3d39c099ebf1c`.
+The demo's prior session ended at 05:29:30 UTC and its replacement started at
+05:30:04; no revival intents remain. This is a measured 34-second interruption
+and automatic return, not uninterrupted worker continuity. Queen's earlier
+terminal tail contained an unsent paste placeholder; its ownership was not
+established, so it was neither submitted nor erased.
+
+At 05:32 UTC the normal Queen workflow completed the demo task on evidence
+(`closed_on_evidence=true`, `closed_unverifiable=false`, no deployment fabricated).
+Queen `019ff136-7a90-7631-bbc0-f95efd1df576` withdrew her own decision
+`01a06f58-4526-76d0-adb4-858e731470fb` at 1788586336, citing her verified and
+approved no-deployment claim and the corrected structural refusal. Resolution
+action, operator identity, resolved time and decision delivery all remain null.
+This closes the local-code completion and obsolete-request live round trip;
+it does not close direct-terminal answer correlation or all Needs You/Queues UX.
+
+The following entries retain the intermediate verification history.
 
 Withdrawal's executable Linux MCP round trip now passes: an authenticated test requester
 creates and withdraws a request, and Queen's full-ID read reports withdrawn,
