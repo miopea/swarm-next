@@ -165,6 +165,25 @@ unchanged. All 48 task-board tests passed again after the query correction.
 
 ## Evidence from the September 4–5 demo run
 
+### Fifteen-worker browser lifecycle check (September 5)
+
+Expanded the isolated pool fixture from eight to fifteen synthetic sessions and
+exposed attached/inactive/evicted counts beside retained renderers. In Edge, two
+complete ordered passes retained 15 renderers (one attached, 14 inactive).
+Replacing the selected session still retained 15. With the optional five-renderer
+pool enabled, a complete pass retained five (one attached, four inactive), with
+25 cumulative evictions including the initial trim. A later cold return retained
+five with 26 evictions. The experiment was turned off afterward.
+
+This is lifecycle evidence, not a heap plateau or real-worker performance proof.
+The fast switching pass interrupted 14 of 15 cold attempts; its one completed
+sample measured 3,977 ms. An isolated subsequent return completed, leaving two
+samples and the same maximum. That is insufficient and unfavorable evidence for
+adopting the pool against the 500 ms target. Keep it off by default. Investigate
+foreground/layout/restore timing with controlled completed returns before drawing
+a causal conclusion; transport here is in-memory and rendering is the harness's
+DOM renderer. TypeScript checking passed. PERF-01/02 remain open.
+
 ### Bounded submission observation and wrapped-message recovery
 
 The stranded-message baseline used contiguous matching while normal delivery
