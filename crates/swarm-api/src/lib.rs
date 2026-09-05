@@ -1316,6 +1316,10 @@ impl AppState {
         {
             return;
         }
+        // ADR 0077: avoid a full supervisor interval between every return while
+        // keeping starts sequential and freshly admitted by the lifecycle owner.
+        const RETURN_ATTEMPTS_PER_PASS: usize = 4;
+        let mut attempted = 0;
         for worker_id in owed {
             match worker_runtime::revive_worker_process(self, worker_id, TerminalSize::default())
                 .await
@@ -1323,14 +1327,17 @@ impl AppState {
                 Ok(None) => {}
                 Ok(Some(_)) => {
                     self.control_room_notify.notify_waiters();
-                    break;
+                    attempted += 1;
                 }
                 Err(error) => {
                     tracing::warn!(worker_id = %worker_id, message = %error.message,
                         "worker owed a return after a worker-engine replacement could not be started");
                     self.control_room_notify.notify_waiters();
-                    break;
+                    attempted += 1;
                 }
+            }
+            if attempted == RETURN_ATTEMPTS_PER_PASS {
+                break;
             }
         }
     }
@@ -16702,6 +16709,61 @@ mod tests {
         let replacement_task = replacement_receiver.await.unwrap();
         replacement_task.abort();
         let _ = replacement_task.await;
+    }
+
+    #[tokio::test]
+    async fn owed_return_batch_is_bounded_and_a_failure_does_not_block_later_workers() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 8, [workspace.clone()]).unwrap(),
+        );
+        let socket = runtime.path().join("batch.sock");
+        // No provider executable: every admitted start fails without launching
+        // real work, allowing the batch and failure boundaries to be observed.
+        let server = HostServer::bind_with_identity(
+            &socket,
+            registry,
+            build_version(),
+            worker_engine_build_id(),
+        )
+        .unwrap();
+        let server_task = tokio::spawn(server.run());
+        let store = TaskStore::in_memory().unwrap();
+        let mut workers = Vec::new();
+        for position in 0..5 {
+            workers.push(
+                store
+                    .create_worker(
+                        &format!("Return {position}"),
+                        ProviderKind::ClaudeCode,
+                        workspace.to_str().unwrap(),
+                        false,
+                        position,
+                    )
+                    .unwrap()
+                    .id,
+            );
+        }
+        store
+            .record_worker_revival_intents(&workers, unix_timestamp())
+            .unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new(&socket), "secret")
+            .with_task_store(store.clone());
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            state.revive_workers_owed_a_return().await;
+            assert_eq!(state.worker_errors.read().await.len(), 4);
+            assert_eq!(store.worker_revival_intents().unwrap().len(), 1);
+            state.revive_workers_owed_a_return().await;
+            assert_eq!(state.worker_errors.read().await.len(), 5);
+            assert!(store.worker_revival_intents().unwrap().is_empty());
+        })
+        .await
+        .unwrap();
+        assert!(state.worker_lifecycle.try_lock().is_ok());
+        server_task.abort();
+        let _ = server_task.await;
     }
 
     #[tokio::test]

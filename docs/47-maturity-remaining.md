@@ -92,6 +92,21 @@ ownership. Any acceleration must retain those fresh checks, bounded work and
 fairness for workers behind a deferred or failing candidate. No scheduling fix
 has been implemented or accepted by the preceding deployment evidence.
 
+Return scheduling follow-up (ADR 0077): the supervisor now considers up to four
+actual owed-return attempts sequentially per pass. Each call retains fresh
+lifecycle-locked admission, cancellation and drain checks; ordinary crash recovery
+still attempts one worker per pass. A failed attempt no longer abandons the batch,
+and policy/capacity-deferred promises are not consumed. The isolated five-worker
+failure fixture passed: four attempts on the first pass, one durable promise left,
+then the fifth on the next pass. No actual provider executable was configured,
+so this is scheduling/failure evidence, not live startup or conversation acceptance.
+The browser `/resume` journey currently awaits unlock of the separate Edge tab.
+All 468 API library tests passed in 110.54 seconds with incremental compilation
+disabled. The installed pinned `1.97.1` toolchain has rustfmt (the `stable` alias
+did not); its reported formatting changes were applied locally after the test
+source copy. Live batched return timing remains untested and this batch is not
+yet deployed.
+
 ### Disposed renderer fit cancellation (September 5)
 
 Disposal previously checked only after font/frame waits resumed. Two regressions
