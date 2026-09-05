@@ -9,6 +9,7 @@ import { Terminal } from "@xterm/xterm";
 import { documentColorTheme, terminalTheme } from "../brand/terminalTheme";
 import type { TerminalSnapshot } from "./TerminalConnection";
 import type { Disposable, TerminalSurface } from "./TerminalController";
+import type { FitMilestone } from "./TerminalRestoreEvidence";
 
 const MAX_FIT_FRAMES = 60;
 const STABLE_FIT_FRAMES = 2;
@@ -324,10 +325,11 @@ export class XtermSurface implements TerminalSurface {
     if (!this.#disposed) this.#terminal.focus();
   }
 
-  async fit(): Promise<{ rows: number; columns: number }> {
+  async fit(onMilestone?: (phase: FitMilestone) => void): Promise<{ rows: number; columns: number }> {
     try {
       if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
       this.#cancelScheduledFit();
+      onMilestone?.("fit_started");
       // Wait for the face used to measure terminal cells, not unrelated UI
       // fonts on the page. A failed web font uses the configured fallbacks;
       // stable measured frames below still govern geometry readiness.
@@ -337,6 +339,7 @@ export class XtermSurface implements TerminalSurface {
         else await Promise.resolve();
       } catch { /* Font loading failure must not prevent fallback rendering. */ }
       if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
+      onMilestone?.("fonts_ready");
       let previous: { rows: number; columns: number } | undefined;
       let stableFrames = 0;
       for (let frame = 0; frame < MAX_FIT_FRAMES; frame += 1) {

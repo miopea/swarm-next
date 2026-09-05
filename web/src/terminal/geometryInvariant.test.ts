@@ -33,7 +33,7 @@ test("only #measureForResize may mutate the terminal grid", () => {
 
   // Deliberately counts the raw call, comments and all: a commented-out second
   // caller is a second caller waiting to be uncommented.
-  const callers = controller.split("this.#surface.fit()").length - 1;
+  const callers = controller.split("this.#surface.fit(").length - 1;
 
   expect(
     callers,
@@ -46,6 +46,6 @@ test("only #measureForResize may mutate the terminal grid", () => {
   // it.
   const helper = controller.slice(controller.indexOf("async #measureForResize("));
   const helperBody = helper.slice(0, helper.indexOf("\n  }"));
-  expect(helperBody).toContain("this.#surface.fit()");
+  expect(helperBody).toContain("this.#surface.fit(");
   expect(helperBody).toContain("ownsGeometry");
 });

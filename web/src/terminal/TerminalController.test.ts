@@ -278,6 +278,27 @@ test("warm-pool rejects invalid limits without changing its policy", () => {
   expect(registry.retention.limit).toBeUndefined();
 });
 
+test("cold-return fit milestones reach the same completed experiment sample", async () => {
+  const registry = new TerminalControllerRegistry();
+  registry.setRetainedLimit(1);
+  registry.getOrCreate("cold", fakeSurface, fakeConnection);
+  registry.getOrCreate("other", fakeSurface, fakeConnection);
+  const surface = fakeSurface();
+  surface.fit = vi.fn(async (milestone) => {
+    milestone?.("fit_started");
+    milestone?.("fonts_ready");
+    return { rows: 24, columns: 80 };
+  });
+  const connection = fakeConnection();
+  registry.getOrCreate("cold", () => surface, () => connection).attach(document.createElement("div"));
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledOnce());
+  vi.mocked(connection.start).mock.calls[0][0].onState("connected");
+  expect(registry.coldRestoreEvidence.slowest_fit).toEqual({
+    opening_ms: expect.any(Number), font_ms: expect.any(Number), layout_ms: expect.any(Number),
+  });
+  registry.closeAll();
+});
+
 test("cold-return measurements exclude first visits and survive a view remount", async () => {
   const registry = new TerminalControllerRegistry();
   registry.setRetainedLimit(1);

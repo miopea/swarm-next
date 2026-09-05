@@ -72,6 +72,13 @@ This adds no timer, persistence, session identifier, protocol or automatic expor
 It measures neither confirmed compositor paint nor input ownership. A failed
 five-renderer acceptance result must not enable that policy by default.
 
+Initial fit additionally reports start and font-ready milestones to that same
+opt-in sample. Its setup breakdown separates opening, font readiness (including
+fallback), and layout through initial sizing. Out-of-order or absent milestones
+remain unavailable; the breakdown always belongs to the slowest total return.
+This does not change font loading, frame waits, geometry authority or renderer
+retention. Layout elapsed time is not CPU time or proof of browser throttling.
+
 ## Event entries versus interactions
 
 The historical `interaction` wire field contains individual native Event Timing

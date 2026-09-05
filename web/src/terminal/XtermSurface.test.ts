@@ -341,10 +341,13 @@ test.each([false, true])("fit waits only for terminal fonts and tolerates load f
   const surface = new XtermSurface();
   try {
     surface.open(document.createElement("div"));
-    const fitting = surface.fit();
+    const milestone = vi.fn();
+    const fitting = surface.fit(milestone);
     expect(load).toHaveBeenCalledWith(`14px ${xterm.options?.fontFamily}`, "W");
+    expect(milestone.mock.calls).toEqual([["fit_started"]]);
     for (let step = 0; step < 4; step++) await Promise.resolve();
     expect(frames).toHaveLength(1);
+    expect(milestone.mock.calls).toEqual([["fit_started"], ["fonts_ready"]]);
     frames.shift()?.(0);
     await Promise.resolve();
     frames.shift()?.(16);

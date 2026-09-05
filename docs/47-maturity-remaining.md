@@ -8,6 +8,18 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Renderer setup breakdown (September 5)
+
+The opt-in cold-return experiment now pairs initial-fit and font-ready milestones
+with its existing connection-start boundary. Developer Dogfood shows opening,
+font readiness and layout/initial sizing for the same slowest completed return.
+Missing or invalid ordering stays unavailable. No sizing policy, frame wait,
+font-loading behavior, queue bound, timer or backend storage changes. TypeScript
+and all 1,183 frontend tests passed. The initial full run exposed a source guard
+counting only argument-free fit calls; it now counts all direct fit calls while
+still requiring the single geometry-authorized helper. Live attribution and
+performance acceptance remain open; this is instrumentation, not a speed fix.
+
 ### Blocked recovery and API-preserved Queen reviews (September 5)
 
 Live inspection found 31 Blocked tasks with recorded notes, but only one with
@@ -19,8 +31,12 @@ Recovery now preserves that confirmed run only for its exact open session;
 unconfirmed delivery and missing/ended sessions still become Uncertain. All
 33 conductor tests passed in the isolated Linux workspace, including preserved
 run identity, duplicate-run refusal, continued autonomy restrictions, exact
-session replacement, missing identity and interrupted delivery. Live acceptance
-of this recovery fix remains open. Full QUEUE-01/QUEEN-02 remain incomplete:
+session replacement, missing identity and interrupted delivery. The broader
+isolated persistence library suite also passed all 566 tests. Commit `06ee7660`
+deployed healthy with engine PID 2456733 and all ten worker session IDs unchanged.
+Queen subsequently showed a queued review held by normal pacing; this is not
+proof of end-to-end blocked recovery or a live Running-to-Running update trial.
+Full QUEUE-01/QUEEN-02 remain incomplete:
 cleared blockers must return through Ready, actionable queue ordering must be
 reconciled by Queen, and genuine operator decisions need concise cause/action
 copy with supporting history collapsed, not a prose-only recovery mechanism.

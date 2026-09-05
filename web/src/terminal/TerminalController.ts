@@ -4,11 +4,12 @@ import type {
   TerminalSnapshot,
   TerminalControlView,
 } from "./TerminalConnection";
-import { TerminalRestoreEvidence } from "./TerminalRestoreEvidence";
+import { TerminalRestoreEvidence, type FitMilestone } from "./TerminalRestoreEvidence";
 
 interface ControllerLifecycle {
   attached(): void;
   connectionStarting?(): void;
+  fitMilestone?(phase: FitMilestone): void;
   inactive(): void;
   stateChanged(state: TerminalConnectionState): void;
 }
@@ -20,7 +21,7 @@ export interface Disposable {
 export interface TerminalSurface {
   open(element: HTMLElement): void;
   focus(): void;
-  fit(): Promise<{ rows: number; columns: number }>;
+  fit(onMilestone?: (phase: FitMilestone) => void): Promise<{ rows: number; columns: number }>;
   /**
    * What this viewport would fit, WITHOUT applying it. Optional so a test
    * double that does not model it keeps working; a surface without it simply
@@ -308,12 +309,12 @@ export class TerminalController {
    * claim is granted is the server's to decide, and the grid that results
    * arrives as a snapshot.
    */
-  async #measureForResize(): Promise<{ rows: number; columns: number } | undefined> {
+  async #measureForResize(onMilestone?: (phase: FitMilestone) => void): Promise<{ rows: number; columns: number } | undefined> {
     if (this.#geometrySuspended) return this.#surface.proposeFit?.();
     if (this.#started && this.#connection.ownsGeometry === false) {
       return this.#surface.proposeFit?.();
     }
-    return this.#surface.fit();
+    return this.#surface.fit(onMilestone);
   }
 
   #mayResizeNow(): boolean {
@@ -341,7 +342,7 @@ export class TerminalController {
     this.#surface.observeGeometrySuspension?.(() => this.#geometrySuspended);
     // No canonical screen exists yet. Initial fit waits for usable metrics;
     // once attached, passive views only measure and accept engine dimensions.
-    const measured = await this.#measureForResize();
+    const measured = await this.#measureForResize(this.#lifecycle?.fitMilestone);
     if (!measured) return;
     const { rows, columns } = measured;
     if (this.#disposed || this.#started || !this.#host.parentElement) return;
@@ -489,6 +490,7 @@ export class TerminalControllerRegistry {
         }
       },
       connectionStarting: () => finish?.("connection_started"),
+      fitMilestone: (phase) => finish?.(phase),
       stateChanged: (state) => {
         if (state === "connected") {
           finish?.(document.visibilityState === "visible" ? "rendered" : "interrupted");

@@ -13,7 +13,7 @@ test("records nearest-rank p95 without hiding interrupted and failed attempts", 
   evidence.begin()("interrupted");
   evidence.begin()("failed");
   evidence.begin();
-  expect(evidence.snapshot()).toEqual({ started: 23, pending: 1, interrupted: 1, failed: 1, samples: 20, p95_ms: 19, max_ms: 20, slowest: { total_ms: 20, setup_ms: null, connection_ms: null } });
+  expect(evidence.snapshot()).toEqual({ started: 23, pending: 1, interrupted: 1, failed: 1, samples: 20, p95_ms: 19, max_ms: 20, slowest: { total_ms: 20, setup_ms: null, connection_ms: null }, slowest_fit: null });
 });
 
 test("caps samples, expires old observations, and reports missing evidence as null", () => {
@@ -41,7 +41,7 @@ test("stopping retains results but invalidates pending callbacks; reset starts a
   expect(evidence.snapshot()).toMatchObject({ samples: 1, pending: 0, interrupted: 1 });
   evidence.reset();
   late("failed");
-  expect(evidence.snapshot()).toEqual({ started: 0, pending: 0, interrupted: 0, failed: 0, samples: 0, p95_ms: null, max_ms: null, slowest: null });
+  expect(evidence.snapshot()).toEqual({ started: 0, pending: 0, interrupted: 0, failed: 0, samples: 0, p95_ms: null, max_ms: null, slowest: null, slowest_fit: null });
 });
 
 test("invalid clocks do not produce a healthy latency sample", () => {
@@ -69,6 +69,30 @@ test("slowest return keeps paired phases rather than unrelated maxima", () => {
   expect(evidence.snapshot().slowest!.setup_ms).toBe(300);
   now += 60 * 60_000 + 1;
   expect(evidence.snapshot().slowest).toBeNull();
+});
+
+test("fit breakdown stays paired, copied, and unavailable for out-of-order milestones", () => {
+  let now = 0;
+  const evidence = new TerminalRestoreEvidence(() => now);
+  const finish = evidence.begin();
+  now = 10; finish("fit_started");
+  now = 30; finish("fonts_ready");
+  now = 90; finish("fonts_ready");
+  now = 100; finish("connection_started");
+  now = 200; finish("rendered");
+  expect(evidence.snapshot().slowest_fit).toEqual({ opening_ms: 10, font_ms: 20, layout_ms: 70 });
+  evidence.snapshot().slowest_fit!.font_ms = 999;
+  expect(evidence.snapshot().slowest_fit!.font_ms).toBe(20);
+  const invalid = evidence.begin();
+  now = 210; invalid("fonts_ready");
+  now = 220; invalid("fit_started");
+  now = 300; invalid("connection_started");
+  now = 500; invalid("rendered");
+  expect(evidence.snapshot().slowest_fit).toBeNull();
+  const late = evidence.begin();
+  evidence.reset();
+  late("fit_started"); late("fonts_ready"); late("connection_started"); late("rendered");
+  expect(evidence.snapshot()).toMatchObject({ samples: 0, pending: 0, slowest_fit: null });
 });
 
 test("invalid or missing phase boundaries remain unavailable", () => {
