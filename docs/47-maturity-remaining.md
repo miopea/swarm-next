@@ -56,6 +56,18 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ### Follow-up reconciliation trace and queue presentation
 
+The full frontend suite passed 1,085 tests across 127 files before the queue
+progression change; its nine focused tests and project TypeScript check passed
+afterward. Queue commit `b0a3758` deployed through the normal development reload:
+health reported that revision with no degraded subsystems and the same engine
+build identity. This is server deployment evidence, not signed-in visual acceptance.
+
+The inbox read cap was smaller than admission (200 versus 256), hiding pending
+requests at capacity. Reads now share the 256 pending bound and keep pending-first
+ordering. All 28 decision persistence tests passed, including a full-capacity
+fixture with resolved history and one subsequent resolution. This closes that
+specific omission, not direct-worker answer reconciliation or full attention UX.
+
 Direct-terminal answer reconciliation remains unwired: the API has verification
 reads, but no production caller of `resolve_operator_statement_interview`.
 ADR 0065's authenticated provider-consumption and exact-question correlation

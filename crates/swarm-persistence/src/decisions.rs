@@ -109,7 +109,9 @@ pub(super) fn migrate_decision_resolution_surface(
 }
 
 pub const MAX_PENDING_DECISIONS: i64 = 256;
-pub const MAX_DECISION_RESULTS: i64 = 200;
+// Pending-first ordering must fit every admitted request. History uses only
+// remaining capacity; it must never conceal an unanswered operator request.
+pub const MAX_DECISION_RESULTS: i64 = MAX_PENDING_DECISIONS;
 const MAX_TITLE_BYTES: usize = 240;
 const MAX_DETAIL_BYTES: usize = 10_000;
 const MAX_ACTION_BYTES: usize = 80;
@@ -1561,6 +1563,49 @@ mod tests {
             found.discharge,
             Some(DecisionDischarge::Outstanding),
             "a deployment older than the ruling is not evidence the ruling was carried out"
+        );
+    }
+
+    #[test]
+    fn inbox_fits_every_admitted_pending_request_before_resolved_history() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let actions = vec!["wait".into()];
+        let historical = store
+            .create_decision_request(&request(queen.id, &actions))
+            .unwrap();
+        store
+            .resolve_decision_request(historical.id, "wait", "", "test")
+            .unwrap();
+        let mut pending = HashSet::new();
+        for _ in 0..MAX_PENDING_DECISIONS {
+            pending.insert(
+                store
+                    .create_decision_request(&request(queen.id, &actions))
+                    .unwrap()
+                    .id,
+            );
+        }
+        let listed = store.list_decision_requests().unwrap();
+        assert_eq!(listed.len(), pending.len());
+        assert!(listed.iter().all(|decision| pending.contains(&decision.id)
+            && decision.state == DecisionRequestState::Pending));
+        let resolved = listed[0].id;
+        store
+            .resolve_decision_request(resolved, "wait", "", "test")
+            .unwrap();
+        let refreshed = store.list_decision_requests().unwrap();
+        assert_eq!(
+            refreshed
+                .iter()
+                .filter(|decision| decision.state == DecisionRequestState::Pending)
+                .count(),
+            pending.len() - 1
+        );
+        assert_eq!(
+            refreshed.len(),
+            listed.len(),
+            "history stays bounded to spare capacity"
         );
     }
 

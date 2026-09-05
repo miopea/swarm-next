@@ -29,7 +29,10 @@ Swarm owns one durable, typed operator decision inbox.
   resolve them. Resolution is an authenticated operator action.
 - Resolution records the selected allowed action, optional note, operator
   identity, and timestamp atomically with a content-free control-room event.
-- Pending requests are bounded at 256 and reads at 200. Resolved history stays
+- Pending requests and reads are both bounded at 256. Pending-first reads must
+  fit every admitted unanswered request; resolved history occupies only spare
+  capacity. This corrects the former 200-row read cap, which could hide 56 pending
+  requests and understate the operator's inbox count. Resolved history stays
   durable but visually quiet until requested.
 - A decision is a recorded judgment, not arbitrary agent-to-agent messaging.
   ADR-0015 delivers resolved outcomes to the requesting worker through the
