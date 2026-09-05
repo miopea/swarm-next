@@ -53,6 +53,21 @@ Delivery and completion are durable:
 
 ## Consequences
 
+### Review delivery fairness (September 5 maturity pass)
+
+A queued review that has waited through an acknowledged coordination delivery
+to Queen receives first consideration on the next delivery pass. The persisted
+run request timestamp and live session's last acknowledged delivery establish
+this ordering; a new session does not inherit an ended session's evidence.
+Before such evidence exists, notification delivery retains its existing order.
+The review still uses the shared cooldown, prompt, engagement, provider and
+takeover guards. This is not a cooldown exemption or authorization to unblock
+tasks. Other outboxes retain their rows if the review consumes this opportunity.
+The sole delivery owner attempts the review at most once per pass. This prevents
+continuous notifications from renewing pacing ahead of a queued review forever
+without permitting the two submissions per pause previously reported as flooding.
+No new timer, retry queue, schema or terminal-host protocol is introduced.
+
 Queen can perform useful unattended coordination without becoming a second
 permission authority. Operators receive visible queued, running, completed,
 waiting, and uncertain states plus a manual review control. The conductor does

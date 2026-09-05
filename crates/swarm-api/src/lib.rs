@@ -1397,6 +1397,19 @@ impl AppState {
             }
         }
         self.run_deterministic_coordinator(store).await;
+        // A review may yield once to notifications, but a continuing stream
+        // must not renew Queen's cooldown ahead of it forever. The common
+        // submission gate still prevents two cooled writes in one pause.
+        let review_first = match store.queen_review_has_yielded_to_delivery() {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(message = %error, "Queen delivery ordering could not be read");
+                false
+            }
+        };
+        if review_first {
+            self.deliver_queen_automation(store, client).await;
+        }
         self.deliver_decision_outcomes(store, client).await;
         self.deliver_task_briefs(store, client).await;
         self.deliver_task_outcomes(store, client).await;
@@ -1412,7 +1425,9 @@ impl AppState {
         if let Err(error) = store.sweep_attention_notifications(unix_timestamp()) {
             tracing::warn!(message = %error, "the attention queue could not be swept");
         }
-        self.deliver_queen_automation(store, client).await;
+        if !review_first {
+            self.deliver_queen_automation(store, client).await;
+        }
     }
 
     async fn run_deterministic_coordinator(&self, store: &TaskStore) {
@@ -16150,13 +16165,38 @@ mod tests {
             "the outcome landed first and started a cooldown, so the run brief waits"
         );
 
-        // Time passing, expressed directly: the cooldown is a timestamp, and
-        // nothing but the clock releases it. No agent declares itself free and
-        // none can hold it open.
+        // Another worker outcome must not consume the next opportunity ahead
+        // of the review that already yielded. It stays durable, not discarded.
+        store.transition_task(task.id, TaskState::Active).unwrap();
         store
-            .record_coordination_delivery(queen_terminal.id(), 0)
+            .transition_worker_task(
+                task.id,
+                TaskState::Review,
+                "Follow-up evidence",
+                worker_session,
+            )
+            .unwrap();
+        // Prove ordering does not bypass the existing cooldown.
+        state.deliver_coordination().await;
+        assert_eq!(
+            store.queen_automation_status(101).unwrap().state,
+            swarm_domain::QueenAutomationState::Queued
+        );
+        assert_eq!(
+            store.get_task(task.id).unwrap().outcome_delivery_state,
+            Some(swarm_domain::TaskOutcomeDeliveryState::Queued)
+        );
+        // Express elapsed time without erasing the delivery evidence that
+        // establishes the queued review's turn.
+        store
+            .record_coordination_delivery(queen_terminal.id(), unix_timestamp() - 301)
             .unwrap();
         state.deliver_coordination().await;
+        assert_eq!(
+            store.get_task(task.id).unwrap().outcome_delivery_state,
+            Some(swarm_domain::TaskOutcomeDeliveryState::Queued),
+            "the review gets this turn; the newer outcome is still queued"
+        );
 
         let automation = store.queen_automation_status(101).unwrap();
         let snapshot = match queen_terminal.resume_after(None).unwrap() {

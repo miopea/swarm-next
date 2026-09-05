@@ -8,6 +8,19 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Queen review delivery fairness (September 5)
+
+At 21:06:27 UTC the same review requested at 20:30:03 remained Queued with
+zero attempts; the eligibility deadline had moved again to 21:08:45. Delivery
+ordering now gives a queued review first consideration after an acknowledged
+delivery during its wait, using persisted run/session evidence. It retains the
+shared cooldown and all terminal/operator guards; no task is bulk-unblocked.
+The isolated Linux overlay workspace passed 34 conductor tests, 38 delivery
+tests, and the real-PTY regression that now queues a second outcome, proves
+both remain held during cooldown, then proves the review lands first while
+the second outcome stays Queued. Deployment and live recovery evidence remain
+to be collected; this alone does not close blocked-task reassessment or QUEUE-01.
+
 ### Queen pacing visibility (September 5)
 
 Run `01a07343-913c-7d12-9684-f494bbdf2b56` remained Queued with zero

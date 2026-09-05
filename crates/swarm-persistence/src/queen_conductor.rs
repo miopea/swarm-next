@@ -72,6 +72,27 @@ pub enum QueenAutomationFinish {
 }
 
 impl TaskStore {
+    /// A queued review that has already yielded to a confirmed delivery gets
+    /// first consideration next pass. This is ordering, not delivery permission:
+    /// cooldown, engagement, provider, and terminal guards still apply.
+    ///
+    /// # Errors
+    /// Returns an error when the durable run/session evidence cannot be read.
+    pub fn queen_review_has_yielded_to_delivery(&self) -> Result<bool, TaskStoreError> {
+        Ok(self.connection()?.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM queen_automation automation
+                JOIN worker_profiles queen ON queen.role = 'queen'
+                JOIN worker_sessions session ON session.worker_id = queen.id
+                WHERE automation.id = 1 AND automation.state = 'queued'
+                  AND session.ended_at IS NULL
+                  AND session.last_coordination_delivery_at >= automation.requested_at
+            )",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Returns bounded, content-free automation state for the operator UI.
     ///
     /// # Errors
@@ -1034,6 +1055,37 @@ pub(super) fn migrate_queen_delivery_session(
 mod tests {
     use super::*;
     use swarm_domain::{ProviderKind, TaskActivityActor, TaskPriority, TaskState};
+
+    #[test]
+    fn review_priority_requires_delivery_during_this_queued_run_and_live_session() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        store.record_coordination_delivery(session, 99).unwrap();
+        store.request_queen_automation_run(100).unwrap();
+        assert!(!store.queen_review_has_yielded_to_delivery().unwrap());
+        store.record_coordination_delivery(session, 100).unwrap();
+        assert!(store.queen_review_has_yielded_to_delivery().unwrap());
+        // API recovery does not erase ordering evidence for a queued run.
+        store.recover_inflight_queen_automation().unwrap();
+        assert!(store.queen_review_has_yielded_to_delivery().unwrap());
+        let delivery = store.claim_queen_automation(401).unwrap().unwrap();
+        assert!(!store.queen_review_has_yielded_to_delivery().unwrap());
+        store
+            .defer_queen_automation_delivery(&delivery.run_id, 402)
+            .unwrap();
+        assert!(store.queen_review_has_yielded_to_delivery().unwrap());
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE worker_sessions SET ended_at = 403 WHERE session_id = ?1",
+                [session.to_string()],
+            )
+            .unwrap();
+        assert!(!store.queen_review_has_yielded_to_delivery().unwrap());
+    }
 
     #[test]
     fn queued_queen_review_explains_pacing_and_clears_at_the_shared_boundary() {
