@@ -27,6 +27,40 @@ old-capture defaults and existing privacy/authentication/retention constraints.
 Deployment and actual demo phase measurements remain pending. This instrumentation
 does not by itself close PERF-01/02 or establish a reconnect cause.
 
+Deployed `a64b12650400` through the managed reload; health reports
+`1.5.0-dev-a64b12650400-20260905180554-2453877`, no degraded subsystems.
+Main push bypassed four expected checks; local/isolated test results above are
+not a claim of GitHub CI completion. Initial API activation preserved all eleven
+sessions and engine PID 2420200. At 18:08:40Z, a later managed engine reconciliation
+replaced it with PID 2456733. This agent did not invoke maintenance or click the
+engine-update action; the triggering request/timer has not been attributed.
+Return progressed from Queen, through eight workers, to all eleven. Every new
+provider launch, selection and Restored outcome matched the pre-update conversation
+audit, including D365's corrected c4d71311 conversation and Contract's c4435eee
+marker. No manual duplicate starts were issued. The reconcile unit logged TERM
+during replacement, followed by a successful subsequent run; diagnostic clarity
+of that transition remains to inspect.
+
+The phase-instrumented Edge report at 18:11:57Z (1465 x 1285 CSS pixels) contained
+two complete attachment samples: 666 ms (grant 50, socket 551, initial state 65)
+and 258 ms (grant 55, socket 148, initial state 56; rounding is independent).
+The latter followed explicit selection of Contract demo after its return. These
+are sparse visible-tab observations, not p95, mobile acceptance or proof that
+earlier 4–8 second reconnects are fixed. Interaction-event samples still exceeded
+one second while the latest server sample reported no pressure; attribution of
+that separate delay remains open.
+Authenticated readback of the private hourly evidence store confirmed the new
+build's two samples persisted (grant total 105 ms, socket 699 ms, initial state
+121 ms, reconnect 924 ms). This verifies the live capture-to-store path, not just
+local report rendering.
+
+The engine return exposed a concrete selection-continuity defect: the test tab
+was on Contract before the engine replacement but fell back to Queen as workers
+returned. App selection is session-ID based and substitutes the preferred Queen
+session when an old session disappears. Preserve selected worker identity across
+temporary session absence and bind its replacement when it returns; this remains
+unfinished UX/REC work. No real-worker input was sent during these checks.
+
 ### Performance measurement integrity (September 5)
 
 The 17:48Z diagnostic-tab report on frontend a8e84036 / API cd7db41f
