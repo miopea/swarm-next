@@ -8,12 +8,24 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+- [ ] Queen's explicit `swarm_start_worker` must honor Night Watch provider
+  eligibility as well as capacity. Its current adapter checks capacity only.
+  Standing and per-run instructions also contradict the available start tool by
+  saying there is no wake tool and recommending task-state rewinds to wake work.
+  Reconcile the shared guidance with the actual tool and preserve task state.
+
 - [ ] Automatic crash recovery and post-update revival must honor resource
   admission without consuming attempts or clearing revival intents. Inspection
   on `754acd50` found `supervise_workers` and `revive_workers_owed_a_return`
   bypass the coordinator's resource check and can start several workers in one
   pass. Night Watch policy is checked, but that does not establish safe machine
   capacity. Extend the shared resource policy and test deferred-to-resumed work.
+  Local implementation now gates recovery before attempt accounting and revival
+  before promise settlement, with one supervisor recovery attempt per pass.
+  All 453 Linux API tests pass on the final source, including one-attempt-per-pass,
+  pressure-to-admission and retained-return tests. Strict API lint passes. The
+  previous five-second stable-worker fixture now waits for explicit stop, avoiding
+  expiry during parallel setup. Deployment is held for the fixed-build soak.
 
 - [ ] Jira synchronization respects removed linked tasks and continues processing
   valid work. Recheck the recurring WWD reconciliation error after deployment.
@@ -63,6 +75,8 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 ## Evidence from the September 4–5 demo run
 
 ### Provider policy and truthful settings
+
+The full frontend regression suite subsequently passed all 1,121 tests.
 
 The provider acceptance template is now in `48-provider-acceptance.md`. Current
 Night Watch exclusions were rechecked with the existing Linux API/persistence

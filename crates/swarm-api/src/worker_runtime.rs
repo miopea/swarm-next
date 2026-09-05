@@ -108,6 +108,14 @@ pub(super) async fn revive_worker_process(
     if !automation_admitted(state, profile.provider) {
         return Ok(None);
     }
+    // A capacity hold is not a failed restart. Keep the durable promise and
+    // let the supervisor retry when current machine evidence permits it.
+    if !crate::runtime::coordinator_start_admission(state)
+        .await
+        .permits_start()
+    {
+        return Ok(None);
+    }
     // Recheck after acquiring ownership: another maintenance run may have
     // started after the supervisor's earlier host observation.
     let host = crate::maintenance::host_status_snapshot(state).await?;
@@ -2054,6 +2062,27 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn unavailable_capacity_preserves_the_post_update_return_promise() {
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Return", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        store
+            .record_worker_revival_intents(&[worker.id], 1)
+            .unwrap();
+        let state = AppState::default().with_task_store(store.clone());
+        assert!(
+            revive_worker_process(&state, worker.id, TerminalSize::default())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(store.worker_revival_pending(worker.id).unwrap());
+        assert!(state.worker_errors.read().await.is_empty());
+        assert!(state.worker_recovery_attempts.read().await.is_empty());
     }
 
     /// Builds the start request for a worker whose workspace is `workspace`,

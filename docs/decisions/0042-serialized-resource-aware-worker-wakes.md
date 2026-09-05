@@ -24,6 +24,16 @@ Operator-requested wakes remain immediate, resource pressure never stops an
 already running worker, and an ambiguous claimed wake is still marked uncertain
 rather than replayed.
 
+### Maturity extension: automatic recovery
+
+Automatic crash recovery and post-update revival also require current resource
+admission. A pressure or unavailable-evidence hold must precede recovery-attempt
+accounting and must preserve durable revival intents. The existing supervisor
+reconsiders them without operator approval when admission returns. A supervisor
+pass attempts at most one recovery start across autostart and owed revival work;
+policy-held workers do not consume this allowance. Explicit operator wake requests
+remain unchanged. Post-update restoration checks admission before each start.
+
 The coordinator API exposes the batch limit, and Settings explains that Swarm
 starts one worker at a time and checks memory again before continuing.
 

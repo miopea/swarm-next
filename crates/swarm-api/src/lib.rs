@@ -1197,6 +1197,7 @@ impl AppState {
                 })
             });
         }
+        let mut recovery_started = false;
         for profile in profiles
             .into_iter()
             .filter(|profile| profile.autostart && profile.active_session_id.is_none())
@@ -1208,33 +1209,18 @@ impl AppState {
             {
                 continue;
             }
-            let attempted_recovery = self
-                .worker_recovery_attempts
-                .write()
-                .await
-                .insert(profile.id, now)
-                .is_some();
-            if attempted_recovery {
-                self.worker_errors.write().await.insert(
-                    profile.id,
-                    "Worker exited again before recovery was stable. Retry when ready.".to_owned(),
-                );
-                self.control_room_notify.notify_waiters();
-                tracing::warn!(worker_id = %profile.id, worker_name = %profile.name, "autostart worker recovery circuit opened");
-                continue;
+            let admission = runtime::coordinator_start_admission(self).await;
+            if !admission.permits_start() {
+                break;
             }
-            if let Err(error) =
-                worker_runtime::start_worker_process(self, profile.id, TerminalSize::default())
-                    .await
-            {
-                self.worker_errors
-                    .write()
-                    .await
-                    .insert(profile.id, error.message.clone());
-                tracing::warn!(worker_id = %profile.id, worker_name = %profile.name, message = %error.message, "autostart worker could not be started");
+            if self.try_autostart_recovery(&profile, now, admission).await {
+                recovery_started = true;
+                break;
             }
         }
-        self.revive_workers_owed_a_return().await;
+        if !recovery_started {
+            self.revive_workers_owed_a_return().await;
+        }
         // Before delivering anything new, settle a review Swarm could not
         // confirm. Without this it waits for the operator indefinitely, which
         // is what left one parked for ninety minutes while Queen sat idle.
@@ -1322,16 +1308,65 @@ impl AppState {
             Ok(_) => {}
             Err(_) => return,
         }
+        if !runtime::coordinator_start_admission(self)
+            .await
+            .permits_start()
+        {
+            return;
+        }
         for worker_id in owed {
-            if let Err(error) =
-                worker_runtime::revive_worker_process(self, worker_id, TerminalSize::default())
-                    .await
+            match worker_runtime::revive_worker_process(self, worker_id, TerminalSize::default())
+                .await
             {
-                tracing::warn!(worker_id = %worker_id, message = %error.message,
-                    "worker owed a return after a worker-engine replacement could not be started");
+                Ok(None) => {}
+                Ok(Some(_)) => {
+                    self.control_room_notify.notify_waiters();
+                    break;
+                }
+                Err(error) => {
+                    tracing::warn!(worker_id = %worker_id, message = %error.message,
+                        "worker owed a return after a worker-engine replacement could not be started");
+                    self.control_room_notify.notify_waiters();
+                    break;
+                }
             }
         }
-        self.control_room_notify.notify_waiters();
+    }
+
+    async fn try_autostart_recovery(
+        &self,
+        profile: &WorkerProfile,
+        now: i64,
+        admission: runtime::CoordinatorStartAdmission,
+    ) -> bool {
+        if !admission.permits_start() {
+            return false;
+        }
+        if self
+            .worker_recovery_attempts
+            .write()
+            .await
+            .insert(profile.id, now)
+            .is_some()
+        {
+            self.worker_errors.write().await.insert(
+                profile.id,
+                "Worker exited again before recovery was stable. Retry when ready.".to_owned(),
+            );
+            self.control_room_notify.notify_waiters();
+            tracing::warn!(worker_id = %profile.id, "autostart worker recovery circuit opened");
+            return false;
+        }
+        if let Err(error) =
+            worker_runtime::start_worker_process(self, profile.id, TerminalSize::default()).await
+        {
+            self.worker_errors
+                .write()
+                .await
+                .insert(profile.id, error.message.clone());
+            tracing::warn!(worker_id = %profile.id, message = %error.message, "autostart worker could not be started");
+        }
+        true
     }
 
     /// Delivers durable coordination only to running workers without a live operator lease.
@@ -9904,6 +9939,78 @@ mod tests {
         assert_eq!(status.completed_actions, 0);
     }
 
+    #[tokio::test]
+    async fn pressure_does_not_spend_autostart_recovery_before_admission_returns() {
+        use runtime::CoordinatorStartAdmission;
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Recovery",
+                ProviderKind::ClaudeCode,
+                "/workspace/recovery",
+                true,
+                1,
+            )
+            .unwrap();
+        let state = AppState::default().with_task_store(store);
+        for admission in [
+            CoordinatorStartAdmission::DeferredAdvisory,
+            CoordinatorStartAdmission::DeferredCritical,
+            CoordinatorStartAdmission::DeferredUnavailable,
+        ] {
+            assert!(!state.try_autostart_recovery(&worker, 10, admission).await);
+            assert!(state.worker_recovery_attempts.read().await.is_empty());
+            assert!(state.worker_errors.read().await.is_empty());
+        }
+        // Admission returning allows the first attempt. This deliberately absent
+        // host then fails normally; it was not touched during any pressure hold.
+        assert!(
+            state
+                .try_autostart_recovery(&worker, 11, CoordinatorStartAdmission::Allowed)
+                .await
+        );
+        assert_eq!(
+            state.worker_recovery_attempts.read().await.get(&worker.id),
+            Some(&11)
+        );
+        assert!(state.worker_errors.read().await.contains_key(&worker.id));
+    }
+
+    #[tokio::test]
+    async fn automatic_recovery_attempts_one_worker_per_supervisor_pass() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
+        );
+        let socket = runtime.path().join("recovery.sock");
+        // No provider executable is configured: admitted attempts fail normally,
+        // without starting real providers or relying on their completion timing.
+        let server = HostServer::bind(&socket, registry).unwrap();
+        let server_task = tokio::spawn(server.run());
+        let store = TaskStore::in_memory().unwrap();
+        for (position, name) in ["First", "Second"].into_iter().enumerate() {
+            store
+                .create_worker(
+                    name,
+                    ProviderKind::ClaudeCode,
+                    &workspace.to_string_lossy(),
+                    true,
+                    i64::try_from(position).unwrap(),
+                )
+                .unwrap();
+        }
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new(&socket), "secret")
+            .with_task_store(store);
+        state.supervise_workers().await;
+        assert_eq!(state.worker_recovery_attempts.read().await.len(), 1);
+        state.supervise_workers().await;
+        assert_eq!(state.worker_recovery_attempts.read().await.len(), 2);
+        server_task.abort();
+        let _ = server_task.await;
+    }
+
     /// A refused start names the CAUSE, not just that it was refused.
     ///
     /// The refusal already reached the operator — it becomes a held-delivery
@@ -16860,7 +16967,7 @@ mod tests {
             .spawn(
                 &ProviderCommand {
                     executable: PathBuf::from("/bin/sh"),
-                    arguments: vec!["-lc".into(), "sleep 5".into()],
+                    arguments: vec!["-lc".into(), "read -r line".into()],
                     working_directory: workspace.clone(),
                 },
                 TerminalSize::default(),
