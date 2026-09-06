@@ -22,7 +22,26 @@ the generic busy description rather than mislabeling a Ready predecessor Active.
 The 26 Linux persistence dispatch tests and 39 frontend queue/list tests pass;
 TypeScript passes. A separate Edge tab verified the isolated 390px-wide fixture
 with a wrapping title and compact link. This is not native mobile acceptance.
-Live deployment and navigation verification remain to be recorded.
+Rust formatting and isolated Linux API compilation also pass. The existing
+Needs You inbox/interview checks pass 47 tests, including custom-answer retry.
+
+`e2a2ee7f` deployed through the development reload service. Health is clean;
+the actual engine identity and all 15 running session IDs match the pre-build
+baseline. The live coordinator now identifies Platform's memberStatus Active
+task and D365's head-of-house Active task for their four held briefings. In a
+separate Edge tab, Open blocking task focused Platform's correct task article,
+visible in the viewport, without changing task state or sending terminal input.
+
+The first installation attempt failed with an empty detail while the server
+disk had only 125 MB free. Removing only our reproducible isolated Rust target
+cache recovered about 1.5 GB; one retry then installed successfully. The empty
+failure detail remains an operational diagnostics gap, and disk headroom remains
+limited. No worker data, repositories or database files were removed.
+
+An already-open browser tab displayed the new runtime version but retained the
+old queue presentation until explicit navigation loaded the new assets. A fresh
+page showed the new blocker links. Automatic update consistency therefore
+remains unverified; do not infer frontend refresh from the server version label.
 
 ### Canonical application no longer awaits follow-up sizing (September 6 UTC)
 
