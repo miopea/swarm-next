@@ -49,6 +49,12 @@ detached, including across document visibility changes. Drafts and host history
 are preserved, and failed reads must not be substituted with empty snapshots.
 This cleanup does not stop a provider or evict a still-running worker's warm view.
 
+Lost, previously working GPU renderers fall back immediately. The surface owns
+one recovery attempt on the next attached, visible presentation transition.
+Failed activation stays on the fallback without timers or repeated attempts;
+initial GPU unavailability does not schedule recovery. Recovery replaces only
+the rendering addon, never the terminal, socket, canonical geometry, or worker.
+
 ## Consequences
 
 - React can be upgraded or replaced without changing backend domain modules,

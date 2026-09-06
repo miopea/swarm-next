@@ -54,6 +54,8 @@ export interface TerminalSurface {
   onFindRequested?(listener: () => void): Disposable;
   /** Whether the surface can draw right now — false while the tab is hidden. */
   onRenderable?(listener: (renderable: boolean) => void): Disposable;
+  /** Presentation lifecycle only; never changes terminal input or geometry authority. */
+  setRenderingActive?(active: boolean): void;
   findNext?(query: string): boolean;
   findPrevious?(query: string): boolean;
 }
@@ -181,6 +183,7 @@ export class TerminalController {
 
   /** Told when the operator asks to search this terminal. */
   #updateRendering(): void {
+    this.#surface.setRenderingActive?.(this.#attached && this.#visible);
     if (this.#attached && this.#visible) this.#connection.resumeRendering?.();
     else this.#connection.suspendRendering?.();
   }

@@ -20,6 +20,7 @@ const xterm = vi.hoisted(() => ({
   bufferViewportY: 0,
   gpuMode: "unavailable" as "unavailable" | "works" | "activation-fails" | "loss-during-load",
   gpuDispose: vi.fn(),
+  gpuConstruct: vi.fn(),
   gpuLoss: undefined as (() => void) | undefined,
   terminalDispose: vi.fn(),
 }));
@@ -58,7 +59,7 @@ vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
 vi.mock("@xterm/addon-webgl", () => ({
   WebglAddon: class {
     readonly gpu = true;
-    constructor() { if (xterm.gpuMode === "unavailable") throw new Error("WebGL2 is unavailable"); }
+    constructor() { xterm.gpuConstruct(); if (xterm.gpuMode === "unavailable") throw new Error("WebGL2 is unavailable"); }
     onContextLoss(listener: () => void) { xterm.gpuLoss = listener; return { dispose() {} }; }
     dispose() { xterm.gpuDispose(); }
   },
@@ -131,6 +132,7 @@ afterEach(() => {
   xterm.gpuMode = "unavailable";
   xterm.gpuLoss = undefined;
   xterm.gpuDispose.mockClear();
+  xterm.gpuConstruct.mockClear();
   xterm.terminalDispose.mockClear();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -158,6 +160,81 @@ test("a context lost during addon activation is not retained or disposed twice",
   xterm.gpuLoss?.();
   surface.dispose();
   expect(xterm.gpuDispose).toHaveBeenCalledTimes(1);
+});
+
+test("a lost working GPU recovers on return without replacing the terminal", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  xterm.gpuMode = "works";
+  const host = document.createElement("div");
+  document.body.append(host);
+  const surface = new XtermSurface();
+  try {
+    surface.open(host);
+    surface.setRenderingActive(true);
+    const oldLoss = xterm.gpuLoss!;
+    oldLoss();
+    surface.setRenderingActive(true);
+    expect(xterm.gpuConstruct).toHaveBeenCalledTimes(1);
+    surface.setRenderingActive(false);
+    surface.setRenderingActive(true);
+    expect(xterm.gpuConstruct).toHaveBeenCalledTimes(2);
+    oldLoss(); // A stale callback must not dispose the replacement.
+    expect(xterm.gpuDispose).toHaveBeenCalledTimes(1);
+    expect(xterm.terminalDispose).not.toHaveBeenCalled();
+    await surface.write(new Uint8Array([65]));
+  } finally { surface.dispose(); host.remove(); }
+  expect(xterm.gpuDispose).toHaveBeenCalledTimes(2);
+});
+
+test.each(["activation-fails", "loss-during-load", "unavailable"] as const)(
+  "failed GPU recovery (%s) stays usable without repeated attempts", async (mode) => {
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    xterm.gpuMode = "works";
+    const host = document.createElement("div");
+    document.body.append(host);
+    const surface = new XtermSurface();
+    try {
+      surface.open(host);
+      surface.setRenderingActive(true);
+      xterm.gpuLoss!();
+      xterm.gpuMode = mode;
+      for (let visit = 0; visit < 3; visit++) {
+        surface.setRenderingActive(false);
+        surface.setRenderingActive(true);
+      }
+      expect(xterm.gpuConstruct).toHaveBeenCalledTimes(2);
+      expect(xterm.terminalDispose).not.toHaveBeenCalled();
+      await surface.write(new Uint8Array([65]));
+    } finally { surface.dispose(); host.remove(); }
+  },
+);
+
+test("GPU recovery waits for a connected visible view and stops after disposal", () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  xterm.gpuMode = "works";
+  const host = document.createElement("div");
+  const surface = new XtermSurface();
+  try {
+    surface.open(host);
+    xterm.gpuLoss!();
+    surface.setRenderingActive(true);
+    expect(xterm.gpuConstruct).toHaveBeenCalledTimes(1);
+    document.body.append(host);
+    visibility.mockReturnValue("hidden");
+    surface.setRenderingActive(false);
+    surface.setRenderingActive(true);
+    expect(xterm.gpuConstruct).toHaveBeenCalledTimes(1);
+    visibility.mockReturnValue("visible");
+    surface.setRenderingActive(false);
+    surface.setRenderingActive(true);
+    expect(xterm.gpuConstruct).toHaveBeenCalledTimes(2);
+    xterm.gpuLoss!();
+    surface.dispose();
+    surface.setRenderingActive(false);
+    surface.setRenderingActive(true);
+    expect(xterm.gpuConstruct).toHaveBeenCalledTimes(2);
+  } finally { surface.dispose(); host.remove(); visibility.mockRestore(); }
 });
 
 function press(key: string, init: Partial<KeyboardEventInit> = {}): boolean {

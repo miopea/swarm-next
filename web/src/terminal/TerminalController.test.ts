@@ -28,6 +28,7 @@ function fakeSurface(): FakeSurface {
     fit: vi.fn().mockResolvedValue({ rows: 24, columns: 80 }),
     proposeFit: vi.fn(() => ({ rows: 24, columns: 80 })),
     observeGeometrySuspension: vi.fn(),
+    setRenderingActive: vi.fn(),
     write: vi.fn().mockResolvedValue(undefined),
     restore: vi.fn().mockResolvedValue(undefined),
     onData: vi.fn(() => ({ dispose: vi.fn() })),
@@ -246,9 +247,11 @@ test("a hidden tab stops rendering even though the surface is still attached", (
 
   surface.renderableListener?.(false);
   expect(connection.suspendRendering).toHaveBeenCalledTimes(1);
+  expect(surface.setRenderingActive).toHaveBeenLastCalledWith(false);
 
   surface.renderableListener?.(true);
   expect(connection.resumeRendering).toHaveBeenCalledTimes(1);
+  expect(surface.setRenderingActive).toHaveBeenLastCalledWith(true);
 });
 
 test("returning to a visible tab does not resume a surface that is still detached", () => {
@@ -264,6 +267,7 @@ test("returning to a visible tab does not resume a surface that is still detache
 
   surface.renderableListener?.(true);
   expect(connection.resumeRendering).not.toHaveBeenCalled();
+  expect(surface.setRenderingActive).toHaveBeenLastCalledWith(false);
 });
 
 test("the connection is told when there is, and is not, a surface to draw into", () => {

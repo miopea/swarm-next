@@ -102,6 +102,8 @@ export class XtermSurface implements TerminalSurface {
   readonly #serialize = new SerializeAddon();
   /** Held so a lost GPU context can dispose it and fall back to the DOM. */
   #webgl?: WebglAddon;
+  #renderingActive = false;
+  #gpuRecoveryPending = false;
 
   constructor() {
     this.#terminal = new Terminal({
@@ -194,15 +196,20 @@ export class XtermSurface implements TerminalSurface {
     try {
       webgl = new WebglAddon();
       const candidate = webgl;
+      let activated = false;
       this.#webgl = candidate;
       // Registered before loading: a context lost during load must still be
       // caught rather than leaving a terminal drawing to nothing.
       candidate.onContextLoss(() => {
         if (this.#webgl !== candidate) return;
         this.#webgl = undefined;
+        // Retry only a previously working context, on the next foreground
+        // attachment. Loss during activation is a failed attempt, not a loop.
+        this.#gpuRecoveryPending = activated;
         candidate.dispose();
       });
       this.#terminal.loadAddon(candidate);
+      activated = this.#webgl === candidate;
     } catch {
       // Activation can throw after allocation; release the candidate as well
       // as falling back. Do not retain an already-lost context after load.
@@ -315,6 +322,16 @@ export class XtermSurface implements TerminalSurface {
    */
   observeGeometryOwnership(owns: () => boolean): void {
     this.#ownsGeometry = owns;
+  }
+
+  /** One recovery attempt per loss, deferred until the view becomes active. */
+  setRenderingActive(active: boolean): void {
+    const returning = active && !this.#renderingActive;
+    this.#renderingActive = active;
+    if (!returning || this.#disposed || !this.#gpuRecoveryPending
+      || !this.#element?.isConnected || document.visibilityState !== "visible") return;
+    this.#gpuRecoveryPending = false;
+    this.#useGpuRendering();
   }
 
   observeGeometrySuspension(suspended: () => boolean): void {

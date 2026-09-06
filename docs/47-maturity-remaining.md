@@ -8,6 +8,23 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Bounded GPU renderer recovery (September 6 UTC, pending live verification)
+
+Inspection found that a lost GPU context fell back permanently until the browser
+renderer was recreated. The surface now makes one recovery attempt when a
+previously working context returns to an attached, visible view. Initial GPU
+unavailability and failed recovery remain on the fallback; no timer, socket
+replacement, worker restart, or geometry change is introduced.
+
+Validation: 85 XtermSurface/TerminalController tests, the complete 1,250-test
+frontend suite (137 files), and TypeScript check passed.
+Coverage includes successful recovery, stale context callbacks, activation
+failure, loss during activation, unavailable GPU, hidden/detached views, disposal,
+and usable terminal writes after failure. These use addon doubles, not an actual
+driver reset. Real GPU context-loss recovery and deployment remain unverified.
+The earlier live 15-worker samples did not observe a fallback, so this is not
+claimed as the cause or a measured fix for overall sluggishness.
+
 ### On-demand heap evidence for retention comparisons (September 6 UTC)
 
 Developer Dogfood can sample the browser's optional Chromium legacy heap
