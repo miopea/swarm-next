@@ -94,6 +94,28 @@ to the central source merely because the feature becomes configured.
 
 ## Completion loop and activation gate
 
+### Hive outbox persistence (2026-09-06, integration pending)
+
+Schema 143 introduces a separate execution-Hive outbox for explicitly reviewed
+submissions. It freezes the submission key, exact encoded payload and configured
+destination before delivery. Admission is bounded to 256 retained rows and 16 MiB
+of frozen payload; metadata is additionally bounded per row. Capacity refuses new
+submissions without deleting unanswered reports, while exact-key replays remain
+available. No private historical Dogfood report is automatically copied into it.
+
+Pending and uncertain reports may claim up to five automatic attempts. A claim
+has a unique attempt ID; concurrent claims and superseded completion receipts
+cannot settle another attempt. Confirmed and definitively failed records are not
+automatically replayed. Process-owner recovery changes interrupted Delivering to
+Uncertain, never to success, and retains the frozen key and payload. Recovery must
+run only after the previous sender instance ends, not from a timeout alongside a
+live sender. Matching remote receipt identities are required for confirmation.
+
+This is not an activated sender. Application authentication, configured-origin
+validation, bounded process-owned transport, safe error presentation, explicit
+retry/retention controls and the operator UI remain required. No transport or
+customer-facing reply is invoked by schema migration or opening an outbox record.
+
 ### Central source discovery and durable health
 
 BFG Admin confirmed the single source identity `swarm-support` / `Swarm Support`.

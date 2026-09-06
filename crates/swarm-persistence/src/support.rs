@@ -2,7 +2,7 @@
 use std::{num::NonZeroU32, path::Path, time::Duration};
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use swarm_domain::SupportSubmission;
 use thiserror::Error;
 use uuid::Uuid;
@@ -32,7 +32,7 @@ pub enum SupportStoreError {
     Encoding(#[from] serde_json::Error),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SupportReceipt {
     pub submission_key: String,
     pub conversation_id: String,

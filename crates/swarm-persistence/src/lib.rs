@@ -63,6 +63,7 @@ mod federation_tasks;
 pub use federation_tasks::MAX_FEDERATION_TASK_COMMAND_BATCH;
 mod feedback;
 mod support;
+mod support_outbox;
 pub use federation::{
     MAX_CONNECTION_CARD_LIFETIME_SECONDS, MAX_FEDERATION_INVITATION_LIFETIME_SECONDS,
     MIN_CONNECTION_CARD_LIFETIME_SECONDS, MIN_FEDERATION_INVITATION_LIFETIME_SECONDS,
@@ -79,6 +80,9 @@ pub use federation_jira_claims::{
 pub use support::{
     SupportConversationRecord, SupportListRecords, SupportReceipt, SupportStore, SupportStoreError,
     SupportThreadRecords,
+};
+pub use support_outbox::{
+    SupportOutboxDelivery, SupportOutboxEntry, SupportOutboxError, SupportOutboxStatus,
 };
 mod jira;
 mod legacy_source;
@@ -261,7 +265,8 @@ const TASK_QUEUE_AGE_SCHEMA_VERSION: i64 = 146;
 const TASK_DECISION_LINKS_SCHEMA_VERSION: i64 = 148;
 const QUEEN_INCOMPLETE_ASSESSMENTS_SCHEMA_VERSION: i64 = 150;
 const QUEEN_REVIEW_FOCUS_SCHEMA_VERSION: i64 = 152;
-const CURRENT_SCHEMA_VERSION: i64 = QUEEN_REVIEW_FOCUS_SCHEMA_VERSION;
+const SUPPORT_OUTBOX_SCHEMA_VERSION: i64 = 153;
+const CURRENT_SCHEMA_VERSION: i64 = SUPPORT_OUTBOX_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -3954,6 +3959,9 @@ fn migrate_ops_intake_schema_steps(
     }
     if schema_version < QUEEN_REVIEW_FOCUS_SCHEMA_VERSION {
         queen_review_focus::migrate(transaction)?;
+    }
+    if schema_version < SUPPORT_OUTBOX_SCHEMA_VERSION {
+        support_outbox::migrate(transaction)?;
     }
     Ok(())
 }
@@ -9150,6 +9158,12 @@ mod tests {
             table: "queen_review_focus",
             artifact: "",
             undo_sql: "DROP TABLE queen_review_focus",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "hive_support_outbox",
+            artifact: "",
+            undo_sql: "DROP TABLE hive_support_outbox",
             probe_sql: "",
         },
     ];
