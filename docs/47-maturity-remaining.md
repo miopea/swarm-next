@@ -8,6 +8,24 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Queen status stays current across runtime and task changes (September 6)
+
+The App event adapter refreshed Queen automation only for workers_changed or a
+cursor reset. Runtime replacement, task/decision transitions, session replacement
+and presence changes could therefore leave its explanation/counts stale while
+the rest of the page advanced. The same read swallowed failures, allowing the
+event cursor to advance without the refreshed status. The existing event feed
+now invalidates Queen status for every relevant event (notification-only batches
+remain independent), and a failed read uses its existing bounded retry without
+advancing the event cursor. No new timer or endpoint was added.
+
+TypeScript and all 68 App/live-feed tests passed, including six event kinds,
+clearing resolved reasons and recovery after a transient status-read failure.
+The full frontend suite also passed: 1,195 tests across 132 files. Deployment
+and live recovery acceptance remain pending. A Windows foreground
+probe returned no window handle, so it supplies no evidence about Edge occlusion;
+the browser presentation-delay attribution remains open.
+
 ### Current Queen prompt hold and default-browser sample (September 5)
 
 Build 79364c74 deployed healthy with engine PID 2640474 unchanged and 13 workers

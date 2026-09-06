@@ -716,7 +716,9 @@ export function App() {
       operatorToken,
       async (page, signal) => {
         const runtimeChanged = page.reset_required || page.events.some((event) => event.kind === "runtime_changed");
-        const refreshQueenAutomation = page.reset_required || page.events.some((event) => event.kind === "workers_changed");
+        // Status derives from tasks, decisions, sessions and presence as well
+        // as workers. Runtime replacement can change the projection itself.
+        const refreshQueenAutomation = page.reset_required || page.events.some((event) => event.kind !== "notifications_changed");
         const [controlRoom, refreshedPresence, refreshedNotifications, refreshedQueenPolicy, refreshedQueenAutomation, refreshedPresentation, refreshedProviders] = await Promise.all([
           controlRoomModel.refreshFromEvents(operatorToken, page, signal),
           page.reset_required || page.events.some((event) => event.kind === "presence_changed")
@@ -729,7 +731,7 @@ export function App() {
             ? fetchQueenAutonomyPolicy(operatorToken, signal)
             : Promise.resolve(undefined),
           refreshQueenAutomation
-            ? fetchQueenAutomationStatus(operatorToken, signal).catch(() => undefined)
+            ? fetchQueenAutomationStatus(operatorToken, signal)
             : Promise.resolve(undefined),
           runtimeChanged
             ? fetchPresentationPreferences(operatorToken, presentationDevice, signal)

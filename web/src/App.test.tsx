@@ -1235,6 +1235,56 @@ function bootFetch() {
   });
 }
 
+test.each(["runtime_changed", "tasks_changed", "sessions_changed", "decisions_changed", "presence_changed", "workers_changed", "runtime_retry"])("refreshes Queen's Queue explanation on %s without reload", async (scenario) => {
+  const kind = scenario === "runtime_retry" ? "runtime_changed" : scenario;
+  window.sessionStorage.setItem("swarm-next.surface.v1", "queues");
+  const base = bootFetch();
+  let sendEvent: ((response: Response) => void) | undefined;
+  let waitingReason: string | null = null;
+  let failNextRead = false;
+  const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/control-room/events")) return new Promise<Response>((resolve, reject) => {
+      sendEvent = resolve;
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    });
+    if (url === "/api/v1/orchestration/queen-automation" && failNextRead) {
+      failNextRead = false;
+      return Promise.reject(new Error("Temporary status read failure"));
+    }
+    if (url === "/api/v1/orchestration/queen-automation") return Promise.resolve(ok({
+      enabled: true, state: "queued", run_id: "run", trigger: "actionable_work",
+      actionable_count: 1, attempts: 0, requested_at: 1, delivered_at: null,
+      finished_at: null, outcome: null, waiting_reason: waitingReason,
+    }));
+    return base(input);
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(<App />);
+  await screen.findByRole("heading", { name: "Queues" });
+  const publish = async (sequence: number) => {
+    await waitFor(() => expect(sendEvent).toBeDefined());
+    await act(async () => {
+      const send = sendEvent!;
+      sendEvent = undefined;
+      send(new Response(JSON.stringify({ events: [{ sequence, kind, occurred_at: 1 }], next_cursor: sequence, reset_required: false }), { status: 200 }));
+    });
+  };
+  waitingReason = "Last delivery check found unsent text at Queen's prompt; automatic delivery will not alter it";
+  failNextRead = scenario === "runtime_retry";
+  await publish(1);
+  if (scenario === "runtime_retry") {
+    // The feed retries the same unacknowledged event rather than losing the
+    // invalidation and waiting for a later worker change or manual reload.
+    await publish(1);
+  }
+  expect(await screen.findByText(waitingReason)).toBeVisible();
+  const oldReason = waitingReason;
+  waitingReason = null;
+  await publish(2);
+  await waitFor(() => expect(screen.queryByText(oldReason)).not.toBeInTheDocument());
+});
+
 test.each(["Fixture reload terminal", "Refresh control room"])("%s resets the selected renderer without waiting for API reads", async (action) => {
   window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
   const sessionId = "019fedfc-1c30-70e1-a5e2-9a3c94268082";
