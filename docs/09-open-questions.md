@@ -1,5 +1,15 @@
 # Open product questions
 
+## BFG Admin integration follow-up — 2026-09-06
+
+The operator approved the integration scope in section 1 of the maturity plan.
+Their forwarded requirements were truncated after "Preve"; the missing ending
+has been requested. BFG Admin owns contract evolution. Its worker has been asked
+to identify current feedback, identity, attachments, diagnostic and reply/draft
+contracts before implementation; do not invent a generic ingress or bypass its
+operator-only triage authorization. This is an additional integration question,
+not a reopening of the completed original interview.
+
 Status: **Original dogfooding set closed 2026-08-22; maturity reconciliation resolved 2026-09-03**
 
 ## Daily-driver maturity reconciliation — 2026-09-03

@@ -8,6 +8,29 @@ Code baseline: clean `main` fast-forwarded from `a10bf2c` to `36420b3` during pl
 
 ## 1. Overall objective and authority
 
+### Added scope: BFG Admin feedback and development integration (2026-09-06)
+
+Integrate with BFG Admin's shared Messages, Requests and diagnostic workflows,
+using contracts owned in `C:\projects\bfg-operations`; coordinate contract changes
+with the BFG Admin worker. Keep two directions distinct:
+
+- Admin's reviewed development-task submissions enter Swarm as linked work.
+- Swarm's own customer feedback, bugs, feature requests and support emails enter
+  Admin's shared support workspace, not a second independent support system.
+
+Preserve originating app, full sender identity, conversation history, supported
+attachments and source links. Development tasks retain their support conversation
+association. Operator-approved replies return through the original channel and
+subsequent replies remain in the same conversation. AI may classify, suggest
+duplicates and draft; only the operator approves customer-facing sends.
+
+Contract inspection must preserve existing authorization and frozen/idempotent
+submission semantics, not grant workers access to operator-only triage routes.
+The forwarded message ends at "Preve"; obtain the missing constraint before
+finalizing integration acceptance. Admin's current checklist independently calls
+for idempotency, loop prevention and visible failed-delivery/retry states; confirm
+the paired contract and verify with fictional data before touching customer flows.
+
 Make Swarm responsive, stable, self-managing, observable, and delightful through
 long daily use, including desktop/mobile handoff and unattended work, while
 preserving its cute, feminine-leaning bee/Hive identity and independent worker
