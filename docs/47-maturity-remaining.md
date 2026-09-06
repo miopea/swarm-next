@@ -8,7 +8,7 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
-### Bounded GPU renderer recovery (September 6 UTC, pending deployment)
+### Bounded GPU renderer recovery (September 6 UTC, deployed)
 
 Inspection found that a lost GPU context fell back permanently until the browser
 renderer was recreated. The surface now makes one recovery attempt when a
@@ -28,7 +28,17 @@ after loss, zero live contexts and one DOM renderer; after switching to another
 synthetic worker and back, one live context and no DOM renderer. This exercises
 the real addon and controller, not a physical driver reset or a native-phone
 background cycle. Harness GPU use is explicit opt-in (`gpu=enabled`); default
-photographic fixtures still use DOM rendering. Deployment remains unverified.
+photographic fixtures still use DOM rendering.
+
+Deployed `3c61f1f26e88`, runtime
+`1.5.0-dev-3c61f1f26e88-20260906063344-2949329`: reload job 2949306
+completed successfully; fresh health is OK with no degraded subsystems. All 15
+running session IDs and engine build `38453a84c3fa` match the immediate pre-build
+baseline. No release cut. The fresh live Edge tab requires sign-in, so
+authenticated live-browser acceptance remains pending operator unlock; no token
+was retrieved for browser entry. Physical-device loss/background cycles remain
+open. GitHub reported four expected status checks bypassed on the authorized
+main push; local test success is not claimed as completed CI.
 The earlier live 15-worker samples did not observe a fallback, so this is not
 claimed as the cause or a measured fix for overall sluggishness.
 
