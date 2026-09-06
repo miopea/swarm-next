@@ -1,5 +1,43 @@
 # Daily-driver maturity: remaining delivery and acceptance
 
+## 2026-09-06: engine-only replacement can strand a confirmed Queen review
+
+Ownership-hold commit `2ad86d6f` passed all four CI jobs and is healthy in the
+development Hive. All 15 previously loaded workers returned, but the engine
+replacement interrupted work: Queen's new terminal showed the old review text
+at a resting prompt, while review `01a07833-d89f-7212-b569-eb8fe798be31` remained
+Running. Admin/Scout/D365 recovery messages were visible in their restored
+terminals, but no new task activity yet proved resumed work. Do not treat restored
+conversation display, earlier confirmed delivery, or a running process as an
+active provider turn.
+
+The recovery query covered only Uncertain runs. Confirmed Running reviews were
+recovered on API startup, but not when their exact delivery session ended later
+under the independent engine updater. The follow-up includes both unfinished
+states in lifecycle-driven recovery while preserving the same review ID and
+receipts. Live sessions and completed reviews are excluded; no timeout is used.
+All 37 conductor tests, all 600 persistence unit tests and strict persistence
+lint passed. The calculated engine fingerprint matches deployed `8d2c8700113a`,
+so this follow-up does not require an engine replacement. Deployment is pending
+at this checkpoint. An API reload itself
+already runs startup recovery, so live improvement immediately after deployment
+will not independently prove the newly covered engine-only transition.
+
+Authenticated Edge acceptance still waits for operator unlock of the dedicated
+test tab. Source discovery/identity coordination was sent to the verified local
+BFG Admin task after the initial unverified-destination safety hold. No central
+support activation, registration, credentials or customer sends were requested.
+
+BFG Admin confirmed one central registration identity: `swarm-support`, display
+name `Swarm Support`, with `operatorResources: ["conversations"]`. There is no
+separate conversation-only registration mode. Normal manifest/health discovery
+is required; metrics/incidents are best-effort after successful health, and may
+be truthful empty envelopes rather than invented telemetry. Health must examine
+the actual service/store and required disk check. Private conversation reads use
+the dedicated privileged credential, not the ordinary polling credential; future
+write grants are separate. Core Ops routes, final origin, registration and paired
+read acceptance remain implementation/activation work, not completed connection.
+
 ## 2026-09-06: review coverage deployed; live behavior under observation
 
 Commit `72c03ba1` is on main and healthy in the Linux development Hive as

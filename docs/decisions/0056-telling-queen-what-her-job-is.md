@@ -102,6 +102,19 @@ open rather than guessed at.
 
 ## Where the behaviour lives
 
+### Engine replacement during a confirmed review (2026-09-06)
+
+A confirmed review is preserved across an API restart only while its exact
+delivery session remains live. Engine replacement can end that session while
+the API stays up; normal review observation must then requeue both Running and
+Uncertain unfinished reviews. It retains the same run ID and review receipts,
+clears only the old delivery attempt, and uses the existing guarded delivery
+path to the replacement session. No elapsed-time threshold establishes this
+transition. A live session, missing delivery identity, or completed review is
+not proof for replay. Ended process identity proves interruption, not that the
+previous briefing went unread or that partial work should be repeated. Queen
+must inspect current facts and prior exchanges before continuing work.
+
 ### Wake contract reconciliation (2026-09-05)
 
 The historical no-start/no-stop account above is superseded by the existing

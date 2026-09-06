@@ -864,12 +864,12 @@ fn prerequisite_fingerprint(connection: &rusqlite::Connection) -> Result<String,
 /// Resumes a review whose delivery was written to a Queen terminal that has
 /// since ended.
 ///
-/// An uncertain run is normally an operator judgment: Swarm could not confirm
-/// the review reached Queen, and replaying it blindly could double a briefing.
-/// The exact session it was written to having ended removes the ambiguity,
-/// because that terminal no longer exists and cannot be read from. Queen is
-/// never told the run id in that case, so she cannot finish the run herself and
-/// the review would otherwise wait for an operator forever.
+/// Ending the exact delivery session proves that process can no longer finish
+/// its turn; it does NOT prove the earlier message went unread. Keep the same
+/// run identity and receipts so the restored conversation can reconcile prior
+/// work. Both confirmed Running and Uncertain reviews need this lifecycle
+/// recovery, including an engine replacement while the API remains alive.
+/// Live sessions and completed reviews are never requeued by this path.
 ///
 /// This is deliberately keyed on session identity rather than on comparing an
 /// attempt time to a session start. Identity is exact, and the lifecycle
@@ -883,7 +883,7 @@ fn resume_run_delivered_to_an_ended_queen_session(
          SET state = 'queued', attempts = 0, attempted_at = NULL,
              delivery_session_id = NULL, delivered_at = NULL, finished_at = NULL,
              outcome = NULL, updated_at = ?1
-         WHERE id = 1 AND state = 'uncertain' AND run_id IS NOT NULL
+         WHERE id = 1 AND state IN ('uncertain', 'running') AND run_id IS NOT NULL
            AND delivery_session_id IS NOT NULL
            AND NOT EXISTS (
                SELECT 1 FROM worker_sessions session
@@ -2093,13 +2093,58 @@ mod tests {
             QueenAutomationState::Uncertain
         );
 
-        // The terminal the review was written to is gone, so the delivery
-        // provably was not read and Queen was never told the run id.
+        // The old process is gone. Preserve its review identity rather than
+        // claiming its message was unread or its partial work never happened.
         store.release_worker_session(session).unwrap();
         let resumed = store.queen_automation_status(13).unwrap();
 
         assert_eq!(resumed.state, QueenAutomationState::Queued);
         assert_eq!(resumed.run_id.as_deref(), Some(run_id.as_str()));
+    }
+
+    #[test]
+    fn engine_replacement_requeues_confirmed_review_without_api_restart() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let old_session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, old_session).unwrap();
+        let run = store
+            .request_queen_automation_run(10)
+            .unwrap()
+            .run_id
+            .unwrap();
+        store.claim_queen_automation(11).unwrap().unwrap();
+        store.complete_queen_automation_delivery(&run, 12).unwrap();
+        assert_eq!(
+            store.queen_automation_status(13).unwrap().state,
+            QueenAutomationState::Running
+        );
+        assert!(store.claim_queen_automation(13).unwrap().is_none());
+
+        store.release_worker_session(old_session).unwrap();
+        let replacement = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, replacement).unwrap();
+        // No recover_inflight_queen_automation call: the API did not restart.
+        for now in [14, 15] {
+            let status = store.queen_automation_status(now).unwrap();
+            assert_eq!(status.state, QueenAutomationState::Queued);
+            assert_eq!(status.run_id.as_deref(), Some(run.as_str()));
+            assert_eq!(status.attempts, 0);
+            assert_eq!(status.delivered_at, None);
+        }
+        let delivery = store.claim_queen_automation(16).unwrap().unwrap();
+        assert_eq!(delivery.run_id, run);
+        assert_eq!(delivery.session_id, replacement);
+        assert!(store.claim_queen_automation(16).unwrap().is_none());
+        store.complete_queen_automation_delivery(&run, 17).unwrap();
+        store
+            .finish_queen_automation_run(&run, QueenAutomationOutcome::Completed, 18)
+            .unwrap();
+        store.release_worker_session(replacement).unwrap();
+        assert_eq!(
+            store.queen_automation_status(19).unwrap().state,
+            QueenAutomationState::Completed
+        );
     }
 
     #[test]
