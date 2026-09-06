@@ -23,6 +23,7 @@ use crate::{ApiError, AppState, authorize, terminal_host::request_host};
 pub(super) struct ProviderCapabilitiesView {
     claude_code: bool,
     codex: bool,
+    experimental: Option<swarm_domain::ExperimentalProviderAvailability>,
     /// The release each provider resolves to now, and the workers still running
     /// something older.
     ///
@@ -330,11 +331,13 @@ pub(super) async fn capabilities(
         Ok(HostResponse::ProviderCapabilities {
             claude_code,
             codex,
+            experimental,
             claude_release,
             codex_release,
         }) => ProviderCapabilitiesView {
             claude_code,
             codex,
+            experimental,
             superseded: superseded_providers(
                 &state,
                 claude_release.as_ref(),
@@ -344,6 +347,7 @@ pub(super) async fn capabilities(
         _ => ProviderCapabilitiesView {
             claude_code: true,
             codex: false,
+            experimental: None,
             superseded: Vec::new(),
         },
     };

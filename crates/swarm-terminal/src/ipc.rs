@@ -440,6 +440,9 @@ pub enum HostResponse {
     ProviderCapabilities {
         claude_code: bool,
         codex: bool,
+        /// Older hosts omit this field: unknown is not executable absence.
+        #[serde(default)]
+        experimental: Option<swarm_domain::ExperimentalProviderAvailability>,
         /// What each provider executable resolves to right now.
         ///
         /// Defaulted so an older host, which reports availability only, stays
@@ -555,6 +558,33 @@ impl HostClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn experimental_availability_distinguishes_old_hosts_from_missing_executables() {
+        let old = serde_json::json!({ "type": "provider_capabilities", "claude_code": true, "codex": false });
+        let response = serde_json::from_value::<HostResponse>(old.clone());
+        assert!(matches!(
+            response,
+            Ok(HostResponse::ProviderCapabilities {
+                experimental: None,
+                ..
+            })
+        ));
+        let mut current = old;
+        current["experimental"] =
+            serde_json::json!({"gemini": false, "grok": true, "opencode": false});
+        let response = serde_json::from_value::<HostResponse>(current).unwrap();
+        let HostResponse::ProviderCapabilities {
+            experimental: Some(available),
+            ..
+        } = response
+        else {
+            panic!("expected known experimental availability");
+        };
+        assert_eq!(available.available(ProviderKind::Gemini), Some(false));
+        assert_eq!(available.available(ProviderKind::Grok), Some(true));
+        assert_eq!(available.available(ProviderKind::ClaudeCode), None);
+    }
 
     /// Adding a host request without bumping `PROTOCOL_VERSION` fails here.
     ///

@@ -140,7 +140,57 @@ pub enum ProviderKind {
     Unsupported,
 }
 
+/// Executable discovery for the bounded set of bare interactive adapters.
+/// Presence of this record is distinct from every executable being absent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExperimentalProviderAvailability {
+    pub gemini: bool,
+    pub grok: bool,
+    pub opencode: bool,
+}
+
+impl ExperimentalProviderAvailability {
+    #[must_use]
+    pub const fn available(self, provider: ProviderKind) -> Option<bool> {
+        match provider {
+            ProviderKind::Gemini => Some(self.gemini),
+            ProviderKind::Grok => Some(self.grok),
+            ProviderKind::OpenCode => Some(self.opencode),
+            _ => None,
+        }
+    }
+}
+
 impl ProviderKind {
+    #[must_use]
+    pub const fn is_experimental(self) -> bool {
+        matches!(self, Self::Gemini | Self::Grok | Self::OpenCode)
+    }
+
+    /// Unrelated edits preserve an existing binding, even on an older engine.
+    ///
+    /// # Errors
+    /// Rejects a new experimental binding without acknowledgement and positive
+    /// executable evidence. This never grants unattended maturity.
+    pub fn validate_experimental_binding(
+        self,
+        current: Option<Self>,
+        acknowledged: bool,
+        available: Option<bool>,
+    ) -> Result<(), ExperimentalProviderAdmissionError> {
+        if !self.is_experimental() || current == Some(self) {
+            return Ok(());
+        }
+        if !acknowledged {
+            return Err(ExperimentalProviderAdmissionError::AcknowledgementRequired);
+        }
+        match available {
+            Some(true) => Ok(()),
+            Some(false) => Err(ExperimentalProviderAdmissionError::Unavailable),
+            None => Err(ExperimentalProviderAdmissionError::Unknown),
+        }
+    }
+
     /// Builder-owned Night Watch promotion list; availability is not approval.
     pub const NIGHT_WATCH_APPROVED: [Self; 2] = [Self::ClaudeCode, Self::Codex];
 
@@ -162,6 +212,88 @@ impl ProviderKind {
     #[must_use]
     pub fn from_stored(value: &str) -> Self {
         Self::from_str(value).unwrap_or(Self::Unsupported)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExperimentalProviderAdmissionError {
+    AcknowledgementRequired,
+    Unknown,
+    Unavailable,
+}
+
+impl fmt::Display for ExperimentalProviderAdmissionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::AcknowledgementRequired => {
+                "Explicitly acknowledge this experimental provider before selecting it"
+            }
+            Self::Unknown => {
+                "The running worker engine could not confirm experimental provider availability"
+            }
+            Self::Unavailable => {
+                "The experimental provider executable is unavailable to the running worker engine"
+            }
+        })
+    }
+}
+
+impl std::error::Error for ExperimentalProviderAdmissionError {}
+
+#[cfg(test)]
+mod experimental_admission_tests {
+    use super::*;
+
+    #[test]
+    fn experimental_binding_requires_both_acknowledgement_and_availability() {
+        for provider in [
+            ProviderKind::Gemini,
+            ProviderKind::Grok,
+            ProviderKind::OpenCode,
+        ] {
+            assert_eq!(
+                provider.validate_experimental_binding(None, false, Some(true)),
+                Err(ExperimentalProviderAdmissionError::AcknowledgementRequired)
+            );
+            assert_eq!(
+                provider.validate_experimental_binding(None, true, None),
+                Err(ExperimentalProviderAdmissionError::Unknown)
+            );
+            assert_eq!(
+                provider.validate_experimental_binding(None, true, Some(false)),
+                Err(ExperimentalProviderAdmissionError::Unavailable)
+            );
+            assert!(
+                provider
+                    .validate_experimental_binding(None, true, Some(true))
+                    .is_ok()
+            );
+            assert!(!provider.night_watch_approved());
+        }
+    }
+
+    #[test]
+    fn unrelated_edits_preserve_binding_but_a_different_experimental_provider_requires_consent() {
+        assert!(
+            ProviderKind::Gemini
+                .validate_experimental_binding(Some(ProviderKind::Gemini), false, None)
+                .is_ok()
+        );
+        assert_eq!(
+            ProviderKind::Grok.validate_experimental_binding(
+                Some(ProviderKind::Gemini),
+                false,
+                Some(true)
+            ),
+            Err(ExperimentalProviderAdmissionError::AcknowledgementRequired)
+        );
+        for provider in [ProviderKind::ClaudeCode, ProviderKind::Codex] {
+            assert!(
+                provider
+                    .validate_experimental_binding(None, false, None)
+                    .is_ok()
+            );
+        }
     }
 }
 

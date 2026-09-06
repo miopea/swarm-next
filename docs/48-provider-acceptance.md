@@ -52,8 +52,17 @@ new-worker picker.
 ADR 0079 defines the pending admission contract: host-owned optional availability,
 explicit acknowledgement when creating/changing an experimental binding, honest
 bare-adapter limitations, and unchanged builder-owned Night Watch admission.
-This design is not implemented or a provider promotion. Older-engine omission
+This design is not fully implemented and is not a provider promotion. Older-engine omission
 must remain unknown, and unrelated edits must retain the existing provider.
+
+The first implementation step adds optional, host-owned executable availability
+for the three existing alpha adapters and a domain rule requiring both explicit
+acknowledgement and positive availability for a new experimental binding.
+Two domain tests and one old/new IPC compatibility test passed in the isolated
+Linux export; API and terminal-host compile checks passed there with the changed
+files overlaid. This is not a full clean-current-tree test run. Command enforcement,
+operator UI, temporary-worker acknowledgement and end-to-end acceptance remain
+pending. The foundation is not deployed and enables no experimental provider.
 
 Builder sign-off must identify the evidence revision and any supported-platform
 limits before changing the promotion list. Do not turn elapsed soak time or

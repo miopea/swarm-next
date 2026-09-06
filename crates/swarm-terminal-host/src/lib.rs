@@ -589,6 +589,11 @@ fn dispatch_blocking(
             Ok(HostResponse::ProviderCapabilities {
                 claude_code: executable_in_path("claude"),
                 codex: executable_in_path("codex"),
+                experimental: Some(swarm_domain::ExperimentalProviderAvailability {
+                    gemini: executable_in_path("gemini"),
+                    grok: executable_in_path("grok"),
+                    opencode: executable_in_path("opencode"),
+                }),
                 claude_release: swarm_terminal::provider_release(
                     std::path::Path::new("claude"),
                     search_path.as_deref(),
