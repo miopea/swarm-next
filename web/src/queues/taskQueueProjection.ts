@@ -1,5 +1,15 @@
 import type { BlockedEscalation, HeldBriefing } from "../api";
 import { isOpenTaskState, prerequisiteSatisfied, type Task } from "../api/tasks";
+import type { Worker } from "../api/workers";
+
+/** Exact-session observation, not a decision or a change of task ownership. */
+export function terminalAwaitingInput(task: Task, worker: Worker | undefined): boolean {
+  return (task.state === "ready" || task.state === "active")
+    && task.assigned_session_id != null && worker?.running === true
+    && task.assigned_worker_id === worker.id
+    && task.assigned_session_id === worker.active_session_id
+    && worker.attention_state === "awaiting_operator";
+}
 
 export function ordinaryActiveWork(task: Task): boolean {
   return task.state === "active" && task.next_move_owner === "worker"
@@ -8,10 +18,13 @@ export function ordinaryActiveWork(task: Task): boolean {
 }
 
 /** One task-count definition for the navigation and rendered queue rows. */
-export function projectTaskQueues(tasks: Task[], held: HeldBriefing[], blocked: BlockedEscalation[]) {
+export function projectTaskQueues(tasks: Task[], held: HeldBriefing[], blocked: BlockedEscalation[], workers: Worker[] = []) {
   const known = new Map(tasks.map((task) => [task.id, task]));
-  const waitingTasks = tasks.filter((task) => isOpenTaskState(task.state) && !ordinaryActiveWork(task));
-  const activeTasks = tasks.filter(ordinaryActiveWork);
+  const workerById = new Map(workers.map(worker => [worker.id, worker]));
+  const ordinary = (task: Task) => ordinaryActiveWork(task)
+    && !terminalAwaitingInput(task, workerById.get(task.assigned_worker_id ?? ""));
+  const waitingTasks = tasks.filter((task) => isOpenTaskState(task.state) && !ordinary(task));
+  const activeTasks = tasks.filter(ordinary);
   // Independently refreshed coordinator snapshots must not resurrect work
   // that the current task snapshot already knows has moved on.
   const heldBriefings = held.filter((brief) => {

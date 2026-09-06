@@ -4,7 +4,7 @@ import type { BlockedEscalation, HeldBriefing, HeldDelivery, QueenAutomationStat
 import DeliveryWaitList from "./DeliveryWaitList";
 import TaskPrerequisiteList from "./TaskPrerequisiteList";
 import { prerequisiteSatisfied, type NextMoveOwner, type Task } from "../api/tasks";
-import { projectTaskQueues } from "./taskQueueProjection";
+import { projectTaskQueues, terminalAwaitingInput } from "./taskQueueProjection";
 import type { Worker } from "../api/workers";
 
 /** A scanning hint, never a replacement for the recorded statement. */
@@ -168,7 +168,8 @@ export default function QueuesView({
     () => new Map(workers.map((worker) => [worker.id, worker.name])),
     [workers],
   );
-  const projection = useMemo(() => projectTaskQueues(tasks, sourceBriefings, sourceBlockedWaits), [tasks, sourceBriefings, sourceBlockedWaits]);
+  const workerById = useMemo(() => new Map(workers.map(worker => [worker.id, worker])), [workers]);
+  const projection = useMemo(() => projectTaskQueues(tasks, sourceBriefings, sourceBlockedWaits, workers), [tasks, sourceBriefings, sourceBlockedWaits, workers]);
   const { waitingTasks, activeTasks: activeWork, heldBriefings, blockedWaits, extraBlockedWaits: extraWaits } = projection;
 
   const groups = useMemo<Group[]>(() => {
@@ -243,6 +244,7 @@ export default function QueuesView({
                   </button>
                   {briefing && <p className="queue-task-meta">Briefing held: {holdReason(briefing)} · queued {waitedFor(now / 1000 - briefing.queued_at)} <BlockingTaskLink briefing={briefing} onOpenTask={onOpenTask} /></p>}
                   <TaskPrerequisiteList task={task} workerNames={workerNames} onOpenTask={onOpenTask} compact />
+                  {terminalAwaitingInput(task, workerById.get(task.assigned_worker_id ?? "")) && <p className="queue-task-meta">Terminal reports waiting for input · inspect the worker's current prompt. This is not a recorded operator decision.</p>}
                   {task.state === "blocked" && task.blocked_until != null && <p className="queue-task-meta">
                     {Number.isFinite(task.blocked_until) && Number.isFinite(new Date(task.blocked_until * 1000).getTime())
                       ? task.blocked_until * 1000 > now

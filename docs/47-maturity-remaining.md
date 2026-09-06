@@ -8,6 +8,22 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Terminal input waits in Queues (September 6 UTC)
+
+The current demo remains Ready/Delivered while its worker reports
+awaiting_operator; Queen's latest observed run `01a075ac-e4b1-7893-92fa-52a5508f30b9`
+finished no_action. No dependency task or transition was observed for the repeat.
+This is not unattended recovery acceptance.
+
+Queues now shows the worker's input-wait observation alongside Ready/Active work
+only when worker and assigned session identities match and the worker is running.
+An Active task with that observation stays in the visible worker queue instead of
+the collapsed ordinary-activity list. Clearing the observation restores normal
+presentation. Navigation uses the same projection. This is not a new operator
+decision, a changed next owner, a task transition or permission to answer a prompt.
+All 33 queue tests and TypeScript checking passed. Live visual verification and
+deployment of this slice remain pending.
+
 ### Attachment overlap status race (September 6 UTC)
 
 An oversized second selection could overwrite the status of an existing upload

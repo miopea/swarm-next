@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import type { Task } from "../api/tasks";
 import type { HeldBriefing, BlockedEscalation } from "../api";
 import { projectTaskQueues } from "./taskQueueProjection";
+import type { Worker } from "../api/workers";
 
 const task = (id: string, extra: Partial<Task> = {}): Task => ({
   id, hive_id: "h", title: id, description: "", operator_instruction: "", state: "ready",
@@ -11,6 +12,25 @@ const task = (id: string, extra: Partial<Task> = {}): Task => ({
 });
 const held = (task_id: string): HeldBriefing => ({ task_id, title: task_id, worker_id: "w", worker_name: "Petal", queued_at: 1, reason: "waiting_its_turn", blocked_by: "Other task" });
 const blocked = (task_id: string): BlockedEscalation => ({ task_id, title: task_id, worker_name: "Petal", workspace: "/w", blocked_for_seconds: 100 });
+
+test("exact-session input waits remain visible and clear when the worker resumes", () => {
+  const current = task("active", { state: "active", dispatch_state: "delivered", assigned_worker_id: "w", assigned_session_id: "s" });
+  const worker = { id: "w", running: true, active_session_id: "s", attention_state: "awaiting_operator" } as Worker;
+  const waiting = projectTaskQueues([current], [], [], [worker]);
+  expect(waiting.waitingTasks).toEqual([current]);
+  expect(waiting.activeTasks).toEqual([]);
+  expect(waiting.taskCount).toBe(1);
+  for (const change of [
+    { attention_state: "buzzing" as const }, { attention_state: "resting" as const },
+    { running: false }, { active_session_id: "new-session" }, { id: "other-worker" },
+  ]) {
+    const projection = projectTaskQueues([current], [], [], [{ ...worker, ...change }]);
+    expect(projection.taskCount).toBe(0);
+    expect(projection.activeTasks).toEqual([current]);
+  }
+  expect(current.state).toBe("active");
+  expect(current.next_move_owner).toBe("worker");
+});
 
 test("waiting count excludes ordinary active work but includes unknown owners and uncertain delivery", () => {
   const projection = projectTaskQueues([

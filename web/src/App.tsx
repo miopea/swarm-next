@@ -1528,8 +1528,8 @@ export function App() {
   const openTaskCount = tasks.filter((task) => isOpenTaskState(task.state)).length;
   // Count waiting task identities, not ordinary active work or duplicate
   // coordinator observations. The queue page uses this same projection.
-  const queuedTaskCount = useMemo(() => projectTaskQueues(tasks, heldBriefings, blockedEscalations).taskCount,
-    [tasks, heldBriefings, blockedEscalations]);
+  const queuedTaskCount = useMemo(() => projectTaskQueues(tasks, heldBriefings, blockedEscalations, workers).taskCount,
+    [tasks, heldBriefings, blockedEscalations, workers]);
   const pendingDecisionCount = decisions.filter((decision) => decision.state === "pending").length;
   const pendingAssistCount = stewardAssists?.incoming?.filter((request) => request.state === "pending").length ?? 0;
   const queenWorkerId = workers.find((worker) => worker.role === "queen")?.id;
