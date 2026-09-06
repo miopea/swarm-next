@@ -78,6 +78,116 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn host_reads_refresh_activity_reject_wrong_sessions_and_cancel_timeout() {
+        use swarm_terminal::{HostClient, HostRequest, HostResponse, Resume, TerminalSnapshot};
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("attention.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Fixture",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/fixture",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = "019ff136-7a90-7631-bbc0-f95efd1df576".parse().unwrap();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store.create_task("Unchanged task", "/fixture").unwrap();
+        let row = CoordinatorAttention {
+            action_id: "saved".into(),
+            session_id: session,
+            kind: "stale_owned_work_attention".into(),
+            worker_id: worker.id,
+            worker_name: worker.name,
+            task_id: task.id,
+            task_title: task.title,
+            reason: "Worker was resting".into(),
+            observed_at: 1,
+            age_seconds: 200,
+        };
+        let state = AppState::default().with_terminal_host(HostClient::new(&socket), "fixture");
+        let host = tokio::spawn(async move {
+            for index in 0..5 {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let request: HostRequest = serde_json::from_str(&line).unwrap();
+                assert!(
+                    matches!(request, HostRequest::Read { session_id, .. } if session_id == session)
+                );
+                if index == 4 {
+                    // A stalled host must observe EOF when the bounded read is
+                    // cancelled; no background socket/task may remain waiting.
+                    let mut byte = [0];
+                    assert_eq!(reader.read(&mut byte).await.unwrap(), 0);
+                    continue;
+                }
+                let response = HostResponse::Output {
+                    session_id: if index == 2 {
+                        "019ff136-7a90-7631-bbc0-f95efd1df577".parse().unwrap()
+                    } else {
+                        session
+                    },
+                    running: index != 3,
+                    resume: Resume::Snapshot {
+                        snapshot: TerminalSnapshot {
+                            sequence: index + 1,
+                            rows: 24,
+                            columns: 100,
+                            truncated: false,
+                            bytes: if index == 0 {
+                                "● Done.\r\n❯ \r\n? for shortcuts"
+                            } else {
+                                "❯ do the thing\r\n✻ Working… (esc to interrupt)\r\n"
+                            }
+                            .as_bytes()
+                            .to_vec(),
+                        },
+                    },
+                };
+                let mut bytes = serde_json::to_vec(&response).unwrap();
+                bytes.push(b'\n');
+                reader.get_mut().write_all(&bytes).await.unwrap();
+            }
+        });
+        for expected in [
+            "resting",
+            "active",
+            "unavailable",
+            "unavailable",
+            "unavailable",
+        ] {
+            let result = tokio::time::timeout(
+                Duration::from_secs(4),
+                observe(&state, &store, std::slice::from_ref(&row)),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result["saved"]["activity"], expected);
+        }
+        tokio::time::timeout(Duration::from_secs(1), host)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            store.get_task(task.id).unwrap().state,
+            swarm_domain::TaskState::Draft
+        );
+        assert_eq!(
+            store
+                .get_worker_profile(worker.id)
+                .unwrap()
+                .active_session_id,
+            Some(session)
+        );
+    }
+
+    #[tokio::test]
     async fn changed_sessions_are_unavailable_and_observation_is_bounded() {
         let store = TaskStore::in_memory().unwrap();
         let worker = store

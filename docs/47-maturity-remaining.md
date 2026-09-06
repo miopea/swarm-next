@@ -27,8 +27,15 @@ files were formatted separately; whole-tree fmt still reports unrelated existing
 formatting in maintenance.rs and terminal_control.rs, left untouched.
 
 Final exact-source `cargo check --release --locked -p swarm-api` passed.
-Not yet deployed at this checkpoint. Native host read/timeout and a
-real Queen consuming the fresh evidence still need journey verification. The
+Follow-up Unix-socket regression passed through the actual HostClient: successive
+Resting/Active snapshots refresh the same historical row; wrong-session and
+stopped-session responses are unavailable; an unresponsive host observes EOF
+after timeout cancellation. No Write request or task/worker state change occurs.
+All five coordination-attention API tests and 11 provider-activity tests pass.
+The worker-engine fingerprint remains `38453a84c3fa`.
+
+Not yet deployed at this checkpoint. A real Queen consuming the fresh evidence
+still needs journey verification. The
 durable actionable fingerprint remains unchanged; this does not claim to clear
 all stale records or prove unattended recovery. Physical-device and broader
 maturity gates remain open.

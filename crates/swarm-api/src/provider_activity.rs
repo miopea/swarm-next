@@ -143,10 +143,11 @@ pub(super) async fn observe_session(
     .await
     {
         Ok(HostResponse::Output {
+            session_id: observed_session,
             resume: swarm_terminal::Resume::Snapshot { snapshot },
             running: true,
             ..
-        }) => Some(ProviderSignals {
+        }) if observed_session == session_id => Some(ProviderSignals {
             activity: classify_observed_activity(provider, &snapshot),
             background_work: swarm_terminal::background_work_running(provider, &snapshot),
         }),
