@@ -8,6 +8,35 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Post-change live baseline (September 6, 01:57 UTC)
+
+Read-only run `20260906T015710Z-live` on `d6047bda` collected 18 samples over
+180 seconds. API PID 2745336 and engine PID 2721173 stayed unchanged, with all
+13 original sessions retained. The sample count of running sessions ranged
+13–15 (the browser later showed 14), so it is not a constant-workload comparison.
+API cgroup memory ranged 77,512,704–173,412,352 bytes; engine cgroup memory,
+including provider children, ranged 4,691,361,792–5,558,165,504 bytes. Recorded
+history stayed below the configured cap, with no dropped history bytes reported.
+CPU deltas averaged 17.35% of one core for API, with a 60.55% maximum sample
+interval; the engine cgroup including children averaged 38.57%, maximum 124.63%.
+These are not whole-machine or Edge Task Manager percentages. Worker starts and
+the short window prevent either a leak conclusion or an optimization comparison.
+Content-free samples remain at
+`/home/bschleifer/.local/state/swarm-next/soak/20260906T015710Z-live-samples.csv`.
+
+The separate fresh Edge tab's visible diagnostic report captured reconnect
+1,248ms (grant 995ms, socket 149ms, restore 104ms), route paint median 56ms /
+maximum 78ms across three samples, and event-entry maxima 1,032–1,064ms. It
+reported zero grouped interaction IDs, so these automated event entries are not
+unique human interaction measurements or page INP. The contemporaneous server
+sample reported no pressure. Browser/OS foreground conditions were not proven;
+neither causal attribution nor aged-session acceptance follows from this sample.
+
+Live navigation also exposed a UX follow-up: the runtime's Open diagnostics
+button opens the Maintenance group, with Migration and Backup preceding the
+diagnostic card. Targeted diagnostic navigation remains to be improved without
+duplicating that card or removing the existing maintenance tools.
+
 ### Evidence-read event request churn (September 6)
 
 Successful `swarm_read_task_history` and `swarm_list_coordination_attention`
