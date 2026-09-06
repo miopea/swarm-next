@@ -1,0 +1,24 @@
+[package]
+name = "swarm-support"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+axum.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+swarm-application = { path = "../swarm-application" }
+swarm-domain = { path = "../swarm-domain" }
+swarm-persistence = { path = "../swarm-persistence" }
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tower.workspace = true
+
+[lints]
+workspace = true

@@ -3042,6 +3042,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "swarm-support"
+version = "1.5.0"
+dependencies = [
+ "axum",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "swarm-application",
+ "swarm-domain",
+ "swarm-persistence",
+ "tempfile",
+ "tokio",
+ "tower",
+]
+
+[[package]]
 name = "swarm-terminal"
 version = "1.5.0"
 dependencies = [

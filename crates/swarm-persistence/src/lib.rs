@@ -73,7 +73,10 @@ pub use federation_handoff_reconciliation::{
 pub use federation_jira_claims::{
     FederationJiraClaimIntent, FederationJiraClaimPhase, MAX_FEDERATION_JIRA_CLAIM_BATCH,
 };
-pub use support::{SupportReceipt, SupportStore, SupportStoreError};
+pub use support::{
+    SupportConversationRecord, SupportListRecords, SupportReceipt, SupportStore, SupportStoreError,
+    SupportThreadRecords,
+};
 mod jira;
 mod legacy_source;
 mod migration;

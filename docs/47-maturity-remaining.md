@@ -1,8 +1,33 @@
 # Daily-driver maturity: remaining delivery and acceptance
 
-## 2026-09-06: review coverage integration in validation
+## 2026-09-06: review coverage deployed; live behavior under observation
 
-The uncommitted ADR 0082 slice now connects transactional task evidence and
+Commit `72c03ba1` is on main and healthy in the Linux development Hive as
+`1.5.0-dev-72c03ba1cbb4-20260906172610-3221381`. The normal development rebuild
+completed successfully. Its activation also restarted the terminal host; the
+first observation had only Queen loaded. Normal start commands were issued for
+the exact 14 other previously loaded worker identities, and all 15 are now up.
+All 15 sessions have discovered tool revision 20, with none stale or unknown;
+loaded-worker conversation diagnostics are current. Follow-up journal inspection
+confirmed `swarm-host-reconcile.service` performed the configured idle engine
+update, not a crash. Shared domain source participates in the engine fingerprint,
+so this Queen/domain change correctly triggered the existing conservative update
+policy. This is not evidence that workers remained uninterrupted.
+
+Queen run `01a077c4-09d2-7f62-9423-0f1fbd7b7e2d` ended honestly as incomplete,
+but did no cleanup: Queen said all 31 could not be verified in one turn. The next
+run, `01a077c7-02c8-7110-b04c-e6a7310e7182`, began source inspection and called
+`swarm_set_task_prerequisite`; API ownership then fell from 31 Queen items to 30.
+The same provider transcript confirms a Social task was linked to its actual
+C21 prerequisite, rather than incorrectly treating completed C9 as sufficient.
+Queen then inspected a different task with an abandoned prerequisite. This is
+the first observed structural cleanup on this build, not full backlog recovery
+or proof of worker dispatch. CI `34048555024` completed successfully in all four
+jobs: Rust, web, audit and Linux packaging.
+
+### Validation preceding deployment
+
+The ADR 0082 slice connects transactional task evidence and
 checked wait receipts to review completion. An uncovered finish is recorded as
 `incomplete`, not `no_action` or `completed`; explicit incomplete remains a safe
 exit when evidence cannot be read. Queen-only evidence/disposition tools are
@@ -13,8 +38,7 @@ All 596 persistence tests and 483 API unit tests passed in the isolated Linux
 checkout, including the overflow fixture, Queen-only MCP authorization and tool
 surface fingerprint validation. All 1,266 frontend tests, TypeScript checking,
 and strict domain/persistence/application/API lint passed. Live demo acceptance
-remains required. No part of
-this uncommitted slice has been deployed; the live version remains `5b149514`.
+remains required after deployment.
 The separate Edge test tab was recreated at the unlock screen after the old tab
 disappeared. Authenticated visual acceptance still awaits operator unlock.
 
@@ -3229,3 +3253,43 @@ API sample reached one core at 100% during a six-second burst overlapping Jira
 reconciliation; overlap is not attribution of every CPU sample. Browser timing
 showed multi-second interactions. These establish unresolved performance work,
 not a completed optimization or a universal latency baseline.
+
+### September 6: private support reads and live Queen recovery evidence
+
+The separate, inactive support runtime now has optional credential-protected
+BFG Admin conversation list/thread reads. Public intake does not grant read
+access. Fictional tests verify identity/body retention, ambiguous credential
+refusal, credential rotation, bounded list pagination across database reopen,
+revision stability/change, history overflow refusal, and duplicate intake.
+Eight support HTTP tests and four application history tests passed in the isolated
+Linux checkout. History tests cover lossless multipart Unicode across page boundaries,
+stale/cross-thread cursors, and expanded-part overflow. Strict all-target/all-feature
+lint passed for support, application, persistence, and domain. An actual loopback
+fixture returned 102 fictional reports in two pages (100 + 2); these pages and its
+thread response passed BFG Admin's current normative Zod schemas. Exact submission
+replay after process restart retained the original conversation/message identity.
+The temporary service was stopped; no customer send or public activation occurred.
+Final complete affected-crate suites passed: application 36, domain 119,
+persistence 599, support HTTP 8 (762 total); no failed or ignored tests.
+This is initial read-contract acceptance, not proof of the full feedback workflow.
+Attachments, diagnostics, inbound mail, approved outbound delivery, source
+registration and Hive outbox integration remain unfinished.
+Public hosting and activation are still pending operator direction.
+
+Live task records now confirm C17 is Ready, assigned to Scout, with dispatch
+queued; investigation 01a077de-6c22-74d2-a5c1-2f636661ce23 is Ready, assigned to
+Platform, with dispatch queued. C19 has a real prerequisite pointing to that
+investigation. This verifies structural recovery and queued assignment, not
+provider consumption or completion. Queen run 01a077d9 remained incomplete with
+26 Queen-owned items. Full idle-fleet pickup and evidence-backed disposition
+coverage remain open acceptance gates.
+
+Further read-only checks found Scout and Platform each have an older Active task;
+the coordinator correctly holds their new assignments as `worker_already_working`.
+Both loaded sessions report Resting, no visible background work. Queen's latest
+coordination-attention result at 1788718613 includes that fresh observation beside
+an older `terminal could not be read` reason. She has not recovered those active
+tasks. Investigate why historical caution is outweighing current evidence and
+ensure guarded task-scoped recovery is actionable without bypassing Active work
+or disturbing operator input. The cumulative stale-attention count is not a count
+of current independent stalls.

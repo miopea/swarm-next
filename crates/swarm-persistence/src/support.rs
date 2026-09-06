@@ -9,8 +9,17 @@ use uuid::Uuid;
 
 const APPLICATION_ID: i64 = 0x5357_5350;
 
+mod reads;
+pub use reads::{SupportConversationRecord, SupportListRecords, SupportThreadRecords};
+
 #[derive(Debug, Error)]
 pub enum SupportStoreError {
+    #[error("support conversation not found")]
+    NotFound,
+    #[error("support cursor is invalid")]
+    InvalidCursor,
+    #[error("support history exceeds its explicit read limit")]
+    HistoryCapacity,
     #[error("database is not a supported central support database")]
     WrongDatabase,
     #[error("submission key already belongs to different content")]
@@ -191,6 +200,85 @@ mod tests {
         assert!(matches!(
             reopened.submit(&report(2, "New"), 30),
             Err(SupportStoreError::Capacity)
+        ));
+    }
+
+    #[test]
+    fn conversation_pages_resume_after_reopen_without_duplicates() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("support.db");
+        let capacity = NonZeroU32::new(102).unwrap();
+        let mut store = SupportStore::open(&path, capacity).unwrap();
+        for key in 1..=101 {
+            store.submit(&report(key, "Fictional"), 10).unwrap();
+        }
+        let first = store.conversation_records(None).unwrap();
+        assert_eq!(first.conversations.len(), 100);
+        let cursor = first.next_cursor.unwrap();
+        drop(store);
+        let mut store = SupportStore::open(&path, capacity).unwrap();
+        let second = store.conversation_records(Some(&cursor)).unwrap();
+        assert_eq!(second.conversations.len(), 1);
+        assert!(second.next_cursor.is_none());
+        assert!(
+            !first
+                .conversations
+                .iter()
+                .any(|row| row.id == second.conversations[0].id)
+        );
+        assert!(matches!(
+            store.conversation_records(Some("invalid")),
+            Err(SupportStoreError::InvalidCursor)
+        ));
+    }
+
+    #[test]
+    fn thread_revision_survives_reopen_and_changes_with_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("support.db");
+        let capacity = NonZeroU32::new(1).unwrap();
+        let mut store = SupportStore::open(&path, capacity).unwrap();
+        let receipt = store.submit(&report(1, "Fictional"), 10).unwrap();
+        let original = store
+            .conversation_thread_records(&receipt.conversation_id)
+            .unwrap();
+        drop(store);
+        let mut store = SupportStore::open(&path, capacity).unwrap();
+        assert_eq!(
+            store
+                .conversation_thread_records(&receipt.conversation_id)
+                .unwrap()
+                .revision,
+            original.revision
+        );
+        store.connection.execute("INSERT INTO support_messages(id,conversation_id,body,created_at) VALUES (?1,?2,?3,?4)", params![Uuid::now_v7().to_string(), receipt.conversation_id, "Fictional continuation", 20]).unwrap();
+        let changed = store
+            .conversation_thread_records(&receipt.conversation_id)
+            .unwrap();
+        assert_ne!(changed.revision, original.revision);
+        assert_eq!(changed.messages.len(), 2);
+        assert_eq!(changed.conversation.updated_at, 20);
+        assert!(
+            store
+                .submit(&report(1, "Fictional"), 30)
+                .unwrap()
+                .deduplicated
+        );
+    }
+
+    #[test]
+    fn oversized_history_refuses_instead_of_returning_partial_success() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = SupportStore::open(
+            &directory.path().join("support.db"),
+            NonZeroU32::new(1).unwrap(),
+        )
+        .unwrap();
+        let receipt = store.submit(&report(1, "Fictional"), 10).unwrap();
+        store.connection.execute("INSERT INTO support_messages(id,conversation_id,body,created_at) VALUES (?1,?2,?3,?4)", params![Uuid::now_v7().to_string(), receipt.conversation_id, "x".repeat(swarm_domain::SUPPORT_HISTORY_MAX_TEXT_UNITS), 20]).unwrap();
+        assert!(matches!(
+            store.conversation_thread_records(&receipt.conversation_id),
+            Err(SupportStoreError::HistoryCapacity)
         ));
     }
 

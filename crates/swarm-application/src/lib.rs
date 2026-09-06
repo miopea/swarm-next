@@ -33,9 +33,11 @@ use thiserror::Error;
 mod ops_tickets;
 mod queen_review;
 mod queue_snapshot;
+mod support;
 mod task_block;
 pub use ops_tickets::{OpsTicketError, OpsTicketProgress, OpsTicketService};
 pub use queue_snapshot::QueenQueueSnapshot;
+pub use support::{SupportService, SupportServiceError};
 
 /// The durable agent identity resolved before an application command is invoked.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
