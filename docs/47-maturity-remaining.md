@@ -8,6 +8,15 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Runtime diagnostics entry (September 6)
+
+The footer Diagnostics shortcut now clears an old Settings search, and the
+Maintenance group puts the existing diagnostic card before migration and backup.
+This avoids an unrelated search hiding diagnostics and removes the initial
+scroll past maintenance tools without duplicating the diagnostics owner. The
+67 App/navigation tests and TypeScript checking passed, including card order,
+search recovery and the original single-owner resource refresh assertions.
+
 ### Post-change live baseline (September 6, 01:57 UTC)
 
 Read-only run `20260906T015710Z-live` on `d6047bda` collected 18 samples over

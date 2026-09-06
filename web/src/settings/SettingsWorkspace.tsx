@@ -669,6 +669,10 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
     <EmailSettings operatorToken={operatorToken} readiness={emailReadiness} unavailable={emailUnavailable} onRetryReadiness={() => setEmailReadinessAttempt((attempt) => attempt + 1)} />
       )}
 
+      {shows("settings-diagnostics") && (
+        <DiagnosticsWorkspace sharedMachineResources={sharedMachineResources} feedbackRevision={feedbackRevision} operatorToken={operatorToken} health={health} hiveIdentity={hiveIdentity} liveFeedState={liveFeedState} recentEvents={recentEvents} sessions={sessions} workers={workers} jiraReadiness={jiraReadiness} jiraUnavailable={jiraUnavailable} />
+      )}
+
       {shows("settings-migration") && (
     <LegacyMigrationSettings busy={busy} operatorToken={operatorToken} onOpenTasks={onOpenTasks} />
       )}
@@ -704,10 +708,6 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
           </details>
           <small className="privacy-note">This file contains private operational data. Store it like a credential. Host credentials and repository contents remain intentionally separate.</small>
         </section>
-      )}
-
-      {shows("settings-diagnostics") && (
-        <DiagnosticsWorkspace sharedMachineResources={sharedMachineResources} feedbackRevision={feedbackRevision} operatorToken={operatorToken} health={health} hiveIdentity={hiveIdentity} liveFeedState={liveFeedState} recentEvents={recentEvents} sessions={sessions} workers={workers} jiraReadiness={jiraReadiness} jiraUnavailable={jiraUnavailable} />
       )}
 
       {shows("settings-dogfood") && (

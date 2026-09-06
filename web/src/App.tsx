@@ -2010,7 +2010,7 @@ export function App() {
               className="runtime-diagnostics"
               aria-label="Open diagnostics"
               title="Browser and server evidence"
-              onClick={() => openSettings("settings-maintenance")}
+              onClick={() => { setSettingsQuery(""); openSettings("settings-maintenance"); }}
             ><DiagnosticsIcon /><span>Diagnostics</span></button>
           ) : null}
           {/* Beside the runtime line because it is about the machine that line

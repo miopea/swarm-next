@@ -1472,9 +1472,17 @@ test("diagnostics is a single labeled control in the runtime area", async () => 
   fireEvent.click(diagnostics);
   expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
   await screen.findByRole("heading", { name: "Know which layer needs attention" });
+  const diagnosticHeading = screen.getByRole("heading", { name: "Know which layer needs attention" });
+  const backupHeading = screen.getByRole("heading", { name: "Carry your Hive safely" });
+  expect(diagnosticHeading.compareDocumentPosition(backupHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   await waitFor(() => expect(resourceReads).toBe(2)); // One owner changes to the diagnostic cadence.
   fireEvent.click(screen.getByRole("button", { name: "Refresh now" }));
   await waitFor(() => expect(resourceReads).toBe(3)); // No second read inside Diagnostics.
+  fireEvent.change(screen.getByRole("searchbox", { name: "Find a setting" }), { target: { value: "backup" } });
+  expect(screen.queryByRole("heading", { name: "Know which layer needs attention" })).not.toBeInTheDocument();
+  fireEvent.click(diagnostics);
+  expect(screen.getByRole("searchbox", { name: "Find a setting" })).toHaveValue("");
+  await screen.findByRole("heading", { name: "Know which layer needs attention" });
 });
 
 test("a detached window keeps the controls belonging to what it shows", async () => {
