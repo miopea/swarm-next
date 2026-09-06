@@ -19,6 +19,14 @@ now pass; all 92 attachment/view/composer tests and TypeScript checking pass.
 This is a reproduced client-path inconsistency, not proof of the original native
 camera/gallery failure. Live browser verification and deployment remain pending.
 
+Deployment follow-up: the production frontend build passed with the existing
+terminal chunk-size warning. Reload job 3084229 completed successfully, serving
+`1.5.0-dev-38d8b0f9ef5c-20260906125142-3084252` with health OK and no degraded
+subsystems. All 15 sessions retain fingerprint
+`9ddd1bc5a3920bea8da7fd2e188f37635b3bc9e2810c7966153f0fd6b1d6b49e`; engine
+identity remains `38453a84c3fa`. No release or worker restart occurred. This does
+not turn the synthetic clipboard regression into native-device acceptance.
+
 ### Terminal input waits in Queues (September 6 UTC)
 
 The current demo remains Ready/Delivered while its worker reports
