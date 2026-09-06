@@ -69,6 +69,19 @@ inspect the actual exchange and progress before asking for same-task continuatio
 neither a delivery receipt nor a resting terminal proves work resumed. This
 projection cannot authorize replay, clear a blocker or bypass guarded delivery.
 
+Queen's recovery response may also include the last 1,600 rendered characters
+of the exact current terminal for an unchanged Active task. This uses the same
+already bounded host snapshot, not provider-history files or another polling
+loop. Only positively resting terminals without visible background work qualify.
+The current session and operator engagement are rechecked after observation;
+an engaged terminal or visible unsent input is excluded. Other workers cannot
+call this Queen-only tool. The excerpt is untrusted worker output, not verified
+operator authorship, permission, a complete conversation or completion evidence.
+It is not included in general diagnostics, telemetry or control-room events.
+This honors the operator's shared worker/Queen context policy while allowing
+Queen to spot a final question that was never recorded on the task. Resolving
+that question still requires current task history and source-verified decisions.
+
 ### Workers can read their own finished evidence
 
 Task history uses the existing stable-worker ownership check also used by

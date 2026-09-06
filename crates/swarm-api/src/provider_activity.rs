@@ -133,6 +133,17 @@ pub(super) async fn observe_session(
     session_id: WorkerSessionId,
     provider: ProviderKind,
 ) -> Option<ProviderSignals> {
+    observe_session_snapshot(state, session_id, provider)
+        .await
+        .map(|(signals, _)| signals)
+}
+
+/// Same fenced observation, retained only for explicitly authorized recovery reads.
+pub(super) async fn observe_session_snapshot(
+    state: &AppState,
+    session_id: WorkerSessionId,
+    provider: ProviderKind,
+) -> Option<(ProviderSignals, TerminalSnapshot)> {
     match request_host(
         state,
         HostRequest::Read {
@@ -147,10 +158,13 @@ pub(super) async fn observe_session(
             resume: swarm_terminal::Resume::Snapshot { snapshot },
             running: true,
             ..
-        }) if observed_session == session_id => Some(ProviderSignals {
-            activity: classify_observed_activity(provider, &snapshot),
-            background_work: swarm_terminal::background_work_running(provider, &snapshot),
-        }),
+        }) if observed_session == session_id => Some((
+            ProviderSignals {
+                activity: classify_observed_activity(provider, &snapshot),
+                background_work: swarm_terminal::background_work_running(provider, &snapshot),
+            },
+            snapshot,
+        )),
         _ => None,
     }
 }

@@ -3503,3 +3503,23 @@ approved cleanup. External unauthenticated resources returned 401; direct
 loopback returned 200 under the existing trusted-local authorization policy.
 No low-space fault was injected into the production disk. Threshold/failure
 behavior is covered by isolated tests; rendered warnings remain unverified.
+
+### D365 final question was absent from its task record
+
+The current provider conversation `c4d71311-c854-4ac8-b637-542b4b280401`
+recorded verification work on September 6 at 20:53–20:57 UTC, then ended with a
+request for permission to commit scripts/specification before Review. It cited
+the repository's commit-only-when-asked rule. Task activity still ended at
+sequence 7136 (Resuming), so the board did not expose the final question. These
+are provider-reported results, not an independent verification of the external
+data operation. Operator permission for the code/docs-only commit was requested;
+no approval, commit or data-write authority was inferred.
+
+Queen's recovery evidence now includes a bounded rendered excerpt from a current
+resting Active-task terminal, excluding visible background work, operator
+engagement, unsent input, unknown activity and changed sessions. It uses the
+existing snapshot read and includes explicit untrusted-output labeling; no
+excerpt is added to diagnostics or telemetry. Task-history guidance no longer
+claims an ended delivery session proves the message unread or requires resend.
+All 492 API library tests and strict all-target/all-feature API lint pass.
+Live Queen use of the excerpt and the final task handoff remain unverified.
