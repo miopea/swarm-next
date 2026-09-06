@@ -1274,6 +1274,8 @@ impl AppState {
     /// Skipped while a maintenance run holds the worker lifecycle, which is the
     /// one time these workers are expected to be stopped.
     async fn revive_workers_owed_a_return(&self) {
+        // ADR 0077 bounds sequential, freshly admitted return attempts.
+        const RETURN_ATTEMPTS_PER_PASS: usize = 4;
         // Checked, then released immediately. `start_worker_process` takes this
         // same mutex, and it is not reentrant, so holding it here deadlocked
         // the API against itself: the first revival waited forever for a lock
@@ -1319,7 +1321,6 @@ impl AppState {
         }
         // ADR 0077: avoid a full supervisor interval between every return while
         // keeping starts sequential and freshly admitted by the lifecycle owner.
-        const RETURN_ATTEMPTS_PER_PASS: usize = 4;
         let mut attempted = 0;
         for worker_id in owed {
             match worker_runtime::revive_worker_process(self, worker_id, TerminalSize::default())

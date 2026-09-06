@@ -78,6 +78,8 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    // One real socket exercises successful reads, identity refusal, and cancellation.
+    #[allow(clippy::too_many_lines)]
     async fn host_reads_refresh_activity_reject_wrong_sessions_and_cancel_timeout() {
         use swarm_terminal::{HostClient, HostRequest, HostResponse, Resume, TerminalSnapshot};
         use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
