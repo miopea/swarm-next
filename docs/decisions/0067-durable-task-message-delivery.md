@@ -89,6 +89,12 @@ The existing style-aware provider parser supplies this fact; stripped rendered
 text cannot establish operator input or approval. This adds no terminal read or
 delivery permission. Both prompt evidence and the optional excerpt use one
 fresh profile check after the bounded snapshot observation.
+The plain-text transcript ends before that same lowest provider prompt: the
+current composer, wrapped suggestions and footer are excluded. Historical
+submitted prompts remain. This prevents loss of terminal styling from turning
+a suggested next message into apparent operator direction or worker progress.
+The response identifies whether this composer boundary was found; absence is
+not proof of a submitted instruction. Normal delivery guards remain unchanged.
 
 ### Workers can read their own finished evidence
 

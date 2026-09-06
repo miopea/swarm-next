@@ -206,10 +206,7 @@ pub(super) fn has_open_provider_input(provider: ProviderKind, snapshot: &Termina
     // looked equivalent to the old line-based window and is not: a short
     // transcript sits at the top of the screen, so the composer was never
     // examined at all and every answer was "nothing typed".
-    let Some(row) = (0..snapshot.rows)
-        .rev()
-        .find(|row| marker_column(screen, *row, marker).is_some())
-    else {
+    let Some(row) = provider_composer_row(provider, screen) else {
         return false;
     };
     let Some(column) = marker_column(screen, row, marker) else {
@@ -237,6 +234,16 @@ pub(super) fn has_open_provider_input(provider: ProviderKind, snapshot: &Termina
         }
     }
     typed
+}
+
+/// The lowest provider prompt is the current composer, not submitted history.
+/// Excerpt readers use the same boundary as the existing input guard so that
+/// suggestions and unsent text cannot become apparent conversation history.
+pub(super) fn provider_composer_row(provider: ProviderKind, screen: &vt100::Screen) -> Option<u16> {
+    let marker = prompt_marker(provider);
+    (0..screen.size().0)
+        .rev()
+        .find(|row| marker_column(screen, *row, marker).is_some())
 }
 
 fn prompt_marker(provider: ProviderKind) -> char {
