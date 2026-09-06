@@ -25,6 +25,13 @@ addition. Native camera/gallery and live browser acceptance remain open; this
 fix is not evidence that the original phone-picker problem is fully solved.
 Deployment is pending.
 
+Deployment follow-up: the final production frontend build passed, retaining the
+existing 500 kB terminal-chunk warning. Reload job 2988990 completed successfully;
+health serves `1.5.0-dev-f0bef077c507-20260906075541-2989013` with no degraded
+subsystems. All 15 running sessions retain fingerprint
+`9ddd1bc5a3920bea8da7fd2e188f37635b3bc9e2810c7966153f0fd6b1d6b49e`, and engine
+identity remains `38453a84c3fa`. No release or worker restart occurred.
+
 ### Mixed prerequisite queue scanning (September 6 UTC)
 
 Tasks with mixed prerequisite states now show unresolved dependencies first and
