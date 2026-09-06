@@ -1,6 +1,80 @@
 # Daily-driver maturity: remaining delivery and acceptance
 
+## 2026-09-06: review coverage integration in validation
+
+The uncommitted ADR 0082 slice now connects transactional task evidence and
+checked wait receipts to review completion. An uncovered finish is recorded as
+`incomplete`, not `no_action` or `completed`; explicit incomplete remains a safe
+exit when evidence cannot be read. Queen-only evidence/disposition tools are
+wired through application services, with served tool revision 20. The UI labels
+this "Review unfinished" without manufacturing a Needs You approval.
+
+All 596 persistence tests and 483 API unit tests passed in the isolated Linux
+checkout, including the overflow fixture, Queen-only MCP authorization and tool
+surface fingerprint validation. All 1,266 frontend tests, TypeScript checking,
+and strict domain/persistence/application/API lint passed. Live demo acceptance
+remains required. No part of
+this uncommitted slice has been deployed; the live version remains `5b149514`.
+The separate Edge test tab was recreated at the unlock screen after the old tab
+disappeared. Authenticated visual acceptance still awaits operator unlock.
+
 ## 2026-09-06: in-place blocker repair checkpoint
+
+Connectivity recovered on the next goal continuation. Live API/engine remained
+healthy on `5b149514` with all 15 workers loaded. The seven domain coverage tests
+then passed on Linux. A read-only persistence evidence revision now has six
+passing focused tests: stable reads, corrected evidence, dependency completion
+without consumer edits, changed decision content at the same pending count,
+delivery-state changes without task transitions, and bounded source overflow /
+missing-task refusal (the stable/correction case is one test). These are local
+uncommitted foundations, not a wired review-disposition or finish guard.
+
+New live contradiction: run `01a0778a-5ab8-7c13-b289-cb4382c3ecad` was delivered
+at 1788712162 and closed `no_action` at 1788712173 with 31 Queen-owned items.
+The provider transcript at 16:24 explicitly described the completion response as
+a standard nudge and relied on prior verified holds; the 16:29 run again only
+read coordination attention and closed. This is evidence that wording plus the
+new repair tool is insufficient. Preserve genuine holds, but require current
+durable dispositions before representing review coverage as settled.
+
+Follow-through verification: CI 34043593332 finished successfully in all four
+jobs (Rust, web, audit and Linux package). The local full frontend run passed
+1,265 tests across 139 files, and the TypeScript build check passed. The isolated
+390px Queues fixture was visually inspected in Edge; that is not native mobile
+or authenticated production acceptance.
+
+Next implementation is ADR 0082's evidence-backed review coverage. The initial
+domain evaluator and failure-case tests are local drafts only: missing, stale,
+duplicate, partial and over-capacity evidence cannot certify coverage, and covered
+waiting obligations are not declared completed. Persistence receipts, evidence
+revision generation, command/finish wiring, compilation and live acceptance are
+still open. SSH became unavailable before this next draft could be verified; it
+has not been committed or deployed.
+
+The draft now includes seven coverage tests, including the exact 256-item capacity,
+receipt overflow, a receipt for the wrong task, and bounded/nonblank revision
+values. These tests have not run: there is no local Rust toolchain and the bounded
+SSH recheck still timed out. The current CI workflow runs only on main pushes or
+pull requests; do not claim it validated this uncommitted draft, or push unverified
+runtime changes to main just to obtain a compiler.
+
+Deployment follow-through: `5b149514` was pushed to main and fast-forwarded into
+the clean Linux development checkout. Normal development reload completed with
+exit status zero; API health reported
+`1.5.0-dev-5b1495146cec-20260906155149-3177212`, no degraded subsystems and no
+database recovery required. All 15 session identities survived the API replacement.
+Normal engine maintenance then replaced the old engine and stopped those sessions;
+the owned revival queue restored the same 15 worker identities in bounded passes.
+Development status confirmed `worker_engine_update_required: false`. Conversation
+freshness reported current for all loaded workers, including Queen and D365; this
+is diagnostic evidence, not independent inspection of every resumed transcript.
+No release was cut. CI 34043593332 was still running at inspection.
+
+The separate Edge tab reached the unlock screen; authenticated visual acceptance
+requires the operator to unlock it. Subsequent SSH checks timed out twice after
+the successful deployment/restoration checks; network clarification was requested.
+Do not reinterpret that later connectivity loss as proof of an app failure, or
+claim continued live verification while SSH is unavailable.
 
 ADR 0081 supplies a missing Queen repair command: revise the current concise
 blocker reason and verified external time window without changing task state,
@@ -22,7 +96,7 @@ critical-pressure deferral preserves all five intents, then normal admission
 processes the bounded batch despite individual failures. The focused test passed;
 this is not a claim that the complete CI workflow is green.
 
-Not deployed at this checkpoint. Queen's actual backlog cleanup, evidence-backed
+Queen's actual backlog cleanup, evidence-backed
 no-action coverage, and idle-fleet progress remain critical open acceptance work.
 The fresh 31-item snapshot followed by no-action closure is not considered fixed
 merely because a new repair tool exists.

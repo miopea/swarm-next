@@ -1308,7 +1308,7 @@ pub(super) fn queen_automation_message(delivery: &QueenAutomationDelivery) -> Co
         delivery.actionable_count,
         delivery.presence,
         delivery.run_id,
-        guidance = format_args!("{} {} {}", crate::agent::QUEEN_JUDGMENT_GUIDANCE, crate::agent::QUEEN_BLOCK_RECOVERY_GUIDANCE, crate::agent::QUEEN_EVIDENCE_GUIDANCE),
+        guidance = format_args!("{} {} {} {}", crate::agent::QUEEN_JUDGMENT_GUIDANCE, crate::agent::QUEEN_BLOCK_RECOVERY_GUIDANCE, crate::agent::QUEEN_EVIDENCE_GUIDANCE, crate::agent::QUEEN_REVIEW_COVERAGE_GUIDANCE),
         wake_guidance = crate::agent::QUEEN_WAKE_GUIDANCE,
     )
     .into_bytes();

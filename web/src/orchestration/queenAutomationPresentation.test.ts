@@ -39,6 +39,14 @@ test("a finished no-action run cannot claim an unresolved Queen queue is clear",
   expect(queenAutomationStateDetail({ ...status, queen_owned_count: undefined })).toContain("has not supplied");
 });
 
+test("an incomplete review remains Queen work, not a new human approval", () => {
+  const status = { ...idle, state: "completed", outcome: "incomplete", queen_owned_count: 31 } as const;
+  expect(queenAutomationStateLabel(status)).toBe("Review unfinished");
+  expect(queenAutomationCompactLabel(status)).toBe("Review unfinished");
+  expect(queenAutomationStateDetail(status)).toContain("Recovery remains with Queen");
+  expect(queenAutomationNeedsAttention(status)).toBe(false);
+});
+
 test("only treats interrupted or operator-blocked Queen reviews as attention", () => {
   expect(queenAutomationNeedsAttention(undefined)).toBe(false);
   expect(queenAutomationNeedsAttention(idle)).toBe(false);

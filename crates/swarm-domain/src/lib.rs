@@ -12,6 +12,7 @@ mod night_watch;
 mod operator_answers;
 mod ops_tickets;
 mod presence_policy;
+mod queen_review;
 mod release;
 mod support;
 mod task_block;
@@ -31,6 +32,7 @@ pub use night_watch::*;
 pub use operator_answers::*;
 pub use ops_tickets::*;
 pub use presence_policy::*;
+pub use queen_review::*;
 pub use release::*;
 pub use support::*;
 pub use task_block::*;
@@ -449,6 +451,7 @@ pub enum QueenAutomationOutcome {
     Completed,
     NeedsOperator,
     NoAction,
+    Incomplete,
 }
 
 impl fmt::Display for QueenAutomationOutcome {
@@ -457,6 +460,7 @@ impl fmt::Display for QueenAutomationOutcome {
             Self::Completed => "completed",
             Self::NeedsOperator => "needs_operator",
             Self::NoAction => "no_action",
+            Self::Incomplete => "incomplete",
         })
     }
 }

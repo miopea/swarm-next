@@ -31,6 +31,7 @@ use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
 
 mod ops_tickets;
+mod queen_review;
 mod queue_snapshot;
 mod task_block;
 pub use ops_tickets::{OpsTicketError, OpsTicketProgress, OpsTicketService};

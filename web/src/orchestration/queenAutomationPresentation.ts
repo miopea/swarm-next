@@ -6,12 +6,14 @@ export function queenAutomationStateLabel(status: QueenAutomationStatus | undefi
   if (status.state === "running") return "Queen is reviewing work";
   if (status.state === "uncertain") return "Review needs attention";
   if (status.state === "completed" && status.outcome === "needs_operator") return "Queen needs you";
+  if (status.state === "completed" && status.outcome === "incomplete") return "Review unfinished";
   if (status.state === "completed" && (status.queen_owned_count ?? 0) > 0) return "Queen has work remaining";
   if (status.state === "completed") return "Review run ended";
   return status.enabled ? "Watching for new work" : "Manual review only";
 }
 
 export function queenAutomationCompactLabel(status: QueenAutomationStatus) {
+  if (status.state === "completed" && status.outcome === "incomplete") return "Review unfinished";
   if (status.state === "uncertain") return "Automation needs review";
   if (status.state === "completed" && status.outcome === "needs_operator") return "Queen needs you";
   if (status.state === "queued" || status.state === "delivering") return "Review queued";
@@ -49,6 +51,7 @@ export function queenAutomationStateDetail(
     return "Open Queen when you are ready to resolve her decision.";
   }
   if (status.state === "completed") {
+    if (status.outcome === "incomplete") return "Queen's turn ended without current evidence covering her outstanding work. Recovery remains with Queen; see Queues for what still needs attention.";
     const count = status.queen_owned_count;
     if (count != null && count > 0) return `The run ended; ${count} task${count === 1 ? " still needs" : "s still need"} Queen to route, reassess or review. See Queues for ownership and blockers.`;
     if (count === 0) return "The run ended. No current task names Queen as next owner; workers, releases or external holds may still have work.";

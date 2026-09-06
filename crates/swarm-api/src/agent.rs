@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 19;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 20;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -401,9 +401,9 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 19;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 19. Update this and the revision together.
+/// The served surface as of revision 20. Update this and the revision together.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "239026970995cfb671dac89b9bae110cf00680b04d6213efa8af6fb5ed3ab40a";
+    "66f78f869a19cc51ffca6a92182f0ffffb117b8791df7cc6358e8ddf931eaddf";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -507,6 +507,8 @@ pub(super) const QUEEN_BLOCK_RECOVERY_GUIDANCE: &str = "BLOCK RECOVERY. Read blo
 
 pub(super) const QUEEN_EVIDENCE_GUIDANCE: &str = "EVIDENCE BEFORE ESCALATION. Missing facts are not automatically missing operator authority. Obtain task-scoped evidence through the owning worker when existing access and authority permit it; use guarded task messages or a properly assigned investigation task, not an approval for routine investigation. Keep the real scope choice open until the evidence returns. If access, permission, scope or judgment is genuinely missing, ask the operator for that exact boundary and explain why it prevents investigation. Never infer new authority from a read-only label or bypass a permission refusal. Each decision button must have one unambiguous outcome, not combine operator execution with authorization for a worker to execute.";
 
+pub(super) const QUEEN_REVIEW_COVERAGE_GUIDANCE: &str = "REVIEW COVERAGE. Before finishing, account for every current Queen-owned task. Route actionable work with lifecycle tools and record real dependencies or decisions structurally. For a genuine remaining wait, use swarm_read_review_evidence and swarm_record_review_disposition with checked evidence and actual source references. External conditions require a fresh check each run; an operator deferral requires the operator's authenticated task-linked statement or resolved decision, not your recollection or a worker's claim. A summary saying unchanged supplies no coverage. Uncovered runs finish as incomplete, not success. If you cannot finish, use outcome incomplete rather than repeatedly calling finish; recovery remains yours unless a concrete issue genuinely requires the operator.";
+
 fn standing_brief(role: WorkerRole) -> String {
     let shared = "Swarm is the durable record of this Hive's work. What is not on the board did not happen. Before asking the operator to repeat a relayed composer instruction, use swarm_operator_submissions to find the source worker's recorded messages and read the exact submission ID. Verified authorship does not prove delivery, resolve a decision, or extend the words' scope. Raw-terminal and AskUser capture are not complete; a missing source is not evidence that the operator said nothing.";
     match role {
@@ -521,6 +523,7 @@ fn standing_brief(role: WorkerRole) -> String {
              Hive. Workers do the work; you decide who does it and whether it is done.\n\n\
              {QUEEN_WAKE_GUIDANCE}\n\n\
              {QUEEN_BLOCK_RECOVERY_GUIDANCE}\n\n\
+             {QUEEN_REVIEW_COVERAGE_GUIDANCE}\n\n\
              WHEN YOU RUN. You are woken automatically whenever the actionable board \
              changes, and again after fifteen minutes on an unchanged board while \
              actionable work remains. Task outcomes and coordination messages can also \
@@ -606,6 +609,8 @@ impl ServerHandler for AgentMcp {
                 assign_task_tool(),
                 task_prerequisite_tool(),
                 reassess_task_block_tool(),
+                read_queen_review_evidence_tool(),
+                record_queen_review_disposition_tool(),
                 approve_no_deployment_tool(),
                 retire_task_tool(),
                 hold_reviewed_work_tool(),
@@ -657,6 +662,7 @@ impl ServerHandler for AgentMcp {
                 | "swarm_assign_task"
                 | "swarm_set_task_prerequisite"
                 | "swarm_reassess_task_block"
+                | "swarm_record_review_disposition"
                 | "swarm_transition_task"
                 | "swarm_reconcile_task_message" => QueenActionClass::Coordinate,
                 "swarm_create_apiary_task"
@@ -821,6 +827,12 @@ impl ServerHandler for AgentMcp {
                 .and_then(structured),
             "swarm_reassess_task_block" => parse::<swarm_domain::TaskBlockReassessment>(arguments)
                 .and_then(|input| self.tasks.reassess_task_block(self.principal, &input, crate::unix_timestamp()))
+                .and_then(structured),
+            "swarm_read_review_evidence" => parse::<ReviewEvidenceInput>(arguments)
+                .and_then(|input| self.tasks.read_queen_review_evidence(self.principal, input.task_id))
+                .and_then(structured),
+            "swarm_record_review_disposition" => parse::<swarm_domain::QueenReviewDispositionInput>(arguments)
+                .and_then(|input| self.tasks.record_queen_review_disposition(self.principal, &input, crate::unix_timestamp()))
                 .and_then(structured),
             "swarm_assign_task" => parse::<AssignTaskInput>(arguments).and_then(|input| {
                 let task_id = TaskId::from_str(&input.task_id)
@@ -1116,6 +1128,8 @@ impl ServerHandler for AgentMcp {
                     structured(json!({
                         "run_id": input.run_id,
                         "outcome": recorded_outcome,
+                        "requested_outcome": input.outcome,
+                        "review_covered": recorded_outcome != swarm_domain::QueenAutomationOutcome::Incomplete,
                         "state": "completed",
                         "run_scope": "Only this automation turn ended. This does not settle tasks or certify the queue is clear.",
                         "queen_owned_count": queen_owned_count,
@@ -1124,7 +1138,9 @@ impl ServerHandler for AgentMcp {
                             "task_id": task.id, "state": task.state, "title": task.title
                         })).collect::<Vec<_>>(),
                         "remaining_queen_tasks_truncated": queen_owned_count > 16,
-                        "next_action": if queen_owned_count > 0 {
+                        "next_action": if recorded_outcome == swarm_domain::QueenAutomationOutcome::Incomplete {
+                            "This review was not covered. On your next review, route actionable work using lifecycle tools. For genuine remaining waits, read swarm_read_review_evidence and record a checked swarm_record_review_disposition with real source references. Do not manufacture an operator deferral or repeat finish calls. Escalate a concrete recovery failure only when you cannot resolve it."
+                        } else if queen_owned_count > 0 {
                             "Your turn ended, but recorded work still requires Queen. Reconcile verified prose dependencies to explicit prerequisite links; record true holds or task-linked operator decisions, and safely route recoverable work. Unchanged does not mean handled. Read current task history before claiming a watched task is still Ready."
                         } else {
                             "No current task names Queen as next owner. This is not proof that workers, releases or external holds have finished."
@@ -1141,6 +1157,7 @@ impl ServerHandler for AgentMcp {
                     && request.name.as_ref() != "swarm_list_decisions"
                     && request.name.as_ref() != "swarm_operator_submissions"
                     && request.name.as_ref() != "swarm_read_task_history"
+                    && request.name.as_ref() != "swarm_read_review_evidence"
                     && request.name.as_ref() != "swarm_list_coordination_attention"
                 {
                     self.changed.notify_waiters();
@@ -2632,6 +2649,12 @@ struct RetireTaskInput {
     reason: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewEvidenceInput {
+    task_id: TaskId,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SleepWorkerInput {
@@ -3232,12 +3255,12 @@ fn reconcile_task_message_tool() -> Tool {
 fn finish_automation_run_tool() -> Tool {
     tool(
         "swarm_finish_automation_run",
-        "Queen only: close the exact unattended review marker after coordinating authorized local work or requesting operator input. This does not authorize external side effects.",
+        "Queen only: end the exact review turn. Completed/no_action require current evidence for every Queen-owned task: route actionable work, record verified dependencies/decisions with lifecycle tools, or record a checked wait using swarm_read_review_evidence and swarm_record_review_disposition. Missing coverage is recorded as incomplete, not success. Use incomplete if you cannot finish; this leaves recovery with Queen and does not create an operator approval. This does not authorize external side effects.",
         &json!({
             "type": "object",
             "properties": {
                 "run_id": { "type": "string", "minLength": 1, "maxLength": 80 },
-                "outcome": { "type": "string", "enum": ["completed", "needs_operator", "no_action"] }
+                "outcome": { "type": "string", "enum": ["completed", "needs_operator", "no_action", "incomplete"] }
             },
             "required": ["run_id", "outcome"],
             "additionalProperties": false
@@ -3261,6 +3284,34 @@ fn create_task_tool() -> Tool {
             "required": ["title", "workspace"],
             "additionalProperties": false
         }),
+        false,
+    )
+}
+
+fn read_queen_review_evidence_tool() -> Tool {
+    tool(
+        "swarm_read_review_evidence",
+        "Queen only: read current task facts and their evidence revision from one snapshot. Reading is not a review receipt. Inspect task history for exact source references; changed facts require a fresh read. Route actionable work with the existing task tools instead of recording it as a wait.",
+        &json!({"type":"object","properties":{"task_id":{"type":"string","format":"uuid"}},"required":["task_id"],"additionalProperties":false}),
+        true,
+    )
+}
+
+fn record_queen_review_disposition_tool() -> Tool {
+    tool(
+        "swarm_record_review_disposition",
+        "Queen only: explicitly record a checked wait for this review run, using the exact revision from swarm_read_review_evidence. External conditions require fresh verification each run. Operator deferrals require a real task-linked operator activity sequence or resolved operator decision ID, and the cited statement must actually support the deferral. A worker claiming the operator said so is not authority. This command does not change lifecycle, dependencies, assignment or permission. Never use it to hide actionable routing work. Use structural prerequisite/decision/window commands where applicable; only record a wait after checking the remaining condition.",
+        &json!({"type":"object","properties":{
+            "task_id":{"type":"string","format":"uuid"},
+            "run_id":{"type":"string","format":"uuid"},
+            "expected_revision":{"type":"string","minLength":64,"maxLength":64},
+            "kind":{"type":"string","enum":["external_condition","operator_deferral"]},
+            "condition":{"type":"string","minLength":1,"maxLength":1000},
+            "evidence":{"type":"string","minLength":1,"maxLength":2000},
+            "source":{"type":"string","minLength":1,"maxLength":1000},
+            "operator_activity_sequence":{"type":["integer","null"],"minimum":1},
+            "operator_decision_id":{"type":["string","null"],"format":"uuid"}
+        },"required":["task_id","run_id","expected_revision","kind","condition","evidence","source"],"additionalProperties":false}),
         false,
     )
 }
@@ -3980,6 +4031,8 @@ mod tests {
         "swarm_list_jira_projects",
         "swarm_set_task_prerequisite",
         "swarm_reassess_task_block",
+        "swarm_read_review_evidence",
+        "swarm_record_review_disposition",
         // A reviewer's dissent is a reviewer's to record. A worker holding its
         // own work is just a worker declining to finish it, which the lifecycle
         // already expresses.
@@ -4132,6 +4185,85 @@ mod tests {
                     .is_none()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn review_disposition_tools_are_queen_only_and_preserve_blocked_work() {
+        let (bridge, store, queen_id, worker_id, _directory) = setup();
+        let task = store
+            .create_task("Fictional review gate", "/workspace/petal")
+            .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store.assign_task_to_worker(task.id, worker_id).unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Blocked)
+            .unwrap();
+        store
+            .bind_worker_session(queen_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let now = crate::unix_timestamp();
+        store.request_queen_automation_run(now).unwrap();
+        let run = store.claim_queen_automation(now).unwrap().unwrap();
+        store
+            .complete_queen_automation_delivery(&run.run_id, now)
+            .unwrap();
+        let revision = store
+            .queen_task_review_evidence(task.id)
+            .unwrap()
+            .evidence_revision;
+        for (caller, allowed) in [(worker_id, false), (queen_id, true)] {
+            let token = bearer_from_path(&bridge.ensure_worker_config(caller).unwrap());
+            let read = response_json(
+                handle(
+                    bridge.clone(),
+                    plain_state(),
+                    mcp_request(
+                        Some(&token),
+                        "tools/call",
+                        &json!({
+                            "name": "swarm_read_review_evidence", "arguments": {"task_id": task.id}
+                        }),
+                    ),
+                )
+                .await,
+            )
+            .await;
+            assert_eq!(
+                read["result"]["isError"].as_bool().unwrap_or(false),
+                !allowed,
+                "{read}"
+            );
+            let response = response_json(handle(bridge.clone(), plain_state(), mcp_request(Some(&token), "tools/call", &json!({
+                "name": "swarm_record_review_disposition", "arguments": {
+                    "task_id": task.id, "run_id": run.run_id, "expected_revision": revision,
+                    "kind": "external_condition", "condition": "Fixture endpoint unavailable",
+                    "evidence": "Checked fictional endpoint status", "source": "Fixture response"
+                }
+            }))).await).await;
+            assert_eq!(
+                response["result"]["isError"].as_bool().unwrap_or(false),
+                !allowed,
+                "{response}"
+            );
+            let current = store.get_task(task.id).unwrap();
+            assert_eq!(current.state, swarm_domain::TaskState::Blocked);
+            assert_eq!(current.assigned_worker_id, Some(worker_id));
+            assert!(
+                store
+                    .get_worker_profile(worker_id)
+                    .unwrap()
+                    .active_session_id
+                    .is_none()
+            );
+        }
+        assert!(matches!(
+            store.queen_run_review_coverage(&run.run_id).unwrap(),
+            swarm_domain::QueenReviewCoverage::Covered {
+                waiting_obligations: 1
+            }
+        ));
     }
 
     fn listed_tool_names(response: &Value) -> Vec<&str> {
@@ -7494,15 +7626,16 @@ mod tests {
         );
         // Queen reported needing the operator without filing anything for them
         // to answer, so the claim does not stand. Recorded as what actually
-        // happened — a finished run with no pending operator request — rather than as a
-        // request the operator can neither find nor resolve.
+        // happened — an incomplete review with an untriaged draft — rather than
+        // an invented human request or a successful no-action review.
         let status = store.queen_automation_status(13).unwrap();
-        assert_eq!(status.outcome, Some(QueenAutomationOutcome::NoAction));
+        assert_eq!(status.outcome, Some(QueenAutomationOutcome::Incomplete));
         assert_eq!(
             finished["result"]["structuredContent"]["outcome"],
-            "no_action"
+            "incomplete"
         );
         let content = &finished["result"]["structuredContent"];
+        assert_eq!(content["review_covered"], false);
         assert_eq!(content["queen_owned_count"], 1);
         assert_eq!(content["queen_queue_clear"], false);
         assert_eq!(

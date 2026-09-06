@@ -576,6 +576,23 @@ impl TaskStore {
             }
             other => other,
         };
+        // Ending a turn must not certify work that has no current assessment.
+        // Close honestly as incomplete instead of trapping a terminal in a
+        // finish/retry loop. This neither resumes work nor asks the operator.
+        let active: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM queen_automation WHERE id=1 AND run_id=?1 AND state IN ('running','uncertain'))",
+            [run_id], |row| row.get(0),
+        )?;
+        let outcome = if active
+            && outcome != QueenAutomationOutcome::Incomplete
+            && !matches!(
+                crate::queen_review::review_coverage(&transaction, run_id)?,
+                swarm_domain::QueenReviewCoverage::Covered { .. }
+            ) {
+            QueenAutomationOutcome::Incomplete
+        } else {
+            outcome
+        };
         // Accepted from `uncertain` as well as `running`, and that is the
         // point rather than a loosening.
         //
@@ -1048,6 +1065,7 @@ fn parse_outcome(value: &str) -> Result<QueenAutomationOutcome, rusqlite::Error>
         "completed" => Ok(QueenAutomationOutcome::Completed),
         "needs_operator" => Ok(QueenAutomationOutcome::NeedsOperator),
         "no_action" => Ok(QueenAutomationOutcome::NoAction),
+        "incomplete" => Ok(QueenAutomationOutcome::Incomplete),
         _ => Err(rusqlite::Error::InvalidQuery),
     }
 }

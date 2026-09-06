@@ -287,7 +287,7 @@ export type QueenAutomationStatus = {
   requested_at: number | null;
   delivered_at: number | null;
   finished_at: number | null;
-  outcome: "completed" | "needs_operator" | "no_action" | null;
+  outcome: "completed" | "needs_operator" | "no_action" | "incomplete" | null;
   queen_owned_count?: number | null;
   waiting_reason: string | null;
 };

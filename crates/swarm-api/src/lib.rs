@@ -16313,7 +16313,7 @@ mod tests {
                 )
                 .unwrap(),
             swarm_persistence::QueenAutomationFinish::Closed(
-                swarm_domain::QueenAutomationOutcome::Completed
+                swarm_domain::QueenAutomationOutcome::Incomplete
             )
         );
         let finished = store.queen_automation_status(103).unwrap();
@@ -16323,8 +16323,10 @@ mod tests {
         );
         assert_eq!(
             finished.outcome,
-            Some(swarm_domain::QueenAutomationOutcome::Completed)
+            Some(swarm_domain::QueenAutomationOutcome::Incomplete)
         );
+        // Receiving the handoff and review prompt does not itself assess the
+        // task. The run ends without claiming that outstanding work was covered.
         assert_eq!(finished.run_id.as_deref(), Some(run_id.as_str()));
 
         queen_terminal.stop().unwrap();

@@ -24,6 +24,7 @@ mod apiary;
 mod attention;
 mod coordinator;
 mod database_integrity;
+mod queen_review;
 mod task_block;
 mod task_prerequisites;
 pub use coordinator::{
@@ -246,7 +247,8 @@ const TASK_HISTORY_LOOKUP_SCHEMA_VERSION: i64 = 138;
 const TASK_PREREQUISITES_SCHEMA_VERSION: i64 = 139;
 const EXPLICIT_CONVERSATION_CHOICE_SCHEMA_VERSION: i64 = 140;
 const TASK_BLOCK_REASSESSMENT_SCHEMA_VERSION: i64 = 141;
-const CURRENT_SCHEMA_VERSION: i64 = TASK_BLOCK_REASSESSMENT_SCHEMA_VERSION;
+const QUEEN_REVIEW_RECEIPTS_SCHEMA_VERSION: i64 = 142;
+const CURRENT_SCHEMA_VERSION: i64 = QUEEN_REVIEW_RECEIPTS_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -3884,6 +3886,9 @@ fn migrate_ops_intake_schema_steps(
     conversation_recovery::migrate_explicit_choice(transaction, schema_version)?;
     if schema_version < TASK_BLOCK_REASSESSMENT_SCHEMA_VERSION {
         task_block::migrate(transaction)?;
+    }
+    if schema_version < QUEEN_REVIEW_RECEIPTS_SCHEMA_VERSION {
+        queen_review::migrate(transaction)?;
     }
     Ok(())
 }
@@ -9036,6 +9041,12 @@ mod tests {
             table: "task_block_reassessments",
             artifact: "",
             undo_sql: "DROP TABLE task_block_reassessments",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "queen_task_review_receipts",
+            artifact: "",
+            undo_sql: "DROP TABLE queen_task_review_receipts",
             probe_sql: "",
         },
     ];
