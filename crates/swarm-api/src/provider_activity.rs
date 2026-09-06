@@ -212,28 +212,67 @@ pub(super) fn has_open_provider_input(provider: ProviderKind, snapshot: &Termina
     let Some(column) = marker_column(screen, row, marker) else {
         return false;
     };
-    let mut typed = false;
-    for cell_column in column + 1..snapshot.columns {
-        let Some(cell) = screen.cell(row, cell_column) else {
+    let end = composer_end_row(screen, row);
+    for input_row in row..end {
+        let start = if input_row == row { column + 1 } else { 0 };
+        for cell_column in start..snapshot.columns {
+            let Some(cell) = screen.cell(input_row, cell_column) else {
+                continue;
+            };
+            let contents = cell.contents();
+            if contents.trim().is_empty() {
+                continue;
+            }
+            // Claude draws a suggested command into the empty composer in grey.
+            // It is a proposal, not something anybody typed, and it disappears the
+            // moment a key is pressed — so treating it as unsent input froze every
+            // delivery to that worker for as long as the suggestion was on screen.
+            // Measured 2026-08-23: Queen's composer showed "push the architecture
+            // doc fix" that nobody had written, and her review was refused for
+            // hours.
+            if !is_suggestion_styling(cell) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// A styled input-box rule terminates the composer, not its first physical row.
+/// With no known box boundary, retain the existing single-row interpretation
+/// plus physical wrap continuations; unrelated footer text is not operator input.
+fn composer_end_row(screen: &vt100::Screen, row: u16) -> u16 {
+    let rows = screen.size().0;
+    if let Some(border) = (row + 1..rows).find(|candidate| input_box_rule(screen, *candidate)) {
+        return border;
+    }
+    let mut end = row + 1;
+    while end < rows && screen.row_wrapped(end - 1) {
+        end += 1;
+    }
+    end
+}
+
+fn input_box_rule(screen: &vt100::Screen, row: u16) -> bool {
+    let mut glyphs = 0;
+    for column in 0..screen.size().1 {
+        let Some(cell) = screen.cell(row, column) else {
             continue;
         };
         let contents = cell.contents();
         if contents.trim().is_empty() {
             continue;
         }
-        // Claude draws a suggested command into the empty composer in grey.
-        // It is a proposal, not something anybody typed, and it disappears the
-        // moment a key is pressed — so treating it as unsent input froze every
-        // delivery to that worker for as long as the suggestion was on screen.
-        // Measured 2026-08-23: Queen's composer showed "push the architecture
-        // doc fix" that nobody had written, and her review was refused for
-        // hours.
-        if !is_suggestion_styling(cell) {
-            typed = true;
-            break;
+        if !is_suggestion_styling(cell)
+            || !contents
+                .chars()
+                .all(|glyph| matches!(glyph, '─' | '━' | '═'))
+        {
+            return false;
         }
+        glyphs += contents.chars().count();
     }
-    typed
+    glyphs >= 3
 }
 
 /// The lowest provider prompt is the current composer, not submitted history.
@@ -556,6 +595,46 @@ mod tests {
         // Half-typed over a suggestion still counts: any ordinary cell wins.
         let mixed = snapshot("\u{276f} push\x1b[38;5;244m the architecture doc fix\x1b[39m");
         assert!(has_open_provider_input(ProviderKind::ClaudeCode, &mixed));
+    }
+
+    #[test]
+    fn multiline_composer_input_is_not_an_empty_delivery_target() {
+        let draft = snapshot(
+            "● Done.\r\n\x1b[38;5;244m────────────────────\x1b[39m\r\n❯ \r\n  private second line\r\n\x1b[38;5;244m────────────────────\x1b[39m\r\n⏵⏵ auto mode on",
+        );
+        assert!(has_open_provider_input(ProviderKind::ClaudeCode, &draft));
+    }
+
+    #[test]
+    fn multiline_suggestions_and_bright_footer_do_not_hold_an_empty_composer() {
+        let suggestion = snapshot(
+            "● Done.\r\n❯ \x1b[2mstart the work\r\n  suggested second line\x1b[22m\r\n\x1b[38;5;244m────────────────────\x1b[39m\r\n⏵⏵ auto mode on",
+        );
+        assert!(!has_open_provider_input(
+            ProviderKind::ClaudeCode,
+            &suggestion
+        ));
+        let mixed = snapshot(
+            "● Done.\r\n❯ \x1b[2msuggested first row\x1b[22m\r\n  actual typed second row\r\n\x1b[38;5;244m────────────────────\x1b[39m\r\n⏵⏵ auto mode on",
+        );
+        assert!(has_open_provider_input(ProviderKind::ClaudeCode, &mixed));
+    }
+
+    #[test]
+    fn wrapped_input_without_a_box_is_checked_past_the_prompt_row() {
+        let draft = snapshot(&format!(
+            "❯ {}private wrapped input\r\n? for shortcuts",
+            " ".repeat(99)
+        ));
+        assert!(has_open_provider_input(ProviderKind::ClaudeCode, &draft));
+    }
+
+    #[test]
+    fn a_typed_rule_inside_the_composer_is_not_its_footer() {
+        let draft = snapshot(
+            "❯ \r\n────────────────────\r\n  private text below typed rule\r\n\x1b[38;5;244m────────────────────\x1b[39m\r\nfooter",
+        );
+        assert!(has_open_provider_input(ProviderKind::ClaudeCode, &draft));
     }
 
     #[test]

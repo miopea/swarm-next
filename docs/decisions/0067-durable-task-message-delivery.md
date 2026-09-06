@@ -96,6 +96,15 @@ a suggested next message into apparent operator direction or worker progress.
 The response identifies whether this composer boundary was found; absence is
 not proof of a submitted instruction. Normal delivery guards remain unchanged.
 
+The unsent-input guard examines all rows up to the provider's styled input-box
+rule, not only the prompt's first physical row. Without a recognized box it
+also follows physical wrap continuations. Suggestions remain excluded by cell
+styling across these rows; ordinary typed text on any examined row holds
+delivery. A bright typed line of rule characters cannot masquerade as the muted
+provider border, and status text beyond the border cannot manufacture a draft.
+Unboxed non-wrapped multiline layouts without a recognized provider boundary
+remain a provider-validation limitation, not a claim of universal CLI support.
+
 ### Workers can read their own finished evidence
 
 Task history uses the existing stable-worker ownership check also used by
