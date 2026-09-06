@@ -16,8 +16,11 @@ stale holds after delivery, reassignment or task-state changes. Without known
 evidence, a queued briefing says delivery has not started rather than guessing
 that it waits for a quiet moment. No polling, dispatch policy or task transition
 was added. All 80 focused task/queue tests and TypeScript checking passed;
-Edge rendered the named predecessor in the actual TaskBoard fixture. Deployment
-is pending the unchanged-build soak. This does not close full QUEUE-01 recovery.
+Edge rendered the named predecessor in the actual TaskBoard fixture. Build
+`cb2d5c4b` then deployed healthy after the soak, preserving engine PID 2721173,
+build identity `a5686596…` and all 15 running sessions. A separate authenticated
+Edge tab verified that live Tasks now renders the recorded worker-busy holds.
+This does not close full QUEUE-01 recovery.
 The broader App suite also passed all 57 tests after this change.
 
 At 02:40 UTC a separate Edge tab on the unchanged live build captured one
