@@ -490,6 +490,7 @@ pub struct ReviewedWorkWithoutEvidenceCandidate {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CoordinatorAttention {
     pub action_id: String,
+    pub session_id: WorkerSessionId,
     pub kind: String,
     pub worker_id: WorkerId,
     pub worker_name: String,
@@ -1646,7 +1647,8 @@ impl TaskStore {
         let mut statement = connection.prepare(&format!(
             "SELECT action.id, action.kind, worker.id, worker.name, task.id, task.title,
                         action.reason, action.finished_at,
-                        action.observed_age_seconds + MAX(0, ?1 - action.finished_at)
+                        action.observed_age_seconds + MAX(0, ?1 - action.finished_at),
+                        session.session_id
                  {LIVE_ATTENTION_SOURCE}
                  ORDER BY action.finished_at DESC, action.id DESC LIMIT 32"
         ))?;
@@ -1662,6 +1664,7 @@ impl TaskStore {
                     row.get::<_, String>(6)?,
                     row.get::<_, i64>(7)?,
                     row.get::<_, i64>(8)?,
+                    row.get::<_, String>(9)?,
                 ))
             })?
             .map(|row| {
@@ -1675,9 +1678,13 @@ impl TaskStore {
                     reason,
                     observed_at,
                     age_seconds,
+                    session_id,
                 ) = row?;
                 Ok::<_, rusqlite::Error>(CoordinatorAttention {
                     action_id,
+                    session_id: session_id
+                        .parse()
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
                     kind,
                     worker_id: worker_id
                         .parse()

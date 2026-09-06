@@ -8,6 +8,31 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Fresh terminal evidence beside historical Queen attention (September 6 UTC)
+
+Implemented read-time observations for stale Active, delivered-but-unstarted,
+and never-briefed attention. Saved reasons are explicitly historical; terminal
+activity/background-work visibility is a separate observation with its own time.
+The saved age is not represented as continuous measured inactivity. Exact
+session identity comes from the persistence projection. At most 32 observations,
+eight concurrently, have a two-second host-read deadline each; unavailable
+sessions remain unavailable. Durable eligibility is reread after asynchronous
+observation. No input, dispatch, task transition, periodic sampler or cache added.
+
+Isolated Linux release-profile validation: four API tests passed (two new
+evidence/boundary tests plus existing Queen-only access and assignment-recovery
+tests); all 51 coordinator persistence tests passed. Initial async lifetime
+compile failure was corrected by owning the bounded input batch. Changed Rust
+files were formatted separately; whole-tree fmt still reports unrelated existing
+formatting in maintenance.rs and terminal_control.rs, left untouched.
+
+Final exact-source `cargo check --release --locked -p swarm-api` passed.
+Not yet deployed at this checkpoint. Native host read/timeout and a
+real Queen consuming the fresh evidence still need journey verification. The
+durable actionable fingerprint remains unchanged; this does not claim to clear
+all stale records or prove unattended recovery. Physical-device and broader
+maturity gates remain open.
+
 ### Returned-work status is not execution evidence (September 6 UTC)
 
 Task metadata formerly called every Active task In progress, including returned

@@ -5,6 +5,7 @@ mod auth;
 mod backups;
 pub mod bundled_feedback;
 mod control_room;
+mod coordination_attention_evidence;
 mod coordination_delivery;
 mod ops_mcp;
 #[cfg(test)]

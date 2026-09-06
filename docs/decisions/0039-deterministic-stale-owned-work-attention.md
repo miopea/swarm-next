@@ -40,6 +40,19 @@ operator. Existing presence and external-effect limits remain authoritative.
 
 ## Consequences
 
+### Read-time evidence refresh (daily-driver maturity)
+
+Saved reasons describe their original observation, not a fresh terminal read.
+Queen's coordination-attention tool rechecks up to 32 terminal-related records
+against their exact session, with at most eight concurrent reads and a two-second
+deadline per read. Current activity and visible background-work evidence are
+returned separately from the historical reason and age. Missing, changed or
+unreadable sessions are unavailable, never inferred resting. Durable task/session
+eligibility is checked again after observation so resolved records cannot return
+solely because a host read took time. No polling, terminal input, replay, or task
+mutation is introduced. Delivery still rechecks engagement and current activity;
+a read-time observation cannot grant future input authority.
+
 - The control room can surface stalled-looking owned work without polling with
   an LLM or interrupting a provider turn.
 - **Active**, **Awaiting you**, **With you**, unknown, and sleeping workers are

@@ -719,9 +719,15 @@ impl ServerHandler for AgentMcp {
                 }),
             "swarm_list_coordination_attention" => {
                 if self.principal.role == WorkerRole::Queen {
-                    self.tasks
-                        .store()
-                        .current_coordinator_attention(crate::unix_timestamp())
+                    let initial = self.tasks.store().current_coordinator_attention(crate::unix_timestamp());
+                    let terminal_evidence = match &initial {
+                        Ok(items) => crate::coordination_attention_evidence::observe(&self.state, self.tasks.store(), items).await,
+                        Err(_) => std::collections::HashMap::new(),
+                    };
+                    // Recheck durable identity after asynchronous terminal reads.
+                    // A resolved task must not reappear because observation took time.
+                    initial.and_then(|_| self.tasks.store()
+                        .current_coordinator_attention(crate::unix_timestamp()))
                         .map_err(ApplicationError::Store)
                         .and_then(|attention| {
                             let queue = self.tasks.queen_queue_snapshot(self.principal)?;
@@ -764,8 +770,11 @@ impl ServerHandler for AgentMcp {
                                     "task_id": item.task_id,
                                     "task_title": item.task_title,
                                     "reason": item.reason,
+                                    "reason_scope": "historical_observation",
+                                    "terminal_observation": terminal_evidence.get(&item.action_id),
                                     "observed_at": item.observed_at,
                                     "age_seconds": item.age_seconds,
+                                    "age_scope": "Elapsed age of saved evidence, not confirmed continuous terminal inactivity",
                                 })).collect::<Vec<_>>(),
                                 "task_message_deliveries": self.tasks.store().task_message_attention()?,
                                 // Briefings that are queued and not moving, and
