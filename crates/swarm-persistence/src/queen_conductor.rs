@@ -56,7 +56,7 @@ pub enum QueenAutomationFailure {
 /// those it was rather than that no run exists.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum QueenAutomationFinish {
-    Closed,
+    Closed(QueenAutomationOutcome),
     /// The run is the current one, but its marker is in a state the finish does
     /// not cover — already completed, or still queued or delivering.
     WrongState {
@@ -597,7 +597,7 @@ impl TaskStore {
         if changed {
             insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
             transaction.commit()?;
-            return Ok(QueenAutomationFinish::Closed);
+            return Ok(QueenAutomationFinish::Closed(outcome));
         }
         // Why it was refused, rather than a flat denial that the run exists.
         //
@@ -1728,7 +1728,7 @@ mod tests {
             store
                 .finish_queen_automation_run(&delivery.run_id, QueenAutomationOutcome::NoAction, 14)
                 .unwrap(),
-            QueenAutomationFinish::Closed
+            QueenAutomationFinish::Closed(QueenAutomationOutcome::NoAction)
         );
         assert!(
             store
@@ -1782,7 +1782,7 @@ mod tests {
             store
                 .finish_queen_automation_run(&delivery.run_id, QueenAutomationOutcome::NoAction, 13)
                 .unwrap(),
-            QueenAutomationFinish::Closed,
+            QueenAutomationFinish::Closed(QueenAutomationOutcome::NoAction),
             "Queen's own report is the evidence the delivery landed"
         );
         assert_eq!(
@@ -2064,7 +2064,7 @@ mod tests {
                     15
                 )
                 .unwrap(),
-            QueenAutomationFinish::Closed
+            QueenAutomationFinish::Closed(QueenAutomationOutcome::Completed)
         );
     }
 
@@ -2143,7 +2143,7 @@ mod tests {
                     15,
                 )
                 .unwrap(),
-            QueenAutomationFinish::Closed
+            QueenAutomationFinish::Closed(QueenAutomationOutcome::Completed)
         );
         assert_eq!(
             store.queen_automation_status(16).unwrap().state,
@@ -2353,7 +2353,7 @@ mod tests {
                     13,
                 )
                 .unwrap(),
-            QueenAutomationFinish::Closed
+            QueenAutomationFinish::Closed(QueenAutomationOutcome::NoAction)
         );
 
         // The run finished — it really did happen — but it does not leave a

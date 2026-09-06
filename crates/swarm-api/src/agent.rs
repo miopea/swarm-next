@@ -1077,7 +1077,7 @@ impl ServerHandler for AgentMcp {
                     // had simply moved state, and left the caller retrying the
                     // same call because nothing in it suggested what to do.
                     if let Some(reason) = match &finish {
-                        QueenAutomationFinish::Closed => None,
+                        QueenAutomationFinish::Closed(_) => None,
                         QueenAutomationFinish::WrongState { state } => Some(format!(
                             "This run is the current one but its marker is {state}, so there is nothing to close. A completed run needs no second finish; a queued or delivering one has not been handed to you yet."
                         )),
@@ -1092,9 +1092,12 @@ impl ServerHandler for AgentMcp {
                             reason,
                         )));
                     }
+                    let QueenAutomationFinish::Closed(recorded_outcome) = finish else {
+                        unreachable!("non-closed outcomes returned an error above");
+                    };
                     structured(json!({
                         "run_id": input.run_id,
-                        "outcome": input.outcome,
+                        "outcome": recorded_outcome,
                         "state": "completed"
                     }))
                 })
@@ -7365,6 +7368,10 @@ mod tests {
         // request the operator can neither find nor resolve.
         let status = store.queen_automation_status(13).unwrap();
         assert_eq!(status.outcome, Some(QueenAutomationOutcome::NoAction));
+        assert_eq!(
+            finished["result"]["structuredContent"]["outcome"],
+            "no_action"
+        );
     }
 
     #[test]

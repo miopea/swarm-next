@@ -53,6 +53,13 @@ Delivery and completion are durable:
 
 ## Consequences
 
+The finish command returns the outcome committed by its transaction. In
+particular, the existing normalization of `needs_operator` to `no_action` when
+Queen has no pending decision must also appear in the MCP response. Echoing the
+requested value would give Queen and the operator contradictory accounts of the
+same run. This does not change normalization policy or require a later read that
+could observe a different run.
+
 ### API-owned background shutdown (September 6 maturity pass)
 
 The API owns and joins its six periodic service tasks. On graceful termination,

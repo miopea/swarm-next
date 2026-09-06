@@ -16300,7 +16300,9 @@ mod tests {
                     102,
                 )
                 .unwrap(),
-            swarm_persistence::QueenAutomationFinish::Closed
+            swarm_persistence::QueenAutomationFinish::Closed(
+                swarm_domain::QueenAutomationOutcome::Completed
+            )
         );
         let finished = store.queen_automation_status(103).unwrap();
         assert_eq!(

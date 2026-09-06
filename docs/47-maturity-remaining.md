@@ -8,6 +8,20 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Truthful Queen finish response (September 6)
+
+The finish transaction already normalizes `needs_operator` to `no_action` when
+Queen has no pending decision. The MCP adapter nevertheless echoed the requested
+outcome. It now returns the transaction's actual committed outcome, without a
+second read or policy change. All 35 conductor tests and the MCP end-to-end
+normalization regression passed in the isolated Linux checkout.
+
+A bounded read of Queen's live terminal also clarified her current claim: the
+four original drafts are held for the operator's interview, while other backlog
+items have external gates. That is a claim to verify, not authority to override
+operator deferrals or evidence those gates have structured records. The demo
+completed normally; this does not settle the broader backlog disagreement.
+
 ### Shared ownership of blocked reassessment (September 6)
 
 After the automated paste was submitted, Queen entered a new Running review.
