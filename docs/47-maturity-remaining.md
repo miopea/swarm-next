@@ -38,6 +38,17 @@ This closes the owner-drain integration gap, not a real Claude paste-chip test,
 full systemd/SIGTERM acceptance, forced-kill recovery, or attribution of the exact
 117-line paste. No live worker input was used.
 
+The follow-up `graceful_delivery` integration test runs the actual API executable
+with a disposable database, isolated host socket and shell workers. After HTTP
+readiness it assigns through persistence, waits for the normal 30-second
+supervisor to paste, and sends SIGTERM before the shell sees Enter. The API exits
+successfully, exactly one line is consumed, delivery is durably Delivered, and
+the independent terminal remains running. This passed in 32 seconds on Linux.
+The initial fixture incorrectly assigned implementation work to Queen and was
+corrected to use a separate ordinary worker; no runtime permission was relaxed.
+Actual process-signal acceptance is now demonstrated for this shell path;
+systemd packaging, Claude collapsed-paste and forced-kill acceptance are distinct.
+
 ### Blocked-row explanations (September 6)
 
 Queues now labels the recorded operator decision, unresolved prerequisite count,
