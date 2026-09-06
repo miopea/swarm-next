@@ -1,0 +1,36 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { summarize } = require('./live-soak-summary.cjs');
+
+const header = 'elapsed_seconds,api_memory_bytes,terminal_host_memory_bytes,running_sessions,history_bytes,dropped_history_bytes,api_cpu_nanoseconds,terminal_host_cpu_nanoseconds,collection_seconds';
+const row = (time, api, host) => `${time},100,200,15,300,0,${api},${host},1`;
+const fixture = [header, row(1, 1000000000, 2000000000), row(11, 2000000000, 22000000000), row(41, 14000000000, 52000000000)];
+
+test('weights CPU by elapsed time and retains multi-core percentages', () => {
+  const result = summarize(fixture.join('\n'));
+  assert.equal(result.observed_span_seconds, 40);
+  assert.equal(result.cpu.api_cgroup.average_percent_of_one_core, 32.5);
+  assert.equal(result.cpu.api_cgroup.max_interval_percent_of_one_core, 40);
+  assert.equal(result.cpu.terminal_host_cgroup_including_workers.average_percent_of_one_core, 125);
+  assert.equal(result.cpu.terminal_host_cgroup_including_workers.max_interval_percent_of_one_core, 200);
+  assert.equal(result.performance_acceptance, 'not_evaluated');
+  assert.equal(result.continuity, 'requires_observer_final_report');
+  assert.deepEqual(result.memory_bytes.api_cgroup, { min: 100, max: 100 });
+});
+
+test('accepts CRLF input without inventing completion evidence', () => {
+  assert.equal(summarize(fixture.join('\r\n') + '\r\n').sample_count, 3);
+});
+
+test('rejects truncated, invalid and insufficient samples', () => {
+  for (const csv of [header, fixture.slice(0, 2).join('\n'),
+    [...fixture, '42,100'].join('\n'), fixture.join('\n').replace(',100,', ',,')]) {
+    assert.throws(() => summarize(csv));
+  }
+});
+
+test('rejects duplicate times and counter resets instead of reporting recovery as efficiency', () => {
+  assert.throws(() => summarize([header, row(1, 10, 20), row(1, 20, 30)].join('\n')), /times must increase/);
+  assert.throws(() => summarize([header, row(1, 10, 20), row(2, 9, 30)].join('\n')), /counter reset/);
+  assert.throws(() => summarize([header, row(1, 10, 20), row(2, 20, 19)].join('\n')), /counter reset/);
+});

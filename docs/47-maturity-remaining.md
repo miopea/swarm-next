@@ -8,6 +8,30 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Sustained workload attribution (September 6, observation in progress)
+
+The read-only run `20260906T021841Z-live` is observing unchanged build
+`17d99596` for 30 minutes. Its first 24 samples span 699 seconds, with 15 running
+sessions throughout. API cgroup CPU averages 2.08% of one core (highest sampled
+interval 10.41%); the terminal-host cgroup, including all worker descendants,
+averages 333.47% (highest interval 736.60%). These are interval-counter deltas,
+not browser CPU or terminal-host-only CPU. API memory ranges 69,586,944–155,176,960
+bytes; host-group memory ranges 7,114,739,712–9,867,960,320 bytes. This changing
+workload does not establish a leak, plateau or before/after improvement.
+
+A separate process-name-only snapshot at 02:27 UTC found seven Vitest workers
+with high lifetime CPU percentages, alongside CPU PSI `some avg10=39.80` and
+zero sampled memory PSI. It supports workload contention at that moment, not
+attribution of every interval to those processes. No worker was interrupted.
+The 30-minute final continuity result is still pending.
+
+`node scripts/dogfood/live-soak-summary.cjs <samples.csv>` now summarizes these
+content-free samples (use `-` for stdin). Four tests cover time-weighted CPU,
+multi-core values, CRLF, incomplete data, counter resets and invalid intervals.
+The report deliberately does not claim acceptance or service continuity;
+continuity still requires the observer's final report. No live build change
+was made during this observation.
+
 ### Attachment recovery verification (September 6)
 
 All 88 attachment, terminal-view and mobile-composer tests passed, including
