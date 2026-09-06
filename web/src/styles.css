@@ -2798,6 +2798,14 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
    Queues had neither, so anything below the fold was unreachable. */
 .queues { display: grid; gap: 1.25rem; padding: 1rem; min-width: 0; min-height: 0; overflow-y: auto; }
 .queues-empty { color: var(--muted); }
+.queue-owner-index { display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: 8px; }
+.queue-owner-index a { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 48px; padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); color: var(--text); text-decoration: none; }
+.queue-owner-index a[data-owner="operator"] { background: var(--warn-soft); }
+.queue-owner-index a[data-owner="queen"] { border-color: var(--accent); }
+.queue-owner-index a[data-owner="unknown"] { border-style: dashed; }
+.queue-owner-index strong { font-variant-numeric: tabular-nums; font-size: 1.2rem; }
+.queue-owner-index a:focus-visible, .queue-group:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.queue-group { scroll-margin-block: 12px; }
 .queue-group { border: 1px solid var(--line); border-radius: 10px; padding: 0.85rem 1rem; background: var(--panel); min-width: 0; }
 .queue-group > header { display: grid; gap: 0.15rem; margin-bottom: 0.6rem; }
 .queue-group h2 { font-size: 0.95rem; margin: 0; display: flex; align-items: baseline; gap: 0.5rem; }

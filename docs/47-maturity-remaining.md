@@ -74,8 +74,12 @@ Fresh health reports `1.5.0-dev-3bfdcc3ec112-20260906035803-2873698`, no degrade
 subsystems. This deployment did NOT preserve the old PTYs: engine PID 2721173
 received graceful shutdown at 04:00:41 UTC and was replaced by PID 2876265, build
 `38453a84…`. The observed running count rose 1 -> 4 -> 8 -> 15 automatically, with
-no manual start requests and no worker runtime errors. The reason for the engine
-replacement still needs attribution; do not describe this as API-only continuity.
+no manual start requests and no worker runtime errors. The package reconciler's
+journal attributes the swap to `swarm-host-reconcile.service` at 04:00:40 UTC,
+completing at 04:00:49. Its 04:03:13 pass confirmed the new engine was current.
+The existing package path drains, checks activity and records owed returns before
+replacement. This was a managed update, not a host crash; do not describe it as
+API-only continuity or claim the old PTYs survived.
 D365's conversation report is current, not independent proof of the exact resumed
 conversation. The new engine reports Claude/Codex available and all three named
 experimental executables unavailable. No experimental worker was started.
@@ -84,6 +88,14 @@ Queue readability follow-up: dependency identity, owner and state remain visible
 with the narrative behind "Why this dependency" in Queues only. Task cards retain
 their existing presentation. The 74 focused queue/task tests and TypeScript pass;
 this follow-up is not yet deployed or a completed owner-first redesign.
+
+Queues now includes a compact owner index linked to the actual group and count,
+with keyboard-focusable targets. Counts disappear as the matching groups clear;
+no task or ownership mutation is involved. The 24 queue tests and TypeScript pass.
+Edge inspected the index at 390px and confirmed its dependency-group jump reaches
+that group. Normal activity remains collapsed. This navigation improvement does
+not yet unify transport-only waits with the task-owned groups or separate all
+scheduled holds; those remain in scope.
 
 ### Task board and queue hold consistency (September 6)
 

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import HeldBriefingList, { holdReason, waitedFor } from "../orchestration/HeldBriefingList";
 import type { BlockedEscalation, HeldBriefing, HeldDelivery, QueenAutomationStatus } from "../api";
 import DeliveryWaitList from "./DeliveryWaitList";
@@ -53,6 +53,11 @@ const GROUP_TITLES: Record<Group["owner"], string> = {
   blocked: "Blocked on something else",
   release: "Waiting to ship",
   nobody: "Settled",
+};
+
+const OWNER_LABELS: Record<Group["owner"], string> = {
+  operator: "You", queen: "Queen", worker: "Workers", blocked: "Dependencies / holds",
+  release: "Shipping", unknown: "Owner unclear", nobody: "Settled",
 };
 
 const GROUP_MEANINGS: Record<Group["owner"], string> = {
@@ -147,6 +152,7 @@ export default function QueuesView({
   queenAutomation?: QueenAutomationStatus;
   now?: number;
 }) {
+  const queueId = useId();
   const workerNames = useMemo(
     () => new Map(workers.map((worker) => [worker.id, worker.name])),
     [workers],
@@ -190,10 +196,15 @@ export default function QueuesView({
     <section className="queues" aria-label="Queues">
       {coordinatorUnavailable && <p role="status">Coordination status could not refresh. Showing last known work; it may have changed.</p>}
       {queenWait && <p className="queue-meaning">{queenWait}</p>}
+      {groups.length > 0 && <nav className="queue-owner-index" aria-label="Jump to queue owner">
+        {groups.map(group => <a key={group.owner} href={`#${queueId}-${group.owner}`} data-owner={group.owner}>
+          <span>{OWNER_LABELS[group.owner]}</span><strong>{group.tasks.length}</strong>
+        </a>)}
+      </nav>}
       {groups.map((group) => {
         const hours = oldestAgeHours(group.tasks, now);
         return (
-          <article key={group.owner} className="queue-group" data-owner={group.owner}>
+          <article key={group.owner} id={`${queueId}-${group.owner}`} tabIndex={-1} className="queue-group" data-owner={group.owner}>
             <header>
               <h2>
                 {group.title} <span className="queue-count">{group.tasks.length}</span>

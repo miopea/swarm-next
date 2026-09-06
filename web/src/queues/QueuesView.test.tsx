@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 import QueuesView from "./QueuesView";
 import type { Task } from "../api/tasks";
@@ -306,5 +306,22 @@ describe("QueuesView", () => {
     expect(screen.getAllByText("Blocked task")).toHaveLength(1);
     expect(screen.getByText(/Blocked for 13h/)).toBeInTheDocument();
     expect(screen.queryByText("Resolved task")).not.toBeInTheDocument();
+  });
+
+  test("owner navigation matches visible groups and updates without moving or changing tasks", () => {
+    const onOpenTask = vi.fn();
+    const waiting = [task({ id: "q", next_move_owner: "queen" }), task({ id: "b", state: "blocked", next_move_owner: "blocked" })];
+    const { rerender } = render(<QueuesView tasks={waiting} workers={[]} onOpenTask={onOpenTask} />);
+    const index = screen.getByRole("navigation", { name: "Jump to queue owner" });
+    const queenLink = within(index).getByRole("link", { name: "Queen 1" });
+    const target = document.getElementById(queenLink.getAttribute("href")!.slice(1));
+    expect(target).toHaveAttribute("data-owner", "queen");
+    expect(target).toHaveAttribute("tabindex", "-1");
+    expect(within(target!).getByRole("heading", { name: "Waiting on Queen 1" })).toBeVisible();
+    expect(within(index).getByRole("link", { name: "Dependencies / holds 1" })).toBeVisible();
+    expect(within(index).queryByRole("link", { name: /You/ })).not.toBeInTheDocument();
+    rerender(<QueuesView tasks={[waiting[1]]} workers={[]} onOpenTask={onOpenTask} />);
+    expect(screen.queryByRole("link", { name: "Queen 1" })).not.toBeInTheDocument();
+    expect(onOpenTask).not.toHaveBeenCalled();
   });
 });
