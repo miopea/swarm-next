@@ -34,6 +34,11 @@ This proves that observed non-initiating-tab journey, not the earlier ambiguous
 observation's cause. The progress copy no longer promises every open tab will
 reload itself. Its 30 projection tests and TypeScript check pass.
 
+The follow-up `d7942a85` deployment is also healthy with the same engine and all
+15 session IDs. This time the tab running `3a567a42` showed the new Browser
+update ready notice inside Runtime and system status; Reload this tab loaded
+`d7942a85` and cleared the notice without another login. No releases were cut.
+
 ### Held briefings identify the actual blocking task (September 6 UTC)
 
 Live inspection found four worker-busy briefings whose projection named an
@@ -1917,7 +1922,7 @@ unchanged. All 48 task-board tests passed again after the query correction.
   automatic work admission after machine pressure eases.
 - [ ] PROV-01: capability checklist, experimental opt-in and unattended gates;
   retain builder-only promotion and explicit provider selection.
-- [ ] UX-01/P6: review the pending composition, complete coherent desktop/mobile
+- [ ] UX-01/P6: finish the approved composition, complete coherent desktop/mobile
   surfaces, accessibility, shortcut behavior and optional return briefing.
 - [ ] P7: representative workday and overnight/mobile soak with recorded limits.
 
