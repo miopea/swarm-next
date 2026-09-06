@@ -1220,6 +1220,45 @@ test.each(["pending", "resolved", "withdrawn", "other-task", "worker-owned"])("q
   }
 });
 
+test("experimental temporary handoff sends consent only after confirmation and keeps failures in the dialog", async () => {
+  window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
+  const parent = { id: "parent", hive_id: "hive", name: "Daisy", role: "worker", provider: "claude_code", workspace: "/demo", position: 0, autostart: false, running: false, active_session_id: null, attention_state: "sleeping", created_at: 1, updated_at: 1 };
+  const base = bootFetch();
+  let attempts = 0;
+  const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/control-room/events")) return new Promise<Response>((_, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    });
+    if (url === "/api/v1/workers") return Promise.resolve(ok([parent]));
+    if (url === "/api/v1/providers") return Promise.resolve(ok({ claude_code: true, codex: true, experimental: { gemini: true, grok: false, opencode: false } }));
+    if (url === "/api/v1/workers/parent/temporary") {
+      attempts += 1;
+      return Promise.resolve(attempts === 1
+        ? new Response(JSON.stringify({ message: "Engine unavailable" }), { status: 503, headers: { "content-type": "application/json" } })
+        : ok({ ...parent, id: "temporary", name: "Daisy · Gemini", provider: "gemini", ephemeral: true }));
+    }
+    return base(input);
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Actions for Daisy" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Try this with Gemini (alpha)" }));
+  let dialog = screen.getByRole("dialog", { name: "Try Gemini alongside Daisy" });
+  expect(attempts).toBe(0);
+  expect(within(dialog).getByRole("button", { name: "Create temporary worker" })).toBeDisabled();
+  fireEvent.click(within(dialog).getByRole("checkbox"));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create temporary worker" }));
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent("503");
+  const request = fetch.mock.calls.find(([input]) => String(input).endsWith("/parent/temporary"));
+  expect(JSON.parse(request![1]!.body as string)).toMatchObject({ provider: "gemini", acknowledge_experimental_provider: true });
+  expect(within(dialog).getByRole("checkbox")).toBeChecked();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create temporary worker" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Try Gemini alongside Daisy" })).not.toBeInTheDocument());
+  expect(attempts).toBe(2);
+  expect(fetch.mock.calls.some(([, init]) => init?.method === "PATCH")).toBe(false);
+});
+
 function bootFetch() {
   return vi.fn((input: string | URL | Request) => {
     const url = String(input);

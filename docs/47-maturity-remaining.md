@@ -54,6 +54,18 @@ consent and retained creation failure. Mobile visual review, App-level temporary
 request integration, full-tree backend validation and deployment remain pending.
 No experimental provider was promoted or launched by these fixture checks.
 
+Follow-up validation: exact committed source `daf842e6` was exported to an isolated
+Linux directory rather than overlaid onto an older checkout. API/engine `cargo
+check` and all eight targeted experimental API/domain/IPC tests pass there.
+The App-level temporary-handoff regression now passes: no request before consent,
+explicit acknowledgement in the request, visible failure with retained consent,
+successful retry, and no PATCH to the parent. The fixture explicitly opens Workers
+before looking for its roster menu. The 390 by 844 Edge iframe viewport was
+measured and inspected in consent, expanded-limitations and failed-create states;
+text and buttons fit. This is responsive fixture evidence, not native Android or
+iOS acceptance. `web/mobile-harness.html` provides the bounded isolated viewport
+without changing a live browser window or reaching a Hive.
+
 ### Task board and queue hold consistency (September 6)
 
 Task cards now receive the existing coordinator hold projection through the app

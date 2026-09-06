@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Swarm narrow viewport fixture</title>
+  <style>
+    body { margin: 0; padding: 16px; background: #e8eadf; font: 14px system-ui; }
+    p { margin: 0 0 12px; }
+    iframe { display: block; border: 1px solid #79806a; background: white; }
+  </style>
+  <p>Isolated fixture viewport—not a native phone or live Hive.</p>
+  <iframe title="Swarm mobile fixture"></iframe>
+  <script type="module">
+    const query = new URLSearchParams(location.search);
+    const frame = document.querySelector("iframe");
+    const dimension = (key, fallback, min, max) => {
+      const value = Number(query.get(key) ?? fallback);
+      return Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
+    };
+    frame.width = dimension("width", 390, 280, 480);
+    frame.height = dimension("height", 844, 400, 1000);
+    const fixture = new URL("/harness.html", location.origin);
+    fixture.searchParams.set("surface", query.get("surface") ?? "experimental-handoff");
+    frame.src = fixture.href;
+  </script>
+</html>
