@@ -97,6 +97,15 @@ that group. Normal activity remains collapsed. This navigation improvement does
 not yet unify transport-only waits with the task-owned groups or separate all
 scheduled holds; those remain in scope.
 
+Recorded future holds now have a separate, collapsed Scheduled group. This
+presentation requires Blocked state, recorded blocked ownership and a finite
+future `blocked_until`; it never interprets prose or conceals a pending operator
+decision/unknown owner. An elapsed timestamp moves the row back into the visible
+blocked group on refresh without resuming it. The 83 queue/App tests and TypeScript
+pass, including mixed holds/decisions/missing evidence and expiry. Edge verified
+the folded fixture and expansion back to the actual task. Transport-only owner
+integration and the broader UX finish remain open.
+
 ### Task board and queue hold consistency (September 6)
 
 Task cards now receive the existing coordinator hold projection through the app

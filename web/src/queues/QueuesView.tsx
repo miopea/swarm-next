@@ -36,14 +36,14 @@ function QueueEvidence({ label, text }: { label: string; text: string }) {
  */
 
 type Group = {
-  owner: NextMoveOwner | "unknown";
+  owner: NextMoveOwner | "unknown" | "scheduled";
   title: string;
   /** What the operator should conclude from this pile growing. */
   meaning: string;
   tasks: Task[];
 };
 
-const GROUP_ORDER: readonly Group["owner"][] = ["operator", "queen", "worker", "blocked", "release", "unknown"];
+const GROUP_ORDER: readonly Group["owner"][] = ["operator", "queen", "worker", "unknown", "blocked", "release", "scheduled"];
 
 const GROUP_TITLES: Record<Group["owner"], string> = {
   unknown: "Next owner not recorded",
@@ -53,11 +53,12 @@ const GROUP_TITLES: Record<Group["owner"], string> = {
   blocked: "Blocked on something else",
   release: "Waiting to ship",
   nobody: "Settled",
+  scheduled: "Scheduled / deliberately parked",
 };
 
 const OWNER_LABELS: Record<Group["owner"], string> = {
   operator: "You", queen: "Queen", worker: "Workers", blocked: "Dependencies / holds",
-  release: "Shipping", unknown: "Owner unclear", nobody: "Settled",
+  release: "Shipping", unknown: "Owner unclear", nobody: "Settled", scheduled: "Scheduled",
 };
 
 const GROUP_MEANINGS: Record<Group["owner"], string> = {
@@ -68,7 +69,17 @@ const GROUP_MEANINGS: Record<Group["owner"], string> = {
   blocked: "Blocked work. Queen coordinates dependencies and recovery; task context explains the recorded block.",
   release: "Finished and accepted. These close themselves when the work ships.",
   nobody: "Closed.",
+  scheduled: "A future hold is recorded. Queen reassesses when it ends; other prerequisites may still apply.",
 };
+
+/** Presentation of a recorded hold, never an instruction to resume a task. */
+function displayOwner(task: Task, now: number): Group["owner"] {
+  if (task.next_move_owner === "blocked" && task.state === "blocked"
+    && task.blocked_until != null && Number.isFinite(new Date(task.blocked_until * 1000).getTime())
+    && task.blocked_until * 1000 > now) return "scheduled";
+  return task.next_move_owner && GROUP_ORDER.includes(task.next_move_owner)
+    ? task.next_move_owner : "unknown";
+}
 
 /**
  * Age of the oldest item, which is the number that says whether a pile is a
@@ -167,11 +178,9 @@ export default function QueuesView({
       title: GROUP_TITLES[owner],
       meaning: GROUP_MEANINGS[owner],
       // Missing ownership remains visible without attributing it to someone.
-      tasks: open.filter((task) => owner === "unknown"
-        ? !GROUP_ORDER.includes(task.next_move_owner as Group["owner"])
-        : task.next_move_owner === owner),
+      tasks: open.filter((task) => displayOwner(task, now) === owner),
     })).filter((group) => group.tasks.length > 0);
-  }, [waitingTasks]);
+  }, [waitingTasks, now]);
 
   const total = groups.reduce((sum, group) => sum + group.tasks.length, 0);
   const waits = new Map(blockedWaits.map((wait) => [wait.task_id, wait]));
@@ -203,6 +212,7 @@ export default function QueuesView({
       </nav>}
       {groups.map((group) => {
         const hours = oldestAgeHours(group.tasks, now);
+        const RowContainer = group.owner === "scheduled" ? "details" : "div";
         return (
           <article key={group.owner} id={`${queueId}-${group.owner}`} tabIndex={-1} className="queue-group" data-owner={group.owner}>
             <header>
@@ -214,6 +224,8 @@ export default function QueuesView({
                 <p className="queue-oldest">Longest since task update {ageLabel(hours)}</p>
               )}
             </header>
+            <RowContainer className="queue-group-rows">
+            {group.owner === "scheduled" && <summary>Show {group.tasks.length} scheduled task{group.tasks.length === 1 ? "" : "s"}</summary>}
             <ul>
               {group.tasks.map((task) => {
                 const briefing = briefings.get(task.id);
@@ -248,6 +260,7 @@ export default function QueuesView({
                 );
               })}
             </ul>
+            </RowContainer>
           </article>
         );
       })}

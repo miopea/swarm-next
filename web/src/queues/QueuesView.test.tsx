@@ -27,6 +27,8 @@ describe("QueuesView", () => {
     rerender(<QueuesView {...props} tasks={[{ ...blocked, prerequisites: [{ ...prerequisite, state: "completed" }] }]} />);
     expect(screen.getByText("Blocked · Queen reassessment needed")).toBeVisible();
     rerender(<QueuesView {...props} tasks={[{ ...blocked, blocked_until: 200 }]} />);
+    expect(screen.getByText("Scheduled hold")).not.toBeVisible();
+    fireEvent.click(screen.getByText("Show 1 scheduled task"));
     expect(screen.getByText("Scheduled hold")).toBeVisible();
     rerender(<QueuesView {...props} tasks={[{ ...blocked, blocked_until: 100 }]} />);
     expect(screen.getByText("Blocked · Queen reassessment needed")).toBeVisible();
@@ -39,6 +41,7 @@ describe("QueuesView", () => {
     const blocked = task({ state: "blocked", next_move_owner: "blocked", blocked_until: 200 });
     const props = { workers: [], onOpenTask: vi.fn() };
     const { rerender } = render(<QueuesView {...props} tasks={[blocked]} now={100_000} />);
+    fireEvent.click(screen.getByText("Show 1 scheduled task"));
     expect(screen.getByText(`Scheduled hold until ${new Date(200_000).toLocaleString()}`)).toBeVisible();
     rerender(<QueuesView {...props} tasks={[blocked]} now={200_000} />);
     expect(screen.getByText("Recorded hold ended · Queen reassesses remaining blockers")).toBeVisible();
@@ -48,6 +51,26 @@ describe("QueuesView", () => {
     expect(screen.queryByText(/Recorded hold|Scheduled hold/)).not.toBeInTheDocument();
     rerender(<QueuesView {...props} tasks={[{ ...blocked, blocked_until: Number.NaN }]} now={200_000} />);
     expect(screen.getByText("Recorded hold deadline unavailable")).toBeVisible();
+  });
+
+  test("only recorded future holds are parked, while operator decisions and missing evidence remain visible", () => {
+    const onOpenTask = vi.fn();
+    const scheduled = task({ id: "later", title: "Wait for the approved window", state: "blocked", next_move_owner: "blocked", blocked_until: 200 });
+    const decision = task({ id: "you", title: "Operator choice", state: "blocked", next_move_owner: "operator", blocked_until: 200 });
+    const unknown = task({ id: "unknown", title: "No recorded owner", state: "blocked", next_move_owner: undefined, blocked_until: 200 });
+    const noteOnly = task({ id: "note", title: "Prose is not a clock", state: "blocked", next_move_owner: "blocked", blocked_note: "Park until next year" });
+    const tasks = [scheduled, decision, unknown, noteOnly];
+    const { rerender } = render(<QueuesView tasks={tasks} workers={[]} onOpenTask={onOpenTask} now={100_000} />);
+    expect(screen.getByRole("link", { name: "Scheduled 1" })).toBeVisible();
+    expect(screen.getByText(scheduled.title)).not.toBeVisible();
+    expect(screen.getByText(decision.title)).toBeVisible();
+    expect(screen.getByText(unknown.title)).toBeVisible();
+    expect(screen.getByText(noteOnly.title)).toBeVisible();
+    rerender(<QueuesView tasks={tasks} workers={[]} onOpenTask={onOpenTask} now={200_000} />);
+    expect(screen.queryByRole("link", { name: "Scheduled 1" })).not.toBeInTheDocument();
+    expect(screen.getByText(scheduled.title)).toBeVisible();
+    expect(onOpenTask).not.toHaveBeenCalled();
+    expect(scheduled.state).toBe("blocked");
   });
   test("shows Queen's recorded pacing without inventing a task or retaining it after progress", () => {
     const status: QueenAutomationStatus = { enabled: true, state: "queued", run_id: "run", trigger: "actionable_work", actionable_count: 1, attempts: 0, requested_at: 1, delivered_at: null, finished_at: null, outcome: null, waiting_reason: "Pacing Queen's next review after a recent delivery" };

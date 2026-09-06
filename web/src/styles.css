@@ -2806,6 +2806,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .queue-owner-index strong { font-variant-numeric: tabular-nums; font-size: 1.2rem; }
 .queue-owner-index a:focus-visible, .queue-group:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
 .queue-group { scroll-margin-block: 12px; }
+.queue-group-rows > summary { min-height: 44px; padding-block: 10px; cursor: pointer; color: var(--muted); }
 .queue-group { border: 1px solid var(--line); border-radius: 10px; padding: 0.85rem 1rem; background: var(--panel); min-width: 0; }
 .queue-group > header { display: grid; gap: 0.15rem; margin-bottom: 0.6rem; }
 .queue-group h2 { font-size: 0.95rem; margin: 0; display: flex; align-items: baseline; gap: 0.5rem; }
