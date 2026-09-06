@@ -26,6 +26,17 @@ interviews, mobile input, failed submission and actionable command requests.
 Exact command authorization still requires the existing explicit grant; a custom
 answer must not silently grant it. Real-device and rendered acceptance remain open.
 
+Custom answers now stay open until the request succeeds. Answer and resolution
+failures propagate to the card, preserve its draft, and allow retry. A per-request
+in-flight guard prevents competing submissions before global busy state arrives;
+missing answer transport reports an error rather than appearing to accept text.
+The 45 inbox/interview tests pass, including retained failed replies, pending
+controls, missing transport and custom command responses that never invoke the
+grant action. The App suite passes 57 tests and TypeScript checking passes.
+An existing action-attribution test now waits for its first request to settle
+before attempting another action. These checks do not prove real-phone delivery
+or direct-terminal reconciliation.
+
 ### Experimental admission UI implementation (September 6 UTC)
 
 Settings now requires explicit per-change experimental consent and engine

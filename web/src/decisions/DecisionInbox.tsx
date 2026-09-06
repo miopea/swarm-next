@@ -57,6 +57,11 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
   const [dismissConfirmId, setDismissConfirmId] = useState<string>();
   const [speakingId, setSpeakingId] = useState<string>();
   const [spoken, setSpoken] = useState<Record<string, string>>({});
+  const [submissionErrors, setSubmissionErrors] = useState<Record<string, string>>({});
+  const [submittingIds, setSubmittingIds] = useState<Set<string>>(new Set());
+  const inFlight = useRef(new Set<string>());
+  const currentDecisions = useRef(decisions);
+  currentDecisions.current = decisions;
   const [activity, setActivity] = useState<TaskActivityPage>();
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityFailed, setActivityFailed] = useState(false);
@@ -109,9 +114,35 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
     };
     setNotes(prune);
     setSpoken(prune);
+    setSubmissionErrors(prune);
     setSpeakingId((id) => id && pendingIds.has(id) ? id : undefined);
     setDismissConfirmId((id) => id && pendingIds.has(id) ? id : undefined);
   }, [decisions]);
+
+  async function submitDecision(decision: DecisionRequest, action: () => Promise<void>) {
+    if (busy || inFlight.current.has(decision.id)) return;
+    inFlight.current.add(decision.id);
+    setSubmittingIds(new Set(inFlight.current));
+    setSubmissionErrors(current => ({ ...current, [decision.id]: "" }));
+    try {
+      await action();
+      setSpeakingId(current => current === decision.id ? undefined : current);
+    } catch (error) {
+      if (currentDecisions.current.some(current => current.id === decision.id && current.state === "pending")) {
+        setSubmissionErrors(current => ({ ...current, [decision.id]: error instanceof Error ? error.message : "Your answer could not be sent. It is still here to retry." }));
+      }
+    } finally {
+      inFlight.current.delete(decision.id);
+      setSubmittingIds(new Set(inFlight.current));
+    }
+  }
+
+  function submitAnswer(decision: DecisionRequest, answers: Record<string, string[]>, note: string) {
+    return submitDecision(decision, async () => {
+      if (!onAnswer) throw new Error("Answers cannot be sent from this view. Your text has been kept.");
+      await onAnswer(decision, answers, note);
+    });
+  }
 
   // Navigation owns one focus request, including when its data arrives later.
   // Refreshes cannot create another request or pull the operator out of Activity.
@@ -221,6 +252,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
             const repo = (decision.task_id ? taskRepos.get(decision.task_id) : undefined)
               ?? workerRepos.get(decision.requesting_worker_id);
             const note = notes[decision.id] ?? "";
+            const decisionBusy = busy || submittingIds.has(decision.id);
             return (
               <article className={`decision-card urgency-${decision.urgency} state-${decision.state}`} data-decision-id={decision.id} key={decision.id} tabIndex={-1}>
                 <header>
@@ -256,20 +288,20 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                         "stop asking me" cannot be recorded identically. */}
                     <DecisionInterview
                       questions={decision.questions}
-                      busy={busy}
-                      onAnswer={(answers, answerNote) => { setDismissConfirmId(undefined); void onAnswer?.(decision, answers, answerNote); }}
+                      busy={decisionBusy}
+                      onAnswer={(answers, answerNote) => { setDismissConfirmId(undefined); void submitAnswer(decision, answers, answerNote); }}
                     />
                     <div className="decision-actions">
                       <button
                         type="button"
                         className="secondary-button decision-dismiss"
-                        disabled={busy || !note.trim()}
+                        disabled={decisionBusy || !note.trim()}
                         title={note.trim() ? "Decline to answer, telling the worker why" : "Dismissing an interview needs a reason the worker can act on"}
-                        onClick={() => { setDismissConfirmId(undefined); void onResolve(decision, "dismissed", note, "inbox_dismiss"); }}
+                        onClick={() => { setDismissConfirmId(undefined); void submitDecision(decision, () => onResolve(decision, "dismissed", note, "inbox_dismiss")); }}
                       >Decline with a reason</button>
                       <label className="decision-dismiss-reason">
                         <span>Reason</span>
-                        <input value={note} maxLength={4000} disabled={busy} placeholder="Why you are not answering now" onChange={(event) => setNotes((current) => ({ ...current, [decision.id]: event.target.value }))} />
+                        <input value={note} maxLength={4000} disabled={decisionBusy} placeholder="Why you are not answering now" onChange={(event) => setNotes((current) => ({ ...current, [decision.id]: event.target.value }))} />
                       </label>
                     </div>
                   </div>
@@ -296,11 +328,11 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                     ) : null}
                     <details className="decision-argument decision-note">
                       <summary>{note.trim() ? "Edit your note" : "Add an optional note"}</summary>
-                      <label><span>Optional note</span><textarea value={note} maxLength={4000} disabled={busy} onChange={(event) => setNotes((current) => ({ ...current, [decision.id]: event.target.value }))} placeholder="Add context for the worker" /></label>
+                      <label><span>Optional note</span><textarea value={note} maxLength={4000} disabled={decisionBusy} onChange={(event) => setNotes((current) => ({ ...current, [decision.id]: event.target.value }))} placeholder="Add context for the worker" /></label>
                     </details>
                     <div className="decision-actions">
                       {decision.allowed_actions.map((action) => (
-                        <button key={action} type="button" className={humanize(action).trim().toLowerCase() === humanize(decision.suggested_action).trim().toLowerCase() ? "primary-action" : "secondary-button"} disabled={busy} onClick={() => { setDismissConfirmId(undefined); void onResolve(decision, action, note, "inbox_action"); }}>{humanize(action)}</button>
+                        <button key={action} type="button" className={humanize(action).trim().toLowerCase() === humanize(decision.suggested_action).trim().toLowerCase() ? "primary-action" : "secondary-button"} disabled={decisionBusy} onClick={() => { setDismissConfirmId(undefined); void submitDecision(decision, () => onResolve(decision, action, note, "inbox_action")); }}>{humanize(action)}</button>
                       ))}
                       {/* The buttons above are the asker's guesses. When none
                           of them is the answer, the answer is still the
@@ -309,13 +341,13 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                       <button
                         type="button"
                         className="secondary-button"
-                        disabled={busy}
+                        disabled={decisionBusy}
                         onClick={() => setSpeakingId(speakingId === decision.id ? undefined : decision.id)}
                       >{speakingId === decision.id ? "Never mind" : "Say something else"}</button>
                       <button
                         type="button"
                         className="secondary-button decision-dismiss"
-                        disabled={busy}
+                        disabled={decisionBusy}
                         title="Resolve this request without taking any proposed action"
                         onClick={() => {
                           if (dismissConfirmId !== decision.id) {
@@ -323,7 +355,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                             return;
                           }
                           setDismissConfirmId(undefined);
-                          void onResolve(decision, "dismissed", note, "inbox_dismiss");
+                          void submitDecision(decision, () => onResolve(decision, "dismissed", note, "inbox_dismiss"));
                         }}
                       >
                         {dismissConfirmId === decision.id ? "Confirm dismiss" : "Dismiss request"}
@@ -335,6 +367,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                           <span>Tell the worker what to do instead</span>
                           <textarea
                             rows={3}
+                            disabled={decisionBusy}
                             value={spoken[decision.id] ?? ""}
                             maxLength={4000}
                             placeholder="Add it to the Play Store yourself, using the browser extension"
@@ -344,10 +377,9 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                         <button
                           type="button"
                           className="primary-action"
-                          disabled={busy || !(spoken[decision.id] ?? "").trim()}
+                          disabled={decisionBusy || !(spoken[decision.id] ?? "").trim()}
                           onClick={() => {
-                            setSpeakingId(undefined);
-                            void onAnswer?.(decision, { Answer: [(spoken[decision.id] ?? "").trim()] }, note);
+                            void submitAnswer(decision, { Answer: [(spoken[decision.id] ?? "").trim()] }, note);
                           }}
                         >Send this instead</button>
                       </div>
@@ -358,6 +390,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                 ) : (
                   <div className="decision-resolved"><p><strong>{humanize(decision.resolution_action ?? "resolved")}</strong>{decision.resolution_note ? ` · ${decision.resolution_note}` : ""}</p><span className={`delivery-state ${decision.delivery_state ?? "recorded"}`}>{deliveryLabel(decision.delivery_state)}</span></div>
                 )}
+                {decision.state === "pending" && submissionErrors[decision.id] && <p className="field-error" role="alert">{submissionErrors[decision.id]}</p>}
               </article>
             );
           })}

@@ -1104,7 +1104,7 @@ export function App() {
     await perform(async () => {
       const updated = await answerDecision(operatorToken, decision.id, answers, note);
       setDecisions((current) => current.map((item) => item.id === updated.id ? updated : item));
-    }, "Sending your answers…");
+    }, "Sending your answers…", true);
   }
 
   async function resolveInboxDecision(decision: DecisionRequest, action: string, note: string, surface: DecisionSurface) {
@@ -1112,7 +1112,7 @@ export function App() {
     await perform(async () => {
       const updated = await resolveDecision(operatorToken, decision.id, action, note, surface);
       setDecisions((current) => current.map((item) => item.id === updated.id ? updated : item));
-    });
+    }, "Saving your decision…", true);
   }
   function replaceTask(updated: Task) {
     setTasks((current) => current.map((task) => task.id === updated.id ? updated : task));

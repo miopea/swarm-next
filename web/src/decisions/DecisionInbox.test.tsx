@@ -328,7 +328,7 @@ test("does not move the card under the operator every time the inbox refreshes",
   expect(scrollIntoView).not.toHaveBeenCalled();
 });
 
-test("names which control the operator used, so a disputed answer can be traced", () => {
+test("names which control the operator used, so a disputed answer can be traced", async () => {
   // A decision was recorded with an action the operator says they did not
   // choose, and nothing captured where the answer arrived from.
   const onResolve = vi.fn().mockResolvedValue(undefined);
@@ -339,6 +339,7 @@ test("names which control the operator used, so a disputed answer can be traced"
   fireEvent.click(screen.getByRole("button", { name: "Durable path" }));
   expect(onResolve).toHaveBeenCalledWith(pending, "durable_path", "", "inbox_action");
 
+  await waitFor(() => expect(screen.getByRole("button", { name: "Dismiss request" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "Dismiss request" }));
   fireEvent.click(screen.getByRole("button", { name: "Confirm dismiss" }));
   expect(onResolve).toHaveBeenCalledWith(pending, "dismissed", "", "inbox_dismiss");
@@ -479,6 +480,48 @@ test("leads with what is being decided and folds the argument behind it", () => 
   expect(argument.closest("details")).not.toHaveAttribute("open");
   expect(screen.getByText(pending.evidence).closest("details")).toBe(argument.closest("details"));
   expect(screen.getByText(pending.risk).closest("details")).toBeNull();
+});
+
+test("a failed custom answer remains visible and can be retried without choosing a quick action", async () => {
+  const onAnswer = vi.fn().mockRejectedValueOnce(new Error("Connection interrupted; answer not saved")).mockResolvedValueOnce(undefined);
+  const onResolve = vi.fn();
+  render(<DecisionInbox decisions={[pending]} tasks={[task]} workers={[worker]} busy={false} onResolve={onResolve} onAnswer={onAnswer} />);
+  fireEvent.click(screen.getByRole("button", { name: "Say something else" }));
+  fireEvent.change(screen.getByLabelText("Tell the worker what to do instead"), { target: { value: "Do neither; investigate the third route first." } });
+  fireEvent.click(screen.getByRole("button", { name: "Send this instead" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Connection interrupted");
+  expect(screen.getByLabelText("Tell the worker what to do instead")).toHaveValue("Do neither; investigate the third route first.");
+  fireEvent.click(screen.getByRole("button", { name: "Send this instead" }));
+  await waitFor(() => expect(screen.queryByLabelText("Tell the worker what to do instead")).not.toBeInTheDocument());
+  expect(onAnswer).toHaveBeenCalledTimes(2);
+  expect(onResolve).not.toHaveBeenCalled();
+});
+
+test("pending custom answers disable competing decisions and never grant an exact command", async () => {
+  let finish!: () => void;
+  const onAnswer = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+  const onResolve = vi.fn();
+  render(<DecisionInbox decisions={[{ ...pending, requested_command: "demo-only-command" }]} tasks={[task]} workers={[worker]} busy={false} onResolve={onResolve} onAnswer={onAnswer} />);
+  fireEvent.click(screen.getByRole("button", { name: "Say something else" }));
+  fireEvent.change(screen.getByLabelText("Tell the worker what to do instead"), { target: { value: "Do not run this command. Explain the alternative." } });
+  fireEvent.click(screen.getByRole("button", { name: "Send this instead" }));
+  expect(screen.getByRole("button", { name: "Send this instead" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Durable path" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Dismiss request" })).toBeDisabled();
+  expect(screen.getByLabelText("Tell the worker what to do instead")).toBeDisabled();
+  expect(onResolve).not.toHaveBeenCalled();
+  finish();
+  await waitFor(() => expect(screen.queryByLabelText("Tell the worker what to do instead")).not.toBeInTheDocument());
+  expect(onAnswer).toHaveBeenCalledOnce();
+});
+
+test("a view without answer transport reports a failure instead of silently consuming custom text", async () => {
+  render(<DecisionInbox decisions={[pending]} tasks={[task]} workers={[worker]} busy={false} onResolve={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Say something else" }));
+  fireEvent.change(screen.getByLabelText("Tell the worker what to do instead"), { target: { value: "Keep my answer" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send this instead" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Answers cannot be sent from this view");
+  expect(screen.getByLabelText("Tell the worker what to do instead")).toHaveValue("Keep my answer");
 });
 
 test("long summaries expand without hiding the ask or losing source text", () => {
