@@ -5,6 +5,8 @@ import SavedBrowserEvidence from "./SavedBrowserEvidence";
 import { BROWSER_METRICS, readBrowserPerformance } from "../runtime/browserPerformance";
 import { terminalWorkspace } from "../terminal/TerminalWorkspace";
 import { browserTimingLabels, browserTimingLimitations } from "./browserTimingLabels";
+import { readBrowserHeapEstimate } from "../runtime/browserHeapEstimate";
+import { builtVersion } from "../staleBundle";
 
 export default function DeveloperDogfoodWorkspace({ runtime, version, reachable, collection, operatorToken }: {
   runtime: DevelopmentRuntime | undefined; version: string | undefined; reachable: boolean;
@@ -15,6 +17,7 @@ export default function DeveloperDogfoodWorkspace({ runtime, version, reachable,
   const [preview, setPreview] = useState(false);
   const [retention, setRetention] = useState(() => terminalWorkspace.rendererRetention);
   const [coldRestores, setColdRestores] = useState(() => terminalWorkspace.coldRestoreEvidence);
+  const [heap, setHeap] = useState<ReturnType<typeof readBrowserHeapEstimate>>();
   useEffect(() => {
     if (!runtime?.enabled) {
       terminalWorkspace.setWarmPoolExperiment(false);
@@ -58,6 +61,11 @@ export default function DeveloperDogfoodWorkspace({ runtime, version, reachable,
       setColdRestores(terminalWorkspace.coldRestoreEvidence);
     }}>{retention.limit === undefined ? "Try five-renderer pool" : "Stop warm-pool experiment"}</button>
     <p>{retention.retained} retained · {retention.attached} attached · {retention.inactive} inactive · {retention.evictions} evicted</p>
+    <button type="button" onClick={() => { setHeap(readBrowserHeapEstimate()); setRetention(terminalWorkspace.rendererRetention); }}>Sample heap estimate</button>
+    <p aria-live="polite">{heap === undefined ? "JS heap: not sampled." : heap.available
+      ? `JS heap estimate: ${(heap.used_bytes / 1048576).toFixed(1)} MiB used · ${(heap.allocated_bytes / 1048576).toFixed(1)} MiB allocated.`
+      : "JS heap estimate unavailable in this browser."}</p>
+    <small>On demand only; no heap scan or forced garbage collection. Chromium's legacy estimate may include shared heaps and omit other allocations. Not total browser/GPU memory, not proof of a leak, and not comparable to Edge Task Manager. Compare the same build and workload over repeated samples; verify total memory in browser tools. Not uploaded with hourly history.</small>
     <p>Cold view applied: {coldRestores.samples ? `${coldRestores.samples} ${coldRestores.samples === 1 ? "sample" : "samples"} · p95 ${Math.round(coldRestores.p95_ms!)} ms · max ${Math.round(coldRestores.max_ms!)} ms` : "No completed samples"}.</p>
     {coldRestores.samples > 0 && coldRestores.samples < 20 && <small>Small sample set — not enough for a rollout decision.</small>}
     {coldRestores.slowest && <p>Slowest cold return: {Math.round(coldRestores.slowest.total_ms)} ms total · {coldRestores.slowest.setup_ms === null ? "setup unavailable" : `${Math.round(coldRestores.slowest.setup_ms)} ms renderer setup`} · {coldRestores.slowest.connection_ms === null ? "connection unavailable" : `${Math.round(coldRestores.slowest.connection_ms)} ms connection through applied state`}.</p>}
@@ -70,7 +78,7 @@ export default function DeveloperDogfoodWorkspace({ runtime, version, reachable,
     <p>{evidence.current.incidents.length} retained incidents. {evidence.before_reload ? "Before-reload evidence is available." : "No before-reload evidence available."}</p>
     <button type="button" onClick={() => { setEvidence(readBrowserPerformance()); setRetention(terminalWorkspace.rendererRetention); setColdRestores(terminalWorkspace.coldRestoreEvidence); }}>Refresh evidence</button>
     <button type="button" aria-expanded={preview} onClick={() => setPreview(!preview)}>Preview browser evidence</button>
-    {preview && <pre>{JSON.stringify({ running_version: version ?? runtime.version, checkout_revision: runtime.source_revision, source_dirty: runtime.source_dirty, browser: evidence, renderer_pool: retention, cold_view_restores: coldRestores }, null, 2)}</pre>}
+    {preview && <pre>{JSON.stringify({ running_version: version ?? runtime.version, browser_version: builtVersion() ?? null, checkout_revision: runtime.source_revision, source_dirty: runtime.source_dirty, browser: evidence, renderer_pool: retention, heap_estimate: heap, cold_view_restores: coldRestores }, null, 2)}</pre>}
     <small>Controlled workload comparisons and instrumentation-overhead validation are still pending. This panel does not publish or cut releases.</small>
   </section>;
 }

@@ -8,6 +8,25 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### On-demand heap evidence for retention comparisons (September 6 UTC)
+
+Developer Dogfood can sample the browser's optional Chromium legacy heap
+estimate alongside renderer counts. This reads three numeric properties only:
+no new timer, heap scan, forced GC, hourly upload or automatic eviction policy.
+Unsupported, throwing or inconsistent data is unavailable, not zero. The
+preview distinguishes browser build from server version. The adapter is owned
+by Developer Dogfood and should be removed when a supported cross-browser
+replacement covers this measurement. It cannot be used for admission or alerts.
+
+The estimate is not browser-process or GPU memory and can over/under-count;
+see [the API limitations](https://developer.mozilla.org/en-US/docs/Web/API/Performance/memory).
+Fifteen focused validation/UI tests and TypeScript pass. In the isolated Edge
+DOM-renderer fixture, samples were 21.4 MiB used/25.6 allocated with one renderer,
+24.7/33.8 with eight, 25.4/27.6 with fifteen, and 25.2/28.0 after a second full
+fifteen-terminal pass. Each visit waited for connected state. This short fixture
+run is not a live GPU measurement, long-session plateau or a warm-pool rollout
+decision. The default retention policy remains unchanged.
+
 ### Browser update observation ownership (September 6 UTC)
 
 The pre-existing mismatch notice is now in the runtime area, with concise copy

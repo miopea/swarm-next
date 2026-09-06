@@ -3,9 +3,23 @@ import { afterEach, expect, test, vi } from "vitest";
 import type { DevelopmentRuntime } from "../api";
 import DeveloperDogfoodWorkspace from "./DeveloperDogfoodWorkspace";
 import { terminalWorkspace } from "../terminal/TerminalWorkspace";
+import * as heapEvidence from "../runtime/browserHeapEstimate";
 
 afterEach(() => { cleanup(); terminalWorkspace.logout(); vi.restoreAllMocks(); });
 const runtime = { enabled: true, version: "dev-test", source_revision: "abc123", source_dirty: false } as DevelopmentRuntime;
+
+test("heap sampling is explicit and unsupported memory is not presented as zero", () => {
+  const read = vi.spyOn(heapEvidence, "readBrowserHeapEstimate").mockReturnValue({ available: false });
+  render(<DeveloperDogfoodWorkspace runtime={runtime} version="test" reachable />);
+  expect(read).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Sample heap estimate" }));
+  expect(read).toHaveBeenCalledTimes(1);
+  expect(screen.getByText("JS heap estimate unavailable in this browser.")).toBeVisible();
+  read.mockReturnValue({ available: true, source: "chromium_legacy_heap_estimate", captured_at: 1, used_bytes: 1048576, allocated_bytes: 2097152, limit_bytes: 4194304 });
+  fireEvent.click(screen.getByRole("button", { name: "Sample heap estimate" }));
+  expect(screen.getByText("JS heap estimate: 1.0 MiB used · 2.0 MiB allocated.")).toBeVisible();
+  expect(screen.getByText(/Not total browser\/GPU memory/)).toBeVisible();
+});
 
 test("uses development detection without another enable toggle", () => {
   const { rerender } = render(<DeveloperDogfoodWorkspace runtime={undefined} version="test" reachable={false} />);
