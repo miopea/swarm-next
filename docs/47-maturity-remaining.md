@@ -1,5 +1,33 @@
 # Daily-driver maturity: remaining delivery and acceptance
 
+## 2026-09-06: completed 20-minute live observation and CI recovery
+
+Observer `20260906T130816Z-live` completed 1,200 seconds, 40 samples spanning
+1,184 seconds, with all 15 initial sessions running throughout. API PID 3090658
+and engine PID 2876265 stayed constant; runtime was `081a8f34`. API cgroup CPU
+averaged 4.80% of one core, max interval 24.29%; terminal-host cgroup including
+providers averaged 164.51%, max interval 727.77%. These are interval averages,
+not instantaneous peaks or engine-only measurements. API memory ranged 76,005,376
+to 200,511,488 bytes; host cgroup 6,535,192,576 to 8,279,588,864 bytes. Retained
+history ranged 532,909,264 to 536,399,839 bytes with zero dropped history. This
+shows continuity and meaningful load variation, not an aged-browser heap plateau.
+Report/CSV: `~/.local/state/swarm-next/soak/20260906T130816Z-live-{summary.json,samples.csv}`.
+
+GitHub CI inspection found repeated formatting failures in maintenance.rs and
+terminal_control.rs; these prevented Clippy and Rust tests from running, despite
+passing web/package jobs. Formatting fixed by `956d249e`. Subsequent Clippy runs
+found long regression tests and a constant placed after statements; scoped test
+exceptions and declaration movement are in `667322c2` and `5f8dbf00`. No runtime
+semantics changed. CI run 34036337401 is pending verification; do not call it green.
+
+Live browser Queues -> Open worker Swarm Dogfood navigated to the correct demo
+terminal. One-time native approvals for its task-list read and own Active
+transition succeeded through normal browser control. API confirms demo task
+`01a07595-3a79-7221-852e-d8f5fefa60ed` Active, updated 1788700804. The prior
+permission wait is not missing Enter; do not bypass generation guards. Later
+browser tabs closed and new tabs required authentication; further journey remains
+open. No real worker received test input.
+
 ## 2026-09-06: distinguish engine overhead from provider work
 
 The live observer's terminal-host cgroup CPU includes provider workers; it cannot
