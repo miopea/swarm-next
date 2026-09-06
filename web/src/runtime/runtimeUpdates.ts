@@ -160,8 +160,8 @@ function appUpdate(development: DevelopmentRuntime | undefined): RuntimeUpdateSu
       kind: "building",
       label: "Updating App and API",
       detail: revision
-        ? `Building and checking revision ${revision}. Workers keep running and Swarm stays usable; the page reloads itself when it is ready.`
-        : "Building and checking the development update. Workers keep running and Swarm stays usable; the page reloads itself when it is ready.",
+        ? `Building and checking revision ${revision}. Swarm stays usable while the build runs. Other open tabs may need reloading afterward.`
+        : "Building and checking the development update. Swarm stays usable while the build runs. Other open tabs may need reloading afterward.",
       busy: true,
     };
   }

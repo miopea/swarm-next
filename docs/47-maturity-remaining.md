@@ -25,6 +25,15 @@ This does not prove that the preceding live mismatch was stale assets rather
 than stale coordinator data; that attribution remains unconfirmed. Automatic
 live update acceptance and unsaved-form preservation remain broader gates.
 
+The complete frontend suite passes 1,234 tests across 136 files. `3a567a42`
+deployed healthy with the exact same engine and all 15 session IDs. A separate
+Edge tab retained the previous build during installation, then correctly showed
+its existing mismatch notice when the new server answered. Clicking Reload
+loaded the new version, cleared the notice and retained trusted authentication.
+This proves that observed non-initiating-tab journey, not the earlier ambiguous
+observation's cause. The progress copy no longer promises every open tab will
+reload itself. Its 30 projection tests and TypeScript check pass.
+
 ### Held briefings identify the actual blocking task (September 6 UTC)
 
 Live inspection found four worker-busy briefings whose projection named an
