@@ -89,12 +89,15 @@ globalThis.WebSocket = class extends FixtureWebSocket {
  * on any machine renders identically. Slower, and nothing here is racing.
  */
 const originalGetContext = HTMLCanvasElement.prototype.getContext;
+// Explicit opt-in for actual GPU lifecycle checks; photographic fixtures keep
+// their deterministic DOM fallback. This entry is never used by the live app.
+const allowFixtureGpu = new URLSearchParams(window.location.search).get("gpu") === "enabled";
 HTMLCanvasElement.prototype.getContext = function getContext(
   this: HTMLCanvasElement,
   contextId: string,
   ...rest: unknown[]
 ) {
-  if (contextId === "webgl2" || contextId === "webgl" || contextId === "experimental-webgl") return null;
+  if (!allowFixtureGpu && (contextId === "webgl2" || contextId === "webgl" || contextId === "experimental-webgl")) return null;
   return (originalGetContext as (this: HTMLCanvasElement, id: string, ...args: unknown[]) => unknown).call(
     this,
     contextId,

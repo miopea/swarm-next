@@ -11,6 +11,23 @@ export default function TerminalPoolFixture() {
   const [worker, setWorker] = useState(1);
   const [generations, setGenerations] = useState(Array<number>(WORKER_COUNT).fill(0));
   const [retained, setRetained] = useState<ReturnType<typeof inspectRetention>>();
+  const [gpuEvidence, setGpuEvidence] = useState("Not inspected");
+  const gpuEnabled = new URLSearchParams(window.location.search).get("gpu") === "enabled";
+  function inspectGpu(lose: boolean) {
+    const canvases = document.querySelectorAll<HTMLCanvasElement>(".terminal-surface canvas");
+    let contexts = 0;
+    let requested = 0;
+    for (const canvas of canvases) {
+      const context = canvas.getContext("webgl2");
+      if (!context || context.isContextLost()) continue;
+      contexts++;
+      if (lose) {
+        const extension = context.getExtension("WEBGL_lose_context");
+        if (extension) { extension.loseContext(); requested++; }
+      }
+    }
+    setGpuEvidence(`${contexts} live WebGL contexts; ${requested} loss requests; ${document.querySelectorAll(".terminal-surface .xterm-rows").length} DOM renderers`);
+  }
   useEffect(() => {
     terminalWorkspace.reconcileSessions(generations.map((generation, index) => `fixture-pool-${index + 1}-${generation}`));
   }, [generations]);
@@ -20,6 +37,12 @@ export default function TerminalPoolFixture() {
     <nav aria-label="Fixture workers">
       {Array.from({ length: WORKER_COUNT }, (_, index) => index + 1).map((number) => <button type="button" key={number} aria-pressed={number === worker} onClick={() => setWorker(number)}>Fixture worker {number}</button>)}
     </nav>
+    {gpuEnabled && <section aria-label="GPU lifecycle fixture">
+      <p>Real WebGL, synthetic workers. Lose the selected context, inspect fallback, switch workers and return, then inspect recovery. No Hive requests.</p>
+      <button onClick={() => inspectGpu(true)}>Lose selected GPU context</button>
+      <button onClick={() => inspectGpu(false)}>Inspect GPU renderer</button>
+      <p role="status">{gpuEvidence}</p>
+    </section>}
     <button onClick={() => setGenerations((current) => current.map((generation, index) => index === worker - 1 ? generation + 1 : generation))}>Replace selected session</button>
     <button onClick={() => setRetained(inspectRetention())}>Inspect retained renderers</button>
     {retained !== undefined && <p role="status">{retained.retained} retained browser renderers · {retained.attached} attached · {retained.inactive} inactive · {retained.evictions} evicted · page {retained.visibility} · {retained.focused ? "focused" : "unfocused"}</p>}

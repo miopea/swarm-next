@@ -8,7 +8,7 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
-### Bounded GPU renderer recovery (September 6 UTC, pending live verification)
+### Bounded GPU renderer recovery (September 6 UTC, pending deployment)
 
 Inspection found that a lost GPU context fell back permanently until the browser
 renderer was recreated. The surface now makes one recovery attempt when a
@@ -20,8 +20,15 @@ Validation: 85 XtermSurface/TerminalController tests, the complete 1,250-test
 frontend suite (137 files), and TypeScript check passed.
 Coverage includes successful recovery, stale context callbacks, activation
 failure, loss during activation, unavailable GPU, hidden/detached views, disposal,
-and usable terminal writes after failure. These use addon doubles, not an actual
-driver reset. Real GPU context-loss recovery and deployment remain unverified.
+and usable terminal writes after failure. These use addon doubles.
+
+Edge isolated fixture verification used actual WebGL and its public
+`WEBGL_lose_context` extension: before loss, one live context and no DOM renderer;
+after loss, zero live contexts and one DOM renderer; after switching to another
+synthetic worker and back, one live context and no DOM renderer. This exercises
+the real addon and controller, not a physical driver reset or a native-phone
+background cycle. Harness GPU use is explicit opt-in (`gpu=enabled`); default
+photographic fixtures still use DOM rendering. Deployment remains unverified.
 The earlier live 15-worker samples did not observe a fallback, so this is not
 claimed as the cause or a measured fix for overall sluggishness.
 
