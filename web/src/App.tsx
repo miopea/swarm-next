@@ -5,6 +5,7 @@ import BroadcastToWorkers from "./workers/BroadcastToWorkers";
 import ConversationDriftCard, { type WorkerConversation } from "./workers/ConversationDriftCard";
 import PublicAddressWarning from "./PublicAddressWarning";
 import StaleBundleNotice from "./StaleBundleNotice";
+import { watchDevelopmentBuild as observeDevelopmentBuild } from "./runtime/watchDevelopmentBuild";
 import { useDogfoodCollection } from "./runtime/useDogfoodCollection";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 
@@ -14,7 +15,6 @@ import {
   createBrowserSession,
   createTask,
   fetchReleaseNotes,
-  fetchDevelopmentRuntime,
   type DevelopmentRuntime,
   answerDecision,
   resolveDecision,
@@ -59,7 +59,6 @@ import {
   reconcileJira,
   recoverTransientRuntime,
   requestDevelopmentReload,
-  RuntimeRequestError,
   releaseWorkerEngagement,
   revokeBrowserSession,
   setManualPresence,
@@ -367,6 +366,8 @@ export function App() {
   // unauthenticated health call, which this page already makes.
   const [serverVersion, setServerVersion] = useState<string | null>(null);
   const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
+  const developmentBuildWatch = useRef<AbortController | null>(null);
+  useEffect(() => () => { developmentBuildWatch.current?.abort(); }, [operatorToken]);
   const refreshServerVersion = useCallback(async (signal: AbortSignal) => {
     try {
       const health = await fetchHealth(signal);
@@ -1355,6 +1356,9 @@ export function App() {
   async function reloadDevelopmentBuild() {
     if (!operatorToken || loadState.kind !== "ready") return;
     const previousVersion = loadState.health.version;
+    developmentBuildWatch.current?.abort();
+    const owner = new AbortController();
+    developmentBuildWatch.current = owner;
     // Only asking for the build is a blocking operation.
     //
     // Waiting for it used to be one too, and a build takes minutes: the whole
@@ -1364,11 +1368,17 @@ export function App() {
     // opening a terminal, waking a worker and stopping one all work normally
     // throughout. The only unavailable moment is the restart at the end, which
     // is seconds long and already recovers on its own.
-    await perform(
-      async () => requestRuntimeHandoff(() => requestDevelopmentReload(operatorToken)),
-      "Starting development build…",
-    );
-    void watchDevelopmentBuild(previousVersion);
+    try {
+      await perform(
+        async () => requestRuntimeHandoff(() => requestDevelopmentReload(operatorToken)),
+        "Starting development build…",
+        true,
+      );
+    } catch {
+      owner.abort();
+      return;
+    }
+    if (!owner.signal.aborted) void watchDevelopmentBuild(previousVersion, owner);
   }
 
   /**
@@ -1378,41 +1388,15 @@ export function App() {
    * own; this exists to reload the page the moment the new version answers, and
    * to surface a compile failure rather than leaving the indicator spinning.
    */
-  async function watchDevelopmentBuild(previousVersion: string) {
+  async function watchDevelopmentBuild(previousVersion: string, owner: AbortController) {
     if (!operatorToken) return;
-    for (let attempt = 0; attempt < 600; attempt += 1) {
-      await new Promise((resolve) => window.setTimeout(resolve, 2_000));
-      let next;
-      let development;
-      try {
-        [next, development] = await Promise.all([
-          fetchHealth(),
-          fetchDevelopmentRuntime(operatorToken),
-        ]);
-      } catch (error) {
-        if (error instanceof RuntimeRequestError && ![502, 503, 504].includes(error.status)) {
-          setOperationError(error instanceof Error ? error.message : "The development build could not be followed");
-          return;
-        }
-        // The API is expected to disappear briefly only after the build succeeds.
-        continue;
-      }
-      if (next.version !== previousVersion) {
-        window.location.reload();
-        return;
-      }
-      if (development.state === "failed") {
-        // NEVER ASSERT A CAUSE WE DID NOT OBSERVE. This said "did not compile"
-        // for every failure, so an install refused for a good reason read as a
-        // compiler error and sent the operator to the wrong file. The reload
-        // now records which step failed and what it said; this repeats that
-        // rather than guessing, and only falls back to a generic sentence when
-        // there is genuinely nothing recorded.
-        setOperationError(developmentFailureMessage(development));
-        return;
-      }
-    }
-    setOperationError("The development build did not become healthy within 20 minutes");
+    const result = await observeDevelopmentBuild(operatorToken, previousVersion, owner.signal);
+    if (owner.signal.aborted || developmentBuildWatch.current !== owner) return;
+    developmentBuildWatch.current = null;
+    if (result.kind === "changed") window.location.reload();
+    else if (result.kind === "failed") setOperationError(developmentFailureMessage(result.runtime));
+    else if (result.kind === "error") setOperationError(result.message);
+    else if (result.kind === "timeout") setOperationError("The development build did not become healthy within 20 minutes");
   }
 
   function releaseEngagementWhenSwitching(
@@ -1879,12 +1863,6 @@ export function App() {
               {/* In the rail rather than over the page, for the same reason the
                   address warning is: it is a state this Hive is in, not an
                   interruption, and a terminal is a bad place to put a banner. */}
-              <StaleBundleNotice
-                stale={bundleIsStale(serverVersion)}
-                serverVersion={serverVersion}
-                dismissed={dismissedVersion}
-                onDismiss={setDismissedVersion}
-              />
             </nav>}
 
             {/* Settings navigates from the rail like every other surface. It
@@ -2021,6 +1999,12 @@ export function App() {
             is mostly a misclick risk. */}
         {detached ? null : <div id="runtime-system-status" className={`rail-footer${showMobileRuntime ? " mobile-open" : ""}`} role="region" aria-label="Runtime and system status">
           <RuntimeStatus state={loadState} developmentMode={developmentMode} />
+          <StaleBundleNotice
+            stale={bundleIsStale(serverVersion)}
+            serverVersion={serverVersion}
+            dismissed={dismissedVersion}
+            onDismiss={setDismissedVersion}
+          />
           {databaseRecoveryRequired && <button type="button" className="secondary-button" onClick={() => showSurface("decisions")}>Database recovery required</button>}
           {operatorToken ? (
             <button

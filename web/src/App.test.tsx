@@ -67,6 +67,7 @@ test("makes runtime failure visible", async () => {
 });
 
 test("refreshes the runtime evidence after returning without reloading the app", async () => {
+  vi.stubEnv("VITE_SWARM_BUILD_VERSION", "0.1.0");
   let version = "0.1.0";
   let unavailable = false;
   let visibility: DocumentVisibilityState = "visible";
@@ -87,6 +88,8 @@ test("refreshes the runtime evidence after returning without reloading the app",
     version = "0.2.0";
     await returnToApp();
     await screen.findByText("Runtime 0.2.0");
+    expect(within(screen.getByRole("region", { name: "Runtime and system status" })).getByText("Browser update ready")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Reload this tab" })).toBeVisible();
     unavailable = true;
     await returnToApp();
     expect(screen.getByText("Runtime 0.2.0")).toBeInTheDocument();
@@ -97,6 +100,7 @@ test("refreshes the runtime evidence after returning without reloading the app",
   } finally {
     cleanup();
     visibilitySpy.mockRestore();
+    vi.unstubAllEnvs();
   }
 });
 

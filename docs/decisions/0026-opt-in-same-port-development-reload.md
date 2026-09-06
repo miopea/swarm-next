@@ -61,6 +61,21 @@ marker cannot keep a later healthy source in a failed state.
 
 ## Validation
 
+### Browser observation ownership
+
+An initiating tab owns at most one build watcher. Logout, unmount or a replacing
+request cancels its delay and in-flight reads; even late successful responses
+cannot reload a later session. Reads have an eight-second deadline and the
+observation has a twenty-minute overall deadline. Cancellation stops only the
+browser observation, never the server build. A refused build request starts no
+watcher. These deadlines report observation limits, not proof a build failed.
+
+Other tabs retain their explicit, version-scoped reload notice rather than
+silently discarding forms when someone else installs an update. The notice
+belongs in the runtime area, distinguishes browser code from server version,
+and clears when the mismatch resolves. Dismissal does not hide a later version.
+An observed server version alone does not prove the browser assets refreshed.
+
 - API tests prove authentication, explicit availability, no-store status, a
   content-free request, fail-closed behavior when disabled, source ancestry,
   and revision-bound failure reporting.

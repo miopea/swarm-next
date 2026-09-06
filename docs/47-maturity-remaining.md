@@ -8,6 +8,23 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Browser update observation ownership (September 6 UTC)
+
+The pre-existing mismatch notice is now in the runtime area, with concise copy
+and a warning to finish/save unsent forms before its explicit reload action.
+No duplicate notice or forced reload of other tabs was added. The initiating
+build watcher now has one cancellable owner, eight-second request deadlines,
+and a twenty-minute wall-clock observation limit. Logout, unmount, replacement
+and rejected build requests cannot leave an old observer navigating a later
+session. Server builds are not cancelled by browser observation cancellation.
+
+Seventy focused frontend checks pass, including App integration, timeout
+recovery, late responses after cancellation, install-failure evidence and
+per-version dismissal. TypeScript passes. The 390px Edge fixture renders cleanly.
+This does not prove that the preceding live mismatch was stale assets rather
+than stale coordinator data; that attribution remains unconfirmed. Automatic
+live update acceptance and unsaved-form preservation remain broader gates.
+
 ### Held briefings identify the actual blocking task (September 6 UTC)
 
 Live inspection found four worker-busy briefings whose projection named an

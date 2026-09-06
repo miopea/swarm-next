@@ -21,18 +21,19 @@
  * A single permanent dismissal would silence the signal for good on the first
  * inconvenient day, which is how a warning becomes decoration.
  */
-export default function StaleBundleNotice({ stale, serverVersion, dismissed, onDismiss }: {
+export default function StaleBundleNotice({ stale, serverVersion, dismissed, onDismiss, onReload = reloadBrowser }: {
   stale: boolean;
   serverVersion: string | null;
   dismissed: string | null;
   onDismiss: (version: string) => void;
+  onReload?: (version: string) => void;
 }) {
   if (!stale || !serverVersion || dismissed === serverVersion) return null;
   return (
     <div className="stale-bundle-notice" role="status">
       <span>
-        <strong>This page is running an older version</strong>
-        <small>The Hive has been updated to {serverVersion}. Reload to pick it up — until you do, fixes that have already shipped will look like they are still broken.</small>
+        <strong>Browser update ready</strong>
+        <small>This tab differs from the running Hive. Finish or save any unsent forms before reloading. Workers keep running.</small>
       </span>
       <span className="stale-bundle-actions">
         {/* A VERSION-STAMPED NAVIGATION, NOT window.location.reload().
@@ -51,14 +52,16 @@ export default function StaleBundleNotice({ stale, serverVersion, dismissed, onD
         <button
           type="button"
           className="primary-action"
-          onClick={() => {
-            const fresh = new URL(window.location.href);
-            fresh.searchParams.set("v", serverVersion);
-            window.location.replace(fresh.toString());
-          }}
-        >Reload</button>
+          onClick={() => onReload(serverVersion)}
+        >Reload this tab</button>
         <button type="button" className="text-button" onClick={() => onDismiss(serverVersion)}>Not now</button>
       </span>
     </div>
   );
+}
+
+function reloadBrowser(version: string) {
+  const fresh = new URL(window.location.href);
+  fresh.searchParams.set("v", version);
+  window.location.replace(fresh.toString());
 }

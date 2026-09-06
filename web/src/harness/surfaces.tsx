@@ -445,6 +445,14 @@ export const SURFACES: Surface[] = [
     ]} onOpenTask={() => undefined} />,
   },
   {
+    id: "browser-update",
+    title: "Browser update in the runtime area",
+    why: "an existing tab can differ from the server without restarting workers or discarding a form",
+    render: () => <div style={{ maxWidth: 360 }} role="region" aria-label="Runtime and system status">
+      <StaleBundleNotice stale serverVersion="fixture-new-build" dismissed={null} onDismiss={() => {}} onReload={() => {}} />
+    </div>,
+  },
+  {
     id: "machine-pressure",
     title: "Machine pressure",
     why: "the header badge in every state — the five an operator would only otherwise see by actually running their box out of memory",
