@@ -28,6 +28,16 @@ All 38 coordination-delivery regression tests passed. Binary lint passed with
 the existing unrelated `items_after_statements` warning excluded; unrestricted
 strict lint stopped at `lib.rs`'s `RETURN_ATTEMPTS_PER_PASS` declaration.
 
+Build 829e0759 deployed healthy with engine PID 2640474/build identity unchanged.
+A follow-up Linux regression runs the production worker supervisor and delivery
+path against a real host-owned shell PTY. It synchronizes on the echoed briefing
+before Enter, requests owner shutdown, and verifies one consumed line, durable
+Delivered state, and a still-running terminal. All three shutdown tests passed;
+the real-PTY case also passed five consecutive repeats (about 1.4 seconds each).
+This closes the owner-drain integration gap, not a real Claude paste-chip test,
+full systemd/SIGTERM acceptance, forced-kill recovery, or attribution of the exact
+117-line paste. No live worker input was used.
+
 ### Blocked-row explanations (September 6)
 
 Queues now labels the recorded operator decision, unresolved prerequisite count,
