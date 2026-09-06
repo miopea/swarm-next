@@ -150,6 +150,15 @@ output cannot authorize Enter on the operator's current draft.
 
 ### Task-aware delivery holds
 
+Task-message envelopes must not contradict the existing same-task recovery
+contract by labelling every request a question rather than an instruction.
+Continuation means only already-authorized work within its recorded gates;
+the message does not alter assignment, lifecycle, scope or authority. Receipt
+and acknowledgement remain distinct from execution and completion. Worker
+reports go to Queen; Queen acts through her routing, review and decision tools,
+not through a wrapper telling her to message herself. This presentation repair
+does not implement the recovery-accountability obligations in ADR 0082.
+
 Queue selection leaves a worker's cross-task messages queued while that worker
 owns another Active task. A question about that same Active task remains eligible,
 so continuing current work is not blocked behind an unrelated question. Queen's
