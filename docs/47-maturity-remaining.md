@@ -3349,5 +3349,27 @@ controlled shell, release recovery, legacy operator fencing, and the API's
 before/after-payload distinction. All 27 host and 486 API unit tests passed.
 Strict all-target/all-feature lint passed with incremental compilation disabled
 after the first lint attempt hit a Rust incremental-cache internal compiler error.
-This change has not been deployed. Existing uncertain reviews still require evidence-backed
+Existing uncertain reviews still require evidence-backed
 reconciliation; the fix does not silently replay historical uncertainty.
+
+Deployment: `2ad86d6f6a13` is healthy with engine fingerprint
+`8d2c8700113a2ca2dda72f582723de3875d1cc75a467b2f22ae16ef3485ee490`.
+The normal update and engine reconciliation both exited zero. All 15 previously
+loaded workers were verified running afterward; normal idempotent starts restored
+workers not yet returned. No release was cut. CI run 34055265046 is still pending
+at this evidence checkpoint. Queen review `01a07833-d89f-7212-b569-eb8fe798be31`
+reports Running with confirmed delivery; current provider history at 19:35 UTC
+records concrete guarded recovery messages to Admin, Scout, and D365. That proves
+new coordination, not clearance of the whole backlog or the restored workers'
+conversation correctness. Live ownership-race reproduction remains unverified;
+the host and API regression tests cover the corrected refusal path.
+
+The isolated workflow fixture reached phase 2 before this engine replacement.
+Provider JSONL records its phase-2 note at 2026-09-06 19:33:31.184Z with the same
+actual session ID `019ff8e1-4a2d-7a11-acff-6a10fb57af3e` as phase 1.
+Commit `27fbcc152289d33ef5d7e8a9e9af77a6624dc33b` contains the fixture;
+independent `node --test recovery-3ba0935b/*.test.js` passed all three tests.
+The COMPLETE marker hash is
+`a4bccf5c13ef5ff8311e59b34d492bc7072a55298723601a6a9c127053aee8fc` and fixture
+paths are clean. The task is in Review, not yet claimed complete. This proves
+one same-conversation controlled-pause recovery, not an all-provider restart gate.
