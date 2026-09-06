@@ -66,6 +66,25 @@ text and buttons fit. This is responsive fixture evidence, not native Android or
 iOS acceptance. `web/mobile-harness.html` provides the bounded isolated viewport
 without changing a live browser window or reaching a Hive.
 
+The full frontend suite passed 1,211 tests across 133 files with two test workers;
+TypeScript passed. Commit `3bfdcc3e` was pushed to main and deployed through the
+normal development reload (job PID 2873675 completed successfully). GitHub reported
+bypassing four expected required checks; local validation is not CI-green evidence.
+Fresh health reports `1.5.0-dev-3bfdcc3ec112-20260906035803-2873698`, no degraded
+subsystems. This deployment did NOT preserve the old PTYs: engine PID 2721173
+received graceful shutdown at 04:00:41 UTC and was replaced by PID 2876265, build
+`38453a84…`. The observed running count rose 1 -> 4 -> 8 -> 15 automatically, with
+no manual start requests and no worker runtime errors. The reason for the engine
+replacement still needs attribution; do not describe this as API-only continuity.
+D365's conversation report is current, not independent proof of the exact resumed
+conversation. The new engine reports Claude/Codex available and all three named
+experimental executables unavailable. No experimental worker was started.
+
+Queue readability follow-up: dependency identity, owner and state remain visible,
+with the narrative behind "Why this dependency" in Queues only. Task cards retain
+their existing presentation. The 74 focused queue/task tests and TypeScript pass;
+this follow-up is not yet deployed or a completed owner-first redesign.
+
 ### Task board and queue hold consistency (September 6)
 
 Task cards now receive the existing coordinator hold projection through the app

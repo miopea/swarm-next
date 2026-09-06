@@ -68,6 +68,11 @@ describe("QueuesView", () => {
     const { rerender } = render(<QueuesView tasks={[blocked]} workers={[]} onOpenTask={onOpenTask} />);
     expect(screen.getByText("1 unresolved prerequisite")).toBeVisible();
     expect(screen.getByText(/No worker assigned/)).toBeVisible();
+    const explanation = screen.getByText(prerequisite.reason);
+    expect(explanation).not.toBeVisible();
+    expect(explanation.closest("details")).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByText("Why this dependency"));
+    expect(explanation).toBeVisible();
     expect(screen.queryByText("Blocked · reason not recorded")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: prerequisite.title }));
     expect(onOpenTask).toHaveBeenCalledWith("upstream");

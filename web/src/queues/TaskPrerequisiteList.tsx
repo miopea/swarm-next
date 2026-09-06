@@ -1,9 +1,11 @@
 import { prerequisiteSatisfied, type Task } from "../api/tasks";
 
-export default function TaskPrerequisiteList({ task, workerNames, onOpenTask }: {
+export default function TaskPrerequisiteList({ task, workerNames, onOpenTask, compact = false }: {
   task: Task;
   workerNames: Map<string, string>;
   onOpenTask?: (taskId: string) => void;
+  /** Queue scanning keeps the blocker identity visible and folds its narrative. */
+  compact?: boolean;
 }) {
   const prerequisites = task.prerequisites ?? [];
   if (prerequisites.length === 0) return null;
@@ -15,7 +17,9 @@ export default function TaskPrerequisiteList({ task, workerNames, onOpenTask }: 
         <span className="queue-task-meta">{item.removed ? "Removed · Queen must reconcile" : prerequisiteSatisfied(item) ? "Completed" : item.state === "abandoned" ? "Abandoned · not satisfied" : item.state.replaceAll("_", " ")}
           {" · "}{item.assigned_worker_id ? workerNames.get(item.assigned_worker_id) ?? "Worker not in current roster" : "No worker assigned"}</span>
       </div>
-      {item.reason.length <= 240 ? <p className="queue-task-meta">{item.reason}</p> : <details className="decision-argument"><summary>{item.reason.slice(0, 240)}…</summary><p className="decision-prose">{item.reason}</p></details>}
+      {compact && item.reason.trim()
+        ? <details className="decision-argument"><summary>Why this dependency</summary><p className="decision-prose">{item.reason}</p></details>
+        : item.reason.length <= 240 ? <p className="queue-task-meta">{item.reason}</p> : <details className="decision-argument"><summary>{item.reason.slice(0, 240)}…</summary><p className="decision-prose">{item.reason}</p></details>}
     </li>)}
   </ul>;
   if (unresolved.length === 0) return <div className="queue-prerequisites">
