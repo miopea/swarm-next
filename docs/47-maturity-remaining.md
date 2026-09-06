@@ -24,6 +24,15 @@ decision, a changed next owner, a task transition or permission to answer a prom
 All 33 queue tests and TypeScript checking passed. Live visual verification and
 deployment of this slice remain pending.
 
+Pre-deployment source verification corrected the wording: WorkerView derives
+awaiting_operator from either held answers or provider activity, so the UI must
+not call it a terminal-only observation. It now says Worker reports waiting for
+an answer and directs inspection to Needs you or the current prompt without
+claiming a task blocker. The 390px Edge fixture shows this alongside visible
+worker-owned Active work. All 33 queue tests and the production build passed;
+the existing terminal bundle-size warning remains. The earlier wording was not
+deployed.
+
 ### Attachment overlap status race (September 6 UTC)
 
 An oversized second selection could overwrite the status of an existing upload

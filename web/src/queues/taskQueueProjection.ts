@@ -2,8 +2,8 @@ import type { BlockedEscalation, HeldBriefing } from "../api";
 import { isOpenTaskState, prerequisiteSatisfied, type Task } from "../api/tasks";
 import type { Worker } from "../api/workers";
 
-/** Exact-session observation, not a decision or a change of task ownership. */
-export function terminalAwaitingInput(task: Task, worker: Worker | undefined): boolean {
+/** Worker attention can reflect a pending answer or a provider prompt. */
+export function workerAwaitingAnswer(task: Task, worker: Worker | undefined): boolean {
   return (task.state === "ready" || task.state === "active")
     && task.assigned_session_id != null && worker?.running === true
     && task.assigned_worker_id === worker.id
@@ -22,7 +22,7 @@ export function projectTaskQueues(tasks: Task[], held: HeldBriefing[], blocked: 
   const known = new Map(tasks.map((task) => [task.id, task]));
   const workerById = new Map(workers.map(worker => [worker.id, worker]));
   const ordinary = (task: Task) => ordinaryActiveWork(task)
-    && !terminalAwaitingInput(task, workerById.get(task.assigned_worker_id ?? ""));
+    && !workerAwaitingAnswer(task, workerById.get(task.assigned_worker_id ?? ""));
   const waitingTasks = tasks.filter((task) => isOpenTaskState(task.state) && !ordinary(task));
   const activeTasks = tasks.filter(ordinary);
   // Independently refreshed coordinator snapshots must not resurrect work

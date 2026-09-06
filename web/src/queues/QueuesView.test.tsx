@@ -21,10 +21,10 @@ describe("QueuesView", () => {
     const props = { tasks: [current], onOpenTask: vi.fn() };
     const { rerender } = render(<QueuesView {...props} workers={[worker]} />);
     expect(screen.getByRole("heading", { name: "Waiting on a worker 1" })).toBeVisible();
-    expect(screen.getByText(/Terminal reports waiting for input/)).toBeVisible();
+    expect(screen.getByText(/Worker reports waiting for an answer/)).toBeVisible();
     expect(screen.queryByRole("heading", { name: /Waiting on you/ })).not.toBeInTheDocument();
     rerender(<QueuesView {...props} workers={[{ ...worker, attention_state: "buzzing" }]} />);
-    expect(screen.queryByText(/Terminal reports waiting for input/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Worker reports waiting for an answer/)).not.toBeInTheDocument();
     expect(screen.getByText("Some work")).not.toBeVisible();
     expect(props.onOpenTask).not.toHaveBeenCalled();
   });

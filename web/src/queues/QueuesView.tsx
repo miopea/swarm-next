@@ -4,7 +4,7 @@ import type { BlockedEscalation, HeldBriefing, HeldDelivery, QueenAutomationStat
 import DeliveryWaitList from "./DeliveryWaitList";
 import TaskPrerequisiteList from "./TaskPrerequisiteList";
 import { prerequisiteSatisfied, type NextMoveOwner, type Task } from "../api/tasks";
-import { projectTaskQueues, terminalAwaitingInput } from "./taskQueueProjection";
+import { projectTaskQueues, workerAwaitingAnswer } from "./taskQueueProjection";
 import type { Worker } from "../api/workers";
 
 /** A scanning hint, never a replacement for the recorded statement. */
@@ -244,7 +244,7 @@ export default function QueuesView({
                   </button>
                   {briefing && <p className="queue-task-meta">Briefing held: {holdReason(briefing)} · queued {waitedFor(now / 1000 - briefing.queued_at)} <BlockingTaskLink briefing={briefing} onOpenTask={onOpenTask} /></p>}
                   <TaskPrerequisiteList task={task} workerNames={workerNames} onOpenTask={onOpenTask} compact />
-                  {terminalAwaitingInput(task, workerById.get(task.assigned_worker_id ?? "")) && <p className="queue-task-meta">Terminal reports waiting for input · inspect the worker's current prompt. This is not a recorded operator decision.</p>}
+                  {workerAwaitingAnswer(task, workerById.get(task.assigned_worker_id ?? "")) && <p className="queue-task-meta">Worker reports waiting for an answer · check Needs you or its current prompt. This observation does not establish a task blocker.</p>}
                   {task.state === "blocked" && task.blocked_until != null && <p className="queue-task-meta">
                     {Number.isFinite(task.blocked_until) && Number.isFinite(new Date(task.blocked_until * 1000).getTime())
                       ? task.blocked_until * 1000 > now

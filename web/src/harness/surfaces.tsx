@@ -581,6 +581,14 @@ export const SURFACES: Surface[] = [
     render: () => <iframe title="Phone prerequisite editor" src="/harness.html?surface=prerequisite-editor" style={{ display: "block", width: 390, height: 844, border: 0 }} />,
   },
   {
+    id: "queues-worker-answer",
+    title: "Worker answer wait",
+    why: "Invented exact-session attention signal, not a fabricated task blocker or operator decision",
+    render: () => <QueuesView workers={[{ ...demoWorkers[0], running: true, active_session_id: "answer-session", attention_state: "awaiting_operator" }]}
+      tasks={[{ ...demoTasks[0], title: "Verify the fixture response", state: "active", next_move_owner: "worker", dispatch_state: "delivered", assigned_worker_id: demoWorkers[0].id, assigned_session_id: "answer-session", prerequisites: [] }]}
+      onOpenTask={() => undefined} />,
+  },
+  {
     id: "queues-prerequisites",
     title: "Explicit task prerequisites",
     why: "fictional blocked, completed and reopened prerequisite states; layout only",
