@@ -10,6 +10,18 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ### Snapshot application phase evidence (September 6 UTC)
 
+Build `316a9aef` is deployed and healthy with no degradation; actual engine
+`38453a84c3fa` and all 15 running session IDs remained unchanged. A separate live
+Edge tab visited Swarm Dogfood and opened diagnostics without terminal input or
+decision submission. Three completed applications were captured. The slowest was
+1,096 ms for 83,666 bytes: 34 ms state application and 1,062 ms geometry/focus.
+Fresh server diagnostics reported no pressure in measured layers. This points
+the next investigation at the controller's awaited post-snapshot fit (which can
+wait for fonts and stable animation frames), not at snapshot parsing alone.
+It is one live observation, not a general causal or performance conclusion.
+The isolated fifteen-view pass retained 15 renderers with one attached and 14
+inactive, captured 16 applications and kept the same 26.5 ms maximum.
+
 Local diagnostics and the sanitized report now retain a paired breakdown of the
 slowest completed terminal snapshot: state application (reset, resize and parser
 completion), subsequent geometry/focus, and payload byte count. No content or
