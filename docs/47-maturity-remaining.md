@@ -8,6 +8,33 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Read-only 15-session resource checkpoint (September 6 UTC)
+
+Run `20260906T073816Z-live` completed the existing 60-second observer without
+service or session changes: six samples spanning 51 seconds, all 15 original
+sessions running, API PID 2971127 and host PID 2876265 unchanged. API build is
+`5877c8c1d54d`; host reports `3bfdcc3ec112`. CPU deltas averaged 0.57% of one
+core for the API (maximum interval 1.40%) and 19.30% for the host cgroup including
+all provider workers (maximum interval 25.88%). These are not percentages of
+the whole eight-core machine or measurements of the engine alone.
+
+API cgroup memory ranged 132,665,344–133,124,096 bytes; host-plus-workers ranged
+6,475,927,552–6,506,606,592 bytes. Retained history grew from 536,128,417 to
+536,137,683 bytes, with zero reported drops. Collection took 0–1 whole seconds
+per sample; this is coarse collector duration, not measured instrumentation CPU.
+The report and CSV remain under the remote `~/.local/state/swarm-next/soak/`
+directory with this run ID. No browser CPU, burst workload or long-session
+plateau was measured, so PERF-01/02 remain open.
+
+Direct-answer integration reinspection still finds no production caller of
+`resolve_operator_statement_interview`. The current official Claude hook
+[reference](https://code.claude.com/docs/en/hooks#posttooluse) describes completed
+tool input/result observations but does not by itself authenticate human origin
+or supply Swarm decision identity. Its display hook handles assistant text, not
+operator input; tool deferral is non-interactive only. These are not substitutes
+for ADR 0065's remaining correlation boundary. No hook was installed or native
+interactive session replaced to bypass that boundary.
+
 ### Custom-answer browser recovery check (September 6 UTC)
 
 The approved always-available alternative answer remains in DecisionInbox and
