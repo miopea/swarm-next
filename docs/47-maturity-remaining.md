@@ -1,5 +1,30 @@
 # Daily-driver maturity: remaining delivery and acceptance
 
+## 2026-09-06: CI green and dependency recovery completed
+
+CI run [34036337401](https://github.com/miopea/swarm-next/actions/runs/34036337401)
+completed successfully on `5f8dbf00`. All four jobs passed: Rust, web, rust-audit,
+linux-package. Rust passed fmt, all-target/all-feature Clippy, all-feature workspace
+tests (1,369 passing across test binaries), and the additional release-mode PTY
+resize regression. This supersedes the earlier pending-CI observations, not the
+remaining live acceptance gates. No workflow checks were disabled.
+
+Second dependency exercise completed: upstream `01a076ea` completed at
+1788701616; Queen actor `019ff136-7a90-7631-bbc0-f95efd1df576` resumed consumer
+`01a07595` Blocked -> Ready at 1788702104 (488 seconds / 8m08s later). Consumer
+reported Active at 1788702114, Review at 1788702216 and appears Completed in the
+settled board (documentation-only settlement). Initial native permissions were
+assisted; no operator/task-harness resume or prerequisite mutation was used.
+This proves this dependency journey, not fully unattended provider onboarding or
+acceptable fleet-wide recovery latency.
+
+Both demo repositories are clean. Upstream commit
+`54c09270d56acd439b41d78f0a55b4f8c30a608d` contains version 1 with `result` and
+`observed_at`; consumer commit `dc6b0fdceaeb129a19b267f0026ef0fa5b3e925a` records
+that exact source, fields, enum and SHA. The actual files were read and compared,
+not accepted solely from the workers' completion notes. No release or customer
+repository mutation was part of this test.
+
 ## 2026-09-06: engine attribution and second dependency exercise
 
 Updated observer `20260906T133410Z-live` completed 300 seconds / 10 samples
