@@ -8,6 +8,24 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Canonical application no longer awaits follow-up sizing (September 6 UTC)
+
+The controller now accepts an applied canonical snapshot before its post-restore
+stable-frame fit finishes. Subsequent output can be parsed instead of waiting
+behind geometry work. Attach and snapshot paths share one pending follow-up fit;
+completion rechecks ownership, attachment, visibility, focus and composer hold
+before publishing dimensions. Stable-frame and anti-oscillation checks remain.
+The paired diagnostic still includes asynchronous fit latency (including failed
+sizing after successful state application), with one continuation per pending
+fit and no retained payload. This is not a claim that layout itself became fast.
+
+136 terminal controller/connection/renderer and diagnostics tests pass, including
+output while 20 snapshots share a pending fit, ownership loss during sizing,
+failed-fit recovery, passive views and existing geometry guards. TypeScript
+passes. Two prior tests now await sizing independently while retaining their
+exact dimension assertions. Real-device cutover and live latency acceptance
+remain open until observed; no worker engine or protocol change is introduced.
+
 ### Snapshot application phase evidence (September 6 UTC)
 
 Build `316a9aef` is deployed and healthy with no degradation; actual engine

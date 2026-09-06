@@ -111,6 +111,7 @@ export class TerminalController {
   #started = false;
   #startPromise: Promise<void> | undefined;
   #refitPromise: Promise<void> | undefined;
+  #applicationObservation: Promise<void> | undefined;
   #disposed = false;
   #state: TerminalConnectionState = "connecting";
   #stateDetail: string | undefined;
@@ -275,11 +276,9 @@ export class TerminalController {
       });
   }
 
-  #refitWhenAttached(): void {
-    if (this.#refitPromise) return;
-    const refitPromise = this.#refitAttachedSurface("echo");
-    this.#refitPromise = refitPromise;
-    void refitPromise
+  #refitWhenAttached(): Promise<void> {
+    if (this.#refitPromise) return this.#refitPromise;
+    const refitPromise = this.#refitAttachedSurface("echo")
       // A started terminal already owns a valid PTY size. Reattachment can race
       // a hidden or not-yet-laid-out container; ResizeObserver will publish the
       // settled geometry later, so a transient refit miss must not poison the
@@ -288,6 +287,8 @@ export class TerminalController {
       .finally(() => {
         if (this.#refitPromise === refitPromise) this.#refitPromise = undefined;
       });
+    this.#refitPromise = refitPromise;
+    return refitPromise;
   }
 
   /**
@@ -333,7 +334,7 @@ export class TerminalController {
     // of a phone, so this path re-shredded the terminal on every scroll.
     const measured = await this.#measureForResize();
     if (!measured) return;
-    if (this.#disposed || !this.#started || !this.#host.parentElement) return;
+    if (!this.#mayResizeNow() || !this.#visible || !this.#started || !this.#host.parentElement || !documentHasFocus()) return;
     this.#connection.resize(measured.rows, measured.columns, intent);
   }
 
@@ -365,6 +366,7 @@ export class TerminalController {
         await this.#surface.restore(snapshot);
         const stateApplied = performance.now();
         if (this.#disposed || !this.#attached) return;
+        let geometrySettled: Promise<void> | undefined;
         // Passive views always accept canonical geometry. Neither a snapshot
         // nor a viewport resize is an implicit request to take control.
         if (documentHasFocus() && this.#connection.ownsGeometry !== false) {
@@ -373,19 +375,35 @@ export class TerminalController {
             // layout wait. Later geometry changes still reach ResizeObserver.
             const proposed = this.#surface.proposeFit?.();
             const matchesSnapshot = proposed?.rows === snapshot.rows && proposed.columns === snapshot.columns;
-            const fitted = matchesSnapshot ? undefined : await this.#measureForResize();
-            if (fitted && this.#mayResizeNow()) {
-              this.#connection.resize(fitted.rows, fitted.columns, "echo");
-            }
+            // The canonical bytes are already applied. Stable-frame sizing is
+            // follow-up work, not a condition for accepting subsequent output
+            // or reporting the restored connection. Coalesce with attach fits.
+            if (!matchesSnapshot) geometrySettled = this.#refitWhenAttached();
           } catch {
             // Keep the canonical screen when a transient layout cannot fit.
           }
         }
         this.#applyRestoredFocus(restoreFocus);
-        if (measure && !this.#disposed && this.#attached && this.#visible && document.visibilityState === "visible") {
-          terminalApplicationEvidence.record(snapshot.bytes.byteLength,
-            stateApplied - applicationStarted, performance.now() - stateApplied);
+        const payloadBytes = snapshot.bytes.byteLength;
+        const recordApplication = () => {
+          if (measure && !this.#disposed && this.#attached && this.#visible && document.visibilityState === "visible") {
+            terminalApplicationEvidence.record(payloadBytes,
+              stateApplied - applicationStarted, performance.now() - stateApplied);
+          }
+        };
+        // Keep the complete follow-up latency observable; making it asynchronous
+        // must not disguise a slow fit as a faster geometry measurement.
+        if (geometrySettled) {
+          // One diagnostic continuation per controller, not one per snapshot
+          // arriving while a sizing frame is delayed. Never retain payloads.
+          if (!this.#applicationObservation) {
+            const observation = geometrySettled.then(recordApplication).finally(() => {
+              if (this.#applicationObservation === observation) this.#applicationObservation = undefined;
+            });
+            this.#applicationObservation = observation;
+          }
         }
+        else recordApplication();
       },
       onState: (state, detail) => this.#setState(state, detail),
       onControlChange: (control) => {

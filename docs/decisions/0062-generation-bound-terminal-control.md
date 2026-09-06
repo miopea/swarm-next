@@ -101,6 +101,16 @@ the verified pre-update database backup.
 
 ## Verification
 
+Post-snapshot sizing is one controller-owned, coalesced asynchronous follow-up.
+Once canonical bytes have applied, queued output and the connection's applied
+cursor do not wait for font/layout frames a second time. The existing stable-fit
+and oscillation checks still run; completion rechecks attachment, visibility,
+focus, mobile-composer hold and geometry ownership before publishing a resize.
+Failed follow-up sizing leaves the canonical screen usable and permits a later
+fit. Local evidence retains the follow-up duration rather than hiding it from
+timings; at most one diagnostic continuation is attached to a pending fit.
+This changes neither engine authorization nor the meaning of a granted takeover.
+
 Initial browser attachment may read usable terminal-cell and container metrics
 after font readiness without waiting for scheduled animation frames. This is a
 non-mutating measurement, not a control grant or local screen reflow. When those

@@ -236,7 +236,7 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
           {" · Geometry and focus "}{Math.round(browserTiming.terminal_application.slowest.geometry_ms)} ms
           {" · "}{browserTiming.terminal_application.slowest.bytes.toLocaleString()} bytes.
         </p> : null}
-        <p>These phases belong to the same completed snapshot. State application includes reset, resize and parser completion; geometry includes any subsequent fit. Neither is CPU time or confirmed paint. Failed or interrupted applications are not represented here; see connection errors. This breakdown resets on reload.</p>
+        <p>These phases belong to the same snapshot. State application includes reset, resize and parser completion. Geometry includes any asynchronous follow-up fit; it no longer blocks output application. Coalesced fits contribute one sample, including a failed sizing attempt after successful state application. Neither phase is CPU time or confirmed paint. Failed state applications and interrupted views are not represented here; see connection errors. This breakdown resets on reload.</p>
         <p>{browserTiming.current.buckets.length} timing buckets · {browserTiming.current.incidents.length} recent incident captures. These are historical evidence, not unresolved alerts.</p>
         {browserTiming.before_reload ? <p>Before-reload snapshot available for comparison.</p> : null}
         <p>Preview report includes the timing evidence. Browser CPU percentage is not available here; compare with your browser task manager.</p>

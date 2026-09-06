@@ -83,6 +83,71 @@ test("initial transport uses measured attachment metrics without waiting on ordi
   controller.dispose();
 });
 
+
+test("canonical output proceeds while one coalesced geometry follow-up is pending", async () => {
+  const surface = fakeSurface();
+  const connection = fakeConnection();
+  const controller = new TerminalController(() => surface, () => connection);
+  controller.attach(document.createElement("div"));
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledOnce());
+  let finishFit!: (value: { rows: number; columns: number }) => void;
+  vi.mocked(surface.fit).mockClear().mockImplementation(() => new Promise(resolve => { finishFit = resolve; }));
+  vi.mocked(connection.resize).mockClear();
+  const record = vi.spyOn(terminalApplicationEvidence, "record");
+  const handlers = vi.mocked(connection.start).mock.calls[0][0];
+  try {
+    for (let sequence = 1; sequence <= 20; sequence++) {
+      await handlers.onSnapshot({ sequence, rows: 24, columns: 120, truncated: false, reason: "attached", bytes: new Uint8Array(12) });
+    }
+    await handlers.onOutput(new Uint8Array([65]));
+    expect(surface.write).toHaveBeenCalledWith(new Uint8Array([65]));
+    expect(surface.fit).toHaveBeenCalledOnce();
+    expect(connection.resize).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+    finishFit({ rows: 24, columns: 80 });
+    await vi.waitFor(() => expect(record).toHaveBeenCalledOnce());
+    expect(connection.resize).toHaveBeenCalledExactlyOnceWith(24, 80, "echo");
+  } finally { record.mockRestore(); controller.dispose(); }
+});
+
+test("ownership lost during deferred sizing cannot publish the old view's dimensions", async () => {
+  const surface = fakeSurface();
+  const connection = { ...fakeConnection(), ownsGeometry: true };
+  const controller = new TerminalController(() => surface, () => connection);
+  controller.attach(document.createElement("div"));
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledOnce());
+  let finishFit!: (value: { rows: number; columns: number }) => void;
+  vi.mocked(surface.fit).mockImplementation(() => new Promise(resolve => { finishFit = resolve; }));
+  vi.mocked(connection.resize).mockClear();
+  const record = vi.spyOn(terminalApplicationEvidence, "record");
+  try {
+    await vi.mocked(connection.start).mock.calls[0][0].onSnapshot({ sequence: 1, rows: 24, columns: 120, truncated: false, reason: "attached", bytes: new Uint8Array() });
+    connection.ownsGeometry = false;
+    finishFit({ rows: 60, columns: 40 });
+    await vi.waitFor(() => expect(record).toHaveBeenCalledOnce());
+    expect(connection.resize).not.toHaveBeenCalled();
+  } finally { record.mockRestore(); controller.dispose(); }
+});
+
+test("a failed follow-up fit preserves applied canonical output and allows a later fit", async () => {
+  const surface = fakeSurface();
+  const connection = fakeConnection();
+  const controller = new TerminalController(() => surface, () => connection);
+  controller.attach(document.createElement("div"));
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledOnce());
+  vi.mocked(surface.fit).mockClear().mockRejectedValueOnce(new Error("layout unavailable"));
+  const record = vi.spyOn(terminalApplicationEvidence, "record");
+  const handlers = vi.mocked(connection.start).mock.calls[0][0];
+  const snapshot = { sequence: 1, rows: 24, columns: 120, truncated: false, reason: "attached" as const, bytes: new Uint8Array() };
+  try {
+    await handlers.onSnapshot(snapshot);
+    await vi.waitFor(() => expect(record).toHaveBeenCalledOnce());
+    await handlers.onSnapshot({ ...snapshot, sequence: 2 });
+    await vi.waitFor(() => expect(surface.fit).toHaveBeenCalledTimes(2));
+    expect(surface.restore).toHaveBeenCalledTimes(2);
+  } finally { record.mockRestore(); controller.dispose(); }
+});
+
 test("a requested desktop focus follows the session into its mounted terminal", async () => {
   const surface = fakeSurface();
   const controller = new TerminalController(() => surface, fakeConnection);
@@ -514,7 +579,7 @@ test("canonical snapshots reset the renderer through its controller", async () =
 
   expect(surface.restore).toHaveBeenCalledWith(snapshot);
   expect(surface.fit).toHaveBeenCalledTimes(2);
-  expect(connection.resize).toHaveBeenLastCalledWith(38, 132, "echo");
+  await vi.waitFor(() => expect(connection.resize).toHaveBeenLastCalledWith(38, 132, "echo"));
   expect(surface.write).not.toHaveBeenCalled();
 });
 
@@ -672,7 +737,7 @@ test("the device that owns the claim still asserts its own size", async () => {
 
   await handlers.onSnapshot({ sequence: 5, rows: 24, columns: 120, truncated: false, reason: "attached" as const, bytes: new Uint8Array() });
 
-  expect(connection.resize).toHaveBeenCalledWith(60, 40, "echo");
+  await vi.waitFor(() => expect(connection.resize).toHaveBeenCalledWith(60, 40, "echo"));
 });
 
 /**
