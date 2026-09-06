@@ -61,6 +61,8 @@ export type Worker = {
   updated_at: number;
   running: boolean;
   attention_state: WorkerAttentionState;
+  /** Independent terminal observation; absent on pre-observation API builds. */
+  provider_activity?: "active" | "resting" | "awaiting_operator" | "unknown";
   /**
    * Spawned beside another worker to try a second provider, and not yet adopted.
    *

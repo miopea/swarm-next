@@ -2739,6 +2739,8 @@ struct WorkerView {
     profile: WorkerProfile,
     running: bool,
     attention_state: WorkerAttentionState,
+    /// Provider execution evidence is independent of a pending operator decision.
+    provider_activity: ProviderActivity,
     /// A wake is queued or in flight for this worker, and since when.
     ///
     /// Beside the state, not inside it: an asleep worker really is asleep, and
@@ -3114,6 +3116,7 @@ fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
         profile,
         running,
         attention_state,
+        provider_activity,
         background_work,
         waking_since,
         engagement_expires_at,
@@ -12766,6 +12769,22 @@ mod tests {
             .attention_state,
             WorkerAttentionState::AwaitingOperator
         );
+        let working_with_decision = worker_view(
+            profile.clone(),
+            WorkerViewFacts {
+                running: true,
+                awaiting_operator: true,
+                provider_activity: ProviderActivity::Active,
+                ..WorkerViewFacts::default()
+            },
+        );
+        assert_eq!(
+            working_with_decision.attention_state,
+            WorkerAttentionState::AwaitingOperator
+        );
+        let encoded = serde_json::to_value(working_with_decision).unwrap();
+        assert_eq!(encoded["provider_activity"], "active");
+        assert_eq!(encoded["attention_state"], "awaiting_operator");
         let mut engaged = profile;
         engaged.engagement_expires_at = Some(400);
         assert_eq!(

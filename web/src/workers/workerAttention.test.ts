@@ -43,6 +43,21 @@ test("mobile worker details keep operational state visible before task context",
   expect(workerSwitcherDetail({ ...worker, running: false, attention_state: "sleeping" })).toBe("Sleeping · tap to wake");
 });
 
+test("active work and a pending decision remain visible together without changing attention", () => {
+  const pending: Worker = { ...worker, attention_state: "awaiting_operator", held_for_answer_since: 100, provider_activity: "active" };
+  expect(workerAttention(pending)).toMatchObject({
+    state: "awaiting_operator", label: "Buzzing · decision pending", expression: "thinking", presence: "waiting",
+  });
+  expect(workerSwitcherDetail(pending, "Route other work", true)).toBe("Buzzing · decision pending · Route other work");
+  for (const activity of [undefined, "unknown", "resting", "awaiting_operator"] as const) {
+    expect(workerAttention({ ...pending, provider_activity: activity }).label).toBe("Decision pending");
+  }
+  expect(workerAttention({ ...pending, held_for_answer_since: undefined }).label).toBe("Awaiting you");
+  for (const state of ["sleeping", "blocked", "with_operator"] as const) {
+    expect(workerAttention({ ...pending, attention_state: state }).label).not.toContain("decision pending");
+  }
+});
+
 test("reports how long a loaded worker has been silent", () => {
   const now = 1_800_000_000_000;
   const silentFor = (seconds: number) => ({ ...worker, running: true, last_output_at: now / 1000 - seconds });

@@ -25,4 +25,18 @@ Classifiers operate on the bounded visible terminal surface and are covered by p
 
 ## Consequences
 
+### Independent activity and decision attention (2026-09-06)
+
+The worker response also exposes the existing content-free `provider_activity`
+observation. A pending decision can coexist with active work: Queen may continue
+coordinating other tasks while one request awaits the operator. Attention remains
+unchanged for existing consumers and all delivery guards. The shared roster
+presentation says "Buzzing · decision pending" only for a loaded worker with
+explicit Active evidence and a pending-decision timestamp; unknown activity does
+not establish that fact. No new terminal reads, polling, retention or events are
+introduced. The web worker adapter owns the optional-field fallback during rolling
+updates; older APIs retain the existing "Decision pending" presentation. That
+fallback can be removed when the supported rolling-upgrade floor includes this
+field. Runtime faults, sleeping and operator engagement retain their precedence.
+
 The operator can distinguish loaded-but-idle workers from unloaded workers and safely keep a complete durable roster. Provider UI changes may require classifier fixture updates, but unknown live states fail conservatively to `Buzzing`. Status propagation uses the existing control-room feed and supervisor cadence rather than introducing browser polling or per-session unbounded state.

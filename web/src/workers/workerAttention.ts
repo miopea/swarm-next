@@ -28,6 +28,9 @@ export function workerAttention(worker: Worker, now = Date.now()): WorkerAttenti
   // The legacy held-for-answer field is the oldest pending decision timestamp,
   // not proof that the provider stopped. Queen can keep coordinating other work.
   if (state === "awaiting_operator" && worker.held_for_answer_since !== undefined) {
+    if (worker.running && worker.provider_activity === "active") {
+      return { state, ...shown, label: "Buzzing · decision pending", compactLabel: "buzzing · decision pending", expression: "thinking" };
+    }
     return { state, ...shown, label: "Decision pending", compactLabel: "decision pending" };
   }
   // A WAKE IS COMING, AND SAYING SO IS THE WHOLE FIX. Two tasks were routed to

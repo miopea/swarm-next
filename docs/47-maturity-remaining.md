@@ -3529,7 +3529,11 @@ and the worker-engine build unchanged. Queen's subsequent terminal snapshot
 shows active processing of worker replies and proposed Admin C15 routing through
 Scout; this is not yet evidence of completed downstream work. The worker-list
 `awaiting_operator` label disagreed with visible active tool execution, so that
-status freshness remains an open defect.
+status interpretation required investigation. Follow-up found three real pending
+Queen decisions and a matching oldest-decision timestamp. The API attention value
+was not stale: it combines durable decision attention with terminal state. The UI
+already renders that case as "Decision pending", not a stopped terminal. No
+dispatch-policy correction follows from that observation.
 
 A deterministic browser regression reproduced a late opening-screen preference
 overriding explicit navigation to Queues. All explicit surface selections now
@@ -3538,3 +3542,10 @@ the fix; all 59 App tests and the frontend typecheck pass afterward. This is a
 plausible cause of the intermittent queued-briefing CI failure, not proof that
 every historical CI failure shared the cause. Live visual verification remains
 pending unlock of the separate Edge test tab.
+
+The navigation fix `6f78693b` is healthy in the development Hive as
+`1.5.0-dev-6f78693b3bce-20260906214124-3417201`, with the engine build unchanged.
+Its web, audit and Linux-package CI jobs passed; Rust CI was still running at
+this checkpoint. Follow-up roster work exposes the already-observed provider
+activity beside attention, so an active worker with a pending decision can say
+"Buzzing · decision pending" without changing dispatch or removing the decision.
