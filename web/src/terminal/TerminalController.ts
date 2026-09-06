@@ -5,6 +5,7 @@ import type {
   TerminalControlView,
 } from "./TerminalConnection";
 import { TerminalRestoreEvidence, type FitMilestone } from "./TerminalRestoreEvidence";
+import { terminalApplicationEvidence } from "./TerminalApplicationEvidence";
 
 interface ControllerLifecycle {
   attached(): void;
@@ -357,9 +358,12 @@ export class TerminalController {
       onOutput: (bytes) => this.#disposed ? Promise.resolve() : this.#surface.write(bytes),
       onSnapshot: async (snapshot) => {
         if (this.#disposed) return;
+        const measure = this.#attached && this.#visible && document.visibilityState === "visible";
+        const applicationStarted = performance.now();
         const restoreFocus = document.activeElement === this.#host
           || Boolean(document.activeElement && this.#host.contains(document.activeElement));
         await this.#surface.restore(snapshot);
+        const stateApplied = performance.now();
         if (this.#disposed || !this.#attached) return;
         // Passive views always accept canonical geometry. Neither a snapshot
         // nor a viewport resize is an implicit request to take control.
@@ -378,6 +382,10 @@ export class TerminalController {
           }
         }
         this.#applyRestoredFocus(restoreFocus);
+        if (measure && !this.#disposed && this.#attached && this.#visible && document.visibilityState === "visible") {
+          terminalApplicationEvidence.record(snapshot.bytes.byteLength,
+            stateApplied - applicationStarted, performance.now() - stateApplied);
+        }
       },
       onState: (state, detail) => this.#setState(state, detail),
       onControlChange: (control) => {

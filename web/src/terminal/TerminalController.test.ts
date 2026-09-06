@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { terminalApplicationEvidence } from "./TerminalApplicationEvidence";
 
 import {
   TerminalController,
@@ -41,6 +42,33 @@ function fakeSurface(): FakeSurface {
   };
   return surface;
 }
+
+test("snapshot diagnostics split state application from subsequent geometry without recording failed restores", async () => {
+  const surface = fakeSurface();
+  const connection = fakeConnection();
+  const controller = new TerminalController(() => surface, () => connection);
+  controller.attach(document.createElement("div"));
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledOnce());
+  const record = vi.spyOn(terminalApplicationEvidence, "record");
+  const clock = vi.spyOn(performance, "now").mockReturnValueOnce(10).mockReturnValueOnce(110).mockReturnValue(140);
+  const snapshot = { sequence: 1, rows: 24, columns: 80, truncated: false, reason: "attached" as const, bytes: new Uint8Array(12) };
+  const handlers = vi.mocked(connection.start).mock.calls[0][0];
+  try {
+    await handlers.onSnapshot(snapshot);
+    expect(record).toHaveBeenCalledWith(12, 100, 30);
+    record.mockClear();
+    vi.mocked(surface.restore).mockRejectedValueOnce(new Error("parser failed"));
+    await expect(handlers.onSnapshot(snapshot)).rejects.toThrow("parser failed");
+    expect(record).not.toHaveBeenCalled();
+    vi.mocked(surface.restore).mockImplementationOnce(async () => { controller.detach(); });
+    await handlers.onSnapshot(snapshot);
+    expect(record).not.toHaveBeenCalled();
+  } finally {
+    record.mockRestore();
+    clock.mockRestore();
+    controller.dispose();
+  }
+});
 
 test("initial transport uses measured attachment metrics without waiting on ordinary refit", async () => {
   const surface = fakeSurface();

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import TerminalView from "../terminal/TerminalView";
 import DeveloperDogfoodWorkspace from "../settings/DeveloperDogfoodWorkspace";
 import { terminalWorkspace } from "../terminal/TerminalWorkspace";
+import { terminalApplicationEvidence } from "../terminal/TerminalApplicationEvidence";
 
 /** Lifecycle smoke test only: synthetic transport and the harness's DOM renderer. */
 const WORKER_COUNT = 15;
@@ -22,6 +23,7 @@ export default function TerminalPoolFixture() {
     <button onClick={() => setGenerations((current) => current.map((generation, index) => index === worker - 1 ? generation + 1 : generation))}>Replace selected session</button>
     <button onClick={() => setRetained(inspectRetention())}>Inspect retained renderers</button>
     {retained !== undefined && <p role="status">{retained.retained} retained browser renderers · {retained.attached} attached · {retained.inactive} inactive · {retained.evictions} evicted · page {retained.visibility} · {retained.focused ? "focused" : "unfocused"}</p>}
+    {retained !== undefined && <pre aria-label="Snapshot application evidence">{JSON.stringify(retained.application, null, 2)}</pre>}
     <div style={{ height: 480, display: "flex", flexDirection: "column" }}>
       <TerminalView session={{ session_id: `fixture-pool-${worker}-${generations[worker - 1]}`, running: true }} operatorToken="fixture-only" busy={false} />
     </div>
@@ -30,5 +32,5 @@ export default function TerminalPoolFixture() {
 }
 
 function inspectRetention() {
-  return { ...terminalWorkspace.rendererRetention, visibility: document.visibilityState, focused: document.hasFocus() };
+  return { ...terminalWorkspace.rendererRetention, visibility: document.visibilityState, focused: document.hasFocus(), application: terminalApplicationEvidence.snapshot() };
 }

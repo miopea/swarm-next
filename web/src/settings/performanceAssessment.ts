@@ -14,7 +14,7 @@ export function computePressure(machine: MachineResources | undefined): Resource
   return load / cpus >= 2 ? "critical" : load / cpus >= 1 ? "advisory" : "normal";
 }
 
-export function assessPerformance(browser: Omit<ReturnType<typeof readBrowserPerformance>, "recent_interactions">, resources: RuntimeResources | undefined, now = Date.now()) {
+export function assessPerformance(browser: Pick<ReturnType<typeof readBrowserPerformance>, "collection" | "current" | "before_reload" | "supported_observers">, resources: RuntimeResources | undefined, now = Date.now()) {
   const windowMs = 30_000;
   const recent = browser.current.buckets.filter((bucket) => bucket.at >= now - windowMs && bucket.at <= now);
   const delayed = recent.flatMap((bucket) => Object.entries(bucket.metrics).filter(([kind, value]) => value && (

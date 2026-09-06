@@ -8,6 +8,24 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Snapshot application phase evidence (September 6 UTC)
+
+Local diagnostics and the sanitized report now retain a paired breakdown of the
+slowest completed terminal snapshot: state application (reset, resize and parser
+completion), subsequent geometry/focus, and payload byte count. No content or
+session identifiers are retained. At most 200 samples survive for one hour in
+the current page; reads/records prune without a timer. Only applications starting
+and finishing in a visible attached view are sampled. Failures and interrupted
+restores are excluded rather than treated as fast completion. These phases are
+wall time, not CPU or paint, and do not include transport/backlog waiting.
+
+The isolated Edge terminal-pool fixture produced one real callback sample:
+1,547 bytes, 25.7 ms state application and 0.8 ms geometry/focus (26.5 ms total).
+This proves wiring on synthetic content, not the cause of the live two-second
+restore. 67 focused controller/evidence/diagnostics/report tests and TypeScript
+pass. The live cause, representative performance comparison and overhead
+acceptance remain open; no buffering, resize or worker behavior changed.
+
 ### Latest development verification and decision reading order (September 6 UTC)
 
 The follow-up `f7b6c1a0` deployment is healthy with an empty degraded list,

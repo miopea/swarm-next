@@ -229,6 +229,14 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
           {" · Presentation estimate "}{Math.round(browserTiming.recent_interactions.slowest.presentation_estimate_ms)} ms
         </p> : null}
         <p>{browserTiming.recent_interactions.coverage}</p>
+        <p>Snapshot application breakdown: {browserTiming.terminal_application.samples} completed samples, at most 200 from the last hour in this page.</p>
+        {browserTiming.terminal_application.slowest ? <p>
+          Slowest snapshot: {Math.round(browserTiming.terminal_application.slowest.total_ms)} ms
+          {" · State application "}{Math.round(browserTiming.terminal_application.slowest.state_ms)} ms
+          {" · Geometry and focus "}{Math.round(browserTiming.terminal_application.slowest.geometry_ms)} ms
+          {" · "}{browserTiming.terminal_application.slowest.bytes.toLocaleString()} bytes.
+        </p> : null}
+        <p>These phases belong to the same completed snapshot. State application includes reset, resize and parser completion; geometry includes any subsequent fit. Neither is CPU time or confirmed paint. Failed or interrupted applications are not represented here; see connection errors. This breakdown resets on reload.</p>
         <p>{browserTiming.current.buckets.length} timing buckets · {browserTiming.current.incidents.length} recent incident captures. These are historical evidence, not unresolved alerts.</p>
         {browserTiming.before_reload ? <p>Before-reload snapshot available for comparison.</p> : null}
         <p>Preview report includes the timing evidence. Browser CPU percentage is not available here; compare with your browser task manager.</p>
