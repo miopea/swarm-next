@@ -1,7 +1,20 @@
 import { expect, test } from "vitest";
 import type { Task } from "../api/tasks";
 import type { HeldBriefing, BlockedEscalation } from "../api";
-import { projectTaskQueues } from "./taskQueueProjection";
+import { groupQueueByWorker, projectTaskQueues } from "./taskQueueProjection";
+
+test("worker groups preserve roster and dispatch order without changing task inputs", () => {
+  const workers = [{ id: "b", name: "Bee", position: 0 }, { id: "a", name: "Ant", position: 1 }] as Worker[];
+  const source = [task("z", { assigned_worker_id: "a" }), task("later", { assigned_worker_id: "b", position: 8 }),
+    task("first", { assigned_worker_id: "b", position: 2 }), task("unassigned"), task("missing", { assigned_worker_id: "gone" })];
+  const before = structuredClone(source);
+  const groups = groupQueueByWorker(source, workers);
+  expect(groups.map(group => group.workerId)).toEqual(["b", "a", "gone", null]);
+  expect(groups[0].tasks.map(item => item.id)).toEqual(["first", "later"]);
+  expect(groups[2].name).toBe("Worker unavailable (gone)");
+  expect(groups[3].name).toBe("Unassigned");
+  expect(source).toEqual(before);
+});
 import type { Worker } from "../api/workers";
 
 const task = (id: string, extra: Partial<Task> = {}): Task => ({

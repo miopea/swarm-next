@@ -2816,6 +2816,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .queue-meaning, .queue-oldest { margin: 0; font-size: 0.8rem; color: var(--muted); }
 .queue-group ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.25rem; min-width: 0; }
 .queue-group li { min-width: 0; }
+.queue-worker-group { margin-top: 1rem; padding-top: .75rem; border-top: 1px solid var(--line); min-width: 0; }
+.queue-worker-group h3 { margin: 0; font-size: .9rem; overflow-wrap: anywhere; }
 .queue-group li button {
   width: 100%; text-align: left; display: flex; justify-content: space-between; gap: 1rem;
   background: none; border: 1px solid transparent; border-radius: 6px; padding: 0.35rem 0.5rem; cursor: pointer;

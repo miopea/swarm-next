@@ -4,7 +4,7 @@ import type { BlockedEscalation, HeldBriefing, HeldDelivery, QueenAutomationStat
 import DeliveryWaitList from "./DeliveryWaitList";
 import TaskPrerequisiteList from "./TaskPrerequisiteList";
 import { prerequisiteSatisfied, type NextMoveOwner, type Task } from "../api/tasks";
-import { projectTaskQueues, workerAwaitingAnswer } from "./taskQueueProjection";
+import { groupQueueByWorker, projectTaskQueues, workerAwaitingAnswer } from "./taskQueueProjection";
 import type { Worker } from "../api/workers";
 
 /** A scanning hint, never a replacement for the recorded statement. */
@@ -111,7 +111,10 @@ function taskProgress(task: Task, now: number): string {
   if (task.state === "review") {
     if (task.outcome_delivery_state === "uncertain") return "Handoff delivery unconfirmed · Queen must reconcile before retrying";
     if (task.outcome_delivery_state === "queued" || task.outcome_delivery_state === "dispatching") return "Review handoff awaiting confirmed delivery";
-    return "In review";
+    if (task.next_move_owner === "worker") return task.review_request_id
+      ? "Waiting for the worker to answer Queen's review request"
+      : "Worker follow-up recorded · request details unavailable";
+    return "Waiting for Queen's review";
   }
   if (task.state === "blocked") {
     if (task.next_move_owner === "operator") return "Waiting for your decision";
@@ -230,8 +233,11 @@ export default function QueuesView({
             </header>
             <RowContainer className="queue-group-rows">
             {group.owner === "scheduled" && <summary>Show {group.tasks.length} scheduled task{group.tasks.length === 1 ? "" : "s"}</summary>}
+            {groupQueueByWorker(group.tasks, workers).map(workerGroup => <section className="queue-worker-group" key={workerGroup.workerId ?? "unassigned"} aria-label={workerGroup.name}>
+            <h3>{workerGroup.name} <span className="queue-count">{workerGroup.tasks.length}</span></h3>
+            <p className="queue-task-meta">Recorded queue order · earlier items may still have gates</p>
             <ul>
-              {group.tasks.map((task) => {
+              {workerGroup.tasks.map((task) => {
                 const briefing = briefings.get(task.id);
                 return (
                 <li key={task.id}>
@@ -271,6 +277,7 @@ export default function QueuesView({
                 );
               })}
             </ul>
+            </section>)}
             </RowContainer>
           </article>
         );

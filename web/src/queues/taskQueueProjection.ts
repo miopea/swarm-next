@@ -2,6 +2,30 @@ import type { BlockedEscalation, HeldBriefing } from "../api";
 import { isOpenTaskState, prerequisiteSatisfied, type Task } from "../api/tasks";
 import type { Worker } from "../api/workers";
 
+/** Presentation only: roster order, then the dispatcher's recorded position/id order. */
+export function groupQueueByWorker(tasks: Task[], workers: Worker[]) {
+  const roster = new Map(workers.map(worker => [worker.id, worker]));
+  const groups = new Map<string | null, Task[]>();
+  for (const task of tasks) {
+    const id = task.assigned_worker_id ?? null;
+    const group = groups.get(id) ?? [];
+    group.push(task);
+    groups.set(id, group);
+  }
+  const compareId = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
+  return [...groups].map(([workerId, items]) => ({
+    workerId,
+    name: workerId == null ? "Unassigned" : roster.get(workerId)?.name ?? `Worker unavailable (${workerId})`,
+    tasks: items.sort((a, b) => a.position - b.position || compareId(a.id, b.id)),
+  })).sort((a, b) => {
+    if (a.workerId == null) return 1;
+    if (b.workerId == null) return -1;
+    return (roster.get(a.workerId)?.position ?? Number.MAX_SAFE_INTEGER)
+      - (roster.get(b.workerId)?.position ?? Number.MAX_SAFE_INTEGER)
+      || compareId(a.workerId, b.workerId);
+  });
+}
+
 /** Worker attention can reflect a pending answer or a provider prompt. */
 export function workerAwaitingAnswer(task: Task, worker: Worker | undefined): boolean {
   return (task.state === "ready" || task.state === "active")

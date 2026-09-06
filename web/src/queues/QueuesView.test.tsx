@@ -15,6 +15,24 @@ function task(overrides: Partial<Task>): Task {
 }
 
 describe("QueuesView", () => {
+  test("each owner section groups workers and shows recorded order and review waits", () => {
+    const workers = [{ id: "b", name: "Bee", position: 0 }, { id: "a", name: "Ant", position: 1 }] as Worker[];
+    render(<QueuesView workers={workers} onOpenTask={vi.fn()} tasks={[
+      task({ id: "later", title: "Later task", assigned_worker_id: "b", position: 8, next_move_owner: "worker", review_request_id: "r", review_request: "Verify the mobile download" }),
+      task({ id: "ant", assigned_worker_id: "a", next_move_owner: "worker" }),
+      task({ id: "first", title: "Earlier task", assigned_worker_id: "b", position: 1, next_move_owner: "worker" }),
+      task({ id: "draft", state: "draft", next_move_owner: "queen" }),
+    ]} />);
+    const bee = screen.getByRole("region", { name: "Bee" });
+    expect(within(bee).getAllByRole("button").map(button => button.textContent)).toEqual([
+      expect.stringContaining("Earlier task"), expect.stringContaining("Later task"),
+    ]);
+    expect(within(bee).getByText("Waiting for the worker to answer Queen's review request")).toBeVisible();
+    expect(within(bee).getByText("Queen asks: Verify the mobile download")).toBeVisible();
+    expect(screen.getByRole("region", { name: "Unassigned" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Waiting on Queen 1" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Waiting on a worker 3" })).toBeVisible();
+  });
   test("a current terminal input wait stays visible without assigning it to the operator", () => {
     const current = task({ state: "active", next_move_owner: "worker", dispatch_state: "delivered", assigned_worker_id: "w", assigned_session_id: "s" });
     const worker = { id: "w", name: "Petal", running: true, active_session_id: "s", attention_state: "awaiting_operator" } as Worker;
