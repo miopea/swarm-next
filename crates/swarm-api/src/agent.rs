@@ -777,8 +777,7 @@ impl ServerHandler for AgentMcp {
                                 "held_briefings": self
                                     .tasks
                                     .store()
-                                    .held_task_dispatches(crate::unix_timestamp())
-                                    .unwrap_or_default(),
+                                    .held_task_dispatches(crate::unix_timestamp())?,
                                 // Assigned to a worker that is not running.
                                 // There is no briefing to hold and no session
                                 // to hold it for, so this appears nowhere
@@ -788,8 +787,7 @@ impl ServerHandler for AgentMcp {
                                 "unreachable_assignments": self
                                     .tasks
                                     .store()
-                                    .work_assigned_to_a_worker_that_is_not_running()
-                                    .unwrap_or_default(),
+                                    .work_assigned_to_a_worker_that_is_not_running()?,
                             }))
                         })
                 } else {
@@ -5217,6 +5215,59 @@ mod tests {
         let denied =
             response_json(handle(bridge, plain_state(), request(&worker_token)).await).await;
         assert!(denied["result"]["isError"].as_bool().unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn coordination_attention_tracks_unreachable_assignment_recovery() {
+        let (bridge, store, queen_id, _, _) = setup();
+        let sleeping = store
+            .create_worker(
+                "Sleeping fixture",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace/sleeping",
+                false,
+                1,
+            )
+            .unwrap();
+        let task = store
+            .create_task("Waiting for wake", "/workspace/sleeping")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(
+                task.id,
+                sleeping.id,
+                &swarm_domain::TaskActivityActor::worker(queen_id),
+            )
+            .unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let before = call_review_test_tool(
+            bridge.clone(),
+            &token,
+            "swarm_list_coordination_attention",
+            json!({}),
+        )
+        .await;
+        let assignments = before["result"]["structuredContent"]["unreachable_assignments"]
+            .as_array()
+            .unwrap();
+        assert_eq!(assignments.len(), 1);
+        assert_eq!(assignments[0]["task_id"], task.id.to_string());
+        store
+            .bind_worker_session(sleeping.id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let after = call_review_test_tool(
+            bridge,
+            &token,
+            "swarm_list_coordination_attention",
+            json!({}),
+        )
+        .await;
+        assert_eq!(
+            after["result"]["structuredContent"]["unreachable_assignments"],
+            json!([])
+        );
+        assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Ready);
     }
 
     async fn call_review_test_tool(

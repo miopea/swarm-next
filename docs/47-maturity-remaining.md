@@ -21,10 +21,20 @@ advancing the event cursor. No new timer or endpoint was added.
 
 TypeScript and all 68 App/live-feed tests passed, including six event kinds,
 clearing resolved reasons and recovery after a transient status-read failure.
-The full frontend suite also passed: 1,195 tests across 132 files. Deployment
-and live recovery acceptance remain pending. A Windows foreground
+The full frontend suite also passed: 1,195 tests across 132 files. Build a8875f85
+deployed healthy with the same engine identity. A separate Edge tab displayed the
+current Queen prompt-hold explanation and four Queen-owned drafts. Live prompt
+recovery remains unverified: no real unsent input was altered. A Windows foreground
 probe returned no window handle, so it supplies no evidence about Edge occlusion;
 the browser presentation-delay attribution remains open.
+
+The attention MCP reader also no longer substitutes empty lists when held-briefing
+or unreachable-assignment persistence reads fail. Those failures propagate as
+tool errors, like the other snapshot reads, instead of claiming no obligations.
+The focused API regression covers a sleeping worker's assigned Ready task and
+its disappearance from unreachable assignments after session binding; reading
+attention never starts the task. This is not proof of Queen triage or a live
+database-failure drill.
 
 ### Current Queen prompt hold and default-browser sample (September 5)
 
