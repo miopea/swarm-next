@@ -110,7 +110,7 @@ test("canonical output proceeds while one coalesced geometry follow-up is pendin
   } finally { record.mockRestore(); controller.dispose(); }
 });
 
-test("ownership lost during deferred sizing cannot publish the old view's dimensions", async () => {
+test.each(["ownership", "focus", "composer"])("losing %s eligibility during deferred sizing cannot publish the old view's dimensions", async (lost) => {
   const surface = fakeSurface();
   const connection = { ...fakeConnection(), ownsGeometry: true };
   const controller = new TerminalController(() => surface, () => connection);
@@ -122,7 +122,9 @@ test("ownership lost during deferred sizing cannot publish the old view's dimens
   const record = vi.spyOn(terminalApplicationEvidence, "record");
   try {
     await vi.mocked(connection.start).mock.calls[0][0].onSnapshot({ sequence: 1, rows: 24, columns: 120, truncated: false, reason: "attached", bytes: new Uint8Array() });
-    connection.ownsGeometry = false;
+    if (lost === "ownership") connection.ownsGeometry = false;
+    if (lost === "focus") document.hasFocus = () => false;
+    if (lost === "composer") controller.holdGeometryForMobileComposer(true);
     finishFit({ rows: 60, columns: 40 });
     await vi.waitFor(() => expect(record).toHaveBeenCalledOnce());
     expect(connection.resize).not.toHaveBeenCalled();

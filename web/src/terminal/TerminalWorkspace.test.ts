@@ -69,10 +69,12 @@ test("taking a worker refits its terminal to this device", async () => {
   vi.mocked(connection.resize).mockClear();
   vi.mocked(surface.fit).mockResolvedValue({ rows: 50, columns: 40 });
 
-  workspace.redrawSession("queen-session");
-
-  // Taking a worker is an operator action, so this one claims.
-  await vi.waitFor(() => expect(connection.resize).toHaveBeenCalledWith(50, 40, "operator"));
+  // This is the foreground window in which the operator selected Work here.
+  const focus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  try {
+    workspace.redrawSession("queen-session");
+    await vi.waitFor(() => expect(connection.resize).toHaveBeenCalledWith(50, 40, "operator"));
+  } finally { focus.mockRestore(); workspace.logout(); }
 });
 
 test("taking a worker whose terminal is not mounted here is harmless", () => {

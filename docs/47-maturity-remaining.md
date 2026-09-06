@@ -10,6 +10,25 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ### Canonical application no longer awaits follow-up sizing (September 6 UTC)
 
+`c3246a71` is deployed and healthy; the actual engine and all 15 session IDs
+matched the prior baseline. A separate Edge tab observed both isolated Dogfood
+terminals without typing. Its sanitized report recorded two connections:
+grant/socket/initial-state 539/353/77 ms (970 ms total) and 54/142/76 ms
+(272 ms total). Terminal apply maxima were 25 and 20 ms. The independent
+follow-up sample still showed 1,049 ms geometry after 21 ms state application,
+so the delayed sizing remains observable but no longer blocks state application.
+Payloads/workloads differ from the earlier sample; these are live observations,
+not a controlled before/after benchmark or a native-device acceptance claim.
+
+The first full-suite run found one workspace test assuming an unfocused document
+could publish an operator resize. The fixture now explicitly models foreground
+Work here; additional deferred-fit cases prove losing focus or entering the
+mobile composer prevents publication. The focused workspace/controller checks
+pass 45 tests and TypeScript passes. Queen's read-only automation status was
+enabled, completed/no_action with no waiting_reason; this verifies that run was
+not stuck in delivery, not that all its orchestration judgments were correct.
+The subsequent complete frontend run passes all 1,224 tests across 134 files.
+
 The controller now accepts an applied canonical snapshot before its post-restore
 stable-frame fit finishes. Subsequent output can be parsed instead of waiting
 behind geometry work. Attach and snapshot paths share one pending follow-up fit;
