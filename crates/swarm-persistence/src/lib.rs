@@ -57,6 +57,7 @@ pub use federation_steward_tasks::MAX_FEDERATION_STEWARD_TASK_BATCH;
 mod federation_tasks;
 pub use federation_tasks::MAX_FEDERATION_TASK_COMMAND_BATCH;
 mod feedback;
+mod support;
 pub use federation::{
     MAX_CONNECTION_CARD_LIFETIME_SECONDS, MAX_FEDERATION_INVITATION_LIFETIME_SECONDS,
     MIN_CONNECTION_CARD_LIFETIME_SECONDS, MIN_FEDERATION_INVITATION_LIFETIME_SECONDS,
@@ -70,6 +71,7 @@ pub use federation_handoff_reconciliation::{
 pub use federation_jira_claims::{
     FederationJiraClaimIntent, FederationJiraClaimPhase, MAX_FEDERATION_JIRA_CLAIM_BATCH,
 };
+pub use support::{SupportReceipt, SupportStore, SupportStoreError};
 mod jira;
 mod legacy_source;
 mod migration;

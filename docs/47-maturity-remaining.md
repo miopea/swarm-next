@@ -1,5 +1,33 @@
 # Daily-driver maturity: remaining delivery and acceptance
 
+## 2026-09-06: central support intake foundation
+
+ADR 0080 now has input and isolated persistence groundwork, not a deployed
+integration. Public input cannot assert an actor, account, existing conversation
+or send approval. Supplied email is preserved as unverified contact information.
+Text bounds match Admin's UTF-16 limits. Admission has a configured positive
+conversation cap and never deletes existing reports to make room.
+
+An immediate transaction commits frozen submission, conversation and initial
+message together. Exact-key retries recover the same receipt after restart and
+at capacity; changed payloads conflict. Concurrent duplicate submission creates
+one conversation. Separate keys from the same email do not merge threads. Failed
+message insertion rolls back the whole report. The database identity gate refuses
+foreign execution schemas, including names that would fool a SQL LIKE wildcard.
+
+Verification in an isolated Linux source snapshot using Rust 1.97.1: full domain
+and persistence suites passed before the final two edge-case additions (109 and
+575 tests); final strict all-target/all-feature Clippy passed for both crates,
+and all 11 support-focused tests passed after those additions. No live Hive
+database, worker or customer conversation was used by these tests.
+
+Still required: application/HTTP boundary, bounded Hive outbox, privileged Admin
+conversation reads, source registration, supported attachments/diagnostics,
+original-channel approved delivery and inbound threading, completion-evidence
+linkage, fictional end-to-end browser journeys and deployment/recovery proof.
+This foundation does not satisfy those activation gates or the original maturity
+program's remaining performance, orchestration and native-device acceptance.
+
 ## 2026-09-06: CI green and dependency recovery completed
 
 CI run [34036337401](https://github.com/miopea/swarm-next/actions/runs/34036337401)

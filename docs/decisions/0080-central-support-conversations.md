@@ -1,7 +1,9 @@
 # ADR 0080: Central support conversations, separate from Hive execution
 
 Status: accepted implementation design under the operator's September 6 scope.
-Not implemented or connected. Central deployment URL and credentials remain unset.
+Implementation underway, not connected. Central deployment URL and credentials
+remain unset. Initial domain validation and isolated persistence do not activate
+public intake, Admin reads, Hive delivery or customer replies.
 
 ## Outcome and ownership
 
@@ -91,6 +93,15 @@ AI summaries unless separately authorized. Do not migrate old private Hive repor
 to the central source merely because the feature becomes configured.
 
 ## Completion loop and activation gate
+
+The initial persistence foundation admits a configured positive maximum number
+of conversations and refuses new reports at capacity without deleting history.
+Exact idempotent replay remains available at capacity. Conversation, frozen
+submission and initial message commit atomically; admission and duplicate checks
+use one immediate transaction. A separate application ID/schema gate refuses
+existing execution databases before support schema changes. Later migrations
+must preserve frozen submission encoding for retry comparison; serialization
+changes are not a reason to accept different content under an old key.
 
 Closed implementation work supplies linked completion evidence to Admin, which
 prepares the response for operator approval in each originating conversation.
