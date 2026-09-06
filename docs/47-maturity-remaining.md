@@ -10,6 +10,13 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ### Latest development verification and decision reading order (September 6 UTC)
 
+The follow-up `f7b6c1a0` deployment is healthy with an empty degraded list,
+the same actual engine build and the exact same 15 session IDs. The complete
+frontend suite passed 1,215 tests across 133 files. An isolated Edge interaction
+selected Something else, entered a custom answer and confirmed Send answers
+became enabled, without submitting any real decision. Main pushes bypassed four
+expected required checks; these local results are not a claim of green CI.
+
 Development build `bc3f5057` is healthy with no reported degradation. Its reload
 completed successfully; the actual engine build remained `38453a84c3fa` and all
 15 running session IDs exactly matched the pre-deployment baseline. This batch
