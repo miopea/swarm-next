@@ -8,6 +8,20 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Custom-answer browser recovery check (September 6 UTC)
+
+The approved always-available alternative answer remains in DecisionInbox and
+each interview question. Both existing decision suites passed (47 tests).
+Added `needs-you-answer-recovery`, an invented in-memory fixture using the actual
+DecisionInbox: its first submission fails and retry records a visible receipt.
+An Edge check through the 390px mobile-harness iframe opened Say something else,
+entered a multiline answer, observed the failed-send alert, retried, and read
+back the exact answer including its newline. A regression independently checks
+the draft survives failure and that the successful send control disappears.
+The new test and TypeScript check passed. No live decision was resolved.
+Native keyboard/PWA behavior and actual worker delivery remain separate gates.
+The separate live Edge tab still requires operator unlock.
+
 ### Verified earlier dependency journey; current-build repeat (September 6 UTC)
 
 The earlier exercise is now verified from task history and committed files:

@@ -8,6 +8,7 @@ import DatabaseRecoveryCard from "../runtime/DatabaseRecoveryCard";
 import NightWatchSettings from "../settings/NightWatchSettings";
 import TerminalPoolFixture from "./TerminalPoolFixture";
 import PerformanceEvidenceFixture from "./PerformanceEvidenceFixture";
+import DecisionAnswerFixture from "./DecisionAnswerFixture";
 
 import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
 import { App } from "../App";
@@ -500,6 +501,12 @@ export const SURFACES: Surface[] = [
         </div>
       </div>
     ),
+  },
+  {
+    id: "needs-you-answer-recovery",
+    title: "Custom answer failure and retry",
+    why: "Invented in-memory decision tests draft preservation and exact answer submission without Hive writes",
+    render: () => <DecisionAnswerFixture />,
   },
   {
     id: "needs-you-demo",
