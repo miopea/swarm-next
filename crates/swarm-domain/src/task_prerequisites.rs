@@ -45,17 +45,18 @@ impl TaskPrerequisite {
 }
 
 impl NextMoveOwner {
-    /// Completed prerequisites return the next move to Queen for reassessment,
-    /// without changing lifecycle or overriding an outstanding operator request.
+    /// Without a current structured gate Queen must reassess the block.
+    /// This assigns verification, not permission to resume or override a note.
     #[must_use]
-    pub fn after_prerequisites(
+    pub fn after_blocker_evidence(
         self,
         awaiting_operator: bool,
         prerequisites: &[TaskPrerequisite],
+        future_hold: bool,
     ) -> Self {
         if self == Self::Blocked
             && !awaiting_operator
-            && !prerequisites.is_empty()
+            && !future_hold
             && prerequisites.iter().all(TaskPrerequisite::satisfied)
         {
             Self::Queen
@@ -224,6 +225,30 @@ mod tests {
         ] {
             prerequisite.state = state;
             assert!(!prerequisite.satisfied());
+        }
+    }
+
+    #[test]
+    fn reassessment_owner_preserves_operator_and_current_gates() {
+        let empty = [];
+        assert_eq!(
+            NextMoveOwner::Blocked.after_blocker_evidence(false, &empty, false),
+            NextMoveOwner::Queen
+        );
+        assert_eq!(
+            NextMoveOwner::Blocked.after_blocker_evidence(false, &empty, true),
+            NextMoveOwner::Blocked
+        );
+        assert_eq!(
+            NextMoveOwner::Operator.after_blocker_evidence(true, &empty, false),
+            NextMoveOwner::Operator
+        );
+        for owner in [
+            NextMoveOwner::Worker,
+            NextMoveOwner::Release,
+            NextMoveOwner::Nobody,
+        ] {
+            assert_eq!(owner.after_blocker_evidence(false, &empty, false), owner);
         }
     }
 }

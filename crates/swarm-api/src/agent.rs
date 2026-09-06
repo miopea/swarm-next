@@ -5192,6 +5192,13 @@ mod tests {
                 .iter()
                 .any(|task| task["task_id"] == upstream.id.to_string())
         );
+        assert!(
+            queen_tasks
+                .iter()
+                .any(|task| task["task_id"] == unlinked.id.to_string()
+                    && task["state"] == "blocked"
+                    && task["next_move_owner"] == "queen")
+        );
         assert_eq!(queue["queen_tasks_truncated"], false);
         let ready = &attention["result"]["structuredContent"]["prerequisite_ready"];
         assert_eq!(ready["tasks"][0]["id"], consumer.id.to_string());

@@ -1523,7 +1523,7 @@ mod tests {
     }
 
     #[test]
-    fn withdrawing_a_blocked_tasks_decision_restores_its_underlying_owner() {
+    fn withdrawing_a_blocked_tasks_decision_returns_unstructured_block_to_queen() {
         let store = TaskStore::in_memory().unwrap();
         let queen = store.ensure_queen("/workspace/queen").unwrap();
         let task = store
@@ -1549,7 +1549,9 @@ mod tests {
             .unwrap();
         let task = store.get_task(task.id).unwrap();
         assert_eq!(task.state, TaskState::Blocked);
-        assert_eq!(task.next_move_owner, NextMoveOwner::Blocked);
+        // The withdrawal note is not a structured external gate. Queen still
+        // owns verifying/recording that gate; the task does not become Ready.
+        assert_eq!(task.next_move_owner, NextMoveOwner::Queen);
     }
 
     /// A ruling open on active work changes nothing. Active work

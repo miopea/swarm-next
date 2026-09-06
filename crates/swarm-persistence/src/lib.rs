@@ -1855,7 +1855,8 @@ impl TaskStore {
                        'reason', p.reason, 'created_at', p.created_at))
                     FROM task_prerequisites p LEFT JOIN tasks prerequisite ON prerequisite.id = p.prerequisite_id
                     WHERE p.task_id = t.id),
-                   CASE WHEN t.state = 'blocked' THEN t.blocked_until END
+                   CASE WHEN t.state = 'blocked' THEN t.blocked_until END,
+                   coalesce(t.state = 'blocked' AND t.blocked_until > unixepoch(), 0)
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
@@ -5982,7 +5983,7 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
             row.get(19)?,
             row.get(20)?,
         )
-        .after_prerequisites(row.get(20)?, &prerequisites),
+        .after_blocker_evidence(row.get(20)?, &prerequisites, row.get(26)?),
         prerequisites,
         outcome_delivery_state: outcome_delivery_state
             .map(|value| TaskOutcomeDeliveryState::from_str(&value))

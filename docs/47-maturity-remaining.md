@@ -8,6 +8,26 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Shared ownership of blocked reassessment (September 6)
+
+After the automated paste was submitted, Queen entered a new Running review.
+The board still had four Draft tasks and 32 Blocked tasks. Four blocks had an
+unresolved prerequisite; the other 28 had notes but no structured prerequisite,
+pending-decision owner or hold deadline. The shared owner projection previously
+left those 28 attributed to Blocked even while attention listed them for Queen's
+reassessment. It now attributes the verification move to Queen without changing
+Blocked state or interpreting/discarding notes. Pending decisions, unresolved
+prerequisites and future explicit holds retain their current gates.
+
+All 103 domain tests passed. The broad persistence run passed 568 tests and
+identified two old owner expectations (unstructured block after decision
+withdrawal and the lifecycle owner matrix). Those assertions were updated to
+Queen, retaining Blocked state. The decision-withdrawal test and two agent
+attention tests passed afterward; the agent assertion confirms this work appears
+in Queen's own queue snapshot as well as the reassessment candidates.
+The corrected owner-matrix test and all 14 prerequisite regressions also passed.
+The broad suite was not rerun after these test-expectation-only corrections.
+
 ### Automation paste stranded across API replacement (September 6)
 
 A read-only canonical snapshot found Queen's current prompt contained a collapsed

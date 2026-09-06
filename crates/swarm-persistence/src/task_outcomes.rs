@@ -493,12 +493,12 @@ mod tests {
             NextMoveOwner::Worker
         );
 
-        // NOT Queen. Blocked is the harder reason — a task waiting on another
-        // task — and naming Queen here would bury those in her queue.
+        // This fixture has no prerequisite, decision or future hold. Queen
+        // verifies the missing gate; the lifecycle remains Blocked.
         store.transition_task(task.id, TaskState::Blocked).unwrap();
         assert_eq!(
             store.get_task(task.id).unwrap().next_move_owner,
-            NextMoveOwner::Blocked
+            NextMoveOwner::Queen
         );
 
         store.transition_task(task.id, TaskState::Active).unwrap();

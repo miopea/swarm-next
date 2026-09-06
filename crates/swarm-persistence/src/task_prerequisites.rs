@@ -441,6 +441,14 @@ mod tests {
         assert!(!truncated);
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].id, task);
+        assert_eq!(
+            candidates[0].next_move_owner,
+            swarm_domain::NextMoveOwner::Queen
+        );
+        assert_eq!(
+            store.get_task(task).unwrap().next_move_owner,
+            swarm_domain::NextMoveOwner::Queen
+        );
         assert_eq!(store.get_task(task).unwrap().state, TaskState::Blocked);
         assert!(
             store
@@ -465,6 +473,30 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(store.blocked_tasks_for_reassessment(30).unwrap().0.len(), 1);
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET blocked_until = unixepoch() + 3600 WHERE id = ?1",
+                [task.to_string()],
+            )
+            .unwrap();
+        assert_eq!(
+            store.get_task(task).unwrap().next_move_owner,
+            swarm_domain::NextMoveOwner::Blocked
+        );
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET blocked_until = unixepoch() - 1 WHERE id = ?1",
+                [task.to_string()],
+            )
+            .unwrap();
+        assert_eq!(
+            store.get_task(task).unwrap().next_move_owner,
+            swarm_domain::NextMoveOwner::Queen
+        );
         store
             .connection()
             .unwrap()

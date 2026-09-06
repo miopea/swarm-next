@@ -87,3 +87,13 @@ response states that distinction. This read does not grant new routing authority
 or rewrite blockers. Queen must account for recorded obligations before declaring
 her queue clear. Failure to read the board fails the response rather than
 presenting an empty/healthy snapshot.
+
+The same owner projection assigns Blocked work with no pending operator decision,
+no unfinished prerequisite and no future recorded hold to Queen for reassessment.
+This includes missing prerequisite metadata, not only completed edges. A historical
+note cannot establish that an external gate remains current. Queen must verify it
+and record the applicable dependency, decision or scheduled hold; the task remains
+Blocked until an authorized transition. This changes the owner of verification,
+not task readiness, operator authorization or permission to discard existing notes.
+Board, single-task and agent reads share the rule. No new timer or background
+transition is introduced; a deadline's effect is evaluated on the next read.

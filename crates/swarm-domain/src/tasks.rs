@@ -937,9 +937,9 @@ impl NextMoveOwner {
             // The hard block remains, but its current requested human ruling
             // is the next move. Resolving it re-derives the remaining owner.
             TaskState::Review | TaskState::Blocked if awaiting_operator_decision => Self::Operator,
-            // NOT Queen. The operator drew this line: blocked is a harder
-            // reason than back-and-forth, such as a task waiting on another
-            // task. Naming Queen here would bury the hard cases in her queue.
+            // Base ownership only. The shared read then applies current blocker
+            // evidence: real gates stay Blocked; absent/cleared gates give Queen
+            // the verification move without changing the task state.
             TaskState::Blocked => Self::Blocked,
             // An event, not a person. It settles itself when the work ships.
             TaskState::AwaitingRelease => Self::Release,
