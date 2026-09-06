@@ -3466,3 +3466,15 @@ Task records independently show member-status task
 `01a06105-261d-7d80-aeb0-05f9f1981483` in Ready after Queen's review. D365 still
 has no later task activity beyond its previous Resuming note. Queen's transcript
 explicitly reports incomplete coverage. No release was cut.
+
+### Recovery request delivery evidence
+
+Queen's compact active-work recovery projection now includes the latest request
+to each exact task/worker pair: message ID, durable delivery state, delivery time,
+session identity and whether that session remains live. The existing 32-candidate
+bound is retained, each request lookup selects at most one row, and no message
+body is added to this projection. Missing history and failed observation remain
+distinct. This does not classify an ended-session message as unread or retry it;
+provider conversation history may have retained it. Six API evidence tests and
+sixteen message persistence tests pass, as does strict API/persistence lint.
+Live Queen use and actual D365 resumption remain unverified.

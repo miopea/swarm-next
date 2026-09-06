@@ -47,10 +47,22 @@ pub(super) async fn observe(
             } else {
                 None
             };
-            (
-                item.action_id.clone(),
-                evidence(signals, crate::unix_timestamp()),
-            )
+            let mut observation = evidence(signals, crate::unix_timestamp());
+            observation["latest_queen_request"] = match store.latest_queen_request(item.task_id, item.worker_id) {
+                Ok(Some(message)) => json!({
+                    "observation": "recorded",
+                    "message_id": message.id,
+                    "created_at": message.created_at,
+                    "delivery_state": message.delivery_state,
+                    "delivered_at": message.delivered_at,
+                    "delivered_session_id": message.delivered_session_id,
+                    "reached_the_current_session": message.reached_the_current_session,
+                    "scope": "Transport evidence only. Read the task exchange and latest worker answer before deciding whether continuation is needed. An ended delivery session is not proof the message went unread; provider history may survive. A delivered request is not pending delivery or proof work resumed. Never replay solely because a session ended."
+                }),
+                Ok(None) => json!({"observation":"none_recorded"}),
+                Err(_) => json!({"observation":"unavailable"}),
+            };
+            (item.action_id.clone(), observation)
         })
         .buffer_unordered(8)
         .collect()
@@ -92,6 +104,7 @@ pub(super) fn active_work_recovery(
             "worker_name": item.worker_name,
             "session_id": item.session_id,
             "checked_at": observation["checked_at"],
+            "latest_queen_request": observation["latest_queen_request"],
             "current_observation": "Terminal resting; no background work visible in the terminal. This is not a process-tree check.",
         }))
     }).take(32).collect::<Vec<_>>();
@@ -144,6 +157,30 @@ mod tests {
             result["next_action"],
             crate::agent::QUEEN_ACTIVE_RECOVERY_GUIDANCE
         );
+    }
+
+    #[test]
+    fn recovery_keeps_delivery_identity_and_failed_observation_explicit() {
+        let row = recovery_fixture();
+        for request in [
+            json!({"observation":"recorded", "message_id":"old-request",
+                "delivery_state":"delivered", "delivered_session_id":"ended-session",
+                "reached_the_current_session":false}),
+            json!({"observation":"unavailable"}),
+            json!({"observation":"none_recorded"}),
+        ] {
+            let mut observation = evidence(
+                Some(ProviderSignals {
+                    activity: ProviderActivity::Resting,
+                    background_work: false,
+                }),
+                42,
+            );
+            observation["latest_queen_request"] = request.clone();
+            let observations = HashMap::from([(row.action_id.clone(), observation)]);
+            let result = active_work_recovery(std::slice::from_ref(&row), &observations);
+            assert_eq!(result["tasks"][0]["latest_queen_request"], request);
+        }
     }
 
     #[test]

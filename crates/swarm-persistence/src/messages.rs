@@ -116,7 +116,8 @@ pub struct TaskMessage {
     /// This is the question Queen was answering by hand, comparing a delivery
     /// timestamp against the session id from `swarm_list_workers`. False on a
     /// delivered message means it was written into a terminal that no longer
-    /// exists: the bytes were typed, and nothing running was ever told.
+    /// exists. Provider conversation history may retain it, so this does not
+    /// establish whether it was read or acted upon, or authorize replay.
     ///
     /// A worker has at most one open session at a time — that is the property
     /// `LIVE_RECIPIENT_SESSION_JOIN` already relies on — so "still open" and
@@ -398,6 +399,32 @@ impl TaskStore {
             .query_map([task_id.to_string()], message_from_row)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(messages)
+    }
+
+    /// Latest Queen request to this exact worker on this task, bounded to one row.
+    /// Delivery is transport evidence, never proof of resumed work.
+    ///
+    /// # Errors
+    /// Returns unavailable or corrupt storage rather than claiming no request exists.
+    pub fn latest_queen_request(
+        &self,
+        task_id: TaskId,
+        worker_id: WorkerId,
+    ) -> Result<Option<TaskMessage>, TaskStoreError> {
+        let connection = self.connection()?;
+        let sql = format!(
+            "SELECT {MESSAGE_COLUMNS} FROM task_messages m
+             WHERE m.task_id = ?1 AND m.sender = 'queen'
+               AND m.recipient_worker_id = ?2
+             ORDER BY m.created_at DESC, m.id DESC LIMIT 1"
+        );
+        Ok(connection
+            .query_row(
+                &sql,
+                params![task_id.to_string(), worker_id.to_string()],
+                message_from_row,
+            )
+            .optional()?)
     }
 
     /// Messages waiting to reach one worker's terminal.
@@ -699,6 +726,16 @@ mod tests {
             .unwrap();
         store.release_worker_session(departed).unwrap();
 
+        let latest = store.latest_queen_request(task, worker).unwrap().unwrap();
+        assert_eq!(latest.id, stranded.id);
+        assert!(!latest.reached_the_current_session);
+        assert!(
+            store
+                .latest_queen_request(task, WorkerId::new())
+                .unwrap()
+                .is_none()
+        );
+
         let current = WorkerSessionId::new();
         store.bind_worker_session(worker, current).unwrap();
         let read = store
@@ -715,6 +752,14 @@ mod tests {
             .unwrap();
 
         let messages = store.task_messages(task).unwrap();
+        assert_eq!(
+            store
+                .latest_queen_request(task, worker)
+                .unwrap()
+                .unwrap()
+                .id,
+            read.id
+        );
         let stranded = messages
             .iter()
             .find(|message| message.id == stranded.id)

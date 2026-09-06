@@ -57,6 +57,18 @@ lifetimes remain unchanged.
 
 ## Acceptance
 
+### Recovery keeps delivery evidence beside current terminal observations
+
+The bounded active-work recovery view includes the latest Queen request to the
+exact task/worker pair, with message ID, delivery state and delivery session.
+At most one message is selected for each of the existing 32 observation candidates;
+message bodies are not copied into this projection. No recorded message and an
+unavailable storage observation remain distinct. A delivered message on an ended
+session is not pending transport, but provider history may retain it. Queen must
+inspect the actual exchange and progress before asking for same-task continuation;
+neither a delivery receipt nor a resting terminal proves work resumed. This
+projection cannot authorize replay, clear a blocker or bypass guarded delivery.
+
 ### Workers can read their own finished evidence
 
 Task history uses the existing stable-worker ownership check also used by
