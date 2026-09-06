@@ -74,6 +74,7 @@ export default function HeldBriefingList({ briefings, onOpenTask }: Props) {
                   {briefing.title}
                 </button>
                 {!group.sharedReason && <p className="queue-task-meta">{holdReason(briefing)}</p>}
+                <BlockingTaskLink briefing={briefing} onOpenTask={onOpenTask} />
               </li>
             ))}
           </ul>
@@ -121,12 +122,21 @@ export function holdReason(briefing: HeldBriefing): string {
     case "operator_in_the_terminal":
       return "you are in that terminal";
     case "worker_already_working":
-      return "the worker is on something else";
+      // Older APIs used blocked_by for Ready queue order even for this reason.
+      // Only the new paired identity proves the title is the Active blocker.
+      return briefing.blocking_task_id && briefing.blocked_by
+        ? `worker has Active work: ${briefing.blocked_by}` : "the worker is on something else";
     case "waiting_its_turn":
       return briefing.blocked_by ? `behind ${briefing.blocked_by}` : "behind earlier work";
     default:
       return briefing.reason;
   }
+}
+
+export function BlockingTaskLink({ briefing, onOpenTask }: { briefing: HeldBriefing; onOpenTask?: (taskId: string) => void }) {
+  if (!onOpenTask || !briefing.blocking_task_id
+    || !["worker_already_working", "waiting_its_turn"].includes(briefing.reason)) return null;
+  return <button type="button" className="queue-blocking-task-link" onClick={() => onOpenTask(briefing.blocking_task_id!)}>Open blocking task</button>;
 }
 
 /** Coarse on purpose: the question is hours-or-minutes, not the exact figure. */

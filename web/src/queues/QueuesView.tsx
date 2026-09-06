@@ -1,5 +1,5 @@
 import { useId, useMemo } from "react";
-import HeldBriefingList, { holdReason, waitedFor } from "../orchestration/HeldBriefingList";
+import HeldBriefingList, { BlockingTaskLink, holdReason, waitedFor } from "../orchestration/HeldBriefingList";
 import type { BlockedEscalation, HeldBriefing, HeldDelivery, QueenAutomationStatus } from "../api";
 import DeliveryWaitList from "./DeliveryWaitList";
 import TaskPrerequisiteList from "./TaskPrerequisiteList";
@@ -241,7 +241,7 @@ export default function QueuesView({
                     </span>
                     {task.state === "blocked" && waits.has(task.id) && <span className="queue-task-meta">Blocked for {ageLabel(Math.max(0, Math.floor(waits.get(task.id)!.blocked_for_seconds / 3600)))}</span>}
                   </button>
-                  {briefing && <p className="queue-task-meta">Briefing held: {holdReason(briefing)} · queued {waitedFor(now / 1000 - briefing.queued_at)}</p>}
+                  {briefing && <p className="queue-task-meta">Briefing held: {holdReason(briefing)} · queued {waitedFor(now / 1000 - briefing.queued_at)} <BlockingTaskLink briefing={briefing} onOpenTask={onOpenTask} /></p>}
                   <TaskPrerequisiteList task={task} workerNames={workerNames} onOpenTask={onOpenTask} compact />
                   {task.state === "blocked" && task.blocked_until != null && <p className="queue-task-meta">
                     {Number.isFinite(task.blocked_until) && Number.isFinite(new Date(task.blocked_until * 1000).getTime())

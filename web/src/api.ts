@@ -365,12 +365,14 @@ export type HeldBriefing = {
   /** Operator engagement, active work, queue order, or experimental_during_night_watch. */
   reason: string;
   /**
-   * The earlier task this one is behind, when that is the hold.
+   * The Active or earlier Ready task responsible for this hold.
    *
    * Without it "waiting its turn" is unfalsifiable — sixteen briefings reported
    * it at once on 2026-08-24 and named nothing to go and look at.
    */
   blocked_by?: string | null;
+  /** Exact Active/earlier Ready task selected for this hold; absent on older APIs. */
+  blocking_task_id?: string | null;
 };
 export type HeldDelivery = {
   /**

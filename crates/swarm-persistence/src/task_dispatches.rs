@@ -144,10 +144,11 @@ pub struct HeldTaskDispatch {
     pub worker_name: String,
     pub queued_at: i64,
     pub reason: DispatchHold,
-    /// The earlier task this one is queued behind, when that is the hold.
+    /// The Active task or earlier Ready task responsible for this hold.
     /// Without it "waiting its turn" is unfalsifiable — sixteen briefings
     /// reported it at once on 2026-08-24 and it named nothing to look at.
     pub blocked_by: Option<String>,
+    pub blocking_task_id: Option<String>,
 }
 
 impl TaskStore {
@@ -285,55 +286,65 @@ impl TaskStore {
             "SELECT td.task_id, t.title, td.worker_id, w.name, td.updated_at,
                     EXISTS(SELECT 1 FROM worker_engagements e
                            WHERE e.worker_id = td.worker_id AND e.expires_at > ?1) AS engaged,
-                    EXISTS(SELECT 1 FROM tasks other
-                           WHERE other.assigned_worker_id = td.worker_id
-                             AND other.state = 'active' AND other.removed_at IS NULL
-                             AND other.id <> td.task_id) AS busy,
-                    (SELECT earlier.title FROM tasks earlier
-                      WHERE earlier.assigned_worker_id = td.worker_id
-                        AND earlier.state = 'ready' AND earlier.removed_at IS NULL
-                        AND (earlier.position < t.position
-                             OR (earlier.position = t.position AND earlier.id < t.id))
-                        AND NOT EXISTS (
-                            SELECT 1 FROM task_dispatches earlier_brief
-                            WHERE earlier_brief.task_id = earlier.id
-                              AND earlier_brief.state IN ('delivered','uncertain')
-                              AND earlier_brief.updated_at + ?2 <= ?1)
-                      ORDER BY earlier.position, earlier.id LIMIT 1) AS blocked_by,
+                    active.title, earlier.title,
                     w.provider,
                     EXISTS(SELECT 1 FROM task_prerequisites p LEFT JOIN tasks upstream ON upstream.id = p.prerequisite_id
-                           WHERE p.task_id = t.id AND (upstream.id IS NULL OR upstream.removed_at IS NOT NULL OR upstream.state != 'completed'))
+                           WHERE p.task_id = t.id AND (upstream.id IS NULL OR upstream.removed_at IS NOT NULL OR upstream.state != 'completed')),
+                    active.id, earlier.id
              FROM task_dispatches td
              JOIN tasks t ON t.id = td.task_id
              JOIN worker_profiles w ON w.id = td.worker_id
+             LEFT JOIN tasks active ON active.id = (
+                 SELECT other.id FROM tasks other
+                 WHERE other.assigned_worker_id = td.worker_id
+                   AND other.state = 'active' AND other.removed_at IS NULL
+                   AND other.id <> td.task_id
+                 ORDER BY other.position, other.id LIMIT 1)
+             LEFT JOIN tasks earlier ON earlier.id = (
+                 SELECT prior.id FROM tasks prior
+                 WHERE prior.assigned_worker_id = td.worker_id
+                   AND prior.state = 'ready' AND prior.removed_at IS NULL
+                   AND (prior.position < t.position OR (prior.position = t.position AND prior.id < t.id))
+                   AND NOT EXISTS (
+                       SELECT 1 FROM task_dispatches earlier_brief
+                       WHERE earlier_brief.task_id = prior.id
+                         AND earlier_brief.state IN ('delivered','uncertain')
+                         AND earlier_brief.updated_at + ?2 <= ?1)
+                 ORDER BY prior.position, prior.id LIMIT 1)
              WHERE td.state = 'queued' AND t.removed_at IS NULL
              ORDER BY td.updated_at",
         )?;
         let rows = statement.query_map(params![now, ABANDONED_BRIEF_SECONDS], |row| {
             let engaged: bool = row.get(5)?;
-            let busy: bool = row.get(6)?;
-            let blocked_by: Option<String> = row.get(7)?;
+            let active_title: Option<String> = row.get(6)?;
+            let reason = if row.get::<_, bool>(9)? {
+                DispatchHold::PrerequisiteUnresolved
+            } else if night_watch
+                && !swarm_domain::ProviderKind::from_stored(&row.get::<_, String>(8)?)
+                    .night_watch_approved()
+            {
+                DispatchHold::ExperimentalDuringNightWatch
+            } else if engaged {
+                DispatchHold::OperatorInTheTerminal
+            } else if active_title.is_some() {
+                DispatchHold::WorkerAlreadyWorking
+            } else {
+                DispatchHold::WaitingItsTurn
+            };
+            let (blocked_by, blocking_task_id) = match reason {
+                DispatchHold::WorkerAlreadyWorking => (active_title, row.get(10)?),
+                DispatchHold::WaitingItsTurn => (row.get(7)?, row.get(11)?),
+                _ => (None, None),
+            };
             Ok(HeldTaskDispatch {
                 task_id: row.get::<_, String>(0)?,
                 title: row.get(1)?,
                 worker_id: row.get::<_, String>(2)?,
                 worker_name: row.get(3)?,
                 queued_at: row.get(4)?,
-                blocked_by: blocked_by.clone(),
-                reason: if row.get::<_, bool>(9)? {
-                    DispatchHold::PrerequisiteUnresolved
-                } else if night_watch
-                    && !swarm_domain::ProviderKind::from_stored(&row.get::<_, String>(8)?)
-                        .night_watch_approved()
-                {
-                    DispatchHold::ExperimentalDuringNightWatch
-                } else if engaged {
-                    DispatchHold::OperatorInTheTerminal
-                } else if busy {
-                    DispatchHold::WorkerAlreadyWorking
-                } else {
-                    DispatchHold::WaitingItsTurn
-                },
+                blocked_by,
+                blocking_task_id,
+                reason,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -1758,6 +1769,37 @@ mod tests {
             .find(|entry| entry.task_id == next.id.to_string())
             .expect("the second briefing is queued");
         assert_eq!(waiting.reason, DispatchHold::WorkerAlreadyWorking);
+        assert_eq!(waiting.blocked_by.as_deref(), Some("Under way"));
+        assert_eq!(waiting.blocking_task_id, Some(busy.id.to_string()));
+
+        // Engagement takes precedence; do not attribute that hold to a task.
+        store
+            .renew_worker_engagement(
+                session,
+                Some(swarm_domain::PresenceDeviceId::new()),
+                1_000,
+                300,
+            )
+            .unwrap();
+        let held = store.held_task_dispatches(1_100).unwrap();
+        let waiting = held
+            .iter()
+            .find(|entry| entry.task_id == next.id.to_string())
+            .unwrap();
+        assert_eq!(waiting.reason, DispatchHold::OperatorInTheTerminal);
+        assert_eq!(waiting.blocked_by, None);
+        assert_eq!(waiting.blocking_task_id, None);
+
+        // Once current work leaves Active, it is not a blocker merely because
+        // it remains assigned to the same worker.
+        store.transition_task(busy.id, TaskState::Review).unwrap();
+        let held = store.held_task_dispatches(1_400).unwrap();
+        let waiting = held
+            .iter()
+            .find(|entry| entry.task_id == next.id.to_string())
+            .unwrap();
+        assert_eq!(waiting.reason, DispatchHold::WaitingItsTurn);
+        assert_eq!(waiting.blocking_task_id, None);
     }
 
     /// An engaged worker with a live session and no work briefed yet.

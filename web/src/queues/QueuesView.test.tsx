@@ -14,6 +14,14 @@ function task(overrides: Partial<Task>): Task {
 }
 
 describe("QueuesView", () => {
+  test("a held task opens its exact blocking task rather than the waiting item", () => {
+    const open = vi.fn();
+    render(<QueuesView workers={[]} tasks={[task({ state: "ready", next_move_owner: "worker", dispatch_state: "queued", assigned_worker_id: "w" })]} onOpenTask={open}
+      heldBriefings={[{ task_id: "t1", title: "Some work", worker_id: "w", worker_name: "Petal", queued_at: 1, reason: "worker_already_working", blocked_by: "Current assignment", blocking_task_id: "active" }]} />);
+    expect(screen.getByText(/worker has Active work: Current assignment/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Open blocking task" }));
+    expect(open).toHaveBeenCalledExactlyOnceWith("active");
+  });
   test("blocked row labels distinguish recorded gates without interpreting notes or resuming work", () => {
     const prerequisite = { task_id: "t1", prerequisite_id: "upstream", title: "Contract", state: "active" as const, assigned_worker_id: null, removed: false, reason: "Contract first", created_at: 1 };
     const blocked = task({ state: "blocked", next_move_owner: "blocked", blocked_note: "Operator approved; dependency complete; start now" });

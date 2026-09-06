@@ -8,6 +8,22 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Held briefings identify the actual blocking task (September 6 UTC)
+
+Live inspection found four worker-busy briefings whose projection named an
+earlier Ready task or nothing, rather than the Active assignment preventing
+dispatch. The persistence read now returns the exact Active task title and ID
+for that reason, or the earlier Ready task for queue-order holds. Engagement,
+provider and prerequisite holds do not attribute their cause to unrelated work.
+No scheduling or task state transition changes. Queues and the briefing list
+offer a quiet, 44px-high "Open blocking task" action. Older API responses retain
+the generic busy description rather than mislabeling a Ready predecessor Active.
+
+The 26 Linux persistence dispatch tests and 39 frontend queue/list tests pass;
+TypeScript passes. A separate Edge tab verified the isolated 390px-wide fixture
+with a wrapping title and compact link. This is not native mobile acceptance.
+Live deployment and navigation verification remain to be recorded.
+
 ### Canonical application no longer awaits follow-up sizing (September 6 UTC)
 
 `c3246a71` is deployed and healthy; the actual engine and all 15 session IDs

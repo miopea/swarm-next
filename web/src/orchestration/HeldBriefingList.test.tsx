@@ -6,6 +6,20 @@ import HeldBriefingList from "./HeldBriefingList";
 
 afterEach(cleanup);
 
+test("names and opens the recorded Active blocker without trusting old queue-order titles", () => {
+  const open = vi.fn();
+  const held = briefing({ reason: "worker_already_working", blocked_by: "Actual active task", blocking_task_id: "active-id" });
+  const view = render(<HeldBriefingList briefings={[held]} onOpenTask={open} />);
+  expect(screen.getByText(/worker has Active work: Actual active task/)).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Open blocking task" }));
+  expect(open).toHaveBeenCalledExactlyOnceWith("active-id");
+  view.rerender(<HeldBriefingList briefings={[{ ...held, blocking_task_id: undefined }]} onOpenTask={open} />);
+  expect(screen.queryByText(/worker has Active work/)).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Open blocking task" })).not.toBeInTheDocument();
+  view.rerender(<HeldBriefingList briefings={[{ ...held, reason: "operator_in_the_terminal" }]} onOpenTask={open} />);
+  expect(screen.queryByRole("button", { name: "Open blocking task" })).not.toBeInTheDocument();
+});
+
 function briefing(overrides: Partial<HeldBriefing> = {}): HeldBriefing {
   return {
     task_id: "019fedfc-1c30-70e1-a5e2-9a3c94268099",
