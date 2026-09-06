@@ -187,11 +187,13 @@ pub(super) async fn stop(
     let bound_worker = state
         .task_store
         .as_ref()
-        .map(|store| match store.provider_for_active_session(session_id) {
-            Ok(_) => Ok(true),
-            Err(swarm_persistence::TaskStoreError::WorkerSessionNotActive) => Ok(false),
-            Err(error) => Err(error),
-        })
+        .map(
+            |store| match store.provider_for_active_session(session_id) {
+                Ok(_) => Ok(true),
+                Err(swarm_persistence::TaskStoreError::WorkerSessionNotActive) => Ok(false),
+                Err(error) => Err(error),
+            },
+        )
         .transpose()
         .map_err(|error| task_store_error(&error))?
         .unwrap_or(false);

@@ -824,7 +824,10 @@ mod tests {
                 };
                 if kind == "stop" {
                     assert_eq!(
-                        store.get_worker_profile(worker.id).unwrap().provider_conversation_id,
+                        store
+                            .get_worker_profile(worker.id)
+                            .unwrap()
+                            .provider_conversation_id,
                         Some(selected)
                     );
                 }
@@ -853,7 +856,10 @@ mod tests {
                 assert!(restart_all_workers(State(state), headers).await.is_err());
             }
             assert_eq!(
-                store.get_worker_profile(worker.id).unwrap().active_session_id,
+                store
+                    .get_worker_profile(worker.id)
+                    .unwrap()
+                    .active_session_id,
                 Some(session)
             );
         };
