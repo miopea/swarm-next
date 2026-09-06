@@ -20,6 +20,13 @@ const priorityLabels: Record<TaskPriority, string> = {
 };
 
 function taskStateLabel(task: Task): string {
+  // Returning work to Active reserves its worker before its new briefing is
+  // consumed. The lifecycle claim is not evidence of execution yet (ADR 0016).
+  if (task.state === "active") {
+    if (task.dispatch_state === "queued") return "Awaiting briefing";
+    if (task.dispatch_state === "dispatching") return "Sending briefing";
+    if (task.dispatch_state === "uncertain") return "Delivery unconfirmed";
+  }
   if (task.state === "ready" && task.assigned_worker_id) return "Assigned";
   // Finished is not the same as shown to be live. Calling it completed claims
   // more than anyone has established, which is the distinction between

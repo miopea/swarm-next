@@ -14,6 +14,7 @@ import { App } from "../App";
 import { SURFACE_STORAGE_KEY } from "../navigation/startSurface";
 import QueuesView from "../queues/QueuesView";
 import TaskBoard from "../tasks/TaskBoard";
+import TaskMetadata from "../tasks/TaskMetadata";
 import TaskPrerequisiteDialog from "../tasks/TaskPrerequisiteDialog";
 import WorkerRosterItem from "../workers/WorkerRosterItem";
 import WorkerSettings from "../settings/WorkerSettings";
@@ -664,6 +665,18 @@ export const SURFACES: Surface[] = [
         onReorder={asyncNoop}
       />
     ),
+  },
+  {
+    id: "task-delivery-status",
+    title: "Task execution and briefing status",
+    why: "Real metadata at narrow width, using synthetic returned-work states",
+    render: () => <main style={{ maxWidth: 390 }}>
+      <h2>Returned work</h2>
+      {(["queued", "dispatching", "uncertain", "delivered"] as const).map((dispatch_state) => <article key={dispatch_state}>
+        <h3>{dispatch_state}</h3>
+        <TaskMetadata task={{ ...demoTasks[2], state: "active", dispatch_state }} busy={false} onRetryJira={asyncNoop} />
+      </article>)}
+    </main>,
   },
   {
     id: "worker-order",

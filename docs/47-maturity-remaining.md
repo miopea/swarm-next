@@ -8,6 +8,23 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Returned-work status is not execution evidence (September 6 UTC)
+
+Task metadata formerly called every Active task In progress, including returned
+work whose new briefing was queued, sending, or uncertain. It now labels those
+three cases Awaiting briefing, Sending briefing, and Delivery unconfirmed.
+Delivered or absent briefing metadata preserves the explicit task lifecycle;
+later Blocked/Review states remain authoritative. This is presentation only:
+no dispatch, task transition, worker wake, or concurrency guard changes.
+
+Validation: all 57 task-board tests and TypeScript check pass, including five
+delivery variants and transition back to ordinary/Blocked status. The isolated
+Edge fixture renders the real metadata with synthetic states. Deployment pending.
+Live read-only evidence still shows held Platform/D365 briefs naming their
+actual Active task IDs. That proves the hold's identity, not provider progress;
+idle-Active reconciliation and complete waking/delivery/execution acceptance
+remain open. No real task was changed during this inspection.
+
 ### Bounded GPU renderer recovery (September 6 UTC, deployed)
 
 Inspection found that a lost GPU context fell back permanently until the browser

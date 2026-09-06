@@ -764,6 +764,30 @@ test.each([
 
   expect(screen.getByRole("status")).toHaveTextContent(label);
 });
+test.each([
+  ["queued", "Awaiting briefing"],
+  ["dispatching", "Sending briefing"],
+  ["uncertain", "Delivery unconfirmed"],
+  ["delivered", "In progress"],
+  [null, "In progress"],
+] as const)("active task metadata distinguishes %s delivery from execution", (dispatch_state, label) => {
+  renderBoard({ tasks: [{ ...task, state: "active", assigned_worker_id: worker.id, dispatch_state }] });
+  const details = within(screen.getByRole("region", { name: "Swarm details" }));
+  expect(details.getByText(label)).toBeVisible();
+  if (label !== "In progress") expect(details.queryByText("In progress")).not.toBeInTheDocument();
+});
+
+test("task metadata resumes its ordinary status after delivery and respects later blocking", () => {
+  const pending = { ...task, state: "active" as const, assigned_worker_id: worker.id, dispatch_state: "queued" as const };
+  const { props, rerender } = renderBoard({ tasks: [pending] });
+  expect(screen.getByText("Awaiting briefing")).toBeVisible();
+  rerender(<TaskBoard {...props} tasks={[{ ...pending, dispatch_state: "delivered" }]} />);
+  expect(screen.queryByText("Awaiting briefing")).not.toBeInTheDocument();
+  expect(within(screen.getByRole("region", { name: "Swarm details" })).getByText("In progress")).toBeVisible();
+  rerender(<TaskBoard {...props} tasks={[{ ...pending, state: "blocked", dispatch_state: "uncertain" }]} />);
+  expect(within(screen.getByRole("region", { name: "Swarm details" })).getByText("Blocked")).toBeVisible();
+});
+
 test("shows the shared queue hold reason and drops stale delivery or ownership evidence", () => {
   const queued = { ...task, state: "ready" as const, assigned_worker_id: worker.id, dispatch_state: "queued" as const };
   const heldBriefings = [{ task_id: task.id, title: task.title, worker_id: worker.id,
