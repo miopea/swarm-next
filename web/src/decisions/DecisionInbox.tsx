@@ -270,14 +270,8 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                     the live inbox they ran to about five thousand characters
                     together — so they fold behind it rather than in front. */}
                 {decision.summary ? <div className="decision-summary"><LongText text={decision.summary} label="the summary" foldAbove={300} /></div> : null}
-                {decision.suggested_action && <p className="decision-ask"><span>{requester} recommends</span> {humanize(decision.suggested_action)}</p>}
-                <details className="decision-argument">
-                  <summary>Why, and what it rests on</summary>
-                  <DecisionReason reason={decision.reason} />
-                  {decision.evidence && <div><p className="eyebrow">Evidence</p><LongText text={decision.evidence} label="the evidence" /></div>}
-                </details>
+                {decision.suggested_action && <div className="decision-ask"><span>{requester} recommends</span><LongText text={humanize(decision.suggested_action)} label="the recommendation" foldAbove={300} /></div>}
                 <dl className="decision-context">
-                  {decision.task_id && <div><dt>Task</dt><dd>{onOpenTask ? <button type="button" className="decision-task-link" onClick={() => onOpenTask(decision.task_id!)}>{taskNames.get(decision.task_id) ?? "Linked task"}</button> : taskNames.get(decision.task_id) ?? "Linked task"}</dd></div>}
                   {decision.risk && <div className="decision-risk"><dt>Risk</dt><dd><LongText text={decision.risk} label="the risk" foldAbove={300} /></dd></div>}
                 </dl>
                 {decision.state === "pending" && decision.questions?.length ? (
@@ -342,6 +336,8 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                         type="button"
                         className="secondary-button"
                         disabled={decisionBusy}
+                        aria-expanded={speakingId === decision.id}
+                        aria-controls={`${tabId}-answer-${decision.id}`}
                         onClick={() => setSpeakingId(speakingId === decision.id ? undefined : decision.id)}
                       >{speakingId === decision.id ? "Never mind" : "Say something else"}</button>
                       <button
@@ -362,7 +358,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                       </button>
                     </div>
                     {speakingId === decision.id ? (
-                      <div className="decision-own-words" role="group" aria-label="Answer in your own words">
+                      <div id={`${tabId}-answer-${decision.id}`} className="decision-own-words" role="group" aria-label="Answer in your own words">
                         <label>
                           <span>Tell the worker what to do instead</span>
                           <textarea
@@ -370,7 +366,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                             disabled={decisionBusy}
                             value={spoken[decision.id] ?? ""}
                             maxLength={4000}
-                            placeholder="Add it to the Play Store yourself, using the browser extension"
+                            placeholder="Describe the outcome you want instead"
                             onChange={(event) => setSpoken((current) => ({ ...current, [decision.id]: event.target.value }))}
                           />
                         </label>
@@ -391,6 +387,12 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                   <div className="decision-resolved"><p><strong>{humanize(decision.resolution_action ?? "resolved")}</strong>{decision.resolution_note ? ` · ${decision.resolution_note}` : ""}</p><span className={`delivery-state ${decision.delivery_state ?? "recorded"}`}>{deliveryLabel(decision.delivery_state)}</span></div>
                 )}
                 {decision.state === "pending" && submissionErrors[decision.id] && <p className="field-error" role="alert">{submissionErrors[decision.id]}</p>}
+                <details className="decision-argument">
+                  <summary>Why, and what it rests on</summary>
+                  {decision.task_id && <dl className="decision-context"><div><dt>Task</dt><dd>{onOpenTask ? <button type="button" className="decision-task-link" onClick={() => onOpenTask(decision.task_id!)}>{taskNames.get(decision.task_id) ?? "Linked task"}</button> : taskNames.get(decision.task_id) ?? "Linked task"}</dd></div></dl>}
+                  <DecisionReason reason={decision.reason} />
+                  {decision.evidence && <div><p className="eyebrow">Evidence</p><LongText text={decision.evidence} label="the evidence" /></div>}
+                </details>
               </article>
             );
           })}

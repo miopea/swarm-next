@@ -71,6 +71,31 @@ const uncertain = { ...resolved, id: "decision-5", title: "Uncertain release", d
 const task = { id: "task-1", title: "Stabilize reloads" } as Task;
 const worker = { id: "worker-1", name: "Petal" } as Worker;
 
+test("answers precede supporting evidence while risk remains ahead of the action", () => {
+  render(<DecisionInbox decisions={[pending]} tasks={[task]} workers={[worker]} busy={false} onResolve={vi.fn()} />);
+  const action = screen.getByRole("button", { name: "Durable path" });
+  const evidence = screen.getByText("Why, and what it rests on");
+  expect(screen.getByText(pending.risk).compareDocumentPosition(action) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(action.compareDocumentPosition(evidence) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(evidence.closest("details")).not.toHaveAttribute("open");
+});
+
+test("long recommendations expand without changing the custom answer", () => {
+  const recommendation = "Choose the durable route after verifying the migration. ".repeat(20).trim();
+  render(<DecisionInbox decisions={[{ ...pending, suggested_action: recommendation }]} tasks={[]} workers={[worker]} busy={false} onResolve={vi.fn()} />);
+  const custom = screen.getByRole("button", { name: "Say something else" });
+  expect(custom).toHaveAttribute("aria-expanded", "false");
+  fireEvent.click(custom);
+  expect(custom).toHaveAttribute("aria-expanded", "true");
+  const answer = screen.getByLabelText("Tell the worker what to do instead");
+  fireEvent.change(answer, { target: { value: "Investigate another approach first" } });
+  expect(screen.getByText(recommendation)).toHaveClass("clamped");
+  fireEvent.click(screen.getByRole("button", { name: "Show all of the recommendation" }));
+  expect(screen.getByText(recommendation)).not.toHaveClass("clamped");
+  expect(answer).toHaveValue("Investigate another approach first");
+  expect(document.getElementById(custom.getAttribute("aria-controls")!)).toBe(screen.getByRole("group", { name: "Answer in your own words" }));
+});
+
 test("optional notes start folded without hiding the risk or choices", () => {
   const { rerender } = render(<DecisionInbox decisions={[pending]} tasks={[task]} workers={[worker]} busy={false} onResolve={vi.fn()} />);
   const note = screen.getByLabelText("Optional note");
@@ -107,7 +132,7 @@ test("names the repository the decision is about, and the ask, without opening t
   expect(screen.queryByText("queen")).not.toBeInTheDocument();
 
   // The ask is on the card, not the last row of a list under a folded details.
-  const ask = screen.getByText(/recommends$/).closest("p");
+  const ask = screen.getByText(/recommends$/).closest(".decision-ask");
   expect(ask).toHaveTextContent("Merge PR #419");
   expect(ask?.closest("details")).toBeNull();
 });

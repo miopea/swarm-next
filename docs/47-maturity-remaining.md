@@ -8,6 +8,28 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Latest development verification and decision reading order (September 6 UTC)
+
+Development build `bc3f5057` is healthy with no reported degradation. Its reload
+completed successfully; the actual engine build remained `38453a84c3fa` and all
+15 running session IDs exactly matched the pre-deployment baseline. This batch
+did preserve workers, unlike the preceding documented engine convergence.
+
+Needs You now puts supporting argument/evidence and its task link after the
+answers. The risk preview and exact grant command remain before the actions.
+Long requester recommendations use the existing expandable preview rather than
+an unbounded paragraph; source text and custom drafts are retained. The custom
+answer toggle exposes expansion/control semantics and uses a neutral placeholder.
+105 inbox/interview/App tests and TypeScript pass. Edge's isolated 390-by-844
+fixture visibly wraps the question, recommendation, risk and options without
+horizontal overflow; this is not native Android/iOS acceptance.
+
+Contract inspection confirms `DecisionRequest` still has only the requester's
+`suggested_action`, not independently attributed worker and Queen opinions.
+Separate Queen/worker recommendations remain unfinished and must not be faked by
+relabelling one value twice. Direct-terminal decision reconciliation and the
+broader performance/recovery gates also remain open.
+
 ### UX direction approved by the operator (September 6 UTC)
 
 The operator approved the phone-readable Needs You/Queues direction: concise
