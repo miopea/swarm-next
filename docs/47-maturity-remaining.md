@@ -26,7 +26,9 @@ Queen, retaining Blocked state. The decision-withdrawal test and two agent
 attention tests passed afterward; the agent assertion confirms this work appears
 in Queen's own queue snapshot as well as the reassessment candidates.
 The corrected owner-matrix test and all 14 prerequisite regressions also passed.
-The broad suite was not rerun after these test-expectation-only corrections.
+The full isolated Linux persistence suite was subsequently rerun after these
+corrections: all 570 tests passed in 316 seconds. This checkout contains the
+scoped maturity overlays; it is not a claim of full current-main CI acceptance.
 
 Live development deployment `2084d7e9` was verified in the separate Edge Queues
 tab: 31 Queen-owned items (four Drafts and 27 blocked reassessments), with four
@@ -44,6 +46,27 @@ then reported 13 running sessions, no unreadable sessions and no drain; API heal
 was ok without degraded subsystems. No manual worker start was needed. This is
 one successful live idle engine update and automatic return, not proof of each
 provider conversation's contents, crash recovery, or a complete overnight soak.
+
+### Live Queen follow-through probe (September 6)
+
+Created isolated Draft `01a07450-52ec-7521-8461-21970164aa3c` in the existing
+workflow-fixture repository: document the tested heartbeat contract, run its
+Node tests and commit documentation only. Triage, assignment to Swarm Dogfood
+and normal settlement are deliberately left to Queen. No real project task was
+changed, and no terminal input was injected to expedite the probe.
+
+The separate authenticated Edge tab showed the demo under Waiting on Queen,
+alongside 27 blocked reassessments and four other Drafts. Screenshot review still
+finds the Queue presentation too dense: collapsed blocker notes expose up to
+240 characters per row. Compact default presentation with full expandable
+evidence remains UX work, not completed acceptance.
+
+Queen run `01a0744e-ff42-7130-a7fd-d5953fd0d044` initially waited on pacing.
+Its displayed deadline moved after a delivery, but this observation did not
+establish starvation: the same run was delivered at 01:29:34 UTC and became
+Running with one attempt and no waiting reason. The demo still had only its
+creation event at that check. Keep the probe open and verify actual task
+triage, worker execution and settlement; delivered automation is not completion.
 
 ### Automation paste stranded across API replacement (September 6)
 
