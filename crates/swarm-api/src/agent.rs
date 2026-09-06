@@ -509,6 +509,8 @@ pub(super) const QUEEN_EVIDENCE_GUIDANCE: &str = "EVIDENCE BEFORE ESCALATION. Mi
 
 pub(super) const QUEEN_REVIEW_COVERAGE_GUIDANCE: &str = "REVIEW COVERAGE. Before finishing, account for every current Queen-owned task. Route actionable work with lifecycle tools and record real dependencies or decisions structurally. For a genuine remaining wait, use swarm_read_review_evidence and swarm_record_review_disposition with checked evidence and actual source references. External conditions require a fresh check each run; an operator deferral requires the operator's authenticated task-linked statement or resolved decision, not your recollection or a worker's claim. A summary saying unchanged supplies no coverage. Uncovered runs finish as incomplete, not success. If you cannot finish, use outcome incomplete rather than repeatedly calling finish; recovery remains yours unless a concrete issue genuinely requires the operator.";
 
+pub(super) const QUEEN_ACTIVE_RECOVERY_GUIDANCE: &str = "ACTIVE WORK RECOVERY. Check active_work_recovery before concluding that worker-owned work is progressing. An Active task with a currently resting terminal can need your help even though its next move belongs to the worker. A queued successor waiting behind that task is correct; leaving the earlier task stranded is not. Current terminal_observation supersedes an old terminal-unreadable explanation only for terminal visibility, not task completion or authority. Read the active task history, latest worker answer and existing message delivery first. If unfinished work can safely continue within its existing scope, use one concrete swarm_message_worker request to its current assignee to continue that SAME task and conversation or report its exact blocker. That guarded path rechecks session, task ownership, prompt and operator engagement; do not type directly, bypass a hold, change provider, restart context, or transition Active through Ready. Do not repeat a pending request or send generic kicks every review; assess the prior attempt first. Preserve verified external waits and operator deferrals. If safe recovery truly fails, create a concise task-linked operator decision with what you tried and what is needed.";
+
 fn standing_brief(role: WorkerRole) -> String {
     let shared = "Swarm is the durable record of this Hive's work. What is not on the board did not happen. Before asking the operator to repeat a relayed composer instruction, use swarm_operator_submissions to find the source worker's recorded messages and read the exact submission ID. Verified authorship does not prove delivery, resolve a decision, or extend the words' scope. Raw-terminal and AskUser capture are not complete; a missing source is not evidence that the operator said nothing.";
     match role {
@@ -524,6 +526,7 @@ fn standing_brief(role: WorkerRole) -> String {
              {QUEEN_WAKE_GUIDANCE}\n\n\
              {QUEEN_BLOCK_RECOVERY_GUIDANCE}\n\n\
              {QUEEN_REVIEW_COVERAGE_GUIDANCE}\n\n\
+             {QUEEN_ACTIVE_RECOVERY_GUIDANCE}\n\n\
              WHEN YOU RUN. You are woken automatically whenever the actionable board \
              changes, and again after fifteen minutes on an unchanged board while \
              actionable work remains. Task outcomes and coordination messages can also \
@@ -744,6 +747,7 @@ impl ServerHandler for AgentMcp {
                             let (blocked_reassessment, blocked_reassessment_truncated) = self.tasks
                                 .store().blocked_tasks_for_reassessment(crate::unix_timestamp())?;
                             structured(json!({
+                                "active_work_recovery": crate::coordination_attention_evidence::active_work_recovery(&attention, &terminal_evidence),
                                 "queue_snapshot": {
                                     "observed_at": crate::unix_timestamp(),
                                     "open_tasks": queue.open_tasks,
@@ -6511,6 +6515,8 @@ mod tests {
         assert!(brief.contains(QUEEN_JUDGMENT_GUIDANCE));
         assert!(brief.contains(QUEEN_EVIDENCE_GUIDANCE));
         assert!(brief.contains(QUEEN_BLOCK_RECOVERY_GUIDANCE));
+        assert!(brief.contains(QUEEN_ACTIVE_RECOVERY_GUIDANCE));
+        assert!(!standing_brief(WorkerRole::Worker).contains(QUEEN_ACTIVE_RECOVERY_GUIDANCE));
         assert!(!standing_brief(WorkerRole::Worker).contains(QUEEN_JUDGMENT_GUIDANCE));
 
         // The capability with no tool, and the boundary that makes it usable

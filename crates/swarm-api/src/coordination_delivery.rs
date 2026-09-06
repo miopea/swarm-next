@@ -1308,7 +1308,7 @@ pub(super) fn queen_automation_message(delivery: &QueenAutomationDelivery) -> Co
         delivery.actionable_count,
         delivery.presence,
         delivery.run_id,
-        guidance = format_args!("{} {} {} {}", crate::agent::QUEEN_JUDGMENT_GUIDANCE, crate::agent::QUEEN_BLOCK_RECOVERY_GUIDANCE, crate::agent::QUEEN_EVIDENCE_GUIDANCE, crate::agent::QUEEN_REVIEW_COVERAGE_GUIDANCE),
+        guidance = format_args!("{} {} {} {} {}", crate::agent::QUEEN_ACTIVE_RECOVERY_GUIDANCE, crate::agent::QUEEN_JUDGMENT_GUIDANCE, crate::agent::QUEEN_BLOCK_RECOVERY_GUIDANCE, crate::agent::QUEEN_EVIDENCE_GUIDANCE, crate::agent::QUEEN_REVIEW_COVERAGE_GUIDANCE),
         wake_guidance = crate::agent::QUEEN_WAKE_GUIDANCE,
     )
     .into_bytes();
@@ -2956,6 +2956,7 @@ mod tests {
         );
         let brief = std::str::from_utf8(&queen.bytes).unwrap();
         assert!(brief.contains(crate::agent::QUEEN_JUDGMENT_GUIDANCE));
+        assert!(brief.contains(crate::agent::QUEEN_ACTIVE_RECOVERY_GUIDANCE));
         assert!(brief.contains(crate::agent::QUEEN_WAKE_GUIDANCE));
         assert!(!brief.contains("no wake tool"));
         assert!(!brief.contains('\n'));

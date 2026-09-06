@@ -73,9 +73,135 @@ fn evidence(signals: Option<ProviderSignals>, checked_at: i64) -> Value {
     })
 }
 
+/// A compact view of fresh observations, not a second dispatch policy. This
+/// does not grant write authority or infer task completion from a resting prompt.
+pub(super) fn active_work_recovery(
+    attention: &[CoordinatorAttention],
+    observations: &HashMap<String, Value>,
+) -> Value {
+    let tasks = attention.iter().filter_map(|item| {
+        if item.kind != "stale_owned_work_attention" { return None; }
+        let observation = observations.get(&item.action_id)?;
+        if observation["activity"] != "resting" || observation["background_work_visible"] != false {
+            return None;
+        }
+        Some(json!({
+            "task_id": item.task_id,
+            "task_title": item.task_title,
+            "worker_id": item.worker_id,
+            "worker_name": item.worker_name,
+            "session_id": item.session_id,
+            "checked_at": observation["checked_at"],
+            "current_observation": "Terminal resting; no background work visible in the terminal. This is not a process-tree check.",
+        }))
+    }).take(32).collect::<Vec<_>>();
+    json!({
+        "tasks": tasks,
+        "scope": "Only unchanged Active work with a current resting/no-visible-background observation. Missing, unknown, active, or awaiting-operator observations are excluded, not declared healthy. Observation is bounded to 32 attention rows.",
+        "next_action": crate::agent::QUEEN_ACTIVE_RECOVERY_GUIDANCE,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn recovery_fixture() -> CoordinatorAttention {
+        CoordinatorAttention {
+            action_id: "fixture-observation".into(),
+            session_id: "019ff136-7a90-7631-bbc0-f95efd1df576".parse().unwrap(),
+            kind: "stale_owned_work_attention".into(),
+            worker_id: "019ff136-7a90-7631-bbc0-f95efd1df577".parse().unwrap(),
+            worker_name: "Fictional worker".into(),
+            task_id: "019ff136-7a90-7631-bbc0-f95efd1df578".parse().unwrap(),
+            task_title: "Continue the same fictional task".into(),
+            reason: "Historical terminal could not be read".into(),
+            observed_at: 1,
+            age_seconds: 1000,
+        }
+    }
+
+    #[test]
+    fn fresh_resting_observation_exposes_active_recovery_not_historical_unavailability() {
+        let row = recovery_fixture();
+        let observations = HashMap::from([(
+            row.action_id.clone(),
+            evidence(
+                Some(ProviderSignals {
+                    activity: ProviderActivity::Resting,
+                    background_work: false,
+                }),
+                42,
+            ),
+        )]);
+        let result = active_work_recovery(std::slice::from_ref(&row), &observations);
+        assert_eq!(result["tasks"].as_array().unwrap().len(), 1);
+        assert_eq!(result["tasks"][0]["task_id"], row.task_id.to_string());
+        assert_eq!(result["tasks"][0]["session_id"], row.session_id.to_string());
+        assert_eq!(result["tasks"][0]["checked_at"], 42);
+        assert!(!result["tasks"][0].to_string().contains("could not be read"));
+        assert_eq!(
+            result["next_action"],
+            crate::agent::QUEEN_ACTIVE_RECOVERY_GUIDANCE
+        );
+    }
+
+    #[test]
+    fn active_recovery_never_turns_absent_busy_or_background_evidence_into_idle() {
+        let row = recovery_fixture();
+        let rows = std::slice::from_ref(&row);
+        assert!(
+            active_work_recovery(rows, &HashMap::new())["tasks"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        for signals in [
+            None,
+            Some(ProviderSignals {
+                activity: ProviderActivity::Unknown,
+                background_work: false,
+            }),
+            Some(ProviderSignals {
+                activity: ProviderActivity::Active,
+                background_work: false,
+            }),
+            Some(ProviderSignals {
+                activity: ProviderActivity::AwaitingOperator,
+                background_work: false,
+            }),
+            Some(ProviderSignals {
+                activity: ProviderActivity::Resting,
+                background_work: true,
+            }),
+        ] {
+            let observations = HashMap::from([(row.action_id.clone(), evidence(signals, 42))]);
+            assert!(
+                active_work_recovery(rows, &observations)["tasks"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        let mut blocked = recovery_fixture();
+        blocked.kind = "blocked_work_unattended_attention".into();
+        let observations = HashMap::from([(
+            row.action_id.clone(),
+            evidence(
+                Some(ProviderSignals {
+                    activity: ProviderActivity::Resting,
+                    background_work: false,
+                }),
+                42,
+            ),
+        )]);
+        assert!(
+            active_work_recovery(&[blocked], &observations)["tasks"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     #[tokio::test]
     // One real socket exercises successful reads, identity refusal, and cancellation.

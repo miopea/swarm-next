@@ -3293,3 +3293,13 @@ tasks. Investigate why historical caution is outweighing current evidence and
 ensure guarded task-scoped recovery is actionable without bypassing Active work
 or disturbing operator input. The cumulative stale-attention count is not a count
 of current independent stalls.
+
+The follow-up API change exposes a bounded `active_work_recovery` view using
+fresh terminal observations, separate from historical reason text. Only current
+resting/no-visible-background observations on stale Active work appear; unknown,
+unreadable, active, awaiting-operator and visible-background cases are excluded,
+not declared healthy. Queen's per-run brief now explicitly directs her to inspect
+history and existing delivery before one task-scoped guarded continuation request.
+No automatic input, lifecycle change, new authority, or blanket unblock is added.
+Five observation tests and all 485 API unit tests passed; strict API lint passed.
+Actual guarded delivery and worker continuation after deployment remain unproven.
