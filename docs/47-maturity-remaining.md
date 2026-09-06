@@ -1,5 +1,23 @@
 # Daily-driver maturity: remaining delivery and acceptance
 
+## 2026-09-06: engine attribution and second dependency exercise
+
+Updated observer `20260906T133410Z-live` completed 300 seconds / 10 samples
+(272-second measured span) on unchanged API PID 3090658 and host PID 2876265;
+all 15 sessions remained running. Engine-process CPU averaged 2.897% of one core,
+max interval 7.032%; worker-inclusive host cgroup averaged 20.113%, max 32.732%;
+API averaged 2.564%, max 13.002%. Host group includes the engine and providers:
+do not add these percentages together. No dropped history. This quieter interval
+cannot retrospectively attribute the earlier 727.77% worker-inclusive burst.
+The CSV and observer report use the run ID under `~/.local/state/swarm-next/soak/`.
+
+Second dependency exercise: Queen created and linked upstream
+`01a076ea-fdc8-77a1-a465-663bbafda89c`; authoritative prerequisite read shows it
+Completed at 1788701616. Consumer `01a07595-3a79-7221-852e-d8f5fefa60ed` remains
+Blocked with Queen owning the next move. Queen review `01a076e9-a3e1-7663-8fc0-d653c017d896`
+is Running, delivered at 1788702046. Do not claim the recovery journey complete
+or manually resume the consumer to make the test pass. Later outcome still needed.
+
 ## 2026-09-06: completed 20-minute live observation and CI recovery
 
 Observer `20260906T130816Z-live` completed 1,200 seconds, 40 samples spanning

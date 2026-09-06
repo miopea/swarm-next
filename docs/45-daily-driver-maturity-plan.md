@@ -42,6 +42,12 @@ The central source must accept explicit submissions safely without making privat
 conversations/diagnostics publicly readable. Support IDs remain distinct from
 development tasks and diagnostic IDs.
 
+When Swarm closes linked implementation work, completion summary and evidence
+return to Admin's originating request/conversation. Admin prepares the customer
+response for operator approval and delivers through that conversation's original
+channel. Closure is neither send authorization nor evidence that code is deployed;
+customer-facing wording must distinguish implementation from verified deployment.
+
 Make Swarm responsive, stable, self-managing, observable, and delightful through
 long daily use, including desktop/mobile handoff and unattended work, while
 preserving its cute, feminine-leaning bee/Hive identity and independent worker
