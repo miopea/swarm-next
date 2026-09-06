@@ -1110,6 +1110,8 @@ impl ServerHandler for AgentMcp {
                     && request.name.as_ref() != "swarm_list_workers"
                     && request.name.as_ref() != "swarm_list_decisions"
                     && request.name.as_ref() != "swarm_operator_submissions"
+                    && request.name.as_ref() != "swarm_read_task_history"
+                    && request.name.as_ref() != "swarm_list_coordination_attention"
                 {
                     self.changed.notify_waiters();
                 }
@@ -3797,6 +3799,35 @@ mod tests {
     use swarm_domain::{JiraProjectScope, JiraStatusMapping, ProviderKind, SharedWorkBackend};
     use swarm_persistence::JiraProjectBindingInput;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn evidence_reads_do_not_wake_control_room_but_mutations_do() {
+        let (bridge, store, queen_id, _, _) = setup();
+        let task = store.create_task("Read evidence", "/workspace").unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let notified = bridge.changed.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        for (name, arguments) in [
+            ("swarm_read_task_history", json!({"task_id": task.id})),
+            ("swarm_list_coordination_attention", json!({})),
+        ] {
+            let response = call_review_test_tool(bridge.clone(), &token, name, arguments).await;
+            assert_eq!(response["result"]["isError"], false, "{response}");
+        }
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(1), notified.as_mut())
+                .await
+                .is_err()
+        );
+        let response = call_review_test_tool(bridge.clone(), &token, "swarm_create_task", json!({
+            "title": "A real change", "workspace": "/workspace", "description": "Bounded fixture"
+        })).await;
+        assert_eq!(response["result"]["isError"], false, "{response}");
+        tokio::time::timeout(std::time::Duration::from_secs(1), notified.as_mut())
+            .await
+            .unwrap();
+    }
 
     /// THE DESCRIPTION AND THE LIFECYCLE AGREE ON ALL 64 PAIRS, checked rather
     /// than trusted.

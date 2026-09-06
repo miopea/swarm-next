@@ -8,6 +8,18 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Evidence-read event request churn (September 6)
+
+Successful `swarm_read_task_history` and `swarm_list_coordination_attention`
+calls woke all waiting control-room requests despite committing no event. The
+event endpoint then reread SQLite and returned an empty page to each browser.
+These reads now share the existing notification exemption for read-only tools.
+A registered-notification regression verifies both reads remain quiet and a
+subsequent task creation still wakes the listener. This addresses unnecessary
+request churn, not proof of a browser rerender, measured CPU savings, or closure
+of PERF-01/02. Durable event publication and long-poll bounds are unchanged.
+All 65 agent API tests passed in the isolated Linux checkout after this change.
+
 ### Truthful Queen finish response (September 6)
 
 The finish transaction already normalizes `needs_operator` to `no_action` when
