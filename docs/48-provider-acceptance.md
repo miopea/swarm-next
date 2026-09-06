@@ -49,6 +49,12 @@ still show their real provider in settings and preserve it when unrelated detail
 are edited. Showing an existing binding does not promote it or add it to the
 new-worker picker.
 
+ADR 0079 defines the pending admission contract: host-owned optional availability,
+explicit acknowledgement when creating/changing an experimental binding, honest
+bare-adapter limitations, and unchanged builder-owned Night Watch admission.
+This design is not implemented or a provider promotion. Older-engine omission
+must remain unknown, and unrelated edits must retain the existing provider.
+
 Builder sign-off must identify the evidence revision and any supported-platform
 limits before changing the promotion list. Do not turn elapsed soak time or
 operator availability into automatic promotion.
