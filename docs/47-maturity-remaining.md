@@ -3523,3 +3523,18 @@ excerpt is added to diagnostics or telemetry. Task-history guidance no longer
 claims an ended delivery session proves the message unread or requires resend.
 All 492 API library tests and strict all-target/all-feature API lint pass.
 Live Queen use of the excerpt and the final task handoff remain unverified.
+
+The 41008c97 recovery update is now live, with all 15 loaded workers preserved
+and the worker-engine build unchanged. Queen's subsequent terminal snapshot
+shows active processing of worker replies and proposed Admin C15 routing through
+Scout; this is not yet evidence of completed downstream work. The worker-list
+`awaiting_operator` label disagreed with visible active tool execution, so that
+status freshness remains an open defect.
+
+A deterministic browser regression reproduced a late opening-screen preference
+overriding explicit navigation to Queues. All explicit surface selections now
+invalidate the pending launch default synchronously. The regression fails before
+the fix; all 59 App tests and the frontend typecheck pass afterward. This is a
+plausible cause of the intermittent queued-briefing CI failure, not proof that
+every historical CI failure shared the cause. Live visual verification remains
+pending unlock of the separate Edge test tab.

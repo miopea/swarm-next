@@ -1696,6 +1696,24 @@ test("a blocked task's age stays in Queues without operator attention", async ()
   expect(screen.getByText(/Age alone does not require your approval/)).toBeInTheDocument();
 });
 
+test("a late opening-screen preference cannot undo explicit Queue navigation", async () => {
+  const base = bootFetch();
+  let finishPreference: ((response: ReturnType<typeof ok>) => void) | undefined;
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => {
+    if (String(input).includes("/preferences/start-surface")) {
+      return new Promise<ReturnType<typeof ok>>((resolve) => { finishPreference = resolve; });
+    }
+    return base(input);
+  }));
+  render(<App />);
+  await screen.findByRole("button", { name: /^Needs you/ });
+  await waitFor(() => expect(finishPreference).toBeDefined());
+  fireEvent.click(screen.getByRole("button", { name: /^Queues/ }));
+  expect(await screen.findByRole("heading", { name: "Queues", level: 2 })).toBeVisible();
+  await act(async () => { finishPreference!(ok({ start_surface: "decisions" })); });
+  expect(screen.getByRole("heading", { name: "Queues", level: 2 })).toBeVisible();
+});
+
 test("a queued briefing is shown but does not inflate the Needs you count", async () => {
   // THE DESIGN DECISION THIS HOLDS. Every reason a briefing is held is a queue
   // behaving correctly, and they clear themselves — two on this Hive went to

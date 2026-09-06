@@ -419,7 +419,12 @@ export function App() {
   // second copy of everything. Duplicating the whole app was what made a
   // pop-out indistinguishable from another window of the same thing.
   const detached = detachedSurface();
-  const [surface, setSurface] = useState<Surface>(() => new URLSearchParams(window.location.search).has("jira") || readSettingsSection() ? "settings" : readSavedSurface());
+  const [surface, setSurfaceState] = useState<Surface>(() => new URLSearchParams(window.location.search).has("jira") || readSettingsSection() ? "settings" : readSavedSurface());
+  const setSurface = useCallback((next: Surface) => {
+    // Explicit navigation wins even while the opening preference is in flight.
+    openedAtLaunch.current = false;
+    setSurfaceState(next);
+  }, []);
   const [taskFocus, setTaskFocus] = useState<{ id: string; request: number }>();
   const [taskComposeRequest, setTaskComposeRequest] = useState(0);
   const [taskQuery, setTaskQuery] = useState("");
@@ -550,7 +555,7 @@ export function App() {
         if (!openedAtLaunch.current) return;
         openedAtLaunch.current = false;
         if (surfaceWasRequested()) return;
-        if (isSurface(chosen)) setSurface(chosen);
+        if (isSurface(chosen)) setSurfaceState(chosen);
       })
       .catch(() => undefined);
     presenceController.start(operatorToken, setPresence, setLockDetectionState);
