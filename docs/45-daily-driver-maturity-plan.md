@@ -26,10 +26,13 @@ duplicates and draft; only the operator approves customer-facing sends.
 
 Contract inspection must preserve existing authorization and frozen/idempotent
 submission semantics, not grant workers access to operator-only triage routes.
-The forwarded message ends at "Preve"; obtain the missing constraint before
-finalizing integration acceptance. Admin's current checklist independently calls
-for idempotency, loop prevention and visible failed-delivery/retry states; confirm
-the paired contract and verify with fictional data before touching customer flows.
+Prevent duplicate ingestion and reply loops, and make failures and retries
+visible. Verify with fictional messages, including lost responses, stale approvals,
+replayed provider events and subsequent replies in the original conversation.
+Admin currently pulls privileged app-owned conversation resources; there is no
+generic Admin feedback-ingestion endpoint. Its current reply contract is
+email-specific, and attachments/source links require coordinated typed additions.
+Do not silently drop those fields or substitute email for an in-app channel.
 
 Make Swarm responsive, stable, self-managing, observable, and delightful through
 long daily use, including desktop/mobile handoff and unattended work, while

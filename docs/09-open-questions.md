@@ -3,12 +3,14 @@
 ## BFG Admin integration follow-up — 2026-09-06
 
 The operator approved the integration scope in section 1 of the maturity plan.
-Their forwarded requirements were truncated after "Preve"; the missing ending
-has been requested. BFG Admin owns contract evolution. Its worker has been asked
-to identify current feedback, identity, attachments, diagnostic and reply/draft
-contracts before implementation; do not invent a generic ingress or bypass its
-operator-only triage authorization. This is an additional integration question,
-not a reopening of the completed original interview.
+The full forwarded requirement is now received: prevent duplicate ingestion and
+reply loops, show failures/retries, and test with fictional messages. No product
+clarification remains from the truncated message. BFG Admin owns contract
+evolution; its worker confirmed the authoritative operator-conversations-v1 and
+fleet-feedback-onboarding documents. Coordinate attachment/source-link schema
+additions and non-email reply channels before implementation. Do not invent a
+generic ingress or bypass operator-only triage authorization. These are integration
+contract gaps, not a reopening of the completed original interview.
 
 Status: **Original dogfooding set closed 2026-08-22; maturity reconciliation resolved 2026-09-03**
 
