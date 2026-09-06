@@ -8,7 +8,7 @@ export const XLS_TYPE = "application/vnd.ms-excel";
 
 
 export function clipboardAttachment(clipboard: DataTransfer): File | undefined {
-  for (const item of clipboard.items) {
+  for (const item of Array.from(clipboard.items ?? [])) {
     // Any file, not only an allow-listed one — but still only a FILE, so a text
     // paste stays a text paste.
     if (item.kind !== "file") continue;

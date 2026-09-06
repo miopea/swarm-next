@@ -4,6 +4,13 @@ import { TERMINAL_ATTACHMENT_ACCEPT, chosenAttachment, clipboardAttachment, conf
 
 afterEach(() => vi.unstubAllGlobals());
 
+test("incomplete text transfers remain ordinary input rather than throwing", () => {
+  for (const transfer of [{}, { files: [] }, { items: [], files: [] }]) {
+    expect(clipboardAttachment(transfer as DataTransfer)).toBeUndefined();
+    expect(transferredAttachment(transfer as DataTransfer)).toEqual({ kind: "none" });
+  }
+});
+
 test("selects a supported clipboard image without consuming ordinary text", () => {
   const image = new File([new Uint8Array([1, 2, 3])], "capture.png", { type: "image/png" });
   const imageTransfer = {

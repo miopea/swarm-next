@@ -8,6 +8,16 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Attachment recovery verification (September 6)
+
+All 88 attachment, terminal-view and mobile-composer tests passed, including
+timeout/retry retention, cancellation, stale response and cross-session guards.
+TypeScript checking passed. An incomplete clipboard transfer without `items`
+now returns no file instead of throwing; ordinary text input remains available.
+This small defensive change does not establish the cause of the reported camera
+or gallery failures. Android camera/gallery acceptance was requested from the
+operator; iOS and native AskUser rendering remain separate outstanding gates.
+
 ### Runtime diagnostics entry (September 6)
 
 The footer Diagnostics shortcut now clears an old Settings search, and the
