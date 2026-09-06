@@ -6,8 +6,8 @@ afterEach(() => vi.unstubAllGlobals());
 
 test("incomplete text transfers remain ordinary input rather than throwing", () => {
   for (const transfer of [{}, { files: [] }, { items: [], files: [] }]) {
-    expect(clipboardAttachment(transfer as DataTransfer)).toBeUndefined();
-    expect(transferredAttachment(transfer as DataTransfer)).toEqual({ kind: "none" });
+    expect(clipboardAttachment(transfer as unknown as DataTransfer)).toBeUndefined();
+    expect(transferredAttachment(transfer as unknown as DataTransfer)).toEqual({ kind: "none" });
   }
 });
 
