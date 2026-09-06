@@ -3454,3 +3454,15 @@ request time, attempt counts and confirmed delivery. Thirty-eight conductor test
 and the API route regression pass, including repeated requests and an operator
 hold. The larger automatic recovery and truthful blocker reconciliation gate
 remains open; this correction removes one operator-trigger failure only.
+
+Deployed `4a5948404420` through the normal development update; service exited
+zero and health is OK. Engine fingerprint remains
+`8d2c8700113a2ca2dda72f582723de3875d1cc75a467b2f22ae16ef3485ee490`; all 15
+workers remain running. A live repeated run-now request returned successfully
+with queued run `01a07873-288f-7a11-a42a-a9d620eae790` unchanged and its existing
+pacing hold intact. Strict all-target/all-feature API/persistence lint passed.
+Task records independently show member-status task
+`01a05946-e414-74b2-91cb-a2ec5fcd1dd8` in Review and task
+`01a06105-261d-7d80-aeb0-05f9f1981483` in Ready after Queen's review. D365 still
+has no later task activity beyond its previous Resuming note. Queen's transcript
+explicitly reports incomplete coverage. No release was cut.
