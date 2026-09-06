@@ -8,6 +8,41 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### UX direction approved by the operator (September 6 UTC)
+
+The operator approved the phone-readable Needs You/Queues direction: concise
+decision cards with worker and Queen recommendations, immediate answer buttons,
+expandable evidence, owner-first queue groups, deliberate scheduled holds, and
+healthy activity minimized. Preserve warm cream, sage and honey, distinctive
+worker bees, restrained visual personality, comfortable mobile targets and the
+runtime area for system notices. This approves implementation of the composition,
+not completion of UX-01/P6 or changes to orchestration authority.
+
+Explicit acceptance addition: every pending Needs You decision must offer an
+answer in the operator's own words when quick options do not fit. Do not require
+choosing an inaccurate quick option or treating custom instructions as dismissal.
+Preserve the current free-text answer path through the redesign, including
+interviews, mobile input, failed submission and actionable command requests.
+Exact command authorization still requires the existing explicit grant; a custom
+answer must not silently grant it. Real-device and rendered acceptance remain open.
+
+### Experimental admission UI implementation (September 6 UTC)
+
+Settings now requires explicit per-change experimental consent and engine
+availability for new bindings. Unknown/absent capability cannot silently choose
+another provider. Failed creates and edits retain the entered values and error.
+Consent resets after successful creation/save or discard. Temporary alternate
+providers have a confirmation with the same gate, truthful capability limitations,
+and pending-request duplicate/dismiss protection. A successful create followed
+by roster-refresh failure reports that the worker exists rather than inviting a
+duplicate retry. No existing worker is changed by opening the confirmation.
+
+The focused Settings, temporary confirmation, roster and App suites pass all
+96 tests; TypeScript checking passes. Separate Edge fixture interaction verified
+consent and retained creation failure. Mobile visual review, App-level temporary
+request integration, full-tree backend validation and deployment remain pending.
+No experimental provider was promoted or launched by these fixture checks.
+
 ### Task board and queue hold consistency (September 6)
 
 Task cards now receive the existing coordinator hold projection through the app

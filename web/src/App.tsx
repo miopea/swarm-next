@@ -118,6 +118,8 @@ import { foreignEngagement, workerAttention, workerSwitcherDetail } from "./work
 import DecisionInbox from "./decisions/DecisionInbox";
 import DogfoodFeedbackDialog from "./feedback/DogfoodFeedbackDialog";
 import ShellModal from "./terminal/ShellModal";
+import ExperimentalHandoffDialog from "./workers/ExperimentalHandoffDialog";
+import { isExperimentalProvider } from "./settings/ExperimentalProviderControl";
 import CommandPalette, { type CommandChoice } from "./navigation/CommandPalette";
 import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
 import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
@@ -509,6 +511,7 @@ export function App() {
   const [heldDeliveryRefresh, setHeldDeliveryRefresh] = useState(0);
   const [providers, setProviders] = useState<ProviderCapabilities>({ claude_code: true, codex: false });
   const [providerCapabilitiesUnavailable, setProviderCapabilitiesUnavailable] = useState(false);
+  const [experimentalHandoff, setExperimentalHandoff] = useState<{ worker: Worker; provider: ProviderKind }>();
   const [notificationState, setNotificationState] = useState<NotificationCapabilityState>("unsupported");
   const presenceController = useMemo(() => new PresenceController(), []);
   useEffect(() => presenceController.setPresenceMode(presence?.mode), [presenceController, presence?.mode]);
@@ -878,14 +881,18 @@ export function App() {
     });
   }
 
-  async function configureWorker(name: string, workspace: string, provider: ProviderKind, allowOutsideRoots: boolean) {
+  async function configureWorker(name: string, workspace: string, provider: ProviderKind, allowOutsideRoots: boolean, acknowledgeExperimentalProvider = false) {
     if (!operatorToken) return;
     await perform(async () => {
-      await createWorker(operatorToken, { name, workspace, provider, allow_outside_roots: allowOutsideRoots });
-      const controlRoom = await loadControlRoom(operatorToken);
-      setWorkers(controlRoom.workers);
-      setWorkspaces(controlRoom.workspaces);
-    });
+      await createWorker(operatorToken, { name, workspace, provider, allow_outside_roots: allowOutsideRoots, acknowledge_experimental_provider: acknowledgeExperimentalProvider });
+      try {
+        const controlRoom = await loadControlRoom(operatorToken);
+        setWorkers(controlRoom.workers);
+        setWorkspaces(controlRoom.workspaces);
+      } catch {
+        setOperationError("The worker was saved, but the roster could not refresh. Refresh Swarm before adding it again.");
+      }
+    }, "Saving worker…", true);
   }
 
   async function reorderWorkerProfiles(workerIds: string[]) {
@@ -901,12 +908,12 @@ export function App() {
     });
   }
 
-  async function maintainWorkerProfile(workerId: string, name: string, description: string, provider: ProviderKind, autostart: boolean, workspace?: string, allowOutsideRoots?: boolean) {
+  async function maintainWorkerProfile(workerId: string, name: string, description: string, provider: ProviderKind, autostart: boolean, workspace?: string, allowOutsideRoots?: boolean, acknowledgeExperimentalProvider = false) {
     if (!operatorToken) return;
     await perform(async () => {
-      const updated = await updateWorker(operatorToken, workerId, { name, description, provider, autostart, workspace, allow_outside_roots: allowOutsideRoots });
+      const updated = await updateWorker(operatorToken, workerId, { name, description, provider, autostart, workspace, allow_outside_roots: allowOutsideRoots, acknowledge_experimental_provider: acknowledgeExperimentalProvider });
       setWorkers((current) => current.map((worker) => worker.id === updated.id ? updated : worker));
-    });
+    }, "Saving worker…", true);
   }
 
   /**
@@ -1112,7 +1119,7 @@ export function App() {
     setSettledTasks((current) => current.map((task) => task.id === updated.id ? updated : task));
   }
 
-  async function perform(action: () => Promise<void>, progress = "Saving…") {
+  async function perform(action: () => Promise<void>, progress = "Saving…", propagateFailure = false) {
     setBusy(true);
     setBusyLabel(progress);
     setOperationError(undefined);
@@ -1120,6 +1127,7 @@ export function App() {
       await action();
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : "The operation could not be completed");
+      if (propagateFailure) throw error;
     } finally {
       setBusy(false);
       setBusyLabel(undefined);
@@ -1450,16 +1458,26 @@ export function App() {
    * worker would break the one-session-per-worker assumption that sleep/wake
    * and briefing delivery rely on.
    */
-  async function spawnTemporary(worker: Worker, provider: string) {
+  async function spawnTemporary(worker: Worker, provider: string, acknowledgeExperimentalProvider = false) {
     if (!operatorToken) return;
+    if (isExperimentalProvider(provider as ProviderKind) && !acknowledgeExperimentalProvider) {
+      setExperimentalHandoff({ worker, provider: provider as ProviderKind });
+      return;
+    }
     setOperationError(undefined);
     try {
-      const created = await spawnTemporaryWorker(operatorToken, worker.id, provider);
-      const controlRoom = await loadControlRoom(operatorToken);
-      setWorkers(controlRoom.workers);
+      const created = await spawnTemporaryWorker(operatorToken, worker.id, provider, acknowledgeExperimentalProvider);
+      try {
+        const controlRoom = await loadControlRoom(operatorToken);
+        setWorkers(controlRoom.workers);
+      } catch {
+        setOperationError(`${created.name} was created, but the roster could not refresh. Refresh Swarm before trying again.`);
+        return;
+      }
       setOperationError(`${created.name} is temporary — adopt it to keep it, or release it when you are done.`);
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : "the temporary worker could not be started");
+      if (acknowledgeExperimentalProvider) throw error;
     }
   }
 
@@ -2321,6 +2339,14 @@ export function App() {
             onBroadcast={(body) => broadcastToWorkers(operatorToken, body)}
           />
         ) : null}
+        {operatorToken && experimentalHandoff ? <ExperimentalHandoffDialog
+          worker={experimentalHandoff.worker}
+          provider={experimentalHandoff.provider}
+          providers={providers}
+          capabilitiesUnavailable={providerCapabilitiesUnavailable}
+          onConfirm={() => spawnTemporary(experimentalHandoff.worker, experimentalHandoff.provider, true)}
+          onClose={() => setExperimentalHandoff(undefined)}
+        /> : null}
         {operatorToken && showFeedback ? (
           <DogfoodFeedbackDialog
             activeSessionId={activeSessionId}

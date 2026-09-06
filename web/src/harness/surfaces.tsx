@@ -17,6 +17,7 @@ import TaskBoard from "../tasks/TaskBoard";
 import TaskPrerequisiteDialog from "../tasks/TaskPrerequisiteDialog";
 import WorkerRosterItem from "../workers/WorkerRosterItem";
 import WorkerSettings from "../settings/WorkerSettings";
+import ExperimentalHandoffDialog from "../workers/ExperimentalHandoffDialog";
 import { demoBlocked, demoBriefings, demoDecision, demoTasks, demoWorkers } from "./productFixtures";
 import DecisionInbox from "../decisions/DecisionInbox";
 import UnansweredEmailAttentionCard from "../tasks/UnansweredEmailAttentionCard";
@@ -683,6 +684,25 @@ export const SURFACES: Surface[] = [
       workspaces={[]} busy={false} providers={{ claude_code: true, codex: true }}
       onCreate={asyncNoop} onUpdate={asyncNoop} onChooseMark={asyncNoop} onRemove={asyncNoop}
       onDraftDescription={async () => "Fixture description"} onReorder={asyncNoop} />,
+  },
+  {
+    id: "experimental-admission",
+    title: "Experimental provider admission",
+    why: "Explicit opt-in with available and unavailable engine choices; failed saves retain the operator's selection.",
+    render: () => <WorkerSettings workers={[]} workspaces={[]} busy={false}
+      providers={{ claude_code: true, codex: true, experimental: { gemini: true, grok: false, opencode: false } }}
+      onCreate={async () => { throw new Error("Fixture: provider availability changed; no worker was created."); }}
+      onUpdate={asyncNoop} onChooseMark={asyncNoop} onRemove={asyncNoop}
+      onDraftDescription={async () => "Fixture description"} onReorder={asyncNoop} />,
+  },
+  {
+    id: "experimental-handoff",
+    title: "Experimental temporary handoff",
+    why: "Consent and truthful limitations before an alternate-provider worker is created; this fixture cannot create a real worker.",
+    render: () => <ExperimentalHandoffDialog worker={demoWorkers[1]} provider="gemini"
+      providers={{ claude_code: true, codex: true, experimental: { gemini: true, grok: false, opencode: false } }}
+      capabilitiesUnavailable={false} onClose={noop}
+      onConfirm={async () => { throw new Error("Fixture: engine unavailable. No worker was created."); }} />,
   },
   {
     id: "workers",

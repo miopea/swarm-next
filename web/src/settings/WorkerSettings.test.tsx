@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import type { Worker } from "../api";
@@ -9,6 +9,82 @@ const budget = worker("budget", "Daisy", "/projects/budgetbug", 1);
 const studio = worker("studio", "Poppy", "/projects/sculpt-studio", 2);
 
 afterEach(cleanup);
+
+test("experimental creation requires opt-in and retains the selected provider when admission is withdrawn", async () => {
+  const onCreate = vi.fn().mockRejectedValue(new Error("Provider availability changed"));
+  const props = { workers: [], workspaces: [{ name: "trial", path: "/projects/trial", kind: "repository" as const, configured_worker_id: null }], busy: false,
+    providers: { claude_code: true, codex: true, experimental: { gemini: true, grok: false, opencode: false } },
+    onCreate, onUpdate: vi.fn(), onChooseMark: vi.fn(), onRemove: vi.fn(), onDraftDescription: vi.fn(), onReorder: vi.fn() };
+  const { rerender } = render(<WorkerSettings {...props} />);
+  const selector = screen.getByLabelText("Coding provider");
+  expect(within(selector).queryByRole("option", { name: /Gemini/ })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByLabelText("Allow experimental providers for this change"));
+  expect(within(selector).getByRole("option", { name: /Grok/ })).toBeDisabled();
+  fireEvent.change(selector, { target: { value: "gemini" } });
+  fireEvent.change(screen.getByLabelText("Worker name"), { target: { value: "Trial" } });
+  fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "/projects/trial" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add sleeping worker" }));
+  expect(onCreate).toHaveBeenCalledWith("Trial", "/projects/trial", "gemini", false, true);
+  expect(await screen.findByRole("alert")).toHaveTextContent("Provider availability changed");
+  expect(screen.getByLabelText("Worker name")).toHaveValue("Trial");
+  expect(selector).toHaveValue("gemini");
+
+  fireEvent.click(screen.getByLabelText("Allow experimental providers for this change"));
+  expect(selector).toHaveValue("gemini");
+  expect(screen.getByRole("button", { name: "Add sleeping worker" })).toBeDisabled();
+  fireEvent.click(screen.getByLabelText("Allow experimental providers for this change"));
+  rerender(<WorkerSettings {...props} providers={{ claude_code: true, codex: true }} />);
+  expect(selector).toHaveValue("gemini");
+  expect(within(selector).getByRole("option", { name: /Gemini.*availability unknown/ })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Add sleeping worker" })).toBeDisabled();
+});
+
+test("failed worker edits keep the form and changed name available for correction", async () => {
+  render(<WorkerSettings workers={[budget]} workspaces={[]} busy={false} providers={{ claude_code: true, codex: true }}
+    onCreate={vi.fn()} onUpdate={vi.fn().mockRejectedValue(new Error("Worker could not be saved"))}
+    onChooseMark={vi.fn()} onRemove={vi.fn()} onDraftDescription={vi.fn()} onReorder={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  const editor = screen.getByRole("form", { name: "Edit Daisy" });
+  fireEvent.change(within(editor).getByLabelText("Worker name"), { target: { value: "Daisy changed" } });
+  fireEvent.click(within(editor).getByRole("button", { name: "Save worker" }));
+  expect(await within(editor).findByRole("alert")).toHaveTextContent("Worker could not be saved");
+  expect(within(editor).getByLabelText("Worker name")).toHaveValue("Daisy changed");
+});
+
+test("experimental provider change requires fresh consent after a completed edit", async () => {
+  const onUpdate = vi.fn().mockResolvedValue(undefined);
+  render(<WorkerSettings workers={[budget]} workspaces={[]} busy={false}
+    providers={{ claude_code: true, codex: true, experimental: { gemini: true, grok: false, opencode: false } }}
+    onCreate={vi.fn()} onUpdate={onUpdate} onChooseMark={vi.fn()} onRemove={vi.fn()} onDraftDescription={vi.fn()} onReorder={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  let editor = screen.getByRole("form", { name: "Edit Daisy" });
+  fireEvent.click(within(editor).getByRole("checkbox", { name: "Allow experimental providers for this change" }));
+  fireEvent.change(within(editor).getByLabelText("Default coding provider"), { target: { value: "gemini" } });
+  fireEvent.click(within(editor).getByRole("button", { name: "Save worker" }));
+  await waitFor(() => expect(screen.queryByRole("form", { name: "Edit Daisy" })).not.toBeInTheDocument());
+  expect(onUpdate).toHaveBeenCalledWith(budget.id, budget.name, "", "gemini", budget.autostart, undefined, false, true);
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  editor = screen.getByRole("form", { name: "Edit Daisy" });
+  expect(within(editor).getByRole("checkbox", { name: "Allow experimental providers for this change" })).not.toBeChecked();
+  // Until refreshed worker data confirms the binding, this is still a change.
+  expect(within(editor).getByLabelText("Default coding provider")).toHaveValue("gemini");
+  expect(within(editor).getByRole("button", { name: "Save worker" })).toBeDisabled();
+});
+
+test("discarding an experimental edit clears its consent without changing the worker", () => {
+  const onUpdate = vi.fn();
+  render(<WorkerSettings workers={[budget]} workspaces={[]} busy={false}
+    providers={{ claude_code: true, codex: true, experimental: { gemini: true, grok: false, opencode: false } }}
+    onCreate={vi.fn()} onUpdate={onUpdate} onChooseMark={vi.fn()} onRemove={vi.fn()} onDraftDescription={vi.fn()} onReorder={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.click(within(screen.getByRole("form", { name: "Edit Daisy" })).getByRole("checkbox", { name: "Allow experimental providers for this change" }));
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  const editor = screen.getByRole("form", { name: "Edit Daisy" });
+  expect(within(editor).getByRole("checkbox", { name: "Allow experimental providers for this change" })).not.toBeChecked();
+  expect(within(editor).getByLabelText("Default coding provider")).toHaveValue("claude_code");
+  expect(onUpdate).not.toHaveBeenCalled();
+});
 
 test.each(["gemini", "grok", "opencode"] as const)("preserves and identifies an existing %s worker instead of displaying Claude", (provider) => {
   const onUpdate = vi.fn().mockResolvedValue(undefined);

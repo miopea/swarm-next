@@ -6,6 +6,7 @@ import { BEE_MARKS, BEE_MARK_LABELS, markFor, resolveMark } from "../brand/beeMa
 import UnsavedChangesPrompt from "../shared/UnsavedChangesPrompt";
 import { useReorderDrag } from "../shared/useReorderDrag";
 import { workerAttention } from "../workers/workerAttention";
+import { ExperimentalProviderControl, ExperimentalProviderOptions, isExperimentalProvider } from "./ExperimentalProviderControl";
 
 type Props = {
   workers: Worker[];
@@ -13,8 +14,8 @@ type Props = {
   busy: boolean;
   providers: ProviderCapabilities;
   providerCapabilitiesUnavailable?: boolean;
-  onCreate: (name: string, workspace: string, provider: ProviderKind, allowOutsideRoots: boolean) => Promise<void>;
-  onUpdate: (workerId: string, name: string, description: string, provider: ProviderKind, autostart: boolean, workspace?: string, allowOutsideRoots?: boolean) => Promise<void>;
+  onCreate: (name: string, workspace: string, provider: ProviderKind, allowOutsideRoots: boolean, acknowledgeExperimentalProvider?: boolean) => Promise<void>;
+  onUpdate: (workerId: string, name: string, description: string, provider: ProviderKind, autostart: boolean, workspace?: string, allowOutsideRoots?: boolean, acknowledgeExperimentalProvider?: boolean) => Promise<void>;
   /** Applies a chosen bee on its own, without the rest of the edit form. */
   onChooseMark: (workerId: string, mark: string) => Promise<void>;
   onRemove: (workerId: string) => Promise<void>;
@@ -41,6 +42,9 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, p
   const [name, setName] = useState("");
   const [workspace, setWorkspace] = useState("");
   const [provider, setProvider] = useState<ProviderKind>("claude_code");
+  const [allowExperimental, setAllowExperimental] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const experimentalBlocked = isExperimentalProvider(provider) && (!allowExperimental || providers.experimental?.[provider] !== true || providerCapabilitiesUnavailable);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [allowOutsideRoots, setAllowOutsideRoots] = useState(false);
   const [highlightedWorkspace, setHighlightedWorkspace] = useState(0);
@@ -56,10 +60,18 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, p
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!name.trim() || !workspace || (customWorkspace && !allowOutsideRoots)) return;
-    await onCreate(name, workspace, provider, customWorkspace && allowOutsideRoots);
+    if (!name.trim() || !workspace || (customWorkspace && !allowOutsideRoots) || experimentalBlocked) return;
+    setSaveError("");
+    try {
+      if (isExperimentalProvider(provider)) await onCreate(name, workspace, provider, customWorkspace && allowOutsideRoots, true);
+      else await onCreate(name, workspace, provider, customWorkspace && allowOutsideRoots);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "The worker could not be saved. Your choices are unchanged.");
+      return;
+    }
     setName("");
     setWorkspace("");
+    setAllowExperimental(false);
     setAllowOutsideRoots(false);
     setWorkspaceOpen(false);
   }
@@ -174,6 +186,8 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, p
         {roster.length > 0 && filteredRoster.length === 0 && matchingManaged.length === 0 && <p className="empty-worker-settings">No workers match “{workerQuery.trim()}”.</p>}
       </div>
       <form className="configure-worker-form" onSubmit={(event) => void submit(event)}>
+        <ExperimentalProviderControl enabled={allowExperimental} onChange={setAllowExperimental} />
+        {saveError && <p role="alert" className="field-error">{saveError}</p>}
         {providerCapabilitiesUnavailable && <div className="integration-state is-error" role="alert"><strong>Coding providers could not be checked</strong><span>Existing workers are unchanged. Refresh Swarm before adding a worker or changing her provider.</span></div>}
         <div className="field-stack">
           <label htmlFor="configured-worker-name">Worker name</label>
@@ -182,6 +196,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, p
         <div className="field-stack provider-field">
           <label htmlFor="configured-worker-provider">Coding provider</label>
           <select id="configured-worker-provider" value={provider} disabled={providerCapabilitiesUnavailable} onChange={(event) => setProvider(event.target.value as ProviderKind)}>
+            <ExperimentalProviderOptions selected={provider} enabled={allowExperimental} providers={providers} />
             <option value="claude_code" disabled={!providers.claude_code}>Claude Code{providers.claude_code ? "" : " · unavailable"}</option>
             <option value="codex" disabled={!providers.codex}>Codex{providers.codex ? "" : " · waiting for maintenance"}</option>
           </select>
@@ -238,7 +253,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, p
           <small>Start with a repository name and Swarm completes the path. Full paths still work.</small>
           {customWorkspace && <label className="outside-workspace-warning"><input type="checkbox" checked={allowOutsideRoots} onChange={(event) => setAllowOutsideRoots(event.target.checked)} /><span><strong>Use this path outside discovered project folders</strong><small>Only continue if you recognize and trust this folder. Swarm still requires an existing real directory and blocks files, symlinks, and filesystem roots.</small></span></label>}
         </div>
-        <button disabled={busy || providerCapabilitiesUnavailable || !name.trim() || !workspace || (customWorkspace && !allowOutsideRoots)}>Add sleeping worker</button>
+        <button disabled={busy || providerCapabilitiesUnavailable || experimentalBlocked || !name.trim() || !workspace || (customWorkspace && !allowOutsideRoots)}>Add sleeping worker</button>
       </form>
       <small className="privacy-note">New workers receive a private Queen-routing draft from local README and project metadata. Review or refresh it from Edit whenever the repository changes.</small>
       {available.length === 0 && <small className="privacy-note">Every discovered repository already has a worker. Advanced repository-root configuration will live in backup and installation settings.</small>}
@@ -276,6 +291,10 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
   const [name, setName] = useState(worker.name);
   const [description, setDescription] = useState(worker.description ?? "");
   const [provider, setProvider] = useState(worker.provider);
+  const [allowExperimental, setAllowExperimental] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const newExperimentalBinding = provider !== worker.provider && isExperimentalProvider(provider);
+  const experimentalBlocked = newExperimentalBinding && (!allowExperimental || !isExperimentalProvider(provider) || providers.experimental?.[provider] !== true || providerCapabilitiesUnavailable);
   const [autostart, setAutostart] = useState(worker.autostart);
   const [repository, setRepository] = useState(worker.workspace);
   const [allowOutsideRoots, setAllowOutsideRoots] = useState(false);
@@ -295,12 +314,22 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
 
   async function save(event: FormEvent) {
     event.preventDefault();
-    if (!name.trim() || repositoryBlocked) return;
-    await onUpdate(worker.id, name, description, provider, autostart, moving ? repository.trim() : undefined, customRepository && allowOutsideRoots);
+    if (!name.trim() || repositoryBlocked || experimentalBlocked) return;
+    setSaveError("");
+    try {
+      if (newExperimentalBinding) await onUpdate(worker.id, name, description, provider, autostart, moving ? repository.trim() : undefined, customRepository && allowOutsideRoots, true);
+      else await onUpdate(worker.id, name, description, provider, autostart, moving ? repository.trim() : undefined, customRepository && allowOutsideRoots);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "The worker could not be saved. Your choices are unchanged.");
+      return;
+    }
+    setAllowExperimental(false);
     setEditing(false);
   }
 
   function discardEdits() {
+    setAllowExperimental(false);
+    setSaveError("");
     setName(worker.name);
     setDescription(worker.description ?? "");
     setProvider(worker.provider);
@@ -409,12 +438,14 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
           {customRepository && <label className="outside-workspace-warning"><input type="checkbox" checked={allowOutsideRoots} onChange={(event) => setAllowOutsideRoots(event.target.checked)} /><span><strong>Use this path outside discovered project folders</strong><small>Only continue if you recognize and trust this folder. Swarm still requires an existing real directory and blocks files, symlinks, and filesystem roots.</small></span></label>}
           <div className="worker-description-field"><span className="worker-description-heading"><label htmlFor={`worker-description-${worker.id}`}>Queen routing description</label><span className="worker-description-actions"><button type="button" className="secondary-button" disabled={busy || draftingDescription || improvingDescription} onClick={() => void draftDescription()}>{draftingDescription ? "Reading repository…" : description ? "Refresh local draft" : "Draft locally"}</button>{onImproveDescription && <button type="button" className="secondary-button" disabled={busy || draftingDescription || improvingDescription} onClick={() => void improveDescription()}>{improvingDescription ? "Claude is generating…" : draftSource === "claude" ? "Generate again with Claude" : "Generate with Claude"}</button>}</span></span><textarea className={draftSource ? "worker-description-generated" : undefined} id={`worker-description-${worker.id}`} value={description} onChange={(event) => { setDescription(event.target.value); setDraftSource(undefined); setDraftStatus(""); }} maxLength={2000} rows={3} placeholder="What this repository owns and when Queen should route work here" />{improvingDescription && <div className="worker-description-progress" role="status" aria-live="polite"><span aria-hidden="true" /><p><strong>Claude is generating a routing draft</strong><small>This usually takes 10–30 seconds. Keep this worker editor open.</small></p></div>}{draftStatus && <div className={`worker-description-result ${draftSource === "claude" ? "claude-result" : ""}`} role="status" aria-live="polite"><strong>{draftStatus}</strong><span>Review the editable text, then choose <b>Save description to worker</b>. Queen cannot use this draft until it is saved.</span></div>}<small>Claude receives only bounded README and manifest metadata in one tool-free turn (up to $0.10). Saving makes the description visible on this worker and available to Queen for routing.</small>{draftError && <small className="field-error" role="alert">{draftError}</small>}</div>
           <div className="worker-provider-field"><label htmlFor={`worker-provider-${worker.id}`}>Default coding provider</label><select id={`worker-provider-${worker.id}`} value={provider} disabled={worker.running || providerCapabilitiesUnavailable} onChange={(event) => setProvider(event.target.value as ProviderKind)}>
-            {worker.provider !== "claude_code" && worker.provider !== "codex" && <option value={worker.provider}>{providerLabel(worker.provider)} · existing experimental provider</option>}
+            <ExperimentalProviderOptions selected={provider} current={worker.provider} enabled={allowExperimental} providers={providers} />
             <option value="claude_code" disabled={!providers.claude_code}>Claude Code{providers.claude_code ? "" : " · unavailable"}</option>
             <option value="codex" disabled={!providers.codex}>Codex{providers.codex ? "" : " · unavailable"}</option>
           </select><small>{worker.running ? "Put this worker to sleep before changing provider." : providerCapabilitiesUnavailable ? "Provider availability could not be checked. Refresh Swarm before changing this setting." : "Used the next time this worker wakes. Existing history remains available."}</small></div>
+          {!worker.running && <ExperimentalProviderControl enabled={allowExperimental} onChange={setAllowExperimental} />}
+          {saveError && <p role="alert" className="field-error">{saveError}</p>}
           <label className="worker-autostart"><input type="checkbox" checked={autostart} onChange={(event) => setAutostart(event.target.checked)} />Keep this worker active automatically</label>
-          {confirmingCancel ? <UnsavedChangesPrompt label="Discard worker changes?" description="The worker name, repository, provider, activity preference, or routing description has not been saved." onDiscard={discardEdits} onKeep={() => setConfirmingCancel(false)} /> : <span className="worker-edit-actions"><button disabled={busy || !name.trim() || repositoryBlocked}>{moving ? "Move worker" : descriptionChanged ? "Save description to worker" : "Save worker"}</button><button type="button" className="secondary-button" disabled={busy} onClick={requestCancel}>Cancel</button></span>}
+          {confirmingCancel ? <UnsavedChangesPrompt label="Discard worker changes?" description="The worker name, repository, provider, activity preference, or routing description has not been saved." onDiscard={discardEdits} onKeep={() => setConfirmingCancel(false)} /> : <span className="worker-edit-actions"><button disabled={busy || !name.trim() || repositoryBlocked || experimentalBlocked}>{moving ? "Move worker" : descriptionChanged ? "Save description to worker" : "Save worker"}</button><button type="button" className="secondary-button" disabled={busy} onClick={requestCancel}>Cancel</button></span>}
           {!managed && <div className="worker-remove-zone">
             {confirmingRemoval ? <><p><strong>Remove {worker.name} from this Hive?</strong><small>Repository files are untouched. Historical sessions remain, but this worker must be sleeping and have no open assigned tasks.</small></p><span><button type="button" className="danger-button" disabled={busy || worker.running} onClick={() => void remove()}>Confirm removal</button><button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirmingRemoval(false)}>Keep worker</button></span></> : <button type="button" className="danger-link" disabled={busy || worker.running} onClick={() => setConfirmingRemoval(true)}>Remove worker</button>}
           </div>}
