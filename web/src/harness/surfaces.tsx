@@ -584,7 +584,7 @@ export const SURFACES: Surface[] = [
     id: "queues-worker-answer",
     title: "Worker answer wait",
     why: "Invented exact-session attention signal, not a fabricated task blocker or operator decision",
-    render: () => <QueuesView workers={[{ ...demoWorkers[0], running: true, active_session_id: "answer-session", attention_state: "awaiting_operator" }]}
+    render: () => <QueuesView onOpenWorker={() => undefined} workers={[{ ...demoWorkers[0], running: true, active_session_id: "answer-session", attention_state: "awaiting_operator" }]}
       tasks={[{ ...demoTasks[0], title: "Verify the fixture response", state: "active", next_move_owner: "worker", dispatch_state: "delivered", assigned_worker_id: demoWorkers[0].id, assigned_session_id: "answer-session", prerequisites: [] }]}
       onOpenTask={() => undefined} />,
   },

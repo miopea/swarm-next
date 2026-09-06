@@ -136,6 +136,7 @@ export default function QueuesView({
   tasks,
   workers,
   onOpenTask,
+  onOpenWorker,
   heldBriefings: sourceBriefings = [],
   blockedWaits: sourceBlockedWaits = [],
   heldDeliveries = [],
@@ -146,6 +147,8 @@ export default function QueuesView({
   tasks: Task[];
   workers: Worker[];
   onOpenTask: (taskId: string) => void;
+  /** Inspect an existing exact session; never start a worker from this action. */
+  onOpenWorker?: (sessionId: string) => void;
   /**
    * Briefings Swarm is holding until their worker is free.
    *
@@ -244,7 +247,13 @@ export default function QueuesView({
                   </button>
                   {briefing && <p className="queue-task-meta">Briefing held: {holdReason(briefing)} · queued {waitedFor(now / 1000 - briefing.queued_at)} <BlockingTaskLink briefing={briefing} onOpenTask={onOpenTask} /></p>}
                   <TaskPrerequisiteList task={task} workerNames={workerNames} onOpenTask={onOpenTask} compact />
-                  {workerAwaitingAnswer(task, workerById.get(task.assigned_worker_id ?? "")) && <p className="queue-task-meta">Worker reports waiting for an answer · check Needs you or its current prompt. This observation does not establish a task blocker.</p>}
+                  {workerAwaitingAnswer(task, workerById.get(task.assigned_worker_id ?? "")) && <div className="queue-task-meta">
+                    <p>Worker reports waiting for an answer · check Needs you or its current prompt. This observation does not establish a task blocker.</p>
+                    {onOpenWorker && task.assigned_session_id && <button type="button" onClick={() => onOpenWorker(task.assigned_session_id!)}
+                      aria-label={`Open worker ${workerNames.get(task.assigned_worker_id ?? "") ?? "terminal"}`}>
+                      Open worker
+                    </button>}
+                  </div>}
                   {task.state === "blocked" && task.blocked_until != null && <p className="queue-task-meta">
                     {Number.isFinite(task.blocked_until) && Number.isFinite(new Date(task.blocked_until * 1000).getTime())
                       ? task.blocked_until * 1000 > now

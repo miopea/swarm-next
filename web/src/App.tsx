@@ -2427,6 +2427,9 @@ export function App() {
         ) : surface === "queues" ? (
           <Suspense fallback={<WorkspaceLoading label="queues" />}>
             <QueuesView
+              onOpenWorker={(sessionId) => {
+                if (workers.some((worker) => worker.running && worker.active_session_id === sessionId)) openWorker(sessionId);
+              }}
               coordinatorUnavailable={coordinatorUnavailable}
               queenAutomation={queenAutomation}
               tasks={tasks}

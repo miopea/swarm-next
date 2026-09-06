@@ -18,15 +18,22 @@ describe("QueuesView", () => {
   test("a current terminal input wait stays visible without assigning it to the operator", () => {
     const current = task({ state: "active", next_move_owner: "worker", dispatch_state: "delivered", assigned_worker_id: "w", assigned_session_id: "s" });
     const worker = { id: "w", name: "Petal", running: true, active_session_id: "s", attention_state: "awaiting_operator" } as Worker;
-    const props = { tasks: [current], onOpenTask: vi.fn() };
+    const props = { tasks: [current], onOpenTask: vi.fn(), onOpenWorker: vi.fn() };
     const { rerender } = render(<QueuesView {...props} workers={[worker]} />);
     expect(screen.getByRole("heading", { name: "Waiting on a worker 1" })).toBeVisible();
     expect(screen.getByText(/Worker reports waiting for an answer/)).toBeVisible();
     expect(screen.queryByRole("heading", { name: /Waiting on you/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open worker Petal" }));
+    expect(props.onOpenWorker).toHaveBeenCalledExactlyOnceWith("s");
+    for (const changed of [{ ...worker, active_session_id: "replacement" }, { ...worker, running: false }]) {
+      rerender(<QueuesView {...props} workers={[changed]} />);
+      expect(screen.queryByRole("button", { name: "Open worker Petal" })).not.toBeInTheDocument();
+    }
     rerender(<QueuesView {...props} workers={[{ ...worker, attention_state: "buzzing" }]} />);
     expect(screen.queryByText(/Worker reports waiting for an answer/)).not.toBeInTheDocument();
     expect(screen.getByText("Some work")).not.toBeVisible();
     expect(props.onOpenTask).not.toHaveBeenCalled();
+    expect(props.onOpenWorker).toHaveBeenCalledTimes(1);
   });
   test("a held task opens its exact blocking task rather than the waiting item", () => {
     const open = vi.fn();

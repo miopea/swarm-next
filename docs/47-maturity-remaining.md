@@ -1,5 +1,17 @@
 # Daily-driver maturity: remaining delivery and acceptance
 
+## 2026-09-06: direct inspection from a worker answer wait
+
+Queues now offers Open worker beside a qualified current-session answer wait.
+It passes the assigned session ID, not the worker ID, to existing terminal
+navigation; App checks that session still belongs to a running worker. It does
+not start a worker, send input, change task state, or infer an operator decision.
+The action disappears when the worker stops, changes sessions, or clears the wait.
+Validation: 32 queue/projection tests, TypeScript check and production build pass.
+Edge's isolated 390-pixel fixture shows the action without clipped text. The
+fixture callback is inert; exact-session routing is covered by the component test.
+Production browser navigation and native mobile acceptance remain unverified.
+
 This is the current completion checklist for the approved scope in
 `45-daily-driver-maturity-plan.md`. Implementation history is in
 `46-maturity-execution.md`. A passing component test does not close a live journey.
