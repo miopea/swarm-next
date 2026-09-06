@@ -109,7 +109,7 @@ test("tells a worker with nothing to do apart from one whose task is still runni
 test("an active assignment leads the switcher line instead of the resting prompt", () => {
   const running = { ...worker, running: true, attention_state: "resting" as const };
 
-  expect(workerSwitcherDetail(running, "Fix the importer", true)).toBe("Working · Fix the importer");
+  expect(workerSwitcherDetail(running, "Fix the importer", true)).toBe("Active assignment · Fix the importer");
 
   // NOT for work that is merely assigned. Ready, blocked and draft do not make
   // a worker busy, and claiming they do would make the word meaningless.

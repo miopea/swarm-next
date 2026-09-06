@@ -122,11 +122,9 @@ export function foreignEngagement(
  *   - "Resting · task running" keeps its own label, which answers the different
  *     question of a turn that ENDED with something still running.
  *
- * The trade, stated rather than buried: this line now trusts the BOARD about
- * activity. If a worker's turn ends while its task is still Active, the row
- * says Working beside an idle terminal. That is the stale-owned-work case, it
- * has its own signal and its own handling, and papering over it here would hide
- * it rather than fix it.
+ * An Active task is an assignment, not proof of execution. Keep that task
+ * prominent without relabeling a resting provider as Working. Stale-work
+ * recovery remains owned by the coordinator and Queen, not this sentence.
  */
 export function workerSwitcherDetail(
   worker: Worker,
@@ -136,7 +134,7 @@ export function workerSwitcherDetail(
   const attention = worker.running ? workerAttention(worker) : undefined;
   const resting = attention?.state === "resting" && attention.label === "Resting";
   const state = attention
-    ? (resting && assignedTaskIsActive ? "Working" : attention.label)
+    ? (resting && assignedTaskIsActive ? "Active assignment" : attention.label)
     : "Sleeping";
   if (assignedTaskTitle) return `${state} · ${assignedTaskTitle}`;
   return worker.running ? state : "Sleeping · tap to wake";

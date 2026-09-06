@@ -19,11 +19,32 @@ no dispatch, task transition, worker wake, or concurrency guard changes.
 
 Validation: all 57 task-board tests and TypeScript check pass, including five
 delivery variants and transition back to ordinary/Blocked status. The isolated
-Edge fixture renders the real metadata with synthetic states. Deployment pending.
+Edge fixture renders the real metadata with synthetic states. Deployed as
+`1.5.0-dev-98239bbf4c3d-20260906064614-2954952`; job 2954928 completed
+successfully and fresh health has no degraded subsystems. The sorted running
+session-ID array SHA-256 remains
+`9ddd1bc5a3920bea8da7fd2e188f37635b3bc9e2810c7966153f0fd6b1d6b49e`
+before/after, and engine build `38453a84c3fa` is unchanged. No release cut.
 Live read-only evidence still shows held Platform/D365 briefs naming their
 actual Active task IDs. That proves the hold's identity, not provider progress;
 idle-Active reconciliation and complete waking/delivery/execution acceptance
 remain open. No real task was changed during this inspection.
+
+Follow-up: the switcher also relabeled a resting provider Working based only on
+an Active assignment. It now says Active assignment, preserving operator-wait
+and background-work priority. All 26 worker-attention/roster tests and TypeScript
+check pass; this switcher follow-up is not yet deployed.
+
+Live orchestration inspection found Queen enabled, latest run completed with
+`no_action`, 62 actionable records, no delivery hold, and automatic admission
+allowed. This does not prove Queen's judgments or equate those 62 records with
+62 stalled tasks. Source trace: `observe_stale_owned_work` records an observation;
+`current_coordinator_attention` revalidates task revision and session identity,
+but does not refresh the observed terminal condition when returning the saved
+reason. A provider resuming without a task-history change can therefore leave
+old resting evidence in the response. Next verification should exercise that
+transition and distinguish historical observations from current inactivity,
+without auto-unblocking or escalating on elapsed time alone.
 
 ### Bounded GPU renderer recovery (September 6 UTC, deployed)
 
