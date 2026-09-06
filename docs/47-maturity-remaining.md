@@ -28,6 +28,23 @@ in Queen's own queue snapshot as well as the reassessment candidates.
 The corrected owner-matrix test and all 14 prerequisite regressions also passed.
 The broad suite was not rerun after these test-expectation-only corrections.
 
+Live development deployment `2084d7e9` was verified in the separate Edge Queues
+tab: 31 Queen-owned items (four Drafts and 27 blocked reassessments), with four
+remaining prerequisite-gated blocks. Task changes during deployment explain the
+one-item difference from the earlier snapshot. This verifies shared presentation,
+not that Queen has finished reassessing or unblocking those tasks.
+
+The automatic engine reconciler deferred twice while one of 13 sessions was
+mid-turn, then installed the desired engine at 01:18:19 UTC on September 6.
+Running host identity, not just the API's packaged identity, matched build
+`a568659677625c816fe3b6899ed8ef47e10c832500e79518b9bd6295a66f6b6b`.
+Sequential recovery was observed progressing through four, five and twelve
+workers before all 13 returned, including Queen and both demo workers. The host
+then reported 13 running sessions, no unreadable sessions and no drain; API health
+was ok without degraded subsystems. No manual worker start was needed. This is
+one successful live idle engine update and automatic return, not proof of each
+provider conversation's contents, crash recovery, or a complete overnight soak.
+
 ### Automation paste stranded across API replacement (September 6)
 
 A read-only canonical snapshot found Queen's current prompt contained a collapsed
