@@ -33,6 +33,15 @@ worker-owned Active work. All 33 queue tests and the production build passed;
 the existing terminal bundle-size warning remains. The earlier wording was not
 deployed.
 
+Morning deployment follow-up: job 3080522 completed successfully; runtime
+`1.5.0-dev-c78518d99101-20260906124325-3080545` is healthy with no degraded
+subsystems. All 15 worker session identities retain fingerprint
+`9ddd1bc5a3920bea8da7fd2e188f37635b3bc9e2810c7966153f0fd6b1d6b49e`; engine
+identity remains `38453a84c3fa`. The final frontend suite passed 1,262 tests
+across 139 files. The overall goal is confirmed active again after the overnight
+capacity interruption. The separate Edge tab still requires operator unlock;
+signed-in visual and unattended demo acceptance are not claimed.
+
 ### Attachment overlap status race (September 6 UTC)
 
 An oversized second selection could overwrite the status of an existing upload
