@@ -53,6 +53,22 @@ Delivery and completion are durable:
 
 ## Consequences
 
+### API-owned background shutdown (September 6 maturity pass)
+
+The API owns and joins its six periodic service tasks. On graceful termination,
+it closes periodic admission before HTTP shutdown and permits an admitted pass
+to finish, rather than dropping its runtime between a terminal paste and Enter.
+After HTTP serving ends, remaining background passes share one 45-second join
+budget. At expiry they are explicitly aborted and joined; existing durable
+uncertain-delivery recovery remains authoritative. A blocked pass cannot prevent
+shutdown indefinitely. The worker engine and provider sessions are not stopped.
+
+Periods and initial-run behavior remain unchanged. Missed ticks are skipped,
+not replayed as a burst after a slow pass. The owner does not interrupt an
+individual pass on the stop signal, authorize a replay, identify an arbitrary
+paste as automation, or promise graceful completion after SIGKILL. This closes
+detached background-task lifetime, not every network or process shutdown gate.
+
 ### Review delivery fairness (September 5 maturity pass)
 
 A queued review that has waited through an acknowledged coordination delivery

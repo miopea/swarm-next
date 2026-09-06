@@ -9,6 +9,8 @@ use swarm_persistence::TaskStore;
 use swarm_terminal::{HostClient, default_terminal_socket_path};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+mod background_services;
+use background_services::BackgroundServices;
 
 /// Where this Hive files feedback, in order of precedence.
 ///
@@ -226,7 +228,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         state = state.with_degraded_subsystem("Queued delivery recovery", error.to_string());
     }
     state.supervise_workers().await;
-    start_background_services(&state);
     serve_control_room(state, address).await
 }
 
@@ -235,6 +236,8 @@ async fn serve_control_room(
     address: SocketAddr,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(address).await?;
+    let background = start_background_services(&state);
+    let stop_background = background.stop_signal();
     let (stop_integrity, integrity_stopped) = tokio::sync::oneshot::channel();
     let integrity_monitor = tokio::spawn(swarm_api::monitor_database_integrity(
         state.clone(),
@@ -252,9 +255,11 @@ async fn serve_control_room(
     let serving = axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             shutdown_signal().await;
+            stop_background.send_replace(true);
             let _ = stop_integrity.send(());
         })
         .await;
+    background.shutdown().await;
     if let Err(error) = integrity_monitor.await {
         tracing::warn!(%error, "database integrity monitor could not join during shutdown");
     }
@@ -326,67 +331,56 @@ fn degrade<T>(
     }
 }
 
-fn start_background_services(state: &AppState) {
+fn start_background_services(state: &AppState) -> BackgroundServices {
+    let mut services = BackgroundServices::new();
     // Hourly, but a check only happens when the operator asked for daily ones
     // and the last is a day old. Nothing is contacted otherwise.
     let release_poller = std::sync::Arc::new(state.clone());
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60 * 60));
-        // Startup is a poor moment to make a network call, and a first tick
-        // fires immediately.
-        interval.tick().await;
-        loop {
-            interval.tick().await;
-            swarm_api::poll_for_release(release_poller.clone()).await;
+    services.periodic(std::time::Duration::from_secs(60 * 60), false, move || {
+        let state = release_poller.clone();
+        async move {
+            swarm_api::poll_for_release(state).await;
         }
     });
     let supervisor = state.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-        interval.tick().await;
-        loop {
-            interval.tick().await;
-            supervisor.supervise_workers().await;
+    services.periodic(std::time::Duration::from_secs(30), false, move || {
+        let state = supervisor.clone();
+        async move {
+            state.supervise_workers().await;
         }
     });
     // Issues come down as drafts on a slow tick. Slow because nobody files an
     // issue expecting it to appear in a control room within seconds, and a
     // faster poll would spend the API budget for nothing.
     let github_intake = state.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5 * 60));
-        interval.tick().await;
-        loop {
-            interval.tick().await;
-            github_intake.intake_github_issues().await;
+    services.periodic(std::time::Duration::from_secs(5 * 60), false, move || {
+        let state = github_intake.clone();
+        async move {
+            state.intake_github_issues().await;
         }
     });
     let jira_reconciler = state.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-        interval.tick().await;
-        loop {
-            interval.tick().await;
-            jira_reconciler.reconcile_jira().await;
+    services.periodic(std::time::Duration::from_secs(60), false, move || {
+        let state = jira_reconciler.clone();
+        async move {
+            state.reconcile_jira().await;
         }
     });
     let federation_reconciler = state.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
-        loop {
-            interval.tick().await;
-            federation_reconciler.reconcile_federation().await;
+    services.periodic(std::time::Duration::from_secs(15), true, move || {
+        let state = federation_reconciler.clone();
+        async move {
+            state.reconcile_federation().await;
         }
     });
     let email_delivery = state.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-        interval.tick().await;
-        loop {
-            interval.tick().await;
-            email_delivery.deliver_email_replies().await;
+    services.periodic(std::time::Duration::from_secs(30), false, move || {
+        let state = email_delivery.clone();
+        async move {
+            state.deliver_email_replies().await;
         }
     });
+    services
 }
 
 fn recover_interrupted_deliveries(state: &AppState) -> Result<(), Box<dyn std::error::Error>> {

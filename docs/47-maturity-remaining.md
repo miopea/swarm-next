@@ -8,6 +8,26 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Automation paste stranded across API replacement (September 6)
+
+A read-only canonical snapshot found Queen's current prompt contained a collapsed
+117-line paste, not an empty/grey suggestion. The operator confirmed it was
+automated and submitted it manually. Logs show an API replacement at 23:30 UTC
+followed by recovery of five interrupted task-message deliveries; this supports
+shutdown interruption but does not identify the exact paste's delivery claim.
+No test input was sent to Queen by this investigation.
+
+The API previously detached six periodic tasks and joined none during graceful
+shutdown. They now have a bounded owner, stop admission on shutdown, let the
+current pass complete, and share a 45-second final join budget with explicit
+abort/join on expiry. Existing uncertain recovery remains unchanged. Two Linux
+tests pass for in-flight completion, no next pass, idle-timer shutdown and stuck
+pass cancellation. A real demo paste during replacement is still needed before
+claiming this incident's end-to-end recovery fixed.
+All 38 coordination-delivery regression tests passed. Binary lint passed with
+the existing unrelated `items_after_statements` warning excluded; unrestricted
+strict lint stopped at `lib.rs`'s `RETURN_ATTEMPTS_PER_PASS` declaration.
+
 ### Blocked-row explanations (September 6)
 
 Queues now labels the recorded operator decision, unresolved prerequisite count,
