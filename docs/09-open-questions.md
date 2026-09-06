@@ -12,6 +12,14 @@ additions and non-email reply channels before implementation. Do not invent a
 generic ingress or bypass operator-only triage authorization. These are integration
 contract gaps, not a reopening of the completed original interview.
 
+Resolved by operator: all Hives submit to the same shared support source, with
+email as the only required contact identity. No BFG account or access to private
+customer Hives is required. The central source provides Admin's privileged
+conversation resource; Admin owns triage and operator-approved responses. Preserve
+additional sender identity where supplied, without fabricating unavailable fields.
+Submission and diagnostic sharing remain explicit. Public submission does not
+authorize reading other conversations or private diagnostic bundles.
+
 Status: **Original dogfooding set closed 2026-08-22; maturity reconciliation resolved 2026-09-03**
 
 ## Daily-driver maturity reconciliation — 2026-09-03

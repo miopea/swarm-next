@@ -34,6 +34,14 @@ generic Admin feedback-ingestion endpoint. Its current reply contract is
 email-specific, and attachments/source links require coordinated typed additions.
 Do not silently drop those fields or substitute email for an in-app channel.
 
+Operator hosting decision: every Hive submits to one shared central support
+source. Email is the only required contact identity; no BFG account and no inbound
+access to the customer's Hive/workers/repositories. Preserve additional identity
+when supplied. Admin provides conversation handling, triage and approved replies.
+The central source must accept explicit submissions safely without making private
+conversations/diagnostics publicly readable. Support IDs remain distinct from
+development tasks and diagnostic IDs.
+
 Make Swarm responsive, stable, self-managing, observable, and delightful through
 long daily use, including desktop/mobile handoff and unattended work, while
 preserving its cute, feminine-leaning bee/Hive identity and independent worker
