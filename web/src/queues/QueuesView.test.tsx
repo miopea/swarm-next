@@ -125,7 +125,18 @@ describe("QueuesView", () => {
     render(<QueuesView workers={[]} onOpenTask={vi.fn()} tasks={[task({ state: "blocked", next_move_owner: "blocked", blocked_note: note })]} />);
     const details = screen.getByText(note.trim()).closest("details");
     expect(details).not.toHaveAttribute("open");
-    expect(details?.querySelector("summary")).toHaveTextContent(`Recorded when blocked: ${note.slice(0, 240)}…`);
+    expect(details?.querySelector("summary")).toHaveTextContent(`Recorded when blocked: ${note.slice(0, 96)}…`);
+  });
+
+  test("medium review questions collapse without losing the exact full evidence", () => {
+    const question = "Verify the worker's recorded test result before proceeding. ".repeat(3);
+    render(<QueuesView workers={[]} onOpenTask={vi.fn()} tasks={[task({
+      state: "review", next_move_owner: "worker", review_request_id: "review-1", review_request: question,
+    })]} />);
+    const details = screen.getByText(question.trim()).closest("details");
+    expect(details).not.toHaveAttribute("open");
+    expect(details?.querySelector("summary")).toHaveTextContent(`Queen asks: ${question.slice(0, 96)}…`);
+    expect(details?.querySelector(".decision-prose")?.textContent).toBe(question);
   });
 
   test("ordinary active work is inspectable but collapsed outside waiting groups", () => {

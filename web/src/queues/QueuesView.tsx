@@ -7,6 +7,18 @@ import { prerequisiteSatisfied, type NextMoveOwner, type Task } from "../api/tas
 import { projectTaskQueues } from "./taskQueueProjection";
 import type { Worker } from "../api/workers";
 
+/** A scanning hint, never a replacement for the recorded statement. */
+function QueueEvidence({ label, text }: { label: string; text: string }) {
+  const characters = Array.from(text);
+  if (characters.length <= 96) {
+    return <p className="queue-task-meta">{label}: {text}</p>;
+  }
+  return <details className="decision-argument queue-evidence">
+    <summary>{label}: {characters.slice(0, 96).join("")}…</summary>
+    <p className="decision-prose">{text}</p>
+  </details>;
+}
+
 /**
  * Every queue on one screen, grouped by WHO OWES THE NEXT MOVE.
  *
@@ -216,20 +228,10 @@ export default function QueuesView({
                       : "Recorded hold deadline unavailable"}
                   </p>}
                   {task.state === "blocked" && task.blocked_note?.trim() && (
-                    task.blocked_note.length <= 240
-                      ? <p className="queue-task-meta">Recorded when blocked: {task.blocked_note}</p>
-                      : <details className="decision-argument">
-                          <summary>Recorded when blocked: {task.blocked_note.slice(0, 240)}…</summary>
-                          <p className="decision-prose">{task.blocked_note}</p>
-                        </details>
+                    <QueueEvidence label="Recorded when blocked" text={task.blocked_note} />
                   )}
                   {task.state === "review" && task.next_move_owner === "worker" && task.review_request_id && task.review_request && (
-                    task.review_request.length <= 240
-                      ? <p className="queue-task-meta">Queen asks: {task.review_request}</p>
-                      : <details className="decision-argument">
-                          <summary>Queen asks: {task.review_request.slice(0, 240)}…</summary>
-                          <p className="decision-prose">{task.review_request}</p>
-                        </details>
+                    <QueueEvidence label="Queen asks" text={task.review_request} />
                   )}
                 </li>
                 );

@@ -68,6 +68,22 @@ Running with one attempt and no waiting reason. The demo still had only its
 creation event at that check. Keep the probe open and verify actual task
 triage, worker execution and settlement; delivered automation is not completion.
 
+The probe subsequently progressed Draft -> Ready -> assigned -> Active -> Review
+-> Completed without manual terminal input or task transitions by this tester.
+Queen routed it to the requested demo worker; the documentation-only settlement
+record explicitly says every recorded commit touched documentation only.
+
+### Compact Queue evidence previews (September 6)
+
+Blocker notes and returned-review questions longer than 96 Unicode code points
+now use a collapsed preview instead of up to 240 characters. Short statements
+remain visible; expansion retains the exact full statement. The shared helper
+changes presentation only, not blocker interpretation or task routing. All 23
+Queue view tests and TypeScript checking passed. The isolated Edge harness
+verified expansion exposes the full note and the 390px iframe layout wraps it
+without clipping. This is responsive layout evidence, not actual phone acceptance
+or approval of the broader visual redesign.
+
 ### Automation paste stranded across API replacement (September 6)
 
 A read-only canonical snapshot found Queen's current prompt contained a collapsed
