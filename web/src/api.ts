@@ -245,6 +245,8 @@ export type SupersededProvider = {
 export type ProviderCapabilities = {
   claude_code: boolean;
   codex: boolean;
+  /** Missing/null means the running engine has not reported this capability. */
+  experimental?: { gemini: boolean; grok: boolean; opencode: boolean } | null;
   /** Empty when every running worker is on the installed release. */
   superseded?: SupersededProvider[];
 };

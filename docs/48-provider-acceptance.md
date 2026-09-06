@@ -64,6 +64,17 @@ files overlaid. This is not a full clean-current-tree test run. Command enforcem
 operator UI, temporary-worker acknowledgement and end-to-end acceptance remain
 pending. The foundation is not deployed and enables no experimental provider.
 
+The next local step enforces acknowledgement on HTTP worker creation, changed
+provider bindings and temporary siblings, before mutation. Provider updates hold
+the lifecycle lock across the current-binding check and save. Five focused API
+tests passed in the isolated Linux export, including actual routes against
+old/absent/positive host capability evidence and preservation of the parent.
+The first test fixture used PUT rather than PATCH; that fixture was corrected
+before the passing run. The TypeScript client carries acknowledgement only when
+explicitly supplied; both client tests and TypeScript checking passed. Settings
+opt-in, temporary-worker confirmation, failed-save retention and browser testing
+remain pending. This backend step is not deployed by itself.
+
 Builder sign-off must identify the evidence revision and any supported-platform
 limits before changing the promotion list. Do not turn elapsed soak time or
 operator availability into automatic promotion.

@@ -103,11 +103,13 @@ export type CreateWorkerInput = {
   name: string;
   workspace: string;
   provider?: ProviderKind;
+  acknowledge_experimental_provider?: boolean;
   autostart?: boolean;
   allow_outside_roots?: boolean;
 };
 
 export type UpdateWorkerInput = {
+  acknowledge_experimental_provider?: boolean;
   name?: string;
   description?: string;
   provider?: ProviderKind;
@@ -251,11 +253,11 @@ export const TEMPORARY_PROVIDERS = [
  * — two providers under one worker would break the one-session-per-worker
  * assumption that sleep/wake and briefing delivery rely on.
  */
-export async function spawnTemporaryWorker(operatorToken: string, workerId: string, provider: string): Promise<Worker> {
+export async function spawnTemporaryWorker(operatorToken: string, workerId: string, provider: string, acknowledgeExperimentalProvider = false): Promise<Worker> {
   const response = await authenticatedFetch(operatorToken, `/api/v1/workers/${encodeURIComponent(workerId)}/temporary`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ provider }),
+    body: JSON.stringify({ provider, ...(acknowledgeExperimentalProvider ? { acknowledge_experimental_provider: true } : {}) }),
   });
   return response.json() as Promise<Worker>;
 }

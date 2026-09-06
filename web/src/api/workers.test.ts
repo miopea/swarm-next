@@ -9,6 +9,7 @@ import {
   removeWorker,
   reorderWorkers,
   startWorker,
+  spawnTemporaryWorker,
   stopWorker,
   updateWorker,
   type Worker,
@@ -31,6 +32,19 @@ const worker: Worker = {
 };
 
 afterEach(() => vi.unstubAllGlobals());
+
+test("temporary provider acknowledgement is explicit and never inferred from provider name", async () => {
+  const fetch = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify(worker), { status: 200 })));
+  vi.stubGlobal("fetch", fetch);
+  await spawnTemporaryWorker("operator", "worker/one", "gemini");
+  await spawnTemporaryWorker("operator", "worker/one", "gemini", true);
+  expect(fetch).toHaveBeenNthCalledWith(1, "/api/v1/workers/worker%2Fone/temporary", expect.objectContaining({
+    body: JSON.stringify({ provider: "gemini" }),
+  }));
+  expect(fetch).toHaveBeenNthCalledWith(2, "/api/v1/workers/worker%2Fone/temporary", expect.objectContaining({
+    body: JSON.stringify({ provider: "gemini", acknowledge_experimental_provider: true }),
+  }));
+});
 
 test("owns worker discovery, configuration, ordering, and lifecycle commands", async () => {
   const responses = [

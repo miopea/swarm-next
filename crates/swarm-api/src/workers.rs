@@ -34,6 +34,8 @@ pub(super) struct CreateWorkerRequest {
     name: String,
     #[serde(default = "default_provider")]
     provider: ProviderKind,
+    #[serde(default)]
+    acknowledge_experimental_provider: bool,
     workspace: String,
     #[serde(default)]
     autostart: bool,
@@ -46,6 +48,8 @@ pub(super) struct UpdateWorkerRequest {
     name: Option<String>,
     description: Option<String>,
     provider: Option<ProviderKind>,
+    #[serde(default)]
+    acknowledge_experimental_provider: bool,
     autostart: Option<bool>,
     /// Where this worker's repository now is. Validated exactly as it is when a
     /// worker is created, because a path that would not be accepted for a new
@@ -503,12 +507,247 @@ mod conversation_scan_tests {
     }
 }
 
+#[cfg(all(test, unix))]
+mod experimental_binding_tests {
+    use super::*;
+    use axum::{body::Body, http::Request};
+    use swarm_persistence::TaskStore;
+    use swarm_terminal::HostClient;
+    use tower::ServiceExt;
+
+    async fn send(state: AppState, method: &str, uri: &str, body: serde_json::Value) -> StatusCode {
+        crate::router(state)
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header("authorization", "Bearer test-operator")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    }
+
+    #[tokio::test]
+    async fn experimental_commands_refuse_without_acknowledgement_before_mutation() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = TaskStore::in_memory().unwrap();
+        let parent = store
+            .create_worker(
+                "Existing",
+                ProviderKind::ClaudeCode,
+                "/workspace/test",
+                false,
+                1,
+            )
+            .unwrap();
+        let state = || {
+            AppState::default()
+                .with_task_store(store.clone())
+                .with_terminal_host(
+                    HostClient::new(directory.path().join("absent.sock")),
+                    "test-operator",
+                )
+        };
+        for (method, uri, body) in [
+            (
+                "POST",
+                "/api/v1/workers".to_owned(),
+                serde_json::json!({"name":"New", "workspace":"/workspace/new", "provider":"gemini"}),
+            ),
+            (
+                "PATCH",
+                format!("/api/v1/workers/{}", parent.id),
+                serde_json::json!({"name":"Must not change", "provider":"gemini"}),
+            ),
+            (
+                "POST",
+                format!("/api/v1/workers/{}/temporary", parent.id),
+                serde_json::json!({"provider":"gemini"}),
+            ),
+        ] {
+            assert_eq!(
+                send(state(), method, &uri, body).await,
+                StatusCode::UNPROCESSABLE_ENTITY
+            );
+            assert_eq!(store.list_worker_profiles().unwrap().len(), 1);
+            let unchanged = store.get_worker_profile(parent.id).unwrap();
+            assert_eq!(unchanged.name, "Existing");
+            assert_eq!(unchanged.provider, ProviderKind::ClaudeCode);
+        }
+    }
+
+    #[tokio::test]
+    async fn experimental_acknowledgement_does_not_override_unknown_host_availability() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = TaskStore::in_memory().unwrap();
+        let state = AppState::default()
+            .with_task_store(store.clone())
+            .with_terminal_host(
+                HostClient::new(directory.path().join("absent.sock")),
+                "test-operator",
+            );
+        assert_eq!(send(state, "POST", "/api/v1/workers", serde_json::json!({
+            "name":"New", "workspace":"/workspace/new", "provider":"gemini", "acknowledge_experimental_provider":true,
+        })).await, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(store.list_worker_profiles().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn experimental_temporary_binding_requires_positive_current_host_evidence() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        for availability in [None, Some(false), Some(true)] {
+            let directory = tempfile::tempdir().unwrap();
+            let socket = directory.path().join("host.sock");
+            let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+            let host = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let (reader, mut writer) = stream.into_split();
+                let mut line = String::new();
+                BufReader::new(reader).read_line(&mut line).await.unwrap();
+                assert!(matches!(
+                    serde_json::from_str::<swarm_terminal::HostRequest>(&line).unwrap(),
+                    swarm_terminal::HostRequest::ProviderCapabilities
+                ));
+                let mut response = serde_json::json!({"type":"provider_capabilities", "claude_code":true,"codex":true});
+                if let Some(available) = availability {
+                    response["experimental"] =
+                        serde_json::json!({"gemini":available,"grok":false,"opencode":false});
+                }
+                writer
+                    .write_all(format!("{response}\n").as_bytes())
+                    .await
+                    .unwrap();
+            });
+            let store = TaskStore::in_memory().unwrap();
+            let parent = store
+                .create_worker(
+                    "Existing",
+                    ProviderKind::ClaudeCode,
+                    "/workspace/test",
+                    false,
+                    1,
+                )
+                .unwrap();
+            let state = AppState::default()
+                .with_task_store(store.clone())
+                .with_terminal_host(HostClient::new(socket), "test-operator");
+            let result = send(
+                state,
+                "POST",
+                &format!("/api/v1/workers/{}/temporary", parent.id),
+                serde_json::json!({
+                    "provider":"gemini", "acknowledge_experimental_provider":true,
+                }),
+            )
+            .await;
+            tokio::time::timeout(std::time::Duration::from_secs(5), host)
+                .await
+                .unwrap()
+                .unwrap();
+            if availability == Some(true) {
+                assert_eq!(result, StatusCode::OK);
+                let profiles = store.list_worker_profiles().unwrap();
+                assert_eq!(profiles.len(), 2);
+                assert!(
+                    profiles
+                        .iter()
+                        .any(|profile| profile.provider == ProviderKind::Gemini)
+                );
+            } else {
+                assert_eq!(result, StatusCode::UNPROCESSABLE_ENTITY);
+                assert_eq!(store.list_worker_profiles().unwrap().len(), 1);
+            }
+            assert_eq!(
+                store.get_worker_profile(parent.id).unwrap().provider,
+                ProviderKind::ClaudeCode
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn experimental_existing_binding_survives_unrelated_edit_without_host() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Existing",
+                ProviderKind::Gemini,
+                "/workspace/test",
+                false,
+                1,
+            )
+            .unwrap();
+        let state = AppState::default()
+            .with_task_store(store.clone())
+            .with_terminal_host(
+                HostClient::new(directory.path().join("absent.sock")),
+                "test-operator",
+            );
+        assert_eq!(
+            send(
+                state,
+                "PATCH",
+                &format!("/api/v1/workers/{}", worker.id),
+                serde_json::json!({
+                    "name":"Renamed", "provider":"gemini",
+                })
+            )
+            .await,
+            StatusCode::OK
+        );
+        let updated = store.get_worker_profile(worker.id).unwrap();
+        assert_eq!(updated.provider, ProviderKind::Gemini);
+        assert_eq!(updated.name, "Renamed");
+    }
+}
+
+async fn require_provider_admission(
+    state: &AppState,
+    provider: ProviderKind,
+    current: Option<ProviderKind>,
+    acknowledged: bool,
+) -> Result<(), ApiError> {
+    let refusal = |error: swarm_domain::ExperimentalProviderAdmissionError| {
+        ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "experimental_provider_not_admitted",
+            error.to_string(),
+        )
+    };
+    match provider.validate_experimental_binding(current, acknowledged, None) {
+        Ok(()) => return Ok(()),
+        Err(swarm_domain::ExperimentalProviderAdmissionError::Unknown) => {}
+        Err(error) => return Err(refusal(error)),
+    }
+    let available =
+        match request_host(state, swarm_terminal::HostRequest::ProviderCapabilities).await {
+            Ok(swarm_terminal::HostResponse::ProviderCapabilities { experimental, .. }) => {
+                experimental.and_then(|record| record.available(provider))
+            }
+            _ => None,
+        };
+    provider
+        .validate_experimental_binding(current, acknowledged, available)
+        .map_err(refusal)
+}
+
 pub(super) async fn create_worker(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(request): Json<CreateWorkerRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    require_provider_admission(
+        &state,
+        request.provider,
+        None,
+        request.acknowledge_experimental_provider,
+    )
+    .await?;
     let profiles = task_store(&state)?
         .list_worker_profiles()
         .map_err(|error| task_store_error(&error))?;
@@ -666,6 +905,21 @@ pub(super) async fn update_worker(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let worker_id = parse_worker_id(&worker_id)?;
+    // Serialize the current-provider check and mutation with other updates and
+    // lifecycle operations, so a stale unchanged-binding exemption cannot win.
+    let _lifecycle = state.worker_lifecycle.lock().await;
+    if let Some(provider) = request.provider {
+        let current = task_store(&state)?
+            .get_worker_profile(worker_id)
+            .map_err(|error| task_store_error(&error))?;
+        require_provider_admission(
+            &state,
+            provider,
+            Some(current.provider),
+            request.acknowledge_experimental_provider,
+        )
+        .await?;
+    }
     let workspace = match request.workspace.as_deref() {
         Some(workspace) => Some(
             resolve_workspace_path(&state, workspace, request.allow_outside_roots)
@@ -734,6 +988,8 @@ pub(super) async fn update_worker(
 #[derive(Deserialize)]
 pub(super) struct SpawnTemporaryRequest {
     provider: ProviderKind,
+    #[serde(default)]
+    acknowledge_experimental_provider: bool,
 }
 
 #[derive(Deserialize)]
@@ -763,6 +1019,13 @@ pub(super) async fn spawn_temporary_worker(
     Json(request): Json<SpawnTemporaryRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    require_provider_admission(
+        &state,
+        request.provider,
+        None,
+        request.acknowledge_experimental_provider,
+    )
+    .await?;
     let parent_id = parse_worker_id(&worker_id)?;
     let store = task_store(&state)?;
     let parent = store
