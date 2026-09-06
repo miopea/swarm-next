@@ -225,6 +225,21 @@ test("a dropped file with no media type is typed from its name", () => {
   expect(result.kind === "file" && result.file.type).toBe("image/gif");
 });
 
+test.each([["capture.png", "image/png"], ["LICENSE", "application/octet-stream"]])(
+  "an items-only clipboard normalizes %s just like picker and drop",
+  (name, type) => {
+    const file = new File(["payload"], name);
+    const clipboard = { files: [], items: [{ kind: "file", getAsFile: () => file }] } as unknown as DataTransfer;
+    const result = transferredAttachment(clipboard);
+    expect(result.kind).toBe("file");
+    if (result.kind === "file") {
+      expect(result.file.type).toBe(type);
+      expect(result.file.name).toBe(name);
+      expect(result.file.size).toBe(file.size);
+    }
+  },
+);
+
 test("a dropped non-image is taken through the files path too", () => {
   const dropped = {
     files: [new File([""], "clip.mp4", { type: "video/mp4" })],

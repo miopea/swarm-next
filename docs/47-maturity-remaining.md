@@ -8,6 +8,17 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Items-only clipboard attachment normalization (September 6 UTC)
+
+Added regressions with an empty DataTransfer.files collection and files supplied
+only by clipboard items. Both failed on the existing implementation: an untyped
+PNG and an unknown extension retained an empty media type, unlike picker/drop.
+The clipboard fallback now calls the shared chosenAttachment validation rather
+than duplicating size checks and bypassing type normalization. Both regressions
+now pass; all 92 attachment/view/composer tests and TypeScript checking pass.
+This is a reproduced client-path inconsistency, not proof of the original native
+camera/gallery failure. Live browser verification and deployment remain pending.
+
 ### Terminal input waits in Queues (September 6 UTC)
 
 The current demo remains Ready/Delivered while its worker reports

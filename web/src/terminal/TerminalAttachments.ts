@@ -174,14 +174,7 @@ export function transferredAttachment(transfer: DataTransfer): TransferredAttach
     return chosenAttachment(file);
   }
   const pasted = clipboardAttachment(transfer);
-  if (pasted) {
-    return pasted.size > maxTerminalAttachmentBytes()
-      ? {
-          kind: "too-large",
-          description: `that file is ${describeBytes(pasted.size)}; the limit is ${describeBytes(maxTerminalAttachmentBytes())}`,
-        }
-      : { kind: "file", file: pasted };
-  }
+  if (pasted) return chosenAttachment(pasted);
   return { kind: "none" };
 }
 
