@@ -61,6 +61,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   // Why it failed, not just that it did. "Image could not be added" on its own
   // left an operator with nothing to act on and nothing to report.
   const [attachmentError, setAttachmentError] = useState<string>();
+  const [selectionRefused, setSelectionRefused] = useState(false);
   const [dropActive, setDropActive] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
   // Held in a ref so a new callback identity cannot detach and reattach the
@@ -83,6 +84,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
     setAttachmentName(undefined);
     setAttachmentError(undefined);
     setAttachmentState("idle");
+    setSelectionRefused(false);
     controller.attach(element);
     const subscription = controller.subscribe((state, nextDetail) => {
       connectionStateRef.current = state;
@@ -125,10 +127,12 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   }
 
   function dismissAttachmentNotice() {
+    setSelectionRefused(false);
     setAttachmentState((state) => (state === "ready" ? "idle" : state));
   }
 
   function removeAttachment() {
+    setSelectionRefused(false);
     attachmentGeneration.current += 1;
     uploadRequest.current?.abort();
     uploadRequest.current = undefined;
@@ -180,6 +184,10 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
    * produced a bare transport failure, or nothing legible at all.
    */
   function refuseSize(description: string) {
+    if (attachmentPending()) return;
+    setSelectedFile(undefined);
+    setAttachmentName(undefined);
+    setSelectionRefused(false);
     setAttachmentError(`${description}. Shrink it, or send a still instead.`);
     setAttachmentState("error");
   }
@@ -203,9 +211,16 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
     if (judged.kind === "file") await addAttachment(judged.file);
   }
 
+  function attachmentPending(): boolean {
+    if (!uploadRequest.current && !waitingAttachment.current) return false;
+    setSelectionRefused(true);
+    return true;
+  }
+
   async function addAttachment(file: File) {
     // One owned selection, including all paste/drop/picker entry points.
-    if (uploadRequest.current || waitingAttachment.current) return;
+    if (attachmentPending()) return;
+    setSelectionRefused(false);
     const generation = ++attachmentGeneration.current;
     const request = new AbortController();
     uploadRequest.current = request;
@@ -354,6 +369,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
             </small>
           )}
           {selectedFile && <small className="attachment-selection">Selected file · {Math.max(1, Math.ceil(selectedFile.size / 1024))} KB</small>}
+          {selectionRefused && <small className="attachment-state" role="status">Another file was not added while an attachment was pending. Finish or remove that attachment, then choose the other file again.</small>}
           {attachmentState === "error" && selectedFile && <button type="button" className="secondary-button" onClick={() => void addAttachment(selectedFile)}>Retry attachment</button>}
           {(attachmentState === "uploading" || attachmentState === "waiting" || attachmentState === "error") && <button type="button" className="secondary-button" onClick={removeAttachment}>{attachmentState === "uploading" ? "Cancel attachment" : "Remove attachment"}</button>}
           {attachmentState === "ready" && <button type="button" className="secondary-button" onClick={dismissAttachmentNotice}>Dismiss attachment notice</button>}

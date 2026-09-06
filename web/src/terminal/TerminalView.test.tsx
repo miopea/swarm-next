@@ -407,7 +407,43 @@ test("overlapping file selections cannot create concurrent uploads", async () =>
   await act(async () => { await composerProps.current!.onAttachment!(new File(["two"], "two.png", { type: "image/png" })); });
   expect(upload).toHaveBeenCalledTimes(1);
   expect(screen.getByText(/Adding one.png/)).toBeInTheDocument();
+  expect(screen.getByText(/Another file was not added/)).toBeVisible();
   await act(async () => { finish("/tmp/attachments/one.png"); await first; });
+});
+
+test("oversized second selection cannot replace a pending upload or make the wrong file retryable", async () => {
+  let finish!: (path: string) => void;
+  upload.mockClear().mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }));
+  render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
+  let first!: Promise<void>;
+  act(() => { first = composerProps.current!.onAttachment!(new File(["one"], "one.png", { type: "image/png" })); });
+  const oversized = new File(["two"], "too-big.png", { type: "image/png" });
+  Object.defineProperty(oversized, "size", { value: 100 * 1024 * 1024 });
+  await act(async () => { await composerProps.current!.onAttachment!(oversized); });
+  expect(screen.getByText(/Adding one.png/)).toBeVisible();
+  expect(screen.getByText(/Another file was not added/)).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Retry attachment" })).not.toBeInTheDocument();
+  expect(upload).toHaveBeenCalledTimes(1);
+  await act(async () => { finish("/tmp/attachments/one.png"); await first; });
+  expect(controller.sendInput).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("/tmp/attachments/one.png"));
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss attachment notice" }));
+  expect(screen.queryByText(/Another file was not added/)).not.toBeInTheDocument();
+});
+
+test("oversized selection preserves an uploaded file waiting for reconnect", async () => {
+  controller.initialState = "connecting";
+  upload.mockClear().mockResolvedValueOnce("/tmp/attachments/one.png");
+  render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
+  await act(async () => { await composerProps.current!.onAttachment!(new File(["one"], "one.png", { type: "image/png" })); });
+  const oversized = new File(["two"], "too-big.png", { type: "image/png" });
+  Object.defineProperty(oversized, "size", { value: 100 * 1024 * 1024 });
+  await act(async () => { await composerProps.current!.onAttachment!(oversized); });
+  expect(screen.getByText(/one.png uploaded/)).toBeVisible();
+  expect(screen.getByText(/Another file was not added/)).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Retry attachment" })).not.toBeInTheDocument();
+  act(() => controller.stateListener?.("connected"));
+  expect(controller.sendInput).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("/tmp/attachments/one.png"));
+  expect(upload).toHaveBeenCalledTimes(1);
 });
 
 test("cancelling upload aborts it and a late response cannot insert the file", async () => {

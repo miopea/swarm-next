@@ -8,6 +8,23 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Attachment overlap status race (September 6 UTC)
+
+An oversized second selection could overwrite the status of an existing upload
+or reconnect-waiting attachment with a size error. A normal second selection
+was silently ignored. Both now retain the first operation and show a separate
+explanation that another file was not added. A standalone size refusal also
+clears any older retry-file identity rather than offering the wrong file.
+Cancel, removal, session replacement and notice dismissal clear the explanation.
+No upload concurrency, automatic submission or worker-switching behavior added.
+
+All 90 attachment/view/mobile-composer tests passed, including oversized overlap
+during upload and reconnect wait, exact single insertion of the original path,
+and notice dismissal. TypeScript checking passed before the final test-only
+addition. Native camera/gallery and live browser acceptance remain open; this
+fix is not evidence that the original phone-picker problem is fully solved.
+Deployment is pending.
+
 ### Mixed prerequisite queue scanning (September 6 UTC)
 
 Tasks with mixed prerequisite states now show unresolved dependencies first and
