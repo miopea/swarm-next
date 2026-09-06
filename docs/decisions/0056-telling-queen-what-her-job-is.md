@@ -102,6 +102,15 @@ open rather than guessed at.
 
 ## Where the behaviour lives
 
+### Explicit run-now joins existing work (2026-09-06)
+
+A manual review request reuses an existing Queued, Delivering or Running review
+instead of returning a storage-integrity error. The adapter still invokes guarded
+delivery for queued work. Run identity, original request time, attempts and delivery
+receipts are preserved; concurrent requests cannot claim another delivery or bypass
+operator engagement. This is not authority to replay a running turn or remove a
+worker's task blocker.
+
 ### Engine replacement during a confirmed review (2026-09-06)
 
 A confirmed review is preserved across an API restart only while its exact

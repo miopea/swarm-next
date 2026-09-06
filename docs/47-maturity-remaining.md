@@ -3438,3 +3438,19 @@ attachments and backups were preserved. API and terminal-host services remained
 active, health was OK at `a576ecc027c4`, and all 15 loaded workers remained running.
 This resolves immediate storage pressure; it does not prove Swarm's normal
 diagnostics surface filesystem trouble adequately. That operational gate remains.
+
+### Run-now must reuse a queued review
+
+The operator requested Queen dispatch after leaving her terminal. The manual-run
+endpoint returned 503 because an automatic review was already queued; it treated
+ordinary existing work as a persistence integrity failure. Keeping automation
+enabled through its normal endpoint invoked guarded delivery successfully:
+`01a07864-0bc6-7f62-845c-01cb6da60670` became Running with one confirmed delivery.
+No task was reassigned, rewound or force-started. Queen and Platform subsequently
+reported Buzzing; this alone does not establish fleet-wide task recovery.
+
+Run-now now reuses Queued/Delivering/Running reviews, retaining IDs, original
+request time, attempt counts and confirmed delivery. Thirty-eight conductor tests
+and the API route regression pass, including repeated requests and an operator
+hold. The larger automatic recovery and truthful blocker reconciliation gate
+remains open; this correction removes one operator-trigger failure only.

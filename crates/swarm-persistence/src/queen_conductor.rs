@@ -183,10 +183,10 @@ impl TaskStore {
         self.queen_automation_status(now)
     }
 
-    /// Queues an explicit operator-requested review even when automatic reviews are disabled.
+    /// Ensures an operator-requested review exists, reusing an in-flight review.
     ///
     /// # Errors
-    /// Returns an error when another run is active or the request cannot be stored atomically.
+    /// Returns an error when the request cannot be stored atomically.
     pub fn request_queen_automation_run(
         &self,
         now: i64,
@@ -202,9 +202,12 @@ impl TaskStore {
             |row| row.get(0),
         )?;
         if matches!(state.as_str(), "queued" | "delivering" | "running") {
-            return Err(TaskStoreError::IntegrityFailure(
-                "Queen automation already has an active run".into(),
-            ));
+            // A run-now request joins existing work. Its adapter still invokes
+            // guarded delivery, so a queued review can advance without resetting
+            // its identity, receipts, attempt budget, or operator safety holds.
+            transaction.commit()?;
+            drop(connection);
+            return self.queen_automation_status(now);
         }
         if state == "uncertain" {
             let changed = transaction.execute(
@@ -1121,6 +1124,39 @@ pub(super) fn migrate_queen_delivery_session(
 mod tests {
     use super::*;
     use swarm_domain::{ProviderKind, TaskActivityActor, TaskPriority, TaskState};
+
+    #[test]
+    fn run_now_reuses_queued_delivering_and_running_review_without_replay() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        let original = store.request_queen_automation_run(100).unwrap();
+        store
+            .renew_worker_engagement(session, None, 100, 10)
+            .unwrap();
+        let held = store.request_queen_automation_run(101).unwrap();
+        assert_eq!(held.run_id, original.run_id);
+        assert_eq!(held.requested_at, original.requested_at);
+        assert_eq!(held.attempts, 0);
+        assert!(held.waiting_reason.is_some());
+        assert!(store.claim_queen_automation(101).unwrap().is_none());
+        let delivery = store.claim_queen_automation(111).unwrap().unwrap();
+        let delivering = store.request_queen_automation_run(112).unwrap();
+        assert_eq!(delivering.run_id, original.run_id);
+        assert_eq!(delivering.state, QueenAutomationState::Delivering);
+        assert_eq!(delivering.attempts, 1);
+        assert!(store.claim_queen_automation(112).unwrap().is_none());
+        store
+            .complete_queen_automation_delivery(&delivery.run_id, 113)
+            .unwrap();
+        let running = store.request_queen_automation_run(114).unwrap();
+        assert_eq!(running.run_id, original.run_id);
+        assert_eq!(running.state, QueenAutomationState::Running);
+        assert_eq!(running.delivered_at, Some(113));
+        assert_eq!(running.attempts, 1);
+        assert!(store.claim_queen_automation(114).unwrap().is_none());
+    }
 
     #[test]
     fn finished_run_does_not_erase_live_queen_ownership() {
@@ -2172,7 +2208,14 @@ mod tests {
         );
 
         assert!(store.claim_queen_automation(14).unwrap().is_none());
-        assert!(store.request_queen_automation_run(14).is_err());
+        assert_eq!(
+            store
+                .request_queen_automation_run(14)
+                .unwrap()
+                .run_id
+                .as_deref(),
+            Some(original_run_id.as_str())
+        );
         assert!(
             !store
                 .queen_automation_permits(QueenActionClass::ExternalSideEffect, 14)

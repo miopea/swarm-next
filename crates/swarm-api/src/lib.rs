@@ -14684,6 +14684,22 @@ mod tests {
         assert_eq!(queued["state"], "queued");
         assert_eq!(queued["trigger"], "manual");
         assert_eq!(queued["waiting_reason"], "Waiting for Queen to wake");
+        let repeated = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/orchestration/queen-automation/run")
+                    .header("authorization", "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(repeated.status(), StatusCode::OK);
+        let repeated = response_json(repeated).await;
+        assert_eq!(repeated["run_id"], queued["run_id"]);
+        assert_eq!(repeated["requested_at"], queued["requested_at"]);
+        assert_eq!(repeated["attempts"], queued["attempts"]);
     }
 
     #[tokio::test]
