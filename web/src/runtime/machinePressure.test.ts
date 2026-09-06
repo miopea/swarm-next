@@ -33,6 +33,21 @@ function resources(m: MachineResources | undefined): RuntimeResources {
 
 const ready = (m: MachineResources | undefined) => ({ kind: "ready" as const, resources: resources(m) });
 
+it("storage pressure is visible even with normal memory and preserves critical compute evidence", () => {
+  const state = ready(machine("normal"));
+  state.resources.storage = [{ scope: "system", total_bytes: 61 * 1024 ** 3,
+    available_bytes: 1024 ** 3, pressure: "advisory",
+    advisory_available_bytes: 2 * 1024 ** 3, critical_available_bytes: 512 * 1024 ** 2 }];
+  expect(machinePressureNotice(state)?.label).toBe("Storage running low");
+  state.resources.machine = machine("critical");
+  const combined = machinePressureNotice(state);
+  expect(combined?.level).toBe("critical");
+  expect(combined?.detail).toContain("System storage");
+  state.resources.storage[0].pressure = "normal";
+  state.resources.machine = machine("normal");
+  expect(machinePressureNotice(state)).toBeNull();
+});
+
 describe("machinePressureNotice", () => {
   it("says nothing when the machine is fine, so a badge always means something changed", () => {
     expect(machinePressureNotice(ready(machine("normal")))).toBeNull();

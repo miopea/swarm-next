@@ -28,6 +28,7 @@ import { assessPerformance, computePressure } from "./performanceAssessment";
 import PerformanceEvidence from "./PerformanceEvidence";
 import { useScreenshotDownload } from "./useScreenshotDownload";
 import type { SharedMachineResources } from "../runtime/machinePressure";
+import { storageValue } from "../runtime/storagePressure";
 
 type Props = {
   sharedMachineResources?: SharedMachineResources;
@@ -164,6 +165,10 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
     { label: "Machine memory", value: machineMemoryLabel(machine), healthy: healthyPressure(machine?.pressure), className: resourceClass(machine?.pressure) },
     { label: "Memory stall", value: pressureLabel(machine?.memory_pressure_avg10), healthy: healthyPressure(machine?.pressure), className: resourceClass(machine?.pressure) },
     { label: "Compute load", value: loadLabel(machine?.load_average, machine?.logical_cpus), healthy: healthyPressure(computePressure(machine)), className: resourceClass(computePressure(machine)) },
+    ...(runtime.resources?.storage?.map((storage) => ({
+      label: { system: "System storage", temporary: "Temporary storage", database: "Hive storage" }[storage.scope],
+      value: storageValue(storage), healthy: storage.pressure === "normal", className: resourceClass(storage.pressure),
+    })) ?? [{ label: "Storage observation", value: "Unavailable on this runtime", healthy: false }]),
     { label: "Standing swap", value: swapLabel(machine?.swap_used_bytes, machine?.swap_total_bytes, machine?.swap_used_percent), healthy: true },
     { label: "Provider", value: providerStatus, healthy: launchFailures === 0 },
     { label: "Jira", value: jiraStatusLabel(jiraReadiness, jiraUnavailable), healthy: !jiraStatusLabel(jiraReadiness, jiraUnavailable).includes("attention") },

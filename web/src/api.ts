@@ -536,6 +536,15 @@ export type RuntimeResources = {
   terminal_host: ProcessResources & { pressure: ResourcePressure };
   machine?: MachineResources;
   daily_backup?: DailyBackupStatus;
+  storage?: StorageObservation[];
+};
+export type StorageObservation = {
+  scope: "system" | "temporary" | "database";
+  total_bytes: number | null;
+  available_bytes: number | null;
+  pressure: ResourcePressure;
+  advisory_available_bytes: number;
+  critical_available_bytes: number;
 };
 export type DailyBackupStatus = { state: "not_reported" | "unavailable" | "failed" } | { state: "ready"; snapshot_day: string };
 export type MachineResources = {

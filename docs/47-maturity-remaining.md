@@ -3478,3 +3478,18 @@ distinct. This does not classify an ended-session message as unread or retry it;
 provider conversation history may have retained it. Six API evidence tests and
 sixteen message persistence tests pass, as does strict API/persistence lint.
 Live Queen use and actual D365 resumption remain unverified.
+
+### Storage observations after the root-disk incident
+
+ADR 0083 adds request-driven system, temporary and Hive database capacity checks
+to private runtime resources, with a two-probe concurrency bound and two-second
+response deadline. A timed-out blocking probe retains its slot until it returns.
+Available space below 2 GiB is advisory and below 512 MiB critical; this never
+changes worker admission or deletes data. The Runtime notice combines storage
+and compute severity without hiding either cause. Diagnostics shows each role
+and the sanitized export explicitly whitelists measurement fields. Shared
+filesystems are not summed. Missing readings remain unavailable; healthy samples
+clear the notice. Three probe tests, the private endpoint authentication test,
+36 frontend tests, frontend type checking and strict API lint pass. Rendered
+acceptance and live resource comparison remain open until this slice is deployed
+and the test tab unlocked.

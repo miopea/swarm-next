@@ -163,6 +163,7 @@ struct RuntimeResourcesResponse {
     api: ProcessResourceResponse,
     terminal_host: ProcessResourceResponse,
     machine: MachineResourceResponse,
+    storage: Vec<crate::runtime_storage::StorageObservation>,
     daily_backup: crate::backups::DailyBackupStatus,
 }
 
@@ -618,6 +619,7 @@ pub(super) async fn resources(
         api: resource_response(Some(sample_current_process()), &machine),
         terminal_host,
         machine,
+        storage: crate::runtime_storage::sample(state.database_directory.clone()).await,
         daily_backup: crate::backups::daily_status(
             state
                 .database_directory

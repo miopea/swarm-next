@@ -1,6 +1,24 @@
 import { afterEach, expect, test, vi } from "vitest";
 
 import { buildSanitizedDiagnosticReport } from "./diagnosticReport";
+import type { RuntimeResources } from "../api";
+
+test("storage evidence exports measurements but not unexpected path fields", () => {
+  const resources = {
+    sampled_at: 1, policy: { mode: "observe_only", advisory_percent: 85, critical_percent: 95 },
+    api: { resident_memory_bytes: null, pressure: "unavailable" },
+    terminal_host: { resident_memory_bytes: null, pressure: "unavailable" },
+    storage: [{ scope: "database", available_bytes: 100, total_bytes: 1000,
+      pressure: "critical", advisory_available_bytes: 200, critical_available_bytes: 150,
+      path: "/private/fictional/customer-data" }],
+  } as unknown as RuntimeResources; // Simulate an unexpected server field at the export boundary.
+  const result = buildSanitizedDiagnosticReport({
+    health: undefined, hiveIdentity: undefined, liveFeedState: "connected", recentEvents: [],
+    runtime: { loaded: true, resources }, sessions: [], workers: [],
+  });
+  expect(result.runtime_resources?.storage?.[0].available_bytes).toBe(100);
+  expect(JSON.stringify(result.runtime_resources?.storage)).not.toContain("private");
+});
 
 afterEach(() => vi.unstubAllGlobals());
 

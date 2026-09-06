@@ -1,4 +1,5 @@
 import type { RuntimeResources } from "../api";
+import { storagePressureNotice } from "./storagePressure";
 
 /**
  * What the control room says about the machine underneath it.
@@ -84,7 +85,7 @@ function machineDetail(resources: RuntimeResources): string {
  * Returning null for Normal is what keeps the header quiet enough to be worth
  * reading; see the note above.
  */
-export function machinePressureNotice(state: MachineResourceState): MachinePressureNotice | null {
+function computeNotice(state: MachineResourceState): MachinePressureNotice | null {
   if (state.kind === "loading") return null;
   if (state.kind === "failed") {
     return {
@@ -110,4 +111,14 @@ export function machinePressureNotice(state: MachineResourceState): MachinePress
     return { level: "advisory", label: "Machine under load", detail: machineDetail(state.resources) };
   }
   return null;
+}
+
+export function machinePressureNotice(state: MachineResourceState): MachinePressureNotice | null {
+  const compute = computeNotice(state);
+  const storage = state.kind === "ready" ? storagePressureNotice(state.resources.storage) : null;
+  if (!storage) return compute;
+  if (!compute) return storage;
+  const rank = { unknown: 0, advisory: 1, critical: 2 };
+  const primary = rank[storage.level] > rank[compute.level] ? storage : compute;
+  return { ...primary, detail: `${compute.detail} ${storage.detail}` };
 }
