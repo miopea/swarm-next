@@ -3493,3 +3493,13 @@ clear the notice. Three probe tests, the private endpoint authentication test,
 36 frontend tests, frontend type checking and strict API lint pass. Rendered
 acceptance and live resource comparison remain open until this slice is deployed
 and the test tab unlocked.
+
+Deployment evidence: `b3c3f33a1d10` is healthy, update service exited zero, engine
+fingerprint remains `8d2c8700113a2ca2dda72f582723de3875d1cc75a467b2f22ae16ef3485ee490`,
+and all 15 workers remain running. At sample 1788729120, all three storage roles
+reported total 65,445,814,272 bytes and available 21,047,341,056 bytes, exactly
+matching `df -B1` for their filesystems. They correctly report Normal after the
+approved cleanup. External unauthenticated resources returned 401; direct
+loopback returned 200 under the existing trusted-local authorization policy.
+No low-space fault was injected into the production disk. Threshold/failure
+behavior is covered by isolated tests; rendered warnings remain unverified.
