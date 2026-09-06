@@ -10,8 +10,9 @@ export default function TaskPrerequisiteList({ task, workerNames, onOpenTask, co
   const prerequisites = task.prerequisites ?? [];
   if (prerequisites.length === 0) return null;
   const unresolved = prerequisites.filter((item) => !prerequisiteSatisfied(item));
-  const rows = <ul className="queue-prerequisite-list" aria-label="Task prerequisites">
-    {prerequisites.map((item) => <li key={item.prerequisite_id}>
+  const completed = prerequisites.filter(prerequisiteSatisfied);
+  const rows = (items: typeof prerequisites) => <ul className="queue-prerequisite-list" aria-label="Task prerequisites">
+    {items.map((item) => <li key={item.prerequisite_id}>
       <div>
         {item.removed || !onOpenTask ? <strong>{item.title}</strong> : <button type="button" onClick={() => onOpenTask(item.prerequisite_id)}>{item.title}</button>}
         <span className="queue-task-meta">{item.removed ? "Removed · Queen must reconcile" : prerequisiteSatisfied(item) ? "Completed" : item.state === "abandoned" ? "Abandoned · not satisfied" : item.state.replaceAll("_", " ")}
@@ -26,10 +27,11 @@ export default function TaskPrerequisiteList({ task, workerNames, onOpenTask, co
     {task.state === "blocked" && <p className="queue-task-meta">{task.next_move_owner === "operator"
       ? "Prerequisites completed · your decision is still needed"
       : "Prerequisites completed · Queen checks remaining blockers before resuming"}</p>}
-    <details><summary>{prerequisites.length} completed prerequisite{prerequisites.length === 1 ? "" : "s"}</summary>{rows}</details>
+    <details><summary>{prerequisites.length} completed prerequisite{prerequisites.length === 1 ? "" : "s"}</summary>{rows(prerequisites)}</details>
   </div>;
   return <div className="queue-prerequisites">
     <p className="queue-task-meta">{unresolved.length} unresolved prerequisite{unresolved.length === 1 ? "" : "s"}{task.state === "active" ? " · Queen must reconcile; running work has not been stopped" : ""}</p>
-    {rows}
+    {rows(unresolved)}
+    {completed.length > 0 && <details><summary>{completed.length} completed prerequisite{completed.length === 1 ? "" : "s"}</summary>{rows(completed)}</details>}
   </div>;
 }

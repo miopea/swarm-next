@@ -8,6 +8,17 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Mixed prerequisite queue scanning (September 6 UTC)
+
+Tasks with mixed prerequisite states now show unresolved dependencies first and
+fold completed ones separately. Previously all rows remained expanded whenever
+even one dependency was unresolved. Removed Completed prerequisites remain
+unresolved; reopened dependencies become visible on refresh. No task or owner
+transition is inferred. All 31 queue tests and the final TypeScript check passed.
+The 390px Edge fixture confirmed the pending access dependency visible and the
+completed schema dependency folded. This is presentation evidence, not live
+Queen recovery. Deployment of this change is still pending.
+
 ### Read-only 15-session resource checkpoint (September 6 UTC)
 
 Run `20260906T073816Z-live` completed the existing 60-second observer without
