@@ -22,6 +22,22 @@ test('accepts CRLF input without inventing completion evidence', () => {
   assert.equal(summarize(fixture.join('\r\n') + '\r\n').sample_count, 3);
 });
 
+test('engine CPU excludes child workers and respects the host clock rate', () => {
+  const engine = fixture.map((line, i) => i === 0
+    ? `${line},engine_process_cpu_ticks,engine_process_start_ticks,clock_ticks_per_second`
+    : `${line},${[0, 100, 200, 500][i]},900,100`);
+  const result = summarize(engine.join('\n'));
+  assert.equal(result.cpu.engine_process_only.average_percent_of_one_core, 10);
+  assert.equal(result.cpu.terminal_host_cgroup_including_workers.average_percent_of_one_core, 125);
+  assert.equal(summarize(fixture.join('\n')).cpu.engine_process_only, null);
+  for (const invalid of [engine.join('\n').replace(',500,900,100', ',500,901,100'),
+    engine.join('\n').replace(',500,900,100', ',500,900,200'),
+    engine.join('\n').replaceAll(',900,100', ',900,0'),
+    engine.join('\n').replace('engine_process_start_ticks', 'missing')]) {
+    assert.throws(() => summarize(invalid));
+  }
+});
+
 test('rejects truncated, invalid and insufficient samples', () => {
   for (const csv of [header, fixture.slice(0, 2).join('\n'),
     [...fixture, '42,100'].join('\n'), fixture.join('\n').replace(',100,', ',,')]) {

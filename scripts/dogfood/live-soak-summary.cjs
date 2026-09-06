@@ -8,6 +8,10 @@ function summarize(csv) {
   const required = ['elapsed_seconds', 'api_memory_bytes', 'terminal_host_memory_bytes',
     'running_sessions', 'history_bytes', 'dropped_history_bytes',
     'api_cpu_nanoseconds', 'terminal_host_cpu_nanoseconds', 'collection_seconds'];
+  // Historical reports remain readable but cannot invent engine-only evidence.
+  const engineColumns = ['engine_process_cpu_ticks', 'engine_process_start_ticks', 'clock_ticks_per_second'];
+  const hasEngine = engineColumns.some(key => columns.includes(key));
+  if (hasEngine) required.push(...engineColumns);
   if (required.some(key => columns.filter(column => column === key).length !== 1)) {
     throw new Error('Missing or duplicated sample columns');
   }
@@ -26,25 +30,31 @@ function summarize(csv) {
   const first = rows[0];
   const last = rows.at(-1);
   const span = last.elapsed_seconds - first.elapsed_seconds;
-  const cpu = key => {
+  const cpu = (key, unitsPerSecond = 1e9) => {
     const intervals = rows.slice(1).map((row, i) => {
       const seconds = row.elapsed_seconds - rows[i].elapsed_seconds;
       const delta = row[key] - rows[i][key];
       if (seconds <= 0) throw new Error('Sample times must increase');
       if (delta < 0) throw new Error('CPU counter reset: do not join different process lifetimes');
-      return delta / (seconds * 1e9) * 100;
+      return delta / (seconds * unitsPerSecond) * 100;
     });
     return {
-      average_percent_of_one_core: (last[key] - first[key]) / (span * 1e9) * 100,
+      average_percent_of_one_core: (last[key] - first[key]) / (span * unitsPerSecond) * 100,
       max_interval_percent_of_one_core: Math.max(...intervals),
     };
   };
+  if (hasEngine && (first.clock_ticks_per_second === 0 || rows.some(row =>
+    row.engine_process_start_ticks !== first.engine_process_start_ticks ||
+    row.clock_ticks_per_second !== first.clock_ticks_per_second))) {
+    throw new Error('Engine process lifetime or clock rate changed');
+  }
   return {
     sample_count: rows.length,
     observed_span_seconds: span,
     performance_acceptance: 'not_evaluated',
     continuity: 'requires_observer_final_report',
-    cpu: { api_cgroup: cpu('api_cpu_nanoseconds'), terminal_host_cgroup_including_workers: cpu('terminal_host_cpu_nanoseconds') },
+    cpu: { api_cgroup: cpu('api_cpu_nanoseconds'), terminal_host_cgroup_including_workers: cpu('terminal_host_cpu_nanoseconds'),
+      engine_process_only: hasEngine ? cpu('engine_process_cpu_ticks', first.clock_ticks_per_second) : null },
     memory_bytes: { api_cgroup: range('api_memory_bytes'), terminal_host_cgroup_including_workers: range('terminal_host_memory_bytes') },
     running_sessions: range('running_sessions'),
     history_bytes: range('history_bytes'),

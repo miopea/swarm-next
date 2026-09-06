@@ -22,6 +22,16 @@ metric() {
   printf '%s' "$value"
 }
 
+# /proc stat fields 14+15 are this process's user/system CPU ticks (not
+# children's CPU). Strip the parenthesized command before splitting: it may
+# contain spaces or parentheses. Field 22 identifies this process lifetime.
+process_cpu() {
+  local stat tail
+  IFS= read -r stat <"/proc/$1/stat"
+  tail=${stat##*) }
+  awk '{ if (NF < 20 || $12 !~ /^[0-9]+$/ || $13 !~ /^[0-9]+$/ || $20 !~ /^[0-9]+$/) exit 1; printf "%.0f %s\n", $12+$13, $20 }' <<<"$tail"
+}
+
 if [[ -z "${SWARM_OPERATOR_TOKEN:-}" ]]; then
   echo "SWARM_OPERATOR_TOKEN is required" >&2
   exit 2
@@ -61,6 +71,9 @@ fi
 initial_host="$(api_json "${base_url}/api/v1/runtime/terminal-host")"
 host_version="$(jq -er '.status.host_version' <<<"${initial_host}")"
 host_pid="$(metric "$host_unit" MainPID)"
+clock_ticks="$(getconf CLK_TCK)"
+[[ "$clock_ticks" =~ ^[1-9][0-9]*$ ]] || { echo 'CPU clock rate unavailable' >&2; exit 1; }
+read -r initial_engine_cpu engine_started < <(process_cpu "$host_pid")
 initial_health="$(curl --fail --silent --show-error --max-time 5 "${base_url}/health")"
 api_version="$(jq -er '.version' <<<"${initial_health}")"
 api_pid="$(metric "$api_unit" MainPID)"
@@ -68,7 +81,7 @@ if (( host_pid == 0 || api_pid == 0 )); then
   echo 'Both measured services must be running; PID zero is not continuity evidence' >&2
   exit 1
 fi
-printf 'timestamp_utc,elapsed_seconds,api_memory_bytes,api_tasks,terminal_host_memory_bytes,terminal_host_tasks,running_sessions,retained_sessions,history_bytes,dropped_history_bytes,api_cpu_nanoseconds,terminal_host_cpu_nanoseconds,collection_seconds\n' >"${samples_file}"
+printf 'timestamp_utc,elapsed_seconds,api_memory_bytes,api_tasks,terminal_host_memory_bytes,terminal_host_tasks,running_sessions,retained_sessions,history_bytes,dropped_history_bytes,api_cpu_nanoseconds,terminal_host_cpu_nanoseconds,collection_seconds,engine_process_cpu_ticks,engine_process_start_ticks,clock_ticks_per_second\n' >"${samples_file}"
 
 started_at="$(date +%s)"
 deadline=$((started_at + duration_seconds))
@@ -98,16 +111,21 @@ while (( $(date +%s) < deadline )); do
   host_tasks=$(metric "$host_unit" TasksCurrent)
   api_cpu=$(metric "$api_unit" CPUUsageNSec)
   host_cpu=$(metric "$host_unit" CPUUsageNSec)
+  read -r engine_cpu current_engine_started < <(process_cpu "$host_pid")
+  if [[ "$current_engine_started" != "$engine_started" ]]; then
+    echo 'Engine process lifetime changed; CPU series is not continuous' >&2
+    exit 1
+  fi
   running_sessions=$(jq -er '.status.running_sessions | numbers' <<<"$host_status")
   retained_sessions=$(jq -er '.status.retained_sessions | numbers' <<<"$host_status")
   history_bytes=$(jq -er '.diagnostics.retained_bytes | numbers' <<<"$history")
   dropped_bytes=$(jq -er '.diagnostics.dropped_bytes | numbers' <<<"$history")
   sampled_at=$(date +%s)
-  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$((sampled_at - started_at))" \
     "$api_memory" "$api_tasks" "$host_memory" "$host_tasks" \
     "$running_sessions" "$retained_sessions" "$history_bytes" "$dropped_bytes" \
-    "$api_cpu" "$host_cpu" "$((sampled_at - now))" >>"${samples_file}"
+    "$api_cpu" "$host_cpu" "$((sampled_at - now))" "$engine_cpu" "$engine_started" "$clock_ticks" >>"${samples_file}"
   sample_count=$((sample_count + 1))
   sleep "${sample_seconds}"
 done

@@ -1,5 +1,25 @@
 # Daily-driver maturity: remaining delivery and acceptance
 
+## 2026-09-06: distinguish engine overhead from provider work
+
+The live observer's terminal-host cgroup CPU includes provider workers; it cannot
+attribute that total to the engine. New observer samples also capture the engine
+process's own user/system CPU ticks, Linux clock rate, and process start identity.
+The analysis reports this separately, refuses lifetime/clock changes and counter
+resets, and reports null (not zero) for historical CSVs without engine counters.
+Five analyzer tests pass; the full Bash script passes Linux syntax validation.
+The exact counter function read `36306` CPU ticks, start `29660553`, and clock
+rate `100` on the running host. This is reader validation, not an interval CPU
+measurement or performance acceptance. The already-running 20-minute observer
+uses the previous script; keep its build stable and analyze that run separately.
+
+The demo's rejected HTTP input follows the legacy operator write path. Source
+guards and existing tests explicitly reject unversioned input after a session
+has adopted device control, even after release/expiry. Do not weaken that guard
+or relabel automation as a human to unblock the fixture. The original rejection
+body was not retained, so this explains a matching expected guard, not definitive
+proof of that request's exact rejection cause. Live Edge still requires unlock.
+
 ## 2026-09-06: direct inspection from a worker answer wait
 
 Queues now offers Open worker beside a qualified current-session answer wait.
