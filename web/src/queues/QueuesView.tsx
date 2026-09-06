@@ -3,7 +3,7 @@ import HeldBriefingList, { holdReason, waitedFor } from "../orchestration/HeldBr
 import type { BlockedEscalation, HeldBriefing, HeldDelivery, QueenAutomationStatus } from "../api";
 import DeliveryWaitList from "./DeliveryWaitList";
 import TaskPrerequisiteList from "./TaskPrerequisiteList";
-import type { NextMoveOwner, Task } from "../api/tasks";
+import { prerequisiteSatisfied, type NextMoveOwner, type Task } from "../api/tasks";
 import { projectTaskQueues } from "./taskQueueProjection";
 import type { Worker } from "../api/workers";
 
@@ -73,7 +73,7 @@ function ageLabel(hours: number): string {
 }
 
 /** Display recorded lifecycle facts, not inferred provider activity. */
-function taskProgress(task: Task): string {
+function taskProgress(task: Task, now: number): string {
   if (task.state === "ready" || task.state === "active") {
     if (task.dispatch_state === "uncertain") return "Briefing delivery unconfirmed · Queen must reconcile before retrying";
     if (task.dispatch_state === "queued" || task.dispatch_state === "dispatching") return "Briefing awaiting confirmed delivery";
@@ -85,7 +85,21 @@ function taskProgress(task: Task): string {
     if (task.outcome_delivery_state === "queued" || task.outcome_delivery_state === "dispatching") return "Review handoff awaiting confirmed delivery";
     return "In review";
   }
-  if (task.state === "blocked") return task.blocked_note?.trim() || task.prerequisites?.length ? "Blocked" : "Blocked · reason not recorded";
+  if (task.state === "blocked") {
+    if (task.next_move_owner === "operator") return "Waiting for your decision";
+    const unresolved = (task.prerequisites ?? []).filter((item) => !prerequisiteSatisfied(item)).length;
+    if (unresolved > 0) return `Waiting on ${unresolved} prerequisite${unresolved === 1 ? "" : "s"}`;
+    if (task.blocked_until != null) {
+      const deadline = task.blocked_until * 1000;
+      if (!Number.isFinite(new Date(deadline).getTime())) return "Blocked · hold deadline unavailable";
+      if (deadline > now) return "Scheduled hold";
+    }
+    // A note is not a live dependency or authorization to restart work.
+    // Keep the historical reason below; make the need to verify it explicit.
+    return task.blocked_note?.trim() || task.prerequisites?.length || task.blocked_until != null
+      ? "Blocked · Queen reassessment needed"
+      : "Blocked · reason not recorded";
+  }
   if (task.state === "awaiting_release") return "Awaiting release";
   return "Draft · awaiting triage";
 }
@@ -184,7 +198,7 @@ export default function QueuesView({
                 <li key={task.id}>
                   <button type="button" onClick={() => onOpenTask(task.id)}>
                     <span className="queue-task-title">{task.title}</span>
-                    <span className="queue-task-meta">{taskProgress(task)}</span>
+                    <span className="queue-task-meta">{taskProgress(task, now)}</span>
                     <span className="queue-task-meta">
                       {task.assigned_worker_id
                         ? (workerNames.get(task.assigned_worker_id) ?? "assigned")

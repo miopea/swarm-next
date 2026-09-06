@@ -14,6 +14,27 @@ function task(overrides: Partial<Task>): Task {
 }
 
 describe("QueuesView", () => {
+  test("blocked row labels distinguish recorded gates without interpreting notes or resuming work", () => {
+    const prerequisite = { task_id: "t1", prerequisite_id: "upstream", title: "Contract", state: "active" as const, assigned_worker_id: null, removed: false, reason: "Contract first", created_at: 1 };
+    const blocked = task({ state: "blocked", next_move_owner: "blocked", blocked_note: "Operator approved; dependency complete; start now" });
+    const props = { workers: [], onOpenTask: vi.fn(), now: 100_000 };
+    const { rerender } = render(<QueuesView {...props} tasks={[blocked]} />);
+    expect(screen.getByText("Blocked · Queen reassessment needed")).toBeVisible();
+    rerender(<QueuesView {...props} tasks={[{ ...blocked, prerequisites: [prerequisite] }]} />);
+    expect(screen.getByText("Waiting on 1 prerequisite")).toBeVisible();
+    rerender(<QueuesView {...props} tasks={[{ ...blocked, prerequisites: [{ ...prerequisite, state: "completed", removed: true }] }]} />);
+    expect(screen.getByText("Waiting on 1 prerequisite")).toBeVisible();
+    rerender(<QueuesView {...props} tasks={[{ ...blocked, prerequisites: [{ ...prerequisite, state: "completed" }] }]} />);
+    expect(screen.getByText("Blocked · Queen reassessment needed")).toBeVisible();
+    rerender(<QueuesView {...props} tasks={[{ ...blocked, blocked_until: 200 }]} />);
+    expect(screen.getByText("Scheduled hold")).toBeVisible();
+    rerender(<QueuesView {...props} tasks={[{ ...blocked, blocked_until: 100 }]} />);
+    expect(screen.getByText("Blocked · Queen reassessment needed")).toBeVisible();
+    rerender(<QueuesView {...props} tasks={[{ ...blocked, next_move_owner: "operator", prerequisites: [prerequisite], blocked_until: 200 }]} />);
+    expect(screen.getByText("Waiting for your decision")).toBeVisible();
+    expect(screen.getByText("1 unresolved prerequisite")).toBeVisible();
+    expect(props.onOpenTask).not.toHaveBeenCalled();
+  });
   test("shows recorded holds, due reassessment and clears stale deadlines outside Blocked", () => {
     const blocked = task({ state: "blocked", next_move_owner: "blocked", blocked_until: 200 });
     const props = { workers: [], onOpenTask: vi.fn() };

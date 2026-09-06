@@ -8,6 +8,25 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Blocked-row explanations (September 6)
+
+Queues now labels the recorded operator decision, unresolved prerequisite count,
+and future scheduled hold directly on the task row. Without those current gates,
+a historical note or completed prerequisite says Queen reassessment is needed,
+not that the task is ready or that prose proved a dependency. Invalid deadlines
+remain unavailable; multiple gates remain visible in the existing detail rows.
+No ownership, task lifecycle, timer, or automatic recovery policy changed.
+
+All 26 focused queue tests and TypeScript checks passed. The network-isolated
+queues-prerequisites fixture was inspected in a separate Edge tab with DOM and
+screenshot: operator, Queen reassessment, unresolved dependency and removed
+prerequisite states rendered distinctly. This is desktop fixture evidence, not
+real-device acceptance or proof that Queen has reconciled the live backlog.
+
+Previous attention-read correction b02cad98 deployed healthy with unchanged
+engine PID 2640474/build identity; all 64 agent API regressions passed in the
+isolated Linux test checkout.
+
 ### Queen status stays current across runtime and task changes (September 6)
 
 The App event adapter refreshed Queen automation only for workers_changed or a
