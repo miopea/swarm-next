@@ -19,6 +19,14 @@ The 390px Edge fixture confirmed the pending access dependency visible and the
 completed schema dependency folded. This is presentation evidence, not live
 Queen recovery. Deployment of this change is still pending.
 
+Deployment follow-up: reload job 2984916 completed successfully and health now
+serves `1.5.0-dev-4693535b8d14-20260906074712-2984939`, with no degraded
+subsystems or database recovery requirement. All 15 running session identities
+retain fingerprint `9ddd1bc5a3920bea8da7fd2e188f37635b3bc9e2810c7966153f0fd6b1d6b49e`;
+engine build identity remains `38453a84c3fa`. The complete current frontend suite
+passed 1,258 tests across 139 files. No release was cut. Signed-in live visual
+acceptance and the larger QUEUE-01 recovery journey remain separate open gates.
+
 ### Read-only 15-session resource checkpoint (September 6 UTC)
 
 Run `20260906T073816Z-live` completed the existing 60-second observer without
