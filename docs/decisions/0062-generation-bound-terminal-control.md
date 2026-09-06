@@ -67,6 +67,15 @@ resizes remain refused even after release or expiry. Authorized coordination may
 proceed without an active owner, under the same engine guard; it cannot bypass a
 live interactive owner. Before activation, the existing legacy contract remains.
 
+An ownership refusal of a coordination payload has the typed host error
+`coordination_control_held`. This is definitive evidence that this write did not
+occur, not an exhausted delivery attempt. The API leaves a first-payload refusal
+queued without consuming its retry allowance or creating an operator question.
+Ownership acquired after a payload was accepted still leaves submission uncertain;
+the API must not replay that payload. Generic host failures and legacy operator
+generation errors retain their existing failure semantics. This preserves the
+engine gate rather than weakening it to make orchestration move.
+
 Protocol 11 adds a typed `Control` command and a `WaitControlled` output request.
 Control cursors include generation and occupied state, so lease expiry is not
 mistaken for an unchanged live owner. Waiters subscribe before observing state;

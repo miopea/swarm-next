@@ -3329,3 +3329,25 @@ Actual provider transcript/session identity is
 `019ff8e1-4a2d-7a11-acff-6a10fb57af3e`, independently read from the demo JSONL;
 do not substitute the worker's remote-control session URL for this identity.
 Phase 2, Queen message delivery and same-conversation completion remain pending.
+
+### Queen review blocked by a normal interactive ownership hold
+
+Live `7e5f22390efa` was healthy, but run
+`01a07818-5c75-7a62-ab0f-d90a2ccdd3a4` became uncertain after three attempts.
+API journal entries at 2026-09-06 19:13:58–19:13:59 UTC show definitive host
+rejections: `terminal_operation_failed: this terminal requires generation-bound
+control`. The exact run marker was absent from Queen's provider JSONL. Queen
+was nevertheless working on separate delivered Platform outcomes, so terminal
+activity alone did not establish delivery of this review. The existing retry
+budget converted these pre-write ownership refusals to permanent uncertainty.
+
+The in-progress correction gives coordination ownership refusal a typed host
+code and defers a rejected first payload without spending retry attempts.
+Ownership acquired after an accepted paste still preserves uncertainty, avoiding
+duplicate text. Regression coverage exercises actual host dispatch against a
+controlled shell, release recovery, legacy operator fencing, and the API's
+before/after-payload distinction. All 27 host and 486 API unit tests passed.
+Strict all-target/all-feature lint passed with incremental compilation disabled
+after the first lint attempt hit a Rust incremental-cache internal compiler error.
+This change has not been deployed. Existing uncertain reviews still require evidence-backed
+reconciliation; the fix does not silently replay historical uncertainty.

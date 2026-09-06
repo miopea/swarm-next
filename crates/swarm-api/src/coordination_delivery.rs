@@ -31,6 +31,8 @@ use crate::{
 /// drafts are different evidence; none may be inferred merely from deferral.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DeferralReason {
+    /// Engine ownership changed after the API preflight; no payload was written.
+    InteractiveControl,
     /// The provider is actively working; no operator answer is implied.
     ProviderBusy,
     /// The provider visibly reports that it is waiting for input.
@@ -71,7 +73,8 @@ impl DeferralReason {
             Self::PromptHoldsUnsentText => {
                 Some(swarm_persistence::REFUSAL_DELIVERY_HELD_UNSENT_TEXT)
             }
-            Self::RecentDelivery
+            Self::InteractiveControl
+            | Self::RecentDelivery
             | Self::ProviderPolicy
             | Self::TaskMessageHold
             | Self::TaskBriefingHold
@@ -83,6 +86,9 @@ impl DeferralReason {
     /// Written to the operator, so it names the remedy rather than the state.
     pub(super) fn describe(self, subject: &str) -> String {
         match self {
+            Self::InteractiveControl => {
+                format!("{subject} is queued while an interactive view owns this terminal")
+            }
             Self::TaskBriefingHold => format!(
                 "{subject} is held because its task ownership or prerequisites changed; Queen can inspect the current task"
             ),
@@ -682,6 +688,14 @@ async fn submit_terminal_message(
     match response {
         HostResponse::Acknowledged if submit => {}
         HostResponse::Acknowledged => return Ok(TerminalSubmission::Acknowledged),
+        HostResponse::Error { code, .. } if code == "coordination_control_held" => {
+            // Only the first payload write is safely deferred. If ownership
+            // changes after a paste, submit_rendered_message keeps uncertainty:
+            // replaying that payload could duplicate or merge instructions.
+            return Ok(TerminalSubmission::Deferred(
+                DeferralReason::InteractiveControl,
+            ));
+        }
         HostResponse::Error { code, message } => {
             return Ok(TerminalSubmission::Rejected { code, message });
         }
@@ -1782,6 +1796,81 @@ mod tests {
             matches!(result, Ok(Ok(SubmissionObservation::Uncertain))),
             "observation must return uncertainty before the outer test deadline"
         );
+    }
+
+    #[tokio::test]
+    async fn interactive_control_defers_only_before_payload_acceptance() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        for after_payload in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let socket = directory.path().join("host.sock");
+            let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+            let session = WorkerSessionId::new();
+            let server = tokio::spawn(async move {
+                let responses = if after_payload {
+                    vec![HostResponse::Error {
+                        code: "coordination_control_held".into(),
+                        message: "held".into(),
+                    }]
+                } else {
+                    vec![
+                        prompt_observation(session, "● Done.\r\n\r\n❯ \r\n  ? for shortcuts", true),
+                        HostResponse::Error {
+                            code: "coordination_control_held".into(),
+                            message: "held".into(),
+                        },
+                    ]
+                };
+                for response in responses {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut reader = BufReader::new(stream);
+                    let mut line = String::new();
+                    reader.read_line(&mut line).await.unwrap();
+                    let request: HostRequest = serde_json::from_str(&line).unwrap();
+                    if after_payload {
+                        assert!(
+                            matches!(request, HostRequest::Write { bytes, .. } if bytes == b"\r")
+                        );
+                    }
+                    let mut bytes = serde_json::to_vec(&response).unwrap();
+                    bytes.push(b'\n');
+                    reader.get_mut().write_all(&bytes).await.unwrap();
+                }
+            });
+            let client = HostClient::new(socket);
+            let outcome = if after_payload {
+                submit_rendered_message(
+                    &client,
+                    session,
+                    ProviderKind::ClaudeCode,
+                    b"[Swarm delivery held]",
+                    1,
+                    None,
+                )
+                .await
+                .unwrap()
+            } else {
+                submit_terminal_message(
+                    &client,
+                    session,
+                    ProviderKind::ClaudeCode,
+                    b"[Swarm delivery held]\r".to_vec(),
+                    b"[Swarm delivery held]",
+                )
+                .await
+                .unwrap()
+            };
+            server.await.unwrap();
+            assert_eq!(
+                outcome,
+                if after_payload {
+                    TerminalSubmission::Uncertain
+                } else {
+                    TerminalSubmission::Deferred(DeferralReason::InteractiveControl)
+                }
+            );
+        }
+        assert_eq!(DeferralReason::InteractiveControl.refusal_kind(), None);
     }
 
     #[tokio::test]

@@ -741,10 +741,21 @@ fn dispatch_blocking(
             session_id,
             bytes,
             provenance,
-        } => registry
-            .write_local(session_id, &bytes, provenance)
-            .map(|()| HostResponse::Acknowledged)
-            .map_err(|error| error.to_string()),
+        } => match registry.write_local(session_id, &bytes, provenance) {
+            Ok(()) => Ok(HostResponse::Acknowledged),
+            Err(swarm_terminal::SessionRegistryError::ControlGenerationRequired)
+                if matches!(
+                    provenance.actor,
+                    swarm_terminal::TerminalWriteActor::SwarmCoordination
+                ) =>
+            {
+                Ok(error_response(
+                    "coordination_control_held",
+                    "Interactive terminal ownership holds coordination; no input was written",
+                ))
+            }
+            Err(error) => Err(error.to_string()),
+        },
         HostRequest::WriteAudit { limit } => registry
             .recent_write_audit(limit)
             .map(|entries| HostResponse::WriteAudit { entries })
@@ -913,6 +924,52 @@ mod tests {
 
     use swarm_terminal::{HostClient, JournalLimits, ProviderCommand, Resume, TerminalSize};
     use tempfile::TempDir;
+
+    #[test]
+    fn coordination_control_hold_is_definitive_and_recovers_after_release() {
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry =
+            SessionRegistry::new(JournalLimits::new(4096, 64), 1, [workspace.clone()]).unwrap();
+        let session = registry
+            .spawn(
+                &ProviderCommand {
+                    executable: PathBuf::from("/bin/sh"),
+                    arguments: vec!["-c".into(), "read value".into()],
+                    working_directory: workspace,
+                },
+                TerminalSize::default(),
+            )
+            .unwrap();
+        let identity = swarm_domain::TerminalControlIdentity {
+            device: swarm_domain::PresenceDeviceId::new(),
+            view: swarm_domain::TerminalViewId::new(),
+        };
+        let grant = session
+            .claim_control(identity, None, TerminalSize::default())
+            .unwrap();
+        let write = || HostRequest::Write {
+            session_id: session.id(),
+            bytes: b"safe".to_vec(),
+            provenance: swarm_terminal::TerminalWriteProvenance::coordination(),
+        };
+        assert!(
+            matches!(dispatch_blocking(&registry, "test", "test", write()),
+            HostResponse::Error { code, .. } if code == "coordination_control_held")
+        );
+        session.release_control(identity, grant.generation).unwrap();
+        assert!(matches!(
+            dispatch_blocking(&registry, "test", "test", write()),
+            HostResponse::Acknowledged
+        ));
+        // The coordination exception must never relax legacy operator fencing.
+        assert!(
+            matches!(dispatch_blocking(&registry, "test", "test", HostRequest::Write {
+            session_id: session.id(), bytes: b"operator".to_vec(),
+            provenance: swarm_terminal::TerminalWriteProvenance::operator(None, b"operator"),
+        }), HostResponse::Error { code, .. } if code != "coordination_control_held")
+        );
+        session.stop().unwrap();
+    }
 
     #[test]
     fn retained_stop_keeps_bounded_evidence_and_refuses_input_until_cleanup() {
