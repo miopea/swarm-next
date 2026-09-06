@@ -82,6 +82,14 @@ This honors the operator's shared worker/Queen context policy while allowing
 Queen to spot a final question that was never recorded on the task. Resolving
 that question still requires current task history and source-verified decisions.
 
+The same observation exposes a tri-state `prompt_has_unsent_input` value. True
+means preserve unsent input, false includes an empty prompt or a dimmed provider
+suggestion, and null means the current resting session could not be verified.
+The existing style-aware provider parser supplies this fact; stripped rendered
+text cannot establish operator input or approval. This adds no terminal read or
+delivery permission. Both prompt evidence and the optional excerpt use one
+fresh profile check after the bounded snapshot observation.
+
 ### Workers can read their own finished evidence
 
 Task history uses the existing stable-worker ownership check also used by

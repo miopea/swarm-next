@@ -48,9 +48,17 @@ pub(super) async fn observe(
                 None
             };
             let mut observation = evidence(signals.as_ref().map(|(signals, _)| *signals), crate::unix_timestamp());
+            let current_profile = store.get_worker_profile(item.worker_id).ok();
+            observation["prompt_has_unsent_input"] = match (&signals, &current_profile) {
+                (Some((signals, snapshot)), Some(profile))
+                    if profile.active_session_id == Some(item.session_id)
+                        && signals.activity == ProviderActivity::Resting =>
+                    json!(crate::provider_activity::has_open_provider_input(profile.provider, snapshot)),
+                _ => Value::Null,
+            };
             if item.kind == "stale_owned_work_attention"
                 && let Some((signals, snapshot)) = &signals
-                && let Ok(profile) = store.get_worker_profile(item.worker_id)
+                && let Some(profile) = &current_profile
                 && profile.active_session_id == Some(item.session_id)
                 && let Some(excerpt) = recovery_excerpt(
                     *signals, profile.provider, snapshot, profile.engagement_expires_at.is_some(),
@@ -146,11 +154,13 @@ pub(super) fn active_work_recovery(
             "checked_at": observation["checked_at"],
             "latest_queen_request": observation["latest_queen_request"],
             "resting_terminal_excerpt": observation["resting_terminal_excerpt"],
+            "prompt_has_unsent_input": observation["prompt_has_unsent_input"],
             "current_observation": "Terminal resting; no background work visible in the terminal. This is not a process-tree check.",
         }))
     }).take(32).collect::<Vec<_>>();
     json!({
         "tasks": tasks,
+        "input_scope": "prompt_has_unsent_input true means preserve visible unsent input; do not submit, clear or append without operator direction. False includes empty prompts and dimmed provider suggestions, which are not operator instructions or approvals. Null means unverified. Guarded delivery rechecks the current prompt.",
         "scope": "Only unchanged Active work with a current resting/no-visible-background observation. Missing, unknown, active, or awaiting-operator observations are excluded, not declared healthy. Observation is bounded to 32 attention rows.",
         "next_action": crate::agent::QUEEN_ACTIVE_RECOVERY_GUIDANCE,
     })
@@ -182,6 +192,12 @@ mod tests {
             .as_bytes()
             .to_vec();
         assert!(recovery_excerpt(signals, provider, &snapshot, false).is_none());
+        snapshot.bytes = "● May I commit?\r\n❯ \x1b[2myes, commit and submit for review\x1b[22m\r\n? for shortcuts"
+            .as_bytes().to_vec();
+        assert!(!crate::provider_activity::has_open_provider_input(
+            provider, &snapshot
+        ));
+        assert!(recovery_excerpt(signals, provider, &snapshot, false).is_some());
     }
 
     #[test]
@@ -428,6 +444,7 @@ mod tests {
             .unwrap();
             assert_eq!(result["saved"]["activity"], expected);
             if expected == "resting" {
+                assert_eq!(result["saved"]["prompt_has_unsent_input"], false);
                 assert!(
                     result["saved"]["resting_terminal_excerpt"]["text"]
                         .as_str()
@@ -435,6 +452,7 @@ mod tests {
                         .contains("Done.")
                 );
             } else {
+                assert!(result["saved"]["prompt_has_unsent_input"].is_null());
                 assert!(result["saved"].get("resting_terminal_excerpt").is_none());
             }
         }
