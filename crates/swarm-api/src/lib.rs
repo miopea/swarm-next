@@ -267,6 +267,8 @@ pub struct AppState {
     worker_recovery_attempts: Arc<RwLock<HashMap<WorkerId, i64>>>,
     provider_activity: Arc<RwLock<HashMap<WorkerSessionId, provider_activity::ProviderSignals>>>,
     coordinator_start_admission: Arc<AtomicU8>,
+    #[cfg(test)]
+    test_start_admission: Option<runtime::CoordinatorStartAdmission>,
     github_feedback: Option<github_feedback::GithubFeedback>,
     /// The repository whose open issues become draft tasks here, if any.
     ///
@@ -384,6 +386,8 @@ impl AppState {
             coordinator_start_admission: Arc::new(AtomicU8::new(
                 runtime::CoordinatorStartAdmission::DeferredUnavailable.code(),
             )),
+            #[cfg(test)]
+            test_start_admission: None,
             degraded: Vec::new(),
             control_room_notify: Arc::new(Notify::new()),
             notification_sender: None,
@@ -10052,9 +10056,15 @@ mod tests {
                 )
                 .unwrap();
         }
-        let state = AppState::default()
+        let mut state = AppState::default()
             .with_terminal_host(HostClient::new(&socket), "secret")
             .with_task_store(store);
+        // This test measures per-pass recovery admission, not the CI host's
+        // current memory/CPU pressure. The pressure matrix is tested separately.
+        state.test_start_admission = Some(runtime::CoordinatorStartAdmission::DeferredCritical);
+        state.supervise_workers().await;
+        assert!(state.worker_recovery_attempts.read().await.is_empty());
+        state.test_start_admission = Some(runtime::CoordinatorStartAdmission::Allowed);
         state.supervise_workers().await;
         assert_eq!(state.worker_recovery_attempts.read().await.len(), 1);
         state.supervise_workers().await;

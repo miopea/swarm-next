@@ -466,6 +466,10 @@ pub struct QueenAutomationStatus {
     pub run_id: Option<String>,
     pub trigger: Option<QueenAutomationTrigger>,
     pub actionable_count: usize,
+    /// Current board ownership, not the model's claimed outcome or trigger count.
+    /// Missing on older servers is unknown, never an empty queue.
+    #[serde(default)]
+    pub queen_owned_count: Option<usize>,
     pub attempts: usize,
     pub requested_at: Option<i64>,
     pub delivered_at: Option<i64>,

@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
 import type { QueenAutomationStatus } from "../api";
-import { queenAutomationNeedsAttention, queenAutomationStateLabel, queenAutomationCompactLabel, queenAutomationStateTone } from "./queenAutomationPresentation";
+import { queenAutomationNeedsAttention, queenAutomationStateLabel, queenAutomationCompactLabel, queenAutomationStateTone, queenAutomationStateDetail } from "./queenAutomationPresentation";
 
 const idle: QueenAutomationStatus = {
   enabled: false,
@@ -26,6 +26,17 @@ test("claiming delivery does not claim Queen has started reviewing", () => {
   }
   expect(queenAutomationCompactLabel({ ...idle, state: "running" })).toBe("Reviewing work");
   expect(queenAutomationStateTone({ ...idle, state: "running" })).toBe("online");
+});
+
+test("a finished no-action run cannot claim an unresolved Queen queue is clear", () => {
+  const status = { ...idle, state: "completed", outcome: "no_action", queen_owned_count: 31 } as const;
+  expect(queenAutomationStateLabel(status)).toBe("Queen has work remaining");
+  expect(queenAutomationCompactLabel(status)).toBe("Queen work remaining");
+  expect(queenAutomationStateDetail(status)).toContain("31 tasks still need Queen");
+  expect(queenAutomationNeedsAttention(status)).toBe(false);
+  expect(queenAutomationStateLabel({ ...status, queen_owned_count: 0 })).toBe("Review run ended");
+  expect(queenAutomationStateDetail({ ...status, queen_owned_count: 0 })).toContain("workers, releases or external holds");
+  expect(queenAutomationStateDetail({ ...status, queen_owned_count: undefined })).toContain("has not supplied");
 });
 
 test("only treats interrupted or operator-blocked Queen reviews as attention", () => {

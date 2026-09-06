@@ -288,6 +288,7 @@ export type QueenAutomationStatus = {
   delivered_at: number | null;
   finished_at: number | null;
   outcome: "completed" | "needs_operator" | "no_action" | null;
+  queen_owned_count?: number | null;
   waiting_reason: string | null;
 };
 export type CoordinatorStatus = {

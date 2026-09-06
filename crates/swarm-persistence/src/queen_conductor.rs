@@ -140,6 +140,7 @@ impl TaskStore {
             },
         )?;
         let waiting_reason = waiting_reason(&transaction, row.1, now)?;
+        let queen_owned_count = queen_owned_count(&transaction)?;
         transaction.commit()?;
         Ok(QueenAutomationStatus {
             enabled: row.0,
@@ -147,6 +148,7 @@ impl TaskStore {
             run_id: row.2,
             trigger: row.3,
             actionable_count,
+            queen_owned_count: Some(queen_owned_count),
             attempts: usize::try_from(row.4).unwrap_or_default(),
             requested_at: row.5,
             delivered_at: row.6,
@@ -943,6 +945,30 @@ fn expire_stale_run(
     Ok(())
 }
 
+fn queen_owned_count(connection: &rusqlite::Connection) -> Result<usize, TaskStoreError> {
+    // Use the board's projection and domain owner derivation rather than a
+    // second SQL interpretation of what constitutes a genuine hold.
+    let sql = format!(
+        "{} WHERE t.removed_at IS NULL AND NOT {}",
+        TaskStore::TASK_PROJECTION,
+        TaskStore::SETTLED_PREDICATE,
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let tasks = statement.query_map([], crate::task_from_row)?;
+    let mut count = 0;
+    for task in tasks {
+        let task = task?;
+        if !matches!(
+            task.state,
+            swarm_domain::TaskState::Completed | swarm_domain::TaskState::Abandoned
+        ) && task.next_move_owner == swarm_domain::NextMoveOwner::Queen
+        {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
 fn waiting_reason(
     connection: &rusqlite::Connection,
     state: QueenAutomationState,
@@ -1077,6 +1103,39 @@ pub(super) fn migrate_queen_delivery_session(
 mod tests {
     use super::*;
     use swarm_domain::{ProviderKind, TaskActivityActor, TaskPriority, TaskState};
+
+    #[test]
+    fn finished_run_does_not_erase_live_queen_ownership() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        let task = store
+            .create_task("Untriaged draft", "/workspace/test")
+            .unwrap();
+        store.request_queen_automation_run(100).unwrap();
+        let delivery = store.claim_queen_automation(100).unwrap().unwrap();
+        store
+            .complete_queen_automation_delivery(&delivery.run_id, 101)
+            .unwrap();
+        store
+            .finish_queen_automation_run(&delivery.run_id, QueenAutomationOutcome::NoAction, 102)
+            .unwrap();
+        let status = store.queen_automation_status(103).unwrap();
+        assert_eq!(status.state, QueenAutomationState::Completed);
+        assert_eq!(status.queen_owned_count, Some(1));
+        store
+            .transition_task(task.id, TaskState::Abandoned)
+            .unwrap();
+        assert_eq!(
+            store
+                .queen_automation_status(104)
+                .unwrap()
+                .queen_owned_count,
+            Some(0)
+        );
+    }
 
     #[test]
     fn review_priority_requires_delivery_during_this_queued_run_and_live_session() {

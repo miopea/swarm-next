@@ -1,5 +1,29 @@
 # Daily-driver maturity: remaining delivery and acceptance
 
+## 2026-09-06: truthful review completion and current task reads
+
+First corrective checkpoint for the no-action disagreement, not completion of
+the recovery fix: automation status now reports current Queen-owned task count
+using the same task projection/domain owner derivation as Queues. Closing a run
+returns the remaining count and a bounded task list; it explicitly does not
+certify an empty queue. UI wording no longer treats `no_action` as proof that
+nothing needed routing or that a review completed safely. Older servers without
+ownership evidence remain unknown, not zero. This alone does not force Queen to
+record dispositions or resume work; that behavioral enforcement remains open.
+
+Authorized task-history reads now include current state/owner/update time, so a
+task absent from the open board can be checked after automatic settlement.
+The completed-history regression retains cross-worker authorization refusal.
+Focused verification: 72 UI tests across orchestration/Queues and TypeScript
+check passed; Rust regressions for remaining ownership, MCP run closure, completed
+history and per-pass autostart recovery passed in the isolated Linux snapshot.
+
+CI `34038424299` failed one API recovery test (480 others passed). The test used
+real machine/engine pressure while assuming starts were admitted; it now supplies
+explicit Allowed admission through a test-only seam. Production sampling and
+pressure guards are unchanged. This addresses the nondeterministic test input,
+not proof of every recovery path or a claim that CI is green again.
+
 ## 2026-09-06: critical Queen no-action / Queues disagreement
 
 Reopened as a live orchestration defect, not a stale browser report. Operator

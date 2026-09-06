@@ -779,6 +779,10 @@ fn sample_machine_resources() -> MachineResourceResponse {
 }
 
 pub(super) async fn coordinator_start_admission(state: &AppState) -> CoordinatorStartAdmission {
+    #[cfg(test)]
+    if let Some(admission) = state.test_start_admission {
+        return admission;
+    }
     let machine = sample_machine_resources();
     let terminal_host = if let Some(client) = &state.terminal_host {
         match client.request(&HostRequest::HostStatus).await {

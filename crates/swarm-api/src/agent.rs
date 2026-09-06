@@ -1104,10 +1104,26 @@ impl ServerHandler for AgentMcp {
                     let QueenAutomationFinish::Closed(recorded_outcome) = finish else {
                         unreachable!("non-closed outcomes returned an error above");
                     };
+                    let remaining = self.tasks.queen_queue_snapshot(self.principal)?;
+                    let queen_owned_count = remaining.by_owner.iter()
+                        .find(|(owner, _)| *owner == swarm_domain::NextMoveOwner::Queen)
+                        .map_or(0, |(_, count)| *count);
                     structured(json!({
                         "run_id": input.run_id,
                         "outcome": recorded_outcome,
-                        "state": "completed"
+                        "state": "completed",
+                        "run_scope": "Only this automation turn ended. This does not settle tasks or certify the queue is clear.",
+                        "queen_owned_count": queen_owned_count,
+                        "queen_queue_clear": queen_owned_count == 0,
+                        "remaining_queen_tasks": remaining.queen_tasks.into_iter().take(16).map(|task| json!({
+                            "task_id": task.id, "state": task.state, "title": task.title
+                        })).collect::<Vec<_>>(),
+                        "remaining_queen_tasks_truncated": queen_owned_count > 16,
+                        "next_action": if queen_owned_count > 0 {
+                            "Your turn ended, but recorded work still requires Queen. Reconcile verified prose dependencies to explicit prerequisite links; record true holds or task-linked operator decisions, and safely route recoverable work. Unchanged does not mean handled. Read current task history before claiming a watched task is still Ready."
+                        } else {
+                            "No current task names Queen as next owner. This is not proof that workers, releases or external holds have finished."
+                        }
                     }))
                 })
             }
@@ -1820,8 +1836,19 @@ impl AgentMcp {
         let review_request = self
             .tasks
             .read_returned_review_request(self.principal, task_id)?;
+        // History can outlive an open-board row. After authorization above,
+        // expose current state so absence from the board cannot be mistaken for
+        // the last Ready/Active state remembered from a previous run.
+        let current = self.tasks.store().get_task(task_id)?;
         structured(json!({
             "task_id": input.task_id,
+            "current_task": {
+                "state": current.state,
+                "next_move_owner": current.next_move_owner,
+                "assigned_worker_id": current.assigned_worker_id,
+                "updated_at": current.updated_at,
+                "observed_at": crate::unix_timestamp(),
+            },
             "events": page.events,
             // Says so rather than letting a caller mistake a bounded read for
             // the whole history, which is the same failure this tool exists to
@@ -5566,6 +5593,8 @@ mod tests {
         assert!(content["evidence"].is_object());
         assert!(content["messages"].is_array());
         assert!(content["review_request"].is_null());
+        assert_eq!(content["current_task"]["state"], "completed");
+        assert_eq!(content["current_task"]["next_move_owner"], "nobody");
 
         let unrelated = store
             .create_task("Another worker's work", "/workspace/other")
@@ -7348,6 +7377,9 @@ mod tests {
     #[tokio::test]
     async fn unattended_queen_run_blocks_external_effects_and_closes_only_its_exact_marker() {
         let (bridge, store, queen_id, _, _) = setup();
+        let pending = store
+            .create_task("Still needs triage", "/workspace/petal")
+            .unwrap();
         let session = swarm_domain::WorkerSessionId::new();
         store.bind_worker_session(queen_id, session).unwrap();
         store.request_queen_automation_run(10).unwrap();
@@ -7404,13 +7436,20 @@ mod tests {
         );
         // Queen reported needing the operator without filing anything for them
         // to answer, so the claim does not stand. Recorded as what actually
-        // happened — a finished run with nothing outstanding — rather than as a
+        // happened — a finished run with no pending operator request — rather than as a
         // request the operator can neither find nor resolve.
         let status = store.queen_automation_status(13).unwrap();
         assert_eq!(status.outcome, Some(QueenAutomationOutcome::NoAction));
         assert_eq!(
             finished["result"]["structuredContent"]["outcome"],
             "no_action"
+        );
+        let content = &finished["result"]["structuredContent"];
+        assert_eq!(content["queen_owned_count"], 1);
+        assert_eq!(content["queen_queue_clear"], false);
+        assert_eq!(
+            content["remaining_queen_tasks"][0]["task_id"],
+            pending.id.to_string()
         );
     }
 
