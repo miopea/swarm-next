@@ -627,6 +627,12 @@ export const SURFACES: Surface[] = [
     render: () => (
       <TaskBoard
         tasks={demoTasks}
+        heldBriefings={[...demoBriefings, {
+          task_id: "0199bbbb-0000-7000-8000-000000000002",
+          title: "Nightly export finishes but writes an empty file when the source is slow",
+          worker_id: "0199aaaa-0000-7000-8000-000000000003", worker_name: "Orchard API",
+          queued_at: now - 120, reason: "waiting_its_turn", blocked_by: "Verify the export schema",
+        }]}
         jiraTaskLinks={[]}
         operatorToken="harness"
         sessions={[]}

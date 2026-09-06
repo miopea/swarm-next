@@ -8,6 +8,17 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Task board and queue hold consistency (September 6)
+
+Task cards now receive the existing coordinator hold projection through the app
+and display the same specific reason as Queues. The shared projection rejects
+stale holds after delivery, reassignment or task-state changes. Without known
+evidence, a queued briefing says delivery has not started rather than guessing
+that it waits for a quiet moment. No polling, dispatch policy or task transition
+was added. All 80 focused task/queue tests and TypeScript checking passed;
+Edge rendered the named predecessor in the actual TaskBoard fixture. Deployment
+is pending the unchanged-build soak. This does not close full QUEUE-01 recovery.
+
 ### Sustained workload attribution (September 6, observation in progress)
 
 The read-only run `20260906T021841Z-live` is observing unchanged build

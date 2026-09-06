@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import {
   claimApiaryTask,
@@ -19,6 +19,7 @@ import {
   type FederationStewardshipSnapshot,
   type FederationTaskOutboxEntry,
   type HiveIdentity,
+  type HeldBriefing,
   type JiraComment,
   type JiraTaskLink,
   type LocalApiaryTaskExecution,
@@ -38,11 +39,13 @@ import EmailTaskIntake from "./EmailTaskIntake";
 import TaskBoardControls, { type TaskBoardFilter, type TaskBoardSort, type TaskBoardSource, type TaskProjectChoice } from "./TaskBoardControls";
 import TaskCard from "./TaskCard";
 import { buildTaskBoardView } from "./taskBoardModel";
+import { projectTaskQueues } from "../queues/taskQueueProjection";
 
 import { TITLE_BYTE_LIMIT, clampTitleToBytes, titleByteLength, titleFits } from "./titleLimit";
 
 type Props = {
   tasks: Task[];
+  heldBriefings?: HeldBriefing[];
   jiraTaskLinks: JiraTaskLink[];
   operatorToken: string;
   hiveIdentity?: HiveIdentity;
@@ -123,6 +126,7 @@ const validTargets: Record<TaskState, TaskState[]> = {
 
 export default function TaskBoard({
   tasks,
+  heldBriefings,
   jiraTaskLinks,
   operatorToken,
   hiveIdentity,
@@ -322,6 +326,9 @@ export default function TaskBoard({
     if (workerId && !assignableWorkers.some((worker) => worker.id === workerId)) setWorkerId("");
   }, [assignableWorkers, workerId]);
 
+  const currentBriefings = useMemo(() => new Map(
+    projectTaskQueues(tasks, heldBriefings ?? [], []).heldBriefings.map(briefing => [briefing.task_id, briefing]),
+  ), [tasks, heldBriefings]);
   const taskView = buildTaskBoardView(tasks, jiraTaskLinks, workers, { text: query, filter, source, sort, project, worker }, new Set(emailTaskSources.map((item) => item.task_id)));
   useEffect(() => {
     let cancelled = false;
@@ -565,6 +572,7 @@ export default function TaskBoard({
               <TaskCard
                 key={task.id}
                 task={task}
+                heldBriefing={currentBriefings.get(task.id)}
                 jiraLink={jiraTaskLinks.find((link) => link.task_id === task.id)}
                 emailSources={emailTaskSources.filter((source) => source.task_id === task.id)}
                 operatorToken={operatorToken}

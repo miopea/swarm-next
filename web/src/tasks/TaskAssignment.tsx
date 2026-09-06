@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 
-import type { Task, TaskState, Worker } from "../api";
+import type { HeldBriefing, Task, TaskState, Worker } from "../api";
+import { holdReason } from "../orchestration/HeldBriefingList";
 import { prerequisiteSatisfied } from "../api/tasks";
 import { workerAttention } from "../workers/workerAttention";
 
@@ -9,7 +10,7 @@ import { workerAttention } from "../workers/workerAttention";
 // block; the operator could not tell what it was claiming. Each label now names
 // what was sent and which way it travelled.
 const dispatchLabels = {
-  queued: "This task's briefing waits for a quiet moment",
+  queued: "Briefing queued · delivery has not started",
   dispatching: "Sending this task's briefing to the worker",
   delivered: "The worker has this task's briefing",
   uncertain: "Briefing delivery unconfirmed — the task record remains authoritative",
@@ -22,8 +23,9 @@ const outcomeDeliveryLabels = {
   uncertain: "Handoff delivery unconfirmed — the task record remains authoritative",
 } as const;
 
-export default function TaskAssignment({ task, workers, busy, onAssign, onOpenWorker, onTransition, onStartWorker }: {
+export default function TaskAssignment({ task, heldBriefing, workers, busy, onAssign, onOpenWorker, onTransition, onStartWorker }: {
   task: Task;
+  heldBriefing?: HeldBriefing;
   workers: Worker[];
   busy: boolean;
   onAssign: (task: Task, workerId: string) => Promise<void>;
@@ -62,7 +64,11 @@ export default function TaskAssignment({ task, workers, busy, onAssign, onOpenWo
           ))}
         </select>
       </div>
-      {task.dispatch_state && <p className={`task-dispatch task-dispatch-${task.dispatch_state}`} role="status">{task.dispatch_state === "queued" && task.prerequisites?.some((item) => !prerequisiteSatisfied(item)) ? "This task's briefing waits for its prerequisites" : dispatchLabels[task.dispatch_state]}</p>}
+      {task.dispatch_state && <p className={`task-dispatch task-dispatch-${task.dispatch_state}`} role="status">{task.dispatch_state === "queued"
+        ? task.prerequisites?.some((item) => !prerequisiteSatisfied(item))
+          ? "This task's briefing waits for its prerequisites"
+          : heldBriefing ? `Briefing held: ${holdReason(heldBriefing)}` : dispatchLabels.queued
+        : dispatchLabels[task.dispatch_state]}</p>}
       {task.outcome_delivery_state && <p className={`task-dispatch task-dispatch-${task.outcome_delivery_state}`} role="status">{outcomeDeliveryLabels[task.outcome_delivery_state]}</p>}
       {(targetWorker || task.state !== "ready") && (
         <PrimaryTaskAction task={task} workerRunning={workerRunning} targetWorker={targetWorker} busy={busy} onTransition={onTransition} onStartWorker={onStartWorker} />

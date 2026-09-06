@@ -752,7 +752,7 @@ test("moves open tasks with keyboard-accessible ordering controls", () => {
   expect(onReorder).toHaveBeenCalledWith([second.id, task.id]);
 });
 test.each([
-  ["queued", "This task's briefing waits for a quiet moment"],
+  ["queued", "Briefing queued · delivery has not started"],
   ["dispatching", "Sending this task's briefing to the worker"],
   ["delivered", "The worker has this task's briefing"],
   ["uncertain", "Briefing delivery unconfirmed — the task record remains authoritative"],
@@ -764,6 +764,27 @@ test.each([
 
   expect(screen.getByRole("status")).toHaveTextContent(label);
 });
+test("shows the shared queue hold reason and drops stale delivery or ownership evidence", () => {
+  const queued = { ...task, state: "ready" as const, assigned_worker_id: worker.id, dispatch_state: "queued" as const };
+  const heldBriefings = [{ task_id: task.id, title: task.title, worker_id: worker.id,
+    worker_name: worker.name, queued_at: 1, reason: "waiting_its_turn", blocked_by: "Contract checks" }];
+  const { props, rerender } = renderBoard({ tasks: [queued], heldBriefings });
+  expect(screen.getByText("Briefing held: behind Contract checks")).toBeVisible();
+  expect(screen.queryByText(/quiet moment/)).not.toBeInTheDocument();
+
+  rerender(<TaskBoard {...props} tasks={[{ ...queued, dispatch_state: "delivered" }]} />);
+  expect(screen.queryByText(/Briefing held:/)).not.toBeInTheDocument();
+  expect(screen.getByText("The worker has this task's briefing")).toBeVisible();
+
+  rerender(<TaskBoard {...props} tasks={[{ ...queued, assigned_worker_id: "another-worker" }]} />);
+  expect(screen.queryByText(/Briefing held:/)).not.toBeInTheDocument();
+  expect(screen.getByText("Briefing queued · delivery has not started")).toBeVisible();
+
+  rerender(<TaskBoard {...props} heldBriefings={[]} />);
+  expect(screen.queryByText(/Briefing held:/)).not.toBeInTheDocument();
+  expect(screen.getByText("Briefing queued · delivery has not started")).toBeVisible();
+});
+
 test("shows Queen handoff state and its durable history note", async () => {
   const onFetchActivity = vi.fn().mockResolvedValue({
     events: [{
