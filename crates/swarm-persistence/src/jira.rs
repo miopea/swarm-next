@@ -1698,6 +1698,8 @@ mod tests {
     }
 
     #[test]
+    // Keep removal, replay, and atomic rejection in one shared-store regression.
+    #[allow(clippy::too_many_lines)]
     fn removed_jira_work_cannot_be_restored_as_a_local_task() {
         let store = TaskStore::in_memory().unwrap();
         let binding = store
