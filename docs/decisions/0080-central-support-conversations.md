@@ -94,6 +94,25 @@ to the central source merely because the feature becomes configured.
 
 ## Completion loop and activation gate
 
+### Central source discovery and durable health
+
+BFG Admin confirmed the single source identity `swarm-support` / `Swarm Support`.
+Optional ordinary Ops polling uses a credential distinct from privileged
+conversation reads. Reusing those credentials is refused. Manifest advertises
+only `operatorResources: ["conversations"]` when private reads are enabled;
+there is no implied write grant or per-Hive registration. Core health contains
+no contact, message, attachment, or diagnostic payload. Metrics/incidents may be
+truthful empty envelopes until those source capabilities exist.
+
+Support schema 2 adds one constrained health-probe row. A health check reads the
+support tables and commits a toggled probe value; a failed read or commit cannot
+report a healthy durable store. The separately configured disk-space check uses
+the actual database filesystem and an explicit positive threshold. Missing disk
+observation is degraded, not healthy. This is operational evidence, not a complete
+corruption scan or proof of future availability. Existing frozen submissions and
+retry identities are unchanged during migration. These routes remain optional
+and do not activate the source in Admin or send any customer reply.
+
 The initial persistence foundation admits a configured positive maximum number
 of conversations and refuses new reports at capacity without deleting history.
 Exact idempotent replay remains available at capacity. Conversation, frozen

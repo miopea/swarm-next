@@ -3046,6 +3046,7 @@ name = "swarm-support"
 version = "1.5.0"
 dependencies = [
  "axum",
+ "nix",
  "serde",
  "serde_json",
  "sha2 0.10.9",

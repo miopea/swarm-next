@@ -28,6 +28,18 @@ pub enum SupportServiceError {
 }
 
 impl SupportService {
+    /// Content-free durable-store health check for the central operational adapter.
+    ///
+    /// # Errors
+    /// Propagates unavailable/read-only storage without exposing customer data.
+    pub fn check_health(&self) -> Result<(), SupportServiceError> {
+        self.store
+            .lock()
+            .map_err(|_| SupportServiceError::Unavailable)?
+            .check_health()?;
+        Ok(())
+    }
+
     /// Private Admin projection. The support adapter must authenticate its reader.
     ///
     /// # Errors

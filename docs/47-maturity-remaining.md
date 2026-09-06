@@ -3411,3 +3411,30 @@ The COMPLETE marker hash is
 `a4bccf5c13ef5ff8311e59b34d492bc7072a55298723601a6a9c127053aee8fc` and fixture
 paths are clean. The task is in Review, not yet claimed complete. This proves
 one same-conversation controlled-pause recovery, not an all-provider restart gate.
+
+### Central support discovery and disk-pressure recovery (September 6)
+
+The optional central support runtime now implements ordinary authenticated Ops
+manifest, health, metrics and incidents discovery. Private conversation reads
+retain a separate credential; credential reuse is refused, and the manifest
+does not advertise conversations when that reader is disabled. Database health
+requires a committed bounded probe, not merely an open connection. Missing disk
+observations are degraded. Schema-1 migration preserves original submission IDs
+and frozen retry content. Twelve support runtime tests and eleven persistence
+support tests pass; strict all-target/all-feature lint passes for support,
+application and persistence. An isolated fictional loopback fixture's four Ops
+responses passed BFG Admin's current normative Zod schemas. The fixture is stopped.
+This is contract evidence, not public activation, Admin UI acceptance or a working
+customer-reply loop. Hosting, registration, inbound mail and approved replies
+remain outstanding.
+
+Fixture diagnostics exposed root storage at 99% usage. With explicit operator
+approval, process cwd/executable/open-file/mapping and Cargo-target references
+were checked, including privileged processes. No active references existed for
+`/tmp/swarm-ops-console-20260904/target` or `/tmp/swarm-ops-console-target`.
+Only those Cargo-tagged caches were removed, reclaiming 19,946,045,440 bytes.
+Root usage fell to 68%, about 20 GiB available. Source checkout, databases,
+attachments and backups were preserved. API and terminal-host services remained
+active, health was OK at `a576ecc027c4`, and all 15 loaded workers remained running.
+This resolves immediate storage pressure; it does not prove Swarm's normal
+diagnostics surface filesystem trouble adequately. That operational gate remains.

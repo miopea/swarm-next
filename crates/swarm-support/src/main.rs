@@ -12,14 +12,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "127.0.0.1:4281".into())
         .parse()?;
     let service = SupportService::new(SupportStore::open(Path::new(&database), capacity)?);
-    let router = match std::env::var("SWARM_SUPPORT_ADMIN_TOKEN") {
-        Ok(token) => {
-            swarm_support::router_with_admin(service, swarm_support::AdminCredential::new(&token)?)
-        }
-        Err(std::env::VarError::NotPresent) => swarm_support::router(service),
+    let admin = match std::env::var("SWARM_SUPPORT_ADMIN_TOKEN") {
+        Ok(token) => Some(swarm_support::AdminCredential::new(&token)?),
+        Err(std::env::VarError::NotPresent) => None,
         Err(std::env::VarError::NotUnicode(_)) => {
             return Err("support Admin credential must be valid Unicode".into());
         }
+    };
+    let ops = match std::env::var("SWARM_SUPPORT_OPS_TOKEN") {
+        Ok(token) => Some(swarm_support::OpsConfiguration::new(
+            &token,
+            &std::env::var("SWARM_SUPPORT_ENVIRONMENT")?,
+            std::env::var("SWARM_SUPPORT_BUILD_SHA").ok(),
+            Path::new(&database).canonicalize()?,
+            std::env::var("SWARM_SUPPORT_MIN_FREE_MIB")?.parse()?,
+        )?),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err("support Ops credential must be valid Unicode".into());
+        }
+    };
+    let router = match (admin, ops) {
+        (admin, Some(ops)) => swarm_support::router_with_ops(service, admin, ops)?,
+        (Some(admin), None) => swarm_support::router_with_admin(service, admin),
+        (None, None) => swarm_support::router(service),
     };
     #[cfg(unix)]
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;

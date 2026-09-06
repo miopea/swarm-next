@@ -19,6 +19,9 @@ use swarm_domain::SupportSubmissionInput;
 use swarm_persistence::SupportStoreError;
 use tokio::sync::Semaphore;
 
+mod ops;
+pub use ops::OpsConfiguration;
+
 /// A separately provisioned Admin credential, never a public submitter identity.
 #[derive(Clone)]
 pub struct AdminCredential([u8; 32]);
@@ -65,6 +68,7 @@ struct AppState {
     service: SupportService,
     admission: Arc<Semaphore>,
     admin: Option<AdminCredential>,
+    ops: Option<OpsConfiguration>,
 }
 
 /// Builds an isolated public intake surface; registration and replies are not enabled.
@@ -73,6 +77,7 @@ pub fn router(service: SupportService) -> Router {
         service,
         admission: Arc::new(Semaphore::new(MAX_REQUESTS)),
         admin: None,
+        ops: None,
     };
     router_with_state(state)
 }
@@ -83,11 +88,42 @@ pub fn router_with_admin(service: SupportService, admin: AdminCredential) -> Rou
         service,
         admission: Arc::new(Semaphore::new(MAX_REQUESTS)),
         admin: Some(admin),
+        ops: None,
     })
+}
+
+/// Enables ordinary content-free Ops polling independently of private conversations.
+///
+/// # Errors
+/// Refuses credential reuse across ordinary and privileged readers.
+pub fn router_with_ops(
+    service: SupportService,
+    admin: Option<AdminCredential>,
+    ops: OpsConfiguration,
+) -> Result<Router, &'static str> {
+    if admin
+        .as_ref()
+        .is_some_and(|admin| bool::from(admin.0.ct_eq(&ops.credential.0)))
+    {
+        return Err("ordinary Ops and private Admin credentials must be different");
+    }
+    Ok(router_with_state(AppState {
+        service,
+        admin,
+        ops: Some(ops),
+        admission: Arc::new(Semaphore::new(MAX_REQUESTS)),
+    }))
 }
 
 fn router_with_state(state: AppState) -> Router {
     let mut routes = Router::new().route("/api/support/v1/submissions", post(submit));
+    if state.ops.is_some() {
+        routes = routes
+            .route("/api/ops/manifest", axum::routing::get(ops::manifest))
+            .route("/api/ops/health", axum::routing::get(ops::health))
+            .route("/api/ops/metrics", axum::routing::get(ops::metrics))
+            .route("/api/ops/incidents", axum::routing::get(ops::incidents));
+    }
     if state.admin.is_some() {
         routes = routes
             .route(
@@ -289,6 +325,184 @@ mod tests {
         (directory, router(SupportService::new(store)))
     }
 
+    #[tokio::test]
+    async fn ops_discovery_never_grants_private_conversation_access() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("support.db");
+        let service = SupportService::new(
+            SupportStore::open(&database, NonZeroU32::new(2).unwrap()).unwrap(),
+        );
+        service
+            .submit(serde_json::from_value(report()).unwrap(), 10)
+            .unwrap();
+        let reader = "fictional-ordinary-reader-0000000000000000";
+        let private = "fictional-private-reader-00000000000000000";
+        let app = router_with_ops(
+            service,
+            Some(AdminCredential::new(private).unwrap()),
+            OpsConfiguration::new(
+                reader,
+                "development",
+                Some("abcdef1234567".into()),
+                database,
+                1,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        for path in ["manifest", "health", "metrics", "incidents"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/api/ops/{path}"))
+                        .header(header::AUTHORIZATION, format!("Bearer {reader}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            let bytes = to_bytes(response.into_body(), MAX_BODY_BYTES)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let text = String::from_utf8(bytes.to_vec()).unwrap();
+            assert!(!text.contains("fictional@example.test"));
+            assert!(!text.contains("customer"));
+            if path == "manifest" {
+                assert_eq!(body["appId"], "swarm-support");
+                assert_eq!(
+                    body["operatorResources"],
+                    serde_json::json!(["conversations"])
+                );
+                assert_eq!(body["capabilities"], serde_json::json!([]));
+            }
+            for token in ["wrong", private] {
+                assert_eq!(
+                    app.clone()
+                        .oneshot(
+                            Request::builder()
+                                .uri(format!("/api/ops/{path}"))
+                                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                                .body(Body::empty())
+                                .unwrap()
+                        )
+                        .await
+                        .unwrap()
+                        .status(),
+                    StatusCode::UNAUTHORIZED
+                );
+            }
+        }
+        assert_eq!(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/ops/admin/conversations")
+                        .header(header::AUTHORIZATION, format!("Bearer {reader}"))
+                        .body(Body::empty())
+                        .unwrap()
+                )
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            app.oneshot(
+                Request::builder()
+                    .uri("/api/ops/admin/conversations")
+                    .header(header::AUTHORIZATION, format!("Bearer {private}"))
+                    .body(Body::empty())
+                    .unwrap()
+            )
+            .await
+            .unwrap()
+            .status(),
+            StatusCode::OK
+        );
+    }
+
+    #[test]
+    fn ordinary_and_private_credentials_cannot_be_the_same() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("support.db");
+        let service = SupportService::new(
+            SupportStore::open(&database, NonZeroU32::new(1).unwrap()).unwrap(),
+        );
+        let token = "fictional-but-reused-credential-00000000000";
+        assert!(
+            router_with_ops(
+                service,
+                Some(AdminCredential::new(token).unwrap()),
+                OpsConfiguration::new(token, "development", None, database, 1).unwrap()
+            )
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn ops_without_private_reader_advertises_no_conversation_resource() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("support.db");
+        let service = SupportService::new(
+            SupportStore::open(&database, NonZeroU32::new(1).unwrap()).unwrap(),
+        );
+        let token = "fictional-ordinary-reader-0000000000000000";
+        let app = router_with_ops(
+            service,
+            None,
+            OpsConfiguration::new(token, "development", None, database, 1).unwrap(),
+        )
+        .unwrap();
+        for path in ["manifest", "health", "metrics", "incidents"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/api/ops/{path}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/ops/manifest")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), MAX_BODY_BYTES)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["operatorResources"], serde_json::json!([]));
+        assert!(body["buildSha"].is_null());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/ops/admin/conversations")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
     fn request(body: String) -> Request {
         Request::builder()
             .method("POST")
@@ -318,6 +532,7 @@ mod tests {
             service,
             admission,
             admin: None,
+            ops: None,
         });
         let refused = app
             .clone()
@@ -633,6 +848,10 @@ mod tests {
             "/api/v1/workers",
             "/api/v1/tasks",
             "/api/ops/admin/conversations",
+            "/api/ops/manifest",
+            "/api/ops/health",
+            "/api/ops/metrics",
+            "/api/ops/incidents",
             "/api/support/v1/submissions",
         ] {
             let response = app

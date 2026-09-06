@@ -82,8 +82,18 @@ impl SupportStore {
                 PRAGMA application_id = 1398231888;
                 PRAGMA user_version = 1;",
             )?;
-        } else if application_id != APPLICATION_ID || version != 1 {
+        } else if application_id != APPLICATION_ID || !(1..=2).contains(&version) {
             return Err(SupportStoreError::WrongDatabase);
+        }
+        if version < 2 {
+            transaction.execute_batch(
+                "CREATE TABLE support_health_probe (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    value INTEGER NOT NULL CHECK (value IN (0, 1))
+                );
+                INSERT INTO support_health_probe(id, value) VALUES (1, 0);
+                PRAGMA user_version = 2;",
+            )?;
         }
         transaction.commit()?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
@@ -91,6 +101,30 @@ impl SupportStore {
             connection,
             capacity,
         })
+    }
+
+    /// Checks durable read/write availability without reading or changing customer content.
+    /// One fixed probe row bounds storage; successful commit is required.
+    ///
+    /// # Errors
+    /// Reports read-only, unavailable, malformed or failed-commit storage honestly.
+    pub fn check_health(&mut self) -> Result<(), SupportStoreError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let _: i64 = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM support_conversations) + EXISTS(SELECT 1 FROM support_messages)",
+            [], |row| row.get(0),
+        )?;
+        if transaction.execute(
+            "UPDATE support_health_probe SET value = 1 - value WHERE id = 1",
+            [],
+        )? != 1
+        {
+            return Err(rusqlite::Error::InvalidQuery.into());
+        }
+        transaction.commit()?;
+        Ok(())
     }
 
     /// Atomically saves a reviewed report and its initial conversation message.
@@ -161,6 +195,71 @@ impl SupportStore {
 mod tests {
     use super::*;
     use swarm_domain::{SupportKind, SupportSubmissionInput};
+
+    #[test]
+    fn health_probe_is_bounded_and_refuses_read_only_storage() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("support.db");
+        let capacity = NonZeroU32::new(1).unwrap();
+        let mut store = SupportStore::open(&path, capacity).unwrap();
+        let original = store
+            .submit(&report(1, "Private fictional body"), 10)
+            .unwrap();
+        for _ in 0..5 {
+            store.check_health().unwrap();
+        }
+        let count: i64 = store
+            .connection
+            .query_row("SELECT count(*) FROM support_health_probe", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 1);
+        store
+            .connection
+            .pragma_update(None, "query_only", "ON")
+            .unwrap();
+        assert!(store.check_health().is_err());
+        store
+            .connection
+            .pragma_update(None, "query_only", "OFF")
+            .unwrap();
+        store.check_health().unwrap();
+        drop(store);
+        let replay = SupportStore::open(&path, capacity)
+            .unwrap()
+            .submit(&report(1, "Private fictional body"), 20)
+            .unwrap();
+        assert_eq!(replay.conversation_id, original.conversation_id);
+        assert!(replay.deduplicated);
+    }
+
+    #[test]
+    fn version_one_support_upgrade_preserves_frozen_retries() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("support.db");
+        let capacity = NonZeroU32::new(1).unwrap();
+        let mut store = SupportStore::open(&path, capacity).unwrap();
+        let original = store.submit(&report(1, "Original"), 10).unwrap();
+        store
+            .connection
+            .execute_batch("DROP TABLE support_health_probe; PRAGMA user_version = 1;")
+            .unwrap();
+        drop(store);
+        let mut upgraded = SupportStore::open(&path, capacity).unwrap();
+        upgraded.check_health().unwrap();
+        assert_eq!(
+            upgraded
+                .submit(&report(1, "Original"), 20)
+                .unwrap()
+                .message_id,
+            original.message_id
+        );
+        assert!(matches!(
+            upgraded.submit(&report(1, "Changed"), 20),
+            Err(SupportStoreError::Conflict)
+        ));
+    }
 
     fn report(key: u128, body: &str) -> SupportSubmission {
         SupportSubmissionInput {
