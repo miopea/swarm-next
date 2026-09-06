@@ -27,6 +27,35 @@ fifteen-terminal pass. Each visit waited for connected state. This short fixture
 run is not a live GPU measurement, long-session plateau or a warm-pool rollout
 decision. The default retention policy remains unchanged.
 
+`75df589e` deployed healthy; all 15 worker session IDs remained unchanged. In a
+fresh separate signed-in Edge tab, the real canvas-backed terminal baseline was
+28.4 MiB used/30.4 allocated with one retained renderer. A view-only pass through
+all 15 loaded workers measured 78.6/80.0 with 15 retained, and a second pass
+94.3/115.9; a later unchanged-tab sample was 101.6/122.9. Every worker showed
+two canvases and no DOM-row renderer on both visits. The captured terminal
+connection evidence was 15 samples, mean 331 ms/max 678 ms; state application
+47 samples, mean 6 ms/max 29 ms. These are not input latency or confirmed paint.
+
+The five-renderer experiment on that same tab then completed 20 cold returns:
+p95 328 ms, maximum 375 ms; 20 attempted, zero failed/interrupted/pending. The
+slowest paired return was 20 ms setup and 355 ms connection through applied
+state; setup was 17 ms opening, 2 ms fonts and 1 ms layout. Five inactive
+renderers remained with 30 evictions (including the initial trim), and the
+heap estimate was 82.4/105.4 MiB. This passes the observed desktop 500 ms gate,
+not native mobile acceptance or a controlled memory-savings claim. The test
+tab's experiment was stopped afterward; no worker task or terminal input was
+changed. Keep the policy opt-in pending mobile/correlated resource validation.
+
+Twice, clicking Sample immediately after opening Dogfood hit the browser-tool
+three-second deadline before sampling; a subsequent read showed not sampled,
+and retry succeeded. Native Event Timing later included a 15,304 ms duration
+with about 1.9 ms input delay, 0.2 ms processing and 15,301.9 ms estimated
+presentation. Automation/browser scheduling can affect this; it is not proof
+of 15 seconds of application CPU. Source inspection also shows context-loss
+fallback never reacquires GPU until renderer recreation. This is a recovery
+candidate, but the two live passes did not reproduce fallback. Do not claim a
+GPU-context cause or a heap leak from these observations.
+
 ### Browser update observation ownership (September 6 UTC)
 
 The pre-existing mismatch notice is now in the runtime area, with concise copy
