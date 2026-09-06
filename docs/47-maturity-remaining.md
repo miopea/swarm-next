@@ -1,5 +1,41 @@
 # Daily-driver maturity: remaining delivery and acceptance
 
+## 2026-09-06: critical Queen no-action / Queues disagreement
+
+Reopened as a live orchestration defect, not a stale browser report. Operator
+supplied the full automation prompt and Queen's 10:07 AM no-action reply.
+Read-only inspection of Queen's actual provider transcript confirmed the tool
+response at 14:07:22 UTC (call `toolu_013vzd4KqLDHJ7zCyQRxDWR8`) contained
+49 open tasks, 31 Queen-owned items, 27 blocked-reassessment candidates, zero
+pending operator owners, and three release-owned tasks. Details were not
+truncated. The 14:22 run received the same ownership facts. Both were closed
+as `no_action` with no intervening task-history read or routing call in those runs.
+
+Live HTTP board agrees: 27 Queen-owned Blocked tasks plus four Drafts; another
+four Blocked tasks have a recognized hold. Queen's claim that demo `01a07595`
+was still Ready/in-lane is contradicted by the settled task, Completed at
+1788702216 (13:43:36 UTC). Absence from an open-board snapshot does not mean a
+previously observed Ready state remains current.
+
+Some recorded block notes contain real external constraints or explicit operator
+deferrals, which must not be bypassed. Others explicitly identify Queen routing
+as the blocker or an operator question that has not been filed. All 27 Queen-owned
+Blocked rows had null `blocked_until` at inspection. The transcript response
+identifies these as reassessment obligations, not authorization to resume.
+
+`finish_queen_automation_run` currently closes `no_action` without checking
+unresolved Queen ownership and records the pending fingerprint as delivered.
+The existing prompt already tells Queen to account for each item; more prose
+alone is not an adequate fix. Required follow-through: explicit durable waiting
+dispositions and evidence, truthful completion/review coverage, fresh task lookup
+when a watched task leaves the board, and consistent Queues/Needs You projection.
+Preserve true dependencies, operator deferrals and release authority. Do not
+bulk-resume tasks or manufacture operator decisions just to reduce the count.
+
+Support HTTP integration work is preserved uncommitted while this live defect
+takes priority. No real task transitions, terminal inputs or releases were made
+as part of this investigation.
+
 ## 2026-09-06: central support intake foundation
 
 ADR 0080 now has input and isolated persistence groundwork, not a deployed
