@@ -18,10 +18,21 @@ that it waits for a quiet moment. No polling, dispatch policy or task transition
 was added. All 80 focused task/queue tests and TypeScript checking passed;
 Edge rendered the named predecessor in the actual TaskBoard fixture. Deployment
 is pending the unchanged-build soak. This does not close full QUEUE-01 recovery.
+The broader App suite also passed all 57 tests after this change.
 
-### Sustained workload attribution (September 6, observation in progress)
+At 02:40 UTC a separate Edge tab on the unchanged live build captured one
+2,433 ms reconnect: grant 213 ms, socket 135 ms, restoration 2,085 ms. The server
+sample then reported no pressure; this is later than the observed test burst.
+The renderer backlog sample peaked at 2,001 ms. These identify restoration as
+the largest measured stage, not a proven parser, layout, GPU or network cause.
+Three route-paint samples had median 37 ms and maximum 66 ms, but the route
+instrument starts at the App effect and does not wait for lazy content readiness.
+It is not click-to-ready evidence. Automated Event Timing entries had zero
+grouped interaction IDs and are not human-input latency or INP acceptance.
 
-The read-only run `20260906T021841Z-live` is observing unchanged build
+### Sustained workload attribution (September 6)
+
+The read-only run `20260906T021841Z-live` observed unchanged build
 `17d99596` for 30 minutes. Its first 24 samples span 699 seconds, with 15 running
 sessions throughout. API cgroup CPU averages 2.08% of one core (highest sampled
 interval 10.41%); the terminal-host cgroup, including all worker descendants,
@@ -34,7 +45,17 @@ A separate process-name-only snapshot at 02:27 UTC found seven Vitest workers
 with high lifetime CPU percentages, alongside CPU PSI `some avg10=39.80` and
 zero sampled memory PSI. It supports workload contention at that moment, not
 attribution of every interval to those processes. No worker was interrupted.
-The 30-minute final continuity result is still pending.
+The observer completed its 1,800-second run with 60 samples spanning 1,790
+seconds between first and last measurements. All 15 original sessions remained
+running; API PID 2765152 and host PID 2721173 were unchanged. Full-window CPU
+averaged 2.82% of one core for the API (maximum interval 15.79%) and 201.86% for
+the host cgroup including workers (maximum interval 771.51%). API memory ranged
+69,586,944–202,334,208 bytes; host-group memory 7,114,739,712–10,857,439,232 bytes.
+History ranged 533,460,786–536,795,043 bytes, below the 536,870,912-byte cap,
+with zero reported dropped bytes. Collection took 0–1 whole seconds per sample;
+this coarse measure does not establish instrumentation overhead. The rising API
+memory series and changing worker workload require longer comparable evidence
+before claiming a plateau. PERF-01/02 and P7 remain open.
 
 `node scripts/dogfood/live-soak-summary.cjs <samples.csv>` now summarizes these
 content-free samples (use `-` for stdin). Four tests cover time-weighted CPU,
