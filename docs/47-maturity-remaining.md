@@ -8,6 +8,47 @@ remain operator-controlled. The overall goal was restored on 2026-09-05.
 
 ## Immediate live defects
 
+### Verified earlier dependency journey; current-build repeat (September 6 UTC)
+
+The earlier exercise is now verified from task history and committed files:
+consumer `01a07193-7d88-7cb1-888a-602a0e533cb3` and Queen-created upstream
+`01a07199-fef1-76e0-b908-4ad528774904` are Completed with evidence. Queen
+recorded the prerequisite and performed Blocked -> Ready at 1788614360; the
+consumer became Active 20 seconds later and was machine-settled at 1788614462.
+Upstream completed at 1788612762, so recovery waited 1,598 seconds (26m38s).
+This proves routing, explicit dependency, Queen resumption and documentation
+settlement for that run, not acceptable current-build latency or the full scope.
+The earlier initial folder-trust assistance remains a caveat. Both repositories
+are clean. Consumer commit `728c67abb78b` cites upstream `fe873a1dde6e`; both
+files were read back and agree on version 1, status and checked_at.
+
+A current-build repeat is task `01a07595-3a79-7221-852e-d8f5fefa60ed`, created
+1788679109 and assigned to the already-running, unengaged Swarm Dogfood worker.
+Initial briefing is Delivered. Only the two demo repos are in scope; no push or
+deployment is requested of those workers. The new consumer must ask Queen to
+create/assign the upstream, add the edge, and resume it after completion. The
+operator harness does not supply the edge or clear the blocker. Expected new
+files are recovery-contract-20260906.md (upstream) and
+dependency-return-20260906.md (consumer). Continue observing this exact task,
+not creating another copy. This repeat is still in progress.
+
+Current repeat readiness finding: the provider accepted the briefing, then
+stopped at a one-time permission prompt for `swarm_list_tasks`. The host write
+audit confirms coordination text (264 bytes) and submit (1 byte) acknowledged
+at 1788679109/1788679110. This is not a missing-Enter reproduction. The task
+remains Ready; dependency recovery has not started, so elapsed time is not a
+valid dependency-recovery latency measurement. Engine metadata reports exact
+restoration of conversation `019ff8e1-4a2d-7a11-acff-6a10fb57af3e`, matching
+both selected and confirmed revision 1; conversation freshness reports current.
+Older visible transcript dates alone do not establish a wrong-session defect.
+
+A scoped one-time Yes attempt through HTTP input returned 422. Write-audit
+sequence 33 confirms the operator submit was rejected at 1788679706; no retry
+or persistent permission grant was made. Continue via the supported terminal
+interaction path after verifying its ownership requirements, rather than
+bypassing the write guard. This remains an assisted readiness gate, not proof
+of unattended completion or a reason to create another test task.
+
 ### Fresh terminal evidence beside historical Queen attention (September 6 UTC)
 
 Implemented read-time observations for stale Active, delivered-but-unstarted,
