@@ -31,7 +31,10 @@ pub(super) fn migrate(tx: &Transaction<'_>) -> rusqlite::Result<()> {
     )
 }
 
-fn authorize(tx: &Transaction<'_>, actor: &TaskActivityActor) -> Result<(), TaskStoreError> {
+pub(super) fn authorize(
+    tx: &Transaction<'_>,
+    actor: &TaskActivityActor,
+) -> Result<(), TaskStoreError> {
     if actor.kind == TaskActivityActorKind::Operator {
         return Ok(());
     }

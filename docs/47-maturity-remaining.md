@@ -1,5 +1,32 @@
 # Daily-driver maturity: remaining delivery and acceptance
 
+## 2026-09-06: in-place blocker repair checkpoint
+
+ADR 0081 supplies a missing Queen repair command: revise the current concise
+blocker reason and verified external time window without changing task state,
+assignment, terminal lifecycle or transport. Schema 141 retains original notes
+and anchors the correction to its exact Blocked entry. Latest-activity comparison
+refuses stale updates; exact lost-response retries do not duplicate history.
+Clearing a time hold returns verification to Queen, not automatic resumption.
+Dependencies still require verified explicit links through the existing tool.
+
+The isolated Linux regression run passed all 583 persistence tests, including
+six reassessment tests covering migration/reopen, concurrency, authorization,
+stale observations, expired-receipt recovery and leaving/reentering Blocked.
+API tests passed for Queen-only reassessment, unchanged assignment/session state,
+and the bumped role-scoped tool contract (revision 19).
+
+CI 34040354974 exposed another test sampling actual runner pressure while
+expecting admission: owed-return batch recovery. Its test now explicitly verifies
+critical-pressure deferral preserves all five intents, then normal admission
+processes the bounded batch despite individual failures. The focused test passed;
+this is not a claim that the complete CI workflow is green.
+
+Not deployed at this checkpoint. Queen's actual backlog cleanup, evidence-backed
+no-action coverage, and idle-fleet progress remain critical open acceptance work.
+The fresh 31-item snapshot followed by no-action closure is not considered fixed
+merely because a new repair tool exists.
+
 ## 2026-09-06: truthful review completion and current task reads
 
 First corrective checkpoint for the no-action disagreement, not completion of

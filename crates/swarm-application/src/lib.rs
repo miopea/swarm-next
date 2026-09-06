@@ -32,6 +32,7 @@ use thiserror::Error;
 
 mod ops_tickets;
 mod queue_snapshot;
+mod task_block;
 pub use ops_tickets::{OpsTicketError, OpsTicketProgress, OpsTicketService};
 pub use queue_snapshot::QueenQueueSnapshot;
 

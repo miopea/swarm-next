@@ -24,6 +24,7 @@ mod apiary;
 mod attention;
 mod coordinator;
 mod database_integrity;
+mod task_block;
 mod task_prerequisites;
 pub use coordinator::{
     AUTOMATIC_WAKE_BATCH_LIMIT, AssignedReadyWorkNotStartedCandidate, BackgroundWorkReading,
@@ -244,7 +245,8 @@ const DECISION_WITHDRAWAL_SCHEMA_VERSION: i64 = 137;
 const TASK_HISTORY_LOOKUP_SCHEMA_VERSION: i64 = 138;
 const TASK_PREREQUISITES_SCHEMA_VERSION: i64 = 139;
 const EXPLICIT_CONVERSATION_CHOICE_SCHEMA_VERSION: i64 = 140;
-const CURRENT_SCHEMA_VERSION: i64 = EXPLICIT_CONVERSATION_CHOICE_SCHEMA_VERSION;
+const TASK_BLOCK_REASSESSMENT_SCHEMA_VERSION: i64 = 141;
+const CURRENT_SCHEMA_VERSION: i64 = TASK_BLOCK_REASSESSMENT_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -1844,10 +1846,14 @@ impl TaskStore {
                           WHERE dr.task_id = t.id AND dr.state = 'pending'),
                    review_message.id, review_message.body,
                    CASE WHEN t.state = 'blocked' THEN
+                     coalesce((SELECT assessment.reason FROM task_block_reassessments assessment
+                        WHERE assessment.task_id = t.id AND assessment.block_entry_sequence =
+                          (SELECT max(entry.sequence) FROM task_activity entry
+                           WHERE entry.task_id = t.id AND entry.kind = 'state_changed')),
                      (SELECT CASE WHEN block.to_state = 'blocked' THEN NULLIF(block.note, '') END
                       FROM task_activity block
                       WHERE block.task_id = t.id AND block.kind = 'state_changed'
-                      ORDER BY block.sequence DESC LIMIT 1)
+                      ORDER BY block.sequence DESC LIMIT 1))
                    END,
                    (SELECT json_group_array(json_object(
                        'task_id', p.task_id, 'prerequisite_id', p.prerequisite_id,
@@ -3876,6 +3882,9 @@ fn migrate_ops_intake_schema_steps(
         task_prerequisites::migrate(transaction)?;
     }
     conversation_recovery::migrate_explicit_choice(transaction, schema_version)?;
+    if schema_version < TASK_BLOCK_REASSESSMENT_SCHEMA_VERSION {
+        task_block::migrate(transaction)?;
+    }
     Ok(())
 }
 
@@ -9021,6 +9030,12 @@ mod tests {
             table: "worker_explicit_conversation_choices",
             artifact: "",
             undo_sql: "DROP TABLE worker_explicit_conversation_choices",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "task_block_reassessments",
+            artifact: "",
+            undo_sql: "DROP TABLE task_block_reassessments",
             probe_sql: "",
         },
     ];

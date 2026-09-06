@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 18;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 19;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -401,9 +401,9 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 18;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 17. Update this and the revision together.
+/// The served surface as of revision 19. Update this and the revision together.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "611f1ac9a6ee08cdedb353ee5de0e621a16635a2fcdeffc503f9ee7247ba6719";
+    "239026970995cfb671dac89b9bae110cf00680b04d6213efa8af6fb5ed3ab40a";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -605,6 +605,7 @@ impl ServerHandler for AgentMcp {
                 reconcile_task_message_tool(),
                 assign_task_tool(),
                 task_prerequisite_tool(),
+                reassess_task_block_tool(),
                 approve_no_deployment_tool(),
                 retire_task_tool(),
                 hold_reviewed_work_tool(),
@@ -655,6 +656,7 @@ impl ServerHandler for AgentMcp {
                 "swarm_create_task"
                 | "swarm_assign_task"
                 | "swarm_set_task_prerequisite"
+                | "swarm_reassess_task_block"
                 | "swarm_transition_task"
                 | "swarm_reconcile_task_message" => QueenActionClass::Coordinate,
                 "swarm_create_apiary_task"
@@ -816,6 +818,9 @@ impl ServerHandler for AgentMcp {
             }),
             "swarm_set_task_prerequisite" => parse::<swarm_domain::TaskPrerequisiteChange>(arguments)
                 .and_then(|input| self.tasks.change_task_prerequisite(self.principal, &input, crate::unix_timestamp()))
+                .and_then(structured),
+            "swarm_reassess_task_block" => parse::<swarm_domain::TaskBlockReassessment>(arguments)
+                .and_then(|input| self.tasks.reassess_task_block(self.principal, &input, crate::unix_timestamp()))
                 .and_then(structured),
             "swarm_assign_task" => parse::<AssignTaskInput>(arguments).and_then(|input| {
                 let task_id = TaskId::from_str(&input.task_id)
@@ -3291,6 +3296,21 @@ fn task_prerequisite_tool() -> Tool {
     )
 }
 
+fn reassess_task_block_tool() -> Tool {
+    tool(
+        "swarm_reassess_task_block",
+        "Queen only: correct the current blocker reason and optional verified not-before time on an already Blocked task, without restarting it or sending a briefing. Read current task history first and supply its latest activity sequence. Include concise current reason and the evidence you checked. Use not_before only for a verified external window or existing operator instruction, never to hide your routing backlog. Null clears a scheduled hold but does not resume the task or clear prerequisites/decisions. Use swarm_set_task_prerequisite for verified dependencies. Original notes remain in history; changed history refuses the reassessment. Genuine cleared work still needs the ordinary guarded Blocked-to-Ready transition.",
+        &json!({"type":"object","properties":{
+            "task_id":{"type":"string","format":"uuid"},
+            "expected_activity_sequence":{"type":"integer","minimum":1},
+            "reason":{"type":"string","minLength":1,"maxLength":1000},
+            "evidence":{"type":"string","minLength":1,"maxLength":2000},
+            "not_before":{"type":["integer","null"],"description":"Verified future Unix timestamp in seconds, or null for no scheduled hold."}
+        },"required":["task_id","expected_activity_sequence","reason","evidence"],"additionalProperties":false}),
+        false,
+    )
+}
+
 fn list_apiary_tasks_tool() -> Tool {
     tool(
         "swarm_list_apiary_tasks",
@@ -3959,6 +3979,7 @@ mod tests {
         "swarm_assign_task",
         "swarm_list_jira_projects",
         "swarm_set_task_prerequisite",
+        "swarm_reassess_task_block",
         // A reviewer's dissent is a reviewer's to record. A worker holding its
         // own work is just a worker declining to finish it, which the lifecycle
         // already expresses.
@@ -4072,6 +4093,43 @@ mod tests {
             assert_eq!(
                 store.get_task(task.id).unwrap().state,
                 swarm_domain::TaskState::Blocked
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn block_reassessment_is_queen_only_and_preserves_assignment() {
+        let (bridge, store, queen_id, worker_id, _directory) = setup();
+        let task = store
+            .create_task("Fictional external gate", "/workspace/petal")
+            .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store.assign_task_to_worker(task.id, worker_id).unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Blocked)
+            .unwrap();
+        let sequence = store.list_task_activity(task.id, 1).unwrap().events[0].sequence;
+        for (caller, allowed) in [(worker_id, false), (queen_id, true)] {
+            let token = bearer_from_path(&bridge.ensure_worker_config(caller).unwrap());
+            let response = response_json(handle(bridge.clone(), plain_state(), mcp_request(Some(&token), "tools/call", &json!({
+                "name": "swarm_reassess_task_block", "arguments": {
+                    "task_id": task.id, "expected_activity_sequence": sequence,
+                    "reason": "Verified external window", "evidence": "Fictional schedule checked",
+                    "not_before": 4_000_000_000_i64
+                }
+            }))).await).await;
+            let current = store.get_task(task.id).unwrap();
+            assert_eq!(current.blocked_until.is_some(), allowed, "{response}");
+            assert_eq!(current.state, swarm_domain::TaskState::Blocked);
+            assert_eq!(current.assigned_worker_id, Some(worker_id));
+            assert!(
+                store
+                    .get_worker_profile(worker_id)
+                    .unwrap()
+                    .active_session_id
+                    .is_none()
             );
         }
     }

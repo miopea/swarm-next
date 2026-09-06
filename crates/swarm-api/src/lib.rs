@@ -16818,9 +16818,15 @@ mod tests {
         store
             .record_worker_revival_intents(&workers, unix_timestamp())
             .unwrap();
-        let state = AppState::default()
+        let mut state = AppState::default()
             .with_terminal_host(HostClient::new(&socket), "secret")
             .with_task_store(store.clone());
+        // Exercise admission explicitly; CI host pressure is not this test's input.
+        state.test_start_admission = Some(runtime::CoordinatorStartAdmission::DeferredCritical);
+        state.revive_workers_owed_a_return().await;
+        assert!(state.worker_errors.read().await.is_empty());
+        assert_eq!(store.worker_revival_intents().unwrap().len(), 5);
+        state.test_start_admission = Some(runtime::CoordinatorStartAdmission::Allowed);
         tokio::time::timeout(std::time::Duration::from_secs(20), async {
             state.revive_workers_owed_a_return().await;
             assert_eq!(state.worker_errors.read().await.len(), 4);
