@@ -3303,3 +3303,29 @@ history and existing delivery before one task-scoped guarded continuation reques
 No automatic input, lifecycle change, new authority, or blanket unblock is added.
 Five observation tests and all 485 API unit tests passed; strict API lint passed.
 Actual guarded delivery and worker continuation after deployment remain unproven.
+
+Deployment follow-up: `3ba0935b` is healthy in the development Hive; both it and
+support commit `c2ecd424` passed all four CI jobs. The normal engine reconciliation
+replaced the host for the changed domain fingerprint. All 15 previously loaded
+workers are running again with tool revision 20; normal idempotent starts were
+used for workers not yet observed returned. Public central support remains off.
+Queen consumed the new guidance and sent Platform a scoped recovery request at
+18:58 UTC. The existing provider transcript
+`019ffd13-7bcc-79f1-80a3-e514cccac915` then recorded completion of the investigation;
+task activity 7249 contains its findings and 7250 moves it from Active to Blocked
+for a revised scope question. This is investigation progress, not task completion.
+The following Platform briefing was delivered after the slot cleared.
+
+Queen still incorrectly treated lack of urgent downstream work as a reason not
+to assess other resting Active tasks. The follow-up wording clarifies that urgency
+orders attention, not eligibility for recovery, and opening a previous conversation
+does not prove work resumed. Both affected briefing tests passed for this wording.
+
+Isolated task `01a07811-5b5f-7ef1-bdc2-0f1ce3ccb868` exercises one controlled pause
+while Active in the workflow-fixture repository. Phase 1 was picked up and recorded
+in activity 7248; the PREPARED marker hash was independently verified as
+`9b19457b555251319ce2a8558e0a7bee3f6a5b6646284d13660b2e0d1037ccbc`.
+Actual provider transcript/session identity is
+`019ff8e1-4a2d-7a11-acff-6a10fb57af3e`, independently read from the demo JSONL;
+do not substitute the worker's remote-control session URL for this identity.
+Phase 2, Queen message delivery and same-conversation completion remain pending.
