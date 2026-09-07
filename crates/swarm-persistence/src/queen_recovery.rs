@@ -76,9 +76,7 @@ impl TaskStore {
         actor: &TaskActivityActor,
         now: i64,
     ) -> Result<QueenRecoveryIdentity, TaskStoreError> {
-        input
-            .validate()
-            .map_err(refused)?;
+        input.validate().map_err(refused)?;
         let payload = serde_json::to_string(input)
             .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
         if payload.len() > 8192 {
@@ -200,6 +198,16 @@ fn refused(reason: &str) -> TaskStoreError {
     TaskStoreError::RecoveryAssessmentRefused(reason.into())
 }
 
+fn read_saved_recovery(payload: &str) -> Result<QueenRecoveryRecord, TaskStoreError> {
+    let saved: QueenRecoveryRecord = serde_json::from_str(payload).map_err(|_| {
+        TaskStoreError::IntegrityFailure("stored recovery receipt is unreadable".into())
+    })?;
+    saved
+        .validate()
+        .map_err(|reason| TaskStoreError::IntegrityFailure(reason.into()))?;
+    Ok(saved)
+}
+
 pub(super) fn recovery_coverage(
     connection: &Connection,
     run_id: &str,
@@ -283,12 +291,7 @@ pub(super) fn recovery_coverage(
             )
             .optional()?;
         if let Some(payload) = receipt {
-            let saved: QueenRecoveryRecord = serde_json::from_str(&payload).map_err(|_| {
-                TaskStoreError::IntegrityFailure("stored recovery receipt is unreadable".into())
-            })?;
-            saved
-                .validate()
-                .map_err(|reason| TaskStoreError::IntegrityFailure(reason.into()))?;
+            let saved = read_saved_recovery(&payload)?;
             // The query fences this judgment to this exact run and current
             // task/session/terminal identity. It never carries to the next run.
             fresh.verified_external_wait = matches!(
@@ -740,13 +743,35 @@ mod tests {
         let error = store
             .record_queen_recovery(&input, &facts, &TaskActivityActor::operator(), NOW + 1)
             .unwrap_err();
-        assert!(matches!(&error, TaskStoreError::RecoveryAssessmentRefused(_)));
-        assert!(error.to_string().contains("A delivered message is not pending delivery"));
+        assert!(matches!(
+            &error,
+            TaskStoreError::RecoveryAssessmentRefused(_)
+        ));
+        assert!(
+            error
+                .to_string()
+                .contains("A delivered message is not pending delivery")
+        );
         assert!(!error.to_string().contains("database integrity"));
         assert_eq!(
             store.get_task(input.identity.task_id).unwrap().state,
             TaskState::Active
         );
+    }
+
+    #[test]
+    fn corrupt_saved_receipts_remain_integrity_failures_not_command_refusals() {
+        assert!(matches!(
+            read_saved_recovery("not json"),
+            Err(TaskStoreError::IntegrityFailure(_))
+        ));
+        let store = TaskStore::in_memory().unwrap();
+        let (mut input, _) = fixture(&store);
+        input.run_id = "invalid stored run".into();
+        assert!(matches!(
+            read_saved_recovery(&serde_json::to_string(&input).unwrap()),
+            Err(TaskStoreError::IntegrityFailure(_))
+        ));
     }
 
     #[test]

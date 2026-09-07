@@ -136,11 +136,21 @@ impl QueenRecoveryDisposition {
     #[must_use]
     pub const fn evidence_requirement(&self) -> &'static str {
         match self {
-            Self::ObservedWorking => "observed_working requires current terminal evidence of active or background execution; a resting worker is not working",
-            Self::ProtectOperatorInput => "protect_operator_input requires current operator engagement or actual unsent input; a provider suggestion is not operator input",
-            Self::AwaitDelivery { .. } => "await_delivery requires this exact message to be queued or dispatching to the current assignee. A delivered message is not pending delivery. Read the worker's response and verify the actual dependency, operator decision or external condition; do not resend merely to obtain coverage",
-            Self::AwaitOperator { .. } => "await_operator requires this exact pending task-linked operator decision; a resolved or unrelated decision does not qualify",
-            Self::VerifiedExternalWait { .. } => "verified_external_wait requires a freshly checked condition, evidence and source for this run; it is not permission to hide actionable work",
+            Self::ObservedWorking => {
+                "observed_working requires current terminal evidence of active or background execution; a resting worker is not working"
+            }
+            Self::ProtectOperatorInput => {
+                "protect_operator_input requires current operator engagement or actual unsent input; a provider suggestion is not operator input"
+            }
+            Self::AwaitDelivery { .. } => {
+                "await_delivery requires this exact message to be queued or dispatching to the current assignee. A delivered message is not pending delivery. Read the worker's response and verify the actual dependency, operator decision or external condition; do not resend merely to obtain coverage"
+            }
+            Self::AwaitOperator { .. } => {
+                "await_operator requires this exact pending task-linked operator decision; a resolved or unrelated decision does not qualify"
+            }
+            Self::VerifiedExternalWait { .. } => {
+                "verified_external_wait requires a freshly checked condition, evidence and source for this run; it is not permission to hide actionable work"
+            }
         }
     }
 }

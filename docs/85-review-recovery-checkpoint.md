@@ -2,6 +2,41 @@
 
 ## Live acceptance failure: an unfinished run lost from Queen's context
 
+### Current investigation: rejected delivery assessment, not revision churn
+
+Main `173b057cf67d` completed the normal dev reload and is running as
+`1.5.0-dev-173b057cf67d-20260907051533-3836206` with 16 sessions loaded.
+CI 34086106406 passed all four jobs. The engine is still safely deferred on
+mid-turn sessions, not reconciled. All 16 loaded workers report current
+conversation freshness; this projection is not independent transcript acceptance.
+
+Live task evidence now shows Member Services Active on C13c and Public Website
+Active on C19. D365's household-email task has a worker transition at sequence
+7508 followed by a system transition at 7510 and no longer appears in open work.
+These are real movement signals; do not equate the worker's claim that it
+"shipped" with independently verified deployment or authorize further data writes.
+Admin's C15a remains Active at a resting terminal and still needs recovery or a
+verified gate. New-worker admission currently reports deferred_advisory.
+
+Queen run `01a07a3e-d42a-7e41-8bff-b1ac219079af` reached delivery and finished
+incomplete. Her exact recovery call used `await_delivery` for already-delivered
+message `01a079c1-e36f-7301-8ea8-9782b77cd71c`. The tool result was
+`database integrity check failed: current evidence does not support this recovery assessment`.
+It was NOT the distinct stale-identity rejection. Queen subsequently attributed
+the failure to revision churn and declined further assessment; that diagnosis is
+contradicted by the actual result. Do not relax identity checks to accommodate it.
+
+Local correction `30dbcb78` separates a rejected recovery command from real
+database integrity failures and explains each disposition's required evidence.
+In particular, pending delivery does not mean awaiting the answer to a delivered
+message. It directs current-source verification without replaying the message or
+manufacturing a wait. Genuine unreadable/corrupt saved receipts remain integrity
+errors. All eleven persistence recovery tests pass, including the exact delivered
+message rejection, unchanged task state and corrupt saved receipt classification.
+The API conflict regression, formatting and strict domain/persistence/API lint
+pass. Lint initially required extracting the saved-receipt parser; no rule was
+waived. This correction is not yet on main or deployed.
+
 ### Current checkpoint: September 7, 05:09 UTC
 
 Recovery main `a053ae113999` is healthy in the development Hive as
