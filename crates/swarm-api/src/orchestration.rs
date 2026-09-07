@@ -62,6 +62,7 @@ pub(super) struct CoordinatorStatusResponse {
     /// six hours with attempts at zero while the board showed work assigned and
     /// apparently ignored.
     held_briefings: Vec<swarm_persistence::HeldTaskDispatch>,
+    recovery: swarm_domain::RecoveryQueueSnapshot,
 }
 
 /// One thing the coordinator is holding, and for how long.
@@ -390,6 +391,35 @@ pub(super) async fn coordinator_status(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    let observations = state
+        .provider_activity
+        .read()
+        .await
+        .iter()
+        .map(
+            |(session_id, signals)| swarm_domain::RecoveryQueueObservation {
+                session_id: *session_id,
+                activity: match signals.activity {
+                    swarm_terminal::ProviderActivity::Active => {
+                        swarm_domain::RecoveryTerminalActivity::Working
+                    }
+                    swarm_terminal::ProviderActivity::Resting => {
+                        swarm_domain::RecoveryTerminalActivity::Resting
+                    }
+                    swarm_terminal::ProviderActivity::AwaitingOperator => {
+                        swarm_domain::RecoveryTerminalActivity::AwaitingOperator
+                    }
+                    swarm_terminal::ProviderActivity::Unknown => {
+                        swarm_domain::RecoveryTerminalActivity::Unknown
+                    }
+                },
+                background_work: signals.background_work,
+            },
+        )
+        .collect::<Vec<_>>();
+    let recovery = swarm_application::TaskService::new(task_store(&state)?.clone())
+        .recovery_queue_snapshot(&observations, unix_timestamp())
+        .map_err(crate::application_error)?;
     let status = state
         .coordinator_status()
         .map_err(|error| task_store_error(&error))?;
@@ -410,6 +440,7 @@ pub(super) async fn coordinator_status(
             held_briefings: held_briefings(&state)?,
             blocked_escalations: blocked_escalations(&state)?,
             unsettled_review: unsettled_review(&state)?,
+            recovery,
         }),
     )
         .into_response())

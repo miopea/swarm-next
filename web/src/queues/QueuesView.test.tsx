@@ -2,8 +2,42 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 import QueuesView from "./QueuesView";
 import type { Task } from "../api/tasks";
-import type { QueenAutomationStatus } from "../api";
+import type { QueenAutomationStatus, RecoveryQueueItem } from "../api";
 import type { Worker } from "../api/workers";
+
+test.each([
+  ["needs_queen_check", "Queen checks unfinished work"],
+  ["awaiting_delivery", "Queen's recovery message is waiting for delivery"],
+  ["verify_worker_response", "Recovery message delivered · Queen checks the response"],
+  ["delivery_needs_recovery", "Queen resolves a failed or uncertain recovery delivery"],
+  ["observation_unavailable", "Queen checks unavailable worker evidence"],
+] as const)("recovery %s stays with Queen while task execution remains worker-owned", (state, label) => {
+  const current = task({ state: "active", next_move_owner: "worker", assigned_worker_id: "w", assigned_session_id: "s", dispatch_state: "delivered" });
+  const item: RecoveryQueueItem = { attention_id: "a", task_id: current.id, worker_id: "w", session_id: "s", task_revision: 1, observed_at: 1,
+    reason: "The previous turn ended with unfinished work.", state, delivery: { message_id: "message-1", state: "delivered", updated_at: 2 }, last_assessment: { reason: "Previously checked a wait", source: "Fixture" } };
+  const onOpenTask = vi.fn();
+  const props = { tasks: [current], workers: [{ id: "w", name: "Petal", position: 0 } as Worker], onOpenTask };
+  const { rerender } = render(<QueuesView {...props} recovery={{ items: [item], truncated: false }} />);
+  expect(screen.getByRole("heading", { name: "Waiting on Queen 1" })).toBeVisible();
+  expect(screen.getByText(label)).toBeVisible();
+  expect(screen.queryByText(/Marked active/)).not.toBeInTheDocument();
+  fireEvent.click(within(screen.getByRole("region", { name: "Petal" })).getByRole("button"));
+  expect(onOpenTask).toHaveBeenCalledWith(current.id);
+  expect(current.next_move_owner).toBe("worker");
+  rerender(<QueuesView {...props} recovery={{ items: [], truncated: false }} />);
+  expect(screen.queryByRole("heading", { name: "Waiting on Queen 1" })).not.toBeInTheDocument();
+  expect(screen.getByText(/Marked active/)).toBeVisible();
+});
+
+test("missing or partial recovery evidence cannot declare the fleet clear", () => {
+  const props = { tasks: [], workers: [], onOpenTask: vi.fn() };
+  const { rerender } = render(<QueuesView {...props} />);
+  expect(screen.getByText(/Worker recovery details are unavailable/)).toBeVisible();
+  expect(screen.queryByText("Nothing is waiting on anyone.")).not.toBeInTheDocument();
+  rerender(<QueuesView {...props} recovery={{ items: [], truncated: true }} />);
+  expect(screen.getByText(/Recovery details are partial/)).toBeVisible();
+  expect(screen.queryByText("Nothing is waiting on anyone.")).not.toBeInTheDocument();
+});
 
 function task(overrides: Partial<Task>): Task {
   return {
@@ -328,11 +362,11 @@ describe("QueuesView", () => {
     expect(screen.getByRole("heading", { name: "Queen" })).toBeInTheDocument();
     expect(screen.getByText("Queen: reconcile message delivery")).toBeInTheDocument();
     expect(screen.queryByText("Last observed hold: prompt not ready")).not.toBeInTheDocument();
-    rerender(<QueuesView {...props} heldDeliveries={[]} />);
+    rerender(<QueuesView {...props} heldDeliveries={[]} recovery={{ items: [], truncated: false }} />);
     expect(screen.queryByText("Queen: reconcile message delivery")).not.toBeInTheDocument();
   });
   test("retains delivery evidence without claiming the Queen has stopped, then clears it", () => {
-    const props = { tasks: [], workers: [], onOpenTask: vi.fn() };
+    const props = { tasks: [], workers: [], onOpenTask: vi.fn(), recovery: { items: [], truncated: false } };
     const { rerender } = render(<QueuesView {...props} heldDeliveries={[{
       kind: "delivery_held_unsent_text", subject: "queen-review", worker_name: null,
       reason: "The last observed prompt contained text", first_observed_at: 1, observations: 1503,
@@ -377,7 +411,7 @@ describe("QueuesView", () => {
    * forever and the counts would stop meaning anything.
    */
   test("closed work is not a queue", () => {
-    render(<QueuesView onOpenTask={vi.fn()} workers={[]} tasks={[
+    render(<QueuesView onOpenTask={vi.fn()} workers={[]} recovery={{ items: [], truncated: false }} tasks={[
       task({ id: "a", state: "completed", next_move_owner: "nobody" }),
       task({ id: "b", state: "abandoned", next_move_owner: "nobody" }),
     ]} />);

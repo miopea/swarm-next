@@ -1759,7 +1759,7 @@ test("a queued briefing is shown but does not inflate the Needs you count", asyn
     if (url.includes("/api/v1/control-room/events")) return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
     if (url.includes("/api/v1/orchestration/queen-policy")) return Promise.resolve(ok({ at_hive: "coordinate", away: "coordinate", night_watch: "local_execution" }));
     if (url.includes("/api/v1/orchestration/coordinator") && coordinatorState === "failed") return Promise.reject(new Error("offline"));
-    if (url.includes("/api/v1/orchestration/coordinator") && coordinatorState === "empty") return Promise.resolve(ok({ held: [], held_briefings: [], blocked_escalations: [] }));
+    if (url.includes("/api/v1/orchestration/coordinator") && coordinatorState === "empty") return Promise.resolve(ok({ held: [], held_briefings: [], blocked_escalations: [], recovery: { items: [], truncated: false } }));
     if (url.includes("/api/v1/orchestration/coordinator")) return Promise.resolve(ok({
       completed_actions: 0, queen_calls_avoided: 0, uncertain_actions: 0, queued_actions: 0,
       stale_attention_actions: 0, worker_exit_attention_actions: 0, unstarted_attention_actions: 0,

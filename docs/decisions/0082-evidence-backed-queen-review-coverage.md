@@ -67,6 +67,24 @@ verified empty idle prompt. Queen must still obtain current evidence before any
 guarded continuation, distinguish intentional waits and assess the result.
 An early attention record never creates a Needs You request or changes task state.
 
+### Recovery visibility shares the coordinator snapshot
+
+Queues displays recovery responsibility separately from task execution ownership.
+The persistence boundary reads at most 32 live attention identities plus one
+overflow sentinel in a single statement, with exact-session message delivery
+evidence and any historical assessment. The existing supervisor activity cache
+supplies observations; opening or refreshing Queues never reads terminal output.
+Engaged and observed working/background sessions are not recovery rows. Missing
+observations remain explicitly unavailable. Delivery is not execution, and a
+previous assessment is not a current revalidation.
+
+The browser fences independently refreshed task and recovery data by task,
+worker, session and task revision, using the same projection for rows and badge.
+Partial or missing recovery data cannot support an all-clear claim. The optional
+field is an API rolling-update compatibility path owned by the control-room UI;
+remove that fallback when all supported API versions expose recovery snapshots.
+This projection never dispatches, changes task state, or creates a human decision.
+
 ### Queue age is not retry activity
 
 Persist the entry time of each briefing generation separately from retry

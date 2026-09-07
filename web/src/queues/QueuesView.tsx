@@ -1,11 +1,19 @@
 import { useId, useMemo } from "react";
 import HeldBriefingList, { BlockingTaskLink, holdReason, waitedFor, briefingWait } from "../orchestration/HeldBriefingList";
-import type { BlockedEscalation, HeldBriefing, HeldDelivery, QueenAutomationStatus } from "../api";
+import type { BlockedEscalation, HeldBriefing, HeldDelivery, QueenAutomationStatus, RecoveryQueueItem, RecoveryQueueSnapshot } from "../api";
 import DeliveryWaitList from "./DeliveryWaitList";
 import TaskPrerequisiteList from "./TaskPrerequisiteList";
 import { prerequisiteSatisfied, type NextMoveOwner, type Task } from "../api/tasks";
 import { groupQueueByWorker, projectTaskQueues, workerAwaitingAnswer } from "./taskQueueProjection";
 import type { Worker } from "../api/workers";
+
+const RECOVERY_LABELS: Record<RecoveryQueueItem["state"], string> = {
+  needs_queen_check: "Queen checks unfinished work",
+  awaiting_delivery: "Queen's recovery message is waiting for delivery",
+  verify_worker_response: "Recovery message delivered · Queen checks the response",
+  delivery_needs_recovery: "Queen resolves a failed or uncertain recovery delivery",
+  observation_unavailable: "Queen checks unavailable worker evidence",
+};
 
 /** A scanning hint, never a replacement for the recorded statement. */
 function QueueEvidence({ label, text }: { label: string; text: string }) {
@@ -148,6 +156,7 @@ export default function QueuesView({
   heldDeliveries = [],
   coordinatorUnavailable = false,
   queenAutomation,
+  recovery,
   now = Date.now(),
 }: {
   tasks: Task[];
@@ -170,6 +179,7 @@ export default function QueuesView({
   heldDeliveries?: HeldDelivery[];
   coordinatorUnavailable?: boolean;
   queenAutomation?: QueenAutomationStatus;
+  recovery?: RecoveryQueueSnapshot;
   now?: number;
 }) {
   const queueId = useId();
@@ -178,8 +188,9 @@ export default function QueuesView({
     [workers],
   );
   const workerById = useMemo(() => new Map(workers.map(worker => [worker.id, worker])), [workers]);
-  const projection = useMemo(() => projectTaskQueues(tasks, sourceBriefings, sourceBlockedWaits, workers), [tasks, sourceBriefings, sourceBlockedWaits, workers]);
-  const { waitingTasks, activeTasks: activeWork, heldBriefings, blockedWaits, extraBlockedWaits: extraWaits } = projection;
+  const projection = useMemo(() => projectTaskQueues(tasks, sourceBriefings, sourceBlockedWaits, workers, recovery?.items), [tasks, sourceBriefings, sourceBlockedWaits, workers, recovery]);
+  const { waitingTasks, activeTasks: activeWork, heldBriefings, blockedWaits, extraBlockedWaits: extraWaits, recoveryChecks } = projection;
+  const checks = useMemo(() => new Map(recoveryChecks.map(item => [item.task_id, item])), [recoveryChecks]);
 
   const groups = useMemo<Group[]>(() => {
     const open = waitingTasks;
@@ -188,9 +199,9 @@ export default function QueuesView({
       title: GROUP_TITLES[owner],
       meaning: GROUP_MEANINGS[owner],
       // Missing ownership remains visible without attributing it to someone.
-      tasks: open.filter((task) => displayOwner(task, now) === owner),
+      tasks: open.filter((task) => (checks.has(task.id) ? "queen" : displayOwner(task, now)) === owner),
     })).filter((group) => group.tasks.length > 0);
-  }, [waitingTasks, now]);
+  }, [waitingTasks, now, checks]);
 
   const total = groups.reduce((sum, group) => sum + group.tasks.length, 0);
   const waits = new Map(blockedWaits.map((wait) => [wait.task_id, wait]));
@@ -203,8 +214,10 @@ export default function QueuesView({
     return (
       <section className="queues" aria-label="Queues">
         {coordinatorUnavailable && <p role="status">Coordination status could not refresh. Showing last known work; it may have changed.</p>}
+        {recovery?.truncated && <p role="status">Recovery details are partial; more checks may be waiting for Queen.</p>}
+        {!recovery && <p role="status">Worker recovery details are unavailable; this view cannot confirm that every worker is progressing.</p>}
         {queenWait && <p className="queue-meaning">{queenWait}</p>}
-        {!queenWait && !coordinatorUnavailable && heldBriefings.length === 0 && heldDeliveries.length === 0 && <p className="queues-empty">Nothing is waiting on anyone.</p>}
+        {!queenWait && !coordinatorUnavailable && recovery && !recovery.truncated && heldBriefings.length === 0 && heldDeliveries.length === 0 && <p className="queues-empty">Nothing is waiting on anyone.</p>}
         <DeliveryWaitList held={heldDeliveries} />
         <HeldBriefingList briefings={heldBriefings} onOpenTask={onOpenTask} />
       </section>
@@ -214,6 +227,8 @@ export default function QueuesView({
   return (
     <section className="queues" aria-label="Queues">
       {coordinatorUnavailable && <p role="status">Coordination status could not refresh. Showing last known work; it may have changed.</p>}
+      {recovery?.truncated && <p role="status">Recovery details are partial; more checks may be waiting for Queen.</p>}
+      {!recovery && <p role="status">Worker recovery details are unavailable; this view cannot confirm that every worker is progressing.</p>}
       {queenWait && <p className="queue-meaning">{queenWait}</p>}
       {groups.length > 0 && <nav className="queue-owner-index" aria-label="Jump to queue owner">
         {groups.map(group => <a key={group.owner} href={`#${queueId}-${group.owner}`} data-owner={group.owner}>
@@ -230,6 +245,7 @@ export default function QueuesView({
                 {group.title} <span className="queue-count">{group.tasks.length}</span>
               </h2>
               <p className="queue-meaning">{group.meaning}</p>
+              {group.owner === "queen" && checks.size > 0 && <p className="queue-meaning">Recovery checks belong to Queen; execution stays with the assigned worker. Activity is the last supervisor observation.</p>}
               {hours === undefined ? null : (
                 <p className="queue-oldest">Longest since task update {ageLabel(hours)}</p>
               )}
@@ -246,7 +262,7 @@ export default function QueuesView({
                 <li key={task.id}>
                   <button type="button" onClick={() => onOpenTask(task.id)}>
                     <span className="queue-task-title">{task.title}</span>
-                    <span className="queue-task-meta">{taskProgress(task, now)}</span>
+                    <span className="queue-task-meta">{checks.has(task.id) ? RECOVERY_LABELS[checks.get(task.id)!.state] : taskProgress(task, now)}</span>
                     <span className="queue-task-meta">
                       {task.assigned_worker_id
                         ? (workerNames.get(task.assigned_worker_id) ?? "assigned")
@@ -254,6 +270,11 @@ export default function QueuesView({
                     </span>
                     {task.state === "blocked" && waits.has(task.id) && <span className="queue-task-meta">Blocked for {ageLabel(Math.max(0, Math.floor(waits.get(task.id)!.blocked_for_seconds / 3600)))}</span>}
                   </button>
+                  {checks.has(task.id) && <div className="queue-task-meta">
+                    <QueueEvidence label="Recovery observation" text={checks.get(task.id)!.reason} />
+                    {checks.get(task.id)!.delivery && <QueueEvidence label="Latest recovery delivery" text={`${checks.get(task.id)!.delivery!.state} · message ${checks.get(task.id)!.delivery!.message_id}`} />}
+                    {checks.get(task.id)!.last_assessment && <QueueEvidence label="Previous Queen assessment (not rechecked here)" text={`${checks.get(task.id)!.last_assessment!.reason} Source: ${checks.get(task.id)!.last_assessment!.source}`} />}
+                  </div>}
                   {briefing && <p className="queue-task-meta">Briefing held: {holdReason(briefing)} · queued {briefingWait([briefing], now / 1000)} <BlockingTaskLink briefing={briefing} onOpenTask={onOpenTask} /></p>}
                   <TaskPrerequisiteList task={task} workerNames={workerNames} onOpenTask={onOpenTask} compact />
                   {workerAwaitingAnswer(task, workerById.get(task.assigned_worker_id ?? "")) && <div className="queue-task-meta">

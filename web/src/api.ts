@@ -291,7 +291,23 @@ export type QueenAutomationStatus = {
   queen_owned_count?: number | null;
   waiting_reason: string | null;
 };
+export type RecoveryQueueItem = {
+  attention_id: string;
+  task_id: string;
+  worker_id: string;
+  session_id: string;
+  task_revision: number;
+  observed_at: number;
+  reason: string;
+  state: "needs_queen_check" | "awaiting_delivery" | "verify_worker_response" | "delivery_needs_recovery" | "observation_unavailable";
+  delivery: { message_id: string; state: string; updated_at: number } | null;
+  last_assessment: { reason: string; source: string } | null;
+};
+export type RecoveryQueueSnapshot = { items: RecoveryQueueItem[]; truncated: boolean };
+
 export type CoordinatorStatus = {
+  /** Additive mixed-build field; absence is unavailable, not proof of no recovery work. */
+  recovery?: RecoveryQueueSnapshot;
   completed_actions: number;
   queen_calls_avoided: number;
   uncertain_actions: number;

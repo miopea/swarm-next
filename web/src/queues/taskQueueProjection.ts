@@ -1,4 +1,4 @@
-import type { BlockedEscalation, HeldBriefing } from "../api";
+import type { BlockedEscalation, HeldBriefing, RecoveryQueueItem } from "../api";
 import { isOpenTaskState, prerequisiteSatisfied, type Task } from "../api/tasks";
 import type { Worker } from "../api/workers";
 
@@ -42,10 +42,20 @@ export function ordinaryActiveWork(task: Task): boolean {
 }
 
 /** One task-count definition for the navigation and rendered queue rows. */
-export function projectTaskQueues(tasks: Task[], held: HeldBriefing[], blocked: BlockedEscalation[], workers: Worker[] = []) {
+export function projectTaskQueues(tasks: Task[], held: HeldBriefing[], blocked: BlockedEscalation[], workers: Worker[] = [], recovery: RecoveryQueueItem[] = []) {
   const known = new Map(tasks.map((task) => [task.id, task]));
   const workerById = new Map(workers.map(worker => [worker.id, worker]));
+  // Coordinator and task payloads refresh independently. Never revive an old
+  // task/session/revision or move operator-owned work into Queen's check list.
+  const recoveryChecks = recovery.filter(item => {
+    const task = known.get(item.task_id);
+    return task?.next_move_owner === "worker" && isOpenTaskState(task.state)
+      && task.assigned_worker_id === item.worker_id && task.assigned_session_id === item.session_id
+      && task.updated_at === item.task_revision;
+  });
+  const recoveryIds = new Set(recoveryChecks.map(item => item.task_id));
   const ordinary = (task: Task) => ordinaryActiveWork(task)
+    && !recoveryIds.has(task.id)
     && !workerAwaitingAnswer(task, workerById.get(task.assigned_worker_id ?? ""));
   const waitingTasks = tasks.filter((task) => isOpenTaskState(task.state) && !ordinary(task));
   const activeTasks = tasks.filter(ordinary);
@@ -65,5 +75,5 @@ export function projectTaskQueues(tasks: Task[], held: HeldBriefing[], blocked: 
     ...heldBriefings.map((brief) => brief.task_id),
     ...extraBlockedWaits.map((wait) => wait.task_id),
   ]);
-  return { waitingTasks, activeTasks, heldBriefings, blockedWaits, extraBlockedWaits, taskCount: identities.size };
+  return { waitingTasks, activeTasks, heldBriefings, blockedWaits, extraBlockedWaits, recoveryChecks, taskCount: identities.size };
 }

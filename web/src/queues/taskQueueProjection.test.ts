@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { Task } from "../api/tasks";
-import type { HeldBriefing, BlockedEscalation } from "../api";
+import type { HeldBriefing, BlockedEscalation, RecoveryQueueItem } from "../api";
 import { groupQueueByWorker, projectTaskQueues } from "./taskQueueProjection";
 
 test("worker groups preserve roster and dispatch order without changing task inputs", () => {
@@ -25,6 +25,20 @@ const task = (id: string, extra: Partial<Task> = {}): Task => ({
 });
 const held = (task_id: string): HeldBriefing => ({ task_id, title: task_id, worker_id: "w", worker_name: "Petal", queued_at: 1, reason: "waiting_its_turn", blocked_by: "Other task" });
 const blocked = (task_id: string): BlockedEscalation => ({ task_id, title: task_id, worker_name: "Petal", workspace: "/w", blocked_for_seconds: 100 });
+
+test("recovery counts are exact-session, revision-fenced and do not mutate execution ownership", () => {
+  const current = task("recover", { state: "active", dispatch_state: "delivered", assigned_worker_id: "w", assigned_session_id: "s" });
+  const check: RecoveryQueueItem = { attention_id: "a", task_id: current.id, worker_id: "w", session_id: "s", task_revision: 1, observed_at: 1, reason: "Resting", state: "verify_worker_response", delivery: null, last_assessment: null };
+  const visible = projectTaskQueues([current], [], [], [], [check, check]);
+  expect(visible.taskCount).toBe(1);
+  expect(visible.activeTasks).toEqual([]);
+  expect(visible.waitingTasks).toEqual([current]);
+  expect(current.next_move_owner).toBe("worker");
+  for (const changed of [{ state: "completed" as const }, { next_move_owner: "operator" as const }, { assigned_worker_id: "other" }, { assigned_session_id: "new" }, { updated_at: 2 }]) {
+    expect(projectTaskQueues([{ ...current, ...changed }], [], [], [], [check]).recoveryChecks).toEqual([]);
+  }
+  expect(projectTaskQueues([current], [], [], [], []).activeTasks).toEqual([current]);
+});
 
 test("exact-session input waits remain visible and clear when the worker resumes", () => {
   const current = task("active", { state: "active", dispatch_state: "delivered", assigned_worker_id: "w", assigned_session_id: "s" });

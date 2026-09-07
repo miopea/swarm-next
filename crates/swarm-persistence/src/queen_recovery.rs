@@ -29,6 +29,112 @@ pub(super) fn migrate(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
 }
 
 impl TaskStore {
+    /// Read the same live recovery obligations Queen sees, with exact transport
+    /// evidence, in one database snapshot. No terminal reads or writes occur.
+    ///
+    /// # Errors
+    /// Propagates corrupt stored evidence instead of presenting an empty queue.
+    pub fn recovery_queue_snapshot(
+        &self,
+        observations: &[swarm_domain::RecoveryQueueObservation],
+        now: i64,
+    ) -> Result<swarm_domain::RecoveryQueueSnapshot, TaskStoreError> {
+        use swarm_domain::{RecoveryQueueDelivery, RecoveryQueueItem, RecoveryQueueSnapshot};
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(&format!(
+            "SELECT action.id, task.id, worker.id, session.session_id,
+                    task.updated_at, action.finished_at, action.reason,
+                    EXISTS(SELECT 1 FROM worker_engagements e WHERE e.worker_id=worker.id AND e.expires_at>?1),
+                    (SELECT json_object('message_id',m.id,'state',d.state,'updated_at',d.updated_at)
+                     FROM task_messages m JOIN task_message_deliveries d ON d.message_id=m.id
+                     WHERE m.task_id=task.id AND m.sender='queen' AND m.recipient_worker_id=worker.id
+                       AND m.created_at>=action.finished_at AND d.superseded=0
+                       AND d.state IN ('queued','dispatching','delivered','uncertain','rejected')
+                       AND (d.state='queued' OR (d.state='delivered' AND m.delivered_session_id=session.session_id)
+                            OR (d.state IN ('dispatching','uncertain','rejected') AND d.session_id=session.session_id))
+                     ORDER BY m.created_at DESC,m.id DESC LIMIT 1),
+                    (SELECT r.input_payload FROM queen_recovery_receipts r
+                     WHERE r.task_id=task.id AND r.attention_id=action.id
+                       AND r.worker_id=worker.id AND r.session_id=session.session_id)
+             {} AND action.kind IN ('stale_owned_work_attention',
+                 'assigned_ready_work_not_started_attention','owned_work_never_briefed_attention')
+             ORDER BY action.finished_at DESC,action.id DESC LIMIT 33",
+            crate::coordinator::LIVE_ATTENTION_SOURCE
+        ))?;
+        let rows = statement
+            .query_map([now], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, bool>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut snapshot = RecoveryQueueSnapshot {
+            items: Vec::new(),
+            truncated: rows.len() > 32,
+        };
+        for (
+            attention_id,
+            task_id,
+            worker_id,
+            session_id,
+            task_revision,
+            observed_at,
+            reason,
+            engaged,
+            delivery,
+            assessment,
+        ) in rows.into_iter().take(32)
+        {
+            let session_id = session_id
+                .parse()
+                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+            let delivery: Option<RecoveryQueueDelivery> = delivery
+                .map(|raw| serde_json::from_str(&raw))
+                .transpose()
+                .map_err(|_| {
+                    TaskStoreError::IntegrityFailure("invalid recovery queue delivery".into())
+                })?;
+            let observation = observations
+                .iter()
+                .find(|item| item.session_id == session_id)
+                .copied();
+            let Some(state) = swarm_domain::recovery_queue_state(
+                session_id,
+                observation,
+                engaged,
+                delivery.as_ref().map(|item| item.state.as_str()),
+            ) else {
+                continue;
+            };
+            snapshot.items.push(RecoveryQueueItem {
+                attention_id,
+                task_id: task_id.parse().map_err(|_| rusqlite::Error::InvalidQuery)?,
+                worker_id: worker_id
+                    .parse()
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                session_id,
+                task_revision,
+                observed_at,
+                reason,
+                state,
+                delivery,
+                last_assessment: assessment
+                    .map(|raw| read_saved_recovery(&raw))
+                    .transpose()?,
+            });
+        }
+        Ok(snapshot)
+    }
+
     /// Evaluate all current recovery obligations against freshly obtained facts.
     /// A partial observation pass cannot certify complete recovery coverage.
     ///
@@ -405,6 +511,170 @@ mod tests {
         ProviderKind, QueenRecoveryDisposition, RecoveryTerminalActivity, TaskState,
     };
     const NOW: i64 = 4_000_000_000;
+
+    #[test]
+    fn recovery_queue_reports_overflow_instead_of_certifying_a_partial_fleet() {
+        let store = TaskStore::in_memory().unwrap();
+        for index in 0..33 {
+            let workspace = format!("/workspace/bounded-{index}");
+            let worker = store
+                .create_worker(
+                    &format!("Bounded {index}"),
+                    ProviderKind::ClaudeCode,
+                    &workspace,
+                    false,
+                    1,
+                )
+                .unwrap();
+            store
+                .bind_worker_session(worker.id, WorkerSessionId::new())
+                .unwrap();
+            let task = store
+                .create_task("Unfinished fictional work", &workspace)
+                .unwrap();
+            store.transition_task(task.id, TaskState::Ready).unwrap();
+            store
+                .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::operator())
+                .unwrap();
+            store.transition_task(task.id, TaskState::Active).unwrap();
+            let candidate = store
+                .stale_owned_work_candidates(NOW, 600)
+                .unwrap()
+                .into_iter()
+                .find(|candidate| candidate.task_id == task.id)
+                .unwrap();
+            store
+                .record_stale_owned_work_attention(
+                    &candidate,
+                    NOW,
+                    600,
+                    crate::BackgroundWorkReading::NoneVisible,
+                )
+                .unwrap();
+        }
+        let snapshot = store.recovery_queue_snapshot(&[], NOW).unwrap();
+        assert_eq!(snapshot.items.len(), 32);
+        assert!(snapshot.truncated);
+        assert!(
+            snapshot
+                .items
+                .iter()
+                .all(|item| item.state == swarm_domain::RecoveryQueueState::ObservationUnavailable)
+        );
+    }
+
+    #[test]
+    fn recovery_queue_tracks_exact_delivery_without_settling_the_task() {
+        use swarm_domain::{RecoveryQueueObservation, RecoveryQueueState};
+        let store = TaskStore::in_memory().unwrap();
+        let (input, _) = fixture(&store);
+        let id = input.identity;
+        let observations = [RecoveryQueueObservation {
+            session_id: id.session_id,
+            activity: RecoveryTerminalActivity::Resting,
+            background_work: false,
+        }];
+        let read = |now| store.recovery_queue_snapshot(&observations, now).unwrap();
+        assert_eq!(
+            read(NOW).items[0].state,
+            RecoveryQueueState::NeedsQueenCheck
+        );
+        assert_eq!(
+            store.recovery_queue_snapshot(&[], NOW).unwrap().items[0].state,
+            RecoveryQueueState::ObservationUnavailable
+        );
+        let message = store
+            .send_task_message(
+                id.task_id,
+                crate::MessageEnd::queen(),
+                crate::MessageEnd::worker(id.worker_id),
+                "Continue this fictional task",
+                NOW + 1,
+            )
+            .unwrap();
+        let queued = read(NOW + 1);
+        assert_eq!(queued.items[0].state, RecoveryQueueState::AwaitingDelivery);
+        assert_eq!(
+            queued.items[0].delivery.as_ref().unwrap().message_id,
+            message.id
+        );
+        store
+            .mark_task_message_delivered(&message.id, id.session_id, NOW + 2)
+            .unwrap();
+        assert_eq!(
+            read(NOW + 2).items[0].state,
+            RecoveryQueueState::VerifyWorkerResponse
+        );
+        assert_eq!(store.get_task(id.task_id).unwrap().state, TaskState::Active);
+        store
+            .renew_worker_engagement(id.session_id, None, NOW + 3, 60)
+            .unwrap();
+        assert!(read(NOW + 4).items.is_empty());
+        assert_eq!(read(NOW + 64).items.len(), 1);
+        let working = [RecoveryQueueObservation {
+            activity: RecoveryTerminalActivity::Working,
+            ..observations[0]
+        }];
+        assert!(
+            store
+                .recovery_queue_snapshot(&working, NOW + 64)
+                .unwrap()
+                .items
+                .is_empty()
+        );
+        store
+            .transition_task(id.task_id, TaskState::Review)
+            .unwrap();
+        assert!(read(NOW + 65).items.is_empty());
+    }
+
+    #[test]
+    fn recovery_queue_does_not_borrow_old_or_other_session_messages() {
+        use swarm_domain::{RecoveryQueueObservation, RecoveryQueueState};
+        let store = TaskStore::in_memory().unwrap();
+        let (input, _) = fixture(&store);
+        let id = input.identity;
+        let observations = [RecoveryQueueObservation {
+            session_id: id.session_id,
+            activity: RecoveryTerminalActivity::Resting,
+            background_work: false,
+        }];
+        store
+            .send_task_message(
+                id.task_id,
+                crate::MessageEnd::queen(),
+                crate::MessageEnd::worker(id.worker_id),
+                "Older request",
+                NOW - 1,
+            )
+            .unwrap();
+        assert!(
+            store
+                .recovery_queue_snapshot(&observations, NOW)
+                .unwrap()
+                .items[0]
+                .delivery
+                .is_none()
+        );
+        let message = store
+            .send_task_message(
+                id.task_id,
+                crate::MessageEnd::queen(),
+                crate::MessageEnd::worker(id.worker_id),
+                "Different session",
+                NOW + 1,
+            )
+            .unwrap();
+        store
+            .mark_task_message_delivered(&message.id, WorkerSessionId::new(), NOW + 2)
+            .unwrap();
+        let snapshot = store
+            .recovery_queue_snapshot(&observations, NOW + 2)
+            .unwrap();
+        assert_eq!(snapshot.items[0].state, RecoveryQueueState::NeedsQueenCheck);
+        assert!(snapshot.items[0].delivery.is_none());
+        assert!(!snapshot.truncated);
+    }
 
     fn fixture(store: &TaskStore) -> (QueenRecoveryRecord, QueenRecoveryFacts) {
         let worker = store

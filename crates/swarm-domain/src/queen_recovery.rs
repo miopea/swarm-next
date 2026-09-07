@@ -3,6 +3,145 @@
 
 use crate::{DecisionRequestId, TaskId, WorkerId, WorkerSessionId};
 
+/// Presentation of an existing recovery obligation, never delivery authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryQueueState {
+    NeedsQueenCheck,
+    AwaitingDelivery,
+    VerifyWorkerResponse,
+    DeliveryNeedsRecovery,
+    ObservationUnavailable,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct RecoveryQueueDelivery {
+    pub message_id: String,
+    pub state: String,
+    pub updated_at: i64,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct RecoveryQueueItem {
+    pub attention_id: String,
+    pub task_id: TaskId,
+    pub worker_id: WorkerId,
+    pub session_id: WorkerSessionId,
+    pub task_revision: i64,
+    pub observed_at: i64,
+    pub reason: String,
+    pub state: RecoveryQueueState,
+    pub delivery: Option<RecoveryQueueDelivery>,
+    /// Historical judgment only; rendering it does not revalidate its source.
+    pub last_assessment: Option<QueenRecoveryRecord>,
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct RecoveryQueueSnapshot {
+    pub items: Vec<RecoveryQueueItem>,
+    pub truncated: bool,
+}
+
+/// Existing supervisor observation; absence must not be rendered as healthy.
+#[derive(Clone, Copy, Debug)]
+pub struct RecoveryQueueObservation {
+    pub session_id: WorkerSessionId,
+    pub activity: RecoveryTerminalActivity,
+    pub background_work: bool,
+}
+
+/// No additional terminal reads are required to render a queue refresh. These
+/// labels refer to the last supervisor observation, not a new safety assessment.
+#[must_use]
+pub fn recovery_queue_state(
+    session_id: WorkerSessionId,
+    observation: Option<RecoveryQueueObservation>,
+    operator_engaged: bool,
+    delivery_state: Option<&str>,
+) -> Option<RecoveryQueueState> {
+    if operator_engaged {
+        return None;
+    }
+    let Some(observation) = observation.filter(|item| item.session_id == session_id) else {
+        return Some(RecoveryQueueState::ObservationUnavailable);
+    };
+    if observation.activity == RecoveryTerminalActivity::Working || observation.background_work {
+        return None;
+    }
+    if observation.activity == RecoveryTerminalActivity::Unknown {
+        return Some(RecoveryQueueState::ObservationUnavailable);
+    }
+    Some(match delivery_state {
+        Some("queued" | "dispatching") => RecoveryQueueState::AwaitingDelivery,
+        Some("delivered") => RecoveryQueueState::VerifyWorkerResponse,
+        Some("uncertain" | "rejected") => RecoveryQueueState::DeliveryNeedsRecovery,
+        _ => RecoveryQueueState::NeedsQueenCheck,
+    })
+}
+
+#[cfg(test)]
+mod queue_tests {
+    use super::*;
+
+    #[test]
+    fn queue_recovery_never_confuses_delivery_with_execution_or_unknown_with_healthy() {
+        let session = WorkerSessionId::new();
+        let resting = RecoveryQueueObservation {
+            session_id: session,
+            activity: RecoveryTerminalActivity::Resting,
+            background_work: false,
+        };
+        for (delivery, expected) in [
+            (None, RecoveryQueueState::NeedsQueenCheck),
+            (Some("queued"), RecoveryQueueState::AwaitingDelivery),
+            (Some("dispatching"), RecoveryQueueState::AwaitingDelivery),
+            (Some("delivered"), RecoveryQueueState::VerifyWorkerResponse),
+            (Some("uncertain"), RecoveryQueueState::DeliveryNeedsRecovery),
+            (Some("rejected"), RecoveryQueueState::DeliveryNeedsRecovery),
+        ] {
+            assert_eq!(
+                recovery_queue_state(session, Some(resting), false, delivery),
+                Some(expected)
+            );
+        }
+        for observation in [
+            None,
+            Some(RecoveryQueueObservation {
+                session_id: WorkerSessionId::new(),
+                ..resting
+            }),
+            Some(RecoveryQueueObservation {
+                activity: RecoveryTerminalActivity::Unknown,
+                ..resting
+            }),
+        ] {
+            assert_eq!(
+                recovery_queue_state(session, observation, false, Some("delivered")),
+                Some(RecoveryQueueState::ObservationUnavailable)
+            );
+        }
+        assert_eq!(
+            recovery_queue_state(session, Some(resting), true, None),
+            None
+        );
+        for observation in [
+            RecoveryQueueObservation {
+                activity: RecoveryTerminalActivity::Working,
+                ..resting
+            },
+            RecoveryQueueObservation {
+                background_work: true,
+                ..resting
+            },
+        ] {
+            assert_eq!(
+                recovery_queue_state(session, Some(observation), false, Some("delivered")),
+                None
+            );
+        }
+    }
+}
+
 /// Every receipt belongs to one exact observed obligation, including its session.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]

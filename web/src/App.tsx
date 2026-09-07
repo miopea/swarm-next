@@ -1,5 +1,6 @@
 import { isClosedTaskState, isOpenTaskState } from "./api/tasks";
 import { projectTaskQueues } from "./queues/taskQueueProjection";
+import type { RecoveryQueueSnapshot } from "./api";
 import DatabaseRecoveryCard from "./runtime/DatabaseRecoveryCard";
 import BroadcastToWorkers from "./workers/BroadcastToWorkers";
 import ConversationDriftCard, { type WorkerConversation } from "./workers/ConversationDriftCard";
@@ -514,6 +515,7 @@ export function App() {
   // NOT fed into attentionCount, on purpose. See HeldBriefingList for why a
   // self-resolving state must not badge.
   const [heldBriefings, setHeldBriefings] = useState<HeldBriefing[]>([]);
+  const [recoveryQueue, setRecoveryQueue] = useState<RecoveryQueueSnapshot>();
   /** Bumped to re-read held work immediately rather than waiting for the tick. */
   const [heldDeliveryRefresh, setHeldDeliveryRefresh] = useState(0);
   const [providers, setProviders] = useState<ProviderCapabilities>({ claude_code: true, codex: false });
@@ -620,6 +622,7 @@ export function App() {
       setBlockedEscalations([]);
       setUnsettledReview([]);
       setHeldBriefings([]);
+      setRecoveryQueue(undefined);
     }
   }, [operatorToken]);
   const refreshHeldDeliveries = useCallback(async (signal: AbortSignal) => {
@@ -631,6 +634,7 @@ export function App() {
       setBlockedEscalations(status.blocked_escalations ?? []);
       setUnsettledReview(status.unsettled_review ?? []);
       setHeldBriefings(status.held_briefings ?? []);
+      setRecoveryQueue(status.recovery);
       setCoordinatorUnavailable(false);
     } catch {
       if (!signal.aborted || (signal.reason instanceof DOMException && signal.reason.name === "TimeoutError")) {
@@ -1536,8 +1540,8 @@ export function App() {
   const openTaskCount = tasks.filter((task) => isOpenTaskState(task.state)).length;
   // Count waiting task identities, not ordinary active work or duplicate
   // coordinator observations. The queue page uses this same projection.
-  const queuedTaskCount = useMemo(() => projectTaskQueues(tasks, heldBriefings, blockedEscalations, workers).taskCount,
-    [tasks, heldBriefings, blockedEscalations, workers]);
+  const queuedTaskCount = useMemo(() => projectTaskQueues(tasks, heldBriefings, blockedEscalations, workers, recoveryQueue?.items).taskCount,
+    [tasks, heldBriefings, blockedEscalations, workers, recoveryQueue]);
   const pendingDecisionCount = decisions.filter((decision) => decision.state === "pending").length;
   const pendingAssistCount = stewardAssists?.incoming?.filter((request) => request.state === "pending").length ?? 0;
   const queenWorkerId = workers.find((worker) => worker.role === "queen")?.id;
@@ -2448,6 +2452,7 @@ export function App() {
               tasks={tasks}
               workers={workers}
               heldBriefings={heldBriefings}
+              recovery={recoveryQueue}
               blockedWaits={blockedEscalations}
               heldDeliveries={queuedDeliveryObservations}
               onOpenTask={(taskId) => {

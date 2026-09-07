@@ -13,6 +13,19 @@ pub struct QueenQueueSnapshot {
 }
 
 impl TaskService {
+    /// Operator-authorized adapters supply existing supervisor observations.
+    /// This read neither observes terminals again nor certifies recovery success.
+    ///
+    /// # Errors
+    /// Propagates unavailable or corrupt persistence evidence.
+    pub fn recovery_queue_snapshot(
+        &self,
+        observations: &[swarm_domain::RecoveryQueueObservation],
+        now: i64,
+    ) -> Result<swarm_domain::RecoveryQueueSnapshot, ApplicationError> {
+        Ok(self.store.recovery_queue_snapshot(observations, now)?)
+    }
+
     /// Read current board ownership without assigning, starting or resolving work.
     ///
     /// # Errors
