@@ -725,7 +725,18 @@ impl TaskStore {
         // Only from AwaitingRelease. A deployment recorded against work still in
         // Review does NOT close it: that work has not been accepted yet, and
         // shipping something is not the same as somebody agreeing it is done.
-        if task_state == TaskState::AwaitingRelease.to_string() && delivers_whole_task {
+        let prerequisites_satisfied =
+            match crate::task_prerequisites::ensure_satisfied(&transaction, task_id) {
+                Ok(()) => true,
+                Err(TaskStoreError::TaskPrerequisite(
+                    swarm_domain::TaskPrerequisiteError::Unresolved,
+                )) => false,
+                Err(error) => return Err(error),
+            };
+        if task_state == TaskState::AwaitingRelease.to_string()
+            && delivers_whole_task
+            && prerequisites_satisfied
+        {
             transaction.execute(
                 "UPDATE tasks SET state = ?2, updated_at = ?3 WHERE id = ?1",
                 params![
@@ -2220,6 +2231,59 @@ mod tests {
     /// work on a claim that was false. Parking work is only worth doing if
     /// nothing then has to remember to come back for it, so this is the
     /// assertion the whole state stands on.
+    #[test]
+    fn release_evidence_survives_a_removed_prerequisite_and_settles_after_reconciliation() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("Ship the thing", "/workspace").unwrap();
+        let upstream = store.create_task("Verify upstream", "/workspace").unwrap();
+        for id in [task.id, upstream.id] {
+            store.transition_task(id, TaskState::Ready).unwrap();
+            store.transition_task(id, TaskState::Active).unwrap();
+            store.transition_task(id, TaskState::Review).unwrap();
+        }
+        store
+            .transition_task(upstream.id, TaskState::Completed)
+            .unwrap();
+        let actor = swarm_domain::TaskActivityActor::operator();
+        store
+            .add_task_prerequisite(task.id, upstream.id, "Verified upstream", &actor, 1_000)
+            .unwrap();
+        store
+            .transition_task(task.id, TaskState::AwaitingRelease)
+            .unwrap();
+        store
+            .remove_task_as(upstream.id, &actor, "Verification was withdrawn")
+            .unwrap();
+
+        store
+            .record_task_deployment(task.id, "production", "abc123", 2_000)
+            .unwrap();
+        assert_eq!(
+            store.get_task(task.id).unwrap().state,
+            TaskState::AwaitingRelease
+        );
+        assert!(
+            store
+                .complete_reviewed_work_with_deployment()
+                .unwrap()
+                .is_empty()
+        );
+
+        store
+            .remove_task_prerequisite(
+                task.id,
+                upstream.id,
+                "Operator reconciled removed verification",
+                &actor,
+                2_001,
+            )
+            .unwrap();
+        let closed = store.complete_reviewed_work_with_deployment().unwrap();
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].task_id, task.id);
+        assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Completed);
+    }
+
     #[test]
     fn awaiting_release_work_completes_itself_when_the_deployment_lands() {
         let store = TaskStore::in_memory().unwrap();

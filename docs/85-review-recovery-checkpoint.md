@@ -2,6 +2,21 @@
 
 ## Review prerequisites and routine completion (local validation)
 
+Deployed main `002ef1999bf2` through the normal development updater. Health
+reports `1.5.0-dev-002ef1999bf2-20260907010656-3634784`, no degradation and no
+database recovery required. All 16 captured running worker/session pairs remained
+identical after the update. The reported worker-engine build ID changed, so this
+checkpoint claims verified session preservation, not an unchanged engine build.
+The dedicated Edge test tab still requires operator unlock; no visual acceptance
+is claimed. No release was cut.
+
+Follow-up audit found the Awaiting Release deployment writer could close directly
+without rechecking a prerequisite that had become invalid. The follow-up keeps
+the deployment evidence, withholds completion, and lets the existing deployment
+sweep close after reconciliation. Isolated Linux validation passes all 27 email
+persistence tests, 58 task-outcome tests, and strict persistence lint. This
+follow-up is not included in the `002ef1999bf2` deployment checkpoint above.
+
 QUEEN-01 explicitly requires machine-verifiable routine work to settle without
 mandatory Queen approval. Both automatic paths are wired into the API coordinator:
 whole-task deployment evidence and reported documentation/no-code outcomes.
@@ -22,7 +37,7 @@ agent-endpoint test passes for both Blocked and Review, preserving Queen-only
 dependency authority. The editor now supports Review without rewinding its state;
 104 focused queue/task UI tests and TypeScript checking pass. Strict persistence
 all-target, all-feature lint passes after correcting its findings. These changes are
-not yet deployed or accepted in the live browser. No real backlog edges
+deployed but not yet accepted in the live browser. No real backlog edges
 were inferred from prose or changed manually as part of these tests.
 
 ## Deployment verification (September 7 UTC)

@@ -19,6 +19,11 @@ worker; otherwise Queen resumes review. Transitions to completion or shipping
 must recheck prerequisite satisfaction in the same transaction, including
 automatic settlement paths. This extension addresses waits for shared test
 sessions and other downstream verification that formerly existed only in prose.
+Deployment recording must preserve truthful evidence even if a prerequisite has
+since become invalid. It must not complete Awaiting Release work through that
+gate; the existing deterministic deployment sweep settles it when reconciled.
+Neither this recovery nor eligible routine Review completion requires a new
+Queen approval merely because a prerequisite once existed.
 It does not rewind Active or Review work, stop a terminal, start another worker or create
 an operator decision. Existing lifecycle commands remain the owner of transitions.
 Adding an edge requires both tasks to exist in the same Hive and rejects self

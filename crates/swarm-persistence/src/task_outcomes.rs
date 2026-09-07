@@ -2338,7 +2338,7 @@ impl TaskStore {
                  -- closes, on the whole one, which is the honest reading.
                  JOIN task_deployments deployment ON deployment.task_id = task.id
                    AND deployment.delivers_whole_task = 1
-                 WHERE task.state = ?1
+                 WHERE task.state IN (?1, 'awaiting_release')
                    AND task.removed_at IS NULL
                    AND NOT EXISTS (
                        SELECT 1 FROM task_prerequisites p
