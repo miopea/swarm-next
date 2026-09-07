@@ -176,9 +176,34 @@ impl TaskStore {
         key: Uuid,
         now: i64,
     ) -> Result<SupportOutboxEntry, SupportOutboxError> {
+        self.claim_support_submission_at(key, None, now)
+    }
+
+    /// Claims only when the frozen destination still matches the configured sender.
+    ///
+    /// # Errors
+    /// A changed destination refuses without consuming an attempt or rewriting content.
+    pub fn claim_support_submission_for_destination(
+        &self,
+        key: Uuid,
+        destination: &str,
+        now: i64,
+    ) -> Result<SupportOutboxEntry, SupportOutboxError> {
+        self.claim_support_submission_at(key, Some(destination), now)
+    }
+
+    fn claim_support_submission_at(
+        &self,
+        key: Uuid,
+        destination: Option<&str>,
+        now: i64,
+    ) -> Result<SupportOutboxEntry, SupportOutboxError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut entry = read(&transaction, key)?.ok_or(SupportOutboxError::NotFound)?;
+        if destination.is_some_and(|destination| destination != entry.destination) {
+            return Err(SupportOutboxError::Conflict);
+        }
         if now < 0 {
             return Err(SupportOutboxError::InvalidTransition);
         }

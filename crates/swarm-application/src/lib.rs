@@ -34,12 +34,14 @@ mod ops_tickets;
 mod queen_review;
 mod queue_snapshot;
 mod support;
+mod support_submission;
 mod task_block;
 pub use ops_tickets::{OpsTicketError, OpsTicketProgress, OpsTicketService};
 pub use queue_snapshot::{
     PendingDecisionOverlap, PendingDecisionOverlapSnapshot, QueenQueueSnapshot,
 };
 pub use support::{SupportService, SupportServiceError};
+pub use support_submission::{HiveSupportService, HiveSupportServiceError, SupportDestination};
 
 /// The durable agent identity resolved before an application command is invoked.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

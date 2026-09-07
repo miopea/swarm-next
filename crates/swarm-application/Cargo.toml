@@ -9,6 +9,8 @@ license.workspace = true
 swarm-domain = { path = "../swarm-domain" }
 swarm-persistence = { path = "../swarm-persistence" }
 thiserror.workspace = true
+url.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true
