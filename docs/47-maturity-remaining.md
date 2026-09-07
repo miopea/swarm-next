@@ -7,6 +7,30 @@ implementation history, not an assertion that their then-open items are still
 unimplemented. The approved full scope remains `45-daily-driver-maturity-plan.md`.
 No phase-completion percentage or full-program completion is established.
 
+### September 7, 21:40 UTC: operator assistance routing and reload acceptance
+
+Main `f2bd8f7c` is live and healthy as
+`1.5.0-dev-f2bd8f7c92ab-20260907213621-322710`, with all sixteen original
+worker/session pairs preserved. The isolated Linux test tree passed the agent
+contract suite and 48 guarded-delivery tests, formatting and strict API
+all-target/all-feature Clippy. Normalized hashes of both changed Rust files
+match main integration. No schema/engine change or release was made.
+
+Queen's standing instructions and every review delivery now explicitly route
+required operator action (including seeded authentication sessions) into an
+existing/new task-linked assistance request, not an external-wait judgment.
+Authenticated deferrals and original scope remain protected. This is delivered
+model guidance, not an automatic classifier or proof of model compliance. Run
+`01a07dcb-39af-77f0-8e25-bc3249edd319` is running; actual creation/reuse of the
+missing requests and normal resumption remain unverified.
+
+Live Edge update acceptance passed for `a20e17e7`'s corrected update button:
+the separate tab was on Queues, loaded `f2bd8f7c` through Reload this tab, restored
+authentication and the opening preference, and remained on Queues with no
+terminal input mounted. This closes that observed version-stamped reload case,
+not mobile eviction, provider conversation resumption or all navigation cases.
+CI for `8c4724fd` succeeded; later CI results still require final confirmation.
+
 ### September 7, 21:12 UTC: reload restoration correction
 
 Deployment checkpoint, 21:26 UTC: main `a20e17e7` is healthy as
