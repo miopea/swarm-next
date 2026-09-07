@@ -2,6 +2,20 @@
 
 ## Live acceptance failure: an unfinished run lost from Queen's context
 
+The next local slice adds domain-gated same-session continuation: a current,
+complete, resting snapshot with no background work or unsent input can queue
+the exact Running review again. Persistence rechecks session, engagement and
+Steward ownership and retains the existing three-attempt budget. A concurrent
+finish can close an already-delivered continuation while queued/delivering;
+initial undelivered runs remain protected. The queued continuation keeps its
+unattended authority ceiling. No additional timer or migration is introduced.
+The domain gate, two new continuation lifecycle tests and all 41 conductor
+tests pass; the prior 41 delivery tests also passed before the final continuity
+guidance addition. Strict lint initially found a missing semicolon in logging.
+The corrected source passes formatting and strict domain/persistence/API lint.
+Do not deploy this slice before adapter-level busy/input/failure coverage and
+budget-exhaustion visibility are verified. The live demo is still not accepted.
+
 Local context-restoration implementation now exposes an unfinished delivered
 run/session identity in Queen-only coordination attention using a pure database
 read. Preparing a task-message notification for that exact session appends a

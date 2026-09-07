@@ -72,6 +72,45 @@ pub enum QueenAutomationFinish {
 }
 
 impl TaskStore {
+    /// Queue a continuation of the exact delivered run after a fresh idle
+    /// observation. Reuses the existing bounded delivery-attempt budget and
+    /// receipts. It never resets context, grants authority or starts a new run.
+    ///
+    /// # Errors
+    /// Returns an error if durable ownership cannot be checked atomically.
+    pub fn continue_idle_queen_review(
+        &self,
+        run_id: &str,
+        session_id: WorkerSessionId,
+        observation: swarm_domain::QueenReviewContinuationObservation,
+        now: i64,
+    ) -> Result<bool, TaskStoreError> {
+        if !observation.permits_continuation() {
+            return Ok(false);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let changed = transaction.execute(
+            "UPDATE queen_automation SET state='queued', updated_at=?3
+             WHERE id=1 AND run_id=?1 AND state='running'
+               AND delivery_session_id=?2 AND delivered_at IS NOT NULL
+               AND enabled=1 AND attempts < ?4
+               AND EXISTS (SELECT 1 FROM worker_sessions session
+                   JOIN worker_profiles queen ON queen.id=session.worker_id AND queen.role='queen'
+                   WHERE session.session_id=?2 AND session.ended_at IS NULL
+                     AND NOT EXISTS (SELECT 1 FROM worker_engagements engagement
+                         WHERE engagement.worker_id=queen.id AND engagement.expires_at > ?3))
+               AND NOT EXISTS (SELECT 1 FROM local_federation_steward_takeover_leases lease
+                   WHERE lease.state='active' AND lease.expires_at > ?3)",
+            params![run_id, session_id.to_string(), now, MAX_AUTOMATION_ATTEMPTS],
+        )? == 1;
+        if changed {
+            insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        }
+        transaction.commit()?;
+        Ok(changed)
+    }
+
     /// Read the unfinished delivered review without expiring, requeuing or
     /// otherwise advancing it. Provider compaction is not a lifecycle event.
     ///
@@ -84,7 +123,8 @@ impl TaskStore {
             .connection()?
             .query_row(
                 "SELECT run_id, delivery_session_id FROM queen_automation
-             WHERE id = 1 AND state IN ('running', 'uncertain')
+             WHERE id = 1 AND (state IN ('running', 'uncertain')
+                 OR (state IN ('queued','delivering') AND delivered_at IS NOT NULL))
                AND run_id IS NOT NULL AND delivery_session_id IS NOT NULL",
                 [],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
@@ -624,7 +664,8 @@ impl TaskStore {
         // Close honestly as incomplete instead of trapping a terminal in a
         // finish/retry loop. This neither resumes work nor asks the operator.
         let active: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM queen_automation WHERE id=1 AND run_id=?1 AND state IN ('running','uncertain'))",
+            "SELECT EXISTS(SELECT 1 FROM queen_automation WHERE id=1 AND run_id=?1
+             AND (state IN ('running','uncertain') OR (state IN ('queued','delivering') AND delivered_at IS NOT NULL)))",
             [run_id], |row| row.get(0),
         )?;
         let outcome = if active
@@ -663,7 +704,8 @@ impl TaskStore {
         let changed = transaction.execute(
             "UPDATE queen_automation SET state = 'completed', outcome = ?2, finished_at = ?3,
                  delivered_fingerprint = pending_fingerprint, pending_fingerprint = NULL, updated_at = ?3
-             WHERE id = 1 AND run_id = ?1 AND state IN ('running', 'uncertain')",
+             WHERE id = 1 AND run_id = ?1 AND (state IN ('running', 'uncertain')
+                 OR (state IN ('queued','delivering') AND delivered_at IS NOT NULL))",
             params![run_id, outcome.to_string(), now],
         )? == 1;
         if changed {
@@ -705,7 +747,8 @@ impl TaskStore {
     ) -> Result<bool, TaskStoreError> {
         let connection = self.connection()?;
         let running: bool = connection.query_row(
-            "SELECT state = 'running' FROM queen_automation WHERE id = 1",
+            "SELECT state = 'running' OR (state IN ('queued','delivering','uncertain')
+                 AND delivered_at IS NOT NULL) FROM queen_automation WHERE id = 1",
             [],
             |row| row.get(0),
         )?;
@@ -1174,6 +1217,130 @@ pub(super) fn migrate_queen_delivery_session(
 mod tests {
     use super::*;
     use swarm_domain::{ProviderKind, TaskActivityActor, TaskPriority, TaskState};
+
+    fn idle_review_observation() -> swarm_domain::QueenReviewContinuationObservation {
+        swarm_domain::QueenReviewContinuationObservation {
+            current_complete_snapshot: true,
+            activity: swarm_domain::RecoveryTerminalActivity::Resting,
+            background_work: false,
+            operator_engaged: false,
+            unsent_input: Some(false),
+        }
+    }
+
+    #[test]
+    fn idle_review_continuation_is_same_run_bounded_and_finish_wins() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        store.set_queen_automation_enabled(true, 99).unwrap();
+        store.request_queen_automation_run(100).unwrap();
+        let first = store.claim_queen_automation(101).unwrap().unwrap();
+        store
+            .complete_queen_automation_delivery(&first.run_id, 102)
+            .unwrap();
+        assert!(
+            !store
+                .continue_idle_queen_review("wrong-run", session, idle_review_observation(), 103)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .continue_idle_queen_review(
+                    &first.run_id,
+                    WorkerSessionId::new(),
+                    idle_review_observation(),
+                    103
+                )
+                .unwrap()
+        );
+        store
+            .renew_worker_engagement(session, None, 103, 10)
+            .unwrap();
+        assert!(
+            !store
+                .continue_idle_queen_review(&first.run_id, session, idle_review_observation(), 104)
+                .unwrap()
+        );
+        for now in [114, 118] {
+            assert!(
+                store
+                    .continue_idle_queen_review(
+                        &first.run_id,
+                        session,
+                        idle_review_observation(),
+                        now
+                    )
+                    .unwrap()
+            );
+            assert!(
+                !store
+                    .continue_idle_queen_review(
+                        &first.run_id,
+                        session,
+                        idle_review_observation(),
+                        now
+                    )
+                    .unwrap()
+            );
+            let continuation = store.claim_queen_automation(now + 1).unwrap().unwrap();
+            assert_eq!(continuation.run_id, first.run_id);
+            assert_eq!(continuation.session_id, session);
+            store
+                .complete_queen_automation_delivery(&continuation.run_id, now + 2)
+                .unwrap();
+        }
+        assert!(
+            !store
+                .continue_idle_queen_review(&first.run_id, session, idle_review_observation(), 121)
+                .unwrap()
+        );
+        assert_eq!(store.queen_automation_status(121).unwrap().attempts, 3);
+        store
+            .finish_queen_automation_run(&first.run_id, QueenAutomationOutcome::Incomplete, 122)
+            .unwrap();
+        assert!(
+            !store
+                .continue_idle_queen_review(&first.run_id, session, idle_review_observation(), 123)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn queued_continuation_accepts_concurrent_finish_without_new_delivery() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        store.set_queen_automation_enabled(true, 99).unwrap();
+        store.request_queen_automation_run(100).unwrap();
+        let run = store.claim_queen_automation(101).unwrap().unwrap();
+        store
+            .complete_queen_automation_delivery(&run.run_id, 102)
+            .unwrap();
+        assert!(
+            store
+                .continue_idle_queen_review(&run.run_id, session, idle_review_observation(), 103)
+                .unwrap()
+        );
+        assert_eq!(
+            store.unfinished_queen_review().unwrap(),
+            Some((run.run_id.clone(), session))
+        );
+        assert!(
+            !store
+                .queen_automation_permits(QueenActionClass::ExternalSideEffect, 103)
+                .unwrap()
+        );
+        assert_eq!(
+            store
+                .finish_queen_automation_run(&run.run_id, QueenAutomationOutcome::Incomplete, 104)
+                .unwrap(),
+            QueenAutomationFinish::Closed(QueenAutomationOutcome::Incomplete)
+        );
+        assert!(store.claim_queen_automation(105).unwrap().is_none());
+    }
 
     #[test]
     fn unfinished_review_read_preserves_identity_without_lifecycle_side_effects() {

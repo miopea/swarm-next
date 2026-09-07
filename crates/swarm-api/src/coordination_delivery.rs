@@ -1289,6 +1289,52 @@ pub(super) fn task_dispatch_message(delivery: &TaskDispatch) -> CoordinationMess
 /// that is absent proves nothing — it may have scrolled out of the window —
 /// and replaying a review that did land would double it, which is the failure
 /// the uncertain state exists to prevent.
+pub(super) async fn continue_idle_queen_review(state: &AppState) {
+    let Ok(store) = task_store(state) else {
+        return;
+    };
+    let Ok(Some((run_id, session_id))) = store.unfinished_queen_review() else {
+        return;
+    };
+    let Ok(provider) = store.provider_for_active_session(session_id) else {
+        return;
+    };
+    let Ok(Some((signals, snapshot))) = tokio::time::timeout(
+        Duration::from_secs(2),
+        provider_activity::observe_session_snapshot(state, session_id, provider),
+    )
+    .await
+    else {
+        return;
+    };
+    let activity = match signals.activity {
+        ProviderActivity::Active => swarm_domain::RecoveryTerminalActivity::Working,
+        ProviderActivity::Resting => swarm_domain::RecoveryTerminalActivity::Resting,
+        _ => swarm_domain::RecoveryTerminalActivity::Unknown,
+    };
+    let observation = swarm_domain::QueenReviewContinuationObservation {
+        current_complete_snapshot: !snapshot.truncated,
+        activity,
+        background_work: signals.background_work,
+        // Durable engagement is rechecked by the continuation transaction and
+        // again by the normal claim/submission gates, not trusted from a cache.
+        operator_engaged: false,
+        unsent_input: Some(provider_activity::has_open_provider_input(
+            provider, &snapshot,
+        )),
+    };
+    match store.continue_idle_queen_review(&run_id, session_id, observation, unix_timestamp()) {
+        Ok(true) => {
+            state.control_room_notify.notify_waiters();
+            tracing::info!(%run_id, %session_id, "queued same-run continuation after current idle Queen observation");
+        }
+        Ok(false) => {}
+        Err(error) => {
+            tracing::warn!(%run_id, message = %error, "could not queue Queen review continuation");
+        }
+    }
+}
+
 pub(super) async fn settle_uncertain_queen_review(state: &AppState) {
     let Ok(store) = task_store(state) else {
         return;
@@ -1337,7 +1383,7 @@ pub(super) fn queen_automation_message(delivery: &QueenAutomationDelivery) -> Co
         delivery.actionable_count,
         delivery.presence,
         delivery.run_id,
-        guidance = format_args!("{} {} {} {} {}", crate::agent::QUEEN_ACTIVE_RECOVERY_GUIDANCE, crate::agent::QUEEN_JUDGMENT_GUIDANCE, crate::agent::QUEEN_BLOCK_RECOVERY_GUIDANCE, crate::agent::QUEEN_EVIDENCE_GUIDANCE, crate::agent::QUEEN_REVIEW_COVERAGE_GUIDANCE),
+        guidance = format_args!("{} {} {} {} {} {}", crate::agent::QUEEN_ACTIVE_RECOVERY_GUIDANCE, crate::agent::QUEEN_JUDGMENT_GUIDANCE, crate::agent::QUEEN_BLOCK_RECOVERY_GUIDANCE, crate::agent::QUEEN_EVIDENCE_GUIDANCE, crate::agent::QUEEN_REVIEW_COVERAGE_GUIDANCE, "RUN CONTINUITY. This may continue the same unfinished run after an idle provider turn. Read unfinished_delivered_review in current coordination attention before acting. Preserve existing receipts and completed actions; do not repeat side effects, restart the conversation, or replace this run. A worker notification does not finish the review. If the exact run already finished, do not reopen it."),
         wake_guidance = crate::agent::QUEEN_WAKE_GUIDANCE,
     )
     .into_bytes();

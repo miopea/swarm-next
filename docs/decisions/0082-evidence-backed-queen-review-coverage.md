@@ -57,6 +57,19 @@ prior side effects. Notification context alone does not recover an idle Queen
 when no new notification arrives; that same-session recovery path remains part
 of acceptance and must respect terminal/input safety and bounded delivery.
 
+Same-session continuation uses a fresh, complete canonical
+snapshot showing Resting, no background work and known-empty input. The domain
+gate refuses unknown observations; persistence rechecks the exact Running run,
+delivery session, live Queen session, enabled automation, operator engagement
+and Steward takeover. It queues the same run without resetting its existing
+three-attempt delivery budget. Normal delivery guards recheck terminal safety.
+A concurrent explicit finish is accepted for an already-delivered queued or
+delivering continuation, with the same coverage checks; an initial undelivered
+run still cannot finish. Unattended authority restrictions remain active during
+that continuation. This is bounded recovery, not a claim that exhausting the
+budget resolves the underlying failure. Exhaustion visibility and full adapter
+failure/restart acceptance must be verified before this slice is deployed.
+
 Recovery receipts have their own bounded persistence record, separate from task
 review dispositions. One record per task retains the exact attention, worker,
 session, task-evidence revision and optional canonical-terminal revision, plus

@@ -24,6 +24,78 @@ pub enum RecoveryTerminalActivity {
     Unknown,
 }
 
+/// Server-observed permission to request continuation, never task completion.
+/// Not deserializable: a provider cannot assert its own terminal safety.
+#[derive(Clone, Copy, Debug)]
+pub struct QueenReviewContinuationObservation {
+    pub current_complete_snapshot: bool,
+    pub activity: RecoveryTerminalActivity,
+    pub background_work: bool,
+    pub operator_engaged: bool,
+    pub unsent_input: Option<bool>,
+}
+
+impl QueenReviewContinuationObservation {
+    #[must_use]
+    pub fn permits_continuation(self) -> bool {
+        self.current_complete_snapshot
+            && self.activity == RecoveryTerminalActivity::Resting
+            && !self.background_work
+            && !self.operator_engaged
+            && self.unsent_input == Some(false)
+    }
+}
+
+#[cfg(test)]
+mod continuation_tests {
+    use super::*;
+
+    #[test]
+    fn continuation_requires_known_empty_idle_terminal_and_no_other_owner() {
+        let safe = QueenReviewContinuationObservation {
+            current_complete_snapshot: true,
+            activity: RecoveryTerminalActivity::Resting,
+            background_work: false,
+            operator_engaged: false,
+            unsent_input: Some(false),
+        };
+        assert!(safe.permits_continuation());
+        for activity in [
+            RecoveryTerminalActivity::Working,
+            RecoveryTerminalActivity::AwaitingOperator,
+            RecoveryTerminalActivity::Unknown,
+        ] {
+            assert!(
+                !QueenReviewContinuationObservation { activity, ..safe }.permits_continuation()
+            );
+        }
+        for observation in [
+            QueenReviewContinuationObservation {
+                current_complete_snapshot: false,
+                ..safe
+            },
+            QueenReviewContinuationObservation {
+                background_work: true,
+                ..safe
+            },
+            QueenReviewContinuationObservation {
+                operator_engaged: true,
+                ..safe
+            },
+            QueenReviewContinuationObservation {
+                unsent_input: Some(true),
+                ..safe
+            },
+            QueenReviewContinuationObservation {
+                unsent_input: None,
+                ..safe
+            },
+        ] {
+            assert!(!observation.permits_continuation());
+        }
+    }
+}
+
 /// Not deserializable: callers obtain these facts from their authoritative owners,
 /// never from a model's assertion that it inspected or delivered something.
 #[derive(Clone, Debug)]

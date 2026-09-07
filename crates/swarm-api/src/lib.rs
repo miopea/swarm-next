@@ -1233,6 +1233,7 @@ impl AppState {
         // confirm. Without this it waits for the operator indefinitely, which
         // is what left one parked for ninety minutes while Queen sat idle.
         coordination_delivery::settle_uncertain_queen_review(self).await;
+        coordination_delivery::continue_idle_queen_review(self).await;
         // An unconfirmed briefing or answer for something that has moved on is
         // asking the operator to check a terminal about something already
         // finished.
