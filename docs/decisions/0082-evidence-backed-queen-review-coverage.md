@@ -47,6 +47,14 @@ Changed dependencies, decisions or delivery
 invalidate it. No timer, repeated reminder or new human approval establishes
 coverage. A capacity-exceeded or partial snapshot cannot certify a complete review.
 
+The task evidence read also returns its single saved assessment, condition/source,
+and an explicit reuse status from that same transaction. A matching authenticated
+operator deferral can cover the current run; an external condition from another
+run requires a fresh check. Changed evidence and absence of an active review are
+explicit, never reported as covered. Reads create no receipts, activity events or
+terminal observations. This avoids reconstructing already-verified judgments from
+history without turning historical assertions into fresh proof or clearing queues.
+
 ## Bounded execution and recovery
 
 ### Prompt-ended work becomes visible without an age gate

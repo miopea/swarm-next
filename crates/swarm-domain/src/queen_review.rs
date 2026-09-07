@@ -22,6 +22,46 @@ pub struct QueenReviewObligation {
 pub struct QueenTaskReviewEvidence {
     pub task: crate::Task,
     pub obligation: QueenReviewObligation,
+    pub current_run_id: Option<String>,
+    /// A saved judgment with an explicit reuse verdict, not a new assessment.
+    pub previous_assessment: Option<QueenReviewAssessmentEvidence>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueenReviewAssessmentStatus {
+    CoveredForCurrentRun,
+    FreshExternalCheckRequired,
+    EvidenceChanged,
+    NoActiveReview,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct QueenReviewAssessmentEvidence {
+    pub assessment: QueenReviewDispositionInput,
+    pub recorded_at: i64,
+    pub status: QueenReviewAssessmentStatus,
+}
+
+/// Reusing a receipt never means resuming or completing its task.
+#[must_use]
+pub fn queen_review_assessment_status(
+    kind: QueenReviewDispositionKind,
+    recorded_run: &str,
+    current_run: Option<&str>,
+    revision_matches: bool,
+) -> QueenReviewAssessmentStatus {
+    if !revision_matches {
+        QueenReviewAssessmentStatus::EvidenceChanged
+    } else if let Some(current_run) = current_run {
+        if kind == QueenReviewDispositionKind::OperatorDeferral || recorded_run == current_run {
+            QueenReviewAssessmentStatus::CoveredForCurrentRun
+        } else {
+            QueenReviewAssessmentStatus::FreshExternalCheckRequired
+        }
+    } else {
+        QueenReviewAssessmentStatus::NoActiveReview
+    }
 }
 
 /// Only receipts validated by the disposition command enter this evaluation.

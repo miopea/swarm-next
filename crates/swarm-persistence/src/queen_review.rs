@@ -78,8 +78,48 @@ impl TaskStore {
             [task_id.to_string()],
             crate::task_from_row,
         )?;
+        let current_run_id: Option<String> = transaction.query_row(
+            "SELECT run_id FROM queen_automation WHERE id=1
+             AND (state IN ('running','uncertain') OR (state IN ('queued','delivering') AND delivered_at IS NOT NULL))
+             AND run_id IS NOT NULL AND delivery_session_id IS NOT NULL",
+            [], |row| row.get(0),
+        ).optional()?.flatten();
+        let saved: Option<(String, String, i64)> = transaction.query_row(
+            "SELECT input_payload,accepted_revision,recorded_at FROM queen_task_review_receipts WHERE task_id=?1",
+            [task_id.to_string()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional()?;
+        let previous_assessment = saved
+            .map(|(payload, revision, recorded_at)| {
+                let assessment: QueenReviewDispositionInput = serde_json::from_str(&payload)
+                    .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+                assessment
+                    .validate()
+                    .map_err(|reason| TaskStoreError::IntegrityFailure(reason.into()))?;
+                if assessment.task_id != task_id {
+                    return Err(TaskStoreError::IntegrityFailure(
+                        "saved review assessment belongs to another task".into(),
+                    ));
+                }
+                let status = swarm_domain::queen_review_assessment_status(
+                    assessment.kind,
+                    &assessment.run_id,
+                    current_run_id.as_deref(),
+                    revision == obligation.evidence_revision,
+                );
+                Ok(swarm_domain::QueenReviewAssessmentEvidence {
+                    assessment,
+                    recorded_at,
+                    status,
+                })
+            })
+            .transpose()?;
         transaction.commit()?;
-        Ok(swarm_domain::QueenTaskReviewEvidence { task, obligation })
+        Ok(swarm_domain::QueenTaskReviewEvidence {
+            task,
+            obligation,
+            current_run_id,
+            previous_assessment,
+        })
     }
 
     /// Record an explicit current assessment, never create authority or resume work.
@@ -388,6 +428,86 @@ mod tests {
     }
 
     #[test]
+    fn review_snapshot_distinguishes_reusable_history_from_a_new_check() {
+        use swarm_domain::QueenReviewAssessmentStatus as Status;
+        let store = TaskStore::in_memory().unwrap();
+        let input = external_wait(&store);
+        let before = store.queen_task_review_snapshot(input.task_id).unwrap();
+        assert_eq!(
+            before.current_run_id.as_deref(),
+            Some(input.run_id.as_str())
+        );
+        assert!(before.previous_assessment.is_none());
+        store
+            .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 101)
+            .unwrap();
+        let snapshot = store.queen_task_review_snapshot(input.task_id).unwrap();
+        let previous = snapshot.previous_assessment.unwrap();
+        assert_eq!(previous.status, Status::CoveredForCurrentRun);
+        assert_eq!(previous.assessment.condition, input.condition);
+        assert_eq!(previous.assessment.source, input.source);
+        assert_eq!(previous.recorded_at, 101);
+        // A delivered run queued for same-session continuation is still current.
+        store
+            .connection()
+            .unwrap()
+            .execute("UPDATE queen_automation SET state='queued' WHERE id=1", [])
+            .unwrap();
+        let continuing = store.queen_task_review_snapshot(input.task_id).unwrap();
+        assert_eq!(
+            continuing.current_run_id.as_deref(),
+            Some(input.run_id.as_str())
+        );
+        assert_eq!(
+            continuing.previous_assessment.unwrap().status,
+            Status::CoveredForCurrentRun
+        );
+        let count = store
+            .list_task_activity(input.task_id, 100)
+            .unwrap()
+            .events
+            .len();
+        store.queen_task_review_snapshot(input.task_id).unwrap();
+        assert_eq!(
+            store
+                .list_task_activity(input.task_id, 100)
+                .unwrap()
+                .events
+                .len(),
+            count
+        );
+        store
+            .finish_queen_automation_run(&input.run_id, QueenAutomationOutcome::NoAction, 102)
+            .unwrap();
+        let finished = store.queen_task_review_snapshot(input.task_id).unwrap();
+        assert!(finished.current_run_id.is_none());
+        assert_eq!(
+            finished.previous_assessment.unwrap().status,
+            Status::NoActiveReview
+        );
+        let next = start_review(&store, 103);
+        let snapshot = store.queen_task_review_snapshot(input.task_id).unwrap();
+        assert_eq!(snapshot.current_run_id.as_deref(), Some(next.as_str()));
+        assert_eq!(
+            snapshot.previous_assessment.unwrap().status,
+            Status::FreshExternalCheckRequired
+        );
+        store
+            .append_task_correction(
+                input.task_id,
+                "Changed evidence",
+                &TaskActivityActor::operator(),
+            )
+            .unwrap();
+        let stale = store.queen_task_review_snapshot(input.task_id).unwrap();
+        assert_eq!(
+            stale.previous_assessment.unwrap().status,
+            Status::EvidenceChanged
+        );
+        assert_eq!(stale.task.state, TaskState::Blocked);
+    }
+
+    #[test]
     fn disposition_is_durable_idempotent_and_never_resumes_work() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("review.db");
@@ -502,6 +622,15 @@ mod tests {
             QueenReviewCoverage::Covered {
                 waiting_obligations: 1
             }
+        );
+        assert_eq!(
+            store
+                .queen_task_review_snapshot(input.task_id)
+                .unwrap()
+                .previous_assessment
+                .unwrap()
+                .status,
+            swarm_domain::QueenReviewAssessmentStatus::CoveredForCurrentRun,
         );
     }
 

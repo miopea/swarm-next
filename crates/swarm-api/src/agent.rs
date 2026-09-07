@@ -3341,7 +3341,7 @@ fn create_task_tool() -> Tool {
 fn read_queen_review_evidence_tool() -> Tool {
     tool(
         "swarm_read_review_evidence",
-        "Queen only: read current task facts and their evidence revision from one snapshot. Reading is not a review receipt. Inspect task history for exact source references; changed facts require a fresh read. Route actionable work with the existing task tools instead of recording it as a wait.",
+        "Queen only: read current task facts, evidence revision and any saved assessment from one snapshot. previous_assessment.status explicitly says covered_for_current_run, fresh_external_check_required, evidence_changed or no_active_review. Reuse covered evidence without recording a duplicate assessment; external waits from another run still require a fresh check. Saved condition/source are historical context, not new proof. Reading is not a review receipt and does not resume work. Inspect history where sources or facts need clarification. Route actionable work with task tools instead of recording it as a wait.",
         &json!({"type":"object","properties":{"task_id":{"type":"string","format":"uuid"}},"required":["task_id"],"additionalProperties":false}),
         true,
     )
@@ -4339,6 +4339,31 @@ mod tests {
                     .is_none()
             );
         }
+        let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let evidence = response_json(
+            handle(
+                bridge.clone(),
+                plain_state(),
+                mcp_request(
+                    Some(&token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_read_review_evidence", "arguments": {"task_id": task.id}
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        let evidence = &evidence["result"]["structuredContent"];
+        assert_eq!(
+            evidence["previous_assessment"]["status"],
+            "covered_for_current_run"
+        );
+        assert_eq!(
+            evidence["previous_assessment"]["assessment"]["source"],
+            "Fixture response"
+        );
         assert!(matches!(
             store.queen_run_review_coverage(&run.run_id).unwrap(),
             swarm_domain::QueenReviewCoverage::Covered {
