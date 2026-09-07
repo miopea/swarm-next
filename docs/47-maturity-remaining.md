@@ -7,6 +7,29 @@ implementation history, not an assertion that their then-open items are still
 unimplemented. The approved full scope remains `45-daily-driver-maturity-plan.md`.
 No phase-completion percentage or full-program completion is established.
 
+### September 7, 20:04 UTC: resolved references and remaining ownership debt
+
+Resolved-decision linking is deployed and exercised by Queen on both the
+fictional follow-up and the real parent/child scope case (ADR 0084). The
+fictional follow-up settled normally. The controller independently reran its
+nine Node tests and confirmed unchanged clean HEAD. The CI lint correction is
+main `9227d2c4` and the Linux checkout is synchronized; the running API remains
+`5ace7c31` because the correction changes only a test. CI `34157791590` has
+passed workspace strict Clippy, web, packaging and audit; full Rust tests are
+still running at this checkpoint. No release was cut.
+
+The live task snapshot has 22 Queen-owned rows across Blocked, Draft and Review.
+Do not use this count to claim recovery. In particular, authenticated
+operator deferrals still retain Queen next-move ownership in the task read
+projection even after Queen records a valid review receipt. Queues currently
+does not receive that current validated receipt, so it cannot distinguish
+covered parked work from unanswered review debt. Existing UI labels already
+handle explicit prerequisites and future deadlines correctly; changing those
+labels alone will not resolve this discrepancy. A bounded authoritative review
+projection is needed without adding receipt fields to the Task evidence hash
+or rehashing every task history on each UI poll. Prose-only internal dependencies
+and missing operator sources still require actual Queen reconciliation.
+
 | Area | Evidence now available | Still required for acceptance |
 | --- | --- | --- |
 | Measurement and performance | Bounded browser evidence, hourly private captures, split engine/process counters; 16-session one-minute baseline in `85-review-recovery-checkpoint.md` | Controlled same-build fresh/aged comparisons, instrumentation overhead, resource plateau and responsive input under output; cold-restore experiment gate |

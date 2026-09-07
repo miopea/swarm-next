@@ -185,3 +185,37 @@ four domain link tests, the delivered-focus test and all 71 agent adapter tests
 passed on the main-compatible Linux tree. The tool schema is unchanged; updated
 focus instructions teach an existing Queen session the approved scope boundary.
 Deployment and live use are not yet established by this checkpoint.
+
+### Resolved-reference live checkpoint, September 7, 20:00 UTC
+
+API `5ace7c313649-20260907194623-257889` is healthy with no degraded
+subsystems or database recovery required. All sixteen exact session identities
+were preserved during deployment. The health response's engine build ID is the
+packaged fingerprint, not the running engine identity: terminal-host status
+reported retained engine `e1d98e0a4b94-20260907183121-205234`, sixteen sessions,
+no unreadable sessions and no draining. No engine replacement or release occurred.
+
+Fictional task `01a07d6d-4277-7410-8030-6be9eb814426` exercised the new
+resolved-reference path. Activity 7986 identifies Queen as the actor adding the
+original-scope reference to decision `01a07ceb-2e1c-7921-a1b8-2e9135736558`.
+The original source task, resolved answer and null requested command remained
+unchanged. The demo worker's terminal records its own scoped source read,
+exact reply to request `01a07d74-a591-7142-9370-5bb3b9856e41`, nine passing Node
+tests, unchanged clean HEAD `27fbcc152289d33ef5d7e8a9e9af77a6624dc33b`, and a
+truthful empty commit report. Activity 7987 independently confirms ordinary
+system settlement to Completed. Source-read details, test execution and exact
+reply are worker-observed evidence, not independently extracted message rows.
+The controller did not link, answer, or manually complete this task.
+
+Queen also linked real child `01a066f3-b078-73b3-a0f6-d8aff7b9a43a` to original
+resolved decision `01a06624-be2c-71a3-9d97-d1fcedc86a43`, explaining why the
+operator's narrow choice excludes the wider work. The child remains Blocked;
+this is evidence of authentic scope reconciliation, not permission to execute
+the excluded work or proof that the fleet backlog is reconciled.
+
+CI `34156818818` caught a single-element loop in the new domain regression test.
+Web, packaging and security audit passed, but Rust tests were skipped after
+workspace lint failed. The correction passes full-workspace/all-targets/
+all-features strict Clippy, formatting and all four domain link tests on Linux.
+It is main commit `9227d2c4`; its CI result must be checked separately. The
+earlier API-only Clippy check was insufficient to cover dependency test lints.
