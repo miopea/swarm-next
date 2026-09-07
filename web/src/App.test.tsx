@@ -144,7 +144,7 @@ test("creates a durable browser session without storing the operator token", asy
   vi.stubGlobal("fetch", fetch);
   render(<App />);
 
-  fireEvent.change(screen.getByLabelText("Operator token"), { target: { value: "secret" } });
+  fireEvent.change(await screen.findByLabelText("Operator token"), { target: { value: "secret" } });
   fireEvent.click(screen.getByRole("button", { name: "Unlock Swarm" }));
 
   expect(await screen.findByRole("heading", { name: "Task board" })).toBeInTheDocument();
@@ -178,6 +178,27 @@ test("creates a durable browser session without storing the operator token", asy
     "/api/v1/auth/session",
     expect.objectContaining({ method: "DELETE", credentials: "same-origin" }),
   );
+});
+
+test.each(["restored", "signed-out", "failed"])("does not ask for credentials while session restoration is pending: %s", async (outcome) => {
+  const normal = bootFetch();
+  let settle!: (response: Response) => void;
+  const pending = new Promise<Response>((resolve) => { settle = resolve; });
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) =>
+    String(input) === "/api/v1/auth/session" ? pending : normal(input),
+  ));
+  render(<App />);
+  expect(screen.getByRole("status", { name: "Restoring Hive session" })).toBeVisible();
+  expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Use a passkey" })).not.toBeInTheDocument();
+  await act(async () => { settle(new Response("{}", { status: outcome === "restored" ? 200 : outcome === "signed-out" ? 401 : 403 })); });
+  await waitFor(() => expect(screen.queryByRole("status", { name: "Restoring Hive session" })).not.toBeInTheDocument());
+  if (outcome === "restored") {
+    expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
+  } else {
+    expect(screen.getByLabelText("Operator token")).toBeVisible();
+    if (outcome === "failed") expect(screen.getByText(/Runtime request returned 403/)).toBeVisible();
+  }
 });
 
 test("restores tasks and workers after a refresh", async () => {
@@ -357,7 +378,7 @@ test("recovers runtime status and saved authentication after an update handoff",
   render(<App />);
 
   expect(await screen.findByText("Runtime 0.1.0")).toBeInTheDocument();
-  await waitFor(() => expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument());
+  await waitFor(() => expect(screen.queryByRole("status", { name: "Restoring Hive session" })).not.toBeInTheDocument());
   // Both calls failed once and were retried: the first attempt of each is the
   // gateway error. Not an exact count — the app also polls health on an
   // interval, so pinning a total here fails whenever a poll lands inside the
@@ -385,7 +406,7 @@ test("restores the saved session after a rolling API interruption", async () => 
 
   render(<App />);
 
-  await waitFor(() => expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument());
+  await waitFor(() => expect(screen.queryByRole("status", { name: "Restoring Hive session" })).not.toBeInTheDocument());
   expect(screen.getByRole("heading", { name: "Task board" })).toBeInTheDocument();
   // The saved session was rejected once by the interruption and retried, which
   // is the recovery this test is about.
@@ -1006,7 +1027,7 @@ test("creates a persisted task draft from the task board", async () => {
   });
   vi.stubGlobal("fetch", fetch);
   render(<App />);
-  fireEvent.change(screen.getByLabelText("Operator token"), { target: { value: "secret" } });
+  fireEvent.change(await screen.findByLabelText("Operator token"), { target: { value: "secret" } });
   fireEvent.click(screen.getByRole("button", { name: "Unlock Swarm" }));
 
   fireEvent.click(await screen.findByRole("button", { name: "Write task" }));

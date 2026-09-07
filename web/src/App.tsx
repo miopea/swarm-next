@@ -224,6 +224,7 @@ export function App() {
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" });
   const [tokenDraft, setTokenDraft] = useState("");
   const [operatorToken, setOperatorToken] = useState<string>();
+  const [sessionRestoring, setSessionRestoring] = useState(true);
   const controlRoomModel = useControlRoomModel();
   const {
     hiveIdentity, sessions, workers, workspaces, tasks, jiraTaskLinks, decisions, stewardAssists, recentEvents,
@@ -704,10 +705,12 @@ export function App() {
         terminalWorkspace.authenticate(BROWSER_SESSION_AUTH);
         setOperatorToken(BROWSER_SESSION_AUTH);
         setTerminalSelection(restoreTerminalSelection(nextControlRoom.workers, nextControlRoom.sessions));
+        setSessionRestoring(false);
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
         terminalWorkspace.logout();
+        setSessionRestoring(false);
         if (!(error instanceof Error && error.message.includes("401"))) {
           setOperationError(error instanceof Error ? error.message : "Saved authentication could not be restored");
         }
@@ -1996,7 +1999,7 @@ export function App() {
               </div>
             )}
           </>
-        ) : <p className="empty-rail">Unlock this runtime to access tasks and workers.</p>}
+        ) : <p className="empty-rail">{sessionRestoring ? "Restoring your Hive session…" : "Unlock this runtime to access tasks and workers."}</p>}
 
         {/* Beside the runtime line rather than in the lockup: this is what the
             version it sits next to is about, and the lockup is a row the
@@ -2352,6 +2355,11 @@ export function App() {
           />
         ) : null}
         {!operatorToken ? (
+          sessionRestoring ? <section className="unlock-panel" role="status" aria-label="Restoring Hive session">
+            <div className="unlock-symbol"><BeeMascot expression="available" /></div>
+            <h3>Restoring your Hive session…</h3>
+            <p>Checking this trusted device. Your workers keep running.</p>
+          </section> :
           <form className="unlock-panel" onSubmit={(event) => void authenticate(event)}>
             <div className="unlock-symbol"><BeeMascot expression="available" /></div>
             <p className="eyebrow">Private local runtime</p>
