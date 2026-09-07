@@ -1679,6 +1679,8 @@ impl AgentMcp {
             "withdrawn_by_worker_id": decision.withdrawn_by_worker_id,
             "withdrawal_reason": decision.withdrawal_reason,
             "task_id": decision.task_id,
+            "linked_tasks": decision.linked_tasks,
+            "linked_task_scope": "Blocker references only; they do not extend command permission or answer delivery beyond the original request.",
             "kind": decision.kind.to_string(),
             "title": decision.title,
             "summary": decision.summary,
@@ -2950,6 +2952,7 @@ fn decision_index_entry(decision: &swarm_domain::DecisionRequest) -> Value {
     json!({
         "id": decision.id,
         "task_id": decision.task_id,
+        "linked_task_count": decision.linked_tasks.len(),
         "requesting_worker_id": decision.requesting_worker_id,
         "kind": decision.kind,
         "urgency": decision.urgency,
@@ -4205,20 +4208,12 @@ mod tests {
             .unwrap()
     }
 
-    #[tokio::test]
-    async fn shared_decision_tool_is_queen_only_and_fences_stale_changes() {
-        let (bridge, store, queen_id, worker_id, _directory) = setup();
-        let task = store
-            .create_task("Fictional shared consumer", "/workspace/petal")
-            .unwrap();
-        store
-            .transition_task(task.id, swarm_domain::TaskState::Ready)
-            .unwrap();
-        store
-            .transition_task(task.id, swarm_domain::TaskState::Blocked)
-            .unwrap();
+    fn shared_session_decision(
+        store: &swarm_persistence::TaskStore,
+        queen_id: WorkerId,
+    ) -> swarm_domain::DecisionRequest {
         let actions = vec!["Provide the fictional session".to_owned()];
-        let gate = store
+        store
             .create_decision_request(&swarm_persistence::NewDecisionRequest {
                 requesting_worker_id: queen_id,
                 task_id: None,
@@ -4235,7 +4230,23 @@ mod tests {
                 deadline: None,
                 requested_command: None,
             })
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn shared_decision_tool_is_queen_only_and_fences_stale_changes() {
+        let (bridge, store, queen_id, worker_id, _directory) = setup();
+        let task = store
+            .create_task("Fictional shared consumer", "/workspace/petal")
             .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store.assign_task_to_worker(task.id, worker_id).unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Blocked)
+            .unwrap();
+        let gate = shared_session_decision(&store, queen_id);
         let revision = store
             .queen_task_review_evidence(task.id)
             .unwrap()
@@ -4267,7 +4278,30 @@ mod tests {
             );
             assert_eq!(store.get_decision_request(gate.id).unwrap().task_id, None);
         }
+        let visible = store.list_worker_decision_requests(worker_id).unwrap();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(decision_index_entry(&visible[0])["linked_task_count"], 1);
         let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let detail = response_json(
+            handle(
+                bridge.clone(),
+                plain_state(),
+                mcp_request(
+                    Some(&token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_list_decisions", "arguments": {"decision_id": gate.id}
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(
+            detail["result"]["structuredContent"]["linked_tasks"][0]["task_id"],
+            task.id.to_string()
+        );
+        assert_eq!(detail["result"]["structuredContent"]["verified"], false);
         let current = store
             .queen_task_review_evidence(task.id)
             .unwrap()
@@ -4285,6 +4319,12 @@ mod tests {
         assert_eq!(
             store.get_decision_request(gate.id).unwrap().state,
             swarm_domain::DecisionRequestState::Pending
+        );
+        assert!(
+            store
+                .list_worker_decision_requests(worker_id)
+                .unwrap()
+                .is_empty()
         );
     }
 

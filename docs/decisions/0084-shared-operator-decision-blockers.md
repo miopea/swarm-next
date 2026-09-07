@@ -90,3 +90,11 @@ and need their final broader rerun before integration.
 Still required: final broader Rust checks, deployed-schema integration,
 current tool discovery in Queen,
 fictional end-to-end orchestration and rendered live browser verification.
+
+The main-only integration (8c009bce, schema 148 with support excluded) passed
+647 persistence tests, 71 MCP tests, formatting and strict Rust checks. A final
+read-path audit found that compact MCP decision summaries and worker-scoped
+listing also needed the relation. The follow-up adds a count to the compact
+index, full links plus an explicit permission-scope warning to the exact decision
+read, and assigned shared-task discovery. Its 71 MCP tests passed; the refactored
+focused test and strict checks passed afterward. No live acceptance is claimed.

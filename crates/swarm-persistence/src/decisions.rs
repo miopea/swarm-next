@@ -581,7 +581,8 @@ impl TaskStore {
              FROM decision_requests d
              JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1
              WHERE (?2 IS NULL OR d.requesting_worker_id = ?2 OR EXISTS(
-                 SELECT 1 FROM tasks t WHERE t.id = d.task_id
+                 SELECT 1 FROM tasks t WHERE t.id IN (
+                     SELECT task_id FROM task_decision_membership WHERE decision_id=d.id)
                  AND t.removed_at IS NULL AND t.assigned_worker_id = ?2))
              ORDER BY state = 'pending' DESC, urgency = 'time_sensitive' DESC,
                       deadline IS NULL, deadline, created_at DESC, id DESC
