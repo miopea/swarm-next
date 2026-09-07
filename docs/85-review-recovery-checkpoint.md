@@ -1,5 +1,31 @@
 # Returned-review recovery checkpoint
 
+## September 7: cropped provider question hidden behind a queue-order label
+
+On live `179d2df999de`, D365 task `01a073aa-ee0e-7ab1-baa1-2a797df7efcf`
+remained Ready with a queued briefing. Service logs repeatedly recorded
+`ProviderStateUnknown`; the current 80x24 canonical snapshot showed the bottom
+of a Claude AskUser menu, including Type something, Chat about this and the
+selection/navigation footer. Its selected first option was outside the viewport.
+No input was sent and the real account-provisioning question was not answered.
+
+The fictional provider regression fails as Unknown before the fix and passes
+as AwaitingOperator afterward. It also checks that historical menus above a
+returned composer, another provider and a footer without menu options are not
+mistaken for this question. All 17 provider-classification tests pass. This is
+question recognition, not a fix for Android's separate multi-question overwrite.
+
+The held-briefing projection also used WaitingItsTurn with no earlier task, and
+the UI invented "behind earlier work". It now distinguishes AwaitingSafeDelivery
+when no task-order blocker is recorded, while preserving the exact earlier-task
+identity for genuine queue-order waits. Older API responses without a blocker
+receive an honest fallback. The 45 focused queue/held-briefing UI tests and
+TypeScript check pass. No delivery guard is relaxed or task reassigned.
+
+These observations do not establish fleet recovery. Deployment acceptance,
+Queen's handling of the actual question, and the retry-updated queued-age field
+remain to be verified or corrected separately.
+
 ## Live acceptance failure: an unfinished run lost from Queen's context
 
 ### Answered-decision latency: baseline and local correction

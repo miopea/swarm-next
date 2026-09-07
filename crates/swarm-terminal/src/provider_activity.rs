@@ -58,6 +58,26 @@ fn classify_visible_text(provider: ProviderKind, visible: &str) -> ProviderActiv
         .take(10)
         .collect::<Vec<_>>();
 
+    // A long Claude AskUser menu can scroll its selected first option off
+    // screen. Require its current navigation footer and both numbered escape
+    // options, rather than inventing a selected cursor or treating it as idle.
+    // A returned composer below historical menu text does not satisfy this.
+    if provider == ProviderKind::ClaudeCode
+        && recent.first().is_some_and(|line| {
+            line.starts_with("Enter to select")
+                && line.contains("to navigate")
+                && line.ends_with("Esc to cancel")
+        })
+        && recent
+            .iter()
+            .any(|line| is_numbered_choice(line) && line.ends_with("Type something."))
+        && recent
+            .iter()
+            .any(|line| is_numbered_choice(line) && line.ends_with("Chat about this"))
+    {
+        return ProviderActivity::AwaitingOperator;
+    }
+
     // A MENU, NOT A FOOTER. Codex renders at least three different prompts —
     // a command approval, an edit approval and an update notice — and their
     // wording does not agree: two end "Press enter to confirm or esc to
@@ -352,6 +372,46 @@ mod tests {
             ),
         );
         assert_eq!(activity, ProviderActivity::AwaitingOperator);
+    }
+
+    #[test]
+    fn cropped_claude_ask_user_menu_keeps_its_question_identity() {
+        // Fictional wording; real observed 80x24 shape. The selected first
+        // option and its cursor are above the visible viewport.
+        let menu = concat!(
+            "continued explanation of the first option\r\n",
+            "  2. Use the existing fixture\r\n",
+            "     Check the fictional identifier.\r\n",
+            "  3. Hold the test\r\n",
+            "  4. Type something.\r\n",
+            "────────────────────────\r\n",
+            "  5. Chat about this\r\n\r\n",
+            "Enter to select · ↑/↓ to navigate · Esc to cancel",
+        );
+        assert_eq!(
+            classify_provider_activity(ProviderKind::ClaudeCode, &snapshot(menu)),
+            ProviderActivity::AwaitingOperator,
+        );
+        assert_eq!(
+            classify_provider_activity(ProviderKind::Codex, &snapshot(menu)),
+            ProviderActivity::Unknown,
+        );
+        assert_eq!(
+            classify_provider_activity(
+                ProviderKind::ClaudeCode,
+                &snapshot(&format!("{menu}\r\n❯ \r\nauto mode on")),
+            ),
+            ProviderActivity::Resting,
+            "a historical menu above a returned composer is not a current question",
+        );
+        assert_eq!(
+            classify_provider_activity(
+                ProviderKind::ClaudeCode,
+                &snapshot("Enter to select · ↑/↓ to navigate · Esc to cancel"),
+            ),
+            ProviderActivity::Unknown,
+            "a footer alone is insufficient evidence of AskUser",
+        );
     }
 
     #[test]

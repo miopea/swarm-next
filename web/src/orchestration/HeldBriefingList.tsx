@@ -127,7 +127,9 @@ export function holdReason(briefing: HeldBriefing): string {
       return briefing.blocking_task_id && briefing.blocked_by
         ? `worker has Active work: ${briefing.blocked_by}` : "the worker is on something else";
     case "waiting_its_turn":
-      return briefing.blocked_by ? `behind ${briefing.blocked_by}` : "behind earlier work";
+      return briefing.blocked_by ? `behind ${briefing.blocked_by}` : "awaiting safe delivery; no earlier task is recorded";
+    case "awaiting_safe_delivery":
+      return "awaiting safe delivery; no task-order blocker is recorded";
     default:
       return briefing.reason;
   }

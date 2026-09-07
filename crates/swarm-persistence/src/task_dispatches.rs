@@ -133,6 +133,9 @@ pub enum DispatchHold {
     /// Behind earlier Ready work for the same worker that has not been briefed
     /// yet. `blocked_by` names it.
     WaitingItsTurn,
+    /// No durable task-order blocker is recorded. Runtime delivery safety is
+    /// checked separately; absence of a blocker is not proof of a safe prompt.
+    AwaitingSafeDelivery,
 }
 
 /// One briefing waiting, and what it is waiting on.
@@ -328,8 +331,10 @@ impl TaskStore {
                 DispatchHold::OperatorInTheTerminal
             } else if active_title.is_some() {
                 DispatchHold::WorkerAlreadyWorking
-            } else {
+            } else if row.get::<_, Option<String>>(11)?.is_some() {
                 DispatchHold::WaitingItsTurn
+            } else {
+                DispatchHold::AwaitingSafeDelivery
             };
             let (blocked_by, blocking_task_id) = match reason {
                 DispatchHold::WorkerAlreadyWorking => (active_title, row.get(10)?),
@@ -1465,6 +1470,14 @@ mod tests {
             .unwrap();
         store.assign_task(second.id, session).unwrap();
 
+        let holds = store.held_task_dispatches(100).unwrap();
+        let second_hold = holds
+            .iter()
+            .find(|hold| hold.task_id == second.id.to_string())
+            .unwrap();
+        assert_eq!(second_hold.reason, DispatchHold::WaitingItsTurn);
+        assert_eq!(second_hold.blocking_task_id, Some(first_id.to_string()));
+
         let first_dispatch = store
             .claim_task_dispatches(100, &std::collections::HashSet::new())
             .unwrap();
@@ -1713,7 +1726,8 @@ mod tests {
         // Nothing in the way: it is simply next.
         let waiting = store.held_task_dispatches(1_000).unwrap();
         assert_eq!(waiting.len(), 1);
-        assert_eq!(waiting[0].reason, DispatchHold::WaitingItsTurn);
+        assert_eq!(waiting[0].reason, DispatchHold::AwaitingSafeDelivery);
+        assert_eq!(waiting[0].blocking_task_id, None);
         assert_eq!(waiting[0].worker_name, "Petal");
 
         // The operator opens that terminal. The briefing is now held, and says so.
@@ -1798,7 +1812,7 @@ mod tests {
             .iter()
             .find(|entry| entry.task_id == next.id.to_string())
             .unwrap();
-        assert_eq!(waiting.reason, DispatchHold::WaitingItsTurn);
+        assert_eq!(waiting.reason, DispatchHold::AwaitingSafeDelivery);
         assert_eq!(waiting.blocking_task_id, None);
     }
 

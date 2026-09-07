@@ -59,9 +59,16 @@ test("explains experimental Night Watch holds instead of blaming earlier work", 
   expect(screen.queryByText(/behind earlier work/)).not.toBeInTheDocument();
 });
 
-test("falls back to a plain reason when nothing is named", () => {
+test("does not invent earlier work when an older API names no blocker", () => {
   render(<HeldBriefingList briefings={[briefing({ blocked_by: null })]} />);
-  expect(screen.getByText(/behind earlier work/)).toBeInTheDocument();
+  expect(screen.getByText(/awaiting safe delivery; no earlier task is recorded/)).toBeInTheDocument();
+  expect(screen.queryByText(/behind earlier work/)).not.toBeInTheDocument();
+});
+
+test("shows an unconfirmed delivery gate without inventing task order or an operator question", () => {
+  render(<HeldBriefingList briefings={[briefing({ reason: "awaiting_safe_delivery", blocked_by: null })]} />);
+  expect(screen.getByText(/awaiting safe delivery; no task-order blocker is recorded/)).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Open blocking task" })).not.toBeInTheDocument();
 });
 
 /**
