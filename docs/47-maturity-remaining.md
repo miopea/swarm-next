@@ -9,6 +9,25 @@ No phase-completion percentage or full-program completion is established.
 
 ### September 7, 21:12 UTC: reload restoration correction
 
+Deployment checkpoint, 21:26 UTC: main `a20e17e7` is healthy as
+`1.5.0-dev-a20e17e73741-20260907212242-314610`; the rebuild completed and all
+sixteen worker/session identities match the pre-deployment capture. Exact-main
+validation passed 85 tests and the production web build. CI `34162912332` and
+the preceding `34162320259` are still running at this checkpoint. The separate
+Edge tab loaded this bundle using the preceding bundle's old update button
+(which still navigated to Platform), then was returned to Queues. The corrected
+button itself requires the next version-change check; do not count that as
+completed live acceptance yet.
+
+The next orchestration check has concrete live evidence: recovery assessments
+for Admin C15a and three Member Services verification tasks cite required
+operator-seeded sessions, but the sole pending decision is the unrelated RCG
+RAS certificate scheduling request `01a07da4-fc51-78d3-ab02-03c715b41ca6`.
+No pending request currently represents those session asks. Several other
+delivered Ready tasks have no recovery assessment. Check structural operator
+escalation and recovery coverage, not just presentation of historical receipts.
+No real decisions or task states were changed during these read-only checks.
+
 Follow-up at 21:20 UTC: `8c4724fd` deployed healthy and preserved all sixteen
 worker/session pairs. Live Edge acceptance exposed a second path: the browser
 update button uses `location.replace` with a version parameter, classified as
