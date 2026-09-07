@@ -129,3 +129,30 @@ was through the browser, not a claimed successful script execution.
 Still open: observe both tasks completing through normal recovery, execution
 and settlement; inspect any failure instead of forcing task state. Native
 mobile acceptance and engine convergence remain separate unverified gates.
+
+### Completed fictional workflow, September 7, 17:42 UTC
+
+Both tasks subsequently reached Completed without controller task transitions
+or terminal input. The browser answer was recorded at Unix time 1788802790.
+The source worker verified the resolved decision, resumed Blocked to Active
+18 seconds later, recorded nine passing Node tests, and submitted Review.
+System settlement completed it at 1788802843 (53 seconds after the answer).
+The consumer was then delivered normally, verified its own explicit shared
+link, became Active at 1788802878 and completed at 1788802912 (122 seconds
+after the answer). Each completion event identifies the system actor, not
+Queen or the operator. No duplicate question was raised.
+
+Task activity sequences 7850-7856 preserve the recovery, evidence and automatic
+settlement. The controller separately confirmed both final states, one resolved
+decision retaining its link, the fixture's unchanged HEAD `27fbcc152289d33e`
+and clean working tree, and independently ran all nine tests successfully.
+This independent rerun corroborates the fixture, not the provider's original
+execution timing. The worker corrected an invented message identifier in its
+own task note; use the actual recorded message `01a07ceb-9412-7eb1-a772-d6e55a8bba03`
+rather than the superseded prose identifier when tracing delivery.
+
+The shared-decision fictional workflow is accepted for this deployment. This
+does not establish that Queen has reconciled existing real-world prose-only
+blockers, nor close the wider orchestration, mobile or engine-update scope.
+The script correction passes `bash -n`; its successful resolution branch still
+needs a separate fixture because this decision was answered through the UI.
