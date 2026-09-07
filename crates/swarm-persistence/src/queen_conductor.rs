@@ -72,6 +72,37 @@ pub enum QueenAutomationFinish {
 }
 
 impl TaskStore {
+    /// Explain an exhausted continuation budget only with current idle evidence.
+    /// This is a read, not a new attempt, a completion, or an operator decision.
+    ///
+    /// # Errors
+    /// Returns an error when current run authority cannot be read.
+    pub fn idle_queen_review_budget_exhausted(
+        &self,
+        run_id: &str,
+        session_id: WorkerSessionId,
+        observation: swarm_domain::QueenReviewContinuationObservation,
+        now: i64,
+    ) -> Result<bool, TaskStoreError> {
+        if !observation.permits_continuation() {
+            return Ok(false);
+        }
+        Ok(self.connection()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM queen_automation automation
+             JOIN worker_sessions session ON session.session_id=automation.delivery_session_id
+             JOIN worker_profiles queen ON queen.id=session.worker_id AND queen.role='queen'
+             WHERE automation.id=1 AND automation.run_id=?1 AND automation.state='running'
+               AND automation.delivery_session_id=?2 AND session.ended_at IS NULL
+               AND automation.enabled=1 AND automation.attempts >= ?4
+               AND NOT EXISTS (SELECT 1 FROM worker_engagements engagement
+                   WHERE engagement.worker_id=queen.id AND engagement.expires_at > ?3)
+               AND NOT EXISTS (SELECT 1 FROM local_federation_steward_takeover_leases lease
+                   WHERE lease.state='active' AND lease.expires_at > ?3))",
+            params![run_id, session_id.to_string(), now, MAX_AUTOMATION_ATTEMPTS],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Queue a continuation of the exact delivered run after a fresh idle
     /// observation. Reuses the existing bounded delivery-attempt budget and
     /// receipts. It never resets context, grants authority or starts a new run.
@@ -1298,6 +1329,23 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(store.queen_automation_status(121).unwrap().attempts, 3);
+        assert!(
+            store
+                .idle_queen_review_budget_exhausted(
+                    &first.run_id,
+                    session,
+                    idle_review_observation(),
+                    121
+                )
+                .unwrap()
+        );
+        let mut working = idle_review_observation();
+        working.activity = swarm_domain::RecoveryTerminalActivity::Working;
+        assert!(
+            !store
+                .idle_queen_review_budget_exhausted(&first.run_id, session, working, 121)
+                .unwrap()
+        );
         store
             .finish_queen_automation_run(&first.run_id, QueenAutomationOutcome::Incomplete, 122)
             .unwrap();

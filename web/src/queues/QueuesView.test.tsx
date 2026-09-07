@@ -137,8 +137,18 @@ describe("QueuesView", () => {
     expect(screen.queryByRole("article")).not.toBeInTheDocument();
     rerender(<QueuesView {...props} tasks={[task({ next_move_owner: "queen" })]} queenAutomation={status} />);
     expect(screen.getAllByText(status.waiting_reason!)).toHaveLength(1);
-    rerender(<QueuesView {...props} queenAutomation={{ ...status, state: "running" }} />);
+    rerender(<QueuesView {...props} queenAutomation={{ ...status, state: "running", waiting_reason: null }} />);
     expect(screen.queryByText(status.waiting_reason!)).not.toBeInTheDocument();
+  });
+  test("shows observed continuation exhaustion without treating a running review as complete", () => {
+    const reason = "Automatic continuation paused: Queen was just observed idle after using this review's delivery budget.";
+    const status: QueenAutomationStatus = { enabled: true, state: "running", run_id: "same-run", trigger: "actionable_work", actionable_count: 1, attempts: 3, requested_at: 1, delivered_at: 2, finished_at: null, outcome: null, waiting_reason: reason };
+    const props = { tasks: [], workers: [], onOpenTask: vi.fn() };
+    const { rerender } = render(<QueuesView {...props} queenAutomation={status} />);
+    expect(screen.getByText(reason)).toBeVisible();
+    expect(screen.queryByText("Nothing is waiting on anyone.")).not.toBeInTheDocument();
+    rerender(<QueuesView {...props} queenAutomation={{ ...status, waiting_reason: null }} />);
+    expect(screen.queryByText(reason)).not.toBeInTheDocument();
   });
   test("explicit prerequisites link to their task and completion waits for Queen", () => {
     const prerequisite = { task_id: "t1", prerequisite_id: "upstream", title: "Shared API contract", state: "active" as const, assigned_worker_id: null, removed: false, reason: "The response shape must be settled first", created_at: 1 };

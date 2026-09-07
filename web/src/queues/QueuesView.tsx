@@ -197,7 +197,7 @@ export default function QueuesView({
   const briefings = new Map(heldBriefings.map((briefing) => [briefing.task_id, briefing]));
   const visibleTaskIds = new Set(waitingTasks.map((task) => task.id));
   const extraBriefings = heldBriefings.filter((briefing) => !visibleTaskIds.has(briefing.task_id));
-  const queenWait = queenAutomation?.state === "queued" ? queenAutomation.waiting_reason : null;
+  const queenWait = queenAutomation && ["queued", "running"].includes(queenAutomation.state) ? queenAutomation.waiting_reason : null;
 
   if (total === 0 && extraWaits.length === 0 && activeWork.length === 0) {
     return (

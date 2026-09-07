@@ -1296,32 +1296,8 @@ pub(super) async fn continue_idle_queen_review(state: &AppState) {
     let Ok(Some((run_id, session_id))) = store.unfinished_queen_review() else {
         return;
     };
-    let Ok(provider) = store.provider_for_active_session(session_id) else {
+    let Some(observation) = observe_review_continuation(state, store, session_id).await else {
         return;
-    };
-    let Ok(Some((signals, snapshot))) = tokio::time::timeout(
-        Duration::from_secs(2),
-        provider_activity::observe_session_snapshot(state, session_id, provider),
-    )
-    .await
-    else {
-        return;
-    };
-    let activity = match signals.activity {
-        ProviderActivity::Active => swarm_domain::RecoveryTerminalActivity::Working,
-        ProviderActivity::Resting => swarm_domain::RecoveryTerminalActivity::Resting,
-        _ => swarm_domain::RecoveryTerminalActivity::Unknown,
-    };
-    let observation = swarm_domain::QueenReviewContinuationObservation {
-        current_complete_snapshot: !snapshot.truncated,
-        activity,
-        background_work: signals.background_work,
-        // Durable engagement is rechecked by the continuation transaction and
-        // again by the normal claim/submission gates, not trusted from a cache.
-        operator_engaged: false,
-        unsent_input: Some(provider_activity::has_open_provider_input(
-            provider, &snapshot,
-        )),
     };
     match store.continue_idle_queen_review(&run_id, session_id, observation, unix_timestamp()) {
         Ok(true) => {
@@ -1333,6 +1309,38 @@ pub(super) async fn continue_idle_queen_review(state: &AppState) {
             tracing::warn!(%run_id, message = %error, "could not queue Queen review continuation");
         }
     }
+}
+
+pub(super) async fn observe_review_continuation(
+    state: &AppState,
+    store: &TaskStore,
+    session_id: WorkerSessionId,
+) -> Option<swarm_domain::QueenReviewContinuationObservation> {
+    let provider = store.provider_for_active_session(session_id).ok()?;
+    let Ok(Some((signals, snapshot))) = tokio::time::timeout(
+        Duration::from_secs(2),
+        provider_activity::observe_session_snapshot(state, session_id, provider),
+    )
+    .await
+    else {
+        return None;
+    };
+    let activity = match signals.activity {
+        ProviderActivity::Active => swarm_domain::RecoveryTerminalActivity::Working,
+        ProviderActivity::Resting => swarm_domain::RecoveryTerminalActivity::Resting,
+        _ => swarm_domain::RecoveryTerminalActivity::Unknown,
+    };
+    Some(swarm_domain::QueenReviewContinuationObservation {
+        current_complete_snapshot: !snapshot.truncated,
+        activity,
+        background_work: signals.background_work,
+        // Durable engagement is rechecked by the continuation transaction and
+        // again by the normal claim/submission gates, not trusted from a cache.
+        operator_engaged: false,
+        unsent_input: Some(provider_activity::has_open_provider_input(
+            provider, &snapshot,
+        )),
+    })
 }
 
 pub(super) async fn settle_uncertain_queen_review(state: &AppState) {
@@ -1781,6 +1789,74 @@ mod tests {
                 _ => swarm_domain::QueenAutomationState::Running,
             };
             assert_eq!(status.state, expected, "{scenario}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn idle_review_adapter_host_failure_never_requeues_or_writes() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        for mode in ["missing", "error", "timeout"] {
+            let directory = tempfile::tempdir().unwrap();
+            let socket = directory.path().join("host.sock");
+            let server = if mode == "missing" {
+                None
+            } else {
+                let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+                Some(tokio::spawn(async move {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut reader = BufReader::new(stream);
+                    let mut line = String::new();
+                    reader.read_line(&mut line).await.unwrap();
+                    assert!(matches!(
+                        serde_json::from_str::<HostRequest>(&line).unwrap(),
+                        HostRequest::Read { .. }
+                    ));
+                    if mode == "timeout" {
+                        std::future::pending::<()>().await;
+                    }
+                    let mut bytes = serde_json::to_vec(&HostResponse::Error {
+                        code: "unavailable".into(),
+                        message: "fixture".into(),
+                    })
+                    .unwrap();
+                    bytes.push(b'\n');
+                    reader.get_mut().write_all(&bytes).await.unwrap();
+                }))
+            };
+            let store = TaskStore::in_memory().unwrap();
+            let queen = store.ensure_queen("/workspace/queen").unwrap();
+            let session = WorkerSessionId::new();
+            let now = unix_timestamp();
+            store.bind_worker_session(queen.id, session).unwrap();
+            store.set_queen_automation_enabled(true, now).unwrap();
+            store.request_queen_automation_run(now).unwrap();
+            let run = store.claim_queen_automation(now).unwrap().unwrap();
+            store
+                .complete_queen_automation_delivery(&run.run_id, now)
+                .unwrap();
+            let mut state =
+                AppState::new(JournalLimits::new(64 * 1024, 64)).with_task_store(store.clone());
+            state.terminal_host = Some(HostClient::new(socket));
+            tokio::time::timeout(Duration::from_secs(4), continue_idle_queen_review(&state))
+                .await
+                .unwrap();
+            if let Some(server) = server {
+                if mode == "timeout" {
+                    server.abort();
+                    assert!(server.await.unwrap_err().is_cancelled());
+                } else {
+                    server.await.unwrap();
+                }
+            }
+            let status = store.queen_automation_status(now).unwrap();
+            assert_eq!(
+                status.state,
+                swarm_domain::QueenAutomationState::Running,
+                "{mode}"
+            );
+            assert_eq!(status.run_id, Some(run.run_id));
+            assert_eq!(status.attempts, 1);
         }
     }
 

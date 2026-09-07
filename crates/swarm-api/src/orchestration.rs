@@ -361,9 +361,23 @@ pub(super) async fn queen_automation_status(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let status = task_store(&state)?
+    let store = task_store(&state)?;
+    let mut status = store
         .queen_automation_status(unix_timestamp())
         .map_err(|error| task_store_error(&error))?;
+    if status.state == swarm_domain::QueenAutomationState::Running
+        && let Some((run_id, session_id)) = store
+            .unfinished_queen_review()
+            .map_err(|error| task_store_error(&error))?
+        && let Some(observation) =
+            super::coordination_delivery::observe_review_continuation(&state, store, session_id)
+                .await
+        && store
+            .idle_queen_review_budget_exhausted(&run_id, session_id, observation, unix_timestamp())
+            .map_err(|error| task_store_error(&error))?
+    {
+        status.waiting_reason = Some("Automatic continuation paused: Queen was just observed idle after using this review's delivery budget. The review remains unfinished; inspect Queen's current state before retrying.".into());
+    }
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(status)).into_response())
 }
 

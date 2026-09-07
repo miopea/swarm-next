@@ -2,6 +2,19 @@
 
 ## Live acceptance failure: an unfinished run lost from Queen's context
 
+Host-failure acceptance now passes for missing socket, explicit host error and
+a stalled response bounded by the two-second observation deadline. All preserve
+the Running review, run ID and attempt count without writing terminal input.
+The nine-scenario adapter regression still passes after extracting the shared
+observation helper. Exhaustion reporting is now a read-only projection requiring
+current idle evidence and exact durable run/session/budget/engagement checks;
+busy work does not qualify. It creates no decision or retry. Queues displays the
+API's running-review wait explanation and drops it when the explanation clears;
+all 31 queue tests and TypeScript checking pass. The focused persistence budget
+test passes. Strict lint identified two redundant borrows in the helper callers,
+which were removed. Full redelivery, HTTP projection and rendered acceptance
+remain unproven; this slice is still local, not deployed.
+
 Adapter acceptance now exercises the real host protocol against an isolated
 Unix socket for idle, busy, unknown, unsent input, wrong-session, ended-process,
 truncated-snapshot, concurrent engagement and concurrent finish cases. Only idle
