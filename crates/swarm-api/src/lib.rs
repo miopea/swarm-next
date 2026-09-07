@@ -3887,6 +3887,10 @@ fn api_router(state: AppState) -> Router {
         )
         .route("/api/v1/feedback/github", get(feedback::github_readiness))
         .route(
+            "/api/v1/feedback/support/local-copy",
+            axum::routing::delete(support_http::forget).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
             "/api/v1/feedback/support/retry",
             post(support_http::retry).layer(DefaultBodyLimit::max(4096)),
         )

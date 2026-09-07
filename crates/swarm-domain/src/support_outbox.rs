@@ -13,6 +13,13 @@ pub struct SupportRetryRequest {
     pub expected_attempt_id: uuid::Uuid,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForgetSupportReport {
+    pub submission_key: uuid::Uuid,
+    pub expected_message_id: uuid::Uuid,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SupportDeliveryState {
@@ -32,6 +39,10 @@ pub enum SupportDeliveryTransitionError {
 }
 
 impl SupportDeliveryState {
+    #[must_use]
+    pub const fn may_remove_local_copy(self) -> bool {
+        matches!(self, Self::Confirmed)
+    }
     /// One explicit operator retry, not a reset of the automatic budget.
     ///
     /// # Errors

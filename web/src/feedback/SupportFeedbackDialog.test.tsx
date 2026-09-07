@@ -1,11 +1,11 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import SupportFeedbackDialog from "./SupportFeedbackDialog";
-import { fetchSupportStatus, submitSupport, retrySupport, type SupportStatus } from "../api/support";
+import { fetchSupportStatus, submitSupport, retrySupport, forgetSupportCopy, type SupportStatus } from "../api/support";
 import { loadPendingSupport } from "./supportDraft";
 import { RuntimeRequestError } from "../api/request";
 
-vi.mock("../api/support", () => ({ fetchSupportStatus: vi.fn(), submitSupport: vi.fn(), retrySupport: vi.fn() }));
+vi.mock("../api/support", () => ({ fetchSupportStatus: vi.fn(), submitSupport: vi.fn(), retrySupport: vi.fn(), forgetSupportCopy: vi.fn() }));
 const status: SupportStatus = { configured: true, sender: "running", deliveries: [] };
 afterEach(() => { cleanup(); sessionStorage.clear(); vi.resetAllMocks(); });
 function open() { return render(<SupportFeedbackDialog operatorToken="fixture" status={status} onClose={vi.fn()} />); }
@@ -91,5 +91,23 @@ test("definitively stale retry clears only its command, not the saved report", a
   fireEvent.click(screen.getByRole("button", { name: "Retry once" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("Check delivery status");
   expect(sessionStorage.getItem("swarm.support.retry.v1")).toBeNull();
+  expect(screen.getByText(/Delivery unconfirmed/)).toBeInTheDocument();
+});
+
+test("only confirmed copies offer explicit local removal, including when support is disabled", async () => {
+  const rows: SupportStatus = { ...status, configured: false, deliveries: [
+    { submission_key: "confirmed", created_at: 1, delivery: { state: "confirmed", attempts: 1, receipt: { message_id: "central-message" } } },
+    { submission_key: "uncertain", created_at: 2, delivery: { state: "uncertain", attempts: 5 } },
+  ] };
+  vi.mocked(forgetSupportCopy).mockResolvedValue();
+  render(<SupportFeedbackDialog operatorToken="fixture" status={rows} onClose={vi.fn()} />);
+  fireEvent.click(screen.getByText(/Delivery status ·/));
+  expect(screen.getAllByRole("button", { name: "Remove from this Hive…" })).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Remove from this Hive…" }));
+  expect(forgetSupportCopy).not.toHaveBeenCalled();
+  expect(screen.getByText(/conversation and history remain in Swarm Support/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Remove local copy" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Remove local copy" })).toBeNull());
+  expect(forgetSupportCopy).toHaveBeenCalledTimes(1);
   expect(screen.getByText(/Delivery unconfirmed/)).toBeInTheDocument();
 });

@@ -76,6 +76,16 @@ pub struct HiveSupportService {
 }
 
 impl HiveSupportService {
+    /// Local-only retention does not require an enabled central destination.
+    ///
+    /// # Errors
+    /// Refuses unconfirmed or changed receipts; never contacts the central source.
+    pub fn forget_local_copy(
+        store: &TaskStore,
+        request: &swarm_domain::ForgetSupportReport,
+    ) -> Result<bool, HiveSupportServiceError> {
+        Ok(store.forget_confirmed_support_report(request)?)
+    }
     /// Explicit authenticated operator action, not a fresh report or renewed automatic budget.
     ///
     /// # Errors

@@ -118,6 +118,14 @@ customer-facing reply is invoked by schema migration or opening an outbox record
 
 ### Bounded Hive HTTP transport (September 7, not activated)
 
+Local retention is an explicit operator action bound to the confirmed central
+message receipt. Pending, in-flight, failed and uncertain reports cannot be
+removed. Deleting a confirmed local copy releases bounded Hive outbox capacity,
+not the central conversation or its history; it is not a central erasure request.
+Exact absent-copy replay is harmless, while a changed receipt is refused. The
+control remains available when central delivery is disabled. No automatic retention
+timer or bulk deletion is introduced, and the UI warns before local removal.
+
 Explicit operator retry is a separate command with a stable retry ID and the exact
 observed attempt ID. It grants one additional attempt, never resets automatic
 counts, and retains frozen content/destination. Replayed commands cannot replenish

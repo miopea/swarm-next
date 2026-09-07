@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { fetchSupportStatus, submitSupport, retrySupport, type SupportDelivery, type SupportStatus, type SupportSubmission } from "../api/support";
+import { fetchSupportStatus, submitSupport, retrySupport, forgetSupportCopy, type SupportDelivery, type SupportStatus, type SupportSubmission } from "../api/support";
 import { useModalFocus } from "../shared/useModalFocus";
 import { RuntimeRequestError } from "../api/request";
 import UnsavedChangesPrompt from "../shared/UnsavedChangesPrompt";
@@ -29,6 +29,8 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
   const [error, setError] = useState(recovery.error);
   const [busy, setBusy] = useState(false);
   const [discard, setDiscard] = useState(false);
+  const [removing, setRemoving] = useState<string>();
+  const [visibleCount, setVisibleCount] = useState(10);
   const inFlight = useRef(false);
   const dirty = !saved && Boolean(email || name || subject || body || review);
   function close() { if (dirty && !attempted) setDiscard(true); else onClose(); }
@@ -87,6 +89,19 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
     finally { window.clearTimeout(deadline); inFlight.current = false; setBusy(false); }
   }
 
+  async function removeLocal(row: SupportDelivery) {
+    if (inFlight.current) return;
+    inFlight.current = true; setBusy(true); setError("");
+    const controller = new AbortController();
+    const deadline = window.setTimeout(() => controller.abort(), 8_000);
+    try {
+      await forgetSupportCopy(operatorToken, row, controller.signal);
+      setStatus((old) => ({ ...old, deliveries: old.deliveries.filter((item) => item.submission_key !== row.submission_key) }));
+      setRemoving(undefined);
+    } catch { setError("Local removal could not be confirmed. Check delivery status or repeat this same removal. The central conversation is unchanged."); }
+    finally { window.clearTimeout(deadline); inFlight.current = false; setBusy(false); }
+  }
+
   return <div className="feedback-backdrop" role="presentation">
     <section ref={modal} tabIndex={-1} className="feedback-dialog" role="dialog" aria-modal="true" aria-labelledby="support-heading">
       <header><div><p className="eyebrow">A note to the hive keepers</p><h2 id="support-heading">Swarm Support</h2></div>
@@ -120,11 +135,17 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
       {status.sender === "failed" && <p role="alert">Support delivery has stopped. Saved reports remain on this Hive.</p>}
       <details><summary>Delivery status · {status.deliveries.length}</summary>
         <button type="button" className="secondary-button" disabled={busy} onClick={() => void refresh()}>Check delivery status</button>
-        <ul>{status.deliveries.slice(0, 10).map((row) => <li key={row.submission_key}>{labels[row.delivery.state]} · {new Date(row.created_at * 1000).toLocaleString()}
+        <ul>{status.deliveries.slice(0, visibleCount).map((row) => <li key={row.submission_key}>Report …{row.submission_key.slice(-8)} · {labels[row.delivery.state]} · {new Date(row.created_at * 1000).toLocaleString()}
           {row.delivery.manual_retry_pending ? <span> · One retry requested</span> : status.configured && row.delivery.attempt_id
             && (row.delivery.state === "failed" || (row.delivery.state === "uncertain" && row.delivery.attempts >= 5))
             ? <button type="button" className="secondary-button" disabled={busy} onClick={() => void retryOnce(row)}>Retry once</button> : null}
+          {row.delivery.state === "confirmed" && row.delivery.receipt?.message_id && (removing === row.submission_key
+            ? <div><p>Remove this confirmed copy from this Hive? Its conversation and history remain in Swarm Support. The local copy cannot be restored here.</p>
+              <button type="button" className="secondary-button" disabled={busy} onClick={() => void removeLocal(row)}>Remove local copy</button>
+              <button type="button" className="secondary-button" disabled={busy} onClick={() => setRemoving(undefined)}>Keep copy</button></div>
+            : <button type="button" className="secondary-button" disabled={busy} onClick={() => setRemoving(row.submission_key)}>Remove from this Hive…</button>)}
         </li>)}</ul>
+        {status.deliveries.length > visibleCount && <button type="button" className="secondary-button" onClick={() => setVisibleCount((count) => Math.min(count + 10, 256))}>Show more reports</button>}
       </details>
       {discard && <UnsavedChangesPrompt label="Discard this message?" description="This draft has not been saved or sent." discardLabel="Discard message" onDiscard={onClose} onKeep={() => setDiscard(false)} />}
     </section>

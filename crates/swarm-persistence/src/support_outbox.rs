@@ -75,6 +75,42 @@ pub(super) fn migrate(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Resu
 }
 
 impl TaskStore {
+    /// Removes only a receipt-confirmed local copy, never a central conversation.
+    ///
+    /// # Errors
+    /// Refuses unconfirmed state or a changed receipt. Exact absence is idempotent.
+    pub fn forget_confirmed_support_report(
+        &self,
+        request: &swarm_domain::ForgetSupportReport,
+    ) -> Result<bool, SupportOutboxError> {
+        if request.submission_key.is_nil() || request.expected_message_id.is_nil() {
+            return Err(SupportOutboxError::InvalidTransition);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some(entry) = read(&transaction, request.submission_key)? else {
+            return Ok(false);
+        };
+        if !entry.delivery.state.may_remove_local_copy() {
+            return Err(SupportOutboxError::InvalidTransition);
+        }
+        if entry
+            .delivery
+            .receipt
+            .as_ref()
+            .map(|receipt| receipt.message_id.as_str())
+            != Some(request.expected_message_id.to_string().as_str())
+        {
+            return Err(SupportOutboxError::Conflict);
+        }
+        transaction.execute(
+            "DELETE FROM hive_support_outbox WHERE submission_key = ?1",
+            [request.submission_key.to_string()],
+        )?;
+        transaction.commit()?;
+        Ok(true)
+    }
+
     /// Grants exactly one explicit retry without resetting the automatic attempt count.
     ///
     /// # Errors
@@ -553,6 +589,69 @@ mod tests {
             store.request_support_retry(&stale, DESTINATION, 11),
             Err(SupportOutboxError::StaleAttempt)
         ));
+    }
+
+    #[test]
+    fn local_retention_protects_unconfirmed_reports_and_never_deletes_central_history() {
+        let store = TaskStore::in_memory().unwrap();
+        let key = Uuid::from_u128(1);
+        let input = submission(1, "Fictional retained conversation");
+        store
+            .enqueue_support_submission(&input, DESTINATION, 1)
+            .unwrap();
+        let mut central = crate::SupportStore::open(
+            std::path::Path::new(":memory:"),
+            std::num::NonZeroU32::new(1).unwrap(),
+        )
+        .unwrap();
+        let receipt = central.submit(&input, 2).unwrap();
+        let request = swarm_domain::ForgetSupportReport {
+            submission_key: key,
+            expected_message_id: receipt.message_id.parse().unwrap(),
+        };
+        assert!(store.forget_confirmed_support_report(&request).is_err());
+        let attempt = store
+            .claim_support_submission(key, 3)
+            .unwrap()
+            .delivery
+            .attempt_id
+            .unwrap();
+        assert!(store.forget_confirmed_support_report(&request).is_err());
+        store
+            .settle_support_submission(key, attempt, SupportDeliveryState::Uncertain, None, 4)
+            .unwrap();
+        assert!(store.forget_confirmed_support_report(&request).is_err());
+        let next = store
+            .claim_support_submission(key, 5)
+            .unwrap()
+            .delivery
+            .attempt_id
+            .unwrap();
+        store
+            .settle_support_submission(
+                key,
+                next,
+                SupportDeliveryState::Confirmed,
+                Some(receipt.clone()),
+                6,
+            )
+            .unwrap();
+        let mut wrong = request.clone();
+        wrong.expected_message_id = Uuid::from_u128(50);
+        assert!(matches!(
+            store.forget_confirmed_support_report(&wrong),
+            Err(SupportOutboxError::Conflict)
+        ));
+        assert!(store.forget_confirmed_support_report(&request).unwrap());
+        assert!(!store.forget_confirmed_support_report(&request).unwrap());
+        assert!(store.support_submission_statuses().unwrap().is_empty());
+        assert!(
+            central
+                .conversation_thread_records(&receipt.conversation_id)
+                .is_ok()
+        );
+        // A lost old browser save still replays to the original central conversation.
+        assert!(central.submit(&input, 7).unwrap().deduplicated);
     }
 
     #[test]

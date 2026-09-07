@@ -11,10 +11,18 @@ export type SupportSubmission = {
 export type SupportDelivery = {
   submission_key: string;
   created_at: number;
-  delivery: { state: "pending" | "delivering" | "uncertain" | "failed" | "confirmed"; attempts: number; attempt_id?: string | null; manual_retry_pending?: boolean };
+  delivery: { state: "pending" | "delivering" | "uncertain" | "failed" | "confirmed"; attempts: number; attempt_id?: string | null; manual_retry_pending?: boolean; receipt?: { message_id: string } | null };
 };
 export type SupportStatus = { configured: boolean; sender: "configured" | "running" | "stopped" | "failed" | null; deliveries: SupportDelivery[] };
 export type SupportRetry = { submission_key: string; retry_id: string; expected_attempt_id: string };
+
+export async function forgetSupportCopy(token: string, row: SupportDelivery, signal?: AbortSignal): Promise<void> {
+  if (row.delivery.state !== "confirmed" || !row.delivery.receipt?.message_id) throw new Error("Only a confirmed local copy can be removed");
+  await authenticatedFetch(token, "/api/v1/feedback/support/local-copy", {
+    method: "DELETE", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ submission_key: row.submission_key, expected_message_id: row.delivery.receipt.message_id }), signal,
+  });
+}
 
 export async function retrySupport(token: string, command: SupportRetry, signal?: AbortSignal): Promise<SupportDelivery["delivery"]> {
   const response = await authenticatedFetch(token, "/api/v1/feedback/support/retry", {

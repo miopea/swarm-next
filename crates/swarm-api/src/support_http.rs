@@ -144,6 +144,28 @@ fn unavailable() -> ApiError {
     )
 }
 
+pub(super) async fn forget(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<swarm_domain::ForgetSupportReport>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let store = crate::task_store(&state)?.clone();
+    let permit = admission(&state)?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        HiveSupportService::forget_local_copy(&store, &request)
+    })
+    .await
+    .map_err(|_| unavailable())?
+    .map_err(|error| service_error(&error))?;
+    Ok((
+        StatusCode::NO_CONTENT,
+        [(header::CACHE_CONTROL, "no-store")],
+    )
+        .into_response())
+}
+
 pub(super) async fn retry(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -418,5 +440,56 @@ mod tests {
         let claimed = store.claim_support_submission(key, 3).unwrap();
         assert_eq!(claimed.delivery.attempts, 6);
         assert!(!claimed.delivery.manual_retry_pending);
+    }
+
+    #[tokio::test]
+    async fn local_removal_requires_operator_and_confirmed_receipt_even_when_disabled() {
+        let (mut state, store) = fixture();
+        request(crate::router(state.clone()), "POST", true, payload()).await;
+        let key = "00000000-0000-0000-0000-000000000007".parse().unwrap();
+        let message = "00000000-0000-0000-0000-000000000008";
+        let command = serde_json::json!({"submission_key":key,"expected_message_id":message});
+        state.central_support = None;
+        let app = crate::router(state);
+        let remove = |authorized: bool| {
+            let mut builder = Request::builder()
+                .method("DELETE")
+                .uri("/api/v1/feedback/support/local-copy")
+                .header("content-type", "application/json");
+            if authorized {
+                builder = builder.header("authorization", "Bearer fictional-test-token");
+            }
+            app.clone()
+                .oneshot(builder.body(Body::from(command.to_string())).unwrap())
+        };
+        assert_eq!(
+            remove(false).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(remove(true).await.unwrap().status(), StatusCode::CONFLICT);
+        let attempt = store
+            .claim_support_submission(key, 1)
+            .unwrap()
+            .delivery
+            .attempt_id
+            .unwrap();
+        store
+            .settle_support_submission(
+                key,
+                attempt,
+                swarm_domain::SupportDeliveryState::Confirmed,
+                Some(swarm_persistence::SupportReceipt {
+                    submission_key: key.to_string(),
+                    conversation_id: "00000000-0000-0000-0000-000000000009".into(),
+                    message_id: message.into(),
+                    created_at: 2,
+                    deduplicated: false,
+                }),
+                2,
+            )
+            .unwrap();
+        assert_eq!(remove(true).await.unwrap().status(), StatusCode::NO_CONTENT);
+        assert_eq!(remove(true).await.unwrap().status(), StatusCode::NO_CONTENT);
+        assert!(store.support_submission_statuses().unwrap().is_empty());
     }
 }
