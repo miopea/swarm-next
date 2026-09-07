@@ -5,15 +5,18 @@ import { PresenceController } from "./PresenceController";
 
 const atHive: OperatorPresence = { mode: "at_hive", manual_mode: null, source: "active_device" };
 const originalUserAgent = navigator.userAgent;
+const originalHasFocus = document.hasFocus;
 
 beforeEach(() => {
   vi.useFakeTimers();
+  document.hasFocus = () => true;
   window.localStorage.clear();
   Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  document.hasFocus = originalHasFocus;
   vi.unstubAllGlobals();
   Object.defineProperty(navigator, "userAgent", { configurable: true, value: originalUserAgent });
 });
@@ -40,6 +43,27 @@ test("owns one heartbeat and one listener set across repeated starts", async () 
   expect(observe).toHaveBeenCalledTimes(3);
   controller.stop();
   expect(clearIntervalSpy).toHaveBeenCalledTimes(2);
+});
+
+test("an unfocused visible window stays inactive until an actual focus return", async () => {
+  const observe = vi.fn().mockResolvedValue(atHive);
+  const controller = new PresenceController(observe);
+  document.hasFocus = () => false;
+  controller.start("secret", vi.fn(), vi.fn());
+  await vi.runAllTicks();
+  expect(observe.mock.calls.at(-1)?.slice(3)).toEqual(["hidden", false]);
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(observe.mock.calls.at(-1)?.slice(3)).toEqual(["hidden", false]);
+  document.hasFocus = () => true;
+  window.dispatchEvent(new Event("focus"));
+  await vi.runAllTicks();
+  expect(observe.mock.calls.at(-1)?.slice(3)).toEqual(["active", true]);
+  document.hasFocus = () => false;
+  window.dispatchEvent(new Event("blur"));
+  await vi.runAllTicks();
+  expect(observe.mock.calls.at(-1)?.slice(3)).toEqual(["hidden", false]);
+  controller.stop();
 });
 
 test("visibility changes replace pending state without concurrent writes", async () => {

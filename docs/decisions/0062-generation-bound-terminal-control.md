@@ -47,6 +47,14 @@ enabled. It does not change provider sessions, task ownership, or scope of work.
 
 ## Rolling compatibility and activation gate
 
+Operator clarification on September 7: an unfocused, hidden, minimized or
+detached view is not engagement. It releases its own generation immediately,
+retaining canonical geometry and the provider session. A delayed claim/renew
+response received while inactive is also released. This supersedes retaining
+ownership on blur/visibility loss above; transport loss alone still relies on
+bounded engine expiry. Return uses non-displacing acquisition or Resume Here.
+General presence also requires focus before reporting active desktop return.
+
 The terminal adapter and engine must negotiate support explicitly. Never silently
 downgrade a generation-bound attachment to unrestricted legacy input. Existing
 workers on an older engine must remain alive; expose that engine capability gap

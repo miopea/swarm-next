@@ -213,7 +213,7 @@ export class TerminalConnection {
     return sent;
   }
 
-  /** Explicit worker navigation releases control; merely hiding a PWA does not. */
+  /** Release this view's generation without ending the session or changing geometry. */
   releaseControl(): void {
     const generation = this.#control.inputGeneration;
     if (generation !== undefined) this.#send({ type: "release", generation });
@@ -225,6 +225,12 @@ export class TerminalConnection {
   }
 
   #publishControl(): void {
+    // A claim/renew acknowledgement can arrive after blur. Do not let that
+    // delayed reply keep a background window's orchestration hold alive.
+    if (!this.#foreground() && this.#control.ownsControl) {
+      this.#send({ type: "release", generation: this.#control.inputGeneration! });
+      this.#control.disconnect();
+    }
     const next: TerminalControlView = !this.#control.confirmed ? "checking"
       : !this.#control.status.supported ? "unsupported"
       : this.#control.ownsControl ? "owned"
@@ -371,6 +377,7 @@ export class TerminalConnection {
     if (document.visibilityState !== "visible") this.#clearAttachTiming();
     this.#renderWait?.refreshVisibility();
     if (this.#disposed || this.#fatal) return;
+    if (!this.#foreground()) this.releaseControl();
     this.#unconfirmControl();
     if (!this.#foreground()) return;
     const socket = this.#socket;
@@ -500,7 +507,7 @@ export class TerminalConnection {
     }
     this.#rendering = false;
     this.#renderWait?.refreshVisibility();
-    this.#unconfirmControl();
+    this.releaseControl();
   }
 
   /** Back on screen: take a snapshot if anything happened while it was away. */

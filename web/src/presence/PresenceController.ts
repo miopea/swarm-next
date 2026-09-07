@@ -48,10 +48,12 @@ export class PresenceController {
     this.#onLockState = onLockState;
     this.#deviceId = presenceDeviceId();
     this.#deviceClass = deviceClass();
-    this.#state = document.visibilityState === "visible" ? "active" : "hidden";
+    this.#state = document.visibilityState === "visible" && document.hasFocus() ? "active" : "hidden";
     const lockDetectionAvailable = this.#deviceClass === "desktop" && "IdleDetector" in window;
     this.#onLockState(lockDetectionAvailable ? "available" : "unsupported");
     document.addEventListener("visibilitychange", this.#handleVisibility);
+    window.addEventListener("focus", this.#handleVisibility);
+    window.addEventListener("blur", this.#handleVisibility);
     window.addEventListener("pointerdown", this.#handleInteraction, { passive: true });
     window.addEventListener("keydown", this.#handleInteraction);
     window.addEventListener("touchstart", this.#handleInteraction, { passive: true });
@@ -70,6 +72,8 @@ export class PresenceController {
     if (this.#timer !== undefined) window.clearInterval(this.#timer);
     this.#timer = undefined;
     document.removeEventListener("visibilitychange", this.#handleVisibility);
+    window.removeEventListener("focus", this.#handleVisibility);
+    window.removeEventListener("blur", this.#handleVisibility);
     window.removeEventListener("pointerdown", this.#handleInteraction);
     window.removeEventListener("keydown", this.#handleInteraction);
     window.removeEventListener("touchstart", this.#handleInteraction);
@@ -140,7 +144,7 @@ export class PresenceController {
         ? "locked"
         : this.#userIdle
           ? "idle"
-          : document.visibilityState === "visible" ? "active" : "hidden";
+          : document.visibilityState === "visible" && document.hasFocus() ? "active" : "hidden";
       this.#queue(this.#state);
     };
     detector.addEventListener("change", update, { signal: controller.signal });
@@ -159,12 +163,12 @@ export class PresenceController {
   #handleVisibility = () => {
     this.#state = this.#screenLocked ? "locked"
       : this.#userIdle ? "idle"
-        : document.visibilityState === "visible" ? "active" : "hidden";
+        : document.visibilityState === "visible" && document.hasFocus() ? "active" : "hidden";
     this.#queue(this.#state, this.#state === "active");
   };
 
   #handleInteraction = () => {
-    if (document.visibilityState !== "visible" || this.#state === "locked") return;
+    if (document.visibilityState !== "visible" || !document.hasFocus() || this.#state === "locked") return;
     this.#state = "active";
     if (this.#nightWatch || this.now() - this.#lastActiveSentAt >= HEARTBEAT_MS) this.#queue("active", true);
   };

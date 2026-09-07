@@ -296,6 +296,10 @@ test("foreground renewal is bounded and stops when the view loses focus", async 
   socket.message(JSON.stringify({ type: "control", control: ownedControl }));
   document.hasFocus = () => false;
   window.dispatchEvent(new Event("blur"));
+  expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "release", generation: "1" });
+  // A renewal already in flight must not restore an inactive view's hold.
+  socket.message(JSON.stringify({ type: "control", control: ownedControl }));
+  expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "release", generation: "1" });
   const count = socket.sent.length;
   await vi.advanceTimersByTimeAsync(90_000);
   expect(socket.sent).toHaveLength(count);
