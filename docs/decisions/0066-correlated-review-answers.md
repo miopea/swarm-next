@@ -121,3 +121,21 @@ The added batched-delivery regression passed independently: two request messages
 retain distinct reply selectors and the first transport marker, with the submit
 terminator preserved. This verifies delivery text, not the failed settlement
 boundary above.
+
+### Automatic no-deployment settlement guard
+
+An unanswered, linked request bound to the current assignee excludes a task
+from automatic no-build/docs-only settlement. The final completion transaction
+rechecks that obligation before invalidation or state/event writes; a late
+request skips this candidate without failing the sweep. An exact answer makes
+the task eligible again, including when the coordinator already approved its
+exemption before a late handback. Ordinary progress does not answer the request.
+Superseded/unbound historical requests do not create an inherited worker debt.
+
+This implements the existing exact-answer boundary, not a general review veto.
+Explicit lifecycle commands and the separate whole-deployment settlement policy
+remain unchanged. The guard adds no timer, queue, schema or provider restart.
+Two regression tests cover unanswered/progress/exact-answer recovery and a late
+handback after exemption approval. Both passed on the isolated main-compatible
+Linux tree; strict API checks passed. Full persistence and a fresh live fictional
+round trip remain required before calling this deployed or accepted.

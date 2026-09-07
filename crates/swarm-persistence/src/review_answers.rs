@@ -12,6 +12,26 @@ pub struct ReturnedReviewRequest {
     pub status: &'static str,
 }
 
+/// Fence automatic no-deployment settlement against an unanswered current request.
+pub(super) fn ensure_no_pending_request(
+    tx: &rusqlite::Transaction<'_>,
+    task_id: TaskId,
+) -> Result<(), TaskStoreError> {
+    let pending: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM task_returned_reviews r
+         JOIN tasks t ON t.id = r.task_id
+         WHERE r.task_id = ?1 AND t.state = 'review'
+           AND r.answered_at IS NULL AND r.request_message_id IS NOT NULL
+           AND r.request_worker_id = t.assigned_worker_id)",
+        [task_id.to_string()],
+        |row| row.get(0),
+    )?;
+    if pending {
+        return Err(TaskStoreError::ReviewAnswerRequired);
+    }
+    Ok(())
+}
+
 /// Invalidate only an outstanding request; keep its message as historical evidence.
 pub(super) fn invalidate_pending_request(
     tx: &rusqlite::Transaction<'_>,
@@ -216,6 +236,117 @@ mod tests {
             .return_review_to_worker(task.id, "Which SHA?", 100)
             .unwrap();
         (store, task.id, worker.id, request.id)
+    }
+
+    #[test]
+    fn no_deployment_settlement_waits_for_exact_answer_then_recovers() {
+        let (store, task, worker, request) = fixture();
+        store
+            .record_task_commits(
+                task,
+                "/workspace",
+                swarm_domain::CommitRepositoryState::Read,
+                &[],
+                101,
+            )
+            .unwrap();
+        assert!(
+            store
+                .settle_reviewed_work_without_deployment_page(102, None)
+                .unwrap()
+                .closed
+                .is_empty()
+        );
+        assert_eq!(
+            store.completion_evidence(task).unwrap(),
+            crate::CompletionEvidence::None
+        );
+        store
+            .message_queen_from_worker(task, worker, "Still checking", None, 103)
+            .unwrap();
+        assert!(
+            store
+                .settle_reviewed_work_without_deployment_page(104, None)
+                .unwrap()
+                .closed
+                .is_empty()
+        );
+        assert_eq!(
+            store.get_task(task).unwrap().next_move_owner,
+            NextMoveOwner::Worker
+        );
+        store
+            .message_queen_from_worker(task, worker, "Nine tests passed", Some(&request), 105)
+            .unwrap();
+        assert_eq!(
+            store
+                .settle_reviewed_work_without_deployment_page(106, None)
+                .unwrap()
+                .closed,
+            vec![task]
+        );
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Completed);
+        assert!(
+            store
+                .returned_review_request(task)
+                .unwrap()
+                .unwrap()
+                .answer_message_id
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn no_deployment_completion_transaction_rechecks_late_review_request() {
+        let (store, task, worker, request) = fixture();
+        store
+            .record_task_commits(
+                task,
+                "/workspace",
+                swarm_domain::CommitRepositoryState::Read,
+                &[],
+                101,
+            )
+            .unwrap();
+        store
+            .message_queen_from_worker(task, worker, "First answer", Some(&request), 102)
+            .unwrap();
+        // Model a selected candidate whose exemption commits before a new handback.
+        store
+            .claim_completion_exemption(task, "Nothing built", None, 103)
+            .unwrap();
+        store
+            .approve_completion_exemption(task, "coordinator", "Empty commit report", 103)
+            .unwrap();
+        let next = store
+            .return_review_to_worker(task, "Verify one more condition", 104)
+            .unwrap();
+        assert!(matches!(
+            store.transition_task_guarded(
+                task,
+                TaskState::Completed,
+                "Automatic close",
+                None,
+                &crate::TaskActivityActor::system(),
+                true
+            ),
+            Err(TaskStoreError::ReviewAnswerRequired)
+        ));
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Review);
+        assert_eq!(
+            store.returned_review_request(task).unwrap().unwrap().status,
+            "awaiting_answer"
+        );
+        store
+            .message_queen_from_worker(task, worker, "Verified", Some(&next.id), 105)
+            .unwrap();
+        assert_eq!(
+            store
+                .settle_reviewed_work_without_deployment_page(106, None)
+                .unwrap()
+                .closed,
+            vec![task]
+        );
     }
 
     #[test]

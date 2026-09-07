@@ -8433,6 +8433,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "connection_revoked",
             error.to_string(),
         ),
+        TaskStoreError::ReviewAnswerRequired => ApiError::new(
+            StatusCode::CONFLICT,
+            "review_answer_required",
+            error.to_string(),
+        ),
         TaskStoreError::InvalidReviewReply => ApiError::new(
             StatusCode::CONFLICT,
             "review_reply_conflict",

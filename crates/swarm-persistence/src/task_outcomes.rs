@@ -3341,6 +3341,12 @@ impl TaskStore {
                        WHERE p.task_id = task.id AND (upstream.id IS NULL
                            OR upstream.removed_at IS NOT NULL OR upstream.state != 'completed')
                    )
+                   AND NOT EXISTS (
+                       SELECT 1 FROM task_returned_reviews r
+                       WHERE r.task_id = task.id AND r.answered_at IS NULL
+                         AND r.request_message_id IS NOT NULL
+                         AND r.request_worker_id = task.assigned_worker_id
+                   )
                    -- Work carrying a deployment is the OTHER sweep's business.
                    AND NOT EXISTS (
                        SELECT 1 FROM task_deployments d WHERE d.task_id = task.id
@@ -3429,15 +3435,18 @@ impl TaskStore {
                 self.claim_completion_exemption(task_id, reason, None, now)?;
                 self.approve_completion_exemption(task_id, "coordinator", basis, now)?;
             }
-            match self.transition_task_with_note_as(
+            match self.transition_task_guarded(
                 task_id,
                 TaskState::Completed,
                 reason,
+                None,
                 &TaskActivityActor::system(),
+                true,
             ) {
                 Ok(_) => closed.push(task_id),
                 Err(
-                    TaskStoreError::NotFound
+                    TaskStoreError::ReviewAnswerRequired
+                    | TaskStoreError::NotFound
                     | TaskStoreError::InvalidTransition { .. }
                     | TaskStoreError::TaskPrerequisite(
                         swarm_domain::TaskPrerequisiteError::Unresolved,

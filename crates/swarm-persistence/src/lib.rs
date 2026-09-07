@@ -324,6 +324,8 @@ pub enum TaskStoreError {
     DatabaseRecoveryRequired,
     #[error("review reply does not match the current request, worker, or saved answer")]
     InvalidReviewReply,
+    #[error("automatic settlement is waiting for the worker's exact review answer")]
+    ReviewAnswerRequired,
     #[error("task persistence filesystem failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("task persistence failed: {0}")]
@@ -2545,12 +2547,32 @@ impl TaskStore {
         reporting_session_id: Option<WorkerSessionId>,
         actor: &TaskActivityActor,
     ) -> Result<Task, TaskStoreError> {
+        self.transition_task_guarded(id, target, note, reporting_session_id, actor, false)
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        clippy::too_many_arguments,
+        reason = "Lifecycle guards and event write share one transaction"
+    )]
+    fn transition_task_guarded(
+        &self,
+        id: TaskId,
+        target: TaskState,
+        note: &str,
+        reporting_session_id: Option<WorkerSessionId>,
+        actor: &TaskActivityActor,
+        require_review_answer: bool,
+    ) -> Result<Task, TaskStoreError> {
         if note.len() > MAX_TASK_ACTIVITY_NOTE_BYTES {
             return Err(TaskStoreError::InvalidTaskActivityNote);
         }
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         let current = reportable_task_state(&transaction, id, reporting_session_id)?;
+        if require_review_answer {
+            review_answers::ensure_no_pending_request(&transaction, id)?;
+        }
         if !current.can_transition_to(target) {
             // ONLY the completed-to-completed case gets the richer answer.
             // ready to ready and blocked to blocked are ordinary mistakes, and
