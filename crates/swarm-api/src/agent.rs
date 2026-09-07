@@ -749,6 +749,11 @@ impl ServerHandler for AgentMcp {
                             let (blocked_reassessment, blocked_reassessment_truncated) = self.tasks
                                 .store().blocked_tasks_for_reassessment(crate::unix_timestamp())?;
                             structured(json!({
+                                "unfinished_delivered_review": self.tasks.store().unfinished_queen_review()?.map(|(run_id, session_id)| json!({
+                                    "run_id": run_id,
+                                    "delivery_session_id": session_id,
+                                    "next_action": "This durable review is unfinished even if provider compaction or a worker notification displaced its prompt. Reconcile current obligations under this exact run_id and finish it explicitly with swarm_finish_automation_run. Do not repeat prior side effects or start a replacement review. This observation is not proof the terminal is idle or permission to interrupt input."
+                                })),
                                 "active_work_recovery": crate::coordination_attention_evidence::active_work_recovery(&attention, &terminal_evidence),
                                 "queue_snapshot": {
                                     "observed_at": crate::unix_timestamp(),
@@ -5755,6 +5760,58 @@ mod tests {
             json!([])
         );
         assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Ready);
+    }
+
+    #[tokio::test]
+    async fn coordination_attention_recovers_unfinished_review_identity() {
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        let now = now_seconds();
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(queen_id, session).unwrap();
+        store.request_queen_automation_run(now).unwrap();
+        let run = store.claim_queen_automation(now).unwrap().unwrap();
+        store
+            .complete_queen_automation_delivery(&run.run_id, now)
+            .unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let response = call_review_test_tool(
+            bridge.clone(),
+            &token,
+            "swarm_list_coordination_attention",
+            json!({}),
+        )
+        .await;
+        let context = &response["result"]["structuredContent"]["unfinished_delivered_review"];
+        assert_eq!(context["run_id"], run.run_id);
+        assert_eq!(context["delivery_session_id"], session.to_string());
+        assert_eq!(
+            store.unfinished_queen_review().unwrap(),
+            Some((run.run_id.clone(), session))
+        );
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let denied = call_review_test_tool(
+            bridge.clone(),
+            &worker_token,
+            "swarm_list_coordination_attention",
+            json!({}),
+        )
+        .await;
+        assert_eq!(denied["result"]["isError"], true);
+        store
+            .finish_queen_automation_run(
+                &run.run_id,
+                swarm_domain::QueenAutomationOutcome::Incomplete,
+                now,
+            )
+            .unwrap();
+        let finished = call_review_test_tool(
+            bridge,
+            &token,
+            "swarm_list_coordination_attention",
+            json!({}),
+        )
+        .await;
+        assert!(finished["result"]["structuredContent"]["unfinished_delivered_review"].is_null());
     }
 
     async fn call_review_test_tool(

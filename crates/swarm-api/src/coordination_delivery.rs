@@ -390,12 +390,27 @@ pub(super) async fn submit_task_message_groups(
                 }
             }
             let session = group[0].message.session_id;
-            let message = task_message_message(
+            let mut message = task_message_message(
                 &group
                     .iter()
                     .map(|claim| claim.message.clone())
                     .collect::<Vec<_>>(),
             );
+            match store.unfinished_queen_review() {
+                Ok(Some((run_id, review_session))) if review_session == session => {
+                    append_unfinished_review_context(&mut message, &run_id);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    return (
+                        group,
+                        Ok(TerminalSubmission::Rejected {
+                            code: "queen_review_context_unavailable".into(),
+                            message: error.to_string(),
+                        }),
+                    );
+                }
+            }
             let result = submit_coordination_message(store, client, session, message).await;
             (group, result)
         }),
@@ -1435,6 +1450,21 @@ pub(super) fn task_message_message(messages: &[TaskMessageDispatch]) -> Coordina
         bytes: text.into_bytes(),
         marker: delivery_marker(reference),
     }
+}
+
+/// Context on an already-owned notification, not a new delivery or a replay.
+/// The database identity is a snapshot: a concurrent finish must be rechecked
+/// through attention before the recipient resumes or settles anything.
+fn append_unfinished_review_context(message: &mut CoordinationMessage, run_id: &str) {
+    debug_assert_eq!(message.bytes.last(), Some(&b'\r'));
+    message.bytes.pop();
+    message.bytes.extend_from_slice(format!(
+        "\nAt notification preparation, Swarm still recorded unfinished review {run_id}. \
+         This notification does not replace or finish that review. After handling it, \
+         read swarm_list_coordination_attention to recover the current unfinished_delivered_review \
+         identity, reconcile remaining work and finish that exact run. If it has already finished, \
+         do not reopen it. Do not repeat prior side effects or infer a new review from this notice.\r"
+    ).as_bytes());
 }
 
 /// What an operator broadcast looks like in a worker's terminal.
@@ -3102,6 +3132,25 @@ mod tests {
             assert!(text.contains("continuation-contract"));
             assert_eq!(message.bytes.last(), Some(&b'\r'));
         }
+    }
+
+    #[test]
+    fn unfinished_review_context_preserves_notification_marker_and_submit() {
+        let mut message = CoordinationMessage {
+            cadence: Cadence::Cooled,
+            bytes: b"original worker report\r".to_vec(),
+            marker: delivery_marker("notification-identity"),
+        };
+        let original_marker = message.marker.clone();
+        append_unfinished_review_context(&mut message, "exact-existing-run");
+        let text = String::from_utf8(message.bytes).unwrap();
+        assert!(text.starts_with("original worker report\n"));
+        assert!(text.contains("exact-existing-run"));
+        assert!(text.contains("unfinished_delivered_review"));
+        assert!(text.contains("do not reopen it"));
+        assert_eq!(text.matches('\r').count(), 1);
+        assert!(text.ends_with('\r'));
+        assert_eq!(message.marker, original_marker);
     }
 
     /// `reviewed_work_without_evidence_attention` feeds `actionable_fingerprint`,

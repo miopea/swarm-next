@@ -46,6 +46,17 @@ coverage. A capacity-exceeded or partial snapshot cannot certify a complete revi
 
 ## Bounded execution and recovery
 
+Provider conversation compaction and an intervening worker notification do not
+finish a review. Queen can recover the unfinished delivered run identity through
+a read-only coordination-attention observation. Unlike lifecycle reconciliation,
+this read cannot expire or requeue a run. A notification prepared for the exact
+delivery session carries a bounded context reminder, preserving its own delivery
+identity and requiring a fresh read before acting; a concurrent finish must not
+be undone. This is context restoration, not a new review or permission to replay
+prior side effects. Notification context alone does not recover an idle Queen
+when no new notification arrives; that same-session recovery path remains part
+of acceptance and must respect terminal/input safety and bounded delivery.
+
 Recovery receipts have their own bounded persistence record, separate from task
 review dispositions. One record per task retains the exact attention, worker,
 session, task-evidence revision and optional canonical-terminal revision, plus

@@ -72,6 +72,32 @@ pub enum QueenAutomationFinish {
 }
 
 impl TaskStore {
+    /// Read the unfinished delivered review without expiring, requeuing or
+    /// otherwise advancing it. Provider compaction is not a lifecycle event.
+    ///
+    /// # Errors
+    /// Returns an error if the durable run/session identity cannot be read.
+    pub fn unfinished_queen_review(
+        &self,
+    ) -> Result<Option<(String, WorkerSessionId)>, TaskStoreError> {
+        let row = self
+            .connection()?
+            .query_row(
+                "SELECT run_id, delivery_session_id FROM queen_automation
+             WHERE id = 1 AND state IN ('running', 'uncertain')
+               AND run_id IS NOT NULL AND delivery_session_id IS NOT NULL",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        row.map(|(run_id, session)| {
+            WorkerSessionId::from_str(&session)
+                .map(|session| (run_id, session))
+                .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))
+        })
+        .transpose()
+    }
+
     /// A queued review that has already yielded to a confirmed delivery gets
     /// first consideration next pass. This is ordering, not delivery permission:
     /// cooldown, engagement, provider, and terminal guards still apply.
@@ -1148,6 +1174,33 @@ pub(super) fn migrate_queen_delivery_session(
 mod tests {
     use super::*;
     use swarm_domain::{ProviderKind, TaskActivityActor, TaskPriority, TaskState};
+
+    #[test]
+    fn unfinished_review_read_preserves_identity_without_lifecycle_side_effects() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        assert_eq!(store.unfinished_queen_review().unwrap(), None);
+        store.request_queen_automation_run(100).unwrap();
+        assert_eq!(store.unfinished_queen_review().unwrap(), None);
+        let delivery = store.claim_queen_automation(101).unwrap().unwrap();
+        assert_eq!(store.unfinished_queen_review().unwrap(), None);
+        store
+            .complete_queen_automation_delivery(&delivery.run_id, 102)
+            .unwrap();
+        let expected = Some((delivery.run_id.clone(), session));
+        for _ in 0..3 {
+            assert_eq!(store.unfinished_queen_review().unwrap(), expected);
+        }
+        // An API restart changes delivery certainty, not the review identity.
+        store.recover_inflight_queen_automation().unwrap();
+        assert_eq!(store.unfinished_queen_review().unwrap(), expected);
+        store
+            .finish_queen_automation_run(&delivery.run_id, QueenAutomationOutcome::NoAction, 103)
+            .unwrap();
+        assert_eq!(store.unfinished_queen_review().unwrap(), None);
+    }
 
     #[test]
     fn run_now_reuses_queued_delivering_and_running_review_without_replay() {

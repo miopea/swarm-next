@@ -2,6 +2,21 @@
 
 ## Live acceptance failure: an unfinished run lost from Queen's context
 
+Local context-restoration implementation now exposes an unfinished delivered
+run/session identity in Queen-only coordination attention using a pure database
+read. Preparing a task-message notification for that exact session appends a
+bounded reminder to recheck and finish the existing run, not replace it. The
+notification retains its original delivery marker and final submit byte. No new
+timer, database migration, worker restart or standalone prompt is added.
+
+Linux validation passes the new API identity/authentication/finished-run check,
+all 41 coordination-delivery tests and all 39 Queen-conductor tests, including
+the new read/restart/finish identity regression. Full formatting and strict
+API/persistence all-target/all-feature lint pass. This is local, not deployed;
+same-session idle recovery with no incoming notification is still missing, and
+the live two-worker acceptance remains open. The formatter/identity tests do not
+by themselves prove live notification routing or recovery safety end to end.
+
 At the September 7 follow-up, the authoritative automation endpoint still
 reported run `01a079e8-0b21-7af1-9314-5a9894417eee` as Running, with no finish
 time/outcome, 67 actionable records and 22 Queen-owned tasks. The demo downstream
