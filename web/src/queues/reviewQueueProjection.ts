@@ -12,7 +12,7 @@ function canonical(value: unknown): string {
 
 /** Fence the complete task projection, not only its second-resolution timestamp.
  * A checked wait changes presentation only, never execution owner or authority. */
-export function checkedQueueWaits(tasks: Task[], snapshot?: QueenReviewQueueSnapshot) {
+function currentQueueAssessments(tasks: Task[], snapshot?: QueenReviewQueueSnapshot) {
   const current = new Map(tasks.map(task => [task.id, task]));
   const waits = new Map<string, NonNullable<QueenReviewQueueSnapshot["items"][number]["previous_assessment"]>>();
   for (const item of snapshot?.items ?? []) {
@@ -20,11 +20,24 @@ export function checkedQueueWaits(tasks: Task[], snapshot?: QueenReviewQueueSnap
     const previous = item.previous_assessment;
     if (!task || task.next_move_owner !== "queen" || !previous
       || canonical(task) !== canonical(item.task)) continue;
+    waits.set(task.id, previous);
+  }
+  return waits;
+}
+
+export function unresolvedQueueInvestigations(tasks: Task[], snapshot?: QueenReviewQueueSnapshot) {
+  return new Map([...currentQueueAssessments(tasks, snapshot)].filter(([, previous]) =>
+    previous.assessment.kind === "insufficient_evidence" && previous.status === "insufficient_evidence"));
+}
+
+export function checkedQueueWaits(tasks: Task[], snapshot?: QueenReviewQueueSnapshot) {
+  const waits = currentQueueAssessments(tasks, snapshot);
+  for (const [id, previous] of waits) {
     // External judgments need a fresh check each run. Authenticated operator
     // deferrals remain applicable between runs while local evidence matches.
-    if (previous.status === "covered_for_current_run"
-      || (previous.status === "no_active_review" && previous.assessment.kind === "operator_deferral")) {
-      waits.set(task.id, previous);
+    if (previous.assessment.kind === "insufficient_evidence" || !(previous.status === "covered_for_current_run"
+      || (previous.status === "no_active_review" && previous.assessment.kind === "operator_deferral"))) {
+      waits.delete(id);
     }
   }
   return waits;

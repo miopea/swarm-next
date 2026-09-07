@@ -39,6 +39,7 @@ pub struct QueenReviewQueueSnapshot {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QueenReviewAssessmentStatus {
+    InsufficientEvidence,
     CoveredForCurrentRun,
     FreshExternalCheckRequired,
     EvidenceChanged,
@@ -62,6 +63,8 @@ pub fn queen_review_assessment_status(
 ) -> QueenReviewAssessmentStatus {
     if !revision_matches {
         QueenReviewAssessmentStatus::EvidenceChanged
+    } else if kind == QueenReviewDispositionKind::InsufficientEvidence {
+        QueenReviewAssessmentStatus::InsufficientEvidence
     } else if let Some(current_run) = current_run {
         if kind == QueenReviewDispositionKind::OperatorDeferral || recorded_run == current_run {
             QueenReviewAssessmentStatus::CoveredForCurrentRun
@@ -81,6 +84,14 @@ pub struct VerifiedQueenReviewReceipt {
     pub evidence_revision: String,
 }
 
+/// An accepted assessment may explicitly leave its obligation uncovered.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RecordedQueenReviewAssessment {
+    pub task_id: TaskId,
+    pub evidence_revision: String,
+    pub covers_wait: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub enum QueenReviewCoverage {
     Covered { waiting_obligations: usize },
@@ -93,6 +104,7 @@ pub enum QueenReviewCoverage {
 pub enum QueenReviewDispositionKind {
     ExternalCondition,
     OperatorDeferral,
+    InsufficientEvidence,
 }
 
 /// A proposed assessment, not proof of operator authority or task completion.
@@ -146,17 +158,29 @@ impl QueenReviewDispositionInput {
             QueenReviewDispositionKind::OperatorDeferral if sources != 1 => Err(
                 "an operator deferral requires exactly one authenticated task-linked operator source",
             ),
-            QueenReviewDispositionKind::ExternalCondition if sources != 0 => {
-                Err("an external condition cannot assert operator authority")
+            QueenReviewDispositionKind::ExternalCondition
+            | QueenReviewDispositionKind::InsufficientEvidence
+                if sources != 0 =>
+            {
+                Err("a non-operator assessment cannot assert operator authority")
             }
             _ => Ok(()),
         }
     }
 
     #[must_use]
+    pub fn can_record(&self, state: TaskState, owner: NextMoveOwner) -> bool {
+        self.can_cover(state, owner)
+            || (self.kind == QueenReviewDispositionKind::InsufficientEvidence
+                && owner == NextMoveOwner::Queen
+                && !matches!(state, TaskState::Completed | TaskState::Abandoned))
+    }
+
+    #[must_use]
     pub fn can_cover(&self, state: TaskState, owner: NextMoveOwner) -> bool {
         owner == NextMoveOwner::Queen
             && match self.kind {
+                QueenReviewDispositionKind::InsufficientEvidence => false,
                 QueenReviewDispositionKind::ExternalCondition => {
                     matches!(state, TaskState::Blocked | TaskState::Review)
                 }
@@ -221,6 +245,30 @@ pub fn queen_review_coverage(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_evidence_is_never_a_verified_wait_in_any_run() {
+        for run in [None, Some("original"), Some("later")] {
+            assert_eq!(
+                queen_review_assessment_status(
+                    QueenReviewDispositionKind::InsufficientEvidence,
+                    "original",
+                    run,
+                    true
+                ),
+                QueenReviewAssessmentStatus::InsufficientEvidence
+            );
+            assert_eq!(
+                queen_review_assessment_status(
+                    QueenReviewDispositionKind::InsufficientEvidence,
+                    "original",
+                    run,
+                    false
+                ),
+                QueenReviewAssessmentStatus::EvidenceChanged
+            );
+        }
+    }
 
     #[test]
     fn an_unchanged_valid_wait_is_covered_not_declared_finished() {

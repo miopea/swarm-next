@@ -30,6 +30,26 @@ test("checked waits preserve tasks and reject stale/mixed projections", () => {
   expect(JSON.stringify(task)).toBe(before);
 });
 
+test("insufficient evidence stays Queen-owned even with a contradictory covered status", () => {
+  const value = snapshot();
+  const assessment = value.items[0].previous_assessment!;
+  assessment.assessment.kind = "insufficient_evidence";
+  assessment.assessment.condition = "The original operator statement is unavailable";
+  expect(checkedQueueWaits([task], value).size).toBe(0);
+  assessment.status = "insufficient_evidence";
+  const props = { tasks: [task], workers: [], onOpenTask: vi.fn(), recovery: { items: [], truncated: false } };
+  const { rerender } = render(<QueuesView {...props} reviewQueue={value} />);
+  expect(screen.getByRole("heading", { name: "Waiting on Queen 1" })).toBeVisible();
+  expect(screen.getByText(/Queen still needs evidence: The original operator statement is unavailable/)).toBeVisible();
+  fireEvent.click(screen.getByText("What Queen checked"));
+  expect(screen.getByText(/This remains Queen's responsibility/)).toBeVisible();
+  expect(screen.queryByRole("heading", { name: "Scheduled / deliberately parked 1" })).not.toBeInTheDocument();
+  rerender(<QueuesView {...props} reviewQueue={value} coordinatorUnavailable />);
+  expect(screen.queryByText(/Queen still needs evidence:/)).not.toBeInTheDocument();
+  rerender(<QueuesView {...props} tasks={[{ ...task, description: "Changed evidence" }]} reviewQueue={value} />);
+  expect(screen.queryByText(/Queen still needs evidence:/)).not.toBeInTheDocument();
+});
+
 test("parked work keeps a concise reason and source; failed refresh restores recorded ownership", () => {
   const open = vi.fn();
   const props = { tasks: [task], workers: [], onOpenTask: open, recovery: { items: [], truncated: false } };

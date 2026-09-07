@@ -1,7 +1,7 @@
 use crate::{AgentPrincipal, ApplicationError, TaskService, require_queen};
 use swarm_domain::{
-    QueenReviewDispositionInput, QueenTaskReviewEvidence, TaskActivityActor, TaskId,
-    VerifiedQueenReviewReceipt,
+    QueenReviewDispositionInput, QueenTaskReviewEvidence, RecordedQueenReviewAssessment,
+    TaskActivityActor, TaskId,
 };
 
 impl TaskService {
@@ -47,7 +47,7 @@ impl TaskService {
         principal: AgentPrincipal,
         input: &QueenReviewDispositionInput,
         now: i64,
-    ) -> Result<VerifiedQueenReviewReceipt, ApplicationError> {
+    ) -> Result<RecordedQueenReviewAssessment, ApplicationError> {
         require_queen(principal)?;
         Ok(self.store.record_queen_review_disposition(
             input,

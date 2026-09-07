@@ -216,6 +216,25 @@ successful judgment list.
 
 ### Review fairness across incomplete turns
 
+An explicitly recorded `insufficient_evidence` assessment records what Queen
+checked, the concrete missing fact and its source without asserting a valid wait.
+It advances the existing last-assessed ordering so one unresolved investigation
+cannot monopolize every focus batch. It never covers a review obligation, changes
+ownership, parks a task or authorizes work, including in the run that records it.
+The read verdict is `insufficient_evidence`, not covered. Queen must continue
+through other outstanding work and pursue the missing fact or request actual
+operator assistance; this is not a substitute for a recoverable next action.
+
+Use the existing single bounded assessment per task, exact revision/run fences,
+authenticated command and activity event. Preserve saved identities and evidence
+through migration 150; do not activate the separate support outbox on execution
+Hives. An explicit unknown assessment may supersede a formerly verified wait,
+which must then cease to count as covered. Lost-response replay preserves the
+original assessment time and event rather than indefinitely refreshing fairness.
+Verify same-run and later-run noncoverage, replay, stale revision refusal,
+restart/migration preservation, replacement of a valid wait, and UI ownership
+fallback before deployment. Reads remain non-mutating.
+
 September 7 live review `01a07ceb-030f-7341-9b22-24c812e13d9b`
 handled incoming work and recent recovery, then explicitly left about seventeen
 older blocked tasks and four operator-reserved drafts uncovered. Recording

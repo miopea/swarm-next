@@ -1,7 +1,7 @@
 import { useId, useMemo } from "react";
 import HeldBriefingList, { BlockingTaskLink, holdReason, waitedFor, briefingWait } from "../orchestration/HeldBriefingList";
 import type { BlockedEscalation, HeldBriefing, HeldDelivery, QueenAutomationStatus, RecoveryQueueItem, RecoveryQueueSnapshot, QueenReviewQueueSnapshot } from "../api";
-import { checkedQueueWaits } from "./reviewQueueProjection";
+import { checkedQueueWaits, unresolvedQueueInvestigations } from "./reviewQueueProjection";
 import DeliveryWaitList from "./DeliveryWaitList";
 import TaskPrerequisiteList from "./TaskPrerequisiteList";
 import { prerequisiteSatisfied, type NextMoveOwner, type Task } from "../api/tasks";
@@ -111,6 +111,7 @@ function ageLabel(hours: number): string {
 
 /** Display recorded lifecycle facts, not inferred provider activity. */
 function taskProgress(task: Task, now: number): string {
+  if (task.next_move_owner === "operator") return "Waiting for your decision";
   if (task.state === "ready" || task.state === "active") {
     if (task.dispatch_state === "uncertain") return "Briefing delivery unconfirmed · Queen must reconcile before retrying";
     if (task.dispatch_state === "queued" || task.dispatch_state === "dispatching") return "Briefing awaiting confirmed delivery";
@@ -118,7 +119,6 @@ function taskProgress(task: Task, now: number): string {
     return task.state === "active" ? "Marked active" : "Ready · briefing delivery not recorded";
   }
   if (task.state === "review") {
-    if (task.next_move_owner === "operator") return "Waiting for your decision";
     const unresolved = (task.prerequisites ?? []).filter(item => !prerequisiteSatisfied(item)).length;
     if (unresolved > 0) return `Review waiting on ${unresolved} prerequisite${unresolved === 1 ? "" : "s"}`;
     if (task.outcome_delivery_state === "uncertain") return "Handoff delivery unconfirmed · Queen must reconcile before retrying";
@@ -129,7 +129,6 @@ function taskProgress(task: Task, now: number): string {
     return "Waiting for Queen's review";
   }
   if (task.state === "blocked") {
-    if (task.next_move_owner === "operator") return "Waiting for your decision";
     const unresolved = (task.prerequisites ?? []).filter((item) => !prerequisiteSatisfied(item)).length;
     if (unresolved > 0) return `Waiting on ${unresolved} prerequisite${unresolved === 1 ? "" : "s"}`;
     if (task.blocked_until != null) {
@@ -195,6 +194,7 @@ export default function QueuesView({
   const { waitingTasks, activeTasks: activeWork, heldBriefings, blockedWaits, extraBlockedWaits: extraWaits, recoveryChecks } = projection;
   const checks = useMemo(() => new Map(recoveryChecks.map(item => [item.task_id, item])), [recoveryChecks]);
   const checkedWaits = useMemo(() => checkedQueueWaits(tasks, coordinatorUnavailable ? undefined : reviewQueue), [tasks, reviewQueue, coordinatorUnavailable]);
+  const investigations = useMemo(() => unresolvedQueueInvestigations(tasks, coordinatorUnavailable ? undefined : reviewQueue), [tasks, reviewQueue, coordinatorUnavailable]);
 
   const groups = useMemo<Group[]>(() => {
     const open = waitingTasks;
@@ -291,6 +291,14 @@ export default function QueuesView({
                       <p className="decision-prose">{checkedWaits.get(task.id)!.assessment.evidence}</p>
                       <p className="decision-prose">Source: {checkedWaits.get(task.id)!.assessment.source}</p>
                       <p>This records a checked wait, not approval to resume or proof that the task is complete.</p>
+                    </details>
+                  </div>}
+                  {investigations.has(task.id) && <div className="queue-task-meta">
+                    <QueueEvidence label="Queen still needs evidence" text={investigations.get(task.id)!.assessment.condition} />
+                    <details className="decision-argument"><summary>What Queen checked</summary>
+                      <p className="decision-prose">{investigations.get(task.id)!.assessment.evidence}</p>
+                      <p className="decision-prose">Source: {investigations.get(task.id)!.assessment.source}</p>
+                      <p>This remains Queen's responsibility, not a verified wait or a new request for you.</p>
                     </details>
                   </div>}
                   <TaskPrerequisiteList task={task} workerNames={workerNames} onOpenTask={onOpenTask} compact />

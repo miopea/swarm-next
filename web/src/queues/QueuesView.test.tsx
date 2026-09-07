@@ -49,6 +49,12 @@ function task(overrides: Partial<Task>): Task {
 }
 
 describe("QueuesView", () => {
+  test.each(["queued", "dispatching", "delivered", "uncertain"] as const)("operator-owned Ready work explains the decision before %s briefing history", (dispatch_state) => {
+    render(<QueuesView workers={[]} onOpenTask={vi.fn()} tasks={[task({ state: "ready", next_move_owner: "operator", dispatch_state })]} />);
+    expect(screen.getByRole("heading", { name: "Waiting on you 1" })).toBeVisible();
+    expect(screen.getByText("Waiting for your decision")).toBeVisible();
+    expect(screen.queryByText(/Briefing (delivered|awaiting|delivery unconfirmed)/)).not.toBeInTheDocument();
+  });
   test("a returned review with an operator decision shows the human next move", () => {
     render(<QueuesView workers={[]} onOpenTask={vi.fn()} tasks={[task({
       state: "review", next_move_owner: "operator", review_request_id: "request",

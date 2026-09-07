@@ -5,13 +5,37 @@ use sha2::{Digest, Sha256};
 use swarm_domain::{
     ControlRoomEventKind, MAX_QUEEN_REVIEW_OBLIGATIONS, NextMoveOwner, QueenReviewCoverage,
     QueenReviewDispositionInput, QueenReviewDispositionKind, QueenReviewObligation,
-    TaskActivityActor, TaskId, VerifiedQueenReviewReceipt, queen_review_coverage,
+    RecordedQueenReviewAssessment, TaskActivityActor, TaskId, VerifiedQueenReviewReceipt,
+    queen_review_coverage,
 };
 
 use crate::{TaskStore, TaskStoreError};
 
 const MAX_REVIEW_SOURCE_ROWS: usize = 256;
 const MAX_QUEUE_ASSESSMENTS: usize = 64;
+
+pub(super) fn migrate_incomplete_assessments(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE queen_task_review_receipts_next (
+         task_id TEXT PRIMARY KEY NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+         run_id TEXT NOT NULL,
+         kind TEXT NOT NULL CHECK(kind IN ('external_condition','operator_deferral','insufficient_evidence')),
+         accepted_revision TEXT NOT NULL CHECK(length(accepted_revision)=64),
+         input_payload TEXT NOT NULL CHECK(length(input_payload)<=32768),
+         recorded_sequence INTEGER NOT NULL REFERENCES task_activity(sequence),
+         recorded_at INTEGER NOT NULL);
+         INSERT INTO queen_task_review_receipts_next SELECT * FROM queen_task_review_receipts;
+         DROP TABLE queen_task_review_receipts;
+         ALTER TABLE queen_task_review_receipts_next RENAME TO queen_task_review_receipts;"
+    )?;
+    transaction.pragma_update(
+        None,
+        "user_version",
+        crate::QUEEN_INCOMPLETE_ASSESSMENTS_SCHEMA_VERSION,
+    )
+}
 
 pub(crate) struct ReviewQueueCache {
     local_changes: u64,
@@ -252,7 +276,7 @@ impl TaskStore {
         input: &QueenReviewDispositionInput,
         actor: &TaskActivityActor,
         now: i64,
-    ) -> Result<VerifiedQueenReviewReceipt, TaskStoreError> {
+    ) -> Result<RecordedQueenReviewAssessment, TaskStoreError> {
         input
             .validate()
             .map_err(|reason| TaskStoreError::IntegrityFailure(reason.into()))?;
@@ -269,9 +293,10 @@ impl TaskStore {
         )?;
         if replay {
             transaction.commit()?;
-            return Ok(VerifiedQueenReviewReceipt {
+            return Ok(RecordedQueenReviewAssessment {
                 task_id: input.task_id,
                 evidence_revision: current.evidence_revision,
+                covers_wait: input.kind != QueenReviewDispositionKind::InsufficientEvidence,
             });
         }
         let active: bool = transaction.query_row(
@@ -286,7 +311,7 @@ impl TaskStore {
             [&id],
             crate::task_from_row,
         )?;
-        if !input.can_cover(task.state, task.next_move_owner) {
+        if !input.can_record(task.state, task.next_move_owner) {
             return Err(TaskStoreError::IntegrityFailure("this is not Queen-owned waiting work; route Ready work or use the existing dependency, decision and lifecycle commands".into()));
         }
         if let Some(sequence) = input.operator_activity_sequence {
@@ -315,6 +340,7 @@ impl TaskStore {
             }
         }
         let kind = match input.kind {
+            QueenReviewDispositionKind::InsufficientEvidence => "insufficient_evidence",
             QueenReviewDispositionKind::ExternalCondition => "external_condition",
             QueenReviewDispositionKind::OperatorDeferral => "operator_deferral",
         };
@@ -333,9 +359,10 @@ impl TaskStore {
         )?;
         crate::insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
-        Ok(VerifiedQueenReviewReceipt {
+        Ok(RecordedQueenReviewAssessment {
             task_id: input.task_id,
             evidence_revision: accepted.evidence_revision,
+            covers_wait: input.can_cover(task.state, task.next_move_owner),
         })
     }
 
@@ -391,7 +418,7 @@ pub(super) fn review_coverage(
         }
         let current = task_review_evidence(connection, task.id)?;
         let saved: Option<String> = connection.query_row(
-            "SELECT accepted_revision FROM queen_task_review_receipts WHERE task_id=?1 AND (kind='operator_deferral' OR run_id=?2)",
+            "SELECT accepted_revision FROM queen_task_review_receipts WHERE task_id=?1 AND (kind='operator_deferral' OR (kind='external_condition' AND run_id=?2))",
             rusqlite::params![task.id.to_string(), run_id], |row| row.get(0),
         ).optional()?;
         if let Some(evidence_revision) = saved {
@@ -551,6 +578,155 @@ mod tests {
             operator_activity_sequence: None,
             operator_decision_id: None,
         }
+    }
+
+    #[test]
+    fn assessment_migration_preserves_saved_receipt_and_unknown_survives_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("review.sqlite");
+        let store = TaskStore::open(&path).unwrap();
+        let mut input = external_wait(&store);
+        let saved = store
+            .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 101)
+            .unwrap();
+        {
+            let mut connection = store.connection().unwrap();
+            let tx = connection.transaction().unwrap();
+            let sql: String = tx
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE name='queen_task_review_receipts'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let legacy = sql
+                .replacen("queen_task_review_receipts", "legacy_receipts", 1)
+                .replace(", 'insufficient_evidence'", "")
+                .replace(",'insufficient_evidence'", "");
+            tx.execute_batch(&legacy).unwrap();
+            tx.execute_batch("INSERT INTO legacy_receipts SELECT * FROM queen_task_review_receipts; DROP TABLE queen_task_review_receipts; ALTER TABLE legacy_receipts RENAME TO queen_task_review_receipts; PRAGMA user_version=148;").unwrap();
+            tx.commit().unwrap();
+        }
+        drop(store);
+        let store = TaskStore::open(&path).unwrap();
+        assert_eq!(
+            store
+                .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 102)
+                .unwrap(),
+            saved
+        );
+        assert_eq!(
+            store.queen_review_check_times().unwrap()[&input.task_id],
+            101
+        );
+        input.expected_revision = saved.evidence_revision;
+        input.kind = QueenReviewDispositionKind::InsufficientEvidence;
+        store
+            .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 103)
+            .unwrap();
+        drop(store);
+        let store = TaskStore::open(&path).unwrap();
+        assert_eq!(
+            store
+                .queen_task_review_snapshot(input.task_id)
+                .unwrap()
+                .previous_assessment
+                .unwrap()
+                .status,
+            swarm_domain::QueenReviewAssessmentStatus::InsufficientEvidence
+        );
+        assert!(matches!(
+            store.queen_run_review_coverage(&input.run_id).unwrap(),
+            QueenReviewCoverage::Missing { .. }
+        ));
+    }
+
+    #[test]
+    fn incomplete_assessment_orders_attention_but_never_covers_or_duplicates_history() {
+        let store = TaskStore::in_memory().unwrap();
+        let mut input = external_wait(&store);
+        let before = store.get_task(input.task_id).unwrap();
+        input.kind = QueenReviewDispositionKind::InsufficientEvidence;
+        input.condition = "Original operator statement is not available".into();
+        let result = store
+            .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 101)
+            .unwrap();
+        assert!(!result.covers_wait);
+        assert_eq!(
+            store.queen_review_check_times().unwrap()[&input.task_id],
+            101
+        );
+        for run in [&input.run_id, &TaskId::new().to_string()] {
+            assert!(matches!(
+                store.queen_run_review_coverage(run).unwrap(),
+                QueenReviewCoverage::Missing { .. }
+            ));
+        }
+        let snapshot = store.queen_task_review_snapshot(input.task_id).unwrap();
+        assert_eq!(
+            snapshot.previous_assessment.unwrap().status,
+            swarm_domain::QueenReviewAssessmentStatus::InsufficientEvidence
+        );
+        let events = store
+            .list_task_activity(input.task_id, 100)
+            .unwrap()
+            .events
+            .len();
+        let replay = store
+            .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 200)
+            .unwrap();
+        assert_eq!(replay, result);
+        assert_eq!(
+            store.queen_review_check_times().unwrap()[&input.task_id],
+            101
+        );
+        assert_eq!(
+            store
+                .list_task_activity(input.task_id, 100)
+                .unwrap()
+                .events
+                .len(),
+            events
+        );
+        let after = store.get_task(input.task_id).unwrap();
+        assert_eq!(before.state, after.state);
+        assert_eq!(before.next_move_owner, after.next_move_owner);
+        assert_eq!(before.assigned_worker_id, after.assigned_worker_id);
+        let mut stale = input.clone();
+        stale.evidence.push_str(" changed");
+        assert!(
+            store
+                .record_queen_review_disposition(&stale, &TaskActivityActor::operator(), 201)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn incomplete_assessment_replaces_coverage_without_preserving_a_verified_wait() {
+        let store = TaskStore::in_memory().unwrap();
+        let mut input = external_wait(&store);
+        assert!(
+            store
+                .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 101)
+                .unwrap()
+                .covers_wait
+        );
+        assert!(matches!(
+            store.queen_run_review_coverage(&input.run_id).unwrap(),
+            QueenReviewCoverage::Covered { .. }
+        ));
+        input.expected_revision = store
+            .queen_task_review_evidence(input.task_id)
+            .unwrap()
+            .evidence_revision;
+        input.kind = QueenReviewDispositionKind::InsufficientEvidence;
+        store
+            .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 102)
+            .unwrap();
+        assert!(matches!(
+            store.queen_run_review_coverage(&input.run_id).unwrap(),
+            QueenReviewCoverage::Missing { .. }
+        ));
     }
 
     #[test]

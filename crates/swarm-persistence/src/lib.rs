@@ -258,7 +258,8 @@ const QUEEN_RECOVERY_RECEIPTS_SCHEMA_VERSION: i64 = 144;
 const TASK_QUEUE_AGE_SCHEMA_VERSION: i64 = 146;
 // 147 remains reserved for inactive support; shared blockers ship independently.
 const TASK_DECISION_LINKS_SCHEMA_VERSION: i64 = 148;
-const CURRENT_SCHEMA_VERSION: i64 = TASK_DECISION_LINKS_SCHEMA_VERSION;
+const QUEEN_INCOMPLETE_ASSESSMENTS_SCHEMA_VERSION: i64 = 150;
+const CURRENT_SCHEMA_VERSION: i64 = QUEEN_INCOMPLETE_ASSESSMENTS_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -3945,6 +3946,9 @@ fn migrate_ops_intake_schema_steps(
     task_dispatches::migrate_queue_age(transaction, schema_version)?;
     if schema_version < TASK_DECISION_LINKS_SCHEMA_VERSION {
         task_decision_links::migrate(transaction)?;
+    }
+    if schema_version < QUEEN_INCOMPLETE_ASSESSMENTS_SCHEMA_VERSION {
+        queen_review::migrate_incomplete_assessments(transaction)?;
     }
     Ok(())
 }
@@ -9130,6 +9134,12 @@ mod tests {
             artifact: "",
             undo_sql: "DROP VIEW task_decision_membership; DROP TABLE task_decision_links; DROP INDEX decision_requests_by_task_identity",
             probe_sql: "SELECT (SELECT count(*) FROM sqlite_master WHERE type='view' AND name='task_decision_membership')=1 AND (SELECT count(*) FROM sqlite_master WHERE type='table' AND name='task_decision_links')=1",
+        },
+        SchemaStep {
+            table: "queen_task_review_receipts",
+            artifact: "insufficient_evidence",
+            undo_sql: include_str!("fixtures/undo-incomplete-review-assessments.sql"),
+            probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='queen_task_review_receipts' AND instr(sql, 'insufficient_evidence')>0)",
         },
     ];
 

@@ -1,5 +1,99 @@
 # Daily-driver maturity: remaining delivery and acceptance
 
+## September 7: unresolved investigations and actual worker pickup
+
+After `55e8b984`, Queen's review `01a07dff` used all six previously omitted
+recovery candidates. Task activity confirms RCG Networks' investigation
+`01a06859-9a4f` went Active (8081), Review (8082), then automatically Completed
+(8083), without controller task edits. This verifies one real pickup/settlement,
+not the full fleet. Queen linked `01a06d63-1929` and `01a07bf5-df81` to the existing
+session request `01a07dd4-41a4`, recording current await-operator assessments;
+she filed a specific remaining outbound-notice request for `01a06b5b-208f`.
+The corresponding UI was inspected in the separate authenticated Edge tab.
+Baseline CI `34166437828` succeeded. The entire backlog remains unreconciled.
+
+The next implementation introduces explicit `insufficient_evidence` assessments.
+They advance last-assessed ordering but never supply coverage, hide Queen
+ownership or authorize work. Same-payload replay preserves the original event
+and ordering time. Exact run/revision and authorization checks remain. Migration
+150 preserves the receipt table's saved payloads/identities and adds the unknown
+kind. Main integration does not activate the support outbox; that inactive
+branch's old 149 activation must be renumbered above 150 before support delivery.
+Tool surface revision 23 and its observed fingerprint are updated together.
+Queues shows a concise missing-fact explanation with expandable investigation
+details; missing/stale coordinator evidence cannot present that as a verified
+wait. Operator-owned Ready rows now say Waiting for your decision before old
+briefing transport history, matching their actual queue owner.
+
+Verification so far: eight domain coverage tests, 29 focused persistence/review
+tests (including migration/restart and replacing a valid receipt with unknown),
+71 served-agent tests, 48 guarded-delivery tests, 44 final queue tests and the
+browser build. Strict API/persistence lint passed before the final served-tool
+regression and migration-fixture addition. The full persistence run passed 658
+and failed one obsolete newest-step fixture; that fixture now models migration
+150, with its rerun and final lint in progress. The full API run was interrupted
+after its expected tool-fingerprint failure; do not count it as a full pass.
+Final reruns passed: immediately-previous schema, newest-step fixture, populated
+previous-schema migration, served insufficient-evidence authorization/noncoverage
+regression, strict API/persistence all-target/all-feature Clippy, and the final
+production web build. The two earlier process handles were gone, so these checks
+were rerun after verifying no validation process was still running; their missing
+outputs were not treated as successful results.
+The new implementation is not yet committed or deployed. Live Queen use of the
+new assessment kind, fair advancement and rendered unknown explanations remain
+acceptance gates, including verifying the live cached tool schema.
+
+## September 7: delivered Ready recovery omission
+
+Live follow-up: post-update review `01a07dff-4ce0-7e32-867c-aa93c8c040e4`
+explicitly observed six recovery candidates in the corrected compact view,
+contrasting with its earlier empty-view conclusion, and began inspecting their
+identities. The run remains running; no recovered task or completed review is
+claimed from that observation alone.
+
+The three repeated focus items are not hypothetical: task `01a05dc6-2041`
+has Queen note sequence 7896 documenting an empty retained operator-submission
+index for an older relayed /interview hold; `01a0676f-120b` records Platform's
+relayed route-policy deferral; draft `01a07016-86cb` inherits the first task's
+relayed hold. Their full activity responses were not truncated. An empty capture
+does not disprove the operator's instruction. Asked the operator whether the two
+original holds still stand; no task was resumed or approval manufactured.
+Current fairness ordering uses only saved valid assessment times, so unresolved
+investigations without an accepted receipt stay at the front. Do not disguise
+missing evidence as a valid wait merely to rotate that ordering.
+
+Live Queen run `01a07de9-07f9-77a0-ae87-a6b608c44323` reported
+`active_work_recovery` empty and finished incomplete. The coordinator still
+returned delivered-but-unstarted Ready obligations. Inspection found that the
+bounded terminal observer reads three recovery attention kinds, but the compact
+Queen projection admitted only stale owned work. It discarded unstarted Ready
+and never-briefed owned work even when their fresh observations were resting.
+
+Root `cd8a38cf`, main `55e8b984`, shares the existing kind predicate between
+observer and compact projection and exposes the kind without changing any task,
+delivery, authority, schema, observation budget or polling. The new regression
+failed before the fix on `assigned_ready_work_not_started_attention`; all 16
+terminal-evidence tests and strict all-target/all-feature API Clippy pass after
+the fix in the isolated Linux tree. Main was pushed and the Linux clone fast-
+forwarded. The App/API update is running under PID 345136; live acceptance and
+post-update session preservation are not yet established. CI `34166437828` is
+running; the preceding diagnostics CI `34165175442` succeeded. No release cut.
+
+The separate fairness issue remains: Queen repeatedly rereads the same three
+never-assessed focus tasks, names missing operator provenance, and leaves the
+deep backlog untouched. That is not solved by this recovery-view correction.
+Full fleet reconciliation, actual worker pickup and the rest of the maturity
+program remain open.
+
+Deployment follow-up: `55e8b984` is healthy as
+`1.5.0-dev-55e8b98465ff-20260907222307-345158`; the rebuild finished with
+MainPID 0 and Result success. All sixteen worker/session pairs match the
+pre-update capture. A transient loopback connection refusal appeared during
+the API swap; the subsequent independent health check is OK with no degraded
+subsystems or database recovery required. The latest observed Queen run began
+before activation and ended incomplete; it cannot verify use of the new view.
+Post-update Queen use and actual pickup remain open, not inferred from deployment.
+
 ## Current reconciliation — September 7, 21:58 UTC
 
 This is the current remaining-work index. Older dated entries below are
@@ -8,6 +102,21 @@ unimplemented. The approved full scope remains `45-daily-driver-maturity-plan.md
 No phase-completion percentage or full-program completion is established.
 
 ### September 7, 21:58 UTC: live assistance requests and diagnostic attribution
+
+Deployment follow-up: main `6a62f3f6` is healthy as
+`1.5.0-dev-6a62f3f61fe8-20260907220104-335084`. The rebuild finished, and all
+sixteen worker/session pairs still match the original capture. Exact-main
+validation passed the same 47 tests and production build. Edge retained Settings
+through the update and rendered diagnostics correctly. This fresh view had no
+eligible recent event entries, so the populated unattributed-phase panel has
+component-test evidence, not a live captured-delay acceptance yet. No new slow
+event was fabricated. CI `34165175442` remains in progress. No release cut.
+
+BFG Admin's current checkout is `e632eeb`; its Admin-owned email contract has
+expanded since the earlier Swarm checkpoint. The incoming mirror section still
+explicitly awaits Swarm review and paired acceptance. Read the complete current
+contract/fixture before continuing the inactive adapter; do not restore the old
+source-owned sender or treat partial contract inspection as implementation.
 
 Queen independently created pending assistance requests `01a07dd4-b571` for
 Admin C15a and `01a07dd4-41a4` for the Member Services session. She linked video

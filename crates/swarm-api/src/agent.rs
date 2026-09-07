@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 22;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 23;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -401,9 +401,9 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 22;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 22. Update this and the revision together.
+/// The served surface as of revision 23. Update this and the revision together.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "b2ba50ebe0d6a231d17d19037ae22dc947962436e1516f78b4511fbe8bfa8625";
+    "1bc000610cca365d70852585919dd52be9c049e6eaee2cb6dc090f4e774bd92a";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -3361,12 +3361,12 @@ fn read_queen_review_evidence_tool() -> Tool {
 fn record_queen_review_disposition_tool() -> Tool {
     tool(
         "swarm_record_review_disposition",
-        "Queen only: explicitly record a checked wait for this review run, using the exact revision from swarm_read_review_evidence. External conditions require fresh verification each run. Operator deferrals require a real task-linked operator activity sequence or resolved operator decision ID, and the cited statement must actually support the deferral. A worker claiming the operator said so is not authority. This command does not change lifecycle, dependencies, assignment or permission. Never use it to hide actionable routing work. Use structural prerequisite/decision/window commands where applicable; only record a wait after checking the remaining condition.",
+        "Queen only: record a checked assessment using the exact revision from swarm_read_review_evidence. External conditions require fresh verification each run. Operator deferrals require a real task-linked operator activity sequence or resolved decision supporting that deferral; worker-relayed permission is not authority. If investigation cannot establish a valid wait or next action, use insufficient_evidence: condition names the missing fact, evidence says what you checked, source identifies the records. This never covers the obligation or parks work, but records the investigation for fair ordering. Reuse unchanged saved investigations instead of refreshing their timestamps; advance the rest of the backlog and seek the missing evidence or real assistance. This command changes no lifecycle, dependency, assignment or permission. Use structural prerequisite/decision/window commands where applicable, and never substitute an unknown assessment for actionable routing.",
         &json!({"type":"object","properties":{
             "task_id":{"type":"string","format":"uuid"},
             "run_id":{"type":"string","format":"uuid"},
             "expected_revision":{"type":"string","minLength":64,"maxLength":64},
-            "kind":{"type":"string","enum":["external_condition","operator_deferral"]},
+            "kind":{"type":"string","enum":["external_condition","operator_deferral","insufficient_evidence"]},
             "condition":{"type":"string","minLength":1,"maxLength":1000},
             "evidence":{"type":"string","minLength":1,"maxLength":2000},
             "source":{"type":"string","minLength":1,"maxLength":1000},
@@ -4413,6 +4413,60 @@ mod tests {
                     .is_none()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn incomplete_review_tool_returns_noncoverage_and_keeps_task_with_queen() {
+        let (bridge, store, queen_id, worker_id, _directory) = setup();
+        let task = store
+            .create_task("Fictional unresolved investigation", "/workspace/petal")
+            .unwrap();
+        store
+            .bind_worker_session(queen_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let now = crate::unix_timestamp();
+        store.request_queen_automation_run(now).unwrap();
+        let run = store.claim_queen_automation(now).unwrap().unwrap();
+        store
+            .complete_queen_automation_delivery(&run.run_id, now)
+            .unwrap();
+        let revision = store
+            .queen_task_review_evidence(task.id)
+            .unwrap()
+            .evidence_revision;
+        for (caller, allowed) in [(worker_id, false), (queen_id, true)] {
+            let token = bearer_from_path(&bridge.ensure_worker_config(caller).unwrap());
+            let response = response_json(handle(bridge.clone(), plain_state(), mcp_request(Some(&token), "tools/call", &json!({
+                "name": "swarm_record_review_disposition", "arguments": {
+                    "task_id": task.id, "run_id": run.run_id, "expected_revision": revision,
+                    "kind": "insufficient_evidence", "condition": "Original instruction unavailable",
+                    "evidence": "Checked fictional task history", "source": "Fixture history"
+                }
+            }))).await).await;
+            assert_eq!(
+                response["result"]["isError"].as_bool().unwrap_or(false),
+                !allowed,
+                "{response}"
+            );
+            if allowed {
+                assert_eq!(
+                    response["result"]["structuredContent"]["covers_wait"],
+                    false
+                );
+            }
+        }
+        assert_eq!(
+            store.get_task(task.id).unwrap().state,
+            swarm_domain::TaskState::Draft
+        );
+        assert_eq!(
+            store.get_task(task.id).unwrap().next_move_owner,
+            swarm_domain::NextMoveOwner::Queen
+        );
+        assert!(matches!(
+            store.queen_run_review_coverage(&run.run_id).unwrap(),
+            swarm_domain::QueenReviewCoverage::Missing { .. }
+        ));
     }
 
     #[tokio::test]

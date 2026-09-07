@@ -311,9 +311,9 @@ export type QueenReviewQueueSnapshot = {
   items: {
     task: Task;
     previous_assessment: {
-      assessment: { kind: "operator_deferral" | "external_condition"; condition: string; evidence: string; source: string };
+      assessment: { kind: "operator_deferral" | "external_condition" | "insufficient_evidence"; condition: string; evidence: string; source: string };
       recorded_at: number;
-      status: "covered_for_current_run" | "fresh_external_check_required" | "evidence_changed" | "no_active_review";
+      status: "covered_for_current_run" | "fresh_external_check_required" | "evidence_changed" | "no_active_review" | "insufficient_evidence";
     } | null;
   }[];
 };
