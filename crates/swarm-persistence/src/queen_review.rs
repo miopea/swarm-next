@@ -62,6 +62,40 @@ pub(super) fn migrate(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Resu
 }
 
 impl TaskStore {
+    /// Historical review order only, never evidence that a wait remains valid.
+    ///
+    /// # Errors
+    /// Refuses storage failures and an oversized open-task receipt set.
+    pub fn queen_review_check_times(
+        &self,
+    ) -> Result<std::collections::HashMap<TaskId, i64>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT r.task_id,r.recorded_at FROM queen_task_review_receipts r
+             JOIN tasks t ON t.id=r.task_id
+             WHERE t.removed_at IS NULL
+               AND t.hive_id=(SELECT hive_id FROM local_hive_identity WHERE singleton=1)
+               AND t.state NOT IN ('completed','abandoned')
+             ORDER BY r.task_id LIMIT 257",
+        )?;
+        let mut times = std::collections::HashMap::new();
+        for row in statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })? {
+            let (id, checked_at) = row?;
+            if times.len() == MAX_QUEEN_REVIEW_OBLIGATIONS {
+                return Err(TaskStoreError::IntegrityFailure(
+                    "open review ordering exceeds its bounded read".into(),
+                ));
+            }
+            let id = id
+                .parse::<TaskId>()
+                .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+            times.insert(id, checked_at);
+        }
+        Ok(times)
+    }
+
     /// Read task facts and a revision from the same transaction.
     ///
     /// # Errors
@@ -426,6 +460,40 @@ mod tests {
             operator_activity_sequence: None,
             operator_decision_id: None,
         }
+    }
+
+    #[test]
+    fn review_order_metadata_is_read_only_and_excludes_settled_work() {
+        let store = TaskStore::in_memory().unwrap();
+        let input = external_wait(&store);
+        assert!(store.queen_review_check_times().unwrap().is_empty());
+        store
+            .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 101)
+            .unwrap();
+        let count = store
+            .list_task_activity(input.task_id, 100)
+            .unwrap()
+            .events
+            .len();
+        assert_eq!(
+            store
+                .queen_review_check_times()
+                .unwrap()
+                .get(&input.task_id),
+            Some(&101)
+        );
+        assert_eq!(
+            store
+                .list_task_activity(input.task_id, 100)
+                .unwrap()
+                .events
+                .len(),
+            count
+        );
+        store
+            .transition_task(input.task_id, TaskState::Abandoned)
+            .unwrap();
+        assert!(store.queen_review_check_times().unwrap().is_empty());
     }
 
     #[test]

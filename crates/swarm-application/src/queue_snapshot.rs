@@ -35,6 +35,9 @@ impl TaskService {
         principal: AgentPrincipal,
     ) -> Result<QueenQueueSnapshot, ApplicationError> {
         require_queen(principal)?;
+        // Historical checks order attention only. They do not certify current
+        // coverage, which still requires the separately fenced evidence read.
+        let checked_at = self.store.queen_review_check_times()?;
         let mut snapshot = QueenQueueSnapshot {
             open_tasks: 0,
             by_state: [
@@ -78,9 +81,10 @@ impl TaskService {
                 }
             }
             if task.next_move_owner == NextMoveOwner::Queen {
-                if snapshot.queen_tasks.len() < 64 {
-                    snapshot.queen_tasks.push(task);
-                } else {
+                snapshot.queen_tasks.push(task);
+                order_review_tasks(&mut snapshot.queen_tasks, &checked_at);
+                if snapshot.queen_tasks.len() > 64 {
+                    snapshot.queen_tasks.pop();
                     snapshot.queen_tasks_truncated = true;
                 }
             }
@@ -89,9 +93,43 @@ impl TaskService {
     }
 }
 
+fn order_review_tasks(
+    tasks: &mut [Task],
+    checked_at: &std::collections::HashMap<swarm_domain::TaskId, i64>,
+) {
+    tasks.sort_by_key(|task| {
+        (
+            checked_at.get(&task.id).copied(),
+            task.created_at,
+            task.id.to_string(),
+        )
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn review_order_prefers_unchecked_then_oldest_check_without_mutating_tasks() {
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let older = store.create_task("Older check", "/workspace/demo").unwrap();
+        let recent = store
+            .create_task("Recent check", "/workspace/demo")
+            .unwrap();
+        let unchecked = store
+            .create_task("Never checked", "/workspace/demo")
+            .unwrap();
+        let checks = [(older.id, 100), (recent.id, 200)].into_iter().collect();
+        let mut tasks = vec![recent.clone(), older.clone(), unchecked.clone()];
+        order_review_tasks(&mut tasks, &checks);
+        assert_eq!(
+            tasks.iter().map(|task| task.id).collect::<Vec<_>>(),
+            vec![unchecked.id, older.id, recent.id]
+        );
+        assert!(tasks.iter().all(|task| task.state == TaskState::Draft));
+        assert_eq!(store.get_task(recent.id).unwrap().position, recent.position);
+    }
 
     #[test]
     fn queen_queue_snapshot_counts_beyond_detail_cap_and_reconciles_transitions() {

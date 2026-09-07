@@ -169,6 +169,26 @@ terminal. Queen escalates an actual inability to recover with a concrete request
 
 ## Acceptance
 
+### Review fairness across incomplete turns
+
+September 7 live review `01a07ceb-030f-7341-9b22-24c812e13d9b`
+handled incoming work and recent recovery, then explicitly left about seventeen
+older blocked tasks and four operator-reserved drafts uncovered. Recording
+incomplete correctly does not by itself prevent repeated neglect of that work.
+
+Order the bounded Queen review list by absence of an assessment, then oldest
+historical assessment, with creation time and identity as stable ties. Retain
+at most 64 detail rows with full board counts and an overflow indicator. Read
+only bounded receipt timestamps through persistence; do not rehash histories or
+observe terminals just to order attention. Historical timestamps are ordering
+hints, never valid coverage. Existing evidence checks remain mandatory.
+
+This changes neither execution priority nor ownership, lifecycle or authority.
+Queen must advance unchecked backlog alongside urgent incoming work and preserve
+authenticated operator deferrals. Failure or overflow of the ordering read is
+not an empty or healthy queue. Test ordering, capacity and read-only behavior,
+then observe real backlog assessments before claiming the issue resolved.
+
 ### Queued briefings without a recorded order blocker
 
 Queen's existing read-only coordination-attention tool may additionally observe
