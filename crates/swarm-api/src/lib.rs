@@ -11,7 +11,8 @@ mod ops_mcp;
 #[cfg(test)]
 use coordination_delivery::task_dispatch_message;
 use coordination_delivery::{
-    TerminalSubmission, decision_delivery_message, submit_coordination_message, task_outcome_message,
+    TerminalSubmission, decision_delivery_message, submit_coordination_message,
+    task_outcome_message,
 };
 mod database_integrity;
 mod decisions;
