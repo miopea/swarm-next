@@ -139,3 +139,36 @@ Two regression tests cover unanswered/progress/exact-answer recovery and a late
 handback after exemption approval. Both passed on the isolated main-compatible
 Linux tree; strict API checks passed. Full persistence and a fresh live fictional
 round trip remain required before calling this deployed or accepted.
+
+Deployment checkpoint: all **650 persistence tests passed** on the isolated
+main-compatible Linux tree, alongside the strict API and formatting checks.
+Root commit `ff405ef9` integrated as main `e904b2b3`. The normal dev rebuild
+(PID 226209) finished successfully and health serves
+`e904b2b3006c-20260907191027-226231` without degraded subsystems. All sixteen
+session identities captured while the old API was still serving matched after
+activation; the engine identity remained `59802986b8bb4ce4746e20cd26311bc5519f9f71a9129fee4c1181326ec863df`.
+
+New fictional task `01a07d4a-2346-7712-9afa-0f951dbd7f14` was created and
+assigned through normal routes to the idle Swarm Dogfood worker after checking
+for duplicate titles and existing work. Its briefing was delivered. It explicitly
+reports an empty commit list before answering the review request, then must
+observe preserved Review/worker ownership and answer that exact request. The
+old failed fixture is untouched. This is a live test in progress, not a passed
+review round trip. No release was created.
+
+Live follow-up: Queen returned the task with request
+`01a07d4c-9453-7a31-b620-429180d7cc88`; the controller observed Review with
+worker next-move ownership and that exact request through the operator API.
+Normal delivery activated the worker. Its terminal report, based on its task
+history reads, showed the empty commit report preserved Review, worker ownership,
+`awaiting_answer`, null answer identity and null exemption; ordinary progress
+messages did not clear the request. It reported nine passing Node tests, clean
+unchanged `27fbcc152289d33ef5d7e8a9e9af77a6624dc33b`, then the correlated answer.
+
+Independent activity inspection confirms system-only Review-to-Completed at
+sequence **7951**, timestamp `1788808785`, with the normal no-commits settlement
+reason. No controller completion, terminal input, or fixture reset was used.
+This supports the live regression outcome; the intermediate post-commit history
+fields and final answer-message identity are currently worker-observed evidence,
+not an independently captured raw persistence record. Preserve that distinction
+when assessing the exact-correlation gate. Main CI `34154517217` is still running.

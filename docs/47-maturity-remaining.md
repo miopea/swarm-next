@@ -17,6 +17,28 @@ No phase-completion percentage or full-program completion is established.
 | Shared support | Inactive Hive submission and separate central persistence foundations; Admin-owned email requirement recorded | Joint central-email DTO/fingerprint/state contract, history/ingress and attachment/diagnostic integration, task completion loop, hosting/registration and paired fictional acceptance |
 | Integrated completion | Ongoing operator use and dated evidence checkpoints | Current-build full workday/overnight and real-device acceptance, remaining-risk reconciliation and operator maturity acceptance |
 
+### September 7, deployed e904b2b3: live queue inspection
+
+Authenticated Edge inspection at `swarm.bfgsolutions.net` used a new separate
+tab, immediately moved off its restored worker terminal onto Queues. The live
+page retains the approved Hive styling, owner jump links and worker subgroups.
+It showed 33 Queen, 1 worker, 6 dependencies/holds, 4 shipping and 1 scheduled
+items at this observation. This is not an aged-browser measurement.
+
+Content acceptance remains open: previous recovery assessments appear with an
+explicit historical disclaimer, but several reviewed external/operator holds
+still read "Blocked · Queen reassessment needed". Do not interpret the count
+as 33 unhandled executable tasks or call the queue reconciled. Queen's current
+terminal also reported a concrete contract limit: an authenticated resolved
+decision on a parent task cannot currently support an operator-deferral
+disposition on its child. Do not manufacture a new approval, expand the
+original decision's scope, or treat a worker's paraphrase as operator provenance.
+
+The deployed returned-review regression task `01a07d4a-2346-7712-9afa-0f951dbd7f14`
+has a real Queen-issued request `01a07d4c-9453-7a31-b620-429180d7cc88`. The worker
+became active through normal delivery; no controller nudge was used. Final
+answer/settlement acceptance remains in progress in ADR 0066.
+
 ### September 7: operator Android multi-question acceptance
 
 The operator tested the fictional three-question prompt in **Swarm Dogfood
