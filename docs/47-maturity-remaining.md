@@ -1,5 +1,248 @@
 # Daily-driver maturity: remaining delivery and acceptance
 
+## Current reconciliation — September 7, 18:02 UTC
+
+This is the current remaining-work index. Older dated entries below are
+implementation history, not an assertion that their then-open items are still
+unimplemented. The approved full scope remains `45-daily-driver-maturity-plan.md`.
+No phase-completion percentage or full-program completion is established.
+
+| Area | Evidence now available | Still required for acceptance |
+| --- | --- | --- |
+| Measurement and performance | Bounded browser evidence, hourly private captures, split engine/process counters; 16-session one-minute baseline in `85-review-recovery-checkpoint.md` | Controlled same-build fresh/aged comparisons, instrumentation overhead, resource plateau and responsive input under output; cold-restore experiment gate |
+| Terminal/mobile | Focus-release and late-ack cutover tests deployed; provider/native question fixture retained | Actual OS minimize, Android/iOS handoff and background resume; AskUser Q2/Q3, camera/gallery, keyboard and image usability verified on devices |
+| Queen/Queues/Needs You | Durable review/recovery coverage deployed; two fictional tasks shared one decision, resumed and settled automatically; live Edge card cleared without reload (ADR 0084) | Real backlog fairness and structural dependency/deferral reconciliation, fleet-wide recovery, accurate next mover, direct worker answers clearing decisions; wider routine review bypass acceptance |
+| Operations | App/API updates preserve the measured 16 worker sessions; live API healthy | Engine/provider rolling-update convergence including Queen, resume identity and operator conversation switch, pressure recovery, Night Watch and database recovery acceptance |
+| UX/UI | Existing approved Hive identity and scoped interaction improvements retained | Whole-product desktop/mobile consistency and accessibility pass; live Needs You/Queues content must pass, not merely component tests |
+| Shared support | Inactive Hive submission and separate central persistence foundations; Admin-owned email requirement recorded | Joint central-email DTO/fingerprint/state contract, history/ingress and attachment/diagnostic integration, task completion loop, hosting/registration and paired fictional acceptance |
+| Integrated completion | Ongoing operator use and dated evidence checkpoints | Current-build full workday/overnight and real-device acceptance, remaining-risk reconciliation and operator maturity acceptance |
+
+Deployment distinction: shared-decision acceptance ran on API `e2a896f4` with
+the retained `fa403372` worker engine. Only Queen was deliberately refreshed for
+tool discovery; the other fifteen session identities were preserved. Notification
+recovery is deployed, but native notification-click acceptance remains open.
+The 15-minute server observer completed; it does not prove an aged-browser plateau.
+
+Review fairness `4d4229a3` is committed to main and the Linux clone; the normal
+App/API development build completed successfully (service PID 177138 exited,
+Result=success); health serves `4d4229a3c46d-20260907180054-177160` with no
+degraded subsystems and the same worker-engine build identity. Its two
+application queue tests, persistence ordering test and strict API checks passed.
+It orders never-assessed then oldest-assessed work without changing task state,
+priority or authority. Actual old-backlog progress must still be verified
+before calling starvation fixed. The latest observed Queen turn performed real
+cross-worker dependency routing but explicitly left about seventeen old blocked
+tasks and four operator-reserved drafts uncovered. No real blockers were cleared
+by this investigation merely to improve the count.
+
+The separate Edge tab used for the fresh timing sample became unavailable before
+a later resource observation. It is not an aged-browser sample; do not join
+measurements from a replacement tab as though they were one continuous lifetime.
+The independent server observer remains the authority for its own continuity.
+
+Support ownership is resolved, not an operator blocker: BFG Admin will own
+approved envelopes, Resend sending and incoming email; Swarm owns implementation
+work and mirrored support history. Admin's additive contract is under joint
+review. Do not activate the old source-owned send design. Resend sending-domain
+verification was reported by the Admin worker for bfgsolutions.net,
+budgetbug.live and voicebridge.biz; receiving was disabled and sender identities
+still require configuration. No customer send or domain routing change occurred.
+
+## 2026-09-06: worker recovery after the three operator decisions
+
+All three C-track/Scout decisions were confirmed delivered to Queen. Review
+`01a078d7-be58-7e03-b504-66adb3f46151` then issued a specific same-task handoff
+request to Platform, whose provider activity changed from Resting to Active.
+Follow-up verified the spelling task moved to Review with Queen as next owner,
+then Platform took navigation-name task `01a07331-d308-7f62-8353-6904f9ba7f81`
+Active. This proves handoff and successor pickup, not fleet-wide recovery or
+completion of the new navigation work.
+
+D365 remains a recovery defect. Queen described its unchanged commit question
+as an environmental stall and declined recovery/escalation because of low
+urgency. Priority must not make a stuck task exempt from recovery. The terminal's
+dimmed `yes, commit and submit for review` is a provider suggestion, NOT operator
+input or authorization. No Enter was sent by this investigation. Code/docs
+commit permission must be verified from an actual operator source; the three
+other approvals do not grant it.
+
+Commit `52bad83f` adds style-aware tri-state unsent-input evidence to the bounded
+Queen recovery projection, retaining the existing delivery and engagement
+guards. Eight focused API tests and strict all-target/all-feature API lint pass.
+Main and the remote clone contain the commit. Development reload completed;
+`/health` reports `1.5.0-dev-52bad83f44fc-20260906223629-3451446`, no degraded
+subsystems, and the unchanged worker-engine build. All 16 loaded workers retained
+their exact session IDs. CI `34064496838` remains in progress at this checkpoint;
+the previous two main commits have green CI. No release was cut.
+
+Inspection also confirmed a distinct supervision gap: `queen_review.rs` only
+requires disposition coverage for Queen-owned tasks. Worker-owned Active recovery
+is advisory, so a summary can abandon a stalled worker without a structural
+recovery outcome. Fix this without treating all running workers as stalled,
+reassigning execution ownership to Queen, allowing arbitrary inactivity timers
+to escalate, or accepting a delivered message as proof that work resumed.
+Current run ended `incomplete`; it must not be described as a healthy fleet.
+
+Further inspection found Admin at a finished 5:57 PM turn with the dimmed
+suggestion `start on the eleven clean movers`. Queen had interpreted this as
+building progress. Commit `57b18f97` now excludes the current composer and footer
+from recovery transcripts using the existing provider prompt boundary, while
+retaining historical submitted prompts. Nine recovery tests, eleven provider
+activity/input-guard tests and strict API lint pass. Main and the remote clone
+contain it. Deployment completed as
+`1.5.0-dev-57b18f97cca6-20260906225020-3464385`, healthy with unchanged engine
+build and all 16 exact worker session IDs preserved. CI `34065171193` completed
+successfully in all four jobs, including full workspace Rust tests. The earlier
+`52bad83f` CI is also green.
+
+Review `01a078ec-6ea2-77f1-ba52-0b9c95230f96` began after Queen processed worker
+messages. Its current output correctly identifies Admin's finished turn and
+missing go-ahead. After checking task history, Queen queued a same-task
+continuation without broadening access permissions. The live worker projection
+then confirmed Admin Active alongside Platform; D365 remains Resting. This is
+recovery evidence for Admin, not proof all worker-owned work is now moving.
+The existing dispatcher already gives
+a queued review priority after it yields to a delivery; shifting pacing text
+alone was not evidence that this ordering rule was absent or broken.
+
+The accepted coverage ADR now specifies separate recovery accountability for
+worker-owned work, preserving task execution ownership and source-verified
+waits. Its durable enforcement and multi-worker acceptance remain unimplemented;
+the transcript fixes do not close this gap.
+
+RCG Networks' canonical terminal records a September 7 maintenance window and
+refusal to execute early. That is not permission to kick a security-sensitive
+operation outside its window. Its Ready classification and structural wait
+representation still need reconciliation by Queen against the actual decision.
+
+## 2026-09-07: configured Hive support submission boundary, still inactive
+
+Local retention controls are implemented: only an operator-confirmed action on a
+matching central receipt can remove a confirmed Hive copy. Unconfirmed reports
+are protected, absent-copy replay is idempotent, and central history remains intact.
+The UI distinguishes local removal from central erasure, asks for confirmation,
+and can reveal all bounded outbox entries in batches rather than hiding rows after
+the first ten. Disabled central configuration still permits local retention.
+Ten persistence, seven API, and ten focused UI tests pass, along with TypeScript
+and strict all-target/all-feature lint across the affected Rust boundaries.
+No production reports were removed. Configured-source end-to-end acceptance,
+rendered/mobile QA, attachments, diagnostic links, reply delivery and Admin pairing
+remain open; no live support activation or release has occurred.
+
+Explicit retry is now connected from UI through the authenticated API to a durable
+single-use grant. It preserves the original report, monotonically counts attempts,
+and binds a retry ID to the operator-observed attempt. Lost command responses replay
+exactly across browser reloads; changed, concurrent and stale requests cannot reset
+the automatic budget. A definitive stale-command refusal asks for fresh status
+without discarding the report. Recovery retains attempt identity while rejecting
+late settlement. Validation passes four domain, nine outbox, six API and nine UI
+tests plus TypeScript and strict domain/persistence/application/API lint.
+Retention controls and configured-source end-to-end acceptance remain open; this
+integration is still local and not activated in the development Hive.
+
+The local UI selects its destination before showing a form. Configured support
+uses an email-contact form with explicit exact-text review; a failed lookup does
+not silently fall back to public GitHub. Unconfigured Hives retain the existing
+diagnostic workflow unless saved central deliveries or a local uncertain retry
+need attention. A frozen retry copy is saved in tab session storage before sending;
+storage failure refuses transmission, recovery never auto-sends, and an uncertain
+payload cannot be changed under its original key. Confirmed Hive save clears that
+copy. Status distinguishes saved, sending, uncertain and central receipt.
+
+77 feedback/App tests and TypeScript checking pass. Rendered/mobile acceptance,
+central attachments/diagnostics, reply delivery, explicit retry/retention controls,
+and fictional configured-source/Admin acceptance remain open. Unavailable features
+are labelled in the UI. No live activation or release has occurred.
+
+Runtime/API wiring is implemented locally: `SWARM_SUPPORT_ORIGIN` opts the API
+process into one owned sender. Invalid configuration degrades that subsystem
+without preventing Hive startup; absent configuration starts no delivery.
+Graceful shutdown signals and joins the sender. Runtime clones cannot start a
+second owner, and unexpected sender exit is visible through health and support
+status. The authenticated `/api/v1/feedback/support` GET/POST surface accepts only
+explicit reviewed content, returns content-free state, and preserves visibility
+of existing reports when configuration is removed. Reads and writes share four
+admission slots held through blocking persistence; requests are capped at 128 KiB.
+
+Five API tests and strict all-target/all-feature API lint pass. Evidence is retained
+on Linux in `/tmp/swarm-support-http-20260907.log` and the companion `-lint` log.
+A transient SSH reset was checked against its still-running process; only after
+it ended was the unchanged suite rerun to retain its result. An initial lint
+signature finding was corrected. This remains unpromoted integration work: UI,
+explicit retry/retention controls, configured-source fictional end-to-end testing,
+Admin registration, attachments, mail/replies and completion-loop acceptance remain.
+
+A process-owned sender is now implemented but not started by runtime configuration.
+It scans the bounded durable outbox, serializes delivery, coalesces wake requests,
+and uses a 30-second retry cadence with the existing five-attempt durable limit.
+Eligibility lives in the application service. Startup recovers interrupted claims
+only under the sole-owner precondition; graceful stop finishes the current bounded
+request and settlement before returning. Persistence errors terminate the owner
+for supervision instead of spinning. Two owner tests pass: a lost response plus
+shutdown/restart retains one central conversation, and an already-stopped owner
+does not claim or send. Runtime supervision/configuration and HTTP/UI wiring remain
+open; no public endpoint was activated and no live customer payload was sent.
+
+The HTTP transport now enforces redirect refusal, a 20-second total deadline,
+five-second connection deadline, 128 KiB submission cap and 16 KiB streamed receipt
+cap. Application settlement validates receipt identity through the durable claim;
+wrong receipts become Uncertain without replacing the original key or settling a
+newer attempt. Four real loopback HTTP tests and three application submission
+tests pass, as does strict API/application all-target, all-feature lint. A first
+test fixture failed to compile and was corrected before these passing runs.
+The sender owner, authenticated UI and paired central acceptance still remain;
+the new adapter is not wired to a live delivery loop or promoted to main.
+
+The application service now validates a deployment-owned HTTPS origin, uses only
+the fixed submission route, validates explicitly reviewed content, and exposes
+content-free delivery status. Its sender claim checks the frozen destination in
+the same persistence transaction as the attempt claim. Changing configuration
+cannot redirect an existing report, rewrite its payload, or consume its retry
+budget. Restoring the original destination can resume the original identity.
+No network request occurs from construction, save, or status reads.
+
+Focused Linux validation passes the two new application regressions and seven
+outbox tests; strict application/persistence all-target, all-feature lint passes.
+Follow-up complete application and central support suites pass all 38 and 12
+tests respectively, with no failures or ignored tests; output is retained at
+`/tmp/swarm-support-application-acceptance-20260907.log` on the Linux host.
+The earlier full-suite process ended without a retained result and is not counted
+as passing evidence. The integration remains local and inactive: authenticated
+HTTP/UI submission, bounded sender transport, explicit retry controls, central
+hosting/credentials, attachments, replies and paired Admin acceptance remain open.
+
+## 2026-09-06: bounded Hive support outbox, integration underway
+
+The local implementation adds schema 143's private Hive support outbox, distinct
+from central conversations and implementation-task intake. Reviewed bytes,
+destination and submission UUID freeze together; exact retries do not edit that
+record. Claims have unique attempt IDs, stale completions are refused, restart
+recovery preserves uncertainty, and automatic attempts are capped at five.
+Admission is bounded to 256 rows / 16 MiB of frozen payload without silently
+deleting pending feedback. No old Dogfood report is migrated or uploaded.
+
+Three domain tests and seven persistence tests pass, including a fictional
+central-acceptance/lost-response/Hive-restart replay that returns the same
+conversation and message IDs. Strict domain/persistence lint passes. The first
+full persistence run exposed non-idempotent table creation in older-schema
+fixtures; that was corrected, and the previously failing conversation-recovery
+case passes. The immediately-previous-schema fixture also needed the new table
+registered in its rollback inventory; that was corrected. The complete
+persistence suite now passes: 610 tests, zero failures (359.33 seconds).
+
+This remains an inactive persistence slice: configured-origin validation,
+application/operator API, owned delivery loop, safe error and explicit retry
+controls, operator UI, attachment/diagnostic handling and customer reply flows
+remain unfinished. Central hosting/origin and private registration are still
+activation gates; no customer send or live central registration was performed.
+
+Roster commit `4c6f0c51` is live and healthy as
+`1.5.0-dev-4c6f0c513344-20260906215054-3423476`, with unchanged engine build and
+16 loaded workers. Live Queen evidence returned `provider_activity: active`
+alongside pending-decision attention, demonstrating the independent facts the
+shared label renders. Authenticated Edge rendering still needs operator unlock.
+Navigation-fix CI `34061815674` completed successfully in all four jobs.
+
 ## 2026-09-06: engine-only replacement can strand a confirmed Queen review
 
 Ownership-hold commit `2ad86d6f` passed all four CI jobs and is healthy in the
