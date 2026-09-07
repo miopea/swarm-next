@@ -1,5 +1,26 @@
 # Returned-review recovery checkpoint
 
+## Live two-worker acceptance on 8e3d6647
+
+`scripts/dogfood/recovery-acceptance.sh` created two fictional read-only tasks in
+the existing isolated demo repositories. Upstream
+`01a079e9-2fbd-7a61-a313-4c4e16a9757f` ran nine Node tests, reported no commits,
+and submitted Review. Activity sequence 7489 is a **system** transition to
+Completed on recorded no-commit evidence; no Queen approval was needed.
+This is live evidence for routine automatic completion, not just a passing unit
+test. The worker reported a clean unchanged repository and no external actions.
+
+Downstream `01a079e9-2fd9-7261-8acb-c3c594cb3187` retained its assignment and
+Blocked state while the explicit upstream prerequisite was outstanding. Once
+upstream completed, next-move ownership changed to Queen without a manual
+unblock. Queen run `01a079e8-0b21-7af1-9314-5a9894417eee` has now started through
+normal scheduled delivery. Downstream pickup is still pending; do not claim the
+whole acceptance passed until its actual handoff and outcome are observed.
+
+The first inline setup command failed before creating anything; a read confirmed
+no tasks existed. The checked-in fail-fast setup script then completed, and
+refuses duplicate setup. It never sends raw terminal input or edits real tasks.
+
 ## September 7 recovery deployment in progress
 
 Final deployment check: `1.5.0-dev-8e3d6647072d-20260907032044-3749690` is
