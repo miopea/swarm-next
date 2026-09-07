@@ -97,3 +97,17 @@ whole-page INP or a long-term percentile. Quantized duration may make the phase
 remainder slightly negative, so presentation is clamped to zero and labeled an
 estimate. Malformed/unidentified entries do not become guessed interactions.
 Reference: https://www.w3.org/TR/2026/WD-event-timing-20260223/
+
+### Unattributed event timing
+
+Local diagnostics also retains at most 200 numeric event entries without a
+positive interaction ID, for the same one-minute lifetime. These entries can
+explain a raw event-entry delay when the grouped interaction view has no sample.
+They are never counted as identified interactions. Keep the slowest entry's
+matched input/processing/presentation phases separate from the grouped maximum;
+expiry, owner reset and malformed-input rejection remain explicit. No names,
+targets, device IDs, timer or durable schema are added. Existing historical
+event-entry aggregates and incident collection are unchanged, including entries
+without IDs. This is diagnostic attribution, not a claim those entries are
+irrelevant, an INP metric, or proof of an automation/browser cause.
+Reference: https://www.w3.org/TR/event-timing/#dom-performanceeventtiming-interactionid

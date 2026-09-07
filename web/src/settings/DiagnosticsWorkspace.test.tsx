@@ -4,12 +4,31 @@ import { afterEach, expect, test, vi } from "vitest";
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
 import { workerTreePressure } from "./DiagnosticsWorkspace";
 import type { SharedMachineResources } from "../runtime/machinePressure";
+import * as browserCapture from "../runtime/browserPerformance";
 
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+test("distinguishes unattributed event phases from identified interaction timing", async () => {
+  const evidence = browserCapture.readBrowserPerformance();
+  vi.spyOn(browserCapture, "readBrowserPerformance").mockReturnValue({ ...evidence,
+    recent_interactions: { ...evidence.recent_interactions, observed_interactions: 0, slowest: null,
+      unattributed_event_entries: 2, slowest_unattributed: {
+        duration_ms: 1200, input_delay_ms: 20, processing_ms: 30, presentation_estimate_ms: 1150,
+      } },
+  });
+  vi.stubGlobal("fetch", vi.fn(async () => new Response("[]")));
+  const shared: SharedMachineResources = { state: { kind: "failed" }, refresh: vi.fn(async () => undefined), setDiagnosticsActive: vi.fn() };
+  render(<DiagnosticsWorkspace sharedMachineResources={shared} feedbackRevision={0} operatorToken="secret" health={undefined} hiveIdentity={undefined} liveFeedState="connected" recentEvents={[]} sessions={[]} workers={[]} jiraReadiness={undefined} jiraUnavailable={true} />);
+  await screen.findByText("No reports saved yet.");
+  fireEvent.click(screen.getByText("Browser performance evidence", { exact: true }));
+  expect(screen.getByText(/2 recent event entries had no interaction ID/)).toBeVisible();
+  expect(screen.getByText(/Slowest entry without an interaction ID/)).toHaveTextContent("1200 ms · Input delay 20 ms · Handler processing 30 ms · Presentation estimate 1150 ms");
+  expect(screen.getByText(/Recent grouped observations/)).toHaveTextContent("0 interaction IDs");
 });
 
 test("uses the App resource owner and releases diagnostic sampling on unmount", async () => {

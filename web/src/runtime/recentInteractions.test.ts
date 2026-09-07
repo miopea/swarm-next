@@ -15,6 +15,31 @@ test("groups entries across callbacks and retains phases from the slowest entry"
   expect(capture.snapshot().observed_interactions).toBe(2);
 });
 
+test("unattributed native entries explain raw timing without becoming interactions", () => {
+  let now = 1000;
+  const capture = new RecentInteractions(() => now);
+  capture.record(event(0, 1200));
+  capture.record({ ...event(0, 1100), processingStart: 500, processingEnd: 600 });
+  const snapshot = capture.snapshot();
+  expect(snapshot).toMatchObject({ observed_interactions: 0, slowest: null,
+    unattributed_event_entries: 2, slowest_unattributed: {
+      duration_ms: 1200, input_delay_ms: 20, processing_ms: 30, presentation_estimate_ms: 1150,
+    } });
+  snapshot.slowest_unattributed!.duration_ms = 5;
+  expect(capture.snapshot().slowest_unattributed!.duration_ms).toBe(1200);
+  for (let i = 0; i < 500; i++) capture.record(event(0, 200));
+  expect(capture.snapshot()).toMatchObject({ unattributed_event_entries: 200,
+    slowest_unattributed: { duration_ms: 200 }, observed_interactions: 0 });
+  capture.record(event(99, 300));
+  expect(capture.snapshot().observed_interactions).toBe(1);
+  now += 60_001;
+  expect(capture.snapshot()).toMatchObject({ unattributed_event_entries: 0, slowest_unattributed: null });
+  capture.record({ ...event(), interactionId: undefined });
+  expect(capture.snapshot().unattributed_event_entries).toBe(1);
+  now--;
+  expect(capture.snapshot().unattributed_event_entries).toBe(0);
+});
+
 test("unidentified and malformed entries never become guessed interactions", () => {
   const capture = new RecentInteractions();
   for (const invalid of [

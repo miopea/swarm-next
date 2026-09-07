@@ -1,11 +1,32 @@
 # Daily-driver maturity: remaining delivery and acceptance
 
-## Current reconciliation — September 7, 21:12 UTC
+## Current reconciliation — September 7, 21:58 UTC
 
 This is the current remaining-work index. Older dated entries below are
 implementation history, not an assertion that their then-open items are still
 unimplemented. The approved full scope remains `45-daily-driver-maturity-plan.md`.
 No phase-completion percentage or full-program completion is established.
+
+### September 7, 21:58 UTC: live assistance requests and diagnostic attribution
+
+Queen independently created pending assistance requests `01a07dd4-b571` for
+Admin C15a and `01a07dd4-41a4` for the Member Services session. She linked video
+task `01a07361-c848` and search task `01a07880` to the latter without duplicating
+the question. Authenticated Edge shows both cards, their recommendations and
+Say something else. No controller answered these real requests. Session provision
+and normal resumed verification remain operator-dependent acceptance; the later
+Queen run `01a07dd9-0823-72a2-a2d2-f8d259f16b24` finished incomplete, so the
+remaining backlog is explicitly not reconciled. CI `34163744006` passed.
+
+The latest 100 stored browser captures span multiple builds and hours; that
+bounded sample cannot establish a same-build aged baseline. Current `f2bd8f7c`
+had 11 raw event entries (maximum 1,064 ms) but no retained positive interaction
+IDs when inspected. Neither proves an automation cause or absence of real delay.
+Local diagnostics now keeps a separate maximum 200 unattributed numeric entries
+for one minute and displays their matched timing phases. Historical raw aggregates,
+incidents and grouped interaction counts are unchanged. All 47 targeted runtime,
+diagnostics and privacy tests passed locally; this attribution change is not yet
+deployed or live-accepted. It does not establish resource plateau or input p95.
 
 ### September 7, 21:40 UTC: operator assistance routing and reload acceptance
 

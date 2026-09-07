@@ -234,6 +234,16 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
           {" · Presentation estimate "}{Math.round(browserTiming.recent_interactions.slowest.presentation_estimate_ms)} ms
         </p> : null}
         <p>{browserTiming.recent_interactions.coverage}</p>
+        {browserTiming.recent_interactions.unattributed_event_entries > 0 ? <>
+          <p>{browserTiming.recent_interactions.unattributed_event_entries} recent event entries had no interaction ID (up to 200 retained). They remain in historical event-entry timings but are not counted as identified interactions.</p>
+          {browserTiming.recent_interactions.slowest_unattributed ? <p>
+            Slowest entry without an interaction ID: {Math.round(browserTiming.recent_interactions.slowest_unattributed.duration_ms)} ms
+            {" · Input delay "}{Math.round(browserTiming.recent_interactions.slowest_unattributed.input_delay_ms)} ms
+            {" · Handler processing "}{Math.round(browserTiming.recent_interactions.slowest_unattributed.processing_ms)} ms
+            {" · Presentation estimate "}{Math.round(browserTiming.recent_interactions.slowest_unattributed.presentation_estimate_ms)} ms.
+            This is event timing, not proof of a slow click or keystroke. No event names or targets are retained.
+          </p> : null}
+        </> : null}
         <p>Snapshot application breakdown: {browserTiming.terminal_application.samples} completed samples, at most 200 from the last hour in this page.</p>
         {browserTiming.terminal_application.slowest ? <p>
           Slowest snapshot: {Math.round(browserTiming.terminal_application.slowest.total_ms)} ms

@@ -121,6 +121,12 @@ test("native event grouping is separate from historical entry counts and resets 
     const report = readBrowserPerformance();
     expect(report.recent_interactions).toMatchObject({ observed_interactions: 1, slowest: { duration_ms: 240 } });
     expect(report.current.buckets.reduce((sum, bucket) => sum + (bucket.metrics.interaction?.count ?? 0), 0) - before).toBe(2);
+    callback!({ getEntries: () => [{ ...entry, interactionId: 0, duration: 1200 }] } as unknown as PerformanceObserverEntryList, {} as PerformanceObserver);
+    const withUnattributed = readBrowserPerformance();
+    expect(withUnattributed.recent_interactions).toMatchObject({ observed_interactions: 1,
+      unattributed_event_entries: 1, slowest_unattributed: { duration_ms: 1200 } });
+    // Preserve the historical wire metric and its incident evidence, not just grouped IDs.
+    expect(withUnattributed.current.buckets.reduce((sum, bucket) => sum + (bucket.metrics.interaction?.count ?? 0), 0) - before).toBe(3);
   } finally { stop(); }
   const restarted = installBrowserPerformanceCapture();
   expect(readBrowserPerformance().recent_interactions.observed_interactions).toBe(0);
