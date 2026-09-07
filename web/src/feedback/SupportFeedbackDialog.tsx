@@ -103,7 +103,7 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
   }
 
   return <div className="feedback-backdrop" role="presentation">
-    <section ref={modal} tabIndex={-1} className="feedback-dialog" role="dialog" aria-modal="true" aria-labelledby="support-heading">
+    <section ref={modal} tabIndex={-1} className="feedback-dialog support-feedback-dialog" role="dialog" aria-modal="true" aria-labelledby="support-heading">
       <header><div><p className="eyebrow">A note to the hive keepers</p><h2 id="support-heading">Swarm Support</h2></div>
         <button type="button" className="secondary-button" onClick={close}>Close</button></header>
       <p>Share feedback privately with Swarm Support. Only an email address is required for contact. No GitHub account is needed.</p>
@@ -122,7 +122,7 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
         </div><button className="primary-action" type="submit" disabled={!email.trim() || !subject.trim() || !body.trim()}>Review message</button>
       </form> : review ? <section aria-label="Review support message">
         <h3>{review.subject}</h3><p>{review.name ? `${review.name} · ` : ""}{review.email}</p>
-        <pre className="diagnostic-preview">{review.body}</pre>
+        <pre className="support-review-text">{review.body}</pre>
         {saved ? <p role="status">{labels[saved.delivery.state]}</p> : <div className="diagnostic-actions">
           {!attempted && <button type="button" className="secondary-button" onClick={() => setReview(undefined)}>Edit message</button>}
           <button type="button" className="primary-action" disabled={busy || !status.configured} onClick={() => void send()}>
