@@ -203,6 +203,23 @@ pub(super) async fn observe_unexplained_briefings(state: &AppState, store: &Task
     })
 }
 
+/// A single assessment must not reread unrelated workers. Keep the same fresh
+/// snapshot and post-read identity checks as full review coverage.
+pub(super) async fn recovery_fact_for(
+    state: &AppState,
+    store: &TaskStore,
+    attention_id: &str,
+) -> Option<swarm_domain::QueenRecoveryFacts> {
+    let attention = store
+        .current_coordinator_attention(crate::unix_timestamp())
+        .ok()?;
+    let item = attention
+        .into_iter()
+        .find(|item| item.action_id == attention_id)?;
+    let observations = observe(state, store, &[item]).await;
+    observations.get(attention_id).and_then(recovery_fact)
+}
+
 /// Capture server-owned evidence immediately before finishing a Queen turn.
 /// Persistence independently enumerates all current obligations, so any rows
 /// outside this bounded observation window remain uncovered rather than healthy.
@@ -390,6 +407,89 @@ mod tests {
                 .all(|worker| worker["activity"] == "unavailable"
                     && worker["provider_question_excerpt"].is_null())
         );
+    }
+
+    #[tokio::test]
+    async fn single_recovery_assessment_reads_only_its_current_session() {
+        use swarm_terminal::{HostClient, HostRequest, HostResponse, Resume, TerminalSnapshot};
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let store = TaskStore::in_memory().unwrap();
+        for index in 0..2 {
+            let (_, _, task) = queued_brief_fixture(&store, index);
+            store
+                .transition_task(task, swarm_domain::TaskState::Active)
+                .unwrap();
+        }
+        for candidate in store
+            .stale_owned_work_candidates(4_000_000_000, 600)
+            .unwrap()
+        {
+            store
+                .record_stale_owned_work_attention(
+                    &candidate,
+                    4_000_000_000,
+                    600,
+                    swarm_persistence::BackgroundWorkReading::NoneVisible,
+                )
+                .unwrap();
+        }
+        let attention = store.current_coordinator_attention(4_000_000_000).unwrap();
+        assert_eq!(attention.len(), 2);
+        let target = &attention[0];
+        let expected_session = target.session_id;
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("single-recovery.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let state = AppState::default().with_terminal_host(HostClient::new(&socket), "fixture");
+        let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let host_reads = reads.clone();
+        let host = tokio::spawn(async move {
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let request: HostRequest = serde_json::from_str(&line).unwrap();
+                assert!(
+                    matches!(request, HostRequest::Read {session_id, ..} if session_id == expected_session)
+                );
+                host_reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let response = HostResponse::Output {
+                    session_id: expected_session,
+                    running: true,
+                    resume: Resume::Snapshot {
+                        snapshot: TerminalSnapshot {
+                            sequence: 1,
+                            rows: 24,
+                            columns: 80,
+                            truncated: false,
+                            bytes: b"Fictional completed turn\r\n> ".to_vec(),
+                        },
+                    },
+                };
+                let mut bytes = serde_json::to_vec(&response).unwrap();
+                bytes.push(b'\n');
+                reader.get_mut().write_all(&bytes).await.unwrap();
+            }
+        });
+        let facts = recovery_fact_for(&state, &store, &target.action_id)
+            .await
+            .unwrap();
+        assert_eq!(facts.identity.task_id, target.task_id);
+        assert_eq!(facts.identity.session_id, expected_session);
+        assert!(facts.terminal_is_current);
+        assert!(recovery_fact_for(&state, &store, "missing").await.is_none());
+        store
+            .transition_task(target.task_id, swarm_domain::TaskState::Review)
+            .unwrap();
+        assert!(
+            recovery_fact_for(&state, &store, &target.action_id)
+                .await
+                .is_none()
+        );
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+        host.abort();
+        let _ = host.await;
     }
 
     #[tokio::test]

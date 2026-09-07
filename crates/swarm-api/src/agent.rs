@@ -852,15 +852,13 @@ impl ServerHandler for AgentMcp {
             "swarm_record_recovery_assessment" => {
                 if self.principal.role == WorkerRole::Queen {
                     let input = parse::<swarm_domain::QueenRecoveryRecord>(arguments);
-                    let (observations, complete) = if input.is_ok() {
-                        crate::coordination_attention_evidence::recovery_facts(
-                            &self.state, self.tasks.store(),
+                    let observed = if let Ok(input) = &input {
+                        crate::coordination_attention_evidence::recovery_fact_for(
+                            &self.state, self.tasks.store(), &input.identity.attention_id,
                         ).await
-                    } else { (Vec::new(), false) };
+                    } else { None };
                     input.and_then(|input| {
-                        let observed = observations.iter().find(|facts|
-                            complete && facts.identity.attention_id == input.identity.attention_id
-                        ).ok_or_else(|| ApplicationError::Store(TaskStoreError::RecoveryAssessmentRefused(
+                        let observed = observed.as_ref().ok_or_else(|| ApplicationError::Store(TaskStoreError::RecoveryAssessmentRefused(
                             "Recovery observation unavailable or changed; read current coordination attention. No assessment was saved.".into()
                         )))?;
                         let identity = self.tasks.record_queen_recovery(
