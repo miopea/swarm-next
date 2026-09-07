@@ -3340,7 +3340,7 @@ fn assign_task_tool() -> Tool {
 fn task_prerequisite_tool() -> Tool {
     tool(
         "swarm_set_task_prerequisite",
-        "Queen only: add or remove an explicit local task prerequisite with a reason. Add only to Blocked work, never rewind Review or Active work to create a link. Self-links, cycles and graph limits are enforced. Only a present Completed prerequisite satisfies the link; removed or abandoned work does not. Completion returns the next move to Queen to reassess other blockers, not an automatic resume. Read prerequisites on swarm_list_tasks; use full task IDs. Workers stay in their own repository; Queen creates and assigns cross-worker work.",
+        "Queen only: add or remove an explicit local task prerequisite with a reason. Add to Blocked or Review work; keep finished work in Review and never rewind Active work to create a link. For a Review waiting on a shared verification prerequisite, record the exact upstream task instead of leaving the wait only in the review request. Self-links, cycles and graph limits are enforced. Only a present Completed prerequisite satisfies the link; removed or abandoned work does not. Clearing prerequisites restores the remaining review owner or Queen's blocked-work reassessment, not automatic completion or resume. Read prerequisites on swarm_list_tasks; use full task IDs. Workers stay in their own repository; Queen creates and assigns cross-worker work.",
         &json!({"type":"object", "properties": {
             "task_id":{"type":"string","format":"uuid"},
             "prerequisite_id":{"type":"string","format":"uuid"},
@@ -4112,45 +4112,48 @@ mod tests {
 
     #[tokio::test]
     async fn prerequisite_tool_routes_queen_changes_and_refuses_worker_changes() {
-        let (bridge, store, queen_id, worker_id, _directory) = setup();
-        let task = store.create_task("Consumer", "/workspace/petal").unwrap();
-        let upstream = store.create_task("Contract", "/workspace/queen").unwrap();
-        store
-            .transition_task(task.id, swarm_domain::TaskState::Ready)
-            .unwrap();
-        store
-            .transition_task(task.id, swarm_domain::TaskState::Blocked)
-            .unwrap();
-        for (worker, expected) in [(worker_id, 0), (queen_id, 1)] {
-            let token = bearer_from_path(&bridge.ensure_worker_config(worker).unwrap());
-            let response = response_json(
-                handle(
-                    bridge.clone(),
-                    plain_state(),
-                    mcp_request(
-                        Some(&token),
-                        "tools/call",
-                        &json!({
-                            "name": "swarm_set_task_prerequisite",
-                            "arguments": {
-                                "task_id": task.id, "prerequisite_id": upstream.id,
-                                "operation": "add", "reason": "Needs the shared contract"
-                            }
-                        }),
-                    ),
+        for state in [
+            swarm_domain::TaskState::Blocked,
+            swarm_domain::TaskState::Review,
+        ] {
+            let (bridge, store, queen_id, worker_id, _directory) = setup();
+            let task = store.create_task("Consumer", "/workspace/petal").unwrap();
+            let upstream = store.create_task("Contract", "/workspace/queen").unwrap();
+            store
+                .transition_task(task.id, swarm_domain::TaskState::Ready)
+                .unwrap();
+            store
+                .transition_task(task.id, swarm_domain::TaskState::Active)
+                .unwrap();
+            store.transition_task(task.id, state).unwrap();
+            for (worker, expected) in [(worker_id, 0), (queen_id, 1)] {
+                let token = bearer_from_path(&bridge.ensure_worker_config(worker).unwrap());
+                let response = response_json(
+                    handle(
+                        bridge.clone(),
+                        plain_state(),
+                        mcp_request(
+                            Some(&token),
+                            "tools/call",
+                            &json!({
+                                "name": "swarm_set_task_prerequisite",
+                                "arguments": {
+                                    "task_id": task.id, "prerequisite_id": upstream.id,
+                                    "operation": "add", "reason": "Needs the shared contract"
+                                }
+                            }),
+                        ),
+                    )
+                    .await,
                 )
-                .await,
-            )
-            .await;
-            assert_eq!(
-                store.get_task(task.id).unwrap().prerequisites.len(),
-                expected,
-                "{response}"
-            );
-            assert_eq!(
-                store.get_task(task.id).unwrap().state,
-                swarm_domain::TaskState::Blocked
-            );
+                .await;
+                assert_eq!(
+                    store.get_task(task.id).unwrap().prerequisites.len(),
+                    expected,
+                    "{response}"
+                );
+                assert_eq!(store.get_task(task.id).unwrap().state, state);
+            }
         }
     }
 

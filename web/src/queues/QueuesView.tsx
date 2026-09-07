@@ -110,6 +110,8 @@ function taskProgress(task: Task, now: number): string {
   }
   if (task.state === "review") {
     if (task.next_move_owner === "operator") return "Waiting for your decision";
+    const unresolved = (task.prerequisites ?? []).filter(item => !prerequisiteSatisfied(item)).length;
+    if (unresolved > 0) return `Review waiting on ${unresolved} prerequisite${unresolved === 1 ? "" : "s"}`;
     if (task.outcome_delivery_state === "uncertain") return "Handoff delivery unconfirmed · Queen must reconcile before retrying";
     if (task.outcome_delivery_state === "queued" || task.outcome_delivery_state === "dispatching") return "Review handoff awaiting confirmed delivery";
     if (task.next_move_owner === "worker") return task.review_request_id

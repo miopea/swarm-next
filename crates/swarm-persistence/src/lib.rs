@@ -2521,6 +2521,10 @@ impl TaskStore {
         )
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "All lifecycle guards and the event write share one transaction"
+    )]
     fn transition_task_inner(
         &self,
         id: TaskId,
@@ -2558,7 +2562,13 @@ impl TaskStore {
         if target == TaskState::Active {
             ensure_worker_has_no_other_active_task(&transaction, id)?;
         }
-        if matches!(target, TaskState::Ready | TaskState::Active) {
+        if matches!(
+            target,
+            TaskState::Ready
+                | TaskState::Active
+                | TaskState::Completed
+                | TaskState::AwaitingRelease
+        ) {
             task_prerequisites::ensure_satisfied(&transaction, id)?;
         }
         jira::queue_jira_transition(&transaction, id, target)?;
@@ -5909,6 +5919,10 @@ fn validate_description(description: &str) -> Result<(), TaskStoreError> {
     Ok(())
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "One task projection keeps lifecycle, decisions and prerequisite ownership consistent"
+)]
 fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     let prerequisites = task_prerequisites::from_projection(row, 24)?;
     let id: String = row.get(0)?;
@@ -6001,6 +6015,10 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
             has_assignee,
             row.get(19)?,
             row.get(20)?,
+        )
+        .after_review_prerequisites(
+            TaskState::from_str(&state).unwrap_or(TaskState::Draft),
+            &prerequisites,
         )
         .after_blocker_evidence(row.get(20)?, &prerequisites, row.get(26)?),
         prerequisites,

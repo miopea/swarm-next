@@ -70,8 +70,8 @@ test("unblocking a sleeping worker's task does not wake it", () => {
   expect(props.onStartWorker).not.toHaveBeenCalled();
 });
 
-test("opens the prerequisite editor from a blocked task's actions", () => {
-  renderBoard({ tasks: [{ ...task, state: "blocked" }], onPrerequisiteChanged: vi.fn() });
+test.each(["blocked", "review"] as const)("opens the prerequisite editor from a %s task's actions", (state) => {
+  renderBoard({ tasks: [{ ...task, state }], onPrerequisiteChanged: vi.fn() });
   fireEvent.click(screen.getByRole("button", { name: `Actions for ${task.title}` }));
   fireEvent.click(screen.getByRole("menuitem", { name: "Manage prerequisites" }));
   expect(screen.getByRole("dialog", { name: "Prerequisites" })).toBeVisible();

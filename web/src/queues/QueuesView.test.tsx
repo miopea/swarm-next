@@ -167,6 +167,18 @@ describe("QueuesView", () => {
     expect(screen.queryByText(/Queen (checks remaining blockers|coordinates the next move)/)).not.toBeInTheDocument();
   });
 
+  test("review dependencies explain the wait without hiding the operator's next move", () => {
+    const prerequisite = { task_id: "t1", prerequisite_id: "upstream", title: "Shared test session", state: "active" as const, assigned_worker_id: null, removed: false, reason: "Real session verification", created_at: 1 };
+    const waiting = task({ state: "review", next_move_owner: "blocked", prerequisites: [prerequisite] });
+    const onOpenTask = vi.fn();
+    const { rerender } = render(<QueuesView tasks={[waiting]} workers={[]} onOpenTask={onOpenTask} />);
+    expect(screen.getByText("Review waiting on 1 prerequisite")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: prerequisite.title }));
+    expect(onOpenTask).toHaveBeenCalledWith("upstream");
+    rerender(<QueuesView tasks={[{ ...waiting, next_move_owner: "operator" }]} workers={[]} onOpenTask={onOpenTask} />);
+    expect(screen.getByText("Waiting for your decision")).toBeVisible();
+  });
+
   test("removed and reopened prerequisites stay visible without claiming the worker stopped", () => {
     const prerequisite = { task_id: "t1", prerequisite_id: "upstream", title: "Shared API contract", state: "completed" as const, assigned_worker_id: null, removed: true, reason: "Contract first", created_at: 1 };
     render(<QueuesView tasks={[task({ state: "active", next_move_owner: "worker", dispatch_state: "delivered", prerequisites: [prerequisite] })]} workers={[]} onOpenTask={vi.fn()} />);

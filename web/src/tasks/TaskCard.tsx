@@ -146,7 +146,7 @@ export default function TaskCard({ task, heldBriefing, jiraLink, emailSources, o
         <CursorMenu className="task-menu" point={menuPoint} onClose={() => setMenuPoint(undefined)} label={`${task.title} actions`}>
           <button role="menuitem" onClick={() => runMenuAction(() => setDetailsOpen(true))}>Review and edit</button>
           <button role="menuitem" onClick={() => runMenuAction(toggleHistory)}>{historyOpen ? "Hide history" : "Show history"}</button>
-          {onPrerequisiteChanged && (task.state === "blocked" || Boolean(task.prerequisites?.length)) && <button role="menuitem" disabled={busy} onClick={() => runMenuAction(() => setPrerequisitesOpen(true))}>Manage prerequisites</button>}
+          {onPrerequisiteChanged && (task.state === "blocked" || task.state === "review" || Boolean(task.prerequisites?.length)) && <button role="menuitem" disabled={busy} onClick={() => runMenuAction(() => setPrerequisitesOpen(true))}>Manage prerequisites</button>}
           {task.state !== "completed" && <button role="menuitem" disabled={busy || !canMoveEarlier} onClick={() => runMenuAction(onMoveEarlier)}>Move earlier</button>}
           {task.state !== "completed" && <button role="menuitem" disabled={busy || !canMoveLater} onClick={() => runMenuAction(onMoveLater)}>Move later</button>}
           {task.state === "active" && <button className="danger-text" role="menuitem" disabled={busy} onClick={() => runMenuAction(() => void onTransition(task, "blocked"))}>Block task</button>}

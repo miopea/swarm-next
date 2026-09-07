@@ -1921,6 +1921,40 @@ mod completion_evidence_tests {
     /// Trading one silent failure for a queue of manual approvals would be the
     /// worse outcome, and it is the thing the ticket explicitly warned against.
     #[test]
+    fn whole_delivery_waits_for_prerequisites_without_holding_other_completions() {
+        let store = TaskStore::in_memory().unwrap();
+        let waiting = task(&store);
+        let upstream = task(&store);
+        let independent = task(&store);
+        for id in [waiting, independent] {
+            store
+                .record_task_deployment(id, "production", "release 42", 1_000)
+                .unwrap();
+        }
+        store
+            .add_task_prerequisite(
+                waiting,
+                upstream,
+                "Verify upstream first",
+                &TaskActivityActor::operator(),
+                1_001,
+            )
+            .unwrap();
+
+        let closed = store.complete_reviewed_work_with_deployment().unwrap();
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].task_id, independent);
+        assert_eq!(store.get_task(waiting).unwrap().state, TaskState::Review);
+
+        store
+            .transition_task(upstream, TaskState::Completed)
+            .unwrap();
+        let closed = store.complete_reviewed_work_with_deployment().unwrap();
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].task_id, waiting);
+    }
+
+    #[test]
     fn a_whole_delivery_still_closes_itself() {
         let store = TaskStore::in_memory().unwrap();
         let whole = task(&store);
@@ -2278,6 +2312,10 @@ impl TaskStore {
     ///
     /// # Errors
     /// Returns an error when the task is unknown or the hold cannot be stored.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep deployment eligibility and guarded completion together for auditability"
+    )]
     pub fn complete_reviewed_work_with_deployment(
         &self,
     ) -> Result<Vec<DeterministicCompletion>, TaskStoreError> {
@@ -2302,6 +2340,12 @@ impl TaskStore {
                    AND deployment.delivers_whole_task = 1
                  WHERE task.state = ?1
                    AND task.removed_at IS NULL
+                   AND NOT EXISTS (
+                       SELECT 1 FROM task_prerequisites p
+                       LEFT JOIN tasks upstream ON upstream.id = p.prerequisite_id
+                       WHERE p.task_id = task.id AND (upstream.id IS NULL
+                           OR upstream.removed_at IS NOT NULL OR upstream.state != 'completed')
+                   )
                    AND deployment.id = (
                        SELECT newest.id FROM task_deployments newest
                        WHERE newest.task_id = task.id
@@ -2388,7 +2432,13 @@ impl TaskStore {
                     environment,
                     reference,
                 }),
-                Err(TaskStoreError::NotFound | TaskStoreError::InvalidTransition { .. }) => {}
+                Err(
+                    TaskStoreError::NotFound
+                    | TaskStoreError::InvalidTransition { .. }
+                    | TaskStoreError::TaskPrerequisite(
+                        swarm_domain::TaskPrerequisiteError::Unresolved,
+                    ),
+                ) => {}
                 Err(error) => return Err(error),
             }
         }
@@ -2717,6 +2767,83 @@ mod settlement_tests {
             vec![task]
         );
         assert_eq!(store.get_task(task).unwrap().state, TaskState::Completed);
+    }
+
+    #[test]
+    fn automatic_settlement_skips_prerequisite_waits_then_closes_without_queen() {
+        let store = TaskStore::in_memory().unwrap();
+        let waiting = claimable_task(&store, "Investigation awaiting upstream evidence");
+        let upstream = reviewed_task(&store, "Upstream verification");
+        let routine = claimable_task(&store, "Independent routine work");
+        store
+            .add_task_prerequisite(
+                waiting,
+                upstream,
+                "Verification first",
+                &TaskActivityActor::operator(),
+                1_000,
+            )
+            .unwrap();
+
+        assert_eq!(
+            store
+                .settle_reviewed_work_without_deployment(2_000)
+                .unwrap(),
+            vec![routine]
+        );
+        assert_eq!(store.get_task(waiting).unwrap().state, TaskState::Review);
+        assert_eq!(
+            store.completion_evidence(waiting).unwrap(),
+            CompletionEvidence::None
+        );
+
+        store
+            .transition_task(upstream, TaskState::Completed)
+            .unwrap();
+        assert_eq!(
+            store
+                .settle_reviewed_work_without_deployment(2_001)
+                .unwrap(),
+            vec![waiting]
+        );
+        assert_eq!(store.get_task(waiting).unwrap().state, TaskState::Completed);
+    }
+
+    #[test]
+    fn automatic_settlement_recovers_its_approval_after_a_prerequisite_interrupts_completion() {
+        let store = TaskStore::in_memory().unwrap();
+        let waiting = claimable_task(&store, "Interrupted automatic settlement");
+        store
+            .claim_completion_exemption(waiting, "Nothing built", None, 1_000)
+            .unwrap();
+        store
+            .approve_completion_exemption(waiting, "coordinator", "Empty commit report", 1_000)
+            .unwrap();
+        let upstream = reviewed_task(&store, "Upstream verification");
+        store
+            .add_task_prerequisite(
+                waiting,
+                upstream,
+                "Verify first",
+                &TaskActivityActor::operator(),
+                1_001,
+            )
+            .unwrap();
+        assert!(
+            store
+                .settle_reviewed_work_without_deployment(2_000)
+                .unwrap()
+                .is_empty()
+        );
+        store
+            .transition_task(upstream, TaskState::Completed)
+            .unwrap();
+        assert_eq!(
+            store
+                .settle_reviewed_work_without_deployment(2_001)
+                .unwrap(),
+            vec![waiting]
+        );
     }
 
     /// The dangerous default, asserted directly.
@@ -3192,6 +3319,10 @@ impl TaskStore {
     ///
     /// # Errors
     /// Returns an error when persistence is unavailable.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep bounded eligibility, evidence derivation and interrupted-settlement recovery together"
+    )]
     pub fn settle_reviewed_work_without_deployment_page(
         &self,
         now: i64,
@@ -3204,14 +3335,23 @@ impl TaskStore {
                  WHERE task.state = ?1
                    AND (?2 IS NULL OR task.id > ?2)
                    AND task.removed_at IS NULL
+                   AND NOT EXISTS (
+                       SELECT 1 FROM task_prerequisites p
+                       LEFT JOIN tasks upstream ON upstream.id = p.prerequisite_id
+                       WHERE p.task_id = task.id AND (upstream.id IS NULL
+                           OR upstream.removed_at IS NOT NULL OR upstream.state != 'completed')
+                   )
                    -- Work carrying a deployment is the OTHER sweep's business.
                    AND NOT EXISTS (
                        SELECT 1 FROM task_deployments d WHERE d.task_id = task.id
                    )
-                   -- Already settled one way or another; nothing to decide.
+                   -- Human/Queen exemptions retain their existing owner. A
+                   -- coordinator approval may have committed before a crash
+                   -- or a newly added prerequisite prevented completion.
                    AND NOT EXISTS (
                        SELECT 1 FROM task_completion_exemptions e
                        WHERE e.task_id = task.id AND e.approved_at IS NOT NULL AND e.withdrawn_at IS NULL
+                         AND (e.approved_by IS NULL OR e.approved_by != 'coordinator')
                    )
                    -- SKIPPED, NOT REFUSED, exactly as the deployment sweep
                    -- treats it: work owing somebody a reply is not well-formed,
@@ -3270,7 +3410,6 @@ impl TaskStore {
                 | CommitSettlement::NotReported
                 | CommitSettlement::Unestablished => continue,
             };
-            self.claim_completion_exemption(task_id, reason, None, now)?;
             // THE BASIS WRITES ITSELF HERE, and this is the machine half of
             // the rule rather than an exception to it. What was checked is a
             // fact the pass just computed from the task's own commits, so the
@@ -3286,7 +3425,10 @@ impl TaskStore {
                 | CommitSettlement::NotReported
                 | CommitSettlement::Unestablished => continue,
             };
-            self.approve_completion_exemption(task_id, "coordinator", basis, now)?;
+            if self.completion_evidence(task_id)? != CompletionEvidence::ExemptionApproved {
+                self.claim_completion_exemption(task_id, reason, None, now)?;
+                self.approve_completion_exemption(task_id, "coordinator", basis, now)?;
+            }
             match self.transition_task_with_note_as(
                 task_id,
                 TaskState::Completed,
@@ -3294,7 +3436,13 @@ impl TaskStore {
                 &TaskActivityActor::system(),
             ) {
                 Ok(_) => closed.push(task_id),
-                Err(TaskStoreError::NotFound | TaskStoreError::InvalidTransition { .. }) => {}
+                Err(
+                    TaskStoreError::NotFound
+                    | TaskStoreError::InvalidTransition { .. }
+                    | TaskStoreError::TaskPrerequisite(
+                        swarm_domain::TaskPrerequisiteError::Unresolved,
+                    ),
+                ) => {}
                 Err(error) => return Err(error),
             }
         }

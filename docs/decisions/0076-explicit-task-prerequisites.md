@@ -10,8 +10,16 @@ from descriptions, dispatch order, repository names or elapsed time. Queen and
 the operator manage edges; ordinary workers request cross-worker coordination
 through Queen and cannot change a peer's dependencies.
 
-The initial command attaches prerequisites to work already in Blocked. It does
-not rewind Active or Review work, stop a terminal, start another worker or create
+The command attaches prerequisites to work already in Blocked or Review. Review
+keeps its finished-work lifecycle: adding an unmet prerequisite changes the
+next-move projection to a dependency wait, not the task state or assignment.
+A pending task-linked operator decision remains the immediate next move.
+When prerequisites clear, an unanswered review request still belongs to its
+worker; otherwise Queen resumes review. Transitions to completion or shipping
+must recheck prerequisite satisfaction in the same transaction, including
+automatic settlement paths. This extension addresses waits for shared test
+sessions and other downstream verification that formerly existed only in prose.
+It does not rewind Active or Review work, stop a terminal, start another worker or create
 an operator decision. Existing lifecycle commands remain the owner of transitions.
 Adding an edge requires both tasks to exist in the same Hive and rejects self
 links, cycles and limit exhaustion atomically. Each task has at most 32 edges;

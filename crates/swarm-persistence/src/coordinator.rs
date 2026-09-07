@@ -282,6 +282,8 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
                            WHERE review.task_id = task.id AND review.answered_at IS NULL
                              AND review.request_worker_id = task.assigned_worker_id
                              AND action.idempotency_key = 'stale-owned-work:' || task.id || ':' || worker.id || ':' || session.session_id || ':' || task.updated_at || ':' || review.request_message_id
+                             AND NOT EXISTS (SELECT 1 FROM task_prerequisites p LEFT JOIN tasks upstream ON upstream.id=p.prerequisite_id
+                                 WHERE p.task_id=task.id AND (upstream.id IS NULL OR upstream.removed_at IS NOT NULL OR upstream.state!='completed'))
                        ))) AND session.ended_at IS NULL)
                    -- Clears itself the moment a brief is confirmed delivered,
                    -- so redelivering the work is the whole fix and nothing has
@@ -1431,6 +1433,8 @@ impl TaskStore {
                  SELECT 1 FROM task_returned_reviews review
                  WHERE review.task_id = task.id AND review.answered_at IS NULL
                    AND review.request_worker_id = task.assigned_worker_id
+                   AND NOT EXISTS (SELECT 1 FROM task_prerequisites p LEFT JOIN tasks upstream ON upstream.id=p.prerequisite_id
+                       WHERE p.task_id=task.id AND (upstream.id IS NULL OR upstream.removed_at IS NOT NULL OR upstream.state!='completed'))
              )))
                AND MAX(task.updated_at, COALESCE(acted.acted_at, 0)) + ?2 <= ?1
                AND NOT EXISTS (
@@ -1539,6 +1543,8 @@ impl TaskStore {
                      WHERE review.task_id = task.id AND review.answered_at IS NULL
                        AND review.request_worker_id = task.assigned_worker_id
                        AND review.request_message_id = ?7
+                       AND NOT EXISTS (SELECT 1 FROM task_prerequisites p LEFT JOIN tasks upstream ON upstream.id=p.prerequisite_id
+                           WHERE p.task_id=task.id AND (upstream.id IS NULL OR upstream.removed_at IS NOT NULL OR upstream.state!='completed'))
                  )))
                    AND task.assigned_worker_id = ?2 AND task.updated_at = ?3
                    AND session.session_id = ?4 AND task.updated_at + ?5 <= ?6
@@ -4868,6 +4874,51 @@ mod tests {
                 .is_empty(),
             "a superseded request must not become the new worker's obligation"
         );
+    }
+
+    #[test]
+    fn a_review_prerequisite_added_during_observation_prevents_worker_stall_attention() {
+        let store = TaskStore::in_memory().unwrap();
+        let (_, _, task) = active_owned_work(&store, "Waiting for verification", 100);
+        store.transition_task(task, TaskState::Review).unwrap();
+        store
+            .return_review_to_worker(task, "Verify using the shared browser session", 100)
+            .unwrap();
+        let now = 4_000_000_000;
+        let candidate = store
+            .stale_owned_work_candidates(now, 600)
+            .unwrap()
+            .pop()
+            .unwrap();
+        let prerequisite = store
+            .create_task("Provide test session", "/workspace")
+            .unwrap();
+        store
+            .add_task_prerequisite(
+                task,
+                prerequisite.id,
+                "Shared session required",
+                &TaskActivityActor::operator(),
+                candidate.task_revision,
+            )
+            .unwrap();
+        assert!(
+            store
+                .stale_owned_work_candidates(now, 600)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !store
+                .record_stale_owned_work_attention(
+                    &candidate,
+                    now,
+                    600,
+                    BackgroundWorkReading::NoneVisible
+                )
+                .unwrap()
+        );
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Review);
     }
 
     /// The two blocks on the board today do NOT reach the operator, and one

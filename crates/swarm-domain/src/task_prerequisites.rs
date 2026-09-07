@@ -45,6 +45,22 @@ impl TaskPrerequisite {
 }
 
 impl NextMoveOwner {
+    /// Review may wait on another task without losing its finished-work state.
+    #[must_use]
+    pub fn after_review_prerequisites(
+        self,
+        state: TaskState,
+        prerequisites: &[TaskPrerequisite],
+    ) -> Self {
+        if state == TaskState::Review
+            && self != Self::Operator
+            && prerequisites.iter().any(|item| !item.satisfied())
+        {
+            Self::Blocked
+        } else {
+            self
+        }
+    }
     /// Without a current structured gate Queen must reassess the block.
     /// This assigns verification, not permission to resume or override a note.
     #[must_use]
@@ -82,7 +98,7 @@ impl std::fmt::Display for TaskPrerequisiteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::InvalidReason => "A prerequisite change needs a nonempty reason of at most 2048 bytes",
-            Self::MustBeBlocked => "Only blocked work can gain a prerequisite; record its actual block first",
+            Self::MustBeBlocked => "Only Blocked or Review work can gain a prerequisite; preserve finished work in Review",
             Self::SelfReference => "A task cannot depend on itself",
             Self::Cycle => "This prerequisite would create a dependency cycle",
             Self::Capacity => "The bounded prerequisite graph is full; remove obsolete links before adding more",
@@ -108,7 +124,7 @@ pub fn validate_task_prerequisite(
     edges: &[(TaskId, TaskId)],
 ) -> Result<(), TaskPrerequisiteError> {
     validate_prerequisite_reason(reason)?;
-    if state != TaskState::Blocked {
+    if !matches!(state, TaskState::Blocked | TaskState::Review) {
         return Err(TaskPrerequisiteError::MustBeBlocked);
     }
     if task_id == prerequisite_id {
@@ -176,7 +192,7 @@ mod tests {
         );
         assert_eq!(
             validate_task_prerequisite(a, TaskState::Review, b, "Contract", &[]),
-            Err(TaskPrerequisiteError::MustBeBlocked)
+            Ok(())
         );
         assert_eq!(
             validate_task_prerequisite(a, TaskState::Blocked, b, "  ", &[]),

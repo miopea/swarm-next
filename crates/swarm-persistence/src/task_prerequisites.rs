@@ -518,6 +518,49 @@ mod tests {
     }
 
     #[test]
+    fn review_prerequisites_preserve_review_and_gate_completion_until_satisfied() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = blocked(&store, "Verify with a shared member session");
+        store.transition_task(task, TaskState::Active).unwrap();
+        store.transition_task(task, TaskState::Review).unwrap();
+        let upstream = blocked(&store, "Provide the shared test session");
+        store
+            .add_task_prerequisite(
+                task,
+                upstream,
+                "The real browser session is needed for verification",
+                &TaskActivityActor::operator(),
+                100,
+            )
+            .unwrap();
+        let waiting = store.get_task(task).unwrap();
+        assert_eq!(waiting.state, TaskState::Review);
+        assert_eq!(
+            waiting.next_move_owner,
+            swarm_domain::NextMoveOwner::Blocked
+        );
+        for target in [TaskState::Completed, TaskState::AwaitingRelease] {
+            assert!(
+                store.transition_task(task, target).is_err(),
+                "unsatisfied verification cannot be closed or shipped"
+            );
+            assert_eq!(store.get_task(task).unwrap().state, TaskState::Review);
+        }
+        store.transition_task(upstream, TaskState::Active).unwrap();
+        store.transition_task(upstream, TaskState::Review).unwrap();
+        store
+            .transition_task(upstream, TaskState::Completed)
+            .unwrap();
+        let ready_for_review = store.get_task(task).unwrap();
+        assert_eq!(ready_for_review.state, TaskState::Review);
+        assert_eq!(
+            ready_for_review.next_move_owner,
+            swarm_domain::NextMoveOwner::Queen
+        );
+        store.transition_task(task, TaskState::Completed).unwrap();
+    }
+
+    #[test]
     fn ready_prerequisite_discovery_respects_due_dates_and_current_upstream_state() {
         let store = TaskStore::in_memory().unwrap();
         let consumer = blocked(&store, "Consumer");

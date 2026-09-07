@@ -1,5 +1,30 @@
 # Returned-review recovery checkpoint
 
+## Review prerequisites and routine completion (local validation)
+
+QUEEN-01 explicitly requires machine-verifiable routine work to settle without
+mandatory Queen approval. Both automatic paths are wired into the API coordinator:
+whole-task deployment evidence and reported documentation/no-code outcomes.
+Review is a lifecycle state, not a requirement for a Queen approval on every task.
+Missing or partial evidence still needs resolution; being idle is not completion.
+
+The local prerequisite extension preserves Review while naming its upstream wait.
+Automatic completion skips unmet prerequisites without holding unrelated work,
+rechecks prerequisites at the transition boundary, and completes eligible work
+after dependencies clear without requiring Queen. Coordinator-approved exemptions
+interrupted before completion remain eligible for recovery, with current commit
+facts re-derived rather than treating an old approval as sufficient by itself.
+
+Linux isolated validation passes all 58 task-outcome tests, including dependency
+wait/recovery on both automatic paths and interrupted exemption settlement.
+The full Linux suites pass 122 domain and 618 persistence tests. The actual
+agent-endpoint test passes for both Blocked and Review, preserving Queen-only
+dependency authority. The editor now supports Review without rewinding its state;
+104 focused queue/task UI tests and TypeScript checking pass. Strict persistence
+all-target, all-feature lint passes after correcting its findings. These changes are
+not yet deployed or accepted in the live browser. No real backlog edges
+were inferred from prose or changed manually as part of these tests.
+
 ## Deployment verification (September 7 UTC)
 
 Main `109ba917271f` is running healthy as

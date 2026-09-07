@@ -12,7 +12,8 @@ export default function TaskPrerequisiteDialog({ task, candidates, operatorToken
   onClose: () => void;
 }) {
   const id = useId();
-  const [operation, setOperation] = useState<"add" | "remove">(task.state === "blocked" ? "add" : "remove");
+  const supportsAdding = task.state === "blocked" || task.state === "review";
+  const [operation, setOperation] = useState<"add" | "remove">(supportsAdding ? "add" : "remove");
   const [query, setQuery] = useState("");
   const [target, setTarget] = useState("");
   const [reason, setReason] = useState("");
@@ -38,7 +39,7 @@ export default function TaskPrerequisiteDialog({ task, candidates, operatorToken
   const selected = choices.find((item) => item.id === target);
   if (selected && !visible.some((item) => item.id === target)) visible.unshift(selected);
   const reasonTooLong = new TextEncoder().encode(reason.trim()).length > 2048;
-  const canAdd = task.state === "blocked" && existing.length < 32;
+  const canAdd = supportsAdding && existing.length < 32;
   const valid = Boolean(selected && reason.trim() && !reasonTooLong && (operation === "remove" || canAdd));
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -73,7 +74,7 @@ export default function TaskPrerequisiteDialog({ task, candidates, operatorToken
             <option value="add" disabled={!canAdd}>Add prerequisite</option>
             <option value="remove" disabled={existing.length === 0}>Remove prerequisite</option>
           </select>
-          {!canAdd && <p>{task.state !== "blocked" ? "Only blocked tasks can gain a prerequisite. Record the actual block first; no task state is changed here." : "This task has reached its 32-prerequisite limit. Remove obsolete links first."}</p>}
+          {!canAdd && <p>{!supportsAdding ? "Only Blocked or Review tasks can gain a prerequisite. No task state is changed here." : "This task has reached its 32-prerequisite limit. Remove obsolete links first."}</p>}
           <label htmlFor={`${id}-query`}>Find task</label>
           <input id={`${id}-query`} disabled={saving} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search by title or task ID" />
           <label htmlFor={`${id}-target`}>Prerequisite task</label>

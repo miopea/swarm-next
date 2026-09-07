@@ -18,10 +18,11 @@ function choose() {
   fireEvent.change(screen.getByLabelText("Prerequisite task"), { target: { value: upstream.id } });
   fireEvent.change(screen.getByLabelText("Why change this link?"), { target: { value: "Need the agreed contract" } });
 }
-test("sends one explicit audited change and publishes the returned task", async () => {
-  const updated = { ...task, prerequisites: [edge] };
+test.each(["blocked", "review"] as const)("sends one explicit audited change for %s work and preserves its state", async (state) => {
+  const source = { ...task, state };
+  const updated = { ...source, prerequisites: [edge] };
   vi.mocked(changeTaskPrerequisite).mockResolvedValue(updated);
-  const { props } = mount();
+  const { props } = mount({ task: source });
   expect(screen.getByRole("button", { name: "Add prerequisite" })).toBeDisabled();
   choose();
   fireEvent.click(screen.getByRole("button", { name: "Add prerequisite" }));
