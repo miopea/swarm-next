@@ -1375,7 +1375,10 @@ test.each(["Fixture reload terminal", "Refresh control room"])("%s resets the se
     fireEvent.click(screen.getByRole("button", { name: action }));
     expect(reset).toHaveBeenCalledOnce();
     expect(reset).toHaveBeenCalledWith(sessionId);
-    await waitFor(() => expect(screen.getByTestId("terminal-view")).not.toBe(previous));
+    // The local reset is synchronous. Yielding here lets unrelated bootstrap
+    // reads enter the spy and incorrectly attributes them to the redraw click.
+    // Requiring replacement before any await also proves it cannot await API IO.
+    expect(screen.getByTestId("terminal-view")).not.toBe(previous);
     expect(screen.getByTestId("terminal-view")).toHaveAttribute("data-session-id", sessionId);
     if (action === "Fixture reload terminal") expect(fetch).not.toHaveBeenCalled();
     expect(fetch.mock.calls.some(([url]) => /\/(start|stop)$/.test(String(url)))).toBe(false);
