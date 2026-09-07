@@ -308,6 +308,63 @@ test("foreground renewal is bounded and stops when the view loses focus", async 
   connection.dispose();
 });
 
+test.each(["blur", "hidden", "detached"] as const)("%s releases control and returning cannot displace another device", async (inactive) => {
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  const { connection, handlers, sockets } = harness();
+  try {
+    connection.start(handlers);
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
+    const socket = sockets[0];
+    socket.open();
+    socket.message(snapshotFrame(0n, 24, 80, "screen"));
+    await vi.waitFor(() => expect(handlers.onState).toHaveBeenCalledWith("connected", undefined));
+    if (inactive === "blur") {
+      document.hasFocus = () => false;
+      window.dispatchEvent(new Event("blur"));
+    } else if (inactive === "hidden") {
+      visibility.mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+    } else {
+      connection.suspendRendering();
+    }
+    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "release", generation: "1" });
+    // The old claim may complete after release. Inactivity must still win.
+    socket.message(JSON.stringify({ type: "control", control: ownedControl }));
+    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "release", generation: "1" });
+    const backgroundCount = socket.sent.length;
+    connection.resize(40, 120);
+    expect(connection.sendInput("inactive input")).toBe(false);
+    expect(socket.sent).toHaveLength(backgroundCount);
+    // Another device acquires the session while this view is away.
+    const otherOwner = { ...ownedControl, generation: "3", owned: false };
+    socket.message(JSON.stringify({ type: "control", control: otherOwner }));
+    document.hasFocus = () => true;
+    visibility.mockReturnValue("visible");
+    if (inactive === "detached") connection.resumeRendering();
+    else window.dispatchEvent(new Event("focus"));
+    const probe = JSON.parse(socket.sent.at(-1)!);
+    expect(probe.type).toBe("probe");
+    socket.message(JSON.stringify({ type: "alive", request_id: probe.request_id }));
+    socket.message(JSON.stringify({ type: "control", control: otherOwner }));
+    expect(connection.controlView).toBe("elsewhere");
+    const passiveCount = socket.sent.length;
+    connection.resize(30, 90);
+    expect(connection.sendInput("stale input")).toBe(false);
+    expect(socket.sent).toHaveLength(passiveCount);
+    expect(socket.close).not.toHaveBeenCalled();
+    expect(sockets).toHaveLength(1);
+    expect(connection.resumeHere(30, 90)).toBe(true);
+    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "claim", observed_generation: "3", rows: 30, columns: 90 });
+    expect(connection.sendInput("unacknowledged input")).toBe(false);
+    socket.message(JSON.stringify({ type: "control", control: { ...ownedControl, generation: "4" } }));
+    expect(connection.sendInput("confirmed input")).toBe(true);
+    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "input", generation: "4", text: "confirmed input" });
+  } finally {
+    connection.dispose();
+    visibility.mockRestore();
+  }
+});
+
 test("new clients refuse a legacy grant instead of falling back to unguarded writes", async () => {
   const { connection, handlers, sockets, fetch } = harness();
   fetch.mockResolvedValue({ ok: true, json: async () => ({ protocol: "swarm-terminal.v3", grant: "old", websocket_path: "/attach" }) });
