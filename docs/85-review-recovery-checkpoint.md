@@ -1,5 +1,30 @@
 # Returned-review recovery checkpoint
 
+## Queued-briefing observation gap
+
+Recognizing D365's question did not put it into Active-task recovery: its next
+briefing was still Ready. Queen's durable roster explicitly contains no terminal
+observation. The existing Queen-only coordination-attention response now adds
+`unexplained_briefing_observations` for up to eight distinct workers without a
+recorded task-order blocker, using four concurrent two-second reads. It does not
+change task ownership or count as a recovery receipt. The response identifies
+the exact session and observation time and warns that a question may concern
+earlier work, not the queued task.
+
+Full/current snapshots may supply bounded untrusted question text, never an
+approval. Operator engagement and detected unsent input suppress excerpts.
+Wrong/ended sessions, truncation, failures and concurrent task changes stay
+unavailable. The failure/recovery scenario exposed stale queued rows after a
+task became Blocked; the held-briefing query now excludes tasks outside Ready
+and Active immediately, without waiting for a cleanup sweep.
+
+All 17 coordination-attention and Queen-only tool tests pass, as do all 26
+dispatch tests. The final tests are retained in
+`/tmp/swarm-queued-observation-final-tests.log`. The initial integration-tree run
+failed with incompatible cached support exports; the main-compatible tree was
+then validated directly. No failed run is counted as acceptance. Live Queen use
+and actual resolution remain open until deployment and observation.
+
 ## September 7: cropped provider question hidden behind a queue-order label
 
 Deployment acceptance: main `d0c29024af2c` is healthy as

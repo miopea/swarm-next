@@ -315,6 +315,7 @@ impl TaskStore {
                          AND earlier_brief.updated_at + ?2 <= ?1)
                  ORDER BY prior.position, prior.id LIMIT 1)
              WHERE td.state = 'queued' AND t.removed_at IS NULL
+               AND t.state IN ('ready', 'active')
              ORDER BY td.updated_at",
         )?;
         let rows = statement.query_map(params![now, ABANDONED_BRIEF_SECONDS], |row| {

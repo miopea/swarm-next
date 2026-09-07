@@ -737,6 +737,9 @@ impl ServerHandler for AgentMcp {
                         Ok(items) => crate::coordination_attention_evidence::observe(&self.state, self.tasks.store(), items).await,
                         Err(_) => std::collections::HashMap::new(),
                     };
+                    let unexplained_briefings = crate::coordination_attention_evidence::observe_unexplained_briefings(
+                        &self.state, self.tasks.store(),
+                    ).await;
                     // Recheck durable identity after asynchronous terminal reads.
                     // A resolved task must not reappear because observation took time.
                     initial.and_then(|_| self.tasks.store()
@@ -755,6 +758,7 @@ impl ServerHandler for AgentMcp {
                                     "next_action": "This durable review is unfinished even if provider compaction or a worker notification displaced its prompt. Reconcile current obligations under this exact run_id and finish it explicitly with swarm_finish_automation_run. Do not repeat prior side effects or start a replacement review. This observation is not proof the terminal is idle or permission to interrupt input."
                                 })),
                                 "active_work_recovery": crate::coordination_attention_evidence::active_work_recovery(&attention, &terminal_evidence),
+                                "unexplained_briefing_observations": unexplained_briefings,
                                 "queue_snapshot": {
                                     "observed_at": crate::unix_timestamp(),
                                     "open_tasks": queue.open_tasks,
@@ -5606,6 +5610,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep Queen-only authorization and the read-only response contract in one scenario"
+    )]
     async fn coordination_attention_tool_is_queen_read_only() {
         let (bridge, store, queen_id, worker_id, _) = setup();
         let draft = store
@@ -5662,6 +5670,11 @@ mod tests {
         let attention =
             response_json(handle(bridge.clone(), plain_state(), request(&queen_token)).await).await;
         assert!(attention["result"]["structuredContent"]["attention"].is_array());
+        let queued_observations =
+            &attention["result"]["structuredContent"]["unexplained_briefing_observations"];
+        assert_eq!(queued_observations["available"], true);
+        assert!(queued_observations["workers"].is_array());
+        assert_eq!(queued_observations["truncated"], false);
         let queue = &attention["result"]["structuredContent"]["queue_snapshot"];
         assert_eq!(queue["open_tasks"], 3);
         assert_eq!(queue["by_state"][0], json!({"state": "draft", "count": 1}));

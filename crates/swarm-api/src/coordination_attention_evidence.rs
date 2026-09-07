@@ -1,6 +1,8 @@
 //! On-demand terminal evidence beside historical coordinator observations.
 //! No cache, writes, replay, or task-state inference. At most 32 reads, eight
-//! concurrently, each with a two-second observation deadline.
+//! concurrently, each with a two-second observation deadline. The separate
+//! queued-briefing view adds at most eight reads, four concurrently, under the
+//! same deadline; neither view starts a background observer.
 use std::{collections::HashMap, time::Duration};
 
 use futures_util::{StreamExt, stream};
@@ -114,6 +116,91 @@ fn terminal_revision(snapshot: &swarm_terminal::TerminalSnapshot) -> String {
     digest.update([u8::from(snapshot.truncated)]);
     digest.update(&snapshot.bytes);
     format!("{:x}", digest.finalize())
+}
+
+/// Queen-only, on-demand evidence for a queued brief with no durable order
+/// blocker. This is independent of Active-task recovery and grants no input
+/// authority. At most eight unique workers, four reads concurrently, two
+/// seconds per read; no background task, retained transcript or UI polling.
+pub(super) async fn observe_unexplained_briefings(state: &AppState, store: &TaskStore) -> Value {
+    let Ok(briefings) = store.held_task_dispatches(crate::unix_timestamp()) else {
+        return json!({"available": false, "workers": [], "truncated": false});
+    };
+    let mut seen = std::collections::HashSet::new();
+    let candidates = briefings
+        .into_iter()
+        .filter(|briefing| {
+            briefing.reason == swarm_persistence::DispatchHold::AwaitingSafeDelivery
+                && seen.insert(briefing.worker_id.clone())
+        })
+        .collect::<Vec<_>>();
+    let truncated = candidates.len() > 8;
+    let workers = stream::iter(candidates.into_iter().take(8))
+        .map(|briefing| async move {
+            let worker_id = briefing.worker_id.parse().ok();
+            let profile = worker_id.and_then(|id| store.get_worker_profile(id).ok());
+            let session = profile
+                .as_ref()
+                .and_then(|profile| profile.active_session_id);
+            let observed = match (&profile, session) {
+                (Some(profile), Some(session)) if profile.engagement_expires_at.is_none() => {
+                    tokio::time::timeout(
+                        Duration::from_secs(2),
+                        observe_session_snapshot(state, session, profile.provider),
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+                }
+                _ => None,
+            };
+            // Recheck the exact task/session after the asynchronous read. A stale
+            // question must not be attached to reassigned or already-delivered work.
+            let current_profile = worker_id.and_then(|id| store.get_worker_profile(id).ok());
+            let current_task = briefing
+                .task_id
+                .parse()
+                .ok()
+                .and_then(|id| store.get_task(id).ok());
+            let current = session.is_some()
+                && current_profile.as_ref().is_some_and(|profile| {
+                    profile.active_session_id == session && profile.engagement_expires_at.is_none()
+                })
+                && current_task.as_ref().is_some_and(|task| {
+                    task.assigned_worker_id == worker_id
+                        && task.assigned_session_id == session
+                        && matches!(
+                            task.state,
+                            swarm_domain::TaskState::Ready | swarm_domain::TaskState::Active
+                        )
+                        && task.dispatch_state == Some(swarm_domain::TaskDispatchState::Queued)
+                });
+            let observed = observed.filter(|(_, snapshot)| current && !snapshot.truncated);
+            let mut result = evidence(
+                observed.as_ref().map(|(signals, _)| *signals),
+                crate::unix_timestamp(),
+            );
+            result["task_id"] = json!(briefing.task_id);
+            result["worker_id"] = json!(briefing.worker_id);
+            result["worker_name"] = json!(briefing.worker_name);
+            result["session_id"] = json!(session);
+            result["identity_current"] = json!(current);
+            if let (Some((signals, snapshot)), Some(profile)) = (&observed, &current_profile)
+                && signals.activity == ProviderActivity::AwaitingOperator
+                && !crate::provider_activity::has_open_provider_input(profile.provider, snapshot)
+            {
+                result["provider_question_excerpt"] = terminal_excerpt(profile.provider, snapshot);
+            }
+            result
+        })
+        .buffer_unordered(4)
+        .collect::<Vec<_>>()
+        .await;
+    json!({
+        "available": true, "workers": workers, "truncated": truncated,
+        "scope": "Current bounded terminal observations for queued briefings without a recorded task-order blocker. A provider question may belong to earlier work, not the queued task. No input, permission, task transition or recovery completion is implied. Missing or truncated observations are not healthy evidence.",
+        "next_action": "If a provider question holds delivery, inspect its task history and existing decisions. Do not answer it from a generic kick or assume a prior approval covers it. If operator judgment is genuinely required and no matching request exists, create one concise task-linked decision with the actual question and your recommendation. Preserve real unsent input and operator engagement. Keep uncertainty explicit when the question cannot be read."
+    })
 }
 
 /// Capture server-owned evidence immediately before finishing a Queen turn.
@@ -257,6 +344,163 @@ pub(super) fn active_work_recovery(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn queued_brief_fixture(
+        store: &TaskStore,
+        index: usize,
+    ) -> (
+        swarm_domain::WorkerId,
+        swarm_domain::WorkerSessionId,
+        swarm_domain::TaskId,
+    ) {
+        let worker = store
+            .create_worker(
+                &format!("Fixture {index}"),
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/fixture",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store
+            .create_task("Fictional queued task", "/fixture")
+            .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store.assign_task(task.id, session).unwrap();
+        (worker.id, session, task.id)
+    }
+
+    #[tokio::test]
+    async fn unexplained_briefing_observation_is_bounded_and_missing_host_is_not_healthy() {
+        let store = TaskStore::in_memory().unwrap();
+        for index in 0..10 {
+            queued_brief_fixture(&store, index);
+        }
+        let result = observe_unexplained_briefings(&AppState::default(), &store).await;
+        assert_eq!(result["truncated"], true);
+        let workers = result["workers"].as_array().unwrap();
+        assert_eq!(workers.len(), 8);
+        assert!(
+            workers
+                .iter()
+                .all(|worker| worker["activity"] == "unavailable"
+                    && worker["provider_question_excerpt"].is_null())
+        );
+    }
+
+    #[tokio::test]
+    async fn engaged_workers_are_not_read_as_unexplained_briefings() {
+        let store = TaskStore::in_memory().unwrap();
+        let (_, session, task) = queued_brief_fixture(&store, 0);
+        store
+            .renew_worker_engagement(
+                session,
+                Some(swarm_domain::PresenceDeviceId::new()),
+                crate::unix_timestamp(),
+                300,
+            )
+            .unwrap();
+        let result = observe_unexplained_briefings(&AppState::default(), &store).await;
+        assert!(result["workers"].as_array().unwrap().is_empty());
+        assert_eq!(
+            store.get_task(task).unwrap().dispatch_state,
+            Some(swarm_domain::TaskDispatchState::Queued)
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn queued_question_reads_are_fenced_read_only_and_cancel_stalled_hosts() {
+        use swarm_terminal::{HostClient, HostRequest, HostResponse, Resume, TerminalSnapshot};
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("queued.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let store = TaskStore::in_memory().unwrap();
+        let (worker_id, session, task_id) = queued_brief_fixture(&store, 0);
+        let state = AppState::default().with_terminal_host(HostClient::new(&socket), "fixture");
+        let host_store = store.clone();
+        let host = tokio::spawn(async move {
+            for index in 0..5 {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let request: HostRequest = serde_json::from_str(&line).unwrap();
+                assert!(
+                    matches!(request, HostRequest::Read { session_id, .. } if session_id == session)
+                );
+                if index == 3 {
+                    let mut byte = [0];
+                    assert_eq!(reader.read(&mut byte).await.unwrap(), 0);
+                    continue;
+                }
+                if index == 4 {
+                    host_store
+                        .transition_task(task_id, swarm_domain::TaskState::Blocked)
+                        .unwrap();
+                }
+                let response = HostResponse::Output {
+                    session_id: if index == 1 { swarm_domain::WorkerSessionId::new() } else { session },
+                    running: true,
+                    resume: Resume::Snapshot { snapshot: TerminalSnapshot {
+                        sequence: index + 1, rows: 24, columns: 80, truncated: index == 2,
+                        bytes: "2. Hold this fictional test\r\n3. Type something.\r\n4. Chat about this\r\nEnter to select · ↑/↓ to navigate · Esc to cancel".as_bytes().to_vec(),
+                    } },
+                };
+                let mut bytes = serde_json::to_vec(&response).unwrap();
+                bytes.push(b'\n');
+                reader.get_mut().write_all(&bytes).await.unwrap();
+            }
+        });
+        for index in 0..5 {
+            let result = tokio::time::timeout(
+                Duration::from_secs(4),
+                observe_unexplained_briefings(&state, &store),
+            )
+            .await
+            .unwrap();
+            let row = &result["workers"][0];
+            assert_eq!(row["session_id"], session.to_string());
+            if index == 0 {
+                assert_eq!(row["activity"], "awaiting_operator");
+                assert!(
+                    row["provider_question_excerpt"]["text"]
+                        .as_str()
+                        .unwrap()
+                        .contains("Hold this fictional test")
+                );
+                assert_eq!(
+                    store.get_task(task_id).unwrap().dispatch_state,
+                    Some(swarm_domain::TaskDispatchState::Queued)
+                );
+            } else {
+                assert_eq!(row["activity"], "unavailable");
+                assert!(row["provider_question_excerpt"].is_null());
+            }
+            if index == 4 {
+                assert_eq!(row["identity_current"], false);
+            }
+        }
+        host.await.unwrap();
+        assert!(
+            observe_unexplained_briefings(&state, &store).await["workers"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            store
+                .get_worker_profile(worker_id)
+                .unwrap()
+                .active_session_id,
+            Some(session)
+        );
+    }
 
     #[test]
     fn recovery_mapping_preserves_uncertainty_and_does_not_trust_durable_claims() {

@@ -103,6 +103,69 @@ terminal. Queen escalates an actual inability to recover with a concrete request
 
 ## Acceptance
 
+### Queued briefings without a recorded order blocker
+
+Queen's existing read-only coordination-attention tool may additionally observe
+up to eight distinct workers whose briefing is queued without a durable task-order
+blocker. Use at most four concurrent reads and a two-second deadline per read;
+these supplement, not replace, the existing maximum 32 attention observations.
+No polling, retained transcript, dispatch, task transition or new approval follows
+from opening this view. Other durable holds are not relabeled as terminal faults.
+
+Recheck worker, task and session identity after each read. Ended/wrong sessions,
+truncated snapshots, failed reads and changed assignments stay unavailable.
+Protect operator engagement. A current provider question may carry a bounded,
+explicitly untrusted rendered excerpt, excluding detected unsent composer input.
+It may belong to earlier work, so Queen must correlate history and existing
+decisions before asking for a task-linked ruling. The excerpt is neither proof
+of operator authorship nor authority to inject an answer. No new customer-facing
+or diagnostic export is authorized. This observation does not count as a recovery
+receipt or certify review coverage.
+
+### Worker execution ownership does not waive recovery accountability
+
+September 6 dogfood evidence exposed a gap in the initial implementation:
+coverage considered only tasks whose next move was Queen-owned. A worker's
+Active task could remain at a finished terminal turn while Queen called the
+fleet healthy or carried forward an informal environmental-stall note.
+
+Extend review accounting with a separate bounded recovery obligation; do not
+change the task's execution owner or move Active work through Ready. Derive
+candidates from unchanged task/session attention identities, then obtain fresh
+canonical terminal evidence. Unknown, unavailable, changed-session and partial
+observations cannot prove a healthy worker. Do not classify every Active task
+as stalled or use snapshot sequence movement alone as work progress.
+
+Account separately for these outcomes:
+
+- Current active/background execution: do not interrupt it. Observation is not
+  task completion or proof of a durable handoff.
+- Operator engagement or real unsent input: preserve the terminal. A dimmed
+  provider suggestion is neither engagement nor an operator instruction.
+- A pending guarded recovery request: retain its exact delivery identity and
+  avoid duplicate requests. This is awaiting delivery, not resumed execution.
+- A delivered request with unchanged resting work: Queen still owns verifying
+  the response and choosing recovery. Delivery alone cannot settle the concern.
+- A real dependency, recorded window, or authenticated operator decision:
+  reference the exact current source. A prior Queen note cannot manufacture it.
+- Failed recovery: retain the attempted action and concrete remaining obstacle;
+  Queen escalates only the actual missing authority or assistance, with a concise
+  task-linked decision. Low urgency is not permission to abandon the task.
+
+Persistence must fence any saved assessment to task, session and evidence
+identity, and invalidate it when those facts change. External judgments retain
+the existing fresh-check requirement. Finishing a turn must remain possible as
+incomplete; never trap the provider in repeated finish calls or auto-create an
+operator approval merely because coverage is missing. Expose recovery ownership
+separately from execution ownership in Queues, with the actual attempted action
+and next step rather than an unbounded transcript.
+
+This extension is an implementation requirement, not a claim that the current
+receipt table or corrected transcript projection already enforces it. Verify
+busy workers, real input, pending versus delivered requests, genuine waits,
+failed delivery/restart, stale assessments and unrelated running workers in an
+isolated multi-worker scenario before declaring recovery supervision complete.
+
 Prove bounds, duplicate/stale/missing receipts, valid waits without queue-clear
 claims, dependency completion, changed/withdrawn decisions, concurrent changes,
 lost responses and restart. Then use isolated demo work to show verified gates
