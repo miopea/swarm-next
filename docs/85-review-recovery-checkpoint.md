@@ -2,6 +2,23 @@
 
 ## September 7: cropped provider question hidden behind a queue-order label
 
+Deployment acceptance: main `d0c29024af2c` is healthy as
+`1.5.0-dev-d0c29024af2c-20260907080952-3930279`; reload exited zero. All 16
+captured worker/session pairs survived unchanged. The same D365 session now
+reports `awaiting_operator` rather than Unknown, and its held briefing reports
+`awaiting_safe_delivery` without an invented earlier task. Admin's genuine Active
+blocker remains named. No real task, provider answer or assignment was changed.
+This proves recognition and deployment preservation, not Queen's recovery of the
+backlog. The private support integration remains off main and no release was cut.
+
+Exact main-compatible Linux validation passes 17 terminal classifier, 26 dispatch,
+14 API observation and 45 coordination-delivery tests. The latter three suites
+are retained in `/tmp/swarm-queue-main-d0c29024-tests.log`. Strict terminal and
+persistence all-target/all-feature lint passed in the isolated integration tree.
+The initial SSH observer disconnected while tests remained alive; it was not
+treated as failure or permission to start another process. After that original
+process ended, a retained-log run supplied complete results.
+
 On live `179d2df999de`, D365 task `01a073aa-ee0e-7ab1-baa1-2a797df7efcf`
 remained Ready with a queued briefing. Service logs repeatedly recorded
 `ProviderStateUnknown`; the current 80x24 canonical snapshot showed the bottom
