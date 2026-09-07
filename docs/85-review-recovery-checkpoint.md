@@ -2,6 +2,15 @@
 
 ## Live acceptance failure: an unfinished run lost from Queen's context
 
+The full 507-test API rerun and strict API lint pass. Recovery integration
+`a053ae1139999c486503e25a066f295543422fe3` was pushed to main and the clean Linux
+clone fast-forwarded. CI 34084913920 is in progress. Normal dev reload was
+requested and its service is running as PID 3821846 at this checkpoint.
+Before reload, all 16 loaded workers retained their captured session identities;
+the live API was still 8e3d6647. Final version, engine reconciliation, worker
+continuity, CI and post-deployment behavior must still be verified. No release
+was cut, and the inactive support foundation was excluded.
+
 The downstream demo eventually completed on the **existing 8e3d6647 build**,
 not on the still-local continuation changes. Audit sequence 7507 moved Blocked
 to Ready at 1788755995; 7509 is the assigned Contract worker's pickup, and 7512
