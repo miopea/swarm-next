@@ -1,10 +1,11 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import SupportFeedbackDialog from "./SupportFeedbackDialog";
-import { fetchSupportStatus, submitSupport, type SupportStatus } from "../api/support";
+import { fetchSupportStatus, submitSupport, retrySupport, type SupportStatus } from "../api/support";
 import { loadPendingSupport } from "./supportDraft";
+import { RuntimeRequestError } from "../api/request";
 
-vi.mock("../api/support", () => ({ fetchSupportStatus: vi.fn(), submitSupport: vi.fn() }));
+vi.mock("../api/support", () => ({ fetchSupportStatus: vi.fn(), submitSupport: vi.fn(), retrySupport: vi.fn() }));
 const status: SupportStatus = { configured: true, sender: "running", deliveries: [] };
 afterEach(() => { cleanup(); sessionStorage.clear(); vi.resetAllMocks(); });
 function open() { return render(<SupportFeedbackDialog operatorToken="fixture" status={status} onClose={vi.fn()} />); }
@@ -57,4 +58,38 @@ test("failure to retain a safe retry copy prevents sending", async () => {
   await screen.findByRole("alert");
   expect(submitSupport).not.toHaveBeenCalled();
   set.mockRestore();
+});
+
+test("manual retry lost response survives reload without granting a second retry", async () => {
+  const exhausted: SupportStatus = { ...status, deliveries: [{
+    submission_key: "00000000-0000-0000-0000-000000000007", created_at: 1,
+    delivery: { state: "uncertain", attempts: 5, attempt_id: "00000000-0000-0000-0000-000000000008" },
+  }] };
+  const mount = () => render(<SupportFeedbackDialog operatorToken="fixture" status={exhausted} onClose={vi.fn()} />);
+  vi.mocked(retrySupport).mockRejectedValueOnce(new Error("lost response"));
+  const first = mount(); fireEvent.click(screen.getByText(/Delivery status ·/));
+  fireEvent.click(screen.getByRole("button", { name: "Retry once" }));
+  await screen.findByRole("alert");
+  const command = vi.mocked(retrySupport).mock.calls[0][1];
+  first.unmount(); mount();
+  expect(retrySupport).toHaveBeenCalledTimes(1);
+  vi.mocked(retrySupport).mockResolvedValueOnce({ state: "uncertain", attempts: 5, manual_retry_pending: true });
+  fireEvent.click(screen.getByText(/Delivery status ·/));
+  fireEvent.click(screen.getByRole("button", { name: "Retry once" }));
+  await screen.findByText(/One retry requested/);
+  expect(vi.mocked(retrySupport).mock.calls[1][1]).toEqual(command);
+});
+
+test("definitively stale retry clears only its command, not the saved report", async () => {
+  const exhausted: SupportStatus = { ...status, deliveries: [{
+    submission_key: "00000000-0000-0000-0000-000000000007", created_at: 1,
+    delivery: { state: "uncertain", attempts: 5, attempt_id: "00000000-0000-0000-0000-000000000008" },
+  }] };
+  vi.mocked(retrySupport).mockRejectedValue(new RuntimeRequestError(409, "changed"));
+  render(<SupportFeedbackDialog operatorToken="fixture" status={exhausted} onClose={vi.fn()} />);
+  fireEvent.click(screen.getByText(/Delivery status ·/));
+  fireEvent.click(screen.getByRole("button", { name: "Retry once" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Check delivery status");
+  expect(sessionStorage.getItem("swarm.support.retry.v1")).toBeNull();
+  expect(screen.getByText(/Delivery unconfirmed/)).toBeInTheDocument();
 });

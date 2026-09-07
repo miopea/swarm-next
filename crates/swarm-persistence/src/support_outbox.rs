@@ -41,6 +41,12 @@ pub struct SupportOutboxEntry {
 /// Content-free status, safe for the operator's delivery list.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SupportOutboxDelivery {
+    #[serde(default)]
+    pub manual_retry_id: Option<Uuid>,
+    #[serde(default)]
+    pub manual_retry_expected_attempt: Option<Uuid>,
+    #[serde(default)]
+    pub manual_retry_pending: bool,
     pub state: SupportDeliveryState,
     pub attempts: u32,
     pub attempt_id: Option<Uuid>,
@@ -69,6 +75,52 @@ pub(super) fn migrate(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Resu
 }
 
 impl TaskStore {
+    /// Grants exactly one explicit retry without resetting the automatic attempt count.
+    ///
+    /// # Errors
+    /// Refuses changed command replay, stale observations, unsafe state and changed destination.
+    pub fn request_support_retry(
+        &self,
+        request: &swarm_domain::SupportRetryRequest,
+        destination: &str,
+        now: i64,
+    ) -> Result<SupportOutboxDelivery, SupportOutboxError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut entry =
+            read(&transaction, request.submission_key)?.ok_or(SupportOutboxError::NotFound)?;
+        if request.retry_id.is_nil() || request.expected_attempt_id.is_nil() || now < 0 {
+            return Err(SupportOutboxError::InvalidTransition);
+        }
+        if entry.destination != destination {
+            return Err(SupportOutboxError::Conflict);
+        }
+        if entry.delivery.manual_retry_id == Some(request.retry_id) {
+            if entry.delivery.manual_retry_expected_attempt != Some(request.expected_attempt_id) {
+                return Err(SupportOutboxError::Conflict);
+            }
+            return Ok(entry.delivery);
+        }
+        if entry.delivery.attempt_id != Some(request.expected_attempt_id) {
+            return Err(SupportOutboxError::StaleAttempt);
+        }
+        if entry.delivery.manual_retry_pending {
+            return Err(SupportOutboxError::InvalidTransition);
+        }
+        entry
+            .delivery
+            .state
+            .begin_manual(entry.delivery.attempts)
+            .map_err(|_| SupportOutboxError::InvalidTransition)?;
+        entry.delivery.manual_retry_id = Some(request.retry_id);
+        entry.delivery.manual_retry_expected_attempt = Some(request.expected_attempt_id);
+        entry.delivery.manual_retry_pending = true;
+        entry.delivery.updated_at = now;
+        save_delivery(&transaction, request.submission_key, &entry.delivery)?;
+        transaction.commit()?;
+        Ok(entry.delivery)
+    }
+
     /// Bounded content-free operator status; never loads customer message bodies.
     ///
     /// # Errors
@@ -132,6 +184,9 @@ impl TaskStore {
             return Err(SupportOutboxError::Capacity);
         }
         let delivery = SupportOutboxDelivery {
+            manual_retry_id: None,
+            manual_retry_expected_attempt: None,
+            manual_retry_pending: false,
             state: SupportDeliveryState::Pending,
             attempts: 0,
             attempt_id: None,
@@ -207,12 +262,16 @@ impl TaskStore {
         if now < 0 {
             return Err(SupportOutboxError::InvalidTransition);
         }
-        let (state, attempts) = entry
-            .delivery
-            .state
-            .begin(entry.delivery.attempts)
-            .map_err(|_| SupportOutboxError::InvalidTransition)?;
+        let transition = if entry.delivery.manual_retry_pending {
+            entry.delivery.state.begin_manual(entry.delivery.attempts)
+        } else {
+            entry.delivery.state.begin(entry.delivery.attempts)
+        };
+        let (state, attempts) = transition.map_err(|_| SupportOutboxError::InvalidTransition)?;
         entry.delivery = SupportOutboxDelivery {
+            manual_retry_id: entry.delivery.manual_retry_id,
+            manual_retry_expected_attempt: entry.delivery.manual_retry_expected_attempt,
+            manual_retry_pending: false,
             state,
             attempts,
             attempt_id: Some(Uuid::now_v7()),
@@ -239,7 +298,9 @@ impl TaskStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let entry = read(&transaction, key)?.ok_or(SupportOutboxError::NotFound)?;
-        if entry.delivery.attempt_id != Some(attempt) {
+        if entry.delivery.attempt_id != Some(attempt)
+            || entry.delivery.state != SupportDeliveryState::Delivering
+        {
             return Err(SupportOutboxError::StaleAttempt);
         }
         let state = entry
@@ -261,6 +322,9 @@ impl TaskStore {
             }
         }
         let delivery = SupportOutboxDelivery {
+            manual_retry_id: entry.delivery.manual_retry_id,
+            manual_retry_expected_attempt: entry.delivery.manual_retry_expected_attempt,
+            manual_retry_pending: false,
             state,
             attempts: entry.delivery.attempts,
             attempt_id: Some(attempt),
@@ -294,7 +358,8 @@ impl TaskStore {
             let mut delivery: SupportOutboxDelivery = serde_json::from_str(&encoded)?;
             if delivery.state == SupportDeliveryState::Delivering {
                 delivery.state = delivery.state.interrupted();
-                delivery.attempt_id = None;
+                // Retain the last observed identity for explicit retry fencing.
+                // The non-Delivering state refuses late settlement from that attempt.
                 delivery.updated_at = now.max(delivery.updated_at);
                 transaction.execute(
                     "UPDATE hive_support_outbox SET delivery = ?2 WHERE submission_key = ?1",
@@ -424,6 +489,105 @@ mod tests {
         }
         .validate()
         .unwrap()
+    }
+
+    #[test]
+    fn explicit_retry_is_once_and_replay_cannot_reset_the_exhausted_budget() {
+        let store = TaskStore::in_memory().unwrap();
+        let key = Uuid::from_u128(1);
+        let saved = store
+            .enqueue_support_submission(&submission(1, "Frozen"), DESTINATION, 1)
+            .unwrap();
+        let mut last = None;
+        for _ in 0..swarm_domain::SUPPORT_OUTBOX_MAX_ATTEMPTS {
+            let entry = store.claim_support_submission(key, 2).unwrap();
+            last = entry.delivery.attempt_id;
+            store
+                .settle_support_submission(
+                    key,
+                    last.unwrap(),
+                    SupportDeliveryState::Uncertain,
+                    None,
+                    3,
+                )
+                .unwrap();
+        }
+        assert!(store.claim_support_submission(key, 4).is_err());
+        let request = swarm_domain::SupportRetryRequest {
+            submission_key: key,
+            retry_id: Uuid::from_u128(99),
+            expected_attempt_id: last.unwrap(),
+        };
+        store
+            .request_support_retry(&request, DESTINATION, 4)
+            .unwrap();
+        store
+            .request_support_retry(&request, DESTINATION, 5)
+            .unwrap();
+        let next = store.claim_support_submission(key, 6).unwrap();
+        assert_eq!(next.delivery.attempts, 6);
+        assert_eq!(next.frozen_submission, saved.frozen_submission);
+        store
+            .settle_support_submission(
+                key,
+                next.delivery.attempt_id.unwrap(),
+                SupportDeliveryState::Uncertain,
+                None,
+                7,
+            )
+            .unwrap();
+        let replay = store
+            .request_support_retry(&request, DESTINATION, 8)
+            .unwrap();
+        assert!(!replay.manual_retry_pending);
+        assert!(store.claim_support_submission(key, 9).is_err());
+        let mut changed = request.clone();
+        changed.expected_attempt_id = next.delivery.attempt_id.unwrap();
+        assert!(matches!(
+            store.request_support_retry(&changed, DESTINATION, 10),
+            Err(SupportOutboxError::Conflict)
+        ));
+        let mut stale = request;
+        stale.retry_id = Uuid::from_u128(100);
+        assert!(matches!(
+            store.request_support_retry(&stale, DESTINATION, 11),
+            Err(SupportOutboxError::StaleAttempt)
+        ));
+    }
+
+    #[test]
+    fn recovered_attempt_retains_retry_identity_but_late_receipt_is_refused() {
+        let store = TaskStore::in_memory().unwrap();
+        let key = Uuid::from_u128(1);
+        store
+            .enqueue_support_submission(&submission(1, "Interrupted"), DESTINATION, 1)
+            .unwrap();
+        let attempt = store
+            .claim_support_submission(key, 2)
+            .unwrap()
+            .delivery
+            .attempt_id
+            .unwrap();
+        store.recover_support_submissions(3).unwrap();
+        assert_eq!(
+            store.support_submission(key).unwrap().delivery.attempt_id,
+            Some(attempt)
+        );
+        assert!(matches!(
+            store.settle_support_submission(key, attempt, SupportDeliveryState::Failed, None, 4),
+            Err(SupportOutboxError::StaleAttempt)
+        ));
+        let request = swarm_domain::SupportRetryRequest {
+            submission_key: key,
+            retry_id: Uuid::from_u128(50),
+            expected_attempt_id: attempt,
+        };
+        assert!(
+            store
+                .request_support_retry(&request, DESTINATION, 5)
+                .unwrap()
+                .manual_retry_pending
+        );
     }
 
     #[test]

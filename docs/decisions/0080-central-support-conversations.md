@@ -118,6 +118,16 @@ customer-facing reply is invoked by schema migration or opening an outbox record
 
 ### Bounded Hive HTTP transport (September 7, not activated)
 
+Explicit operator retry is a separate command with a stable retry ID and the exact
+observed attempt ID. It grants one additional attempt, never resets automatic
+counts, and retains frozen content/destination. Replayed commands cannot replenish
+the grant after consumption; changed and stale commands refuse. Additive delivery
+JSON fields default to no manual grant for older rows. Startup recovery retains
+the last attempt identity while its non-Delivering state rejects late settlement.
+The browser retains an ambiguous command for exact replay; a definitive conflict
+clears only that command and asks for refreshed state. Neither path creates a new
+support submission. This is not permission for customer replies or unbounded retry.
+
 The transport sends only the exact frozen report to its deployment-owned endpoint.
 It refuses redirects, bounds connection establishment to five seconds and the
 whole request/response to twenty seconds, and caps receipt bytes at 16 KiB even

@@ -1,8 +1,9 @@
 import { useRef, useState } from "react";
-import { fetchSupportStatus, submitSupport, type SupportDelivery, type SupportStatus, type SupportSubmission } from "../api/support";
+import { fetchSupportStatus, submitSupport, retrySupport, type SupportDelivery, type SupportStatus, type SupportSubmission } from "../api/support";
 import { useModalFocus } from "../shared/useModalFocus";
+import { RuntimeRequestError } from "../api/request";
 import UnsavedChangesPrompt from "../shared/UnsavedChangesPrompt";
-import { clearPendingSupport, loadPendingSupport, savePendingSupport } from "./supportDraft";
+import { clearPendingSupport, loadPendingSupport, savePendingSupport, prepareSupportRetry, clearSupportRetry } from "./supportDraft";
 
 type Props = { operatorToken: string; status: SupportStatus; onClose: () => void; onSaved?: () => void };
 const labels: Record<SupportDelivery["delivery"]["state"], string> = {
@@ -66,6 +67,26 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
     finally { window.clearTimeout(deadline); inFlight.current = false; setBusy(false); }
   }
 
+  async function retryOnce(row: SupportDelivery) {
+    if (inFlight.current) return;
+    inFlight.current = true; setBusy(true); setError("");
+    const controller = new AbortController();
+    const deadline = window.setTimeout(() => controller.abort(), 15_000);
+    try {
+      const command = prepareSupportRetry(row);
+      const delivery = await retrySupport(operatorToken, command, controller.signal);
+      clearSupportRetry();
+      setStatus((old) => ({ ...old, deliveries: old.deliveries.map((item) => item.submission_key === row.submission_key
+        ? { ...item, delivery } : item) }));
+    } catch (error) {
+      if (error instanceof RuntimeRequestError && [400, 404, 409, 422].includes(error.status)) {
+        try { clearSupportRetry(); } catch { /* preserve an unreadable local command for explicit recovery */ }
+        setError("That retry was refused because delivery changed. Check delivery status before trying again.");
+      } else { setError("Retry could not be confirmed. Try this same report again to recover the original retry request."); }
+    }
+    finally { window.clearTimeout(deadline); inFlight.current = false; setBusy(false); }
+  }
+
   return <div className="feedback-backdrop" role="presentation">
     <section ref={modal} tabIndex={-1} className="feedback-dialog" role="dialog" aria-modal="true" aria-labelledby="support-heading">
       <header><div><p className="eyebrow">A note to the hive keepers</p><h2 id="support-heading">Swarm Support</h2></div>
@@ -99,7 +120,11 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
       {status.sender === "failed" && <p role="alert">Support delivery has stopped. Saved reports remain on this Hive.</p>}
       <details><summary>Delivery status · {status.deliveries.length}</summary>
         <button type="button" className="secondary-button" disabled={busy} onClick={() => void refresh()}>Check delivery status</button>
-        <ul>{status.deliveries.slice(0, 10).map((row) => <li key={row.submission_key}>{labels[row.delivery.state]} · {new Date(row.created_at * 1000).toLocaleString()}</li>)}</ul>
+        <ul>{status.deliveries.slice(0, 10).map((row) => <li key={row.submission_key}>{labels[row.delivery.state]} · {new Date(row.created_at * 1000).toLocaleString()}
+          {row.delivery.manual_retry_pending ? <span> · One retry requested</span> : status.configured && row.delivery.attempt_id
+            && (row.delivery.state === "failed" || (row.delivery.state === "uncertain" && row.delivery.attempts >= 5))
+            ? <button type="button" className="secondary-button" disabled={busy} onClick={() => void retryOnce(row)}>Retry once</button> : null}
+        </li>)}</ul>
       </details>
       {discard && <UnsavedChangesPrompt label="Discard this message?" description="This draft has not been saved or sent." discardLabel="Discard message" onDiscard={onClose} onKeep={() => setDiscard(false)} />}
     </section>

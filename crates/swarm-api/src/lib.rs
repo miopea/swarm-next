@@ -3887,6 +3887,16 @@ fn api_router(state: AppState) -> Router {
         )
         .route("/api/v1/feedback/github", get(feedback::github_readiness))
         .route(
+            "/api/v1/feedback/support/retry",
+            post(support_http::retry).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/api/v1/feedback/support",
+            get(support_http::status)
+                .post(support_http::submit)
+                .layer(DefaultBodyLimit::max(128 * 1024)),
+        )
+        .route(
             "/api/v1/integrations/github/connect",
             post(feedback::github_connect_start),
         )

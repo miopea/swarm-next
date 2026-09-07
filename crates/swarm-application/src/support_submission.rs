@@ -76,6 +76,19 @@ pub struct HiveSupportService {
 }
 
 impl HiveSupportService {
+    /// Explicit authenticated operator action, not a fresh report or renewed automatic budget.
+    ///
+    /// # Errors
+    /// Refuses stale observations and changed identities/content destinations.
+    pub fn retry_once(
+        &self,
+        request: &swarm_domain::SupportRetryRequest,
+        now: i64,
+    ) -> Result<swarm_persistence::SupportOutboxDelivery, HiveSupportServiceError> {
+        Ok(self
+            .store
+            .request_support_retry(request, self.destination.endpoint(), now)?)
+    }
     #[must_use]
     pub fn destination(&self) -> SupportDestination {
         self.destination.clone()
@@ -118,6 +131,13 @@ impl HiveSupportService {
         self.statuses()?
             .into_iter()
             .filter(|status| {
+                if status.delivery.manual_retry_pending {
+                    return status
+                        .delivery
+                        .state
+                        .begin_manual(status.delivery.attempts)
+                        .is_ok();
+                }
                 status
                     .delivery
                     .state

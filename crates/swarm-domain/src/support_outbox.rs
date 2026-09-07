@@ -5,6 +5,14 @@ pub const SUPPORT_OUTBOX_MAX_ATTEMPTS: u32 = 5;
 pub const SUPPORT_OUTBOX_MAX_ROWS: usize = 256;
 pub const SUPPORT_OUTBOX_MAX_BYTES: usize = 16 * 1024 * 1024;
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SupportRetryRequest {
+    pub submission_key: uuid::Uuid,
+    pub retry_id: uuid::Uuid,
+    pub expected_attempt_id: uuid::Uuid,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SupportDeliveryState {
@@ -24,6 +32,22 @@ pub enum SupportDeliveryTransitionError {
 }
 
 impl SupportDeliveryState {
+    /// One explicit operator retry, not a reset of the automatic budget.
+    ///
+    /// # Errors
+    /// Refuses in-flight/confirmed reports and counter overflow.
+    pub fn begin_manual(
+        self,
+        attempts: u32,
+    ) -> Result<(Self, u32), SupportDeliveryTransitionError> {
+        if !matches!(self, Self::Uncertain | Self::Failed) {
+            return Err(SupportDeliveryTransitionError::NotRetryable);
+        }
+        let attempts = attempts
+            .checked_add(1)
+            .ok_or(SupportDeliveryTransitionError::AttemptLimit)?;
+        Ok((Self::Delivering, attempts))
+    }
     /// Starts a bounded attempt using the same frozen submission identity.
     ///
     /// # Errors
@@ -65,6 +89,26 @@ impl SupportDeliveryState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manual_retry_does_not_reset_counts_or_allow_inflight_and_confirmed_work() {
+        assert_eq!(
+            SupportDeliveryState::Uncertain.begin_manual(5),
+            Ok((SupportDeliveryState::Delivering, 6))
+        );
+        assert!(
+            SupportDeliveryState::Uncertain
+                .begin_manual(u32::MAX)
+                .is_err()
+        );
+        for state in [
+            SupportDeliveryState::Pending,
+            SupportDeliveryState::Delivering,
+            SupportDeliveryState::Confirmed,
+        ] {
+            assert!(state.begin_manual(5).is_err());
+        }
+    }
 
     #[test]
     fn lost_responses_keep_retryable_uncertainty_but_attempts_are_bounded() {

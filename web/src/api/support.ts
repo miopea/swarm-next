@@ -11,9 +11,20 @@ export type SupportSubmission = {
 export type SupportDelivery = {
   submission_key: string;
   created_at: number;
-  delivery: { state: "pending" | "delivering" | "uncertain" | "failed" | "confirmed"; attempts: number };
+  delivery: { state: "pending" | "delivering" | "uncertain" | "failed" | "confirmed"; attempts: number; attempt_id?: string | null; manual_retry_pending?: boolean };
 };
 export type SupportStatus = { configured: boolean; sender: "configured" | "running" | "stopped" | "failed" | null; deliveries: SupportDelivery[] };
+export type SupportRetry = { submission_key: string; retry_id: string; expected_attempt_id: string };
+
+export async function retrySupport(token: string, command: SupportRetry, signal?: AbortSignal): Promise<SupportDelivery["delivery"]> {
+  const response = await authenticatedFetch(token, "/api/v1/feedback/support/retry", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(command), signal,
+  });
+  const result = await response.json() as { delivery?: SupportDelivery["delivery"] & { manual_retry_id: string; manual_retry_expected_attempt: string } };
+  if (result.delivery?.manual_retry_id !== command.retry_id
+    || result.delivery.manual_retry_expected_attempt !== command.expected_attempt_id) throw new Error("Retry receipt could not be confirmed");
+  return result.delivery;
+}
 
 export async function fetchSupportStatus(token: string, signal?: AbortSignal): Promise<SupportStatus> {
   const response = await authenticatedFetch(token, "/api/v1/feedback/support", { signal });
