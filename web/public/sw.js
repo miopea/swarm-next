@@ -32,15 +32,20 @@ self.addEventListener("push", (event) => {
  * which looks exactly like the handler never running.
  */
 async function trace(windows, visible, action, surface, detail) {
+  const controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(), 2000);
   try {
     await fetch("/api/v1/notifications/click-trace", {
       method: "POST",
       credentials: "same-origin",
+      signal: controller.signal,
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ windows, visible, action, surface, detail: detail || null }),
     });
   } catch {
     // Tracing must never be the reason a notification fails to open anything.
+  } finally {
+    clearTimeout(deadline);
   }
 }
 
@@ -50,10 +55,11 @@ self.addEventListener("notificationclick", (event) => {
   const surface = new URL(target).searchParams.get("surface") || "decisions";
   event.waitUntil((async () => {
     let windows = [];
+    let detail = null;
     try {
       windows = await clients.matchAll({ type: "window", includeUncontrolled: true });
     } catch (error) {
-      await trace(0, 0, "none", surface, String(error));
+      detail = String(error);
     }
     const visible = windows.filter((candidate) => candidate.visibilityState === "visible");
     const client = visible[0] || windows[0];
@@ -77,14 +83,15 @@ self.addEventListener("notificationclick", (event) => {
         return;
       } catch (error) {
         // A window that cannot be focused is no better than no window.
-        await trace(windows.length, visible.length, "open", surface, String(error));
+        detail = String(error);
       }
     }
 
     try {
       await clients.openWindow(target);
-      if (client) return;
-      await trace(windows.length, visible.length, "open", surface);
+      // Diagnostics run only after the user-facing action, never ahead of
+      // openWindow while transient notification-click activation is available.
+      await trace(windows.length, visible.length, "open", surface, detail);
     } catch (error) {
       await trace(windows.length, visible.length, "none", surface, String(error));
     }

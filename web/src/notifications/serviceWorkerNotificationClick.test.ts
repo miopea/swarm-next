@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 
 import workerSource from "../../public/sw.js?raw";
 
@@ -15,7 +15,10 @@ import workerSource from "../../public/sw.js?raw";
  * Loading the shipped file rather than a copy is the point: this broke without
  * anything failing, and a paraphrase of the handler would have kept passing.
  */
-function loadWorker(options: { focusFails?: boolean; noWindows?: boolean } = {}) {
+function loadWorker(options: {
+  focusFails?: boolean; noWindows?: boolean; matchFails?: boolean;
+  openFails?: boolean; traceHangs?: boolean;
+} = {}) {
   const listeners = new Map<string, (event: unknown) => void>();
   const posted: unknown[] = [];
   const opened: string[] = [];
@@ -47,10 +50,13 @@ function loadWorker(options: { focusFails?: boolean; noWindows?: boolean } = {})
       registration: { showNotification: () => Promise.resolve() },
     },
     clients: {
-      matchAll: () => Promise.resolve(options.noWindows ? [] : [client]),
+      matchAll: () => options.matchFails
+        ? Promise.reject(new Error("window discovery failed"))
+        : Promise.resolve(options.noWindows ? [] : [client]),
       claim: () => Promise.resolve(),
       openWindow: (url: string) => {
         opened.push(url);
+        if (options.openFails) return Promise.reject(new Error("window opening failed"));
         return Promise.resolve(null);
       },
     },
@@ -58,15 +64,50 @@ function loadWorker(options: { focusFails?: boolean; noWindows?: boolean } = {})
 
   // The handler reports what it did; the report is the subject of one test.
   const traced: { action: string; windows: number; visible: number }[] = [];
-  const fetchStub = (_url: string, init: { body: string }) => {
+  const signals: AbortSignal[] = [];
+  const fetchStub = (_url: string, init: { body: string; signal: AbortSignal }) => {
     traced.push(JSON.parse(init.body) as { action: string; windows: number; visible: number });
+    signals.push(init.signal);
+    if (options.traceHangs) return new Promise((_resolve, reject) => {
+      init.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+    });
     return Promise.resolve({ ok: true });
   };
 
   // eslint-disable-next-line no-new-func -- the shipped worker is the subject.
   new Function("self", "clients", "fetch", workerSource)(scope.self, scope.clients, fetchStub);
-  return { listeners, posted, opened, traced, order, state: () => ({ focused, navigated }) };
+  return { listeners, posted, opened, traced, signals, order, state: () => ({ focused, navigated }) };
 }
+
+test.each([
+  { focusFails: true },
+  { matchFails: true },
+  { noWindows: true },
+  { focusFails: true, openFails: true },
+])("a stalled trace cannot delay notification fallback or live forever: %j", async (options) => {
+  vi.useFakeTimers();
+  try {
+    const worker = loadWorker({ ...options, traceHangs: true });
+    let pending: Promise<unknown> = Promise.resolve();
+    worker.listeners.get("notificationclick")?.({
+      notification: { close: () => undefined, data: { url: "/?surface=decisions" } },
+      waitUntil: (work: Promise<unknown>) => { pending = work; },
+    });
+    let settled = false;
+    void pending.then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(worker.opened).toEqual(["https://swarm.example/?surface=decisions"]);
+    expect(worker.traced).toHaveLength(1);
+    expect(worker.traced[0].action).toBe("openFails" in options ? "none" : "open");
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(2000);
+    await pending;
+    expect(worker.signals[0].aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});
 
 test("a tapped notification tells the open window which surface to show", async () => {
   const worker = loadWorker();
