@@ -49,6 +49,24 @@ coverage. A capacity-exceeded or partial snapshot cannot certify a complete revi
 
 ## Bounded execution and recovery
 
+### Prompt-ended work becomes visible without an age gate
+
+An unfinished Active task or unanswered returned Review may enter Queen's
+recovery attention immediately when a fresh, complete canonical snapshot shows
+a resting prompt, known-empty input and no visible background work. Cached
+activity alone cannot establish this early path. The existing domain terminal
+safety gate is reused; this observation is not a delivery or permission to act.
+Persistence rechecks assignment, task/review revision, session, engagement and
+pending decisions, and deduplicates the same attention identity.
+
+Use the existing bounded coordinator owner: at most 32 candidates, four parallel
+reads, each with the existing two-second deadline. No extra timer or retained
+terminal transcript. The existing 30-minute path remains for reporting older
+unknown/background evidence honestly; it is not the admission gate for a freshly
+verified empty idle prompt. Queen must still obtain current evidence before any
+guarded continuation, distinguish intentional waits and assess the result.
+An early attention record never creates a Needs You request or changes task state.
+
 ### Queue age is not retry activity
 
 Persist the entry time of each briefing generation separately from retry

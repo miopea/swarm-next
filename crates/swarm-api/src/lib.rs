@@ -1802,8 +1802,10 @@ impl AppState {
     }
 
     async fn observe_stale_owned_work(&self, store: &TaskStore) {
+        use futures_util::StreamExt;
+
         let now = unix_timestamp();
-        let candidates = match store.stale_owned_work_candidates(now, STALE_OWNED_WORK_SECONDS) {
+        let candidates = match store.stale_owned_work_candidates(now, 0) {
             Ok(candidates) => candidates,
             Err(error) => {
                 tracing::warn!(message = %error, "deterministic coordinator could not inspect stale owned work");
@@ -1813,12 +1815,56 @@ impl AppState {
         if candidates.is_empty() {
             return;
         }
-        let activity = self.provider_activity.read().await;
-        for candidate in candidates {
-            let signals = activity.get(&candidate.session_id);
-            if worker_is_mid_turn(signals.map(|signals| signals.activity).as_ref()) {
-                continue;
-            }
+        // Do not hold the shared activity lock across canonical terminal reads.
+        // Persistence bounds this batch to 32 and deduplicates exact identities.
+        let activity = self.provider_activity.read().await.clone();
+        let observations = futures_util::stream::iter(candidates)
+            .map(|candidate| {
+                let signals = activity.get(&candidate.session_id).copied();
+                async move {
+                    if worker_is_mid_turn(signals.map(|signals| signals.activity).as_ref()) {
+                        return None;
+                    }
+                    if candidate.age_seconds < STALE_OWNED_WORK_SECONDS {
+                        // Reuse the supervisor's hint to avoid another snapshot
+                        // read for every young busy, unknown or background task.
+                        // The hint only selects reads; it never proves safety.
+                        if !matches!(
+                            signals,
+                            Some(provider_activity::ProviderSignals {
+                                activity: ProviderActivity::Resting,
+                                background_work: false,
+                            })
+                        ) {
+                            return None;
+                        }
+                        // A recent unfinished task need not sit invisible for 30
+                        // minutes. Early attention requires a fresh complete,
+                        // empty resting prompt, not a cached Resting label.
+                        // This only asks Queen to assess; it sends no input.
+                        let observation = coordination_delivery::observe_review_continuation(
+                            self,
+                            store,
+                            candidate.session_id,
+                        )
+                        .await?;
+                        if !observation.permits_continuation() {
+                            return None;
+                        }
+                        return Some((candidate, 0, BackgroundWorkReading::NoneVisible));
+                    }
+                    Some((
+                        candidate,
+                        STALE_OWNED_WORK_SECONDS,
+                        candidate_background_work(signals.as_ref()),
+                    ))
+                }
+            })
+            .buffer_unordered(4)
+            .filter_map(async |observation| observation)
+            .collect::<Vec<_>>()
+            .await;
+        for (candidate, minimum_age, background_work) in observations {
             // A resting prompt with a build still running reads exactly like a
             // resting prompt with nothing running, because the classifier lets
             // the prompt outrank the shell -- deliberately, since the turn HAS
@@ -1827,11 +1873,10 @@ impl AppState {
             //
             // Absent from the map means no evidence either way, and it now says
             // so rather than defaulting to a negative it never measured.
-            let background_work = candidate_background_work(signals);
             match store.record_stale_owned_work_attention(
                 &candidate,
                 now,
-                STALE_OWNED_WORK_SECONDS,
+                minimum_age,
                 background_work,
             ) {
                 Ok(true) => self.control_room_notify.notify_waiters(),

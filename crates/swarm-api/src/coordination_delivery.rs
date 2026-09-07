@@ -1690,6 +1690,141 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep the terminal refusal and concurrent-state matrix with its read-only host fixture"
+    )]
+    async fn recent_idle_worker_attention_requires_fresh_safe_evidence_and_current_task() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        for scenario in [
+            "idle",
+            "busy",
+            "input",
+            "unknown",
+            "ended",
+            "wrong_session",
+            "truncated",
+            "engaged",
+            "changed",
+            "background",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let socket = directory.path().join("host.sock");
+            let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+            let store = TaskStore::in_memory().unwrap();
+            let worker = store
+                .create_worker(
+                    "Demo",
+                    ProviderKind::ClaudeCode,
+                    "/workspace/demo",
+                    false,
+                    1,
+                )
+                .unwrap();
+            let session = WorkerSessionId::new();
+            store.bind_worker_session(worker.id, session).unwrap();
+            let task = store
+                .create_task("Unfinished demo", "/workspace/demo")
+                .unwrap();
+            store
+                .transition_task(task.id, swarm_domain::TaskState::Ready)
+                .unwrap();
+            store.assign_task(task.id, session).unwrap();
+            store
+                .transition_task(task.id, swarm_domain::TaskState::Active)
+                .unwrap();
+            let now = unix_timestamp();
+            assert!(
+                store
+                    .stale_owned_work_candidates(now, 1800)
+                    .unwrap()
+                    .is_empty()
+            );
+            let mut state = AppState::default().with_task_store(store.clone());
+            state.terminal_host = Some(HostClient::new(socket));
+            // A cached resting label is insufficient for every refused scenario.
+            state.provider_activity.write().await.insert(
+                session,
+                provider_activity::ProviderSignals {
+                    activity: ProviderActivity::Resting,
+                    background_work: false,
+                },
+            );
+            let concurrent_store = store.clone();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                assert!(
+                    matches!(serde_json::from_str::<HostRequest>(&line).unwrap(), HostRequest::Read { session_id, .. } if session_id == session)
+                );
+                let text = match scenario {
+                    "busy" => "✻ Thinking… (esc to interrupt)\r\n❯ ",
+                    "input" => "● Done.\r\n❯ operator draft\r\n  ? for shortcuts",
+                    "unknown" => "unclassified screen",
+                    "background" => {
+                        "● Done.\r\n❯ \r\n  ? for shortcuts                              2 shells still running"
+                    }
+                    _ => "● Done.\r\n❯ \r\n  ? for shortcuts",
+                };
+                let mut response = prompt_observation(
+                    if scenario == "wrong_session" {
+                        WorkerSessionId::new()
+                    } else {
+                        session
+                    },
+                    text,
+                    scenario != "ended",
+                );
+                if scenario == "truncated"
+                    && let HostResponse::Output {
+                        resume: swarm_terminal::Resume::Snapshot { snapshot },
+                        ..
+                    } = &mut response
+                {
+                    snapshot.truncated = true;
+                }
+                if scenario == "engaged" {
+                    concurrent_store
+                        .renew_worker_engagement(session, None, now, 60)
+                        .unwrap();
+                }
+                if scenario == "changed" {
+                    concurrent_store
+                        .transition_task(task.id, swarm_domain::TaskState::Review)
+                        .unwrap();
+                }
+                let mut bytes = serde_json::to_vec(&response).unwrap();
+                bytes.push(b'\n');
+                reader.get_mut().write_all(&bytes).await.unwrap();
+            });
+            state.observe_stale_owned_work(&store).await;
+            server.await.unwrap();
+            let attention = store
+                .current_coordinator_attention(unix_timestamp())
+                .unwrap();
+            assert_eq!(
+                attention.iter().any(|item| item.task_id == task.id),
+                scenario == "idle",
+                "{scenario}: {attention:?}"
+            );
+            if scenario == "idle" {
+                // Same evidence cannot create another read, input or attention.
+                state.observe_stale_owned_work(&store).await;
+                assert_eq!(
+                    store
+                        .current_coordinator_attention(unix_timestamp())
+                        .unwrap()
+                        .len(),
+                    attention.len()
+                );
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn idle_review_adapter_requires_current_safe_terminal_before_requeue() {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         for scenario in [
