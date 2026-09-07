@@ -308,7 +308,8 @@ pub(super) fn task_review_evidence(
     // must invalidate a receipt even if the pending count remains the same.
     hash_rows(
         connection,
-        "SELECT * FROM decision_requests WHERE task_id = ?1 ORDER BY id LIMIT 257",
+        "SELECT * FROM decision_requests WHERE id IN
+         (SELECT decision_id FROM task_decision_membership WHERE task_id=?1) ORDER BY id LIMIT 257",
         task_id,
         &mut digest,
     )?;

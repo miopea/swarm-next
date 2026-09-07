@@ -8401,6 +8401,17 @@ fn email_attachment_error(error: email_attachments::EmailAttachmentError) -> Api
 #[allow(clippy::too_many_lines)]
 fn task_store_error(error: &TaskStoreError) -> ApiError {
     match error {
+        TaskStoreError::TaskDecisionLink(reason) => ApiError::new(
+            if *reason == swarm_domain::TaskDecisionLinkError::Unauthorized {
+                StatusCode::FORBIDDEN
+            } else if *reason == swarm_domain::TaskDecisionLinkError::InvalidReason {
+                StatusCode::UNPROCESSABLE_ENTITY
+            } else {
+                StatusCode::CONFLICT
+            },
+            "task_decision_link_refused",
+            reason.to_string(),
+        ),
         TaskStoreError::TaskPrerequisite(reason) => ApiError::new(
             if *reason == swarm_domain::TaskPrerequisiteError::Unauthorized {
                 StatusCode::FORBIDDEN

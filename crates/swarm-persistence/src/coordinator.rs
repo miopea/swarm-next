@@ -276,7 +276,8 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
                    OR (action.kind = 'stale_owned_work_attention'
                        AND task.assigned_worker_id = action.worker_id
                        AND NOT EXISTS (SELECT 1 FROM decision_requests decision
-                           WHERE decision.task_id = task.id AND decision.state = 'pending')
+                           WHERE decision.id IN (SELECT decision_id FROM task_decision_membership WHERE task_id=task.id)
+                             AND decision.state = 'pending')
                        AND (task.state = 'active' OR (task.state = 'review' AND EXISTS (
                            SELECT 1 FROM task_returned_reviews review
                            WHERE review.task_id = task.id AND review.answered_at IS NULL
@@ -1457,7 +1458,8 @@ impl TaskStore {
                -- already waiting on them.
                AND NOT EXISTS (
                    SELECT 1 FROM decision_requests decision
-                   WHERE decision.task_id = task.id AND decision.state = 'pending'
+                   WHERE decision.id IN (SELECT decision_id FROM task_decision_membership WHERE task_id=task.id)
+                     AND decision.state = 'pending'
                )
              ORDER BY MAX(task.updated_at, COALESCE(acted.acted_at, 0)),
                       task.id LIMIT ?3"
@@ -1550,7 +1552,8 @@ impl TaskStore {
                    AND session.session_id = ?4 AND task.updated_at + ?5 <= ?6
                    AND NOT EXISTS (
                        SELECT 1 FROM decision_requests decision
-                       WHERE decision.task_id = task.id AND decision.state = 'pending'
+                       WHERE decision.id IN (SELECT decision_id FROM task_decision_membership WHERE task_id=task.id)
+                         AND decision.state = 'pending'
                    )
                    AND NOT EXISTS (
                        SELECT 1 FROM worker_engagements engagement

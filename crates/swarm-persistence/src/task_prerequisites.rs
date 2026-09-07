@@ -134,7 +134,8 @@ impl TaskStore {
                  LEFT JOIN tasks upstream ON upstream.id = p.prerequisite_id
                  WHERE p.task_id = t.id AND (upstream.id IS NULL
                      OR upstream.removed_at IS NOT NULL OR upstream.state != 'completed'))
-             AND NOT EXISTS(SELECT 1 FROM decision_requests d WHERE d.task_id = t.id AND d.state = 'pending')
+             AND NOT EXISTS(SELECT 1 FROM decision_requests d WHERE d.id IN
+                 (SELECT decision_id FROM task_decision_membership WHERE task_id=t.id) AND d.state = 'pending')
              ORDER BY t.position, t.id LIMIT 65",
             Self::TASK_PROJECTION,
         );

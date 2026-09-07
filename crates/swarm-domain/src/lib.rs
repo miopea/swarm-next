@@ -18,6 +18,7 @@ mod release;
 mod support;
 mod support_conversations;
 mod task_block;
+mod task_decision_links;
 mod task_prerequisites;
 mod tasks;
 mod terminal_control;
@@ -40,6 +41,7 @@ pub use release::*;
 pub use support::*;
 pub use support_conversations::*;
 pub use task_block::*;
+pub use task_decision_links::*;
 pub use task_prerequisites::*;
 pub use tasks::*;
 pub use terminal_control::*;
@@ -673,6 +675,9 @@ pub struct DecisionRequest {
     pub hive_id: HiveId,
     pub requesting_worker_id: WorkerId,
     pub task_id: Option<TaskId>,
+    /// Additional explicit blockers, never additional command authorization.
+    #[serde(default)]
+    pub linked_tasks: Vec<TaskDecisionLink>,
     pub kind: DecisionRequestKind,
     pub urgency: DecisionUrgency,
     pub title: String,

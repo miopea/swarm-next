@@ -390,6 +390,14 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                 <details className="decision-argument">
                   <summary>Why, and what it rests on</summary>
                   {decision.task_id && <dl className="decision-context"><div><dt>Task</dt><dd>{onOpenTask ? <button type="button" className="decision-task-link" onClick={() => onOpenTask(decision.task_id!)}>{taskNames.get(decision.task_id) ?? "Linked task"}</button> : taskNames.get(decision.task_id) ?? "Linked task"}</dd></div></dl>}
+                  {!!decision.linked_tasks?.length && <div>
+                    <p className="eyebrow">Also waiting on this answer</p>
+                    <ul>{decision.linked_tasks.map((link) => <li key={link.task_id}>
+                      {onOpenTask ? <button type="button" className="decision-task-link" onClick={() => onOpenTask(link.task_id)}>{taskNames.get(link.task_id) ?? "Linked task"}</button> : taskNames.get(link.task_id) ?? "Linked task"}
+                      {" · "}{link.reason}
+                    </li>)}</ul>
+                    <p>This does not extend command approval to these tasks.</p>
+                  </div>}
                   <DecisionReason reason={decision.reason} />
                   {decision.evidence && <div><p className="eyebrow">Evidence</p><LongText text={decision.evidence} label="the evidence" /></div>}
                 </details>

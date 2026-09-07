@@ -1199,9 +1199,21 @@ const DECISION_COLUMNS: &str =
                                AND x.description LIKE '%' || substr(d.id, 1, 13) || '%')
                              THEN 'unknown'
                          ELSE 'outstanding' END,
-                     d.withdrawn_at, d.withdrawn_by_worker_id, d.withdrawal_reason";
+                     d.withdrawn_at, d.withdrawn_by_worker_id, d.withdrawal_reason,
+                     (SELECT json_group_array(json_object(
+                         'task_id', task_id, 'decision_id', decision_id,
+                         'reason', reason, 'created_at', created_at))
+                      FROM (SELECT task_id, decision_id, reason, created_at
+                            FROM task_decision_links WHERE decision_id=d.id
+                            ORDER BY task_id LIMIT 33))";
 
 fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionRequest> {
+    let linked_tasks: Vec<swarm_domain::TaskDecisionLink> =
+        serde_json::from_str(&row.get::<_, String>(30)?)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    if linked_tasks.len() > swarm_domain::MAX_DECISION_TASK_LINKS {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
     let actions =
         serde_json::from_str::<Vec<String>>(&row.get::<_, String>(11)?).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
@@ -1211,6 +1223,7 @@ fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionReques
             )
         })?;
     Ok(DecisionRequest {
+        linked_tasks,
         id: parse_id(&row.get::<_, String>(0)?)?,
         hive_id: parse_id(&row.get::<_, String>(1)?)?,
         requesting_worker_id: parse_id(&row.get::<_, String>(2)?)?,
@@ -1955,7 +1968,10 @@ mod tests {
             // already-migrated compatibility guard.
             transaction
                 .execute_batch(
-                    "ALTER TABLE decision_requests DROP COLUMN withdrawn_at;
+                    "DROP VIEW task_decision_membership;
+                DROP TABLE task_decision_links;
+                DROP INDEX decision_requests_by_task_identity;
+                ALTER TABLE decision_requests DROP COLUMN withdrawn_at;
                 ALTER TABLE decision_requests DROP COLUMN withdrawn_by_worker_id;
                 ALTER TABLE decision_requests DROP COLUMN withdrawal_reason;",
                 )
@@ -2001,6 +2017,12 @@ mod tests {
             assert_eq!(broken, 0);
             let retained: i64 = connection.query_row("SELECT COUNT(*) FROM sqlite_master WHERE tbl_name = 'decision_requests' AND type = 'index' AND sql IS NOT NULL", [], |row| row.get(0)).unwrap();
             assert_eq!(retained, i64::try_from(indexes.len()).unwrap());
+            // The fixture removed post-v136 objects before rebuilding the old
+            // table. Restore the current membership schema only after proving
+            // withdrawal preserved the actual old requests and indexes.
+            let transaction = connection.transaction().unwrap();
+            crate::task_decision_links::migrate(&transaction).unwrap();
+            transaction.commit().unwrap();
         }
         assert_eq!(store.get_decision_request(pending.id).unwrap(), pending);
         assert_eq!(store.get_decision_request(resolved.id).unwrap(), resolved);

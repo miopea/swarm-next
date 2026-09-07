@@ -455,7 +455,8 @@ fn refresh_durable_facts(
     let decision: Option<String> = connection
         .query_row(
             "SELECT id FROM decision_requests
-        WHERE task_id=?1 AND state='pending' ORDER BY id LIMIT 1",
+        WHERE id IN (SELECT decision_id FROM task_decision_membership WHERE task_id=?1)
+          AND state='pending' ORDER BY id LIMIT 1",
             [facts.identity.task_id.to_string()],
             |row| row.get(0),
         )

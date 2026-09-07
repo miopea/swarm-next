@@ -1032,6 +1032,8 @@ export type DecisionRequest = {
   hive_id: string;
   requesting_worker_id: string;
   task_id: string | null;
+  /** Shared blockers, not additional command authorization. */
+  linked_tasks?: { task_id: string; decision_id: string; reason: string; created_at: number }[];
   kind: "input" | "approval" | "credentials" | "conflict" | "help";
   urgency: "normal" | "time_sensitive";
   title: string;

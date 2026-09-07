@@ -27,6 +27,7 @@ mod database_integrity;
 mod queen_recovery;
 mod queen_review;
 mod task_block;
+mod task_decision_links;
 mod task_prerequisites;
 pub use coordinator::{
     AUTOMATIC_WAKE_BATCH_LIMIT, AssignedReadyWorkNotStartedCandidate, BackgroundWorkReading,
@@ -255,7 +256,9 @@ const QUEEN_REVIEW_RECEIPTS_SCHEMA_VERSION: i64 = 142;
 // 143 is reserved for the inactive support integration and is not shipped here.
 const QUEEN_RECOVERY_RECEIPTS_SCHEMA_VERSION: i64 = 144;
 const TASK_QUEUE_AGE_SCHEMA_VERSION: i64 = 146;
-const CURRENT_SCHEMA_VERSION: i64 = TASK_QUEUE_AGE_SCHEMA_VERSION;
+// 147 remains reserved for inactive support; shared blockers ship independently.
+const TASK_DECISION_LINKS_SCHEMA_VERSION: i64 = 148;
+const CURRENT_SCHEMA_VERSION: i64 = TASK_DECISION_LINKS_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -468,6 +471,8 @@ pub enum TaskStoreError {
     InvalidTaskActivityNote,
     #[error(transparent)]
     TaskPrerequisite(#[from] swarm_domain::TaskPrerequisiteError),
+    #[error(transparent)]
+    TaskDecisionLink(#[from] swarm_domain::TaskDecisionLinkError),
     #[error("completed work requires concise verification evidence")]
     CompletionEvidenceRequired,
     #[error(
@@ -1854,7 +1859,8 @@ impl TaskStore {
                    -- Queen's. Read from the decision rather than stored beside
                    -- it, so it unsets itself the moment they answer.
                    EXISTS(SELECT 1 FROM decision_requests dr
-                          WHERE dr.task_id = t.id AND dr.state = 'pending'),
+                          WHERE dr.id IN (SELECT decision_id FROM task_decision_membership WHERE task_id=t.id)
+                            AND dr.state = 'pending'),
                    review_message.id, review_message.body,
                    CASE WHEN t.state = 'blocked' THEN
                      coalesce((SELECT assessment.reason FROM task_block_reassessments assessment
@@ -3913,6 +3919,9 @@ fn migrate_ops_intake_schema_steps(
         queen_recovery::migrate(transaction)?;
     }
     task_dispatches::migrate_queue_age(transaction, schema_version)?;
+    if schema_version < TASK_DECISION_LINKS_SCHEMA_VERSION {
+        task_decision_links::migrate(transaction)?;
+    }
     Ok(())
 }
 
@@ -9091,6 +9100,12 @@ mod tests {
             artifact: "queue_entered_at",
             undo_sql: "DROP TRIGGER task_dispatch_queue_entered; DROP TRIGGER task_dispatch_queue_rearmed; ALTER TABLE task_dispatches DROP COLUMN queue_entered_at; ALTER TABLE task_dispatches DROP COLUMN queue_age_lower_bound",
             probe_sql: "SELECT (SELECT count(*) FROM pragma_table_info('task_dispatches') WHERE name IN ('queue_entered_at','queue_age_lower_bound')) = 2 AND (SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name IN ('task_dispatch_queue_entered','task_dispatch_queue_rearmed')) = 2",
+        },
+        SchemaStep {
+            table: "task_decision_links",
+            artifact: "",
+            undo_sql: "DROP VIEW task_decision_membership; DROP TABLE task_decision_links; DROP INDEX decision_requests_by_task_identity",
+            probe_sql: "SELECT (SELECT count(*) FROM sqlite_master WHERE type='view' AND name='task_decision_membership')=1 AND (SELECT count(*) FROM sqlite_master WHERE type='table' AND name='task_decision_links')=1",
         },
     ];
 

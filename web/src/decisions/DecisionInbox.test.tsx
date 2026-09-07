@@ -80,6 +80,18 @@ test("answers precede supporting evidence while risk remains ahead of the action
   expect(evidence.closest("details")).not.toHaveAttribute("open");
 });
 
+test("one shared decision lists its other tasks without duplicating the answer or permission", () => {
+  const open = vi.fn();
+  const shared = { id: "task-2", title: "Verify the fictional mobile flow" } as Task;
+  render(<DecisionInbox decisions={[{ ...pending, linked_tasks: [{ task_id: shared.id, decision_id: pending.id, reason: "Needs the same session", created_at: 10 }] }]} tasks={[task, shared]} workers={[worker]} busy={false} onResolve={vi.fn()} onOpenTask={open} />);
+  fireEvent.click(screen.getByText("Why, and what it rests on"));
+  expect(screen.getByText("Also waiting on this answer")).toBeInTheDocument();
+  expect(screen.getByText("This does not extend command approval to these tasks.")).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "Durable path" })).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: shared.title }));
+  expect(open).toHaveBeenCalledWith(shared.id);
+});
+
 test("long recommendations expand without changing the custom answer", () => {
   const recommendation = "Choose the durable route after verifying the migration. ".repeat(20).trim();
   render(<DecisionInbox decisions={[{ ...pending, suggested_action: recommendation }]} tasks={[]} workers={[worker]} busy={false} onResolve={vi.fn()} />);

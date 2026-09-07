@@ -159,6 +159,8 @@ pub enum DispatchHold {
     ExperimentalDuringNightWatch,
     /// An explicitly recorded prerequisite has not completed.
     PrerequisiteUnresolved,
+    /// A pending original or explicitly shared operator decision gates this task.
+    OperatorDecisionPending,
     /// Somebody is using that terminal. Delivering would type into their work.
     OperatorInTheTerminal,
     /// The worker is already on something. Two briefs at once is two tasks.
@@ -328,7 +330,9 @@ impl TaskStore {
                     w.provider,
                     EXISTS(SELECT 1 FROM task_prerequisites p LEFT JOIN tasks upstream ON upstream.id = p.prerequisite_id
                            WHERE p.task_id = t.id AND (upstream.id IS NULL OR upstream.removed_at IS NOT NULL OR upstream.state != 'completed')),
-                    active.id, earlier.id, td.queue_age_lower_bound
+                    active.id, earlier.id, td.queue_age_lower_bound,
+                    EXISTS(SELECT 1 FROM decision_requests d WHERE d.state='pending'
+                           AND d.id IN (SELECT decision_id FROM task_decision_membership WHERE task_id=t.id))
              FROM task_dispatches td
              JOIN tasks t ON t.id = td.task_id
              JOIN worker_profiles w ON w.id = td.worker_id
@@ -356,7 +360,9 @@ impl TaskStore {
         let rows = statement.query_map(params![now, ABANDONED_BRIEF_SECONDS], |row| {
             let engaged: bool = row.get(5)?;
             let active_title: Option<String> = row.get(6)?;
-            let reason = if row.get::<_, bool>(9)? {
+            let reason = if row.get::<_, bool>(13)? {
+                DispatchHold::OperatorDecisionPending
+            } else if row.get::<_, bool>(9)? {
                 DispatchHold::PrerequisiteUnresolved
             } else if night_watch
                 && !swarm_domain::ProviderKind::from_stored(&row.get::<_, String>(8)?)
@@ -676,6 +682,10 @@ fn deliverable_briefings(
              -- sitting at a blank prompt.
              WHERE td.state = 'queued' AND t.removed_at IS NULL
                AND t.state IN ('ready', 'active')
+               AND NOT EXISTS (
+                   SELECT 1 FROM decision_requests d WHERE d.state='pending'
+                     AND d.id IN (SELECT decision_id FROM task_decision_membership WHERE task_id=t.id)
+               )
                AND NOT EXISTS (
                    SELECT 1 FROM task_prerequisites p LEFT JOIN tasks upstream ON upstream.id = p.prerequisite_id
                    WHERE p.task_id = t.id AND (upstream.id IS NULL OR upstream.removed_at IS NOT NULL OR upstream.state != 'completed')
@@ -1366,6 +1376,69 @@ mod tests {
                 .is_empty(),
             "starting the work is not a reason to repeat its briefing"
         );
+    }
+
+    #[test]
+    fn original_and_shared_decisions_hold_delivery_until_the_gate_clears() {
+        for shared in [false, true] {
+            let (store, task, _) = assigned_task();
+            let queen = store.ensure_queen("/workspace/queen").unwrap();
+            let primary = if shared {
+                store
+                    .create_task("Fictional original question", "/workspace/queen")
+                    .unwrap()
+                    .id
+            } else {
+                task
+            };
+            let gate = swarm_domain::DecisionRequestId::new();
+            let hive = store.get_task(task).unwrap().hive_id;
+            store.connection().unwrap().execute(
+                "INSERT INTO decision_requests(id,hive_id,requesting_worker_id,task_id,kind,urgency,title,
+                 reason,risk,evidence,suggested_action,allowed_actions)
+                 VALUES (?1,?2,?3,?4,'input','normal','Fictional session gate','Need a session','','','','[]')",
+                params![gate.to_string(), hive.to_string(),
+                    queen.id.to_string(), primary.to_string()],
+            ).unwrap();
+            if shared {
+                let revision = store
+                    .queen_task_review_evidence(task)
+                    .unwrap()
+                    .evidence_revision;
+                store
+                    .add_task_decision_link(
+                        task,
+                        gate,
+                        "Needs the same session",
+                        &revision,
+                        &swarm_domain::TaskActivityActor::operator(),
+                        100,
+                    )
+                    .unwrap();
+            }
+            assert!(
+                store
+                    .claim_task_dispatches(101, &HashSet::new())
+                    .unwrap()
+                    .is_empty()
+            );
+            let held = store.held_task_dispatches(101).unwrap();
+            assert_eq!(held[0].reason, DispatchHold::OperatorDecisionPending);
+            assert_eq!(
+                store.get_task(task).unwrap().state,
+                swarm_domain::TaskState::Ready
+            );
+            store
+                .withdraw_decision_request(gate, queen.id, "Fictional session no longer required")
+                .unwrap();
+            let claims = store.claim_task_dispatches(102, &HashSet::new()).unwrap();
+            assert_eq!(claims.len(), 1);
+            assert_eq!(claims[0].task_id, task);
+            assert!(
+                claims[0].operator_rulings.is_empty(),
+                "a blocker is not command permission"
+            );
+        }
     }
 
     fn assigned_task() -> (TaskStore, TaskId, WorkerSessionId) {

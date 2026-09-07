@@ -68,6 +68,12 @@ test("explains experimental Night Watch holds instead of blaming earlier work", 
   expect(screen.queryByText(/behind earlier work/)).not.toBeInTheDocument();
 });
 
+test("names the pending decision hold without blaming worker inactivity", () => {
+  render(<HeldBriefingList briefings={[briefing({ reason: "operator_decision_pending", blocked_by: null })]} />);
+  expect(screen.getByText(/waiting for your answer in Needs You/)).toBeVisible();
+  expect(screen.queryByText(/the worker is on something else/)).not.toBeInTheDocument();
+});
+
 test("does not invent earlier work when an older API names no blocker", () => {
   render(<HeldBriefingList briefings={[briefing({ blocked_by: null })]} />);
   expect(screen.getByText(/awaiting safe delivery; no earlier task is recorded/)).toBeInTheDocument();

@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 21;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 22;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -401,9 +401,9 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 21;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 21. Update this and the revision together.
+/// The served surface as of revision 22. Update this and the revision together.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "2b93ead10150d0bd8d893cbfef97ea6c01361d1e5f2b800efafc94b63cf42b6d";
+    "b2ba50ebe0d6a231d17d19037ae22dc947962436e1516f78b4511fbe8bfa8625";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -611,6 +611,7 @@ impl ServerHandler for AgentMcp {
                 reconcile_task_message_tool(),
                 assign_task_tool(),
                 task_prerequisite_tool(),
+                task_decision_link_tool(),
                 reassess_task_block_tool(),
                 read_queen_review_evidence_tool(),
                 record_queen_review_disposition_tool(),
@@ -665,6 +666,7 @@ impl ServerHandler for AgentMcp {
                 "swarm_create_task"
                 | "swarm_assign_task"
                 | "swarm_set_task_prerequisite"
+                | "swarm_set_task_decision_link"
                 | "swarm_reassess_task_block"
                 | "swarm_record_review_disposition"
                 | "swarm_record_recovery_assessment"
@@ -839,6 +841,9 @@ impl ServerHandler for AgentMcp {
             }),
             "swarm_set_task_prerequisite" => parse::<swarm_domain::TaskPrerequisiteChange>(arguments)
                 .and_then(|input| self.tasks.change_task_prerequisite(self.principal, &input, crate::unix_timestamp()))
+                .and_then(structured),
+            "swarm_set_task_decision_link" => parse::<swarm_domain::TaskDecisionLinkChange>(arguments)
+                .and_then(|input| self.tasks.change_task_decision_link(self.principal, &input, crate::unix_timestamp()))
                 .and_then(structured),
             "swarm_reassess_task_block" => parse::<swarm_domain::TaskBlockReassessment>(arguments)
                 .and_then(|input| self.tasks.reassess_task_block(self.principal, &input, crate::unix_timestamp()))
@@ -3424,6 +3429,21 @@ fn task_prerequisite_tool() -> Tool {
     )
 }
 
+fn task_decision_link_tool() -> Tool {
+    tool(
+        "swarm_set_task_decision_link",
+        "Queen only: explicitly link another unfinished local task to an existing pending operator decision, or remove an additional link. Read swarm_read_review_evidence for this task immediately before changing links and pass its evidence_revision. Use this when one operator answer genuinely gates several tasks; do not duplicate the question or leave the dependency only in prose. The link changes blocker ownership, not task lifecycle, assignment, command permission or delivery destination. An answer is delivered only through the original decision. Clearing a link never automatically resumes or completes work; reassess and use normal guarded transitions. Never infer shared authorization. Exact replay is safe; stale evidence requires rereading. At most 32 additional links per decision or task and 4096 per Hive.",
+        &json!({"type":"object", "properties": {
+            "task_id":{"type":"string","format":"uuid"},
+            "decision_id":{"type":"string","format":"uuid"},
+            "operation":{"type":"string","enum":["add","remove"]},
+            "reason":{"type":"string","minLength":1,"maxLength":2048},
+            "expected_evidence_revision":{"type":"string","minLength":1}
+        }, "required":["task_id","decision_id","operation","reason","expected_evidence_revision"],"additionalProperties":false}),
+        false,
+    )
+}
+
 fn reassess_task_block_tool() -> Tool {
     tool(
         "swarm_reassess_task_block",
@@ -4107,6 +4127,7 @@ mod tests {
         "swarm_assign_task",
         "swarm_list_jira_projects",
         "swarm_set_task_prerequisite",
+        "swarm_set_task_decision_link",
         "swarm_reassess_task_block",
         "swarm_read_review_evidence",
         "swarm_record_review_disposition",
@@ -4182,6 +4203,89 @@ mod tests {
                 .to_string(),
             ))
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn shared_decision_tool_is_queen_only_and_fences_stale_changes() {
+        let (bridge, store, queen_id, worker_id, _directory) = setup();
+        let task = store
+            .create_task("Fictional shared consumer", "/workspace/petal")
+            .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Blocked)
+            .unwrap();
+        let actions = vec!["Provide the fictional session".to_owned()];
+        let gate = store
+            .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                requesting_worker_id: queen_id,
+                task_id: None,
+                kind: swarm_domain::DecisionRequestKind::Input,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "Fictional shared session",
+                summary: "One answer gates several checks",
+                reason: "The fictional checks need a session",
+                risk: "",
+                evidence: "Fixture only",
+                suggested_action: "Provide the fictional session",
+                allowed_actions: &actions,
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+            })
+            .unwrap();
+        let revision = store
+            .queen_task_review_evidence(task.id)
+            .unwrap()
+            .evidence_revision;
+        for (caller, operation, expected_revision, expected_links) in [
+            (worker_id, "add", revision.as_str(), 0),
+            (queen_id, "add", "stale", 0),
+            (queen_id, "add", revision.as_str(), 1),
+            (queen_id, "add", revision.as_str(), 1),
+            (queen_id, "remove", revision.as_str(), 1),
+        ] {
+            let token = bearer_from_path(&bridge.ensure_worker_config(caller).unwrap());
+            let response = response_json(handle(bridge.clone(), plain_state(), mcp_request(
+                Some(&token), "tools/call", &json!({
+                    "name": "swarm_set_task_decision_link", "arguments": {
+                        "task_id": task.id, "decision_id": gate.id, "operation": operation,
+                        "reason": "Needs the same session", "expected_evidence_revision": expected_revision
+                    }
+                }),
+            )).await).await;
+            assert_eq!(
+                store.task_decision_links(task.id).unwrap().len(),
+                expected_links,
+                "{response}"
+            );
+            assert_eq!(
+                store.get_task(task.id).unwrap().state,
+                swarm_domain::TaskState::Blocked
+            );
+            assert_eq!(store.get_decision_request(gate.id).unwrap().task_id, None);
+        }
+        let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let current = store
+            .queen_task_review_evidence(task.id)
+            .unwrap()
+            .evidence_revision;
+        let response = response_json(handle(bridge, plain_state(), mcp_request(Some(&token), "tools/call", &json!({
+            "name": "swarm_set_task_decision_link", "arguments": {
+                "task_id": task.id, "decision_id": gate.id, "operation": "remove",
+                "reason": "Verified this check no longer needs it", "expected_evidence_revision": current
+            }
+        }))).await).await;
+        assert!(
+            store.task_decision_links(task.id).unwrap().is_empty(),
+            "{response}"
+        );
+        assert_eq!(
+            store.get_decision_request(gate.id).unwrap().state,
+            swarm_domain::DecisionRequestState::Pending
+        );
     }
 
     #[tokio::test]

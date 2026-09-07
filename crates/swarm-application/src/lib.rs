@@ -1965,6 +1965,65 @@ impl TaskService {
         self.store.get_task(change.task_id).map_err(Into::into)
     }
 
+    /// Queen records explicit shared operator gates without sharing permissions.
+    ///
+    /// # Errors
+    /// Refuses ordinary workers, stale evidence and invalid blocker links.
+    pub fn change_task_decision_link(
+        &self,
+        principal: AgentPrincipal,
+        change: &swarm_domain::TaskDecisionLinkChange,
+        now: i64,
+    ) -> Result<Task, ApplicationError> {
+        require_queen(principal)?;
+        self.apply_decision_link_change(
+            &TaskActivityActor::worker(principal.worker_id),
+            change,
+            now,
+        )
+    }
+
+    /// Apply an authenticated operator's explicit shared decision blocker change.
+    ///
+    /// # Errors
+    /// Refuses stale evidence and invalid blocker links atomically.
+    pub fn change_operator_task_decision_link(
+        &self,
+        change: &swarm_domain::TaskDecisionLinkChange,
+        now: i64,
+    ) -> Result<Task, ApplicationError> {
+        self.apply_decision_link_change(&TaskActivityActor::operator(), change, now)
+    }
+
+    fn apply_decision_link_change(
+        &self,
+        actor: &TaskActivityActor,
+        change: &swarm_domain::TaskDecisionLinkChange,
+        now: i64,
+    ) -> Result<Task, ApplicationError> {
+        match change.operation {
+            swarm_domain::TaskDecisionLinkOperation::Add => self.store.add_task_decision_link(
+                change.task_id,
+                change.decision_id,
+                &change.reason,
+                &change.expected_evidence_revision,
+                actor,
+                now,
+            )?,
+            swarm_domain::TaskDecisionLinkOperation::Remove => {
+                self.store.remove_task_decision_link(
+                    change.task_id,
+                    change.decision_id,
+                    &change.reason,
+                    &change.expected_evidence_revision,
+                    actor,
+                    now,
+                )?;
+            }
+        }
+        self.store.get_task(change.task_id).map_err(Into::into)
+    }
+
     /// Settled work, which the board fetches once rather than on every poll.
     ///
     /// # Errors
