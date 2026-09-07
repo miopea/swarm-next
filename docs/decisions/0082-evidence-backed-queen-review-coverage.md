@@ -266,6 +266,20 @@ receipt or certify review coverage.
 
 ### Worker execution ownership does not waive recovery accountability
 
+September 7 follow-up: a required operator action is not an external-condition
+wait. Live Admin/Member Services recovery repeatedly named operator-seeded
+sessions without creating pending requests. Queen must create/reuse the exact
+task-linked Needs You assistance request and link other genuinely affected tasks;
+use the existing `await_operator` disposition with its pending decision identity.
+An authenticated, applicable operator deferral remains a deliberate wait, not a
+reason to ask again. Mention in a terminal, presence or Queen memory does not
+establish delivery or deferral. Never bypass authentication to avoid escalation.
+This guidance travels in each bounded review delivery as well as the standing
+Queen instructions, so existing sessions receive it without a provider restart.
+There is no prose classifier, automatic decision creation, schema change or new
+authority. Tests prove delivery of the instruction, not model compliance; live
+task-linked assistance and normal resumption remain acceptance requirements.
+
 September 6 dogfood evidence exposed a gap in the initial implementation:
 coverage considered only tasks whose next move was Queen-owned. A worker's
 Active task could remain at a finished terminal turn while Queen called the

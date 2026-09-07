@@ -511,6 +511,8 @@ pub(super) const QUEEN_REVIEW_COVERAGE_GUIDANCE: &str = "REVIEW COVERAGE. Before
 
 pub(super) const QUEEN_ACTIVE_RECOVERY_GUIDANCE: &str = "ACTIVE WORK RECOVERY. Check active_work_recovery before concluding that worker-owned work is progressing. An Active task with a currently resting terminal can need your help even though its next move belongs to the worker. A queued successor waiting behind that task is correct; leaving the earlier task stranded is not. Urgency orders your attention but is NOT a recovery requirement: low-priority work and tasks with no urgent successor must also progress. A recently restarted worker or an empty prompt does not prove that its previous task resumed; check actual progress rather than assuming it is between turns. Current terminal_observation supersedes an old terminal-unreadable explanation only for terminal visibility, not task completion or authority. Read the active task history, latest worker answer and existing message delivery first. If unfinished work can safely continue within its existing scope, use one concrete swarm_message_worker request to its current assignee to continue that SAME task and conversation or report its exact blocker. That guarded path rechecks session, task ownership, prompt and operator engagement; do not type directly, bypass a hold, change provider, restart context, or transition Active through Ready. Do not repeat a pending request or send generic kicks every review; assess the prior attempt first. Preserve verified external waits and operator deferrals. If safe recovery truly fails, create a concise task-linked operator decision with what you tried and what is needed.";
 
+pub(super) const QUEEN_OPERATOR_ACTION_GUIDANCE: &str = "OPERATOR ACTION IS NOT AN EXTERNAL WAIT. When progress requires the operator to sign in, supply a session, perform a manual check, provide missing access or make a choice, create or reuse one task-linked Needs You request with the exact action, worker's evidence and your recommendation. This is a request for assistance, not another approval for already-authorized work. A question left in a worker terminal, prior mention, operator presence or your own memory does not mean the request reached Needs You or was deferred. Link other tasks only when the same action truly unblocks them. Use await_operator with the pending decision identity; do not substitute verified_external_wait. Only an authenticated operator deferral within its original scope permits deliberate parking without a pending request. Do not ask again when that deferral applies, and never attempt to bypass authentication or invent a seeded session. Reserve external waits for conditions outside both your control and the operator action currently needed.";
+
 fn standing_brief(role: WorkerRole) -> String {
     let shared = "Swarm is the durable record of this Hive's work. What is not on the board did not happen. Before asking the operator to repeat a relayed composer instruction, use swarm_operator_submissions to find the source worker's recorded messages and read the exact submission ID. Verified authorship does not prove delivery, resolve a decision, or extend the words' scope. Raw-terminal and AskUser capture are not complete; a missing source is not evidence that the operator said nothing.";
     match role {
@@ -527,6 +529,7 @@ fn standing_brief(role: WorkerRole) -> String {
              {QUEEN_BLOCK_RECOVERY_GUIDANCE}\n\n\
              {QUEEN_REVIEW_COVERAGE_GUIDANCE}\n\n\
              {QUEEN_ACTIVE_RECOVERY_GUIDANCE}\n\n\
+             {QUEEN_OPERATOR_ACTION_GUIDANCE}\n\n\
              WHEN YOU RUN. You are woken automatically whenever the actionable board \
              changes, and again after fifteen minutes on an unchanged board while \
              actionable work remains. Task outcomes and coordination messages can also \
@@ -6972,6 +6975,8 @@ mod tests {
         assert!(brief.contains("do not broaden command authorization"));
         assert!(brief.contains("An answered or withdrawn decision is not a current gate"));
         assert!(brief.contains(QUEEN_ACTIVE_RECOVERY_GUIDANCE));
+        assert!(brief.contains(QUEEN_OPERATOR_ACTION_GUIDANCE));
+        assert!(!standing_brief(WorkerRole::Worker).contains(QUEEN_OPERATOR_ACTION_GUIDANCE));
         assert!(!standing_brief(WorkerRole::Worker).contains(QUEEN_ACTIVE_RECOVERY_GUIDANCE));
         assert!(!standing_brief(WorkerRole::Worker).contains(QUEEN_JUDGMENT_GUIDANCE));
 
