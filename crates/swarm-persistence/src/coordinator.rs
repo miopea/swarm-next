@@ -275,6 +275,8 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
                            )))
                    OR (action.kind = 'stale_owned_work_attention'
                        AND task.assigned_worker_id = action.worker_id
+                       AND NOT EXISTS (SELECT 1 FROM decision_requests decision
+                           WHERE decision.task_id = task.id AND decision.state = 'pending')
                        AND (task.state = 'active' OR (task.state = 'review' AND EXISTS (
                            SELECT 1 FROM task_returned_reviews review
                            WHERE review.task_id = task.id AND review.answered_at IS NULL
@@ -4760,6 +4762,16 @@ mod tests {
             .unwrap()
             .pop()
             .unwrap();
+        assert!(
+            store
+                .record_stale_owned_work_attention(
+                    &candidate,
+                    now,
+                    600,
+                    BackgroundWorkReading::NoneVisible
+                )
+                .unwrap()
+        );
         store
             .create_decision_request(&NewDecisionRequest {
                 requesting_worker_id: worker,
@@ -4783,6 +4795,14 @@ mod tests {
                 .stale_owned_work_candidates(now, 600)
                 .unwrap()
                 .is_empty()
+        );
+        assert!(
+            !store
+                .current_coordinator_attention(now)
+                .unwrap()
+                .iter()
+                .any(|row| row.task_id == task && row.kind == "stale_owned_work_attention"),
+            "an existing idle observation must yield to the new operator decision"
         );
         assert!(
             !store
