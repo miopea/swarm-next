@@ -1,5 +1,16 @@
 # Returned-review recovery checkpoint
 
+## Deployment verification (September 7 UTC)
+
+Main `109ba917271f` is running healthy as
+`1.5.0-dev-109ba917271f-20260907001509-3572626`. The worker engine is unchanged.
+All 16 pre-deployment worker/session pairs survived exactly; 17 workers were
+loaded at the follow-up, with Scout and Platform reporting Active. Member
+Services and D365 remained Resting. This proves deployment preservation, not
+successful fleet recovery. The queue grouping and returned-review detector are
+now deployed; authenticated Edge visual acceptance and live recovery remain
+open. The older checkpoint below records pre-deployment validation history.
+
 Development Hive health verifies `0023ef4f4be4`, with the worker-engine build
 unchanged. This corrects the contradictory delivery envelope, not the full
 orchestration recovery loop.
