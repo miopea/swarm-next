@@ -5,6 +5,7 @@ use std::{collections::HashMap, time::Duration};
 
 use futures_util::{StreamExt, stream};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use swarm_persistence::{CoordinatorAttention, TaskStore};
 use swarm_terminal::ProviderActivity;
 
@@ -80,11 +81,86 @@ pub(super) async fn observe(
                 Ok(None) => json!({"observation":"none_recorded"}),
                 Err(_) => json!({"observation":"unavailable"}),
             };
+            match store.queen_recovery_identity(&item.action_id) {
+                Ok(Some(mut identity)) if identity.task_id == item.task_id
+                    && identity.worker_id == item.worker_id
+                    && identity.session_id == item.session_id => {
+                    if let Some((_, snapshot)) = &signals && !snapshot.truncated {
+                        identity.terminal_revision = Some(terminal_revision(snapshot));
+                    }
+                    observation["recovery_identity"] = json!(identity);
+                    observation["recovery_identity_status"] = json!("current");
+                }
+                Ok(_) => {
+                    observation["recovery_identity_status"] = json!("changed");
+                }
+                Err(_) => {
+                    observation["recovery_identity_status"] = json!("unavailable");
+                }
+            }
             (item.action_id.clone(), observation)
         })
         .buffer_unordered(8)
         .collect()
         .await
+}
+
+fn terminal_revision(snapshot: &swarm_terminal::TerminalSnapshot) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"swarm-recovery-terminal-v1");
+    digest.update(snapshot.sequence.to_be_bytes());
+    digest.update(snapshot.rows.to_be_bytes());
+    digest.update(snapshot.columns.to_be_bytes());
+    digest.update([u8::from(snapshot.truncated)]);
+    digest.update(&snapshot.bytes);
+    format!("{:x}", digest.finalize())
+}
+
+/// Capture server-owned evidence immediately before finishing a Queen turn.
+/// Persistence independently enumerates all current obligations, so any rows
+/// outside this bounded observation window remain uncovered rather than healthy.
+pub(super) async fn recovery_facts(
+    state: &AppState,
+    store: &TaskStore,
+) -> (Vec<swarm_domain::QueenRecoveryFacts>, bool) {
+    let Ok(attention) = store.current_coordinator_attention(crate::unix_timestamp()) else {
+        return (Vec::new(), false);
+    };
+    let observations = observe(state, store, &attention).await;
+    (
+        observations.values().filter_map(recovery_fact).collect(),
+        true,
+    )
+}
+
+// Only accepts the output of our own observation adapter, never tool arguments.
+fn recovery_fact(observation: &Value) -> Option<swarm_domain::QueenRecoveryFacts> {
+    use swarm_domain::{QueenRecoveryFacts, QueenRecoveryIdentity, RecoveryTerminalActivity};
+    if observation["recovery_identity_status"] != "current" {
+        return None;
+    }
+    let identity: QueenRecoveryIdentity =
+        serde_json::from_value(observation["recovery_identity"].clone()).ok()?;
+    let activity = match observation["activity"].as_str() {
+        Some("active") => RecoveryTerminalActivity::Working,
+        Some("resting") if observation["background_work_visible"] == true => {
+            RecoveryTerminalActivity::Working
+        }
+        Some("resting") => RecoveryTerminalActivity::Resting,
+        Some("awaiting_operator") => RecoveryTerminalActivity::AwaitingOperator,
+        _ => RecoveryTerminalActivity::Unknown,
+    };
+    Some(QueenRecoveryFacts {
+        terminal_is_current: identity.terminal_revision.is_some(),
+        identity,
+        activity,
+        unsent_input: observation["prompt_has_unsent_input"].as_bool(),
+        // These durable facts are refreshed inside the persistence transaction.
+        operator_engaged: false,
+        pending_message_id: None,
+        pending_decision_id: None,
+        verified_external_wait: false,
+    })
 }
 
 fn evidence(signals: Option<ProviderSignals>, checked_at: i64) -> Value {
@@ -161,6 +237,8 @@ pub(super) fn active_work_recovery(
             "worker_id": item.worker_id,
             "worker_name": item.worker_name,
             "session_id": item.session_id,
+            "recovery_identity": observation["recovery_identity"],
+            "recovery_identity_status": observation["recovery_identity_status"],
             "checked_at": observation["checked_at"],
             "latest_queen_request": observation["latest_queen_request"],
             "resting_terminal_excerpt": observation["resting_terminal_excerpt"],
@@ -179,6 +257,86 @@ pub(super) fn active_work_recovery(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_mapping_preserves_uncertainty_and_does_not_trust_durable_claims() {
+        let mut observation = json!({
+            "recovery_identity_status": "current",
+            "recovery_identity": {
+                "task_id": swarm_domain::TaskId::new(),
+                "worker_id": swarm_domain::WorkerId::new(),
+                "session_id": swarm_domain::WorkerSessionId::new(),
+                "attention_id": "test-attention",
+                "evidence_revision": "a".repeat(64),
+                "terminal_revision": null
+            },
+            "activity": "unavailable",
+            "prompt_has_unsent_input": null,
+            "operator_engaged": true,
+            "verified_external_wait": true,
+            "pending_message_id": "invented"
+        });
+        let facts = recovery_fact(&observation).unwrap();
+        assert!(!facts.terminal_is_current);
+        assert_eq!(
+            facts.activity,
+            swarm_domain::RecoveryTerminalActivity::Unknown
+        );
+        assert_eq!(facts.unsent_input, None);
+        assert!(!facts.operator_engaged);
+        assert!(!facts.verified_external_wait);
+        assert!(facts.pending_message_id.is_none());
+
+        observation["recovery_identity"]["terminal_revision"] = json!("b".repeat(64));
+        observation["activity"] = json!("resting");
+        observation["background_work_visible"] = json!(true);
+        let facts = recovery_fact(&observation).unwrap();
+        assert!(facts.terminal_is_current);
+        assert_eq!(
+            facts.activity,
+            swarm_domain::RecoveryTerminalActivity::Working
+        );
+        observation["background_work_visible"] = json!(false);
+        assert_eq!(
+            recovery_fact(&observation).unwrap().activity,
+            swarm_domain::RecoveryTerminalActivity::Resting
+        );
+        observation["activity"] = json!("awaiting_operator");
+        assert_eq!(
+            recovery_fact(&observation).unwrap().activity,
+            swarm_domain::RecoveryTerminalActivity::AwaitingOperator
+        );
+        observation["recovery_identity_status"] = json!("changed");
+        assert!(recovery_fact(&observation).is_none());
+        observation["recovery_identity_status"] = json!("unavailable");
+        assert!(recovery_fact(&observation).is_none());
+    }
+
+    #[test]
+    fn terminal_recovery_identity_changes_with_output_geometry_and_truncation() {
+        let original = swarm_terminal::TerminalSnapshot {
+            sequence: 1,
+            rows: 24,
+            columns: 80,
+            truncated: false,
+            bytes: b"Working".to_vec(),
+        };
+        let revision = terminal_revision(&original);
+        assert_eq!(revision, terminal_revision(&original));
+        assert_eq!(revision.len(), 64);
+        let mut changed = original.clone();
+        changed.bytes = b"Done".to_vec();
+        assert_ne!(revision, terminal_revision(&changed));
+        changed = original.clone();
+        changed.sequence += 1;
+        assert_ne!(revision, terminal_revision(&changed));
+        changed = original.clone();
+        changed.columns += 1;
+        assert_ne!(revision, terminal_revision(&changed));
+        changed = original;
+        changed.truncated = true;
+        assert_ne!(revision, terminal_revision(&changed));
+    }
 
     #[test]
     fn recovery_excerpt_excludes_operator_engagement_and_unsent_input() {

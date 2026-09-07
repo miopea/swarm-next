@@ -3932,6 +3932,17 @@ mod tests {
                 .unwrap()
         );
         let attention = store.current_coordinator_attention(now).unwrap();
+        let recovery_identity = store
+            .queen_recovery_identity(
+                &attention
+                    .iter()
+                    .find(|row| row.task_id == task && row.kind == "stale_owned_work_attention")
+                    .unwrap()
+                    .action_id,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovery_identity.task_id, task);
         assert!(
             attention
                 .iter()
@@ -3958,6 +3969,12 @@ mod tests {
                 )
                 .unwrap(),
             "same-second replacement fences the old candidate"
+        );
+        assert!(
+            store
+                .queen_recovery_identity(&recovery_identity.attention_id)
+                .unwrap()
+                .is_none()
         );
         assert!(
             !store

@@ -46,6 +46,24 @@ coverage. A capacity-exceeded or partial snapshot cannot certify a complete revi
 
 ## Bounded execution and recovery
 
+Recovery receipts have their own bounded persistence record, separate from task
+review dispositions. One record per task retains the exact attention, worker,
+session, task-evidence revision and optional canonical-terminal revision, plus
+the review run and concise checked source. Retired-task receipts may be pruned;
+their task activity remains the audit history. Replays must revalidate current
+evidence and cannot duplicate that history. External-wait claims require an
+explicit authenticated assessment with a concise condition, checked evidence
+and source. They remain Queen judgments, not machine proof or operator approval.
+The receipt must match the current run as well as task, session and terminal
+evidence; another run requires another actual check.
+
+The local recovery migration uses version 144. Version 143 belongs to an inactive,
+not-deployed support-outbox foundation; it must not be activated as a side effect
+of recovery delivery. When that integration is delivered to a Hive already at
+144, its migration must use a later version rather than relying on the old 143
+comparison. Swarm's integration owner is responsible for that renumbering before
+support-outbox activation; the recovery feature does not send support messages.
+
 At most 256 obligations and receipts participate in one coverage evaluation;
 detail responses are paged/bounded separately. Duplicate or stale receipts do not
 cover another obligation. Updates and run completion must recheck the evidence

@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 20;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 21;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -401,9 +401,9 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 20;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 20. Update this and the revision together.
+/// The served surface as of revision 21. Update this and the revision together.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "66f78f869a19cc51ffca6a92182f0ffffb117b8791df7cc6358e8ddf931eaddf";
+    "2b93ead10150d0bd8d893cbfef97ea6c01361d1e5f2b800efafc94b63cf42b6d";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -631,6 +631,7 @@ impl ServerHandler for AgentMcp {
                 sync_jira_project_tool(),
                 refresh_jira_project_tool(),
                 finish_automation_run_tool(),
+                record_queen_recovery_tool(),
                 message_worker_tool(),
                 return_reviewed_work_tool(),
             ]);
@@ -666,6 +667,7 @@ impl ServerHandler for AgentMcp {
                 | "swarm_set_task_prerequisite"
                 | "swarm_reassess_task_block"
                 | "swarm_record_review_disposition"
+                | "swarm_record_recovery_assessment"
                 | "swarm_transition_task"
                 | "swarm_reconcile_task_message" => QueenActionClass::Coordinate,
                 "swarm_create_apiary_task"
@@ -838,6 +840,30 @@ impl ServerHandler for AgentMcp {
             "swarm_record_review_disposition" => parse::<swarm_domain::QueenReviewDispositionInput>(arguments)
                 .and_then(|input| self.tasks.record_queen_review_disposition(self.principal, &input, crate::unix_timestamp()))
                 .and_then(structured),
+            "swarm_record_recovery_assessment" => {
+                if self.principal.role == WorkerRole::Queen {
+                    let input = parse::<swarm_domain::QueenRecoveryRecord>(arguments);
+                    let (observations, complete) = if input.is_ok() {
+                        crate::coordination_attention_evidence::recovery_facts(
+                            &self.state, self.tasks.store(),
+                        ).await
+                    } else { (Vec::new(), false) };
+                    input.and_then(|input| {
+                        let observed = observations.iter().find(|facts|
+                            complete && facts.identity.attention_id == input.identity.attention_id
+                        ).ok_or_else(|| ApplicationError::Store(TaskStoreError::IntegrityFailure(
+                            "Recovery observation unavailable or changed; read current coordination attention. No assessment was saved.".into()
+                        )))?;
+                        let identity = self.tasks.record_queen_recovery(
+                            self.principal, &input, observed, crate::unix_timestamp(),
+                        )?;
+                        structured(json!({"identity":identity,
+                            "scope":"Recovery assessment only; does not complete, resume, reassign or authorize work. Finish rechecks current evidence."}))
+                    })
+                } else {
+                    Err(ApplicationError::NotAuthorized)
+                }
+            }
             "swarm_assign_task" => parse::<AssignTaskInput>(arguments).and_then(|input| {
                 let task_id = TaskId::from_str(&input.task_id)
                     .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
@@ -1089,17 +1115,30 @@ impl ServerHandler for AgentMcp {
                 })
             }
             "swarm_finish_automation_run" => {
-                parse::<FinishAutomationRunInput>(arguments).and_then(|input| {
+                let input = parse::<FinishAutomationRunInput>(arguments);
+                let (recovery_observations, observations_complete) =
+                    if self.principal.role == WorkerRole::Queen
+                        && input.as_ref().is_ok_and(|input| input.outcome != swarm_domain::QueenAutomationOutcome::Incomplete)
+                    {
+                        crate::coordination_attention_evidence::recovery_facts(
+                            &self.state, self.tasks.store(),
+                        ).await
+                    } else {
+                        (Vec::new(), false)
+                    };
+                input.and_then(|input| {
                     if self.principal.role != WorkerRole::Queen {
                         return Err(ApplicationError::NotAuthorized);
                     }
                     let finish = self
                         .tasks
                         .store()
-                        .finish_queen_automation_run(
+                        .finish_queen_automation_run_with_recovery(
                             &input.run_id,
                             input.outcome,
                             crate::unix_timestamp(),
+                            &recovery_observations,
+                            observations_complete,
                         )
                         .map_err(ApplicationError::Store)?;
                     // Say which of the reasons it was. The old text claimed no
@@ -1143,7 +1182,7 @@ impl ServerHandler for AgentMcp {
                         })).collect::<Vec<_>>(),
                         "remaining_queen_tasks_truncated": queen_owned_count > 16,
                         "next_action": if recorded_outcome == swarm_domain::QueenAutomationOutcome::Incomplete {
-                            "This review was not covered. On your next review, route actionable work using lifecycle tools. For genuine remaining waits, read swarm_read_review_evidence and record a checked swarm_record_review_disposition with real source references. Do not manufacture an operator deferral or repeat finish calls. Escalate a concrete recovery failure only when you cannot resolve it."
+                            "This review or worker recovery was not covered. On your next review, route actionable work using lifecycle tools and inspect current coordination attention. For Queen-owned waits, use swarm_read_review_evidence and swarm_record_review_disposition. For worker recovery waits, use the current recovery_identity with swarm_record_recovery_assessment and freshly checked evidence/source. Working and guarded pending delivery are checked automatically; do not add Queen approvals. Do not manufacture operator deferrals or repeat finish calls. Escalate a concrete recovery failure only when you cannot resolve it."
                         } else if queen_owned_count > 0 {
                             "Your turn ended, but recorded work still requires Queen. Reconcile verified prose dependencies to explicit prerequisite links; record true holds or task-linked operator decisions, and safely route recoverable work. Unchanged does not mean handled. Read current task history before claiming a watched task is still Ready."
                         } else {
@@ -2049,9 +2088,9 @@ impl AgentMcp {
 
     /// Records that a task has nothing to deploy, with the argument for why.
     ///
-    /// This does not close the task. It is a claim Queen approves, because a
-    /// worker deciding its own work needs no evidence cannot also be the one
-    /// who accepts that decision.
+    /// This records a claim, not completion. The coordinator settles supported
+    /// documentation/no-code evidence automatically; Queen handles claims that
+    /// require judgment. Neither path treats the claim alone as verification.
     fn record_no_deployment(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
         let input = parse::<RecordNoDeploymentInput>(arguments)?;
         let task_id = self.task_evidence_may_reach(&input.task_id)?;
@@ -2540,7 +2579,7 @@ fn review_evidence_next_step(
         // supersedes a claim. Harmless when the claim is fresh; the difference
         // between evidence and no evidence when it is stale.
         CompletionEvidence::ExemptionClaimed => Some(
-            "A claim that this task had nothing to deploy is on file, and Queen approves that before the task can complete. If anything has shipped since that claim was written, record it with swarm_record_deployment — a deployment supersedes the claim. A claim that was true when it was made can be stale by the time a task comes back to Review.",
+            "A no-deployment claim is on file. The coordinator automatically settles supported documentation/no-code completion evidence once prerequisites are satisfied; Queen handles exceptions requiring judgment, not every claim. If anything has shipped since that claim was written, record it with swarm_record_deployment — a deployment supersedes the claim. A claim that was true when it was made can be stale by the time a task comes back to Review.",
         ),
         CompletionEvidence::Deployed | CompletionEvidence::ExemptionApproved => None,
     }
@@ -3259,7 +3298,7 @@ fn reconcile_task_message_tool() -> Tool {
 fn finish_automation_run_tool() -> Tool {
     tool(
         "swarm_finish_automation_run",
-        "Queen only: end the exact review turn. Completed/no_action require current evidence for every Queen-owned task: route actionable work, record verified dependencies/decisions with lifecycle tools, or record a checked wait using swarm_read_review_evidence and swarm_record_review_disposition. Missing coverage is recorded as incomplete, not success. Use incomplete if you cannot finish; this leaves recovery with Queen and does not create an operator approval. This does not authorize external side effects.",
+        "Queen only: end the exact review turn. Completed/no_action require coverage for Queen-owned tasks AND current worker recovery obligations. Route actionable work and record structural dependencies/decisions. For Queen-owned waits use swarm_read_review_evidence and swarm_record_review_disposition; for worker recovery waits use the current recovery_identity with swarm_record_recovery_assessment. The server freshly checks working/input/delivery evidence without an approval round trip. Missing coverage records incomplete, not success. Use incomplete if you cannot finish; do not repeatedly retry or invent an operator approval. This does not complete tasks or authorize external side effects.",
         &json!({
             "type": "object",
             "properties": {
@@ -3316,6 +3355,33 @@ fn record_queen_review_disposition_tool() -> Tool {
             "operator_activity_sequence":{"type":["integer","null"],"minimum":1},
             "operator_decision_id":{"type":["string","null"],"format":"uuid"}
         },"required":["task_id","run_id","expected_revision","kind","condition","evidence","source"],"additionalProperties":false}),
+        false,
+    )
+}
+
+fn record_queen_recovery_tool() -> Tool {
+    tool(
+        "swarm_record_recovery_assessment",
+        "Queen only: record an assessment using the exact recovery_identity from current coordination attention. The server rereads evidence and refuses stale identities. Working, protected input and pending delivery are also checked automatically at finish; do not add approval rounds. Delivery is not execution. For verified_external_wait, reason names the condition, checked_evidence states what you freshly checked, and source identifies where. This is your explicit judgment for this run, not machine proof, operator approval or permission to resume. Use actual prerequisite/decision/window records instead where applicable; never hide actionable routing work as an external wait.",
+        &json!({"type":"object","properties":{
+            "run_id":{"type":"string","format":"uuid"},
+            "identity":{"type":"object","properties":{
+                "task_id":{"type":"string","format":"uuid"},
+                "worker_id":{"type":"string","format":"uuid"},
+                "session_id":{"type":"string","format":"uuid"},
+                "attention_id":{"type":"string","minLength":1,"maxLength":128},
+                "evidence_revision":{"type":"string","minLength":64,"maxLength":64},
+                "terminal_revision":{"type":["string","null"],"minLength":64,"maxLength":64}
+            },"required":["task_id","worker_id","session_id","attention_id","evidence_revision","terminal_revision"],"additionalProperties":false},
+            "disposition":{"oneOf":[
+                {"type":"object","properties":{"kind":{"enum":["observed_working","protect_operator_input"]}},"required":["kind"],"additionalProperties":false},
+                {"type":"object","properties":{"kind":{"const":"await_delivery"},"message_id":{"type":"string","minLength":1}},"required":["kind","message_id"],"additionalProperties":false},
+                {"type":"object","properties":{"kind":{"const":"await_operator"},"decision_id":{"type":"string","format":"uuid"}},"required":["kind","decision_id"],"additionalProperties":false},
+                {"type":"object","properties":{"kind":{"const":"verified_external_wait"},"checked_evidence":{"type":"string","minLength":1,"maxLength":2000}},"required":["kind","checked_evidence"],"additionalProperties":false}
+            ]},
+            "reason":{"type":"string","minLength":1,"maxLength":1000},
+            "source":{"type":"string","minLength":1,"maxLength":2000}
+        },"required":["run_id","identity","disposition","reason","source"],"additionalProperties":false}),
         false,
     )
 }
@@ -4037,6 +4103,7 @@ mod tests {
         "swarm_reassess_task_block",
         "swarm_read_review_evidence",
         "swarm_record_review_disposition",
+        "swarm_record_recovery_assessment",
         // A reviewer's dissent is a reviewer's to record. A worker holding its
         // own work is just a worker declining to finish it, which the lifecycle
         // already expresses.
@@ -4271,6 +4338,152 @@ mod tests {
                 waiting_obligations: 1
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn recovery_tool_refuses_worker_and_missing_server_observation() {
+        let (bridge, store, queen_id, worker_id, _directory) = setup();
+        let task = store
+            .create_task("Fictional recovery", "/workspace/petal")
+            .unwrap();
+        for caller in [worker_id, queen_id] {
+            let token = bearer_from_path(&bridge.ensure_worker_config(caller).unwrap());
+            let response = response_json(
+                handle(
+                    bridge.clone(),
+                    plain_state(),
+                    mcp_request(
+                        Some(&token),
+                        "tools/call",
+                        &json!({
+                            "name":"swarm_record_recovery_assessment", "arguments":{
+                                "run_id":TaskId::new().to_string(),
+                                "identity":{
+                                    "task_id":task.id,"worker_id":worker_id,
+                                    "session_id":swarm_domain::WorkerSessionId::new(),
+                                    "attention_id":"not-an-observed-obligation",
+                                    "evidence_revision":"a".repeat(64),
+                                    "terminal_revision":"b".repeat(64)
+                                },
+                                "disposition":{"kind":"observed_working"},
+                                "reason":"Fictional worker appears busy",
+                                "source":"This claim is not server evidence"
+                            }
+                        }),
+                    ),
+                )
+                .await,
+            )
+            .await;
+            assert_eq!(response["result"]["isError"], true, "{response}");
+            let error = response["result"]["content"][0]["text"].as_str().unwrap();
+            if caller == queen_id {
+                assert!(
+                    error.contains("observation unavailable or changed"),
+                    "{error}"
+                );
+            }
+            assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Draft);
+        }
+    }
+
+    #[tokio::test]
+    async fn recovery_tool_round_trip_replays_checked_wait_without_completing_work() {
+        let (bridge, store, queen_id, worker_id, _directory) = setup();
+        let task = store
+            .create_task("Fictional external gate", "/workspace/petal")
+            .unwrap();
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(worker_id, session).unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(task.id, worker_id).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        let now = crate::unix_timestamp();
+        let candidate = store
+            .stale_owned_work_candidates(now + 3600, 600)
+            .unwrap()
+            .pop()
+            .unwrap();
+        store
+            .record_stale_owned_work_attention(
+                &candidate,
+                now + 3600,
+                600,
+                swarm_persistence::BackgroundWorkReading::NoneVisible,
+            )
+            .unwrap();
+        store
+            .bind_worker_session(queen_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        store.request_queen_automation_run(now).unwrap();
+        let run = store.claim_queen_automation(now).unwrap().unwrap();
+        store
+            .complete_queen_automation_delivery(&run.run_id, now)
+            .unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let attention = call_review_test_tool(
+            bridge.clone(),
+            &token,
+            "swarm_list_coordination_attention",
+            json!({}),
+        )
+        .await;
+        assert_eq!(attention["result"]["isError"], false, "{attention}");
+        // No terminal host is available. We must not manufacture working proof;
+        // a separately checked external condition can still be recorded as a wait.
+        let state = plain_state();
+        let (facts, complete) =
+            crate::coordination_attention_evidence::recovery_facts(&state, &store).await;
+        assert!(complete);
+        assert_eq!(facts.len(), 1);
+        assert!(!facts[0].terminal_is_current);
+        let input = json!({
+            "run_id":run.run_id,"identity":facts[0].identity,
+            "disposition":{"kind":"verified_external_wait",
+                "checked_evidence":"Fictional upstream returned service unavailable during this run"},
+            "reason":"Waiting on the fictional upstream service",
+            "source":"Isolated fictional status endpoint response"
+        });
+        let first = call_review_test_tool(
+            bridge.clone(),
+            &token,
+            "swarm_record_recovery_assessment",
+            input.clone(),
+        )
+        .await;
+        assert_eq!(first["result"]["isError"], false, "{first}");
+        let replay = call_review_test_tool(
+            bridge.clone(),
+            &token,
+            "swarm_record_recovery_assessment",
+            input,
+        )
+        .await;
+        assert_eq!(replay["result"]["isError"], false, "{replay}");
+        assert_eq!(
+            first["result"]["structuredContent"],
+            replay["result"]["structuredContent"]
+        );
+        let finish = call_review_test_tool(
+            bridge,
+            &token,
+            "swarm_finish_automation_run",
+            json!({"run_id":run.run_id,"outcome":"no_action"}),
+        )
+        .await;
+        assert_eq!(finish["result"]["isError"], false, "{finish}");
+        assert_eq!(
+            finish["result"]["structuredContent"]["review_covered"], true,
+            "{finish}"
+        );
+        assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Active);
+        assert_eq!(
+            store
+                .get_worker_profile(worker_id)
+                .unwrap()
+                .active_session_id,
+            Some(session)
+        );
     }
 
     fn listed_tool_names(response: &Value) -> Vec<&str> {
@@ -7556,8 +7769,10 @@ mod tests {
         let again = response_json(to_review(bridge).await).await;
         let settled = again["result"]["structuredContent"]["next_step"]
             .as_str()
-            .expect("a claimed exemption still has a step, and it is Queen's");
-        assert!(settled.contains("Queen approves"));
+            .expect("a claimed exemption still explains evidence settlement");
+        assert!(settled.contains("automatically settles"));
+        assert!(settled.contains("Queen handles exceptions"));
+        assert!(!settled.contains("Queen approves"));
         assert!(!settled.contains("swarm_record_no_deployment"));
         // AND IT DOES NOT DECLARE THE WORKER FINISHED. This used to end
         // "nothing further is needed from you" — true about the store, false

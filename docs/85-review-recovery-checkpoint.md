@@ -1,5 +1,139 @@
 # Returned-review recovery checkpoint
 
+## Recovery finish integration (local, not deployed)
+
+Full Linux library evaluation: 502 API, 36 application and 127 domain tests pass.
+Persistence finished with 628 passing and one migration-fixture failure: the
+previous-schema fixture still removed the support-outbox table instead of the
+new recovery table. The recovery table is now registered as the newest schema
+artifact; its focused rerun passes, as does final strict all-target/all-feature
+lint for persistence, application and API. The full persistence suite was not
+rerun after this test-fixture-only correction.
+This is not a claim that the main-only migration has been verified yet.
+
+The agent endpoint round-trip now passes: a checked external wait is saved,
+replaying the same request returns the same accepted identity, and finishing the
+run recognizes coverage without changing the Active task or worker session.
+Unavailable terminal evidence remains unavailable; this scenario checks a
+separate external-condition judgment, not proof of healthy execution. The
+ordinary-worker/missing-observation endpoint regression also passes. Strict
+all-target/all-feature lint passes for persistence, application and API before
+this final endpoint test addition. Full library suites are now being evaluated.
+
+Live health rechecked during isolated validation: `a78c53e0fb62` remains healthy,
+both API and terminal-host services are active, and root disk is 69% used with
+20 GB available. Upstream main still matches the clean main integration checkout.
+
+The external-wait command path now records a bounded condition (reason), checked
+evidence and source as an authenticated judgment, never completion or operator
+authority. Coverage requires the same run and task/session/terminal revision;
+the task remains Active. Five domain and ten persistence recovery tests pass,
+including blank-evidence refusal, ordinary-worker refusal, and changed-run or
+terminal invalidation. This supersedes the earlier unsupported-path notes below.
+Successful endpoint round-trip, full lint/migration checks and live acceptance
+remain open; the feature is still undeployed.
+
+Follow-up wiring adds Queen-only `swarm_record_recovery_assessment` through
+TaskService, using freshly obtained server observations and the existing fenced
+persistence command. The public schema does not expose trusted fact booleans;
+external-wait assessment remains unavailable pending its explicit judgment path.
+Tool surface revision is now 21 so stale provider tool caches are detectable.
+Thirteen existing tool-related API tests pass after the initial command wiring.
+The additional missing-observation/ordinary-worker endpoint regression also
+passes: both requests are refused and the fictional task stays Draft. No
+deployment or full recovery acceptance is claimed.
+
+The finish endpoint now obtains fresh bounded canonical-terminal observations
+before evaluating recovery coverage in the persistence transaction. Current
+working evidence needs no Queen approval receipt; unknown or missing observations
+cannot certify an old stall as covered. Explicit incomplete remains a valid
+terminal outcome without another observation round trip. Persistence separately
+enumerates obligations, so observations omitted by the adapter's bound remain
+uncovered rather than silently disappearing.
+
+Linux isolated validation passes nine recovery persistence tests, eleven API
+observation tests and all 38 Queen conductor tests. These include restart/replay,
+atomic failure and capacity recovery, stale/delivered evidence rejection, and
+fresh working coverage without a Queen approval round trip. The previous test
+handle was unavailable; these results came from a new completed focused run.
+
+Worker-facing no-deployment guidance also no longer claims every pending claim
+requires Queen approval: it distinguishes automatic documentation/no-code
+settlement from exceptions requiring judgment, retaining the warning to record
+anything that actually shipped. This does not expand automatic eligibility.
+
+Still required before deployment: explicit recovery assessment command and
+external-condition judgment/source handling, endpoint failure/recovery tests,
+main-only migration verification excluding the inactive support foundation,
+and isolated live multi-worker acceptance. This is not yet the fleet recovery fix.
+
+## Isolated live dependency verification
+
+On healthy `a78c53e0fb62`, created fictional unassigned dogfood tasks
+`01a0797a-11b0-7290-b209-e4c85b0800fe` (consumer) and
+`01a0797a-11c0-7f82-bcea-6d6a9731c367` (upstream). Adding the explicit link kept
+the consumer in Review and projected its next move as blocked. Awaiting Release
+was refused with HTTP 409 `task_prerequisite_refused`. Removing the fictional
+edge kept Review, restored Queen ownership, and permitted Awaiting Release.
+Both fixtures were then abandoned with explicit verification notes; no worker
+was assigned or prompted and no real backlog task was changed.
+
+The initial Completed attempt returned HTTP 400 for missing completion evidence,
+before reaching the prerequisite guard. It does not count as a live completion
+guard test. No deployment or commit evidence was invented to make the test pass.
+Automatic settlement and satisfied-upstream recovery remain backed by the Linux
+tests above/below, not by this narrower live operator-route exercise.
+
+## Final update-cycle verification (September 7 UTC)
+
+Main `a78c53e0fb62` is healthy as
+`1.5.0-dev-a78c53e0fb62-20260907011940-3649827`; the development reload unit
+finished successfully. No release was cut. The earlier exact-session preservation
+snapshot below was not the final outcome of the engine update: host reconciliation
+deferred at 21:10 and 21:13 EDT because one of 16 workers was mid-turn, then
+replaced the engine at 21:16 once the fleet was quiet. All 16 workers returned
+with new session identities. The provider-conversation freshness endpoint reports
+current for each running worker. That verifies the product's continuity check,
+not independent proof that each task resumed productive work.
+
+CI run 34071894455 passed for `002ef1999bf2`. Follow-up run 34072636383 for
+`a78c53e0fb62` also passed. Browser validation remains
+blocked on unlocking the separate Edge tab, not on server availability.
+
+Recovery-accountability work has begun locally in the domain layer. Five tests
+cover session/revision fencing, working versus unknown/resting observations,
+operator input, exact pending delivery, and verified decision/external sources.
+This is not runtime enforcement: durable source validation, receipt persistence,
+agent commands, completion coverage and live recovery acceptance remain open.
+Do not deploy or describe this domain-only foundation as the completed fix.
+
+Local follow-up adds a consistent persistence recovery-identity read using the
+existing live-attention predicate and task-evidence revision. The returned-review
+regression proves a same-second replacement invalidates its old identity. The
+bounded agent observation now exposes current/changed/unavailable identity status.
+That regression, all nine observation API tests, and strict persistence lint pass.
+No new recovery receipt is saved yet: this remains undeployed foundation work.
+Completion coverage must refresh terminal observations rather than reuse a
+working assessment after output changes or a provider returns to its prompt.
+
+The local identity now includes an optional terminal revision derived only from
+a current, non-truncated canonical snapshot. Persistence leaves it absent;
+working/unsent-input assessments cannot be certified from database facts alone.
+Domain tests reject changed or absent terminal revisions, and the API regression
+checks output, sequence, geometry and truncation changes. All five domain recovery
+tests and ten observation API tests pass. Finish-time refresh and command wiring
+are still required before this becomes enforcement or is deployed.
+
+The subsequent local receipt implementation uses migration 144 and rechecks live
+identity, review run, engagement, pending delivery and decision sources inside
+its write transaction. It caps records at 256 and retains task-activity audit
+history when retiring obsolete receipts. Five persistence tests pass: reopen/
+idempotent replay, unauthorized/invented delivery rejection, atomic failure and
+retry, capacity recovery, and delivered-request invalidation. Strict persistence
+lint passed before the last two test additions. External-wait judgment writes
+remain deliberately refused until their explicit source path is implemented.
+Nothing in this section has been deployed or proves full recovery supervision.
+
 ## Review prerequisites and routine completion (local validation)
 
 Deployed main `002ef1999bf2` through the normal development updater. Health

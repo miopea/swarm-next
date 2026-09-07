@@ -548,6 +548,21 @@ impl TaskStore {
         outcome: QueenAutomationOutcome,
         now: i64,
     ) -> Result<QueenAutomationFinish, TaskStoreError> {
+        self.finish_queen_automation_run_with_recovery(run_id, outcome, now, &[], true)
+    }
+
+    /// Finish using fresh recovery observations; absent facts cannot cover stalls.
+    ///
+    /// # Errors
+    /// Propagates persistence failure without certifying recovery or queue clearance.
+    pub fn finish_queen_automation_run_with_recovery(
+        &self,
+        run_id: &str,
+        outcome: QueenAutomationOutcome,
+        now: i64,
+        observations: &[swarm_domain::QueenRecoveryFacts],
+        observations_complete: bool,
+    ) -> Result<QueenAutomationFinish, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         // "I need the operator" is a claim about something they can act on, so
@@ -588,10 +603,19 @@ impl TaskStore {
         )?;
         let outcome = if active
             && outcome != QueenAutomationOutcome::Incomplete
-            && !matches!(
+            && (!matches!(
                 crate::queen_review::review_coverage(&transaction, run_id)?,
                 swarm_domain::QueenReviewCoverage::Covered { .. }
-            ) {
+            ) || !matches!(
+                crate::queen_recovery::recovery_coverage(
+                    &transaction,
+                    run_id,
+                    observations,
+                    observations_complete,
+                    now
+                )?,
+                swarm_domain::QueenReviewCoverage::Covered { .. }
+            )) {
             QueenAutomationOutcome::Incomplete
         } else {
             outcome
