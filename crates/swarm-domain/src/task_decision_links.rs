@@ -48,7 +48,7 @@ impl std::fmt::Display for TaskDecisionLinkError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::InvalidReason => "A decision link needs a nonempty reason of at most 2048 bytes",
-            Self::DecisionNotPending => "Only a pending decision can gain another task blocker link",
+            Self::DecisionNotPending => "Only a pending or authenticated resolved decision can gain a task link",
             Self::TaskFinished => "Finished work cannot gain a decision blocker",
             Self::Capacity => "Decision-link capacity reached; explicitly remove obsolete links first",
             Self::Conflict => "This decision link has a different reason; remove it explicitly before replacing it",
@@ -74,7 +74,10 @@ pub fn validate_task_decision_link(
     hive_links: usize,
 ) -> Result<(), TaskDecisionLinkError> {
     validate_decision_link_reason(reason)?;
-    if decision_state != DecisionRequestState::Pending {
+    if !matches!(
+        decision_state,
+        DecisionRequestState::Pending | DecisionRequestState::Resolved
+    ) {
         return Err(TaskDecisionLinkError::DecisionNotPending);
     }
     if matches!(task_state, TaskState::Completed | TaskState::Abandoned) {
@@ -132,11 +135,19 @@ mod tests {
     }
 
     #[test]
-    fn shared_decision_link_cannot_expand_an_already_answered_request() {
-        for state in [
-            DecisionRequestState::Resolved,
-            DecisionRequestState::Withdrawn,
-        ] {
+    fn shared_decision_link_accepts_resolved_evidence_but_not_withdrawn_requests() {
+        assert_eq!(
+            validate_task_decision_link(
+                TaskState::Blocked,
+                DecisionRequestState::Resolved,
+                "Same original scope",
+                0,
+                0,
+                0
+            ),
+            Ok(())
+        );
+        for state in [DecisionRequestState::Withdrawn] {
             assert_eq!(
                 validate_task_decision_link(TaskState::Ready, state, "Shared gate", 0, 0, 0),
                 Err(TaskDecisionLinkError::DecisionNotPending)

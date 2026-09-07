@@ -156,3 +156,32 @@ does not establish that Queen has reconciled existing real-world prose-only
 blockers, nor close the wider orchestration, mobile or engine-update scope.
 The script correction passes `bash -n`; its successful resolution branch still
 needs a separate fixture because this decision was answered through the UI.
+
+## September 7 operator-approved resolved-decision references
+
+The operator explicitly approved Queen linking an existing resolved decision
+from its originating task to another unfinished task within the original scope.
+This supersedes the prohibition on new resolved-decision links above, not the
+prohibition on withdrawn decisions or expanded permission. Queen must explain
+applicability in the audited link reason, preserve the original wording and
+response, and ask the operator if scope is uncertain. Persistence requires an
+authenticated operator resolution and an originating task in the same Hive.
+
+Reuse the bounded explicit membership relation. A resolved reference is evidence,
+not a pending gate, command grant, answer delivery, task transition or assignment.
+Review deferrals may cite a resolved decision only through original or explicit
+membership; removal or changed evidence invalidates coverage. Test missing
+operator provenance, withdrawn/foreign/finished targets, replay, atomic failure,
+unchanged approval/delivery scope, and linked deferral validation. Live Queen
+reconciliation remains required; do not bulk-link real tasks from prose.
+
+Implementation checkpoint: the existing link command now accepts authenticated
+resolved references, and deferral validation uses the shared membership view.
+The pending-gate queries still filter pending decisions; no new answer delivery
+is created. Tests verify unchanged original decision/answer fields, rejected
+missing provenance, explicit membership before deferral, and invalidation after
+unlinking. Twelve shared-link tests, two resolved-reference persistence tests,
+four domain link tests, the delivered-focus test and all 71 agent adapter tests
+passed on the main-compatible Linux tree. The tool schema is unchanged; updated
+focus instructions teach an existing Queen session the approved scope boundary.
+Deployment and live use are not yet established by this checkpoint.

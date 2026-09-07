@@ -1420,7 +1420,7 @@ pub(super) fn queen_review_focus_message(
     let mut message = queen_automation_message(delivery);
     if !ids.is_empty() {
         let focus = format!(
-            "CURRENT REVIEW FOCUS: {}. These are the first three tasks in the current fairness-ordered Queen backlog. Read their current task history and review evidence in this run, alongside any urgent new work. For each, route a verified next action, record a checked external wait or authenticated operator deferral, or state the concrete missing evidence. Do not just repeat assessments of the recent cluster and leave these unread. This focus does not authorize starting reserved drafts, clearing blockers, or acting on an old decision. Recheck current state; a resolved or completed item needs no repeated action. The rest of the full review still matters.\n\n",
+            "CURRENT REVIEW FOCUS: {}. These are the first three tasks in the current fairness-ordered Queen backlog. Read their current task history and review evidence in this run, alongside any urgent new work. For each, route a verified next action, record a checked external wait or authenticated operator deferral, or state the concrete missing evidence. Do not just repeat assessments of the recent cluster and leave these unread. For an authenticated resolved operator ruling on another task, you may use swarm_set_task_decision_link with a concise explanation of why its ORIGINAL scope also applies here, then reread review evidence and cite that decision for a deferral. Preserve the original wording and answer; this grants no new permission and sends no answer into another terminal. Ask the operator if applicability is uncertain. This focus does not authorize starting reserved drafts, clearing blockers, or expanding an old decision. Recheck current state; a resolved or completed item needs no repeated action. The rest of the full review still matters.\n\n",
             ids.join(", ")
         );
         message.bytes.splice(0..0, focus.bytes());
@@ -3779,6 +3779,9 @@ mod tests {
         let text = String::from_utf8(message.bytes).unwrap();
         let focus = text.split("\n\n").next().unwrap();
         assert!(focus.starts_with("CURRENT REVIEW FOCUS:"));
+        assert!(focus.contains("swarm_set_task_decision_link"));
+        assert!(focus.contains("ORIGINAL scope"));
+        assert!(focus.contains("Ask the operator if applicability is uncertain"));
         assert!(!focus.contains(&tasks[0].id.to_string()));
         for task in &tasks[1..4] {
             assert!(focus.contains(&task.id.to_string()));

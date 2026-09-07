@@ -216,8 +216,12 @@ impl TaskStore {
         }
         if let Some(decision_id) = input.operator_decision_id {
             let genuine: bool = transaction.query_row(
-                "SELECT EXISTS(SELECT 1 FROM decision_requests WHERE task_id=?1 AND id=?2 AND state='resolved' AND resolved_by_operator_id IS NOT NULL)",
-                rusqlite::params![id, decision_id.to_string()], |row| row.get(0),
+                "SELECT EXISTS(SELECT 1 FROM decision_requests d
+                 JOIN task_decision_membership m ON m.decision_id=d.id
+                 WHERE m.task_id=?1 AND d.id=?2 AND d.state='resolved'
+                   AND d.resolved_by_operator_id IS NOT NULL)",
+                rusqlite::params![id, decision_id.to_string()],
+                |row| row.get(0),
             )?;
             if !genuine {
                 return Err(TaskStoreError::IntegrityFailure("the cited decision is not an authenticated resolved operator decision for this task".into()));
@@ -700,6 +704,81 @@ mod tests {
                 .unwrap()
                 .status,
             swarm_domain::QueenReviewAssessmentStatus::CoveredForCurrentRun,
+        );
+    }
+
+    #[test]
+    fn resolved_decision_deferral_requires_explicit_membership_and_removal_invalidates_it() {
+        let store = TaskStore::in_memory().unwrap();
+        let mut input = external_wait(&store);
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let parent = store
+            .create_task("Original ruling", "/workspace/demo")
+            .unwrap();
+        let decision = swarm_domain::DecisionRequestId::new();
+        store.connection().unwrap().execute(
+            "INSERT INTO decision_requests(id,hive_id,requesting_worker_id,task_id,kind,urgency,title,reason,risk,evidence,suggested_action,allowed_actions)
+             VALUES (?1,?2,?3,?4,'input','normal','Fictional deferral','Original scope','','','','[\"Defer this scope\"]')",
+            rusqlite::params![decision.to_string(),parent.hive_id.to_string(),queen.id.to_string(),parent.id.to_string()],
+        ).unwrap();
+        store
+            .resolve_decision_request(
+                decision,
+                "Defer this scope",
+                "Fictional original ruling",
+                "inbox",
+            )
+            .unwrap();
+        input.kind = QueenReviewDispositionKind::OperatorDeferral;
+        input.operator_decision_id = Some(decision);
+        assert!(
+            store
+                .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 101)
+                .is_err()
+        );
+        store
+            .add_task_decision_link(
+                input.task_id,
+                decision,
+                "Same original deferred scope; no new permission",
+                &input.expected_revision,
+                &TaskActivityActor::operator(),
+                102,
+            )
+            .unwrap();
+        input.expected_revision = store
+            .queen_task_review_evidence(input.task_id)
+            .unwrap()
+            .evidence_revision;
+        store
+            .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 103)
+            .unwrap();
+        let revision = store
+            .queen_task_review_evidence(input.task_id)
+            .unwrap()
+            .evidence_revision;
+        store
+            .remove_task_decision_link(
+                input.task_id,
+                decision,
+                "Applicability withdrawn",
+                &revision,
+                &TaskActivityActor::operator(),
+                104,
+            )
+            .unwrap();
+        input.expected_revision = store
+            .queen_task_review_evidence(input.task_id)
+            .unwrap()
+            .evidence_revision;
+        assert!(
+            store
+                .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 105)
+                .is_err()
+        );
+        assert_eq!(
+            store.get_task(input.task_id).unwrap().state,
+            TaskState::Blocked
         );
     }
 

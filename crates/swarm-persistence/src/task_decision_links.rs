@@ -128,6 +128,17 @@ impl TaskStore {
         if primary.as_deref() == Some(task.to_string().as_str()) {
             return Ok(());
         }
+        if decision_state == DecisionRequestState::Resolved {
+            let authenticated: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM decision_requests d JOIN tasks origin ON origin.id=d.task_id
+                 WHERE d.id=?1 AND d.state='resolved' AND d.resolved_by_operator_id IS NOT NULL
+                   AND origin.hive_id=d.hive_id)",
+                [decision.to_string()], |row| row.get(0),
+            )?;
+            if !authenticated {
+                return Err(TaskStoreError::IntegrityFailure("Resolved decision references require an authenticated operator answer on an originating task".into()));
+            }
+        }
         let counts: (usize, usize, usize) = tx.query_row(
             "SELECT (SELECT count(*) FROM task_decision_links WHERE decision_id=?1),
                     (SELECT count(*) FROM task_decision_links WHERE task_id=?2),

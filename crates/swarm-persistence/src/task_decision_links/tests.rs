@@ -173,19 +173,69 @@ fn shared_decision_replay_after_resolution_is_exact_and_does_not_expand_scope() 
         ))
     ));
     let fresh = blocked(&store);
-    assert!(matches!(
-        store.add_task_decision_link(
+    let original = store.get_decision_request(gate).unwrap();
+    store
+        .add_task_decision_link(
             fresh,
             gate,
-            "New scope",
+            "The original session ruling also applies here; no new permission",
             &revision(&store, fresh),
             &TaskActivityActor::operator(),
-            200
-        ),
-        Err(TaskStoreError::TaskDecisionLink(
-            TaskDecisionLinkError::DecisionNotPending
-        ))
-    ));
+            200,
+        )
+        .unwrap();
+    let after = store.get_decision_request(gate).unwrap();
+    let mut original_fields = serde_json::to_value(&original).unwrap();
+    let mut after_fields = serde_json::to_value(&after).unwrap();
+    original_fields
+        .as_object_mut()
+        .unwrap()
+        .remove("linked_tasks");
+    after_fields.as_object_mut().unwrap().remove("linked_tasks");
+    assert_eq!(
+        after_fields, original_fields,
+        "linking cannot rewrite the original decision or its answer"
+    );
+    assert_eq!(after.task_id, original.task_id);
+    assert_eq!(after.state, DecisionRequestState::Resolved);
+    assert_eq!(store.get_task(fresh).unwrap().state, TaskState::Blocked);
+    assert_eq!(
+        store.get_task(fresh).unwrap().next_move_owner,
+        NextMoveOwner::Queen
+    );
+    assert_eq!(audit_count(&store, fresh), 1);
+}
+
+#[test]
+fn resolved_decision_link_refuses_missing_operator_provenance() {
+    let store = TaskStore::in_memory().unwrap();
+    let (_, gate) = decision(&store);
+    store
+        .resolve_decision_request(gate, "Provided a session", "Fictional answer", "inbox")
+        .unwrap();
+    store
+        .connection()
+        .unwrap()
+        .execute(
+            "UPDATE decision_requests SET resolved_by_operator_id=NULL WHERE id=?1",
+            [gate.to_string()],
+        )
+        .unwrap();
+    let task = blocked(&store);
+    assert!(
+        store
+            .add_task_decision_link(
+                task,
+                gate,
+                "Unauthenticated history",
+                &revision(&store, task),
+                &TaskActivityActor::operator(),
+                200
+            )
+            .is_err()
+    );
+    assert!(store.task_decision_links(task).unwrap().is_empty());
+    assert_eq!(audit_count(&store, task), 0);
 }
 
 #[test]
