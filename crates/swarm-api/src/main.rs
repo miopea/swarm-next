@@ -196,6 +196,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
     }
     state = configure_github_feedback(state);
+    state = match env::var("SWARM_SUPPORT_ORIGIN") {
+        Ok(origin) => match state.clone().with_central_support(&origin) {
+            Ok(configured) => configured,
+            Err(error) => state.with_degraded_subsystem("Central support", error),
+        },
+        Err(env::VarError::NotPresent) => state,
+        Err(_) => {
+            state.with_degraded_subsystem("Central support", "Support origin is not valid Unicode")
+        }
+    };
     state = configure_github_issue_intake(state);
     state = state.with_email_oauth_paths(
         email_configuration_path(&database_path),
@@ -238,6 +248,10 @@ async fn serve_control_room(
     let listener = tokio::net::TcpListener::bind(address).await?;
     let background = start_background_services(&state);
     let stop_background = background.stop_signal();
+    let support_state = state.clone();
+    let support_stop = stop_background.subscribe();
+    let support_sender =
+        tokio::spawn(async move { support_state.run_support_sender(support_stop).await });
     let (stop_integrity, integrity_stopped) = tokio::sync::oneshot::channel();
     let integrity_monitor = tokio::spawn(swarm_api::monitor_database_integrity(
         state.clone(),
@@ -260,6 +274,9 @@ async fn serve_control_room(
         })
         .await;
     background.shutdown().await;
+    if let Err(error) = support_sender.await {
+        tracing::warn!(%error, "central support sender did not join during shutdown");
+    }
     if let Err(error) = integrity_monitor.await {
         tracing::warn!(%error, "database integrity monitor could not join during shutdown");
     }

@@ -45,6 +45,7 @@ mod reload_backup;
 mod runtime;
 mod runtime_storage;
 mod session_history;
+mod support_http;
 pub mod support_sender;
 pub mod support_transport;
 mod tasks;
@@ -273,6 +274,8 @@ pub struct AppState {
     #[cfg(test)]
     test_start_admission: Option<runtime::CoordinatorStartAdmission>,
     github_feedback: Option<github_feedback::GithubFeedback>,
+    central_support: Option<support_http::SupportRuntime>,
+    support_admission: Arc<Semaphore>,
     /// The repository whose open issues become draft tasks here, if any.
     ///
     /// SEPARATE FROM `github_feedback` BECAUSE THEY ARE DIFFERENT ROLES.
@@ -381,6 +384,8 @@ impl AppState {
             worker_recovery_attempts: Arc::new(RwLock::new(HashMap::new())),
             provider_activity: Arc::new(RwLock::new(HashMap::new())),
             github_feedback: None,
+            central_support: None,
+            support_admission: Arc::new(Semaphore::new(4)),
             github_issue_intake: None,
             github_issue_workspace: String::new(),
             pending_github_device: std::sync::Arc::new(std::sync::Mutex::new(None)),
@@ -4216,6 +4221,12 @@ async fn mcp(State(state): State<Arc<AppState>>, request: axum::extract::Request
 }
 async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
     let mut degraded = state.degraded_subsystems().to_vec();
+    if state.support_sender_failed() {
+        degraded.push(DegradedSubsystem {
+            subsystem: "Central support".into(),
+            reason: "Support delivery stopped. Saved reports are retained; inspect support delivery status.".into(),
+        });
+    }
     let database_recovery_required = state
         .task_store
         .as_ref()
