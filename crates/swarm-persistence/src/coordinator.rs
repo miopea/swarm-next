@@ -1514,7 +1514,10 @@ impl TaskStore {
     /// It is still FLAGGED, not suppressed. A worker resting beside a `sleep`
     /// loop it forgot about is genuinely stalled, and a detector that went
     /// quiet whenever any process was alive would never say so.
-    #[allow(clippy::too_many_lines, reason = "Keep candidate fencing and observation insertion in one auditable transaction")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep candidate fencing and observation insertion in one auditable transaction"
+    )]
     pub fn record_stale_owned_work_attention(
         &self,
         candidate: &StaleOwnedWorkCandidate,
@@ -3888,7 +3891,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines, reason = "Exercises one request through observation, replacement and answer without resetting its history")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Exercises one request through observation, replacement and answer without resetting its history"
+    )]
     fn returned_review_participates_in_recovery_only_while_worker_owes_the_answer() {
         let store = TaskStore::in_memory().unwrap();
         let (_, _, task) = active_owned_work(&store, "Review worker", 100);
@@ -4737,6 +4743,106 @@ mod tests {
                 .stale_owned_work_candidates(1_001, 600)
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn returned_review_rechecks_operator_decisions_before_recording_attention() {
+        let store = TaskStore::in_memory().unwrap();
+        let (worker, _, task) = active_owned_work(&store, "Review decision", 100);
+        store.transition_task(task, TaskState::Review).unwrap();
+        store
+            .return_review_to_worker(task, "Check the missing evidence", 100)
+            .unwrap();
+        let now = 4_000_000_000;
+        let candidate = store
+            .stale_owned_work_candidates(now, 600)
+            .unwrap()
+            .pop()
+            .unwrap();
+        store
+            .create_decision_request(&NewDecisionRequest {
+                requesting_worker_id: worker,
+                task_id: Some(task),
+                kind: DecisionRequestKind::Input,
+                urgency: DecisionUrgency::Normal,
+                title: "Which account may I use?",
+                summary: "Verification needs operator access.",
+                reason: "No approved test account is available.",
+                risk: "",
+                evidence: "",
+                suggested_action: "Provide a test account",
+                allowed_actions: &["Provide a test account".to_owned()],
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+            })
+            .unwrap();
+        assert!(
+            store
+                .stale_owned_work_candidates(now, 600)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !store
+                .record_stale_owned_work_attention(
+                    &candidate,
+                    now,
+                    600,
+                    BackgroundWorkReading::NoneVisible
+                )
+                .unwrap(),
+            "a decision arriving during terminal observation must preserve the operator wait"
+        );
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Review);
+    }
+
+    #[test]
+    fn returned_review_reassignment_invalidates_the_old_recovery_candidate() {
+        let store = TaskStore::in_memory().unwrap();
+        let (_, _, task) = active_owned_work(&store, "Original reviewer", 100);
+        store.transition_task(task, TaskState::Review).unwrap();
+        store
+            .return_review_to_worker(task, "Check the missing evidence", 100)
+            .unwrap();
+        let now = 4_000_000_000;
+        let candidate = store
+            .stale_owned_work_candidates(now, 600)
+            .unwrap()
+            .pop()
+            .unwrap();
+        let replacement = store
+            .create_worker(
+                "Replacement reviewer",
+                ProviderKind::ClaudeCode,
+                "/workspace/replacement",
+                false,
+                2,
+            )
+            .unwrap();
+        store
+            .bind_worker_session(replacement.id, WorkerSessionId::new())
+            .unwrap();
+        store
+            .assign_task_to_worker_as(task, replacement.id, &TaskActivityActor::operator())
+            .unwrap();
+        assert!(
+            !store
+                .record_stale_owned_work_attention(
+                    &candidate,
+                    now,
+                    600,
+                    BackgroundWorkReading::NoneVisible
+                )
+                .unwrap()
+        );
+        assert!(
+            store
+                .stale_owned_work_candidates(now, 600)
+                .unwrap()
+                .is_empty(),
+            "a superseded request must not become the new worker's obligation"
         );
     }
 

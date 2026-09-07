@@ -1252,6 +1252,7 @@ test("experimental temporary handoff sends consent only after confirmation and k
   expect(attempts).toBe(0);
   expect(within(dialog).getByRole("button", { name: "Create temporary worker" })).toBeDisabled();
   fireEvent.click(within(dialog).getByRole("checkbox"));
+  await waitFor(() => expect(within(dialog).getByRole("button", { name: "Create temporary worker" })).toBeEnabled());
   fireEvent.click(within(dialog).getByRole("button", { name: "Create temporary worker" }));
   expect(await within(dialog).findByRole("alert")).toHaveTextContent("503");
   const request = fetch.mock.calls.find(([input]) => String(input).endsWith("/parent/temporary"));

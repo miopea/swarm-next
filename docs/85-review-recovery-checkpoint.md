@@ -19,9 +19,13 @@ Observations and deduplication now include the exact returned-review message
 identity. A same-second replacement regression proves an old candidate is
 refused, its observation disappears, and the new request is eligible. All 45
 coordinator tests pass after that change. Strict persistence/API all-target,
-all-feature lint also passes. Before deployment, complete API runtime tests
-plus broader reassignment, pending-decision and pending
-versus delivered request checks. A live multi-worker recovery run is still
+all-feature lint also passes. Follow-up validation passes nine API evidence
+tests and the new returned-review decision/reassignment regressions. The
+combined App/Queues run passes 94 tests after explicitly waiting for the
+experimental handoff button to become enabled; its preceding combined run
+failed while the isolated test passed. This is not proof all CI flakiness is
+resolved. Pending versus delivered request checks and a live multi-worker run remain.
+A live multi-worker recovery run is still
 required; no passing detector test proves end-to-end recovery.
 
 ADR 0082 recovery-accountability enforcement and the broader program remain
