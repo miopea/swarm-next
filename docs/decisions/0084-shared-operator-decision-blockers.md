@@ -98,3 +98,34 @@ listing also needed the relation. The follow-up adds a count to the compact
 index, full links plus an explicit permission-scope warning to the exact decision
 read, and assigned shared-task discovery. Its 71 MCP tests passed; the refactored
 focused test and strict checks passed afterward. No live acceptance is claimed.
+
+### Live checkpoint, September 7, 17:40 UTC
+
+App/API build `e2a896f4b96c-20260907172200-133536` is serving the development
+Hive with membership schema 148. Its complete CI run `34147294805` passed.
+Queen alone was refreshed through retained-session stop/start at an idle,
+unengaged prompt to discover revision 22; the other fifteen session identities
+were preserved. The older running worker engine has not been replaced.
+
+In the fictional `5663a1f7` scenario, Queen herself used the new link command
+on consumer `01a07cea-8992-7aa3-9a67-e87d5374d09c`, moved it Ready and assigned
+it to the demo worker. The source remained Blocked on the single input decision
+`01a07ceb-2e1c-7921-a1b8-2e9135736558`. The task audit identifies Queen as the
+actor; the controller did not perform these routing transitions.
+
+The separate authenticated Edge tab at `swarm.bfgsolutions.net` rendered one
+Needs You card, its source and linked consumer in expanded details, and the
+existing "Say something else" option. A screenshot confirmed readable desktop
+layout. Clicking "Use fictional sample A" resolved the fictional decision and
+the page cleared to zero without reload. The consumer became worker-owned and
+eligible for normal delivery; the source became Queen-owned for reassessment.
+This proves shared gate creation and clearing, not final task completion.
+
+The fixture's optional API resolution action initially used the wrong route
+and received HTTP 405 without changing the decision. It now uses the actual
+`PATCH /decisions/{id}/resolution` contract. The successful resolution above
+was through the browser, not a claimed successful script execution.
+
+Still open: observe both tasks completing through normal recovery, execution
+and settlement; inspect any failure instead of forcing task state. Native
+mobile acceptance and engine convergence remain separate unverified gates.

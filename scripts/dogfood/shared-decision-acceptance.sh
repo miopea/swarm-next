@@ -46,7 +46,7 @@ case ${1:-} in
     jq -e --arg consumer "$consumer" --arg title "$prefix input" 'length==1 and .[0].title==$title and .[0].allowed_actions==["Use fictional sample A"] and (.[0].requested_command==null) and any(.[0].linked_tasks[]; .task_id==$consumer)' <<<"$questions" >/dev/null
     question=$(jq -er '.[0].id' <<<"$questions")
     # The only simulated operator action; subsequent task recovery must be real.
-    api -X POST -H 'Content-Type: application/json' --data '{"action":"Use fictional sample A","note":"Fictional test input only. No additional command permission.","surface":"dogfood-shared-decision"}' "$base/api/v1/decisions/$question/resolve"
+    api -X PATCH -H 'Content-Type: application/json' --data '{"action":"Use fictional sample A","note":"Fictional test input only. No additional command permission.","surface":"dogfood-shared-decision"}' "$base/api/v1/decisions/$question/resolution"
     ;;
   *) echo 'Use --setup, --status, or --resolve'; exit 2 ;;
 esac
