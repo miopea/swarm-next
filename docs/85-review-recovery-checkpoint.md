@@ -2,6 +2,19 @@
 
 ## Live two-worker acceptance on 8e3d6647
 
+CI 34079309932 now has successful Rust, web, Linux packaging and security-audit
+jobs. During the live acceptance review Queen handled an earlier real dependency,
+then explicitly reached the demo prerequisite item before provider-native
+conversation compaction. No manual kick, resume, restart or blocker removal was
+performed. The downstream outcome remains to be observed after compaction.
+
+Bounded quiet-server sample at 23:35 EDT: 25,230 MiB available of 32,042 MiB,
+load averages 1.90/1.75/1.93 on eight CPUs. Five one-second pidstat samples measured
+API PID 3753112 at 0.00% CPU and 90,024 KiB RSS, terminal-host PID 3748322 at
+0.40% average CPU and 83,528 KiB RSS. Host service memory also includes its worker
+processes, so the roughly 5 GB cgroup total is not terminal-host process memory.
+This quiet five-second sample is not a long-term soak or browser performance test.
+
 `scripts/dogfood/recovery-acceptance.sh` created two fictional read-only tasks in
 the existing isolated demo repositories. Upstream
 `01a079e9-2fbd-7a61-a313-4c4e16a9757f` ran nine Node tests, reported no commits,
