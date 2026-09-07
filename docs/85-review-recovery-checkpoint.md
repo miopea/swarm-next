@@ -1,5 +1,39 @@
 # Returned-review recovery checkpoint
 
+## Live acceptance failure: an unfinished run lost from Queen's context
+
+At the September 7 follow-up, the authoritative automation endpoint still
+reported run `01a079e8-0b21-7af1-9314-5a9894417eee` as Running, with no finish
+time/outcome, 67 actionable records and 22 Queen-owned tasks. The demo downstream
+`01a079e9-2fd9-7261-8acb-c3c594cb3187` remained Blocked, assigned to its original
+demo worker, Queen-owned and without a dispatch. This acceptance has **not passed**.
+
+Queen's current terminal showed that provider compaction had finished. A worker
+notification then received a substantive response, ending at 23:42 EDT with an
+empty prompt and the statement that there was no active automation run or run id
+in play. She deferred the demo item to another run/notification. That statement
+contradicts the durable run record. The terminal report also described correcting
+a false-premise C19 dependency; those real-task mutations were not independently
+verified in this check and are not acceptance evidence for the demo.
+
+Source inspection explains the missing recovery route: session-ended recovery
+requires the delivery session to end, whereas this is the same live session.
+The running-run fallback instead waits for a one-hour expiry into Uncertain.
+The coordination-attention response does not currently expose the active run
+identity, and ordinary task-message delivery does not reconnect the notification
+to an unfinished review. Coverage checks only protect an explicit finish call;
+they cannot help when Queen believes there is no run to finish.
+
+Next implementation must restore the exact unfinished run from durable state,
+without treating compaction, a notification, or an empty prompt as completion.
+Use fresh same-session terminal evidence and existing input/engagement guards;
+do not replay side effects, clear provider context, restart workers, create a new
+run to hide the old one, or depend on a shorter timeout. Test notification and
+compaction/context-loss recovery, busy/background execution, unsent input,
+operator engagement, duplicate observations, restart and a concurrent finish.
+The live downstream remains untouched so the eventual handoff can be observed
+through the product's recovery path rather than a manual unblock.
+
 ## Live two-worker acceptance on 8e3d6647
 
 CI 34079309932 now has successful Rust, web, Linux packaging and security-audit
