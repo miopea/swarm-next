@@ -171,7 +171,7 @@ pub(super) fn active_work_recovery(
     json!({
         "tasks": tasks,
         "input_scope": "prompt_has_unsent_input true means preserve visible unsent input; do not submit, clear or append without operator direction. False includes empty prompts and dimmed provider suggestions, which are not operator instructions or approvals. Null means unverified. Guarded delivery rechecks the current prompt.",
-        "scope": "Only unchanged Active work with a current resting/no-visible-background observation. Missing, unknown, active, or awaiting-operator observations are excluded, not declared healthy. Observation is bounded to 32 attention rows.",
+        "scope": "Unchanged worker-owned Active work or an outstanding returned Review, with a current resting/no-visible-background observation. Missing, unknown, active, or awaiting-operator observations are excluded, not declared healthy. Observation is bounded to 32 attention rows. Review work stays in Review; inspect the exact request and delivery before acting.",
         "next_action": crate::agent::QUEEN_ACTIVE_RECOVERY_GUIDANCE,
     })
 }

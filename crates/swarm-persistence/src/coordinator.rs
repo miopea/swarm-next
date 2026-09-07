@@ -275,7 +275,12 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
                            )))
                    OR (action.kind = 'stale_owned_work_attention'
                        AND task.assigned_worker_id = action.worker_id
-                       AND task.state = 'active' AND session.ended_at IS NULL)
+                       AND (task.state = 'active' OR (task.state = 'review' AND EXISTS (
+                           SELECT 1 FROM task_returned_reviews review
+                           WHERE review.task_id = task.id AND review.answered_at IS NULL
+                             AND review.request_worker_id = task.assigned_worker_id
+                             AND action.idempotency_key = 'stale-owned-work:' || task.id || ':' || worker.id || ':' || session.session_id || ':' || task.updated_at || ':' || review.request_message_id
+                       ))) AND session.ended_at IS NULL)
                    -- Clears itself the moment a brief is confirmed delivered,
                    -- so redelivering the work is the whole fix and nothing has
                    -- to be dismissed by hand.
@@ -420,6 +425,7 @@ pub struct StaleOwnedWorkCandidate {
     pub task_id: TaskId,
     pub task_revision: i64,
     pub age_seconds: i64,
+    pub review_request_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1399,7 +1405,12 @@ impl TaskStore {
         let mut statement = connection.prepare(concat!(
             "SELECT task.assigned_worker_id, session.session_id, task.id,
                     task.updated_at,
-                    MAX(0, ?1 - MAX(task.updated_at, COALESCE(acted.acted_at, 0)))
+                    MAX(0, ?1 - MAX(task.updated_at, COALESCE(acted.acted_at, 0))),
+                    CASE WHEN task.state = 'review' THEN (
+                        SELECT review.request_message_id FROM task_returned_reviews review
+                        WHERE review.task_id = task.id AND review.answered_at IS NULL
+                          AND review.request_worker_id = task.assigned_worker_id
+                    ) END
              FROM tasks task
              JOIN worker_profiles worker
                ON worker.id = task.assigned_worker_id AND worker.archived_at IS NULL
@@ -1414,7 +1425,11 @@ impl TaskStore {
             last_task_action_source!(),
             " acted
                ON acted.task_id = task.id
-             WHERE task.state = 'active'
+             WHERE (task.state = 'active' OR (task.state = 'review' AND EXISTS (
+                 SELECT 1 FROM task_returned_reviews review
+                 WHERE review.task_id = task.id AND review.answered_at IS NULL
+                   AND review.request_worker_id = task.assigned_worker_id
+             )))
                AND MAX(task.updated_at, COALESCE(acted.acted_at, 0)) + ?2 <= ?1
                AND NOT EXISTS (
                    SELECT 1 FROM worker_engagements engagement
@@ -1426,6 +1441,9 @@ impl TaskStore {
                      AND action.task_id = task.id AND action.worker_id = worker.id
                      AND action.session_id = session.session_id
                      AND action.evidence_revision = task.updated_at
+                     AND (task.state = 'active' OR action.idempotency_key =
+                         'stale-owned-work:' || task.id || ':' || worker.id || ':' || session.session_id || ':' || task.updated_at || ':' ||
+                         (SELECT review.request_message_id FROM task_returned_reviews review WHERE review.task_id = task.id))
                )
                -- Work stops changing while its answer is with the operator, and
                -- that is the system working rather than a fault. Reporting it as
@@ -1448,11 +1466,12 @@ impl TaskStore {
                         row.get::<_, String>(2)?,
                         row.get::<_, i64>(3)?,
                         row.get::<_, i64>(4)?,
+                        row.get::<_, Option<String>>(5)?,
                     ))
                 },
             )?
             .map(|row| {
-                let (worker_id, session_id, task_id, task_revision, age_seconds) = row?;
+                let (worker_id, session_id, task_id, task_revision, age_seconds, review_request_id) = row?;
                 Ok::<_, rusqlite::Error>(StaleOwnedWorkCandidate {
                     worker_id: worker_id
                         .parse()
@@ -1463,6 +1482,7 @@ impl TaskStore {
                     task_id: task_id.parse().map_err(|_| rusqlite::Error::InvalidQuery)?,
                     task_revision,
                     age_seconds,
+                    review_request_id,
                 })
             })
             .collect::<Result<Vec<_>, _>>()
@@ -1494,6 +1514,7 @@ impl TaskStore {
     /// It is still FLAGGED, not suppressed. A worker resting beside a `sleep`
     /// loop it forgot about is genuinely stalled, and a detector that went
     /// quiet whenever any process was alive would never say so.
+    #[allow(clippy::too_many_lines, reason = "Keep candidate fencing and observation insertion in one auditable transaction")]
     pub fn record_stale_owned_work_attention(
         &self,
         candidate: &StaleOwnedWorkCandidate,
@@ -1508,9 +1529,18 @@ impl TaskStore {
                  SELECT 1 FROM tasks task
                  JOIN worker_sessions session
                    ON session.worker_id = task.assigned_worker_id AND session.ended_at IS NULL
-                 WHERE task.id = ?1 AND task.state = 'active'
+                 WHERE task.id = ?1 AND ((task.state = 'active' AND ?7 IS NULL) OR (task.state = 'review' AND EXISTS (
+                     SELECT 1 FROM task_returned_reviews review
+                     WHERE review.task_id = task.id AND review.answered_at IS NULL
+                       AND review.request_worker_id = task.assigned_worker_id
+                       AND review.request_message_id = ?7
+                 )))
                    AND task.assigned_worker_id = ?2 AND task.updated_at = ?3
                    AND session.session_id = ?4 AND task.updated_at + ?5 <= ?6
+                   AND NOT EXISTS (
+                       SELECT 1 FROM decision_requests decision
+                       WHERE decision.task_id = task.id AND decision.state = 'pending'
+                   )
                    AND NOT EXISTS (
                        SELECT 1 FROM worker_engagements engagement
                        WHERE engagement.worker_id = task.assigned_worker_id
@@ -1524,6 +1554,7 @@ impl TaskStore {
                 candidate.session_id.to_string(),
                 minimum_age_seconds,
                 now,
+                candidate.review_request_id.as_deref(),
             ],
             |row| row.get(0),
         )?;
@@ -1555,7 +1586,8 @@ impl TaskStore {
                  SELECT 1 FROM task_dispatches dispatch
                  WHERE dispatch.task_id = ?1 AND dispatch.worker_id = ?2
                    AND dispatch.state = 'uncertain' AND dispatch.delivered_at IS NULL
-             ) AND NOT EXISTS(
+             ) AND EXISTS(SELECT 1 FROM tasks task WHERE task.id = ?1 AND task.state = 'active')
+             AND NOT EXISTS(
                  SELECT 1 FROM task_dispatches delivered
                  WHERE delivered.task_id = ?1 AND delivered.worker_id = ?2
                    AND delivered.delivered_at IS NOT NULL
@@ -1575,7 +1607,7 @@ impl TaskStore {
         } else if background_work == BackgroundWorkReading::Running {
             (
                 "stale_owned_work_attention",
-                "Active work is unchanged while its loaded worker rests, but something the worker started is still running — a build, a run watch, or a measurement. Waiting may be the work. Read the terminal before steering.",
+                "Worker-owned work is unchanged while its loaded worker rests, but something the worker started is still running — a build, a run watch, or a measurement. Waiting may be the work. Read the terminal before steering.",
                 "stale-owned-work",
             )
         } else {
@@ -1585,18 +1617,22 @@ impl TaskStore {
                 // "nothing it started is still running", which is a claim about
                 // processes made by something that only ever looked at a screen.
                 if background_work == BackgroundWorkReading::NoneVisible {
-                    "Active work is unchanged while its loaded worker is resting, and its terminal shows nothing running. A process the provider never announced would not appear here."
+                    "Worker-owned work is unchanged while its loaded worker is resting, and its terminal shows nothing running. A process the provider never announced would not appear here."
                 } else {
-                    "Active work is unchanged while its loaded worker is resting, and its terminal could not be read — whether anything it started is still running is unknown."
+                    "Worker-owned work is unchanged while its loaded worker is resting, and its terminal could not be read — whether anything it started is still running is unknown."
                 },
                 "stale-owned-work",
             )
         };
         let reason = note_evidence_beside(&transaction, candidate.task_id, now, reason)?;
-        let idempotency_key = format!(
+        let mut idempotency_key = format!(
             "{key}:{}:{}:{}:{}",
             candidate.task_id, candidate.worker_id, candidate.session_id, candidate.task_revision
         );
+        if let Some(request) = &candidate.review_request_id {
+            idempotency_key.push(':');
+            idempotency_key.push_str(request);
+        }
         let changed = transaction.execute(
             "INSERT OR IGNORE INTO coordinator_actions
                  (id, idempotency_key, kind, worker_id, task_id, session_id,
@@ -3849,6 +3885,121 @@ mod tests {
             )
             .unwrap();
         (worker.id, session, task.id)
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines, reason = "Exercises one request through observation, replacement and answer without resetting its history")]
+    fn returned_review_participates_in_recovery_only_while_worker_owes_the_answer() {
+        let store = TaskStore::in_memory().unwrap();
+        let (_, _, task) = active_owned_work(&store, "Review worker", 100);
+        store.transition_task(task, TaskState::Review).unwrap();
+        let now = 4_000_000_000;
+        assert!(
+            store
+                .stale_owned_work_candidates(now, 600)
+                .unwrap()
+                .is_empty(),
+            "ordinary Queen-owned Review is not idle worker work"
+        );
+        store
+            .return_review_to_worker(task, "Verify the mobile download", now - 1000)
+            .unwrap();
+        let candidates = store.stale_owned_work_candidates(now, 600).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].task_id, task);
+        assert!(
+            store
+                .record_stale_owned_work_attention(
+                    &candidates[0],
+                    now,
+                    600,
+                    BackgroundWorkReading::NoneVisible
+                )
+                .unwrap()
+        );
+        let attention = store.current_coordinator_attention(now).unwrap();
+        assert!(
+            attention
+                .iter()
+                .any(|row| row.task_id == task && row.kind == "stale_owned_work_attention")
+        );
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Review);
+        assert!(
+            store
+                .stale_owned_work_candidates(now, 600)
+                .unwrap()
+                .is_empty(),
+            "observation is deduplicated"
+        );
+        let replacement = store
+            .return_review_to_worker(task, "Verify the second question instead", now - 1000)
+            .unwrap();
+        assert!(
+            !store
+                .record_stale_owned_work_attention(
+                    &candidates[0],
+                    now,
+                    600,
+                    BackgroundWorkReading::NoneVisible
+                )
+                .unwrap(),
+            "same-second replacement fences the old candidate"
+        );
+        assert!(
+            !store
+                .current_coordinator_attention(now)
+                .unwrap()
+                .iter()
+                .any(|row| row.task_id == task && row.kind == "stale_owned_work_attention"),
+            "old request observation cannot describe its replacement"
+        );
+        let fresh = store.stale_owned_work_candidates(now, 600).unwrap();
+        assert_eq!(
+            fresh.len(),
+            1,
+            "old observation must not suppress replacement"
+        );
+        assert_eq!(
+            fresh[0].review_request_id.as_deref(),
+            Some(replacement.id.as_str())
+        );
+        assert!(
+            store
+                .record_stale_owned_work_attention(
+                    &fresh[0],
+                    now,
+                    600,
+                    BackgroundWorkReading::NoneVisible
+                )
+                .unwrap()
+        );
+        // Model an answer arriving after observation, without changing task revision:
+        // the exact pending review ownership must be rechecked, not just age.
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE task_returned_reviews SET answered_at=?2 WHERE task_id=?1",
+                params![task.to_string(), now],
+            )
+            .unwrap();
+        assert!(
+            !store
+                .record_stale_owned_work_attention(
+                    &fresh[0],
+                    now,
+                    600,
+                    BackgroundWorkReading::NoneVisible
+                )
+                .unwrap()
+        );
+        assert!(
+            !store
+                .current_coordinator_attention(now)
+                .unwrap()
+                .iter()
+                .any(|row| row.task_id == task && row.kind == "stale_owned_work_attention")
+        );
     }
 
     fn assert_v64_to_v65_preserves_action(
