@@ -1,6 +1,7 @@
 import { useId, useMemo } from "react";
 import HeldBriefingList, { BlockingTaskLink, holdReason, waitedFor, briefingWait } from "../orchestration/HeldBriefingList";
-import type { BlockedEscalation, HeldBriefing, HeldDelivery, QueenAutomationStatus, RecoveryQueueItem, RecoveryQueueSnapshot } from "../api";
+import type { BlockedEscalation, HeldBriefing, HeldDelivery, QueenAutomationStatus, RecoveryQueueItem, RecoveryQueueSnapshot, QueenReviewQueueSnapshot } from "../api";
+import { checkedQueueWaits } from "./reviewQueueProjection";
 import DeliveryWaitList from "./DeliveryWaitList";
 import TaskPrerequisiteList from "./TaskPrerequisiteList";
 import { prerequisiteSatisfied, type NextMoveOwner, type Task } from "../api/tasks";
@@ -77,7 +78,7 @@ const GROUP_MEANINGS: Record<Group["owner"], string> = {
   blocked: "Blocked work. Queen coordinates dependencies and recovery; task context explains the recorded block.",
   release: "Finished and accepted. These close themselves when the work ships.",
   nobody: "Closed.",
-  scheduled: "A future hold is recorded. Queen reassesses when it ends; other prerequisites may still apply.",
+  scheduled: "A future hold or authenticated operator deferral is recorded. Queen reassesses when its conditions change; other prerequisites may still apply.",
 };
 
 /** Presentation of a recorded hold, never an instruction to resume a task. */
@@ -157,6 +158,7 @@ export default function QueuesView({
   coordinatorUnavailable = false,
   queenAutomation,
   recovery,
+  reviewQueue,
   now = Date.now(),
 }: {
   tasks: Task[];
@@ -180,6 +182,7 @@ export default function QueuesView({
   coordinatorUnavailable?: boolean;
   queenAutomation?: QueenAutomationStatus;
   recovery?: RecoveryQueueSnapshot;
+  reviewQueue?: QueenReviewQueueSnapshot;
   now?: number;
 }) {
   const queueId = useId();
@@ -191,6 +194,7 @@ export default function QueuesView({
   const projection = useMemo(() => projectTaskQueues(tasks, sourceBriefings, sourceBlockedWaits, workers, recovery?.items), [tasks, sourceBriefings, sourceBlockedWaits, workers, recovery]);
   const { waitingTasks, activeTasks: activeWork, heldBriefings, blockedWaits, extraBlockedWaits: extraWaits, recoveryChecks } = projection;
   const checks = useMemo(() => new Map(recoveryChecks.map(item => [item.task_id, item])), [recoveryChecks]);
+  const checkedWaits = useMemo(() => checkedQueueWaits(tasks, coordinatorUnavailable ? undefined : reviewQueue), [tasks, reviewQueue, coordinatorUnavailable]);
 
   const groups = useMemo<Group[]>(() => {
     const open = waitingTasks;
@@ -199,9 +203,11 @@ export default function QueuesView({
       title: GROUP_TITLES[owner],
       meaning: GROUP_MEANINGS[owner],
       // Missing ownership remains visible without attributing it to someone.
-      tasks: open.filter((task) => (checks.has(task.id) ? "queen" : displayOwner(task, now)) === owner),
+      tasks: open.filter((task) => (checks.has(task.id) ? "queen"
+        : checkedWaits.has(task.id) ? (checkedWaits.get(task.id)!.assessment.kind === "operator_deferral" ? "scheduled" : "blocked")
+        : displayOwner(task, now)) === owner),
     })).filter((group) => group.tasks.length > 0);
-  }, [waitingTasks, now, checks]);
+  }, [waitingTasks, now, checks, checkedWaits]);
 
   const total = groups.reduce((sum, group) => sum + group.tasks.length, 0);
   const waits = new Map(blockedWaits.map((wait) => [wait.task_id, wait]));
@@ -262,7 +268,10 @@ export default function QueuesView({
                 <li key={task.id}>
                   <button type="button" onClick={() => onOpenTask(task.id)}>
                     <span className="queue-task-title">{task.title}</span>
-                    <span className="queue-task-meta">{checks.has(task.id) ? RECOVERY_LABELS[checks.get(task.id)!.state] : taskProgress(task, now)}</span>
+                    <span className="queue-task-meta">{checks.has(task.id) ? RECOVERY_LABELS[checks.get(task.id)!.state]
+                      : checkedWaits.has(task.id) ? (checkedWaits.get(task.id)!.assessment.kind === "operator_deferral"
+                        ? "Operator-deferred · source verified by Queen" : "External condition · checked by Queen")
+                      : taskProgress(task, now)}</span>
                     <span className="queue-task-meta">
                       {task.assigned_worker_id
                         ? (workerNames.get(task.assigned_worker_id) ?? "assigned")
@@ -276,6 +285,14 @@ export default function QueuesView({
                     {checks.get(task.id)!.last_assessment && <QueueEvidence label="Previous Queen assessment (not rechecked here)" text={`${checks.get(task.id)!.last_assessment!.reason} Source: ${checks.get(task.id)!.last_assessment!.source}`} />}
                   </div>}
                   {briefing && <p className="queue-task-meta">Briefing held: {holdReason(briefing)} · queued {briefingWait([briefing], now / 1000)} <BlockingTaskLink briefing={briefing} onOpenTask={onOpenTask} /></p>}
+                  {checkedWaits.has(task.id) && <div className="queue-task-meta">
+                    <QueueEvidence label="Waiting for" text={checkedWaits.get(task.id)!.assessment.condition} />
+                    <details className="decision-argument"><summary>Queen's check · {new Date(checkedWaits.get(task.id)!.recorded_at * 1000).toLocaleString()}</summary>
+                      <p className="decision-prose">{checkedWaits.get(task.id)!.assessment.evidence}</p>
+                      <p className="decision-prose">Source: {checkedWaits.get(task.id)!.assessment.source}</p>
+                      <p>This records a checked wait, not approval to resume or proof that the task is complete.</p>
+                    </details>
+                  </div>}
                   <TaskPrerequisiteList task={task} workerNames={workerNames} onOpenTask={onOpenTask} compact />
                   {workerAwaitingAnswer(task, workerById.get(task.assigned_worker_id ?? "")) && <div className="queue-task-meta">
                     <p>Worker reports waiting for an answer · check Needs you or its current prompt. This observation does not establish a task blocker.</p>
@@ -307,6 +324,8 @@ export default function QueuesView({
         );
       })}
       <DeliveryWaitList held={heldDeliveries} />
+      {reviewQueue?.truncated && <p role="status">Queen review details are partial; unchecked work stays in its recorded queue.</p>}
+      {!reviewQueue && <p className="queue-meaning">Queen's checked-wait details are unavailable; showing recorded task ownership.</p>}
       {extraWaits.length > 0 && <article className="queue-group" data-owner="blocked">
         <header><h2>Blocked work awaiting reconciliation <span className="queue-count">{extraWaits.length}</span></h2>
           <p className="queue-meaning">Reported by the coordinator but absent from the current task list. Age alone does not require your approval.</p></header>

@@ -11,6 +11,14 @@ use swarm_domain::{
 use crate::{TaskStore, TaskStoreError};
 
 const MAX_REVIEW_SOURCE_ROWS: usize = 256;
+const MAX_QUEUE_ASSESSMENTS: usize = 64;
+
+pub(crate) struct ReviewQueueCache {
+    local_changes: u64,
+    data_version: i64,
+    next_deadline: Option<i64>,
+    snapshot: swarm_domain::QueenReviewQueueSnapshot,
+}
 
 pub(super) fn migrate(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
     let original: String = transaction.query_row(
@@ -106,56 +114,135 @@ impl TaskStore {
     ) -> Result<swarm_domain::QueenTaskReviewEvidence, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        let obligation = task_review_evidence(&transaction, task_id)?;
-        let task = transaction.query_row(
-            &format!("{} WHERE t.id=?1", TaskStore::TASK_PROJECTION),
-            [task_id.to_string()],
-            crate::task_from_row,
+        let snapshot = task_review_snapshot(&transaction, task_id)?;
+        transaction.commit()?;
+        Ok(snapshot)
+    }
+
+    /// Bounded queue judgments, reusing a snapshot only across an unchanged
+    /// database generation and before any recorded hold deadline. All access
+    /// follows connection -> cache lock order. No terminal observation occurs.
+    ///
+    /// # Errors
+    /// Fails closed on corrupt/unavailable evidence; never returns stale cache
+    /// after a failed revalidation or a database recovery fence.
+    pub fn queen_review_queue_snapshot(
+        &self,
+    ) -> Result<swarm_domain::QueenReviewQueueSnapshot, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let mut cache = self
+            .review_queue_cache
+            .lock()
+            .map_err(|_| TaskStoreError::LockPoisoned)?;
+        let local_changes = connection.total_changes();
+        let data_version: i64 =
+            connection.pragma_query_value(None, "data_version", |row| row.get(0))?;
+        let now: i64 = connection.query_row("SELECT unixepoch()", [], |row| row.get(0))?;
+        if let Some(saved) = cache.as_ref()
+            && saved.local_changes == local_changes
+            && saved.data_version == data_version
+            && now >= saved.snapshot.checked_at
+            && saved.next_deadline.is_none_or(|deadline| now < deadline)
+        {
+            return Ok(saved.snapshot.clone());
+        }
+        *cache = None;
+        let transaction = connection.transaction()?;
+        let ids = {
+            let mut statement = transaction.prepare(
+                "SELECT r.task_id FROM queen_task_review_receipts r JOIN tasks t ON t.id=r.task_id
+                 WHERE t.removed_at IS NULL AND t.state NOT IN ('completed','abandoned')
+                   AND t.hive_id=(SELECT hive_id FROM local_hive_identity WHERE singleton=1)
+                 ORDER BY r.task_id LIMIT 65",
+            )?;
+            statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let next_deadline = transaction.query_row(
+            "SELECT min(blocked_until) FROM tasks WHERE state='blocked' AND removed_at IS NULL
+             AND blocked_until>?1 AND hive_id=(SELECT hive_id FROM local_hive_identity WHERE singleton=1)",
+            [now], |row| row.get(0),
         )?;
-        let current_run_id: Option<String> = transaction.query_row(
+        let mut snapshot = swarm_domain::QueenReviewQueueSnapshot {
+            items: Vec::new(),
+            truncated: ids.len() > MAX_QUEUE_ASSESSMENTS,
+            checked_at: now,
+        };
+        for id in ids.into_iter().take(MAX_QUEUE_ASSESSMENTS) {
+            let id = id
+                .parse::<TaskId>()
+                .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+            let evidence = task_review_snapshot(&transaction, id)?;
+            if evidence.task.next_move_owner == NextMoveOwner::Queen {
+                snapshot.items.push(evidence);
+            }
+        }
+        transaction.commit()?;
+        *cache = Some(ReviewQueueCache {
+            local_changes,
+            data_version,
+            next_deadline,
+            snapshot: snapshot.clone(),
+        });
+        Ok(snapshot)
+    }
+}
+
+fn task_review_snapshot(
+    transaction: &Connection,
+    task_id: TaskId,
+) -> Result<swarm_domain::QueenTaskReviewEvidence, TaskStoreError> {
+    let obligation = task_review_evidence(transaction, task_id)?;
+    let task = transaction.query_row(
+        &format!("{} WHERE t.id=?1", TaskStore::TASK_PROJECTION),
+        [task_id.to_string()],
+        crate::task_from_row,
+    )?;
+    let current_run_id: Option<String> = transaction.query_row(
             "SELECT run_id FROM queen_automation WHERE id=1
              AND (state IN ('running','uncertain') OR (state IN ('queued','delivering') AND delivered_at IS NOT NULL))
              AND run_id IS NOT NULL AND delivery_session_id IS NOT NULL",
             [], |row| row.get(0),
         ).optional()?.flatten();
-        let saved: Option<(String, String, i64)> = transaction.query_row(
+    let saved: Option<(String, String, i64)> = transaction.query_row(
             "SELECT input_payload,accepted_revision,recorded_at FROM queen_task_review_receipts WHERE task_id=?1",
             [task_id.to_string()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).optional()?;
-        let previous_assessment = saved
-            .map(|(payload, revision, recorded_at)| {
-                let assessment: QueenReviewDispositionInput = serde_json::from_str(&payload)
-                    .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
-                assessment
-                    .validate()
-                    .map_err(|reason| TaskStoreError::IntegrityFailure(reason.into()))?;
-                if assessment.task_id != task_id {
-                    return Err(TaskStoreError::IntegrityFailure(
-                        "saved review assessment belongs to another task".into(),
-                    ));
-                }
-                let status = swarm_domain::queen_review_assessment_status(
-                    assessment.kind,
-                    &assessment.run_id,
-                    current_run_id.as_deref(),
-                    revision == obligation.evidence_revision,
-                );
-                Ok(swarm_domain::QueenReviewAssessmentEvidence {
-                    assessment,
-                    recorded_at,
-                    status,
-                })
+    let previous_assessment = saved
+        .map(|(payload, revision, recorded_at)| {
+            let assessment: QueenReviewDispositionInput = serde_json::from_str(&payload)
+                .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+            assessment
+                .validate()
+                .map_err(|reason| TaskStoreError::IntegrityFailure(reason.into()))?;
+            if assessment.task_id != task_id {
+                return Err(TaskStoreError::IntegrityFailure(
+                    "saved review assessment belongs to another task".into(),
+                ));
+            }
+            let status = swarm_domain::queen_review_assessment_status(
+                assessment.kind,
+                &assessment.run_id,
+                current_run_id.as_deref(),
+                revision == obligation.evidence_revision,
+            );
+            Ok(swarm_domain::QueenReviewAssessmentEvidence {
+                assessment,
+                recorded_at,
+                status,
             })
-            .transpose()?;
-        transaction.commit()?;
-        Ok(swarm_domain::QueenTaskReviewEvidence {
-            task,
-            obligation,
-            current_run_id,
-            previous_assessment,
         })
-    }
+        .transpose()?;
+    Ok(swarm_domain::QueenTaskReviewEvidence {
+        task,
+        obligation,
+        current_run_id,
+        previous_assessment,
+    })
+}
 
+impl TaskStore {
     /// Record an explicit current assessment, never create authority or resume work.
     ///
     /// # Errors
@@ -498,6 +585,199 @@ mod tests {
             .transition_task(input.task_id, TaskState::Abandoned)
             .unwrap();
         assert!(store.queen_review_check_times().unwrap().is_empty());
+    }
+
+    #[test]
+    fn review_queue_cache_reuses_unchanged_reads_and_invalidates_local_writes() {
+        use swarm_domain::QueenReviewAssessmentStatus as Status;
+        let store = TaskStore::in_memory().unwrap();
+        let input = external_wait(&store);
+        assert!(
+            store
+                .queen_review_queue_snapshot()
+                .unwrap()
+                .items
+                .is_empty()
+        );
+        store
+            .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 101)
+            .unwrap();
+        let first = store.queen_review_queue_snapshot().unwrap();
+        assert_eq!(first.items.len(), 1);
+        assert_eq!(
+            first.items[0].previous_assessment.as_ref().unwrap().status,
+            Status::CoveredForCurrentRun
+        );
+        let changes = store.connection().unwrap().total_changes();
+        // Instrument the saved read time, not a timer or production task state.
+        store
+            .review_queue_cache
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .snapshot
+            .checked_at = first.checked_at - 1;
+        assert_eq!(
+            store.queen_review_queue_snapshot().unwrap().checked_at,
+            first.checked_at - 1
+        );
+        assert_eq!(store.connection().unwrap().total_changes(), changes);
+        // A same-second edit with unchanged updated_at still invalidates evidence.
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET description='Changed scope' WHERE id=?1",
+                [input.task_id.to_string()],
+            )
+            .unwrap();
+        let refreshed = store.queen_review_queue_snapshot().unwrap();
+        assert_eq!(
+            refreshed.items[0]
+                .previous_assessment
+                .as_ref()
+                .unwrap()
+                .status,
+            Status::EvidenceChanged
+        );
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE queen_task_review_receipts SET input_payload='{}' WHERE task_id=?1",
+                [input.task_id.to_string()],
+            )
+            .unwrap();
+        assert!(store.queen_review_queue_snapshot().is_err());
+        assert!(store.review_queue_cache.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn review_queue_cache_invalidates_external_writes_and_restarts() {
+        use swarm_domain::QueenReviewAssessmentStatus as Status;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("review.sqlite");
+        let store = TaskStore::open(&path).unwrap();
+        let input = external_wait(&store);
+        store
+            .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 101)
+            .unwrap();
+        store.queen_review_queue_snapshot().unwrap();
+        let other = rusqlite::Connection::open(&path).unwrap();
+        other
+            .execute(
+                "UPDATE tasks SET description='External writer corrected scope' WHERE id=?1",
+                [input.task_id.to_string()],
+            )
+            .unwrap();
+        assert_eq!(
+            store.queen_review_queue_snapshot().unwrap().items[0]
+                .previous_assessment
+                .as_ref()
+                .unwrap()
+                .status,
+            Status::EvidenceChanged
+        );
+        drop(other);
+        drop(store);
+        let reopened = TaskStore::open(&path).unwrap();
+        assert!(reopened.review_queue_cache.lock().unwrap().is_none());
+        assert_eq!(
+            reopened.queen_review_queue_snapshot().unwrap().items[0]
+                .previous_assessment
+                .as_ref()
+                .unwrap()
+                .status,
+            Status::EvidenceChanged
+        );
+    }
+
+    #[test]
+    fn review_queue_cache_deadline_clock_and_recovery_fences_do_not_need_sleep() {
+        let store = TaskStore::in_memory().unwrap();
+        let first = store.queen_review_queue_snapshot().unwrap();
+        {
+            let mut cache = store.review_queue_cache.lock().unwrap();
+            let saved = cache.as_mut().unwrap();
+            saved.next_deadline = Some(0);
+            saved.snapshot.checked_at = first.checked_at - 1;
+        }
+        assert!(store.queen_review_queue_snapshot().unwrap().checked_at >= first.checked_at);
+        store
+            .review_queue_cache
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .snapshot
+            .checked_at = i64::MAX;
+        assert_ne!(
+            store.queen_review_queue_snapshot().unwrap().checked_at,
+            i64::MAX
+        );
+        store
+            .recovery_required
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(matches!(
+            store.queen_review_queue_snapshot(),
+            Err(TaskStoreError::DatabaseRecoveryRequired)
+        ));
+    }
+
+    #[test]
+    fn review_queue_bounds_and_observes_cold_and_cached_read_cost() {
+        let store = TaskStore::in_memory().unwrap();
+        let mut input = external_wait(&store);
+        store
+            .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 101)
+            .unwrap();
+        for index in 0..MAX_QUEUE_ASSESSMENTS {
+            let task = store
+                .create_task(&format!("Bounded fixture {index}"), "/workspace/demo")
+                .unwrap();
+            store.transition_task(task.id, TaskState::Ready).unwrap();
+            store
+                .transition_task_with_note(task.id, TaskState::Blocked, "External fixture gate")
+                .unwrap();
+            input.task_id = task.id;
+            input.expected_revision = store
+                .queen_task_review_evidence(task.id)
+                .unwrap()
+                .evidence_revision;
+            store
+                .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 101)
+                .unwrap();
+        }
+        let started = std::time::Instant::now();
+        let snapshot = store.queen_review_queue_snapshot().unwrap();
+        let cold = started.elapsed();
+        assert!(snapshot.truncated);
+        assert_eq!(snapshot.items.len(), MAX_QUEUE_ASSESSMENTS);
+        let changes = store.connection().unwrap().total_changes();
+        let started = std::time::Instant::now();
+        for _ in 0..100 {
+            let cached = store.queen_review_queue_snapshot().unwrap();
+            assert_eq!(cached.checked_at, snapshot.checked_at);
+            assert_eq!(cached.items.len(), MAX_QUEUE_ASSESSMENTS);
+        }
+        eprintln!(
+            "review queue: 64 receipts cold={}us; 100 cached reads={}us",
+            cold.as_micros(),
+            started.elapsed().as_micros()
+        );
+        assert_eq!(store.connection().unwrap().total_changes(), changes);
+        store
+            .transition_task(input.task_id, TaskState::Abandoned)
+            .unwrap();
+        let reduced = store.queen_review_queue_snapshot().unwrap();
+        assert!(!reduced.truncated);
+        assert!(
+            reduced
+                .items
+                .iter()
+                .all(|item| item.task.id != input.task_id)
+        );
     }
 
     #[test]

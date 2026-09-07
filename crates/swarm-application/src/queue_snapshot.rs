@@ -13,6 +13,16 @@ pub struct QueenQueueSnapshot {
 }
 
 impl TaskService {
+    /// Read bounded validated judgments without changing task ownership.
+    ///
+    /// # Errors
+    /// Propagates unavailable or corrupt evidence, never stale cached coverage.
+    pub fn queen_review_queue_snapshot(
+        &self,
+    ) -> Result<swarm_domain::QueenReviewQueueSnapshot, ApplicationError> {
+        Ok(self.store.queen_review_queue_snapshot()?)
+    }
+
     /// Operator-authorized adapters supply existing supervisor observations.
     /// This read neither observes terminals again nor certifies recovery success.
     ///

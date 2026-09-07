@@ -63,6 +63,7 @@ pub(super) struct CoordinatorStatusResponse {
     /// apparently ignored.
     held_briefings: Vec<swarm_persistence::HeldTaskDispatch>,
     recovery: swarm_domain::RecoveryQueueSnapshot,
+    review_queue: Option<swarm_domain::QueenReviewQueueSnapshot>,
 }
 
 /// One thing the coordinator is holding, and for how long.
@@ -441,6 +442,11 @@ pub(super) async fn coordinator_status(
             blocked_escalations: blocked_escalations(&state)?,
             unsettled_review: unsettled_review(&state)?,
             recovery,
+            review_queue: swarm_application::TaskService::new(task_store(&state)?.clone())
+                .queen_review_queue_snapshot()
+                // An unavailable judgment read must not take delivery/recovery
+                // visibility down with it. Null is unavailable, never empty.
+                .ok(),
         }),
     )
         .into_response())

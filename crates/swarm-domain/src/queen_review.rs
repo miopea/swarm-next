@@ -27,6 +27,15 @@ pub struct QueenTaskReviewEvidence {
     pub previous_assessment: Option<QueenReviewAssessmentEvidence>,
 }
 
+/// Current saved judgments for the queue, separate from task lifecycle/ownership.
+/// Missing or truncated evidence must never be interpreted as an all-clear.
+#[derive(Clone, Debug, Serialize)]
+pub struct QueenReviewQueueSnapshot {
+    pub items: Vec<QueenTaskReviewEvidence>,
+    pub truncated: bool,
+    pub checked_at: i64,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QueenReviewAssessmentStatus {

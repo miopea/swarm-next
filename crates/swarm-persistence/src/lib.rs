@@ -314,6 +314,7 @@ impl Default for ReleaseCheckState {
 pub struct TaskStore {
     connection: Arc<Mutex<Connection>>,
     recovery_required: Arc<AtomicBool>,
+    review_queue_cache: Arc<Mutex<Option<queen_review::ReviewQueueCache>>>,
 }
 
 #[derive(Debug, Error)]
@@ -955,6 +956,7 @@ impl TaskStore {
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
             recovery_required: Arc::new(AtomicBool::new(false)),
+            review_queue_cache: Arc::new(Mutex::new(None)),
         })
     }
 

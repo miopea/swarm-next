@@ -14739,6 +14739,9 @@ mod tests {
         assert_eq!(coordinator["uncertain_actions"], 0);
         assert_eq!(coordinator["stale_attention_actions"], 0);
         assert_eq!(coordinator["worker_exit_attention_actions"], 0);
+        assert_eq!(coordinator["review_queue"]["items"], serde_json::json!([]));
+        assert_eq!(coordinator["review_queue"]["truncated"], false);
+        assert!(coordinator["review_queue"]["checked_at"].as_i64().unwrap() > 0);
         assert_eq!(
             coordinator["automatic_start_admission"],
             "deferred_unavailable"

@@ -169,6 +169,51 @@ terminal. Queen escalates an actual inability to recover with a concrete request
 
 ## Acceptance
 
+### Checked waits in the operator queue
+
+Expose a separate bounded review-judgment snapshot through the existing
+coordinator read, never by adding receipt fields to the Task evidence hash.
+At most 64 saved open-task judgments are revalidated using the same revision
+and run rules as Queen's exact read; report overflow explicitly. A single
+TaskStore-owned cache retains that snapshot only across unchanged local
+connection total_changes and SQLite data_version, before the earliest pending
+hold deadline. A backwards clock, write, restart or recovery fence prevents
+reuse. Errors never return previously cached coverage. No timer, terminal
+observation, schema migration or new command authority is introduced.
+
+The UI fences each item against the complete task projection from its separate
+task read. Valid operator deferrals may appear under deliberately parked work;
+current-run external assessments appear with dependencies/holds. External
+assessments needing a fresh run check remain Queen work. Between runs only an
+unchanged authenticated operator deferral is reusable for this presentation.
+Keep concise condition, check time and expandable evidence/source visible.
+Missing, stale or failed coordinator evidence uses recorded ownership, not an
+all-clear. These presentation groups never change task state, next-move owner,
+review completion, task count, permissions or terminal delivery. The control-room
+UI owns the mixed-version unavailable fallback until supported APIs expose it.
+
+Verify unchanged cache reuse without writes, local and external same-second
+changes, deadlines/backwards clocks, corrupted evidence, database recovery,
+restart, bounds and mixed browser payloads. Measure the cold read and unchanged
+read overhead before deployment; a bounded cache alone is not performance proof.
+
+September 7 implementation checkpoint: the isolated Linux fixture passed local
+and external-write invalidation, same-second edits, corrupt receipt rejection,
+restart, deadline/clock and database-recovery fences. With 64 saved judgments,
+one cold validation measured 85,901 microseconds; 100 unchanged cached reads
+measured 5,711 microseconds total. These are synthetic debug-build observations,
+not live API latency percentiles or browser performance acceptance. Fifty-seven
+queue/API web tests and the twenty persistence review tests passed. The served
+coordinator contract test and full-workspace strict Clippy passed before the
+final unavailable-read isolation; final reruns and full persistence tests are
+in progress. No deployment or rendered acceptance is claimed yet.
+
+If judgment validation is unavailable, the coordinator exposes a null judgment
+snapshot while preserving its independently available delivery/recovery data.
+The UI restores recorded ownership and reports the unavailable details instead
+of retaining old checked-wait groups. It never converts this failure to an empty
+successful judgment list.
+
 ### Review fairness across incomplete turns
 
 September 7 live review `01a07ceb-030f-7341-9b22-24c812e13d9b`

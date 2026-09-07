@@ -6,7 +6,7 @@ import {
 } from "./api/request";
 import type { PresenceDeviceClass } from "./api/presence";
 import type { JiraConnectionState } from "./api/jira";
-import type { TaskPriority, TaskState } from "./api/tasks";
+import type { Task, TaskPriority, TaskState } from "./api/tasks";
 
 export {
   authenticatedFetch,
@@ -305,9 +305,24 @@ export type RecoveryQueueItem = {
 };
 export type RecoveryQueueSnapshot = { items: RecoveryQueueItem[]; truncated: boolean };
 
+export type QueenReviewQueueSnapshot = {
+  checked_at: number;
+  truncated: boolean;
+  items: {
+    task: Task;
+    previous_assessment: {
+      assessment: { kind: "operator_deferral" | "external_condition"; condition: string; evidence: string; source: string };
+      recorded_at: number;
+      status: "covered_for_current_run" | "fresh_external_check_required" | "evidence_changed" | "no_active_review";
+    } | null;
+  }[];
+};
+
 export type CoordinatorStatus = {
   /** Additive mixed-build field; absence is unavailable, not proof of no recovery work. */
   recovery?: RecoveryQueueSnapshot;
+  /** Queue UI owns the unavailable fallback until supported APIs provide this. */
+  review_queue?: QueenReviewQueueSnapshot | null;
   completed_actions: number;
   queen_calls_avoided: number;
   uncertain_actions: number;

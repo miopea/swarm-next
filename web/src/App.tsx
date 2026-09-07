@@ -1,6 +1,6 @@
 import { isClosedTaskState, isOpenTaskState } from "./api/tasks";
 import { projectTaskQueues } from "./queues/taskQueueProjection";
-import type { RecoveryQueueSnapshot } from "./api";
+import type { RecoveryQueueSnapshot, QueenReviewQueueSnapshot } from "./api";
 import DatabaseRecoveryCard from "./runtime/DatabaseRecoveryCard";
 import BroadcastToWorkers from "./workers/BroadcastToWorkers";
 import ConversationDriftCard, { type WorkerConversation } from "./workers/ConversationDriftCard";
@@ -516,6 +516,7 @@ export function App() {
   // self-resolving state must not badge.
   const [heldBriefings, setHeldBriefings] = useState<HeldBriefing[]>([]);
   const [recoveryQueue, setRecoveryQueue] = useState<RecoveryQueueSnapshot>();
+  const [reviewQueue, setReviewQueue] = useState<QueenReviewQueueSnapshot>();
   /** Bumped to re-read held work immediately rather than waiting for the tick. */
   const [heldDeliveryRefresh, setHeldDeliveryRefresh] = useState(0);
   const [providers, setProviders] = useState<ProviderCapabilities>({ claude_code: true, codex: false });
@@ -623,6 +624,7 @@ export function App() {
       setUnsettledReview([]);
       setHeldBriefings([]);
       setRecoveryQueue(undefined);
+      setReviewQueue(undefined);
     }
   }, [operatorToken]);
   const refreshHeldDeliveries = useCallback(async (signal: AbortSignal) => {
@@ -635,6 +637,7 @@ export function App() {
       setUnsettledReview(status.unsettled_review ?? []);
       setHeldBriefings(status.held_briefings ?? []);
       setRecoveryQueue(status.recovery);
+      setReviewQueue(status.review_queue ?? undefined);
       setCoordinatorUnavailable(false);
     } catch {
       if (!signal.aborted || (signal.reason instanceof DOMException && signal.reason.name === "TimeoutError")) {
@@ -2444,6 +2447,7 @@ export function App() {
         ) : surface === "queues" ? (
           <Suspense fallback={<WorkspaceLoading label="queues" />}>
             <QueuesView
+              reviewQueue={reviewQueue}
               onOpenWorker={(sessionId) => {
                 if (workers.some((worker) => worker.running && worker.active_session_id === sessionId)) openWorker(sessionId);
               }}
