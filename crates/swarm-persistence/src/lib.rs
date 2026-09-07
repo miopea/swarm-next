@@ -696,6 +696,8 @@ pub enum TaskStoreError {
     UnsupportedSchemaVersion { found: i64, supported: i64 },
     #[error("database integrity check failed: {0}")]
     IntegrityFailure(String),
+    #[error("recovery assessment refused: {0}")]
+    RecoveryAssessmentRefused(String),
     #[error("the Legacy migration package is invalid or unsupported")]
     InvalidMigrationBundle,
     #[error("the Legacy migration package changed after preview")]

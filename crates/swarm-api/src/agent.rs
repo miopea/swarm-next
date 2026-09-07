@@ -856,7 +856,7 @@ impl ServerHandler for AgentMcp {
                     input.and_then(|input| {
                         let observed = observations.iter().find(|facts|
                             complete && facts.identity.attention_id == input.identity.attention_id
-                        ).ok_or_else(|| ApplicationError::Store(TaskStoreError::IntegrityFailure(
+                        ).ok_or_else(|| ApplicationError::Store(TaskStoreError::RecoveryAssessmentRefused(
                             "Recovery observation unavailable or changed; read current coordination attention. No assessment was saved.".into()
                         )))?;
                         let identity = self.tasks.record_queen_recovery(

@@ -8894,6 +8894,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "database_recovery_required",
             error.to_string(),
         ),
+        TaskStoreError::RecoveryAssessmentRefused(_) => ApiError::new(
+            StatusCode::CONFLICT,
+            "recovery_assessment_refused",
+            error.to_string(),
+        ),
         TaskStoreError::Io(_)
         | TaskStoreError::Sql(_)
         | TaskStoreError::LockPoisoned
@@ -8922,6 +8927,17 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             )
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn recovery_refusal_is_a_conflict_not_database_failure() {
+    let error = task_store_error(&TaskStoreError::RecoveryAssessmentRefused(
+        "await_delivery requires a pending message".into(),
+    ));
+    assert_eq!(error.status, StatusCode::CONFLICT);
+    assert_eq!(error.code, "recovery_assessment_refused");
+    assert!(!error.message.contains("database"));
 }
 
 fn notification_store_error(error: &TaskStoreError) -> ApiError {

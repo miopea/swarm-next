@@ -78,7 +78,7 @@ impl TaskStore {
     ) -> Result<QueenRecoveryIdentity, TaskStoreError> {
         input
             .validate()
-            .map_err(|reason| TaskStoreError::IntegrityFailure(reason.into()))?;
+            .map_err(refused)?;
         let payload = serde_json::to_string(input)
             .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
         if payload.len() > 8192 {
@@ -140,9 +140,7 @@ impl TaskStore {
         if assess_queen_recovery(&input.identity, &facts, &input.disposition)
             == QueenRecoveryAssessment::Uncovered
         {
-            return Err(refused(
-                "current evidence does not support this recovery assessment",
-            ));
+            return Err(refused(input.disposition.evidence_requirement()));
         }
         tx.execute("DELETE FROM queen_recovery_receipts WHERE task_id IN
             (SELECT id FROM tasks WHERE removed_at IS NOT NULL OR state IN ('completed','abandoned'))", [])?;
@@ -199,7 +197,7 @@ fn recovery_audit_note(input: &QueenRecoveryRecord) -> String {
 }
 
 fn refused(reason: &str) -> TaskStoreError {
-    TaskStoreError::IntegrityFailure(reason.into())
+    TaskStoreError::RecoveryAssessmentRefused(reason.into())
 }
 
 pub(super) fn recovery_coverage(
@@ -285,9 +283,12 @@ pub(super) fn recovery_coverage(
             )
             .optional()?;
         if let Some(payload) = receipt {
-            let saved: QueenRecoveryRecord = serde_json::from_str(&payload)
-                .map_err(|_| refused("stored recovery receipt is unreadable"))?;
-            saved.validate().map_err(refused)?;
+            let saved: QueenRecoveryRecord = serde_json::from_str(&payload).map_err(|_| {
+                TaskStoreError::IntegrityFailure("stored recovery receipt is unreadable".into())
+            })?;
+            saved
+                .validate()
+                .map_err(|reason| TaskStoreError::IntegrityFailure(reason.into()))?;
             // The query fences this judgment to this exact run and current
             // task/session/terminal identity. It never carries to the next run.
             fresh.verified_external_wait = matches!(
@@ -352,8 +353,9 @@ fn refresh_durable_facts(
         .optional()?;
     facts.pending_decision_id = decision
         .map(|id| {
-            id.parse()
-                .map_err(|_| refused("invalid recovery decision identity"))
+            id.parse().map_err(|_| {
+                TaskStoreError::IntegrityFailure("invalid recovery decision identity".into())
+            })
         })
         .transpose()?;
     Ok(())
@@ -735,11 +737,12 @@ mod tests {
             .unwrap();
         facts.identity = input.identity.clone();
         facts.pending_message_id = Some(message.id);
-        assert!(
-            store
-                .record_queen_recovery(&input, &facts, &TaskActivityActor::operator(), NOW + 1)
-                .is_err()
-        );
+        let error = store
+            .record_queen_recovery(&input, &facts, &TaskActivityActor::operator(), NOW + 1)
+            .unwrap_err();
+        assert!(matches!(&error, TaskStoreError::RecoveryAssessmentRefused(_)));
+        assert!(error.to_string().contains("A delivered message is not pending delivery"));
+        assert!(!error.to_string().contains("database integrity"));
         assert_eq!(
             store.get_task(input.identity.task_id).unwrap().state,
             TaskState::Active
