@@ -15777,6 +15777,11 @@ mod tests {
                 requested_command: None,
             })
             .unwrap();
+        // An explicit answer must reach this resting PTY even when its initial
+        // task briefing was just delivered. Readiness protections still apply.
+        store
+            .record_coordination_delivery(session.id(), unix_timestamp())
+            .unwrap();
         let client = HostClient::new(&socket);
         let app = router(
             AppState::default()

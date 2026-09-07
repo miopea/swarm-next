@@ -18,6 +18,22 @@ and web releases continue to preserve running worker sessions.
 Resolving a decision atomically creates one bounded delivery-outbox row for the
 requesting worker.
 
+### Explicit answer responsiveness (September 7 maturity acceptance)
+
+An authenticated operator resolution bypasses coordination pacing, just like an
+explicit operator broadcast. It is an answer to work already waiting for that
+operator, not another automatically generated board reminder. Live fictional
+acceptance found an answered decision held by `RecentDelivery` while its worker
+was resting, solely because the initial task brief started a five-minute cooldown.
+That delay violates the approved answer-to-resumption workflow.
+
+Bypassing pacing does not bypass current session identity, provider readiness,
+unsent-input protection, engagement, unattended provider policy or durable claim
+checks. The same bounded outbox and ambiguous-delivery rules below still apply.
+Task follow-ups, worker messages, outcomes and Queen reviews retain their pacing.
+Test a recent-delivery timestamp at the real HTTP-to-PTY boundary, plus a provider
+question that remains protected, before treating this correction as accepted.
+
 - Delivery targets that worker's current active session; worker identity remains
 durable across provider-process replacement.
 - A live operator engagement lease leaves the outcome queued. Viewing or

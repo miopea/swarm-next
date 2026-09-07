@@ -1106,12 +1106,12 @@ pub(super) struct CoordinationMessage {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Cadence {
     /// Held while the terminal is cooling down, and delivered with whatever
-    /// else has accumulated: follow-up briefs, messages, outcomes, decision
-    /// answers and automation runs. Task and terminal safety gates are separate.
+    /// else has accumulated: follow-up briefs, messages, outcomes and automation
+    /// runs. Task and terminal safety gates are separate.
     Cooled,
     /// Written as soon as the terminal is resting, cooldown or not.
     ///
-    /// Operator broadcasts and an assignment's first briefing. Initial work
+    /// Operator answers, broadcasts and an assignment's first briefing. Initial work
     /// should not sit idle because an unrelated earlier message landed recently.
     /// This bypasses only pacing, never provider or task admission checks.
     Immediate,
@@ -1170,7 +1170,7 @@ pub(super) fn decision_delivery_message(delivery: &DecisionDispatch) -> Coordina
         format!("Answers: {answers}.")
     };
     CoordinationMessage {
-        cadence: Cadence::Cooled,
+        cadence: Cadence::Immediate,
         bytes: format!(
             "[Swarm decision {} resolved] {} Operator note: {} Use swarm_list_decisions for the full request context.\r",
             delivery.decision_id, outcome, note,
@@ -3200,7 +3200,7 @@ mod tests {
     /// A per-builder test would not have caught it. The flag lives in the
     /// SUBMITTER and the builders are what must satisfy it, so the assertion
     /// belongs across all of them at once.
-    /// Initial briefs and operator broadcasts bypass pacing, not readiness.
+    /// Initial briefs and explicit operator actions bypass pacing, not readiness.
     ///
     /// The cooldown exists because everything the BOARD generates arrives at
     /// whatever pause an agent next produces, so a busy agent is written to at
@@ -3212,12 +3212,12 @@ mod tests {
     /// is 600 — so a 300 second cooldown would silently consume half of every
     /// broadcast's window and expire some of them outright.
     ///
-    /// Asserted over every builder rather than the one that changed, because
-    /// the failure this guards is a NEW path quietly choosing Immediate: one
-    /// exemption is a decision, and a second one nobody argued for is how a
-    /// cooldown stops meaning anything.
+    /// Operator decision answers also bypass pacing: the worker is awaiting the
+    /// human's answer, not another automatic reminder. ADR 0015 records the live
+    /// decision-recovery failure. Assert every builder to keep unrelated board
+    /// coordination from quietly acquiring that exemption.
     #[test]
-    fn only_broadcasts_and_initial_briefings_bypass_coordination_pacing() {
+    fn operator_answers_broadcasts_and_initial_briefings_bypass_coordination_pacing() {
         let session = WorkerSessionId::new();
         let task: TaskId = "01a06300-0000-7000-8000-000000000001"
             .parse()
@@ -3301,7 +3301,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             immediate,
-            vec!["task brief", "operator broadcast"],
+            vec!["task brief", "operator decision", "operator broadcast"],
             "follow-up coordination must retain pacing"
         );
     }
