@@ -4815,6 +4815,10 @@ mod tests {
                 .unwrap(),
             "a decision arriving during terminal observation must preserve the operator wait"
         );
+        assert_eq!(
+            store.get_task(task).unwrap().next_move_owner,
+            swarm_domain::NextMoveOwner::Operator
+        );
         assert_eq!(store.get_task(task).unwrap().state, TaskState::Review);
     }
 

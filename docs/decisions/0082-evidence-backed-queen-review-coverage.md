@@ -12,6 +12,15 @@ Neither a summary sentence nor the outcome `no_action` supplies that evidence.
 
 ## Boundaries
 
+For returned Review work, an open task-linked operator decision owns the next
+move before the worker's outstanding review request. This does not erase the
+request, change the assignee, move Review backward, or approve work. Resolving
+the decision re-derives worker ownership if the request remains outstanding.
+Likewise, a pending decision suppresses an older idle-worker attention record;
+the same task must not simultaneously be described as an unexplained worker
+stall while the system is waiting for a recorded human ruling. This does not
+infer an operator decision from prose or alter ordinary Active-task ownership.
+
 The application derives obligations from the same domain task projection as
 Queues. The persistence boundary supplies an opaque evidence revision covering
 the task, relevant decisions, dependency states and current delivery evidence.

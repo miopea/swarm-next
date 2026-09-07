@@ -109,6 +109,7 @@ function taskProgress(task: Task, now: number): string {
     return task.state === "active" ? "Marked active" : "Ready · briefing delivery not recorded";
   }
   if (task.state === "review") {
+    if (task.next_move_owner === "operator") return "Waiting for your decision";
     if (task.outcome_delivery_state === "uncertain") return "Handoff delivery unconfirmed · Queen must reconcile before retrying";
     if (task.outcome_delivery_state === "queued" || task.outcome_delivery_state === "dispatching") return "Review handoff awaiting confirmed delivery";
     if (task.next_move_owner === "worker") return task.review_request_id

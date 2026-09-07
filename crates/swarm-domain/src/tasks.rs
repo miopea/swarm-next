@@ -928,15 +928,13 @@ impl NextMoveOwner {
             // Assigned work is the worker's to start, so "N tasks ready" was
             // never the useful number: half of it was never waiting on Queen.
             TaskState::Ready if assigned => Self::Worker,
+            // A returned review retains its worker's debt, but a pending
+            // task-linked human ruling owns the NEXT move. Resolving it
+            // re-derives worker ownership without moving or reassigning work.
+            TaskState::Review | TaskState::Blocked if awaiting_operator_decision => Self::Operator,
             // Queen has handed this back and named what is missing. The task
             // did not move; the debt did.
             TaskState::Review if review_returned => Self::Worker,
-            // AFTER the hand-back, because that is an explicit act by Queen
-            // naming what the worker owes, and a decision left open beside it
-            // does not cancel the debt she named.
-            // The hard block remains, but its current requested human ruling
-            // is the next move. Resolving it re-derives the remaining owner.
-            TaskState::Review | TaskState::Blocked if awaiting_operator_decision => Self::Operator,
             // Base ownership only. The shared read then applies current blocker
             // evidence: real gates stay Blocked; absent/cleared gates give Queen
             // the verification move without changing the task state.
@@ -972,6 +970,10 @@ mod next_move_tests {
             );
             assert_eq!(
                 NextMoveOwner::derive(TaskState::Review, assigned, true, true),
+                NextMoveOwner::Operator
+            );
+            assert_eq!(
+                NextMoveOwner::derive(TaskState::Review, assigned, true, false),
                 NextMoveOwner::Worker
             );
             for state in [TaskState::Completed, TaskState::Abandoned] {

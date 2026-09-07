@@ -15,6 +15,15 @@ function task(overrides: Partial<Task>): Task {
 }
 
 describe("QueuesView", () => {
+  test("a returned review with an operator decision shows the human next move", () => {
+    render(<QueuesView workers={[]} onOpenTask={vi.fn()} tasks={[task({
+      state: "review", next_move_owner: "operator", review_request_id: "request",
+      review_request: "Verify using an approved test account", assigned_worker_id: "w",
+    })]} />);
+    expect(screen.getByRole("heading", { name: "Waiting on you 1" })).toBeVisible();
+    expect(screen.getByText("Waiting for your decision")).toBeVisible();
+    expect(screen.queryByRole("heading", { name: /Waiting on a worker/ })).not.toBeInTheDocument();
+  });
   test("each owner section groups workers and shows recorded order and review waits", () => {
     const workers = [{ id: "b", name: "Bee", position: 0 }, { id: "a", name: "Ant", position: 1 }] as Worker[];
     render(<QueuesView workers={workers} onOpenTask={vi.fn()} tasks={[
