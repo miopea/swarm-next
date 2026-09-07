@@ -116,6 +116,21 @@ validation, bounded process-owned transport, safe error presentation, explicit
 retry/retention controls and the operator UI remain required. No transport or
 customer-facing reply is invoked by schema migration or opening an outbox record.
 
+### Bounded Hive HTTP transport (September 7, not activated)
+
+The transport sends only the exact frozen report to its deployment-owned endpoint.
+It refuses redirects, bounds connection establishment to five seconds and the
+whole request/response to twenty seconds, and caps receipt bytes at 16 KiB even
+without Content-Length. It carries no Admin credential and owns no retry loop.
+Only a receipt revalidated by the application's durable attempt fence can confirm
+delivery. Missing, invalid or mismatched receipts remain uncertain with the same
+submission key; raw remote error bodies do not become operator diagnostics.
+
+The process-owned sender and authenticated operator UI are not wired yet. That
+owner must bound concurrency, retain admission through blocking persistence work,
+recover interrupted claims only after its predecessor ends, and settle outcomes
+durably. Constructing this adapter alone starts no task and sends no report.
+
 ### Central source discovery and durable health
 
 BFG Admin confirmed the single source identity `swarm-support` / `Swarm Support`.

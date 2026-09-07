@@ -1,6 +1,8 @@
 //! Explicit operator-reviewed Hive feedback, separate from central support and task intake.
-use swarm_domain::SupportSubmissionInput;
-use swarm_persistence::{SupportOutboxEntry, SupportOutboxError, SupportOutboxStatus, TaskStore};
+use swarm_domain::{SupportDeliveryState, SupportSubmissionInput};
+use swarm_persistence::{
+    SupportOutboxEntry, SupportOutboxError, SupportOutboxStatus, SupportReceipt, TaskStore,
+};
 use thiserror::Error;
 use url::Url;
 use uuid::Uuid;
@@ -116,6 +118,39 @@ impl HiveSupportService {
             now,
         )?)
     }
+
+    /// Fences an untrusted transport receipt; invalid or missing receipts stay uncertain.
+    ///
+    /// # Errors
+    /// Superseded attempts and storage failures cannot settle another owner's claim.
+    pub fn settle(
+        &self,
+        key: Uuid,
+        attempt: Uuid,
+        receipt: Option<SupportReceipt>,
+        now: i64,
+    ) -> Result<(), HiveSupportServiceError> {
+        if let Some(receipt) = receipt {
+            match self.store.settle_support_submission(
+                key,
+                attempt,
+                SupportDeliveryState::Confirmed,
+                Some(receipt),
+                now,
+            ) {
+                Ok(()) => return Ok(()),
+                Err(SupportOutboxError::InvalidTransition) => (),
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(self.store.settle_support_submission(
+            key,
+            attempt,
+            SupportDeliveryState::Uncertain,
+            None,
+            now,
+        )?)
+    }
 }
 
 #[cfg(test)]
@@ -192,5 +227,43 @@ mod tests {
         assert_eq!(claimed.destination, saved.destination);
         assert_eq!(claimed.delivery.attempts, 1);
         assert!(original.claim(saved.submission_key, 4).is_err());
+    }
+
+    #[test]
+    fn wrong_receipt_stays_uncertain_and_cannot_settle_a_newer_attempt() {
+        let store = TaskStore::in_memory().unwrap();
+        let service = HiveSupportService::new(
+            store.clone(),
+            SupportDestination::parse("https://support.example.invalid").unwrap(),
+        );
+        let saved = service.submit_reviewed(input(), 1).unwrap();
+        let first = service.claim(saved.submission_key, 2).unwrap();
+        let first_id = first.delivery.attempt_id.unwrap();
+        let wrong = SupportReceipt {
+            submission_key: Uuid::from_u128(99).to_string(),
+            conversation_id: Uuid::from_u128(2).to_string(),
+            message_id: Uuid::from_u128(3).to_string(),
+            created_at: 3,
+            deduplicated: false,
+        };
+        service
+            .settle(saved.submission_key, first_id, Some(wrong), 3)
+            .unwrap();
+        assert_eq!(
+            service.statuses().unwrap()[0].delivery.state,
+            SupportDeliveryState::Uncertain
+        );
+        let second = service.claim(saved.submission_key, 4).unwrap();
+        assert!(matches!(
+            service.settle(saved.submission_key, first_id, None, 5),
+            Err(HiveSupportServiceError::Outbox(
+                SupportOutboxError::StaleAttempt
+            ))
+        ));
+        assert_eq!(
+            service.statuses().unwrap()[0].delivery.attempt_id,
+            second.delivery.attempt_id
+        );
+        assert_eq!(second.frozen_submission, saved.frozen_submission);
     }
 }
