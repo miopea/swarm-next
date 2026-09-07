@@ -147,12 +147,17 @@ mod tests {
             ),
             Ok(())
         );
-        for state in [DecisionRequestState::Withdrawn] {
-            assert_eq!(
-                validate_task_decision_link(TaskState::Ready, state, "Shared gate", 0, 0, 0),
-                Err(TaskDecisionLinkError::DecisionNotPending)
-            );
-        }
+        assert_eq!(
+            validate_task_decision_link(
+                TaskState::Ready,
+                DecisionRequestState::Withdrawn,
+                "Shared gate",
+                0,
+                0,
+                0
+            ),
+            Err(TaskDecisionLinkError::DecisionNotPending)
+        );
         for state in [TaskState::Completed, TaskState::Abandoned] {
             assert_eq!(
                 validate_task_decision_link(
