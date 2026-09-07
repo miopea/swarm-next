@@ -2,6 +2,21 @@
 
 ## Live acceptance failure: an unfinished run lost from Queen's context
 
+Full API evaluation finished **505 passed, 2 failed**:
+`package_return_preparation_requires_auth_and_drain_and_preserves_sessions`
+returned no revival after drain cancellation, and
+`repeated_queen_recovery_opens_a_visible_circuit_instead_of_respawning`
+reported Sleeping instead of Blocked. Both pass when rerun individually.
+That establishes suite-sensitive behavior, not its cause or a waived gate.
+Inspect shared resource admission and fixture assumptions before promotion;
+do not weaken production safety or call the entire suite green.
+
+The recovery-only main integration is clean at `8aaac213`, based on `8e3d6647`.
+It excludes the inactive support foundation and introduces no migration changes.
+It has not been pushed or deployed. A temporary content-identical index entry
+interrupted the first cherry-pick sequence; that owned sequence was aborted and
+reapplied in full dependency order, with the final real-PTY test included.
+
 The HTTP handler regression now verifies authentication is required, responses
 are no-store, an exhausted idle review reports its wait, and resumed terminal
 work clears that explanation without changing run/state/attempts. Two fixture
