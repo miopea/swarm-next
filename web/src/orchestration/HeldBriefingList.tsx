@@ -55,8 +55,8 @@ export default function HeldBriefingList({ briefings, onOpenTask }: Props) {
             {group.sharedReason && <> · {group.sharedReason}</>}
             {" · "}
             {group.briefings.length === 1
-              ? `waiting ${waitedFor(now - group.briefings[0].queued_at)}`
-              : `${group.briefings.length} briefings, longest waiting ${waitedFor(now - Math.min(...group.briefings.map((briefing) => briefing.queued_at)))}`}
+              ? `waiting ${briefingWait(group.briefings, now)}`
+              : `${group.briefings.length} briefings, longest waiting ${briefingWait(group.briefings, now)}`}
           </p>
           <ul className="held-briefing-rows">
             {group.briefings.map((briefing) => (
@@ -90,6 +90,17 @@ export default function HeldBriefingList({ briefings, onOpenTask }: Props) {
  * Insertion order rather than sorted, so a list the operator has already looked
  * at does not reshuffle under them when one group gains a briefing.
  */
+export function briefingWait(briefings: HeldBriefing[], now: number): string {
+  const seconds = Math.max(0, now - Math.min(...briefings.map((briefing) => briefing.queued_at)));
+  // Any uncertain member can be older than the apparently oldest exact row.
+  // Missing evidence on an older API is also a lower bound, not an exact age.
+  if (!briefings.some((briefing) => briefing.queued_at_is_lower_bound !== false)) return waitedFor(seconds);
+  // Round lower bounds DOWN; rounding up would overstate what is proven.
+  if (seconds < 60) return `at least ${Math.floor(seconds)} second${Math.floor(seconds) === 1 ? "" : "s"}`;
+  if (seconds < 3600) return `at least ${Math.floor(seconds / 60)} minute${Math.floor(seconds / 60) === 1 ? "" : "s"}`;
+  return `at least ${(Math.floor(seconds / 360) / 10).toFixed(1)} hours`;
+}
+
 function groupByWorker(briefings: HeldBriefing[]): { workerId: string; workerName: string; sharedReason: string | null; briefings: HeldBriefing[] }[] {
   const groups = new Map<string, HeldBriefing[]>();
   for (const briefing of briefings) {

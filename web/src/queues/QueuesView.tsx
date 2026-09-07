@@ -1,5 +1,5 @@
 import { useId, useMemo } from "react";
-import HeldBriefingList, { BlockingTaskLink, holdReason, waitedFor } from "../orchestration/HeldBriefingList";
+import HeldBriefingList, { BlockingTaskLink, holdReason, waitedFor, briefingWait } from "../orchestration/HeldBriefingList";
 import type { BlockedEscalation, HeldBriefing, HeldDelivery, QueenAutomationStatus } from "../api";
 import DeliveryWaitList from "./DeliveryWaitList";
 import TaskPrerequisiteList from "./TaskPrerequisiteList";
@@ -254,7 +254,7 @@ export default function QueuesView({
                     </span>
                     {task.state === "blocked" && waits.has(task.id) && <span className="queue-task-meta">Blocked for {ageLabel(Math.max(0, Math.floor(waits.get(task.id)!.blocked_for_seconds / 3600)))}</span>}
                   </button>
-                  {briefing && <p className="queue-task-meta">Briefing held: {holdReason(briefing)} · queued {waitedFor(now / 1000 - briefing.queued_at)} <BlockingTaskLink briefing={briefing} onOpenTask={onOpenTask} /></p>}
+                  {briefing && <p className="queue-task-meta">Briefing held: {holdReason(briefing)} · queued {briefingWait([briefing], now / 1000)} <BlockingTaskLink briefing={briefing} onOpenTask={onOpenTask} /></p>}
                   <TaskPrerequisiteList task={task} workerNames={workerNames} onOpenTask={onOpenTask} compact />
                   {workerAwaitingAnswer(task, workerById.get(task.assigned_worker_id ?? "")) && <div className="queue-task-meta">
                     <p>Worker reports waiting for an answer · check Needs you or its current prompt. This observation does not establish a task blocker.</p>

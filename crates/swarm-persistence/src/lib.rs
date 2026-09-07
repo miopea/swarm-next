@@ -254,7 +254,8 @@ const TASK_BLOCK_REASSESSMENT_SCHEMA_VERSION: i64 = 141;
 const QUEEN_REVIEW_RECEIPTS_SCHEMA_VERSION: i64 = 142;
 // 143 is reserved for the inactive support integration and is not shipped here.
 const QUEEN_RECOVERY_RECEIPTS_SCHEMA_VERSION: i64 = 144;
-const CURRENT_SCHEMA_VERSION: i64 = QUEEN_RECOVERY_RECEIPTS_SCHEMA_VERSION;
+const TASK_QUEUE_AGE_SCHEMA_VERSION: i64 = 146;
+const CURRENT_SCHEMA_VERSION: i64 = TASK_QUEUE_AGE_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -3911,6 +3912,7 @@ fn migrate_ops_intake_schema_steps(
     if schema_version < QUEEN_RECOVERY_RECEIPTS_SCHEMA_VERSION {
         queen_recovery::migrate(transaction)?;
     }
+    task_dispatches::migrate_queue_age(transaction, schema_version)?;
     Ok(())
 }
 
@@ -9084,6 +9086,12 @@ mod tests {
             undo_sql: "DROP TABLE queen_recovery_receipts",
             probe_sql: "",
         },
+        SchemaStep {
+            table: "task_dispatches",
+            artifact: "queue_entered_at",
+            undo_sql: "DROP TRIGGER task_dispatch_queue_entered; DROP TRIGGER task_dispatch_queue_rearmed; ALTER TABLE task_dispatches DROP COLUMN queue_entered_at; ALTER TABLE task_dispatches DROP COLUMN queue_age_lower_bound",
+            probe_sql: "SELECT (SELECT count(*) FROM pragma_table_info('task_dispatches') WHERE name IN ('queue_entered_at','queue_age_lower_bound')) = 2 AND (SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name IN ('task_dispatch_queue_entered','task_dispatch_queue_rearmed')) = 2",
+        },
     ];
 
     /// The step that introduced a named artifact, rather than whichever is newest.
@@ -9592,7 +9600,7 @@ mod tests {
         let version: i64 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 144);
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
         let tables: (bool, bool) = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='queen_recovery_receipts'),
                     EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='hive_support_outbox')",

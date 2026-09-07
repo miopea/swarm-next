@@ -363,6 +363,7 @@ export type HeldBriefing = {
   worker_id: string;
   worker_name: string;
   queued_at: number;
+  queued_at_is_lower_bound?: boolean;
   /** Operator engagement, active work, queue order, or experimental_during_night_watch. */
   reason: string;
   /**

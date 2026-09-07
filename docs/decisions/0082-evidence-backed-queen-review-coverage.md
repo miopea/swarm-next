@@ -49,6 +49,25 @@ coverage. A capacity-exceeded or partial snapshot cannot certify a complete revi
 
 ## Bounded execution and recovery
 
+### Queue age is not retry activity
+
+Persist the entry time of each briefing generation separately from retry
+`updated_at`. Persistence owns this bounded metadata on the existing dispatch
+row: insert establishes it; a new generation restarts it; claim, refusal,
+retryable failure and crash reconciliation preserve it. It does not authorize
+dispatch or escalation. Presentation age and retry scheduling are distinct.
+
+Migration 146 freezes existing `updated_at` as a lower bound because the exact
+original entry time was not retained. The API adds `queued_at_is_lower_bound`;
+the UI says "at least" and rounds down for migrated rows. Mixed groups retain
+that qualification. Missing evidence from an older API is also qualified.
+The UI adapter owns this older-API fallback until supported mixed-version
+deployments all supply the field. No age alone makes an operator decision.
+
+Inactive support outbox activation must remain later than this independently
+deployed migration (147 on the integration branch). This migration must not
+create the support outbox or activate its sender on the development Hive.
+
 Provider conversation compaction and an intervening worker notification do not
 finish a review. Queen can recover the unfinished delivered run identity through
 a read-only coordination-attention observation. Unlike lifecycle reconciliation,

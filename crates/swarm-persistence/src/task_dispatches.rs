@@ -48,6 +48,39 @@ pub(super) fn migrate_generation(
     )
 }
 
+pub(super) fn migrate_queue_age(
+    transaction: &rusqlite::Transaction<'_>,
+    version: i64,
+) -> rusqlite::Result<()> {
+    if version >= super::TASK_QUEUE_AGE_SCHEMA_VERSION {
+        return Ok(());
+    }
+    let exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('task_dispatches') WHERE name = 'queue_entered_at')",
+        [], |row| row.get(0),
+    )?;
+    if !exists {
+        transaction.execute_batch(
+            "ALTER TABLE task_dispatches ADD COLUMN queue_entered_at INTEGER NOT NULL DEFAULT 0;
+         ALTER TABLE task_dispatches ADD COLUMN queue_age_lower_bound INTEGER NOT NULL DEFAULT 0
+             CHECK(queue_age_lower_bound IN (0, 1));
+         UPDATE task_dispatches SET queue_entered_at = updated_at, queue_age_lower_bound = 1;",
+        )?;
+    }
+    transaction.execute_batch(
+        "CREATE TRIGGER IF NOT EXISTS task_dispatch_queue_entered AFTER INSERT ON task_dispatches BEGIN
+             UPDATE task_dispatches SET queue_entered_at = unixepoch(), queue_age_lower_bound = 0
+             WHERE assignment_id = NEW.assignment_id;
+         END;
+         CREATE TRIGGER IF NOT EXISTS task_dispatch_queue_rearmed AFTER UPDATE OF generation ON task_dispatches
+         WHEN NEW.generation <> OLD.generation BEGIN
+             UPDATE task_dispatches SET queue_entered_at = unixepoch(), queue_age_lower_bound = 0
+             WHERE assignment_id = NEW.assignment_id;
+         END;",
+    )?;
+    transaction.pragma_update(None, "user_version", super::TASK_QUEUE_AGE_SCHEMA_VERSION)
+}
+
 /// One operator ruling, sized for a terminal line.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TaskRuling {
@@ -146,6 +179,8 @@ pub struct HeldTaskDispatch {
     pub worker_id: String,
     pub worker_name: String,
     pub queued_at: i64,
+    /// Older rows retain a known lower bound, never an invented exact age.
+    pub queued_at_is_lower_bound: bool,
     pub reason: DispatchHold,
     /// The Active task or earlier Ready task responsible for this hold.
     /// Without it "waiting its turn" is unfalsifiable — sixteen briefings
@@ -286,14 +321,14 @@ impl TaskStore {
             .mode
             == swarm_domain::PresenceMode::NightWatch;
         let mut statement = connection.prepare(
-            "SELECT td.task_id, t.title, td.worker_id, w.name, td.updated_at,
+            "SELECT td.task_id, t.title, td.worker_id, w.name, td.queue_entered_at,
                     EXISTS(SELECT 1 FROM worker_engagements e
                            WHERE e.worker_id = td.worker_id AND e.expires_at > ?1) AS engaged,
                     active.title, earlier.title,
                     w.provider,
                     EXISTS(SELECT 1 FROM task_prerequisites p LEFT JOIN tasks upstream ON upstream.id = p.prerequisite_id
                            WHERE p.task_id = t.id AND (upstream.id IS NULL OR upstream.removed_at IS NOT NULL OR upstream.state != 'completed')),
-                    active.id, earlier.id
+                    active.id, earlier.id, td.queue_age_lower_bound
              FROM task_dispatches td
              JOIN tasks t ON t.id = td.task_id
              JOIN worker_profiles w ON w.id = td.worker_id
@@ -316,7 +351,7 @@ impl TaskStore {
                  ORDER BY prior.position, prior.id LIMIT 1)
              WHERE td.state = 'queued' AND t.removed_at IS NULL
                AND t.state IN ('ready', 'active')
-             ORDER BY td.updated_at",
+             ORDER BY td.queue_entered_at, td.assignment_id",
         )?;
         let rows = statement.query_map(params![now, ABANDONED_BRIEF_SECONDS], |row| {
             let engaged: bool = row.get(5)?;
@@ -348,6 +383,7 @@ impl TaskStore {
                 worker_id: row.get::<_, String>(2)?,
                 worker_name: row.get(3)?,
                 queued_at: row.get(4)?,
+                queued_at_is_lower_bound: row.get(12)?,
                 blocked_by,
                 blocking_task_id,
                 reason,
@@ -742,6 +778,85 @@ mod tests {
     use super::*;
 
     #[test]
+    fn queue_age_survives_deferral_and_only_restarts_for_a_new_briefing() {
+        let (store, task, _) = assigned_task();
+        let initial = store.held_task_dispatches(100).unwrap().remove(0);
+        assert!(!initial.queued_at_is_lower_bound);
+        for now in [100, 130, 160] {
+            let claim = store
+                .claim_task_dispatches(now, &HashSet::new())
+                .unwrap()
+                .remove(0);
+            assert!(
+                store
+                    .defer_task_dispatch(&claim.assignment_id, claim.generation, now)
+                    .unwrap()
+            );
+            let held = store.held_task_dispatches(now).unwrap().remove(0);
+            assert_eq!(held.queued_at, initial.queued_at);
+            assert!(!held.queued_at_is_lower_bound);
+        }
+        // Distinguish generations without sleeping for a wall-clock boundary.
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE task_dispatches SET queue_entered_at = 1 WHERE task_id = ?1",
+                [task.to_string()],
+            )
+            .unwrap();
+        let mut connection = store.connection().unwrap();
+        let tx = connection.transaction().unwrap();
+        super::super::rearm_briefing_for_returned_work(&tx, task).unwrap();
+        tx.commit().unwrap();
+        drop(connection);
+        let rearmed = store.held_task_dispatches(200).unwrap().remove(0);
+        assert!(rearmed.queued_at > 1);
+        assert!(!rearmed.queued_at_is_lower_bound);
+    }
+
+    #[test]
+    fn queue_age_migration_preserves_lower_bounds_and_rolls_back_atomically() {
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE task_dispatches(assignment_id TEXT PRIMARY KEY, generation INTEGER,
+             updated_at INTEGER); INSERT INTO task_dispatches VALUES ('old', 0, 123);",
+            )
+            .unwrap();
+        {
+            let tx = connection.transaction().unwrap();
+            migrate_queue_age(&tx, 144).unwrap();
+            tx.rollback().unwrap();
+        }
+        let count: i64 = connection.query_row(
+            "SELECT count(*) FROM pragma_table_info('task_dispatches') WHERE name = 'queue_entered_at'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(count, 0);
+        let tx = connection.transaction().unwrap();
+        migrate_queue_age(&tx, 144).unwrap();
+        tx.commit().unwrap();
+        connection
+            .execute("UPDATE task_dispatches SET updated_at = 999", [])
+            .unwrap();
+        let evidence: (i64, bool) = connection.query_row(
+            "SELECT queue_entered_at, queue_age_lower_bound FROM task_dispatches WHERE assignment_id = 'old'",
+            [], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(evidence, (123, true));
+        let tx = connection.transaction().unwrap();
+        migrate_queue_age(&tx, 144).unwrap();
+        tx.commit().unwrap();
+        let after: i64 = connection
+            .query_row("SELECT queue_entered_at FROM task_dispatches", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(after, 123, "reopening must not reset migrated evidence");
+    }
+
+    #[test]
     fn cleared_block_returns_to_ready_with_a_new_briefing_without_preempting_work() {
         use swarm_domain::{TaskActivityActor, TaskState};
         let (store, task, session) = assigned_task();
@@ -992,7 +1107,10 @@ mod tests {
             .connection()
             .unwrap()
             .execute_batch(
-                "DROP TABLE task_message_deliveries; ALTER TABLE task_returned_reviews DROP COLUMN request_message_id; ALTER TABLE task_returned_reviews DROP COLUMN request_worker_id; ALTER TABLE task_returned_reviews DROP COLUMN answer_message_id; DROP TABLE operator_submissions; DROP TABLE operator_statement_resolutions; DROP TABLE operator_statements; ALTER TABLE task_dispatches DROP COLUMN generation; PRAGMA user_version = 128;",
+                "DROP TRIGGER task_dispatch_queue_entered; DROP TRIGGER task_dispatch_queue_rearmed;
+                 ALTER TABLE task_dispatches DROP COLUMN queue_entered_at;
+                 ALTER TABLE task_dispatches DROP COLUMN queue_age_lower_bound;
+                 DROP TABLE task_message_deliveries; ALTER TABLE task_returned_reviews DROP COLUMN request_message_id; ALTER TABLE task_returned_reviews DROP COLUMN request_worker_id; ALTER TABLE task_returned_reviews DROP COLUMN answer_message_id; DROP TABLE operator_submissions; DROP TABLE operator_statement_resolutions; DROP TABLE operator_statements; ALTER TABLE task_dispatches DROP COLUMN generation; PRAGMA user_version = 128;",
             )
             .unwrap();
         drop(store);

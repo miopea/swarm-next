@@ -205,7 +205,7 @@ describe("QueuesView", () => {
     }] };
     const { rerender } = render(<QueuesView {...props} tasks={[ready]} />);
     expect(screen.getAllByText(ready.title)).toHaveLength(1);
-    expect(screen.getByText("Briefing held: behind Earlier task · queued under a minute")).toBeVisible();
+    expect(screen.getByText("Briefing held: behind Earlier task · queued at least 1 minute")).toBeVisible();
     expect(screen.queryByText("One briefing is queued")).not.toBeInTheDocument();
     rerender(<QueuesView {...props} tasks={[{ ...ready, dispatch_state: "delivered" }]} />);
     expect(screen.queryByText(/Briefing held:/)).not.toBeInTheDocument();

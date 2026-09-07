@@ -2,9 +2,17 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, expect, test, vi } from "vitest";
 
 import type { HeldBriefing } from "../api";
-import HeldBriefingList from "./HeldBriefingList";
+import HeldBriefingList, { briefingWait } from "./HeldBriefingList";
 
 afterEach(cleanup);
+
+test("queue age distinguishes exact evidence, migrated bounds and older API responses", () => {
+  const exact = briefing({ queued_at: 100, queued_at_is_lower_bound: false });
+  const legacy = briefing({ queued_at: 200, queued_at_is_lower_bound: true });
+  expect(briefingWait([exact], 7300)).toBe("2.0 hours");
+  expect(briefingWait([exact, legacy], 7300)).toBe("at least 2.0 hours");
+  expect(briefingWait([{ ...exact, queued_at_is_lower_bound: undefined }], 7300)).toBe("at least 2.0 hours");
+});
 
 test("names and opens the recorded Active blocker without trusting old queue-order titles", () => {
   const open = vi.fn();
@@ -27,6 +35,7 @@ function briefing(overrides: Partial<HeldBriefing> = {}): HeldBriefing {
     worker_id: "worker-1",
     worker_name: "Platform",
     queued_at: Math.floor(Date.now() / 1000) - 7_200,
+    queued_at_is_lower_bound: false,
     reason: "waiting_its_turn",
     blocked_by: "Backfill the contact index",
     ...overrides,

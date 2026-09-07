@@ -232,7 +232,7 @@ mod tests {
             let store = TaskStore::open(&path).unwrap();
             let connection = store.connection().unwrap();
             connection
-                .execute_batch("DROP TABLE operator_submissions; DROP TABLE operator_statement_resolutions; DROP TABLE operator_statements; ALTER TABLE task_dispatches DROP COLUMN generation; DROP TABLE worker_startup_context; DROP TABLE browser_evidence; PRAGMA user_version = 125;")
+.execute_batch("DROP TRIGGER task_dispatch_queue_entered; DROP TRIGGER task_dispatch_queue_rearmed; ALTER TABLE task_dispatches DROP COLUMN queue_entered_at; ALTER TABLE task_dispatches DROP COLUMN queue_age_lower_bound; DROP TABLE operator_submissions; DROP TABLE operator_statement_resolutions; DROP TABLE operator_statements; ALTER TABLE task_dispatches DROP COLUMN generation; DROP TABLE worker_startup_context; DROP TABLE browser_evidence; PRAGMA user_version = 125;")
                 .unwrap();
         }
         {
