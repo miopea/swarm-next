@@ -1401,6 +1401,32 @@ pub(super) fn queen_automation_message(delivery: &QueenAutomationDelivery) -> Co
         marker: delivery_marker(&delivery.run_id),
     }
 }
+
+/// Put a small current work selection in the prompt itself. The full board
+/// remains authoritative; this selection is not permission to clear a gate.
+pub(super) fn queen_review_focus_message(
+    store: &TaskStore,
+    delivery: &QueenAutomationDelivery,
+) -> Result<CoordinationMessage, swarm_application::ApplicationError> {
+    let queen = store.get_worker_profile(delivery.worker_id)?;
+    let queue = swarm_application::TaskService::new(store.clone())
+        .queen_queue_snapshot(swarm_application::AgentPrincipal::from(&queen))?;
+    let ids = queue
+        .queen_tasks
+        .iter()
+        .take(3)
+        .map(|task| task.id.to_string())
+        .collect::<Vec<_>>();
+    let mut message = queen_automation_message(delivery);
+    if !ids.is_empty() {
+        let focus = format!(
+            "CURRENT REVIEW FOCUS: {}. These are the first three tasks in the current fairness-ordered Queen backlog. Read their current task history and review evidence in this run, alongside any urgent new work. For each, route a verified next action, record a checked external wait or authenticated operator deferral, or state the concrete missing evidence. Do not just repeat assessments of the recent cluster and leave these unread. This focus does not authorize starting reserved drafts, clearing blockers, or acting on an old decision. Recheck current state; a resolved or completed item needs no repeated action. The rest of the full review still matters.\n\n",
+            ids.join(", ")
+        );
+        message.bytes.splice(0..0, focus.bytes());
+    }
+    Ok(message)
+}
 /// How much of a handoff note is pasted into the recipient's terminal.
 ///
 /// Enough to know whether this needs attention now; not the whole report. The
@@ -3685,6 +3711,54 @@ mod tests {
     /// Naming it is not enough by itself. An item with no move attached is one
     /// she parks, so the brief carries the move for each state — including the
     /// deployment she may not perform during an unattended run but may route.
+    #[test]
+    fn review_focus_is_bounded_current_and_preserves_delivery_identity() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let tasks = (0..5)
+            .map(|index| {
+                store
+                    .create_task(&format!("Focus {index}"), "/workspace/demo")
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        store
+            .transition_task(tasks[0].id, swarm_domain::TaskState::Abandoned)
+            .unwrap();
+        let delivery = QueenAutomationDelivery {
+            run_id: "focus-run".into(),
+            session_id: WorkerSessionId::new(),
+            worker_id: queen.id,
+            trigger: QueenAutomationTrigger::ActionableWork,
+            actionable_count: 4,
+            presence: PresenceMode::AtHive,
+        };
+        let message = queen_review_focus_message(&store, &delivery).unwrap();
+        let text = String::from_utf8(message.bytes).unwrap();
+        let focus = text.split("\n\n").next().unwrap();
+        assert!(focus.starts_with("CURRENT REVIEW FOCUS:"));
+        assert!(!focus.contains(&tasks[0].id.to_string()));
+        for task in &tasks[1..4] {
+            assert!(focus.contains(&task.id.to_string()));
+        }
+        assert!(!focus.contains(&tasks[4].id.to_string()));
+        assert!(text.contains("The rest of the full review still matters"));
+        assert!(
+            text.as_bytes()
+                .windows(message.marker.len())
+                .any(|part| part == message.marker)
+        );
+        assert_eq!(
+            store.get_task(tasks[1].id).unwrap().state,
+            swarm_domain::TaskState::Draft
+        );
+        let missing = QueenAutomationDelivery {
+            worker_id: WorkerId::new(),
+            ..delivery
+        };
+        assert!(queen_review_focus_message(&store, &missing).is_err());
+    }
+
     #[test]
     fn the_run_brief_names_finished_work_and_the_move_for_each_state() {
         let message = String::from_utf8(

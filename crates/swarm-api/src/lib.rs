@@ -11,8 +11,7 @@ mod ops_mcp;
 #[cfg(test)]
 use coordination_delivery::task_dispatch_message;
 use coordination_delivery::{
-    TerminalSubmission, decision_delivery_message, queen_automation_message,
-    submit_coordination_message, task_outcome_message,
+    TerminalSubmission, decision_delivery_message, submit_coordination_message, task_outcome_message,
 };
 mod database_integrity;
 mod decisions;
@@ -2470,13 +2469,20 @@ impl AppState {
             self.hold_queen_automation_until_resting(store, &delivery, activity);
             return;
         }
-        let result = match submit_coordination_message(
-            store,
-            client,
-            delivery.session_id,
-            queen_automation_message(&delivery),
-        )
-        .await
+        let message = match coordination_delivery::queen_review_focus_message(store, &delivery) {
+            Ok(message) => message,
+            Err(error) => {
+                tracing::warn!(run_id = %delivery.run_id, message = %error, "Queen review focus unavailable");
+                let _ = store.fail_queen_automation_delivery(
+                    &delivery.run_id,
+                    unix_timestamp(),
+                    QueenAutomationFailure::Retryable,
+                );
+                return;
+            }
+        };
+        let result = match submit_coordination_message(store, client, delivery.session_id, message)
+            .await
         {
             Ok(TerminalSubmission::Acknowledged) => {
                 clear_held_delivery_refusals(store, &format!("queen-run:{}", delivery.run_id));

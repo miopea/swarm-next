@@ -189,6 +189,17 @@ authenticated operator deferrals. Failure or overflow of the ordering read is
 not an empty or healthy queue. Test ordering, capacity and read-only behavior,
 then observe real backlog assessments before claiming the issue resolved.
 
+The first post-deployment review still skipped the older work and incorrectly
+described the completed fictional pair as pending. Therefore list ordering alone
+has not passed live acceptance. Include at most three current fairness-ordered
+task identities at the beginning of each delivered review prompt, using the same
+application snapshot after the existing resting check. Explicitly require fresh
+history/evidence and preserve reserved drafts and real blockers. This is a focus
+within the full review, not a three-task definition of completion. If focus
+selection fails, retain the existing bounded delivery failure path rather than
+delivering a misleading empty focus. The normal submission gate still protects
+session identity and operator input; no new message or timer is introduced.
+
 ### Queued briefings without a recorded order blocker
 
 Queen's existing read-only coordination-attention tool may additionally observe
