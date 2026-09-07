@@ -1158,7 +1158,7 @@ mod tests {
             .repoint_provider_conversation(worker.id, &manual)
             .unwrap();
         crate::review_answers::remove_schema_for_test(&store.connection().unwrap()).unwrap();
-store.connection().unwrap().execute_batch("DROP TRIGGER task_dispatch_queue_entered; DROP TRIGGER task_dispatch_queue_rearmed; ALTER TABLE task_dispatches DROP COLUMN queue_entered_at; ALTER TABLE task_dispatches DROP COLUMN queue_age_lower_bound; DROP TABLE operator_submissions; DROP TABLE operator_statement_resolutions; DROP TABLE operator_statements; ALTER TABLE task_dispatches DROP COLUMN generation; ALTER TABLE worker_startup_context DROP COLUMN selection_revision; ALTER TABLE worker_startup_context DROP COLUMN selection_suspended; PRAGMA user_version = 127;").unwrap();
+        store.connection().unwrap().execute_batch("DROP TRIGGER task_dispatch_queue_entered; DROP TRIGGER task_dispatch_queue_rearmed; ALTER TABLE task_dispatches DROP COLUMN queue_entered_at; ALTER TABLE task_dispatches DROP COLUMN queue_age_lower_bound; DROP TABLE operator_submissions; DROP TABLE operator_statement_resolutions; DROP TABLE operator_statements; ALTER TABLE task_dispatches DROP COLUMN generation; ALTER TABLE worker_startup_context DROP COLUMN selection_revision; ALTER TABLE worker_startup_context DROP COLUMN selection_suspended; PRAGMA user_version = 127;").unwrap();
         drop(store);
         let store = TaskStore::open(&path).unwrap();
         assert!(
