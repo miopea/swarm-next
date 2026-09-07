@@ -925,13 +925,20 @@ impl NextMoveOwner {
     ) -> Self {
         match state {
             TaskState::Active => Self::Worker,
+            // Ready work awaiting a scoped human ruling is not a worker stall.
+            // Keep its assignment and dispatch intact; ownership follows the
+            // current decision and recovers when it is answered or withdrawn.
+            TaskState::Ready | TaskState::Review | TaskState::Blocked
+                if awaiting_operator_decision =>
+            {
+                Self::Operator
+            }
             // Assigned work is the worker's to start, so "N tasks ready" was
             // never the useful number: half of it was never waiting on Queen.
             TaskState::Ready if assigned => Self::Worker,
             // A returned review retains its worker's debt, but a pending
             // task-linked human ruling owns the NEXT move. Resolving it
             // re-derives worker ownership without moving or reassigning work.
-            TaskState::Review | TaskState::Blocked if awaiting_operator_decision => Self::Operator,
             // Queen has handed this back and named what is missing. The task
             // did not move; the debt did.
             TaskState::Review if review_returned => Self::Worker,
@@ -956,6 +963,18 @@ mod next_move_tests {
     #[test]
     fn blocked_decisions_name_the_operator_without_changing_other_work_ownership() {
         for assigned in [false, true] {
+            assert_eq!(
+                NextMoveOwner::derive(TaskState::Ready, assigned, false, true),
+                NextMoveOwner::Operator
+            );
+            assert_eq!(
+                NextMoveOwner::derive(TaskState::Ready, assigned, false, false),
+                if assigned {
+                    NextMoveOwner::Worker
+                } else {
+                    NextMoveOwner::Queen
+                }
+            );
             assert_eq!(
                 NextMoveOwner::derive(TaskState::Blocked, assigned, false, true),
                 NextMoveOwner::Operator

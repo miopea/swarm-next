@@ -1523,6 +1523,67 @@ mod tests {
     }
 
     #[test]
+    fn ready_decision_ownership_recovers_without_moving_or_reassigning_work() {
+        for assigned in [false, true] {
+            for withdraw in [false, true] {
+                let store = TaskStore::in_memory().unwrap();
+                let queen = store.ensure_queen("/workspace/queen").unwrap();
+                let worker = store
+                    .create_worker(
+                        "Petal",
+                        ProviderKind::ClaudeCode,
+                        "/workspace/petal",
+                        false,
+                        1,
+                    )
+                    .unwrap();
+                let task = store
+                    .create_task("Await a scoped ruling", "/workspace/petal")
+                    .unwrap();
+                store.transition_task(task.id, TaskState::Ready).unwrap();
+                if assigned {
+                    store.assign_task_to_worker(task.id, worker.id).unwrap();
+                }
+                let before = store.get_task(task.id).unwrap();
+                let actions = vec!["proceed".into(), "hold".into()];
+                let mut asking = request(queen.id, &actions);
+                asking.task_id = Some(task.id);
+                let decision = store.create_decision_request(&asking).unwrap();
+                let pending = store.get_task(task.id).unwrap();
+                assert_eq!(pending.next_move_owner, NextMoveOwner::Operator);
+                assert_eq!(pending.state, before.state);
+                assert_eq!(pending.assigned_worker_id, before.assigned_worker_id);
+                assert_eq!(pending.assigned_session_id, before.assigned_session_id);
+                assert_eq!(pending.dispatch_state, before.dispatch_state);
+                if withdraw {
+                    store
+                        .withdraw_decision_request(
+                            decision.id,
+                            queen.id,
+                            "No human choice remains.",
+                        )
+                        .unwrap();
+                } else {
+                    store
+                        .resolve_decision_request(
+                            decision.id,
+                            "proceed",
+                            "Scoped answer.",
+                            "operator",
+                        )
+                        .unwrap();
+                }
+                let recovered = store.get_task(task.id).unwrap();
+                assert_eq!(recovered.next_move_owner, before.next_move_owner);
+                assert_eq!(recovered.state, before.state);
+                assert_eq!(recovered.assigned_worker_id, before.assigned_worker_id);
+                assert_eq!(recovered.assigned_session_id, before.assigned_session_id);
+                assert_eq!(recovered.dispatch_state, before.dispatch_state);
+            }
+        }
+    }
+
+    #[test]
     fn withdrawing_a_blocked_tasks_decision_returns_unstructured_block_to_queen() {
         let store = TaskStore::in_memory().unwrap();
         let queen = store.ensure_queen("/workspace/queen").unwrap();
