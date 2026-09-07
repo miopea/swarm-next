@@ -10,12 +10,27 @@ No phase-completion percentage or full-program completion is established.
 | Area | Evidence now available | Still required for acceptance |
 | --- | --- | --- |
 | Measurement and performance | Bounded browser evidence, hourly private captures, split engine/process counters; 16-session one-minute baseline in `85-review-recovery-checkpoint.md` | Controlled same-build fresh/aged comparisons, instrumentation overhead, resource plateau and responsive input under output; cold-restore experiment gate |
-| Terminal/mobile | Focus-release and late-ack cutover tests deployed; provider/native question fixture retained | Actual OS minimize, Android/iOS handoff and background resume; AskUser Q2/Q3, camera/gallery, keyboard and image usability verified on devices |
+| Terminal/mobile | Focus-release and late-ack cutover tests deployed; operator reports Android PWA multi-question fixture looks great (September 7 checkpoint below) | iOS AskUser Q2/Q3; actual OS minimize, Android/iOS handoff and background resume; camera/gallery, keyboard and image usability verified on devices |
 | Queen/Queues/Needs You | Durable review/recovery coverage deployed; two fictional tasks shared one decision, resumed and settled automatically; live Edge card cleared without reload (ADR 0084) | Real backlog fairness and structural dependency/deferral reconciliation, fleet-wide recovery, accurate next mover, direct worker answers clearing decisions; wider routine review bypass acceptance |
 | Operations | App/API updates preserve the measured 16 worker sessions; live API healthy | Engine/provider rolling-update convergence including Queen, resume identity and operator conversation switch, pressure recovery, Night Watch and database recovery acceptance |
 | UX/UI | Existing approved Hive identity and scoped interaction improvements retained | Whole-product desktop/mobile consistency and accessibility pass; live Needs You/Queues content must pass, not merely component tests |
 | Shared support | Inactive Hive submission and separate central persistence foundations; Admin-owned email requirement recorded | Joint central-email DTO/fingerprint/state contract, history/ingress and attachment/diagnostic integration, task completion loop, hosting/registration and paired fictional acceptance |
 | Integrated completion | Ongoing operator use and dated evidence checkpoints | Current-build full workday/overnight and real-device acceptance, remaining-risk reconciliation and operator maturity acceptance |
+
+### September 7: operator Android multi-question acceptance
+
+The operator tested the fictional three-question prompt in **Swarm Dogfood
+Contract** on the Android PWA and replied **“Yes, looks great”** to the request
+to check that questions 2 and 3 remain readable. This is real-device,
+operator-observed acceptance for that rendering scenario on the current
+`e1d98e0a` API build, not desktop viewport emulation.
+
+Fixture task: `01a07bb1-b0db-78e1-bae8-32c0098228b6`; worker:
+`01a07193-7d79-7113-93f4-8e9a43db6964`. The response does not establish a
+measured reconnect time or independently confirm each suggested keyboard and
+app-switch step. iOS rendering, broader device handoff, attachments and native
+notification acceptance remain open. No fixture restart or automated answer
+was needed to record this result.
 
 Deployment distinction: shared-decision acceptance ran on API `e2a896f4` with
 the retained `fa403372` worker engine. Only Queen was deliberately refreshed for

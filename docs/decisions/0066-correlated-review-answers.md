@@ -70,3 +70,54 @@ identity as `reply_to_message_id`: verify it is the current returned-review
 request, and omit it for progress, clarification or a superseded request. This
 changes presentation of the existing contract, not authorization, semantic
 matching or the atomic persistence transition. Live acceptance remains required.
+
+### September 7 live acceptance in progress
+
+The clarified delivery text passed all 47 guarded-delivery tests and strict API
+checks. Main `e1d98e0a` is serving as
+`e1d98e0a4b94-20260907183121-205234`, healthy with the prior engine identity.
+Formatting-only follow-up `a1362674` is in the Linux clone and passes full-tree
+`cargo fmt --all --check`; full CI run `34152143722` subsequently passed.
+
+Fictional task `01a07d29-2c1f-7642-a82d-736d17fd6adb`, titled
+"Dogfood e1d98e0a: exact returned-review answer", runs only in the existing demo
+repository on Swarm Dogfood. Setup verified an idle, unengaged worker with no
+open assigned task, refused duplicate titles, and used normal creation, Ready
+transition and assignment. The worker started and submitted Review truthfully
+leaving its local Node execution verification outstanding. At this checkpoint
+the task is Queen-owned with no returned-review identity yet; Queen review
+`01a07d27-dfeb-7281-b9f5-26f0543b2519` is actively running.
+
+Required next evidence: Queen returns this exact task; an ordinary progress
+message preserves worker ownership; the final answer names the exact request
+and returns ownership atomically without a Review-to-Review transition; the
+task then settles normally on truthful evidence. No controller-forced hand-back,
+answer, completion or real-project mutation is part of this fixture. Do not
+declare acceptance from the phase-one Review state alone.
+
+### September 7: fixture failed on automatic settlement
+
+Authoritative activity now shows system completion at sequence 7918
+(`1788806698`), followed by the worker's explicit failure report at sequence
+7919. The worker recorded an empty commit report before sending its correlated
+answer. The no-deployment settlement sweep completed the task, superseding the
+unanswered review request. The worker reported nine passing Node tests and a
+clean unchanged HEAD, but correctly did not call the review round trip a pass.
+No controller forced this completion. Preserve this completed fixture as failure
+evidence rather than resetting it or counting it as successful acceptance.
+
+Inspection locates the bypass in
+`settle_reviewed_work_without_deployment_page`: candidate eligibility checks
+prerequisites and outstanding email replies, but not the current returned-review
+obligation. Its completion transition then invalidates that obligation. A fix
+must preserve routine no-build/docs-only bypass when there is no outstanding
+request, protect an unanswered request against the automatic path (including
+selection/completion races), and recover automatically after an exact answer.
+The separate whole-task deployment policy explicitly preserves an earlier
+operator decision to close over reviewer holds; do not silently change that
+policy as part of the no-deployment fix.
+
+The added batched-delivery regression passed independently: two request messages
+retain distinct reply selectors and the first transport marker, with the submit
+terminator preserved. This verifies delivery text, not the failed settlement
+boundary above.

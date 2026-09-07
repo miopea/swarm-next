@@ -3699,6 +3699,29 @@ mod tests {
     }
 
     #[test]
+    fn batched_review_messages_keep_individual_reply_identities() {
+        let messages = (0..2)
+            .map(|index| TaskMessageDispatch {
+                message_id: format!("request-{index}"),
+                task_id: TaskId::new(),
+                task_title: format!("Task {index}"),
+                session_id: WorkerSessionId::new(),
+                sender: swarm_persistence::MessageParty::Queen,
+                sender_name: "Queen".into(),
+                body: "Provide the missing verification.".into(),
+            })
+            .collect::<Vec<_>>();
+        let message = task_message_message(&messages);
+        let text = std::str::from_utf8(&message.bytes).unwrap();
+        for request in &messages {
+            assert!(text.contains(&format!("message {}]", request.message_id)));
+            assert!(text.contains(&format!("reply_to_message_id=\"{}\"", request.message_id)));
+        }
+        assert_eq!(message.marker, delivery_marker("request-0"));
+        assert_eq!(message.bytes.last(), Some(&b'\r'));
+    }
+
+    #[test]
     fn unfinished_review_context_preserves_notification_marker_and_submit() {
         let mut message = CoordinationMessage {
             cadence: Cadence::Cooled,
