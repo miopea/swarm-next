@@ -1,5 +1,25 @@
 # Daily-driver maturity: remaining delivery and acceptance
 
+## September 7: assessment deployment and linked-tab reload follow-up
+
+Root `2b998a01`, main `48019d47`, is deployed and healthy as
+`1.5.0-dev-48019d47c0b9-20260907232520-381953`. The update completed successfully;
+all sixteen worker/session pairs matched the pre-update capture. No release or
+worker-engine restart occurred. API serves tool revision 23; unconfirmed cached
+session schemas are not treated as current. Queen's normal guarded run
+`01a07e2e-9a72-76d3-bb06-4e68d932e83f` received the new investigation guidance
+and explicitly recognized its purpose. Actual saved assessments and backlog
+advancement remain the acceptance gate, not that narrative alone.
+
+The separate Edge tab verified the corrected operator-owned Ready labels.
+It also exposed a reload gap: a tab launched at `?surface=decisions`, navigated
+to Queues, then reloaded by the update button returned to the stale launch link.
+Saving the current surface now updates an existing non-detached surface query,
+preserving other parameters, hash and history state. Normal launches gain no
+explicit override; detached windows retain their destination. Ninety-one
+navigation/app/update tests and the production web build pass. This follow-up
+still needs deployment and repetition of that real-browser sequence.
+
 ## September 7: unresolved investigations and actual worker pickup
 
 After `55e8b984`, Queen's review `01a07dff` used all six previously omitted

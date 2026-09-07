@@ -53,6 +53,13 @@ export function readSavedSurface(search: string = window.location.search): Surfa
 export function saveSurface(surface: Surface) {
   try {
     window.sessionStorage.setItem(SURFACE_STORAGE_KEY, surface);
+    // A launch link must not keep sending this tab back to its original page
+    // after the operator has navigated elsewhere and an update reloads it.
+    const current = new URL(window.location.href);
+    if (current.searchParams.has("surface") && current.searchParams.get("detached") !== "1") {
+      current.searchParams.set("surface", surface);
+      window.history.replaceState(window.history.state, "", current.toString());
+    }
   } catch {
     /* Surface persistence is a non-critical convenience. */
   }

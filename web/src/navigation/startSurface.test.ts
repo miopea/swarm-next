@@ -41,3 +41,24 @@ test("an unknown remembered value falls back to the board", () => {
 
   expect(readSavedSurface("")).toBe("tasks");
 });
+
+test("navigating after a launch link keeps reload on the current surface", () => {
+  window.history.replaceState({ retained: true }, "", "/?surface=decisions&v=build#owner");
+  saveSurface("queues");
+  expect(readSavedSurface()).toBe("queues");
+  expect(window.location.search).toBe("?surface=queues&v=build");
+  expect(window.location.hash).toBe("#owner");
+  expect(window.history.state).toEqual({ retained: true });
+});
+
+test("saving a surface does not change a detached window's destination", () => {
+  window.history.replaceState(null, "", "/?surface=tasks&detached=1");
+  saveSurface("queues");
+  expect(readSavedSurface()).toBe("tasks");
+});
+
+test("a normal launch does not gain an explicit surface override", () => {
+  saveSurface("queues");
+  expect(window.location.search).toBe("");
+  expect(surfaceWasRequested()).toBe(false);
+});
