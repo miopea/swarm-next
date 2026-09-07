@@ -36,7 +36,7 @@ export default function StaleBundleNotice({ stale, serverVersion, dismissed, onD
         <small>This tab differs from the running Hive. Finish or save any unsent forms before reloading. Workers keep running.</small>
       </span>
       <span className="stale-bundle-actions">
-        {/* A VERSION-STAMPED NAVIGATION, NOT window.location.reload().
+        {/* A VERSION-STAMPED RELOAD, not a reload of the old URL.
             This said a plain reload was "all that is needed: static responses
             are served no-cache". That reasoning is sound about our headers and
             was still wrong in practice — the operator pressed this button on
@@ -47,8 +47,9 @@ export default function StaleBundleNotice({ stale, serverVersion, dismissed, onD
 
             Navigating to a URL the browser has never seen cannot be answered
             from a cache entry, so the version it is stamped with is the thing
-            that guarantees the fetch. replace() rather than assign() so the
-            stale page does not stay in history behind it. */}
+            that forces a fetch for the new URL. Replace the current history
+            entry before reloading so navigation timing still identifies this
+            as a reload and preserves the operator's current surface. */}
         <button
           type="button"
           className="primary-action"
@@ -60,8 +61,9 @@ export default function StaleBundleNotice({ stale, serverVersion, dismissed, onD
   );
 }
 
-function reloadBrowser(version: string) {
+export function reloadBrowser(version: string, reload: () => void = () => window.location.reload()) {
   const fresh = new URL(window.location.href);
   fresh.searchParams.set("v", version);
-  window.location.replace(fresh.toString());
+  window.history.replaceState(window.history.state, "", fresh.toString());
+  reload();
 }

@@ -9,6 +9,16 @@ No phase-completion percentage or full-program completion is established.
 
 ### September 7, 21:12 UTC: reload restoration correction
 
+Follow-up at 21:20 UTC: `8c4724fd` deployed healthy and preserved all sixteen
+worker/session pairs. Live Edge acceptance exposed a second path: the browser
+update button uses `location.replace` with a version parameter, classified as
+navigation rather than reload, so this button still returned to Platform.
+The correction stamps the current history entry before a real reload, preserving
+cache busting, history state and the reload classification. All 85 App, navigation,
+notification and update-notice tests and TypeScript check pass locally. The
+update-button correction still needs deployment and live acceptance; the failed
+first browser check is not counted as a successful fix.
+
 CI `34160814582` completed successfully; live `/health` independently confirms
 `60da894f` remains healthy. The observed reload-to-Platform behavior was traced
 to the configured opening preference overriding sessionStorage on every reload.
