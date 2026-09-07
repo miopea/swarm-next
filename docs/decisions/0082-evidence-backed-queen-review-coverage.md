@@ -266,6 +266,20 @@ receipt or certify review coverage.
 
 ### Worker execution ownership does not waive recovery accountability
 
+September 7 recovery-view correction: the compact `active_work_recovery` view
+must include all three attention kinds already selected by its bounded terminal
+observer: stale owned work, delivered Ready work that has not started, and owned
+work never briefed. Previously the observer read all three but the compact view
+silently discarded the latter two. Queen's live run reported that view empty
+while the coordinator still showed unstarted-work obligations. Share the kind
+predicate between observation and projection; retain the 32-row bound and all
+resting/background/input safety semantics. Include the attention kind so a
+missing briefing is not described as a delivered one. This changes no task,
+authority, dispatch, observation frequency or schema. A failing-before regression
+must demonstrate inclusion of Ready work and continued exclusion of busy,
+background, unknown and missing observations. Real worker pickup still requires
+live acceptance after deployment.
+
 September 7 follow-up: a required operator action is not an external-condition
 wait. Live Admin/Member Services recovery repeatedly named operator-seeded
 sessions without creating pending requests. Queen must create/reuse the exact

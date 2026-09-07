@@ -16,6 +16,15 @@ use crate::{
     provider_activity::{ProviderSignals, observe_session_snapshot},
 };
 
+fn is_worker_recovery_attention(item: &CoordinatorAttention) -> bool {
+    matches!(
+        item.kind.as_str(),
+        "stale_owned_work_attention"
+            | "assigned_ready_work_not_started_attention"
+            | "owned_work_never_briefed_attention"
+    )
+}
+
 pub(super) async fn observe(
     state: &AppState,
     store: &TaskStore,
@@ -23,14 +32,7 @@ pub(super) async fn observe(
 ) -> HashMap<String, Value> {
     let candidates = attention
         .iter()
-        .filter(|item| {
-            matches!(
-                item.kind.as_str(),
-                "stale_owned_work_attention"
-                    | "assigned_ready_work_not_started_attention"
-                    | "owned_work_never_briefed_attention"
-            )
-        })
+        .filter(|item| is_worker_recovery_attention(item))
         .take(32)
         .cloned()
         .collect::<Vec<_>>();
@@ -330,12 +332,13 @@ pub(super) fn active_work_recovery(
     observations: &HashMap<String, Value>,
 ) -> Value {
     let tasks = attention.iter().filter_map(|item| {
-        if item.kind != "stale_owned_work_attention" { return None; }
+        if !is_worker_recovery_attention(item) { return None; }
         let observation = observations.get(&item.action_id)?;
         if observation["activity"] != "resting" || observation["background_work_visible"] != false {
             return None;
         }
         Some(json!({
+            "attention_kind": item.kind,
             "task_id": item.task_id,
             "task_title": item.task_title,
             "worker_id": item.worker_id,
@@ -353,7 +356,7 @@ pub(super) fn active_work_recovery(
     json!({
         "tasks": tasks,
         "input_scope": "prompt_has_unsent_input true means preserve visible unsent input; do not submit, clear or append without operator direction. False includes empty prompts and dimmed provider suggestions, which are not operator instructions or approvals. Null means unverified. Guarded delivery rechecks the current prompt.",
-        "scope": "Unchanged worker-owned Active work or an outstanding returned Review, with a current resting/no-visible-background observation. Missing, unknown, active, or awaiting-operator observations are excluded, not declared healthy. Observation is bounded to 32 attention rows. Review work stays in Review; inspect the exact request and delivery before acting.",
+        "scope": "Worker recovery attention includes delivered Ready work that never started, owned work never briefed, unchanged Active work and outstanding returned Review, with a current resting/no-visible-background observation. Missing, unknown, active, or awaiting-operator observations are excluded, not declared healthy. Observation is bounded to 32 attention rows. Preserve the task state and inspect its exact request and delivery before acting; this list neither starts work nor proves an earlier briefing was delivered.",
         "next_action": crate::agent::QUEEN_ACTIVE_RECOVERY_GUIDANCE,
     })
 }
@@ -781,6 +784,48 @@ mod tests {
             reason: "Historical terminal could not be read".into(),
             observed_at: 1,
             age_seconds: 1000,
+        }
+    }
+
+    #[test]
+    fn recovery_includes_unstarted_and_never_briefed_work_without_weakening_observation_gate() {
+        for kind in [
+            "stale_owned_work_attention",
+            "assigned_ready_work_not_started_attention",
+            "owned_work_never_briefed_attention",
+        ] {
+            let mut row = recovery_fixture();
+            row.kind = kind.into();
+            for (activity, background_work, expected) in [
+                (ProviderActivity::Resting, false, 1),
+                (ProviderActivity::Resting, true, 0),
+                (ProviderActivity::Active, false, 0),
+                (ProviderActivity::Unknown, false, 0),
+                (ProviderActivity::AwaitingOperator, false, 0),
+            ] {
+                let observations = HashMap::from([(
+                    row.action_id.clone(),
+                    evidence(
+                        Some(ProviderSignals {
+                            activity,
+                            background_work,
+                        }),
+                        42,
+                    ),
+                )]);
+                let result = active_work_recovery(std::slice::from_ref(&row), &observations);
+                assert_eq!(
+                    result["tasks"].as_array().unwrap().len(),
+                    expected,
+                    "{kind}"
+                );
+            }
+            assert!(
+                active_work_recovery(&[row], &HashMap::new())["tasks"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
         }
     }
 
