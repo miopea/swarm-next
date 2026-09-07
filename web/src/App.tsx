@@ -116,7 +116,7 @@ import { configureTerminalImageLimit } from "./terminal/TerminalAttachments";
 import { queenAutomationNeedsAttention } from "./orchestration/queenAutomationPresentation";
 import { foreignEngagement, workerAttention, workerSwitcherDetail } from "./workers/workerAttention";
 import DecisionInbox from "./decisions/DecisionInbox";
-import DogfoodFeedbackDialog from "./feedback/DogfoodFeedbackDialog";
+import DogfoodFeedbackDialog from "./feedback/FeedbackDialog";
 import ShellModal from "./terminal/ShellModal";
 import ExperimentalHandoffDialog from "./workers/ExperimentalHandoffDialog";
 import { isExperimentalProvider } from "./settings/ExperimentalProviderControl";

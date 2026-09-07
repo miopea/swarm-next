@@ -1726,6 +1726,7 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .feedback-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .feedback-fields label { display: grid; min-width: 0; gap: 7px; color: var(--muted); font-size: .76rem; font-weight: 650; }
 .feedback-fields textarea { min-height: 116px; resize: vertical; }
+.feedback-fields .support-message-field { grid-column: 1 / -1; }
 .feedback-preview { max-height: 280px; }
 .feedback-attachment { display: grid; gap: 9px; padding: 12px; border: 1px dashed var(--line-strong); border-radius: var(--radius-md); background: var(--panel-soft); }
 .feedback-attachment > div:first-child { display: grid; gap: 3px; }
