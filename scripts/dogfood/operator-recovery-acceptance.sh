@@ -4,7 +4,9 @@ set -euo pipefail
 # --setup refuses duplicates. Resolve only the exact resulting fictional decision
 # after inspecting its contents; this script never answers real operator requests.
 base=http://127.0.0.1:8766
-title='Dogfood 207bddbc: decision-to-worker recovery'
+label=${SWARM_DOGFOOD_RUN_LABEL:-207bddbc}
+[[ $label =~ ^[a-zA-Z0-9._-]{1,64}$ ]] || { echo 'Invalid fictional run label'; exit 2; }
+title="Dogfood $label: decision-to-worker recovery"
 worker=01a06eda-bdd1-7a82-928e-cffbee0be6c1
 workspace=/home/bschleifer/projects/.swarm-next-dogfood/workflow-fixture
 token=$(sed -n 's/^SWARM_OPERATOR_TOKEN=//p' "$HOME/.config/swarm/swarm.env")

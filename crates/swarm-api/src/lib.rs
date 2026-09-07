@@ -15734,6 +15734,17 @@ mod tests {
         assert_eq!(dismissed["resolution_note"], "No longer relevant");
     }
 
+    fn decision_echo_command(workspace: PathBuf) -> ProviderCommand {
+        ProviderCommand {
+            executable: PathBuf::from("/bin/sh"),
+            arguments: vec![
+                "-lc".into(),
+                "printf '❯ \\nauto mode on\\n'; while IFS= read -r line; do printf 'received:%s\\n❯ \\nauto mode on\\n' \"$line\"; done".into(),
+            ],
+            working_directory: workspace,
+        }
+    }
+
     #[tokio::test]
     async fn resolving_a_decision_delivers_to_the_requesting_worker_terminal() {
         let runtime = TempDir::new().unwrap();
@@ -15741,14 +15752,7 @@ mod tests {
         let registry = Arc::new(
             SessionRegistry::new(JournalLimits::new(16_384, 256), 2, [workspace.clone()]).unwrap(),
         );
-        let command = ProviderCommand {
-            executable: PathBuf::from("/bin/sh"),
-            arguments: vec![
-                "-lc".into(),
-                "printf '❯ \\nauto mode on\\n'; while IFS= read -r line; do printf 'received:%s\\n❯ \\nauto mode on\\n' \"$line\"; done".into(),
-            ],
-            working_directory: workspace.clone(),
-        };
+        let command = decision_echo_command(workspace.clone());
         let session = registry.spawn(&command, TerminalSize::default()).unwrap();
         let socket = runtime.path().join("terminal.sock");
         let server = HostServer::bind(&socket, registry).unwrap();

@@ -2,6 +2,35 @@
 
 ## Live acceptance failure: an unfinished run lost from Queen's context
 
+### Answered-decision latency: baseline and local correction
+
+Main `207bddbc94e0` is running as
+`1.5.0-dev-207bddbc94e0-20260907053313-3853394`; CI is 34087230668.
+Engine reconciliation remains pending. The isolated operator-recovery script
+created task `01a07a5f-4585-7683-adb5-9a7349ba666c` after checking the demo
+workspace, resting loaded worker and absence of other Ready/Active/Review work.
+Duplicate setup was refused. The worker picked up normal dispatch, created
+fictional decision `01a07a5f-cb3a-7310-85b6-a1058a82a150`, and ended its turn.
+
+The test controller inspected that exact question and answered only its read-only
+option through the decision API, recording surface `dogfood_acceptance_controller`.
+No real decisions or direct terminal input were used. The answer was saved at
+05:39:27 UTC, but logs reported `RecentDelivery` through 05:40:26 while the worker
+was resting. This was coordination pacing, not unsent text. The visible dim
+provider suggestion was not submitted by this investigation.
+
+The baseline eventually reached Review and system-owned Completed at sequence
+7535, timestamp 1788759816, retaining its assignee. The worker reported 9/9 tests,
+unchanged clean HEAD, empty commits and no deployment. This proves eventual
+answer-to-worker recovery and automatic settlement, not acceptable answer latency.
+
+Local `a72bbdff` exempts explicit operator answers only from coordination pacing.
+Readiness, input, engagement, identity, provider-policy and bounded delivery
+protections remain. ADR 0015 records the maturity behavior. The real HTTP-to-PTY
+test seeds a recent delivery and passes; provider-question protection and all
+45 delivery tests pass. Lint required extracting the echo fixture without reducing
+assertions. Its rerun and post-deployment latency acceptance remain pending.
+
 ### Current investigation: rejected delivery assessment, not revision churn
 
 Main `173b057cf67d` completed the normal dev reload and is running as
