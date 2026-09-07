@@ -17,6 +17,8 @@ pub enum HiveSupportServiceError {
         "support destination must be an HTTPS origin without credentials, path, query or fragment"
     )]
     InvalidDestination,
+    #[error("support delivery status contains an invalid saved identity")]
+    InvalidSavedIdentity,
     #[error(transparent)]
     InvalidSubmission(#[from] swarm_domain::SupportValidationError),
     #[error(transparent)]
@@ -75,6 +77,11 @@ pub struct HiveSupportService {
 
 impl HiveSupportService {
     #[must_use]
+    pub fn destination(&self) -> SupportDestination {
+        self.destination.clone()
+    }
+
+    #[must_use]
     pub const fn new(store: TaskStore, destination: SupportDestination) -> Self {
         Self { store, destination }
     }
@@ -101,6 +108,35 @@ impl HiveSupportService {
     /// Propagates unreadable storage instead of reporting an empty outbox.
     pub fn statuses(&self) -> Result<Vec<SupportOutboxStatus>, HiveSupportServiceError> {
         Ok(self.store.support_submission_statuses()?)
+    }
+
+    /// Retry eligibility is durable state and budget, not a network adapter decision.
+    ///
+    /// # Errors
+    /// Refuses unreadable identities rather than silently skipping saved reports.
+    pub fn retryable_keys(&self) -> Result<Vec<Uuid>, HiveSupportServiceError> {
+        self.statuses()?
+            .into_iter()
+            .filter(|status| {
+                status
+                    .delivery
+                    .state
+                    .begin(status.delivery.attempts)
+                    .is_ok()
+            })
+            .map(|status| {
+                Uuid::parse_str(&status.submission_key)
+                    .map_err(|_| HiveSupportServiceError::InvalidSavedIdentity)
+            })
+            .collect()
+    }
+
+    /// Sole process-owner startup only, after the predecessor sender has ended.
+    ///
+    /// # Errors
+    /// Failed persistence leaves interrupted claims intact for later recovery.
+    pub fn recover_interrupted(&self, now: i64) -> Result<usize, HiveSupportServiceError> {
+        Ok(self.store.recover_support_submissions(now)?)
     }
 
     /// Sole process-owned sender claims the exact saved report, not current UI content.

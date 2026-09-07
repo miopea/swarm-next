@@ -45,6 +45,7 @@ mod reload_backup;
 mod runtime;
 mod runtime_storage;
 mod session_history;
+pub mod support_sender;
 pub mod support_transport;
 mod tasks;
 mod terminal_attach;
