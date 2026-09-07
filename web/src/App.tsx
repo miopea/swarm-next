@@ -421,6 +421,9 @@ export function App() {
   // second copy of everything. Duplicating the whole app was what made a
   // pop-out indistinguishable from another window of the same thing.
   const detached = detachedSurface();
+  // Snapshot before saveSurface's effect writes the initial fallback. A reload
+  // with no valid saved page must still use the configured opening preference.
+  const requestedSurfaceAtLaunch = useRef(surfaceWasRequested());
   const [surface, setSurfaceState] = useState<Surface>(() => new URLSearchParams(window.location.search).has("jira") || readSettingsSection() ? "settings" : readSavedSurface());
   const setSurface = useCallback((next: Surface) => {
     // Explicit navigation wins even while the opening preference is in flight.
@@ -558,7 +561,7 @@ export function App() {
         setStartSurface(chosen);
         if (!openedAtLaunch.current) return;
         openedAtLaunch.current = false;
-        if (surfaceWasRequested()) return;
+        if (requestedSurfaceAtLaunch.current) return;
         if (isSurface(chosen)) setSurfaceState(chosen);
       })
       .catch(() => undefined);

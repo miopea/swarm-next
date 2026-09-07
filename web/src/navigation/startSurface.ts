@@ -14,17 +14,18 @@ export function isSurface(value: unknown): value is Surface {
  * Whether something asked for a specific surface, as opposed to this tab simply
  * being where it was.
  *
- * A link, a settings deep link and a Jira hand-off are requests. The surface
- * remembered in sessionStorage is not: it is written on every navigation, so
- * counting it meant the configured opening screen applied once on a genuinely
- * fresh tab and never again. An installed PWA is one long-lived tab, so in
- * practice "start on Workers" did nothing and every reload came back to
- * whatever happened to be open last.
+ * Links and hand-offs win over the opening preference. A valid remembered page
+ * also wins on reload/history restoration, but not on a fresh navigation: an
+ * installed PWA can reuse sessionStorage across launches. Capture this before
+ * the initial render persists its fallback page.
  */
 export function surfaceWasRequested(search: string = window.location.search): boolean {
   try {
     const parameters = new URLSearchParams(search);
-    return Boolean(readSettingsSection()) || parameters.has("jira") || parameters.has("surface");
+    if (Boolean(readSettingsSection()) || parameters.has("jira") || parameters.has("surface")) return true;
+    const navigation = window.performance.getEntriesByType?.("navigation")[0] as PerformanceNavigationTiming | undefined;
+    return (navigation?.type === "reload" || navigation?.type === "back_forward")
+      && isSurface(window.sessionStorage.getItem(SURFACE_STORAGE_KEY));
   } catch {
     return false;
   }

@@ -1721,6 +1721,37 @@ test("a blocked task's age stays in Queues without operator attention", async ()
   expect(screen.getByText(/Age alone does not require your approval/)).toBeInTheDocument();
 });
 
+test.each([
+  ["reload", "queues", true],
+  ["back_forward", "queues", true],
+  ["navigate", "queues", false],
+  ["reload", null, false],
+  ["reload", "invalid", false],
+] as const)("opening preference respects %s restoration with saved page %s", async (type, saved, preserved) => {
+  const navigationSpy = vi.spyOn(window.performance, "getEntriesByType").mockReturnValue([
+    { type } as PerformanceNavigationTiming,
+  ]);
+  if (saved) window.sessionStorage.setItem("swarm-next.surface.v1", saved);
+  const base = bootFetch();
+  let finishPreference: ((response: ReturnType<typeof ok>) => void) | undefined;
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => {
+    if (String(input).includes("/preferences/start-surface")) {
+      return new Promise<ReturnType<typeof ok>>((resolve) => { finishPreference = resolve; });
+    }
+    return base(input);
+  }));
+  try {
+    render(<App />);
+    await waitFor(() => expect(finishPreference).toBeDefined());
+    await act(async () => { finishPreference!(ok({ start_surface: "decisions" })); });
+    expect(screen.getByRole("heading", { name: preserved ? "Queues" : "Needs you", level: 2 })).toBeVisible();
+    expect(screen.queryByTestId("terminal-view")).not.toBeInTheDocument();
+  } finally {
+    cleanup();
+    navigationSpy.mockRestore();
+  }
+});
+
 test("a late opening-screen preference cannot undo explicit Queue navigation", async () => {
   const base = bootFetch();
   let finishPreference: ((response: ReturnType<typeof ok>) => void) | undefined;

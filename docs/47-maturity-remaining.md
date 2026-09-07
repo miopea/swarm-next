@@ -1,11 +1,27 @@
 # Daily-driver maturity: remaining delivery and acceptance
 
-## Current reconciliation — September 7, 20:57 UTC
+## Current reconciliation — September 7, 21:12 UTC
 
 This is the current remaining-work index. Older dated entries below are
 implementation history, not an assertion that their then-open items are still
 unimplemented. The approved full scope remains `45-daily-driver-maturity-plan.md`.
 No phase-completion percentage or full-program completion is established.
+
+### September 7, 21:12 UTC: reload restoration correction
+
+CI `34160814582` completed successfully; live `/health` independently confirms
+`60da894f` remains healthy. The observed reload-to-Platform behavior was traced
+to the configured opening preference overriding sessionStorage on every reload.
+Fresh navigation still honors that preference; reload/history restoration now
+preserves a valid saved surface. The launch decision is captured before the
+initial persistence effect, so missing/invalid saved state still uses the default.
+Explicit navigation while the preference fetch is pending still wins.
+
+Local App/navigation/notification suites pass all 82 tests, including reload,
+history restore, fresh navigation, invalid/missing saved state and delayed
+preference cases. Production TypeScript/build passes. Deployment and live
+browser acceptance of this correction are not yet recorded. This is page
+restoration only, not proof of provider conversation restoration or fleet recovery.
 
 ### September 7, 20:57 UTC: checked-wait projection deployed
 
