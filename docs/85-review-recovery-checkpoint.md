@@ -2,6 +2,24 @@
 
 ## Live acceptance failure: an unfinished run lost from Queen's context
 
+The downstream demo eventually completed on the **existing 8e3d6647 build**,
+not on the still-local continuation changes. Audit sequence 7507 moved Blocked
+to Ready at 1788755995; 7509 is the assigned Contract worker's pickup, and 7512
+is system-owned Review-to-Completed at 1788756076. The assignee was preserved.
+The worker explicitly reported that this documentation-only repository contains
+no tests: `node --test` executed zero tests, not a meaningful test pass. This
+proves eventual routing, pickup and automatic no-code settlement, not contract
+correctness or prompt resumption by the new implementation. The earlier lost-run
+stall remains a verified failure. No manual unblock was performed by this task.
+
+The two full-suite failures both use ambient resource admission before the
+operation under test. A deferral yields exactly the observed no-revival or
+Sleeping result. Their fixtures now use the existing test-only Allowed admission
+input for drain/return and recovery-circuit behavior; dedicated pressure tests
+remain in place and production admission is unchanged. The full API rerun now
+passes all 507 tests in 132.83 seconds. This addresses the two fixture failures;
+it does not prove that every historical CI failure shared this cause.
+
 Full API evaluation finished **505 passed, 2 failed**:
 `package_return_preparation_requires_auth_and_drain_and_preserves_sessions`
 returned no revival after drain cancellation, and

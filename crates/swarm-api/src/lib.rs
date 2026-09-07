@@ -16696,9 +16696,11 @@ mod tests {
                 1,
             )
             .unwrap();
-        let state = AppState::default()
+        let mut state = AppState::default()
             .with_terminal_host(HostClient::new(&socket), "secret")
             .with_task_store(store.clone());
+        // This fixture tests drain/return ownership, not ambient CI pressure.
+        state.test_start_admission = Some(runtime::CoordinatorStartAdmission::Allowed);
         let app = router(state.clone());
         for (token, drained, expected) in [
             ("wrong", false, StatusCode::UNAUTHORIZED),
@@ -17250,9 +17252,11 @@ mod tests {
         let queen = store
             .ensure_queen(workspace.to_string_lossy().as_ref())
             .unwrap();
-        let state = AppState::default()
+        let mut state = AppState::default()
             .with_terminal_host(HostClient::new(&socket), "secret")
             .with_task_store(store);
+        // Capacity deferral must not obscure the recovery circuit under test.
+        state.test_start_admission = Some(runtime::CoordinatorStartAdmission::Allowed);
         state
             .worker_recovery_attempts
             .write()
