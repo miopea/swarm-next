@@ -1860,6 +1860,111 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn queen_status_exhaustion_clears_when_terminal_resumes() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("host.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        let now = unix_timestamp();
+        store.bind_worker_session(queen.id, session).unwrap();
+        store.set_queen_automation_enabled(true, now).unwrap();
+        store.request_queen_automation_run(now).unwrap();
+        let run = store.claim_queen_automation(now).unwrap().unwrap();
+        store
+            .complete_queen_automation_delivery(&run.run_id, now)
+            .unwrap();
+        for _ in 0..2 {
+            assert!(
+                store
+                    .continue_idle_queen_review(
+                        &run.run_id,
+                        session,
+                        swarm_domain::QueenReviewContinuationObservation {
+                            current_complete_snapshot: true,
+                            activity: swarm_domain::RecoveryTerminalActivity::Resting,
+                            background_work: false,
+                            operator_engaged: false,
+                            unsent_input: Some(false),
+                        },
+                        now
+                    )
+                    .unwrap()
+            );
+            store.claim_queen_automation(now).unwrap().unwrap();
+            store
+                .complete_queen_automation_delivery(&run.run_id, now)
+                .unwrap();
+        }
+        let server = tokio::spawn(async move {
+            for text in [
+                "● Done.\r\n\r\n❯ \r\n  ? for shortcuts",
+                "✻ Thinking… (esc to interrupt)\r\n❯ ",
+            ] {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                assert!(matches!(
+                    serde_json::from_str::<HostRequest>(&line).unwrap(),
+                    HostRequest::Read { .. }
+                ));
+                let mut bytes =
+                    serde_json::to_vec(&prompt_observation(session, text, true)).unwrap();
+                bytes.push(b'\n');
+                reader.get_mut().write_all(&bytes).await.unwrap();
+            }
+        });
+        let mut state =
+            AppState::new(JournalLimits::new(64 * 1024, 64)).with_task_store(store.clone());
+        state.terminal_host = Some(HostClient::new(socket));
+        let state = std::sync::Arc::new(state);
+        let denied = crate::orchestration::queen_automation_status(
+            axum::extract::State(state.clone()),
+            axum::http::HeaderMap::new(),
+        )
+        .await;
+        assert!(denied.is_err());
+        let state = std::sync::Arc::new(state.as_ref().clone().with_terminal_host(
+            state.terminal_host.clone().unwrap(),
+            "fictional-queen-status-test-token-0001",
+        ));
+        for exhausted in [true, false] {
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert(
+                axum::http::header::AUTHORIZATION,
+                "Bearer fictional-queen-status-test-token-0001"
+                    .parse()
+                    .unwrap(),
+            );
+            let response = crate::orchestration::queen_automation_status(
+                axum::extract::State(state.clone()),
+                headers,
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            let body = axum::body::to_bytes(response.into_body(), 8192)
+                .await
+                .unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(value["waiting_reason"].is_string(), exhausted);
+            assert_eq!(value["run_id"], run.run_id);
+            assert_eq!(value["state"], "running");
+            assert_eq!(value["attempts"], 3);
+        }
+        server.await.unwrap();
+        assert_eq!(
+            store.unfinished_queen_review().unwrap(),
+            Some((run.run_id, session))
+        );
+    }
+
     #[test]
     fn coordination_requires_a_running_full_snapshot_of_the_exact_session() {
         let session = WorkerSessionId::new();

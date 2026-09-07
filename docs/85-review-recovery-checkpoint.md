@@ -2,6 +2,17 @@
 
 ## Live acceptance failure: an unfinished run lost from Queen's context
 
+The HTTP handler regression now verifies authentication is required, responses
+are no-store, an exhausted idle review reports its wait, and resumed terminal
+work clears that explanation without changing run/state/attempts. Two fixture
+initialization attempts failed authentication before the correctly configured
+fictional-credential fixture passed. No production credential was used.
+The real terminal-host/PTY handoff test now also verifies continuation queues
+and redelivers the same run through normal delivery, increments its existing
+attempt count, and retains coverage enforcement when Queen finishes. It passes.
+The full 507-test API suite is running at this checkpoint; the live demo outcome
+and authenticated rendered acceptance are still open.
+
 Host-failure acceptance now passes for missing socket, explicit host error and
 a stalled response bounded by the two-second observation deadline. All preserve
 the Running review, run ID and attempt count without writing terminal input.

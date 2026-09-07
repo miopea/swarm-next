@@ -16341,6 +16341,24 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
+        // A finished provider turn without an explicit run finish is not a
+        // completed review. Continue through the real host and normal guarded
+        // delivery path, retaining this run and its finite attempt budget.
+        let attempts_before = store.queen_automation_status(101).unwrap().attempts;
+        coordination_delivery::continue_idle_queen_review(&state).await;
+        assert_eq!(
+            store.queen_automation_status(101).unwrap().state,
+            swarm_domain::QueenAutomationState::Queued
+        );
+        store
+            .record_coordination_delivery(queen_terminal.id(), unix_timestamp() - 301)
+            .unwrap();
+        state.deliver_coordination().await;
+        let continued = store.queen_automation_status(101).unwrap();
+        assert_eq!(continued.run_id.as_deref(), Some(run_id.as_str()));
+        assert_eq!(continued.state, swarm_domain::QueenAutomationState::Running);
+        assert_eq!(continued.attempts, attempts_before + 1);
+
         assert_eq!(
             store
                 .finish_queen_automation_run(
