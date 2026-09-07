@@ -369,6 +369,10 @@ pub(super) async fn queen_automation_status(
         && let Some((run_id, session_id)) = store
             .unfinished_queen_review()
             .map_err(|error| task_store_error(&error))?
+        && status.run_id.as_deref() == Some(run_id.as_str())
+        && store
+            .queen_review_continuation_budget_exhausted(&run_id, session_id, unix_timestamp())
+            .map_err(|error| task_store_error(&error))?
         && let Some(observation) =
             super::coordination_delivery::observe_review_continuation(&state, store, session_id)
                 .await

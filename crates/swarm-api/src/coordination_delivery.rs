@@ -1862,6 +1862,59 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn ordinary_queen_status_does_not_observe_terminal() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("host.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        let now = unix_timestamp();
+        store.bind_worker_session(queen.id, session).unwrap();
+        store.set_queen_automation_enabled(true, now).unwrap();
+        store.request_queen_automation_run(now).unwrap();
+        let run = store.claim_queen_automation(now).unwrap().unwrap();
+        store
+            .complete_queen_automation_delivery(&run.run_id, now)
+            .unwrap();
+        // A normal running review must not read its terminal just to serve the
+        // status card. The listening host deliberately supplies no response.
+        let before_exhaustion = std::sync::Arc::new(
+            AppState::new(JournalLimits::new(64 * 1024, 64))
+                .with_task_store(store.clone())
+                .with_terminal_host(
+                    HostClient::new(socket.clone()),
+                    "fictional-queen-status-test-token-0001",
+                ),
+        );
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer fictional-queen-status-test-token-0001"
+                .parse()
+                .unwrap(),
+        );
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            crate::orchestration::queen_automation_status(
+                axum::extract::State(before_exhaustion),
+                headers,
+            ),
+        )
+        .await
+        .expect("ordinary status must not wait for terminal observation")
+        .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), listener.accept())
+                .await
+                .is_err(),
+            "ordinary status must not contact the terminal host"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn queen_status_exhaustion_clears_when_terminal_resumes() {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         let directory = tempfile::tempdir().unwrap();

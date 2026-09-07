@@ -87,6 +87,20 @@ impl TaskStore {
         if !observation.permits_continuation() {
             return Ok(false);
         }
+        self.queen_review_continuation_budget_exhausted(run_id, session_id, now)
+    }
+
+    /// Cheap eligibility check before obtaining terminal evidence. This does not
+    /// prove Queen is idle; callers must recheck after observing the terminal.
+    ///
+    /// # Errors
+    /// Returns an error when current run authority cannot be read.
+    pub fn queen_review_continuation_budget_exhausted(
+        &self,
+        run_id: &str,
+        session_id: WorkerSessionId,
+        now: i64,
+    ) -> Result<bool, TaskStoreError> {
         Ok(self.connection()?.query_row(
             "SELECT EXISTS(SELECT 1 FROM queen_automation automation
              JOIN worker_sessions session ON session.session_id=automation.delivery_session_id

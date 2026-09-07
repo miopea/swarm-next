@@ -2,6 +2,37 @@
 
 ## Live acceptance failure: an unfinished run lost from Queen's context
 
+### Current checkpoint: September 7, 05:09 UTC
+
+Recovery main `a053ae113999` is healthy in the development Hive as
+`1.5.0-dev-a053ae113999-20260907045638-3821868`. CI 34084913920 has completed
+successfully in all four jobs. All 16 original sessions survived the API reload.
+Engine reconciliation is still deferred: its 05:08:40 UTC observation found three
+of 16 sessions mid-turn, on its fifth deferral. The running engine remains
+`d6a2e9b3a041`, with `9d446699a798` desired. This is not a completed engine update
+or proof of rolling-update acceptance; no force interruption was performed.
+
+Queen review `01a07a3e-d42a-7e41-8bff-b1ac219079af` remains queued with zero
+attempts, held after recent delivery. Actionable count moved from 66 to 64 and
+Queen-owned count from 22 to 21. These counts do not prove recovery of particular
+workers or exercise the new same-run continuation. The separate Edge test tab
+still requires operator unlock; browser access itself is connected.
+
+A follow-up optimization avoids reading the terminal host for ordinary running
+review status requests whose continuation budget is not exhausted. Persistence
+owns the cheap eligibility check; a fresh terminal observation and a second
+durable authority check remain mandatory before reporting exhaustion. Matching
+the observed run to the response also avoids attaching another run's explanation.
+The HTTP regressions prove a normal request never contacts a listening host,
+and retain exhausted-idle and resumed-busy checks. Both pass on Linux, as do
+formatting and strict persistence/API all-target, all-feature lint. The initial
+lint run required splitting the enlarged fixture into two focused tests; no lint
+rule was waived. This follow-up is not yet deployed.
+
+Earlier sections below are chronological evidence, not the current deployment
+status. The full maturity program and post-deployment recovery acceptance remain
+open. No release was cut.
+
 The full 507-test API rerun and strict API lint pass. Recovery integration
 `a053ae1139999c486503e25a066f295543422fe3` was pushed to main and the clean Linux
 clone fast-forwarded. CI 34084913920 is in progress. Normal dev reload was
