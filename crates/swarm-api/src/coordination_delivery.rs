@@ -1506,9 +1506,20 @@ pub(super) fn task_message_message(messages: &[TaskMessageDispatch]) -> Coordina
     for message in messages {
         let _ = write!(
             text,
-            "\n[{} — task {} \"{}\"]\n{}\n",
-            message.sender_name, message.task_id, message.task_title, message.body
+            "\n[{} — task {} \"{}\" — message {}]\n{}\n",
+            message.sender_name,
+            message.task_id,
+            message.task_title,
+            message.message_id,
+            message.body
         );
+        if message.sender == swarm_persistence::MessageParty::Queen {
+            let _ = writeln!(
+                text,
+                "Reply correlation: read this task's current returned-review request in swarm_read_task_history. If message {} is that exact request and you are submitting its answer, call swarm_message_queen with reply_to_message_id=\"{}\" and this task_id. That atomically hands review ownership back to Queen without completing the task. Leave reply_to_message_id absent for progress, clarification, unrelated messages or a superseded request. Saying 're-submitted' in prose or sending Review to Review does not answer the request.",
+                message.message_id, message.message_id
+            );
+        }
     }
     // ENDS WITH \r, AND THAT IS NOT PUNCTUATION — IT IS THE SUBMIT FLAG.
     // submit_terminal_message reads the last byte: \r means "type this and
@@ -3675,6 +3686,14 @@ mod tests {
             assert!(text.contains("she does not reply to herself"));
             assert!(text.contains("does not change assignment, scope, lifecycle or authority"));
             assert!(text.contains("continuation-contract"));
+            assert_eq!(
+                text.contains("reply_to_message_id=\"continuation-contract\""),
+                sender == swarm_persistence::MessageParty::Queen
+            );
+            if sender == swarm_persistence::MessageParty::Queen {
+                assert!(text.contains("Leave reply_to_message_id absent for progress"));
+                assert!(text.contains("without completing the task"));
+            }
             assert_eq!(message.bytes.last(), Some(&b'\r'));
         }
     }

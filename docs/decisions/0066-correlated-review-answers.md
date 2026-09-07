@@ -60,3 +60,13 @@ Cover migration without fabricated links, atomic save/event failures, exact
 duplicate and conflicting replies, superseded requests, changed assignment,
 ordinary messages, role isolation, and a real MCP hand-back/answer round trip.
 No native terminal transcript inference or semantic answer matching is added.
+
+September 7 live inspection found that task-message delivery still advertised
+an ordinary worker report without the reply selector. A worker reported fixes
+and said it re-submitted, while the exact review request remained unanswered.
+Every delivered message now includes its own immutable identity, not only the
+first batching marker. Queen-to-worker messages explain conditional use of that
+identity as `reply_to_message_id`: verify it is the current returned-review
+request, and omit it for progress, clarification or a superseded request. This
+changes presentation of the existing contract, not authorization, semantic
+matching or the atomic persistence transition. Live acceptance remains required.
