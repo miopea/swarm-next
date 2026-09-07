@@ -1,5 +1,36 @@
 # Returned-review recovery checkpoint
 
+## September 7 recovery deployment in progress
+
+Final deployment check: `1.5.0-dev-8e3d6647072d-20260907032044-3749690` is
+healthy with no degraded subsystem or database-recovery requirement. Source is
+clean/current and `worker_engine_update_required` is false. All 16 captured
+workers returned with new session identities after the engine swap; their
+conversation freshness reports current. This verifies product continuity checks,
+not independent provider-history or productive-task-resumption acceptance.
+CI 34079309932 and actual multi-worker recovery observation remain pending.
+
+Root checkpoint `7d0b7bf5` was integrated onto main as `9130b38b`, excluding the
+inactive support foundation. In an exact main-only Linux checkout, 34 recovery
+tests passed, including deployed schema 142 to recovery schema 144 with the
+support-outbox table absent. Both recovery endpoint tests and strict lint passed.
+The earlier full root-branch evaluation passed 502 API, 36 application and 127
+domain tests; persistence had 628 passes and the subsequently corrected newest-
+migration fixture. Its corrected focused rerun passed.
+
+Normal dev deployment brought `9130b38b7635` up healthy. Engine reconciliation
+then replaced engine `54dec4b9bf05` with `d6a2e9b3a041` at 23:19 EDT. The 16
+pre-update worker/session identities were captured; restoration was still
+progressing (eight returned at the last check), so this is not yet a claim that
+every worker returned or resumed productive work.
+
+CI 34079060850 failed Rust formatting in the main-only migration test; web and
+Linux packaging passed. Full `cargo fmt --all --check` was then verified, and the
+formatting-only correction was committed/pushed as `8e3d6647`. The remote clone
+is current; its second normal dev reload is running (PID 3749666). CI 34079309932
+is in progress. No release was cut. Completion still requires final health,
+worker return/conversation checks, CI result and actual multi-worker recovery.
+
 ## Recovery finish integration (local, not deployed)
 
 Full Linux library evaluation: 502 API, 36 application and 127 domain tests pass.
