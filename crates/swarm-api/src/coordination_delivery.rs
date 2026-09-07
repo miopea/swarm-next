@@ -1680,6 +1680,110 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn idle_review_adapter_requires_current_safe_terminal_before_requeue() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        for scenario in [
+            "idle",
+            "busy",
+            "input",
+            "unknown",
+            "ended",
+            "wrong_session",
+            "truncated",
+            "engaged",
+            "finished",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let socket = directory.path().join("host.sock");
+            let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+            let store = TaskStore::in_memory().unwrap();
+            let queen = store.ensure_queen("/workspace/queen").unwrap();
+            let session = WorkerSessionId::new();
+            let now = unix_timestamp();
+            store.bind_worker_session(queen.id, session).unwrap();
+            store.set_queen_automation_enabled(true, now).unwrap();
+            store.request_queen_automation_run(now).unwrap();
+            let run = store.claim_queen_automation(now).unwrap().unwrap();
+            store
+                .complete_queen_automation_delivery(&run.run_id, now)
+                .unwrap();
+            let mut state =
+                AppState::new(JournalLimits::new(64 * 1024, 64)).with_task_store(store.clone());
+            state.terminal_host = Some(HostClient::new(socket));
+            let concurrent_store = store.clone();
+            let concurrent_run = run.run_id.clone();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                assert!(
+                    matches!(serde_json::from_str::<HostRequest>(&line).unwrap(), HostRequest::Read { session_id, .. } if session_id == session)
+                );
+                let text = match scenario {
+                    "busy" => "✻ Thinking… (esc to interrupt)\r\n❯ ",
+                    "input" => "● Done.\r\n❯ do not submit this draft\r\n  ? for shortcuts",
+                    "unknown" => "unclassified screen",
+                    _ => "● Done.\r\n\r\n❯ \r\n  ? for shortcuts",
+                };
+                let mut response = prompt_observation(
+                    if scenario == "wrong_session" {
+                        WorkerSessionId::new()
+                    } else {
+                        session
+                    },
+                    text,
+                    scenario != "ended",
+                );
+                if scenario == "truncated"
+                    && let HostResponse::Output {
+                        resume: swarm_terminal::Resume::Snapshot { snapshot },
+                        ..
+                    } = &mut response
+                {
+                    snapshot.truncated = true;
+                }
+                if scenario == "engaged" {
+                    concurrent_store
+                        .renew_worker_engagement(session, None, now, 60)
+                        .unwrap();
+                }
+                if scenario == "finished" {
+                    concurrent_store
+                        .finish_queen_automation_run(
+                            &concurrent_run,
+                            swarm_domain::QueenAutomationOutcome::Incomplete,
+                            now,
+                        )
+                        .unwrap();
+                }
+                let mut bytes = serde_json::to_vec(&response).unwrap();
+                bytes.push(b'\n');
+                reader.get_mut().write_all(&bytes).await.unwrap();
+            });
+            continue_idle_queen_review(&state).await;
+            server.await.unwrap();
+            let status = store.queen_automation_status(now).unwrap();
+            assert_eq!(
+                status.run_id.as_deref(),
+                Some(run.run_id.as_str()),
+                "{scenario}"
+            );
+            assert_eq!(
+                status.attempts, 1,
+                "observation must not submit: {scenario}"
+            );
+            let expected = match scenario {
+                "idle" => swarm_domain::QueenAutomationState::Queued,
+                "finished" => swarm_domain::QueenAutomationState::Completed,
+                _ => swarm_domain::QueenAutomationState::Running,
+            };
+            assert_eq!(status.state, expected, "{scenario}");
+        }
+    }
+
     #[test]
     fn coordination_requires_a_running_full_snapshot_of_the_exact_session() {
         let session = WorkerSessionId::new();

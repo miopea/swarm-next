@@ -236,9 +236,9 @@ impl TaskStore {
         let connection = self.connection()?;
         connection.execute(
             "UPDATE queen_automation SET enabled = ?1, updated_at = ?2,
-                 state = CASE WHEN ?1 = 0 AND state = 'queued' THEN 'idle' ELSE state END,
-                 run_id = CASE WHEN ?1 = 0 AND state = 'queued' THEN NULL ELSE run_id END,
-                 pending_fingerprint = CASE WHEN ?1 = 0 AND state = 'queued' THEN NULL ELSE pending_fingerprint END
+                 state = CASE WHEN ?1 = 0 AND state = 'queued' AND delivered_at IS NULL THEN 'idle' ELSE state END,
+                 run_id = CASE WHEN ?1 = 0 AND state = 'queued' AND delivered_at IS NULL THEN NULL ELSE run_id END,
+                 pending_fingerprint = CASE WHEN ?1 = 0 AND state = 'queued' AND delivered_at IS NULL THEN NULL ELSE pending_fingerprint END
              WHERE id = 1",
             params![enabled, now],
         )?;
@@ -378,6 +378,7 @@ impl TaskStore {
              JOIN worker_profiles queen ON queen.role = 'queen'
              JOIN worker_sessions session ON session.worker_id = queen.id AND session.ended_at IS NULL
              WHERE automation.id = 1 AND automation.state = 'queued' AND automation.attempts < ?1
+               AND (automation.enabled = 1 OR automation.delivered_at IS NULL)
                AND NOT EXISTS (SELECT 1 FROM worker_engagements engagement WHERE engagement.worker_id = queen.id AND engagement.expires_at > ?2)
                AND NOT EXISTS (SELECT 1 FROM local_federation_steward_takeover_leases lease WHERE lease.state = 'active' AND lease.expires_at > ?2)
              ORDER BY session.started_at DESC LIMIT 1",
@@ -1340,6 +1341,34 @@ mod tests {
             QueenAutomationFinish::Closed(QueenAutomationOutcome::Incomplete)
         );
         assert!(store.claim_queen_automation(105).unwrap().is_none());
+    }
+
+    #[test]
+    fn disabling_automation_holds_continuation_without_erasing_delivered_run() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        store.set_queen_automation_enabled(true, 99).unwrap();
+        store.request_queen_automation_run(100).unwrap();
+        let run = store.claim_queen_automation(101).unwrap().unwrap();
+        store
+            .complete_queen_automation_delivery(&run.run_id, 102)
+            .unwrap();
+        assert!(
+            store
+                .continue_idle_queen_review(&run.run_id, session, idle_review_observation(), 103)
+                .unwrap()
+        );
+        let paused = store.set_queen_automation_enabled(false, 104).unwrap();
+        assert_eq!(paused.run_id.as_deref(), Some(run.run_id.as_str()));
+        assert!(store.claim_queen_automation(105).unwrap().is_none());
+        assert_eq!(
+            store
+                .finish_queen_automation_run(&run.run_id, QueenAutomationOutcome::Incomplete, 106)
+                .unwrap(),
+            QueenAutomationFinish::Closed(QueenAutomationOutcome::Incomplete)
+        );
     }
 
     #[test]

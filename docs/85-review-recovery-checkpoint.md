@@ -2,6 +2,18 @@
 
 ## Live acceptance failure: an unfinished run lost from Queen's context
 
+Adapter acceptance now exercises the real host protocol against an isolated
+Unix socket for idle, busy, unknown, unsent input, wrong-session, ended-process,
+truncated-snapshot, concurrent engagement and concurrent finish cases. Only idle
+queues continuation, none of these observation calls writes terminal input, and
+the original run identity/attempt count is preserved. This passes on Linux.
+An additional lifecycle regression found and fixed disabling automation erasing
+an already-delivered queued continuation. Disabling now holds it without another
+claim or losing its identity; an explicit finish still works. All 42 conductor
+tests pass. Lint flagged a nested test conditional, subsequently corrected.
+Unavailable/timeout-host acceptance, end-to-end redelivery and exhausted-budget
+visibility remain required before deployment. No live task was manually unblocked.
+
 The next local slice adds domain-gated same-session continuation: a current,
 complete, resting snapshot with no background work or unsent input can queue
 the exact Running review again. Persistence rechecks session, engagement and
