@@ -1,11 +1,49 @@
 # Daily-driver maturity: remaining delivery and acceptance
 
-## Current reconciliation — September 7, 18:02 UTC
+## Current reconciliation — September 7, 20:57 UTC
 
 This is the current remaining-work index. Older dated entries below are
 implementation history, not an assertion that their then-open items are still
 unimplemented. The approved full scope remains `45-daily-driver-maturity-plan.md`.
 No phase-completion percentage or full-program completion is established.
+
+### September 7, 20:57 UTC: checked-wait projection deployed
+
+Main `60da894f` is live as `1.5.0-dev-60da894f24bf-20260907204912-296238`,
+healthy with no degraded subsystems or database recovery required. The normal
+App/API rebuild completed successfully. All sixteen exact worker/session pairs
+survived. The independent engine remains `e1d98e0a4b94-20260907183121-205234`,
+not the packaged engine fingerprint reported by API health. No release was cut.
+
+The full main-compatible persistence suite passed 656 tests in 383.10 seconds;
+full-workspace/all-target/all-feature strict Clippy and the coordinator contract
+test passed. The exact main web integration passed its TypeScript check, all 57
+queue/API tests and production build. The six changed Rust files were confirmed
+identical between main integration and the Linux test tree. CI `34160814582`
+remains in progress at this checkpoint; the earlier correction CI `34157791590`
+completed successfully.
+
+Authenticated Edge inspection at `swarm.bfgsolutions.net` confirms the new
+grouping: four authenticated operator deferrals appear with one scheduled hold,
+and a current external assessment appears under dependencies/holds. Reasons and
+dated source checks expand without changing tasks. Six stale/fresh-check-required
+judgments remain untrusted for parking. At the observation, the page showed
+25 Queen, 2 worker, 7 dependencies/holds, 4 shipping, 5 scheduled/parked and 1
+operator row. Real work changed concurrently, so the difference from the earlier
+32 Queen rows is not a claim that seven tasks recovered. Recovery obligations
+remain separate and visible; structural reconciliation is still required.
+
+Five sequential live loopback coordinator reads returned HTTP 200 in
+24.088-25.067 ms with 100,844-byte responses. This is a spot observation with
+active workers, not a controlled before/after benchmark, browser percentile,
+aged-memory plateau or native-mobile acceptance. The synthetic cold/cache
+measurement and invalidation tests are recorded in ADR 0082.
+
+During the browser update check, reloading this separate tab returned it to
+Platform despite having been on Needs You. It was immediately moved back to
+Queues without input. Verify page restoration against the approved resume
+behavior; do not attribute intentional operator engagement to a test tab left
+on a terminal. This is an observed follow-up, not a diagnosed or fixed cause.
 
 ### September 7, 20:04 UTC: resolved references and remaining ownership debt
 
