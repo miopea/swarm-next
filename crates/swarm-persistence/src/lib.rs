@@ -9572,22 +9572,35 @@ mod tests {
         let path = directory.path().join("deployed-142.sqlite3");
         let task_id = {
             let store = TaskStore::open(&path).unwrap();
-            let task = store.create_task("Preserve deployed task", "/workspace/demo").unwrap();
+            let task = store
+                .create_task("Preserve deployed task", "/workspace/demo")
+                .unwrap();
             let connection = store.connection().unwrap();
-            connection.execute_batch("DROP TABLE queen_recovery_receipts; PRAGMA user_version=142;").unwrap();
+            connection
+                .execute_batch("DROP TABLE queen_recovery_receipts; PRAGMA user_version=142;")
+                .unwrap();
             task.id
         };
         let store = TaskStore::open(&path).unwrap();
-        assert_eq!(store.get_task(task_id).unwrap().title, "Preserve deployed task");
+        assert_eq!(
+            store.get_task(task_id).unwrap().title,
+            "Preserve deployed task"
+        );
         let connection = store.connection().unwrap();
-        let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
         assert_eq!(version, 144);
         let tables: (bool, bool) = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='queen_recovery_receipts'),
                     EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='hive_support_outbox')",
             [], |row| Ok((row.get(0)?, row.get(1)?)),
         ).unwrap();
-        assert_eq!(tables, (true, false), "Recovery must not activate support ingestion");
+        assert_eq!(
+            tables,
+            (true, false),
+            "Recovery must not activate support ingestion"
+        );
     }
 
     #[test]
