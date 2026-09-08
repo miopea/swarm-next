@@ -817,3 +817,29 @@ test("separates the agent tool surface from the worker engine", async () => {
   // The control it labels is still there and still reachable.
   expect(screen.getByRole("button", { name: "Force worker reload" })).toBeInTheDocument();
 });
+
+test.each([
+  { stale: 0, unknown: 16 },
+  { stale: 1, unknown: 0 },
+  { stale: 1, unknown: 15 },
+])("keeps recorded tool mismatch separate from missing evidence: %j", async ({ stale, unknown }) => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).includes("tool-surface")) {
+      return ok({ serving_revision: 23, live_sessions: 16, current: 16 - stale - unknown, stale, unknown });
+    }
+    return ok({});
+  }));
+  const onForceWorkerReload = vi.fn();
+  render(<SettingsWorkspace {...minimalProps()} section="settings-updates" onForceWorkerReload={onForceWorkerReload} />);
+  if (unknown) {
+    expect(await screen.findByText(/Tool list unconfirmed for/)).toHaveTextContent(`unconfirmed for ${unknown} session`);
+    expect(screen.getByText(/no restart is required on this evidence alone/)).toBeInTheDocument();
+  }
+  if (stale) {
+    expect(await screen.findByText(/recorded tool list older than revision 23/)).toBeInTheDocument();
+  } else {
+    expect(screen.queryByText(/recorded tool list older/)).not.toBeInTheDocument();
+  }
+  expect(screen.queryByText(/Only a session restart fixes this/)).not.toBeInTheDocument();
+  expect(onForceWorkerReload).not.toHaveBeenCalled();
+});

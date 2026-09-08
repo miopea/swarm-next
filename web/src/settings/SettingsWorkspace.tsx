@@ -146,7 +146,6 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
     }
   }, [operatorToken]);
   useVisiblePolling(loadToolSurface, Boolean(operatorToken) && shows("settings-runtime"), 30_000);
-  const surfaceUnreachable = (toolSurface?.stale ?? 0) + (toolSurface?.unknown ?? 0);
   const workspaceRef = useRef<HTMLDivElement>(null);
   // Choosing a section puts you at the top of it.
   //
@@ -618,14 +617,16 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
                     survive. Saying "13 could not be confirmed" is the whole
                     point; saying nothing is what happened before. */}
                 {toolSurfaceUnavailable && <p className="tool-surface-warning" role="status">Worker tool availability could not be refreshed. Any displayed counts are last known.</p>}
-                {surfaceUnreachable > 0 ? (
+                {(toolSurface?.stale ?? 0) > 0 ? (
                   <p className="tool-surface-warning" role="status">
-                    {toolSurface?.stale ? `${toolSurface.stale} session${toolSurface.stale === 1 ? "" : "s"} hold an older tool list` : null}
-                    {toolSurface?.stale && toolSurface?.unknown ? ", and " : null}
-                    {toolSurface?.unknown ? `${toolSurface.unknown} could not be confirmed` : null}
-                    {" "}against revision {toolSurface?.serving_revision}. They cannot use a tool
-                    added since they connected. Only a session restart fixes this — a reload does
-                    not, and it is not a worker engine update.
+                    {toolSurface?.stale} session{toolSurface?.stale === 1 ? " has" : "s have"} a recorded tool list older than revision {toolSurface?.serving_revision}.
+                    {" "}Reconnect affected workers when they need the changed tools. A browser reload does not refresh their tool list.
+                  </p>
+                ) : null}
+                {(toolSurface?.unknown ?? 0) > 0 ? (
+                  <p className="tool-surface-warning" role="status">
+                    Tool list unconfirmed for {toolSurface?.unknown} session{toolSurface?.unknown === 1 ? "" : "s"} against revision {toolSurface?.serving_revision}.
+                    {" "}An App/API restart can clear this record while workers keep running. This is not proof of missing tools; no restart is required on this evidence alone.
                   </p>
                 ) : null}
                 {confirmForceReload ? (
