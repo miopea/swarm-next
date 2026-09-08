@@ -22,6 +22,13 @@ cat > "$SWARM_SYSTEMCTL_BIN" <<'EOF'
 #!/bin/sh
 set -eu
 printf '%s\n' "$*" >> "$HOME/systemctl.log"
+if [ -f "$HOME/check-lifecycle-owner" ]; then
+  if flock -n "$SWARM_STATE_ROOT/.package-lifecycle.lock" true; then
+    printf 'service action had no lifecycle owner\n' > "$HOME/lifecycle-owner-missing"
+    exit 1
+  fi
+  printf 'owned\n' >> "$HOME/lifecycle-owner-observed"
+fi
 # is-failed ANSWERS HONESTLY, or the updater's start-limit check is untestable.
 # A stub that exits 0 for everything reports every unit as failed, so the check
 # fires on every start and the log looks identical whether it works or not.
@@ -789,10 +796,14 @@ grep -q '^--user restart swarm-terminal-host.service$' "$HOME/systemctl.log"
 
 # A failed API health check restores only the previous API/browser pointer.
 printf 'database-v2\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
+: > "$HOME/check-lifecycle-owner"
 if "$package" update "$test_root/bundle-3.0.0"; then
   echo "unhealthy update unexpectedly succeeded" >&2
   exit 1
 fi
+rm "$HOME/check-lifecycle-owner"
+[ ! -f "$HOME/lifecycle-owner-missing" ]
+[ "$(wc -l < "$HOME/lifecycle-owner-observed")" -ge 2 ]
 [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "2.0.0" ]
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "2.0.0" ]
 [ "$(cat "$SWARM_STATE_ROOT/swarm.sqlite3")" = "database-v2" ]
@@ -1112,6 +1123,27 @@ fi
 [ "$(find "$SWARM_STATE_ROOT/backups" -maxdepth 1 -type d -name 'offline-restore-*' | wc -l)" -eq 3 ]
 
 printf 'keep\n' > "$SWARM_STATE_ROOT/operator-data"
+# A real advisory lock holder excludes every activation path before any service
+# calls. The timer returns a deferral, while explicit commands report conflict.
+locked_current=$(readlink "$SWARM_INSTALL_ROOT/current")
+locked_host=$(readlink "$SWARM_INSTALL_ROOT/host-current")
+: > "$HOME/systemctl.log"
+: > "$HOME/swarmctl.log"
+for locked_action in update rollback reconcile-host migrate-protocol complete-protocol-migration restore restore-offline uninstall enable-development disable-development; do
+  if flock "$SWARM_STATE_ROOT/.package-lifecycle.lock" "$package" "$locked_action" "$test_root/bundle-2.0.0" > "$HOME/lock-result" 2>&1; then
+    echo "$locked_action ignored the lifecycle owner" >&2; exit 1
+  fi
+  grep -q 'another package lifecycle operation is active' "$HOME/lock-result"
+done
+for locked_action in reconcile-host-if-idle reconcile-host-requested complete-protocol-migration-if-idle; do
+  flock "$SWARM_STATE_ROOT/.package-lifecycle.lock" "$package" "$locked_action" > "$HOME/lock-result"
+  grep -q 'maintenance deferred.*another package lifecycle operation is active' "$HOME/lock-result"
+done
+[ ! -s "$HOME/systemctl.log" ]
+[ ! -s "$HOME/swarmctl.log" ]
+[ "$(readlink "$SWARM_INSTALL_ROOT/current")" = "$locked_current" ]
+[ "$(readlink "$SWARM_INSTALL_ROOT/host-current")" = "$locked_host" ]
+# Subsequent uninstall below proves the lock is released after refusal/failure.
 if SWARM_INSTALL_ROOT="$HOME/.local/lib/not-swarm" "$package" uninstall; then
   echo "unsafe uninstall root unexpectedly succeeded" >&2
   exit 1

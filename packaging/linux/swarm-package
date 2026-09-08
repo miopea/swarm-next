@@ -94,6 +94,24 @@ record_failure() {
 }
 run_systemctl() { "$systemctl_bin" --user "$@"; }
 
+# One lifecycle owner across API activation, engine reconciliation and rollback.
+# Keep this descriptor held through on_exit recovery. Build/download wrappers do
+# not take the lock: their nested bundle's update owns the activation boundary.
+# Never unlink this file, including after failure; that could split lock owners.
+lock_package_lifecycle() {
+  mkdir -p "$state_root"
+  umask 077
+  exec 7>"$state_root/.package-lifecycle.lock"
+  if ! flock -n 7; then
+    case "$action" in
+      reconcile-host-if-idle|reconcile-host-requested|complete-protocol-migration-if-idle)
+        printf 'Package maintenance deferred; another package lifecycle operation is active. No services or release links changed.\n'
+        exit 0;;
+      *) die "another package lifecycle operation is active; retry after it finishes; no services or release links changed";;
+    esac
+  fi
+}
+
 # Stop the whole stack, and CONFIRM IT STOPPED.
 #
 # `systemctl stop swarm.target` completes when the TARGET is inactive. The
@@ -1962,6 +1980,10 @@ uninstall_product() {
 }
 
 validate_roots
+case "$action" in
+  install|update|rollback|reconcile-host|reconcile-host-if-idle|reconcile-host-requested|migrate-protocol|migrate-protocol-if-idle|complete-protocol-migration|complete-protocol-migration-if-idle|enable-development|disable-development|uninstall|restore|restore-offline)
+    lock_package_lifecycle;;
+esac
 case "$action" in
   install|update) install_or_update;;
   enable-development) enable_development;;
