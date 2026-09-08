@@ -65,3 +65,39 @@ test("opens the selected result entirely from the keyboard", () => {
   expect(second).toHaveBeenCalledOnce();
   expect(close).toHaveBeenCalledOnce();
 });
+
+test("bounds mounted results while retaining every result through keyboard and touch paging", () => {
+  const run = vi.fn();
+  const choices = Array.from({ length: 105 }, (_, index) => ({ id: `worker-${index}`, label: `Worker ${index}`, detail: "Open worker terminal", group: "Workers" as const, run: () => run(index) }));
+  render(<CommandPalette onClose={vi.fn()} choices={choices} />);
+  const search = screen.getByRole("combobox");
+  expect(screen.getAllByRole("option")).toHaveLength(40);
+  expect(screen.getByText("1–40 of 105")).toBeVisible();
+  fireEvent.keyDown(search, { key: "ArrowUp" });
+  expect(screen.getAllByRole("option")).toHaveLength(25);
+  expect(screen.getByText("81–105 of 105")).toBeVisible();
+  expect(document.getElementById(search.getAttribute("aria-activedescendant")!)).toHaveAttribute("aria-selected", "true");
+  fireEvent.keyDown(search, { key: "Enter" });
+  expect(run).toHaveBeenLastCalledWith(104);
+  fireEvent.click(screen.getByRole("button", { name: "Previous results" }));
+  expect(screen.getByText("41–80 of 105")).toBeVisible();
+  expect(screen.getAllByRole("option")).toHaveLength(40);
+  fireEvent.click(screen.getByRole("button", { name: "Next results" }));
+  fireEvent.click(screen.getByRole("option", { name: /Workers Worker 100 Open worker terminal/ }));
+  expect(run).toHaveBeenLastCalledWith(100);
+  fireEvent.change(search, { target: { value: "Worker 7" } });
+  expect(screen.getAllByRole("option")).toHaveLength(11);
+  expect(screen.queryByRole("navigation", { name: "Search result pages" })).not.toBeInTheDocument();
+  expect(document.getElementById(search.getAttribute("aria-activedescendant")!)).toHaveTextContent("Worker 7");
+});
+
+test("long explanations remain searchable without mounting the full history text", () => {
+  const detail = `${"A long explanation. ".repeat(2000)}unique-tail-needle`;
+  render(<CommandPalette onClose={vi.fn()} choices={[
+    { id: "history", label: "A previous decision", detail, group: "Attention", run: vi.fn() },
+  ]} />);
+  expect(screen.getByRole("option").textContent!.length).toBeLessThan(230);
+  expect(screen.queryByText(detail)).not.toBeInTheDocument();
+  fireEvent.change(screen.getByRole("combobox"), { target: { value: "unique-tail-needle" } });
+  expect(screen.getByRole("option")).toHaveTextContent("A previous decision");
+});
