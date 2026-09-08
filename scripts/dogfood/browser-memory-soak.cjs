@@ -5,7 +5,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { chromium } = require("playwright");
 
-const { evaluateGrowth, growthResult, isTransientGatewayError, processTotals } = require("./browser-soak-metrics.cjs");
+const { evaluateGrowth, growthResult, healthyRuntimeVersion, isTransientGatewayError, processTotals, runtimeVersionMatches } = require("./browser-soak-metrics.cjs");
 
 const baseUrl = process.env.SWARM_BASE_URL || "http://127.0.0.1:8766";
 const operatorToken = process.env.SWARM_OPERATOR_TOKEN;
@@ -175,18 +175,18 @@ async function recoverAfterGatewayInterruption(page, elapsedSeconds) {
   const startedAt = Date.now();
   const cookieBefore = await browserSessionMetadata(page.context());
   const deadline = startedAt + 15_000;
-  let healthy = false;
+  let recoveredVersion = null;
   while (Date.now() < deadline) {
     try {
-      const response = await page.request.get(`${baseUrl}/health`, { timeout: 3_000 });
-      healthy = response.ok();
+      const response = await page.request.get(`${baseUrl}/health`, { timeout: Math.min(3_000, Math.max(1, deadline - Date.now())) });
+      recoveredVersion = response.ok() ? healthyRuntimeVersion(await response.json()) : null;
     } catch {
-      healthy = false;
+      recoveredVersion = null;
     }
-    if (healthy) break;
+    if (recoveredVersion) break;
     await delay(500);
   }
-  if (!healthy) throw new Error("gateway interruption did not recover within 15 seconds");
+  if (!recoveredVersion) throw new Error("gateway interruption did not recover to verified healthy runtime within 15 seconds");
   await page.reload({ waitUntil: "domcontentloaded", timeout: 15_000 });
   try {
     await page.getByRole("button", { name: "Download Hive backup" }).waitFor({ timeout: 20_000 });
@@ -195,9 +195,9 @@ async function recoverAfterGatewayInterruption(page, elapsedSeconds) {
     const sessionStatus = await page.request.get(`${baseUrl}/api/v1/auth/session`).then((response) => response.status()).catch(() => 0);
     throw new Error(`browser authentication did not survive the gateway interruption: before=${JSON.stringify(cookieBefore)} after=${JSON.stringify(cookieAfter)} session_status=${sessionStatus}`);
   }
-  const runtimeStatus = (await page.locator(".rail-footer").innerText()).trim();
-  if (!runtimeStatus.startsWith("Runtime 0.1.0-")) throw new Error(`runtime health did not recover after the gateway interruption: ${runtimeStatus}`);
-  return { elapsed_seconds: elapsedSeconds, recovery_milliseconds: Date.now() - startedAt, runtime_status: runtimeStatus };
+  const runtimeStatus = (await page.locator(".rail-footer .runtime-status").first().innerText()).trim();
+  if (!runtimeVersionMatches(runtimeStatus, recoveredVersion)) throw new Error("rendered runtime version did not match the verified healthy API after gateway recovery");
+  return { elapsed_seconds: elapsedSeconds, recovery_milliseconds: Date.now() - startedAt, runtime_status: runtimeStatus, recovered_version: recoveredVersion };
 }
 
 async function browserSessionMetadata(context) {
@@ -291,4 +291,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { readOwnedProcessMemory };
+module.exports = { readOwnedProcessMemory, recoverAfterGatewayInterruption };

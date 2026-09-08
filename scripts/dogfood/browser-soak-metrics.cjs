@@ -54,4 +54,21 @@ function isTransientGatewayError(message) {
   return /^Failed to load resource: the server responded with a status of 502 \(\)$/.test(message);
 }
 
-module.exports = { MIB, evaluateGrowth, growthResult, isTransientGatewayError, processTotals, summarizeSeries };
+function healthyRuntimeVersion(health) {
+  if (!health || health.status !== "ok" || health.database_recovery_required !== false
+    || !Array.isArray(health.degraded) || health.degraded.length !== 0
+    || typeof health.version !== "string" || !health.version.trim()
+    || /\s/.test(health.version)) return null;
+  return health.version;
+}
+
+function runtimeVersionMatches(text, version) {
+  if (typeof text !== "string" || typeof version !== "string" || !version) return false;
+  const normalized = text.trim().replace(/\s+/g, " ");
+  const expected = `Runtime ${version}`;
+  // The optional nested Dev badge may be adjacent in innerText. Do not accept
+  // a version prefix or an arbitrary footer containing a desired version.
+  return [expected, `${expected} Dev`, `${expected}Dev`].includes(normalized);
+}
+
+module.exports = { MIB, evaluateGrowth, growthResult, healthyRuntimeVersion, isTransientGatewayError, processTotals, runtimeVersionMatches, summarizeSeries };
