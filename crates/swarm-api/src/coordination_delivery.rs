@@ -1663,6 +1663,10 @@ fn terminal_safe_text(value: &str) -> String {
         .collect()
 }
 
+#[cfg(all(test, unix))]
+#[path = "coordination_delivery_live_test.rs"]
+mod live_test;
+
 #[cfg(test)]
 mod tests {
     use super::*;
