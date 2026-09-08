@@ -335,7 +335,7 @@ export class TerminalConnection {
         return;
       }
       if (this.#attachPhase?.name === "terminal_grant" && this.#rendering && document.visibilityState === "visible") {
-        recordTerminalGrantRequest(new URL(grantPath, this.#locationOrigin).href, grantStartedAt, performance.now());
+        recordTerminalGrantRequest(new URL(grantPath, this.#locationOrigin).href, grantStartedAt, performance.now(), response.headers?.get("server-timing") ?? null);
       }
       this.#finishAttachPhase();
       const websocketUrl = new URL(grant.websocket_path, this.#locationOrigin);

@@ -506,7 +506,7 @@ test("attach phases separate access, socket and applied initial state", async ()
   expect(record).toHaveBeenCalledWith("terminal_grant", 50);
   expect(record).toHaveBeenCalledWith("terminal_socket", 80);
   expect(record).toHaveBeenCalledWith("terminal_reconnect", 250);
-  expect(grantEvidence).toHaveBeenCalledWith(100, 150, expect.any(Array));
+  expect(grantEvidence).toHaveBeenCalledWith(100, 150, expect.any(Array), null);
   connection.dispose();
 });
 

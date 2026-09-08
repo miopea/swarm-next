@@ -59,3 +59,18 @@ browser scheduling, body consumption and JSON parsing. Neither is a server CPU
 measurement or proof of a particular bottleneck. Cold reload measurements on the
 development Hive motivated this attribution; deployment and live comparison are
 still required before drawing a performance conclusion.
+
+Successful authenticated terminal grant responses additionally carry one standard
+Server-Timing metric, `swarm_grant`, measured with the API's monotonic clock from
+handler entry through authorization, engine validation, grant issuance and response
+encoding. It is numeric elapsed wall time, not CPU time. It excludes request time
+before handler entry and later proxy/network delivery. Failed authorization does
+not expose this success-only metric. No new log, observer, retry or background task
+is created, and neither the grant nor session identity enters the timing header.
+
+The browser accepts only one bounded numeric Swarm metric from at most 1024 header
+characters and retains only its duration in the existing 200-sample/hour detail.
+Missing, malformed, duplicate or implausible durations remain unknown. This can
+be compared with the same request's resource timing without assuming a difference
+is exclusively network latency: API scheduling before handler entry is excluded.
+Old servers and proxies that omit the header continue to work normally.

@@ -1,6 +1,6 @@
 type Sample = { at: number; fetch_elapsed_ms: number; resource_ms: number | null;
   request_to_first_byte_ms: number | null; body_transfer_ms: number | null;
-  response_to_client_ms: number | null };
+  response_to_client_ms: number | null; server_handler_ms: number | null };
 type Resource = Pick<PerformanceResourceTiming, "entryType" | "initiatorType" | "startTime" | "requestStart" | "responseStart" | "responseEnd">;
 const WINDOW_MS = 3_600_000;
 
@@ -9,7 +9,7 @@ export class TerminalGrantEvidence {
   #samples: Sample[] = [];
   constructor(private readonly now: () => number = Date.now) {}
 
-  record(start: number, end: number, entries: readonly Resource[]): void {
+  record(start: number, end: number, entries: readonly Resource[], serverTiming: string | null = null): void {
     const at = this.now();
     if (![at, start, end].every(Number.isFinite) || at < 0 || start < 0 || end < start || end - start > WINDOW_MS) return;
     const candidates = entries.filter(entry => entry.entryType === "resource" && entry.initiatorType === "fetch"
@@ -25,7 +25,8 @@ export class TerminalGrantEvidence {
       resource_ms: resource ? resource.responseEnd - resource.startTime : null,
       request_to_first_byte_ms: resource ? resource.responseStart - resource.requestStart : null,
       body_transfer_ms: resource ? resource.responseEnd - resource.responseStart : null,
-      response_to_client_ms: resource ? end - resource.responseEnd : null });
+      response_to_client_ms: resource ? end - resource.responseEnd : null,
+      server_handler_ms: parseGrantServerTiming(serverTiming, end - start) });
     if (this.#samples.length > 200) this.#samples.shift();
   }
 
@@ -45,9 +46,21 @@ export class TerminalGrantEvidence {
 export const terminalGrantEvidence = new TerminalGrantEvidence();
 
 /** Resource entries are read only after the response body completes; collection cannot break attachment. */
-export function recordTerminalGrantRequest(url: string, start: number, end: number): void {
+export function recordTerminalGrantRequest(url: string, start: number, end: number, serverTiming: string | null): void {
   let entries: PerformanceResourceTiming[] = [];
   try { entries = performance.getEntriesByName(url, "resource") as PerformanceResourceTiming[]; }
   catch { /* Unsupported, restricted or absent timing remains unknown. */ }
-  terminalGrantEvidence.record(start, end, entries);
+  terminalGrantEvidence.record(start, end, entries, serverTiming);
+}
+
+/** Accept only Swarm's bounded numeric metric; never retain arbitrary header text. */
+export function parseGrantServerTiming(value: string | null, elapsed: number): number | null {
+  if (typeof value !== "string" || !value || value.length > 1024 || !Number.isFinite(elapsed) || elapsed < 0) return null;
+  const metrics = value.split(",").filter(part => part.split(";", 1)[0].trim() === "swarm_grant");
+  if (metrics.length !== 1) return null;
+  const match = /^\s*swarm_grant;dur=(\d+(?:\.\d+)?)\s*$/.exec(metrics[0]);
+  if (!match) return null;
+  const duration = Number(match[1]);
+  // Independent monotonic clocks can round differently at sub-millisecond scale.
+  return Number.isFinite(duration) && duration <= 60_000 && duration <= elapsed + 1 ? duration : null;
 }

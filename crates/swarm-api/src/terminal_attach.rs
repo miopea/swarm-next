@@ -1,4 +1,4 @@
-use std::{str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::Arc, time::Instant};
 
 use axum::{
     Json,
@@ -78,6 +78,7 @@ pub(super) async fn issue_grant(
     Path(session_id): Path<String>,
     Query(query): Query<AttachQuery>,
 ) -> Result<Response, ApiError> {
+    let started = Instant::now();
     authorize(&state, &headers)?;
     let session_id = parse_session_id(&session_id)?;
     let client = terminal_client(&state)?;
@@ -142,7 +143,21 @@ pub(super) async fn issue_grant(
         websocket_path: format!("/api/v1/terminal/sessions/{session_id}/attach"),
         expires_in_ms: u64::try_from(ATTACH_GRANT_TTL.as_millis()).unwrap_or(u64::MAX),
     };
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(response)).into_response())
+    Ok(timed_grant_response(response, started))
+}
+
+fn timed_grant_response(grant: AttachGrantResponse, started: Instant) -> Response {
+    let mut response = ([(header::CACHE_CONTROL, "no-store")], Json(grant)).into_response();
+    // Handler wall time includes authentication, engine validation and encoding.
+    // It excludes time before handler entry and subsequent proxy/network delivery.
+    let timing = format!(
+        "swarm_grant;dur={:.3}",
+        started.elapsed().as_secs_f64() * 1000.0
+    );
+    if let Ok(value) = header::HeaderValue::from_str(&timing) {
+        response.headers_mut().insert("server-timing", value);
+    }
+    response
 }
 
 pub(super) async fn attach(
@@ -339,6 +354,36 @@ fn offered_protocol(headers: &HeaderMap) -> Result<AttachProtocol, ApiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn grant_timing_contains_only_duration_and_preserves_the_response_contract() {
+        let response = timed_grant_response(
+            AttachGrantResponse {
+                grant: "private-grant".into(),
+                protocol: CONTROLLED_WEBSOCKET_PROTOCOL,
+                websocket_path: "/private-session-path".into(),
+                expires_in_ms: 10,
+            },
+            Instant::now(),
+        );
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let timing = response.headers()["server-timing"].to_str().unwrap();
+        let duration: f64 = timing
+            .strip_prefix("swarm_grant;dur=")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(duration.is_finite() && duration >= 0.0);
+        assert!(!timing.contains("private"));
+        let bytes = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["grant"], "private-grant");
+        assert_eq!(body["protocol"], CONTROLLED_WEBSOCKET_PROTOCOL);
+        assert_eq!(body["websocket_path"], "/private-session-path");
+    }
 
     #[test]
     fn protocol_negotiation_never_silently_downgrades() {
