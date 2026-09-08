@@ -358,8 +358,8 @@ test("a prepared protocol migration is offered with the worker engine's prompt",
   expect(status.action).toBe("apply_worker_engine");
   // The same consequence, because it costs the same thing.
   expect(status.consequence).toContain("Every loaded worker is stopped and brought back");
-  expect(status.detail).toContain("3 running workers");
-  expect(status.detail).toContain("apply it now");
+  expect(status.detail).toContain("3 loaded workers");
+  expect(status.detail).toContain("warned maintenance action");
 });
 
 /** Nothing is offered once the host already speaks the new protocol. */

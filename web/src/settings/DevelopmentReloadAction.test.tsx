@@ -275,7 +275,7 @@ test("says the worker engine is behind even when the app matches the checkout", 
   }} />);
 
   expect(screen.getByText(/The worker engine is behind this build/)).toBeInTheDocument();
-  expect(screen.getByText(/a background check will install it without asking/)).toBeInTheDocument();
+  expect(screen.getByText(/Automatic replacement waits while workers remain loaded/)).toBeInTheDocument();
 });
 
 test("says the worker engine is behind while a reload is also available", () => {
@@ -419,8 +419,8 @@ test("the engine-behind notice says the swap happens without being asked", () =>
     worker_engine_update_required: true,
     running_worker_sessions: 11,
   }} />);
-  expect(screen.getByText(/install it without asking/)).toBeInTheDocument();
-  expect(screen.getByText(/first moment no worker is mid-turn/)).toBeInTheDocument();
+  expect(screen.getByText(/Automatic replacement waits while workers remain loaded/)).toBeInTheDocument();
+  expect(screen.getByText(/resting terminal is not proof that work has finished/)).toBeInTheDocument();
 });
 
 test("it names how many sessions the swap will stop", () => {

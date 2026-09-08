@@ -76,10 +76,10 @@ function installConsequence(carriesProtocolChange: boolean | null) {
   if (carriesProtocolChange === true) {
     return (
       <p className="form-error" role="alert">
-        <strong>This one stops your workers.</strong> It changes how Swarm talks to the
-        worker engine, and the two have to move together — so every worker session ends
-        and starts again. Workers that were loaded are brought back afterwards. Unsaved
-        work in a terminal is lost.
+        <strong>This one needs engine maintenance.</strong> The app and engine must move
+        together. The release will be prepared and wait while workers remain loaded.
+        The separate maintenance action stops workers and brings them back afterwards;
+        unsent terminal input can be lost.
       </p>
     );
   }
@@ -308,7 +308,7 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
         <>
           {installConsequence(status.carries_protocol_change)}
           {status.carries_new_worker_engine && (
-            <p>It also carries a newer worker engine. That part is <strong>deferred while any worker is running</strong> and applied once they are idle, or when you ask for it from the worker engine card. Applying it restarts workers and brings back the ones loaded from their saved conversations.</p>
+            <p>It also carries a newer worker engine. That part is <strong>deferred while any worker is running</strong>. Use the warned worker engine maintenance action to apply it with loaded workers; that action stops them and attempts to restore their saved conversations.</p>
           )}
           {status.offer?.notes_url && <p><a href={status.offer.notes_url} target="_blank" rel="noreferrer noopener">What changed in {status.offer.version}</a></p>}
           {status.apply_state === "failed" || status.apply_state === "refused" ? (
@@ -352,7 +352,7 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
             confirming ? (
               <div className="maintenance-confirmation" role="group" aria-label="Confirm release install">
                 <strong>Install Swarm {status.offer?.version} now?</strong>
-                <span>Workers stay online.{status.carries_new_worker_engine ? " The newer worker engine waits until they are idle." : ""} Your Hive database, tasks and settings are kept, and the previous release is restored automatically if the new one does not answer.</span>
+                <span>Workers stay online.{status.carries_new_worker_engine ? " The newer worker engine waits for maintenance while workers remain loaded." : ""} Your Hive database, tasks and settings are kept, and the previous release is restored automatically if the new one does not answer.</span>
                 <div className="settings-actions">
                   <button className="secondary-button" disabled={disabled} onClick={() => setConfirming(false)}>Not now</button>
                   <button

@@ -77,8 +77,8 @@ function workerEngineUpdate(
       kind: "worker_engine",
       label: "Protocol migration ready",
       detail: host.running_sessions > 0
-        ? `An update that changes how Swarm talks to its worker engine is installed and waiting. It applies itself once your ${host.running_sessions} running worker${host.running_sessions === 1 ? "" : "s"} ${host.running_sessions === 1 ? "is" : "are"} idle, or you can apply it now.`
-        : "An update that changes how Swarm talks to its worker engine is installed and waiting. Nothing is running, so it applies within two minutes — or you can apply it now.",
+        ? `The update is prepared, not installed. Your ${host.running_sessions} loaded worker${host.running_sessions === 1 ? "" : "s"} remain running. Use the warned maintenance action when ready; a resting terminal does not authorize automatic replacement.`
+        : "The update is prepared, not installed. No worker sessions remain, so the background updater can apply it; you can also apply it now.",
       busy: false,
       action: "apply_worker_engine",
       actionLabel: "Apply the protocol migration",

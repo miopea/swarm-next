@@ -57,10 +57,9 @@ export default function DevelopmentReloadAction({ busy, runtime, reachable = tru
   // pressing the button and being refused.
   const protocolPending = runtime.protocol_migration_required === true ? (
     <p className="runtime-protocol-pending">
-      <strong>This checkout changes the terminal-host protocol.</strong> A reload cannot install
-      it — a reload leaves the terminal host running, which is what keeps worker terminals alive.
-      Installing it swaps the API and the host together and <strong>stops every worker</strong>,
-      so run the protocol migration when your workers are idle.
+      <strong>This checkout changes the terminal-host protocol.</strong> A reload prepares it
+      but waits while workers remain loaded. Applying engine maintenance swaps the API and
+      host together and <strong>stops every worker</strong>; use its warned action when ready.
     </p>
   ) : null;
   /**
@@ -84,13 +83,13 @@ export default function DevelopmentReloadAction({ busy, runtime, reachable = tru
   const runningSessions = runtime.running_worker_sessions;
   const engineBehind = runtime.worker_engine_update_required === true ? (
     <p className="runtime-engine-behind">
-      <strong>The worker engine is behind this build, and a background check will install it
-      without asking.</strong> It swaps at the first moment no worker is mid-turn — which may be
-      minutes or an hour — and that stops{" "}
+      <strong>The worker engine is behind this build. Automatic replacement waits while workers
+      remain loaded.</strong> A resting terminal is not proof that work has finished. The manual
+      engine maintenance action stops{" "}
       {typeof runningSessions === "number"
         ? `all ${runningSessions} running worker session${runningSessions === 1 ? "" : "s"}`
         : "every running worker session"}
-      . This build's compatible-engine updater records loaded workers for recovery before the swap.
+      . The manual maintenance action records loaded workers for recovery before the swap.
       Recovery may pause for provider policy or a reported failure; it is not confirmation that
       context was restored. Use the worker engine update below to choose the moment.
     </p>

@@ -117,7 +117,7 @@ test("promises workers stay online, and defers the engine rather than stopping t
 
   fireEvent.click(screen.getByRole("button", { name: "Install Swarm 0.2.0" }));
   expect(screen.getByText("Install Swarm 0.2.0 now?")).toBeInTheDocument();
-  expect(screen.getByText(/The newer worker engine waits until they are idle/)).toBeInTheDocument();
+  expect(screen.getByText(/The newer worker engine waits for maintenance while workers remain loaded/)).toBeInTheDocument();
   expect(api.applyRelease).not.toHaveBeenCalled();
 
   fireEvent.click(screen.getByRole("button", { name: "Install 0.2.0" }));
@@ -215,8 +215,8 @@ test("a protocol release says it stops the workers, not that they keep running",
   vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({ carries_protocol_change: true }));
   render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
 
-  expect(await screen.findByText(/This one stops your workers/)).toBeInTheDocument();
-  expect(screen.getByText(/every worker session ends/)).toBeInTheDocument();
+  expect(await screen.findByText(/This one needs engine maintenance/)).toBeInTheDocument();
+  expect(screen.getByText(/release will be prepared and wait while workers remain loaded/)).toBeInTheDocument();
   expect(screen.queryByText(/Your workers keep running/)).not.toBeInTheDocument();
 });
 
