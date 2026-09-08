@@ -1203,6 +1203,35 @@ test.each(["resolve", "reject"] as const)("suspension abandons queued output and
   connection.dispose();
 });
 
+test("an old socket snapshot cannot confirm a silent replacement socket", async () => {
+  const { connection, handlers, sockets } = harness();
+  let finish!: () => void;
+  handlers.onSnapshot = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(10n, 24, 80, "pending old screen"));
+  await vi.waitFor(() => expect(finish).toBeDefined());
+  sockets[0].disconnect();
+  await vi.waitFor(() => expect(sockets).toHaveLength(2));
+  sockets[1].open();
+  vi.mocked(handlers.onState).mockClear();
+  finish();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(handlers.onState).not.toHaveBeenCalledWith("connected", undefined);
+  expect(connection.sequence).toBe(10);
+  expect(connection.sendInput("must not deliver on stale confirmation")).toBe(false);
+  await vi.waitFor(() => expect(sockets[1].close).toHaveBeenCalledWith(4013, "terminal confirmation timed out"), { timeout: 3500 });
+  sockets[1].disconnect();
+  await vi.waitFor(() => expect(sockets).toHaveLength(3));
+  handlers.onSnapshot = vi.fn();
+  sockets[2].open();
+  sockets[2].message(snapshotFrame(11n, 24, 80, "current screen"));
+  await vi.waitFor(() => expect(connection.sequence).toBe(11));
+  expect(handlers.onState).toHaveBeenCalledWith("connected", undefined);
+  connection.dispose();
+});
+
 test("a disposed snapshot completion cannot publish a connected terminal", async () => {
   const { connection, handlers, sockets } = harness();
   let finish!: () => void;

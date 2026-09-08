@@ -68,7 +68,7 @@ const MAX_PENDING_RENDER_BYTES = 3 * 1024 * 1024;
 const MAX_PENDING_RENDER_FRAMES = 1_024;
 const MAX_OUTPUT_BATCH_BYTES = 64 * 1024;
 const RENDER_COMPLETION_TIMEOUT_MS = 8_000;
-type QueuedRender = { frame: Uint8Array; generation: number; enqueuedAt: number };
+type QueuedRender = { frame: Uint8Array; generation: number; enqueuedAt: number; socket: WebSocket };
 
 function outputSequence(frame: Uint8Array): number | undefined {
   if (frame.byteLength < 9 || frame[0] !== OUTPUT_FRAME_TYPE) return undefined;
@@ -424,7 +424,7 @@ export class TerminalConnection {
   #handleMessage(socket: WebSocket, event: MessageEvent): void {
     if (socket !== this.#socket || this.#disposed || this.#fatal) return;
     if (event.data instanceof ArrayBuffer) {
-      this.#enqueueBinaryFrame(new Uint8Array(event.data));
+      this.#enqueueBinaryFrame(new Uint8Array(event.data), socket);
       return;
     }
     if (typeof event.data !== "string") {
@@ -520,7 +520,7 @@ export class TerminalConnection {
     this.#recoverFromSnapshot("reattached", "terminal is catching up to live");
   }
 
-  #enqueueBinaryFrame(frame: Uint8Array): void {
+  #enqueueBinaryFrame(frame: Uint8Array, socket: WebSocket): void {
     if (this.#recovering) return;
     if (!this.#rendering) {
       // Nothing can draw this, and holding it only decides how long the
@@ -535,7 +535,7 @@ export class TerminalConnection {
     }
     this.#pendingRenderBytes += frame.byteLength;
     this.#pendingRenderFrames += 1;
-    this.#renderFrames.push({ frame, generation: this.#renderGeneration, enqueuedAt: performance.now() });
+    this.#renderFrames.push({ frame, generation: this.#renderGeneration, enqueuedAt: performance.now(), socket });
     if (this.#renderDraining) return;
     this.#renderDraining = true;
     queueMicrotask(() => { void this.#drainRenderFrames(); });
@@ -545,7 +545,7 @@ export class TerminalConnection {
     try {
       while (this.#renderFrames.length) {
         const first = this.#renderFrames.shift()!;
-        const { generation, enqueuedAt } = first;
+        const { generation, enqueuedAt, socket } = first;
         let frame = first.frame;
         let consumedBytes = frame.byteLength;
         let consumedFrames = 1;
@@ -562,7 +562,7 @@ export class TerminalConnection {
             let payloadBytes = frame.byteLength - 9;
             while (this.#renderFrames.length) {
               const next = this.#renderFrames[0];
-              if (next.generation !== generation || outputSequence(next.frame) !== lastSequence + 1
+              if (next.generation !== generation || next.socket !== socket || outputSequence(next.frame) !== lastSequence + 1
                 || payloadBytes + next.frame.byteLength - 9 > MAX_OUTPUT_BATCH_BYTES) break;
               this.#renderFrames.shift();
               parts.push(next.frame.subarray(9));
@@ -579,7 +579,7 @@ export class TerminalConnection {
               frame = combined;
             }
           }
-          await this.#applyWithDeadline(frame, generation, lastSequence);
+          await this.#applyWithDeadline(frame, generation, socket, lastSequence);
           if (!this.#disposed && generation === this.#renderGeneration && document.visibilityState === "visible") {
             browserPerformance.record("terminal_render", performance.now() - enqueuedAt);
           }
@@ -595,7 +595,7 @@ export class TerminalConnection {
     } finally { this.#renderDraining = false; }
   }
 
-  #applyWithDeadline(frame: Uint8Array, generation: number, lastSequence?: number): Promise<void> {
+  #applyWithDeadline(frame: Uint8Array, generation: number, socket: WebSocket, lastSequence?: number): Promise<void> {
     return new Promise((resolve, reject) => {
       let settled = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -635,11 +635,11 @@ export class TerminalConnection {
       };
       this.#renderWait = wait;
       wait.refreshVisibility();
-      void this.#applyBinaryFrame(frame, generation, lastSequence).then(() => finish(), (cause: unknown) => finish({ cause }));
+      void this.#applyBinaryFrame(frame, generation, socket, lastSequence).then(() => finish(), (cause: unknown) => finish({ cause }));
     });
   }
 
-  async #applyBinaryFrame(frame: Uint8Array, generation: number, lastSequence?: number): Promise<void> {
+  async #applyBinaryFrame(frame: Uint8Array, generation: number, socket: WebSocket, lastSequence?: number): Promise<void> {
     if (frame.byteLength < 9) {
       this.#fail("terminal output frame was malformed");
       return;
@@ -668,7 +668,7 @@ export class TerminalConnection {
       // this stage; retaining the shorter transport deadline would discard a
       // healthy socket while onSnapshot is still applying its first screen.
       // An outstanding return probe still requires its correlated reply.
-      if (this.#probeId === undefined) this.#clearConfirmationTimer();
+      if (socket === this.#socket && this.#probeId === undefined) this.#clearConfirmationTimer();
       const truncated = frame[13] === 1;
       const reason = this.#recoveryReason ?? "attached";
       this.#recoveryReason = undefined;
@@ -686,9 +686,10 @@ export class TerminalConnection {
       if (truncated) {
         this.#confirmRenderedConnection(
           "Terminal view was reset after exceeding its canonical memory bound",
+          socket,
         );
       } else {
-        this.#confirmRenderedConnection();
+        this.#confirmRenderedConnection(undefined, socket);
       }
       return;
     }
@@ -711,7 +712,7 @@ export class TerminalConnection {
     await this.#handlers?.onOutput(frame.slice(9));
     if (generation !== this.#renderGeneration || this.#disposed) return;
     this.#sequence = lastSequence ?? sequence;
-    this.#confirmRenderedConnection();
+    this.#confirmRenderedConnection(undefined, socket);
   }
 
   #handleClose(socket: WebSocket): void {
@@ -809,7 +810,10 @@ export class TerminalConnection {
     this.#retryAttempt = 0;
   }
 
-  #confirmRenderedConnection(detail?: string): void {
+  #confirmRenderedConnection(detail?: string, socket = this.#socket): void {
+    // Parser completion proves these bytes applied, not that a newer transport
+    // responded. Never let an old callback cancel its replacement's deadline.
+    if (!socket || socket !== this.#socket || socket.readyState !== WebSocket.OPEN) return;
     if (this.#probeId === undefined) this.#clearConfirmationTimer();
     this.#confirmConnection();
     if (this.#rendererConfirmed && detail === undefined) return;

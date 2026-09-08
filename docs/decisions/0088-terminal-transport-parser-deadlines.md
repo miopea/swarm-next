@@ -23,3 +23,18 @@ The test reproduced the unnecessary reconnect independently. The observed live
 10.5-second reconnect did not retain failed-attempt details, so it cannot yet be
 attributed to this particular race. Live and real-device acceptance must not be
 claimed from the regression alone.
+
+## Reconnect ownership correction
+
+A second regression reproduced an old socket's asynchronous snapshot completing
+after a replacement socket opened. It incorrectly reported that silent replacement
+connected and cancelled its confirmation deadline. Queued render work now retains
+its originating socket; batches never mix sockets. Applied bytes still advance the
+canonical cursor, but only the current open socket can confirm its transport or
+cancel its deadline. This preserves output continuity without treating old parser
+completion as new network evidence.
+
+The regression verifies refusal of input after stale completion, expiration of
+the silent replacement, and successful canonical recovery on the next socket.
+All 94 focused terminal tests and the TypeScript/Vite build pass. Live acceptance
+of this second correction is not yet recorded here.
