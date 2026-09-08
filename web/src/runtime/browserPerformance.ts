@@ -1,5 +1,6 @@
 import { RecentInteractions } from "./recentInteractions";
 import { terminalApplicationEvidence } from "../terminal/TerminalApplicationEvidence";
+import { terminalFitEvidence } from "../terminal/TerminalFitEvidence";
 
 /** Browser-owned, content-free evidence. Never pass input or terminal bytes here. */
 export const BROWSER_METRICS = ["long_task", "interaction", "route", "terminal_render", "terminal_reconnect", "terminal_grant", "terminal_socket", "terminal_restore"] as const;
@@ -173,5 +174,6 @@ export function installBrowserPerformanceCapture(): () => void {
 export function readBrowserPerformance() {
   if (previous && Date.now() - previous.captured_at > EXPIRY_MS) previous = undefined;
   return { collection: installed ? "active" : "not_installed", supported_observers: [...observed], current: browserPerformance.snapshot(), before_reload: previous,
-    recent_interactions: recentInteractions.snapshot(), terminal_application: terminalApplicationEvidence.snapshot() };
+    recent_interactions: recentInteractions.snapshot(), terminal_application: terminalApplicationEvidence.snapshot(),
+    terminal_fit: terminalFitEvidence.snapshot() };
 }

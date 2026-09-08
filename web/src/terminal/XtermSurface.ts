@@ -10,6 +10,7 @@ import { documentColorTheme, terminalTheme } from "../brand/terminalTheme";
 import type { TerminalSnapshot } from "./TerminalConnection";
 import type { Disposable, TerminalSurface } from "./TerminalController";
 import type { FitMilestone } from "./TerminalRestoreEvidence";
+import { terminalFitEvidence } from "./TerminalFitEvidence";
 
 const MAX_FIT_FRAMES = 60;
 const STABLE_FIT_FRAMES = 2;
@@ -351,6 +352,21 @@ export class XtermSurface implements TerminalSurface {
   }
 
   async #fitMeasured(onMilestone: ((phase: FitMilestone) => void) | undefined, initial: boolean): Promise<{ rows: number; columns: number }> {
+    const observation = terminalFitEvidence.begin(initial);
+    let failed = true;
+    try {
+      const result = await this.#performMeasuredFit((phase) => {
+        observation.milestone(phase);
+        onMilestone?.(phase);
+      }, initial);
+      failed = false;
+      return result;
+    } finally {
+      observation.finish(failed);
+    }
+  }
+
+  async #performMeasuredFit(onMilestone: ((phase: FitMilestone) => void) | undefined, initial: boolean): Promise<{ rows: number; columns: number }> {
     try {
       if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
       this.#cancelScheduledFit();

@@ -252,6 +252,16 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
           {" · "}{browserTiming.terminal_application.slowest.bytes.toLocaleString()} bytes.
         </p> : null}
         <p>These phases belong to the same snapshot. State application includes reset, resize and parser completion. Geometry includes any asynchronous follow-up fit; it no longer blocks output application. Coalesced fits contribute one sample, including a failed sizing attempt after successful state application. Neither phase is CPU time or confirmed paint. Failed state applications and interrupted views are not represented here; see connection errors. This breakdown resets on reload.</p>
+        <p>Follow-up sizing: {browserTiming.terminal_fit.samples} attempts retained, including {browserTiming.terminal_fit.failed} failed attempts.</p>
+        {browserTiming.terminal_fit.slowest ? <p>
+          Slowest follow-up fit: {Math.round(browserTiming.terminal_fit.slowest.total_ms)} ms
+          {" · Font readiness "}{browserTiming.terminal_fit.slowest.font_ms === null ? "unavailable" : `${Math.round(browserTiming.terminal_fit.slowest.font_ms)} ms`}
+          {" · After fonts "}{browserTiming.terminal_fit.slowest.after_fonts_ms === null ? "unavailable" : `${Math.round(browserTiming.terminal_fit.slowest.after_fonts_ms)} ms`}
+          {" · "}{browserTiming.terminal_fit.slowest.frames} measured frames
+          {" · Largest frame gap "}{Math.round(browserTiming.terminal_fit.slowest.max_frame_gap_ms)} ms
+          {browserTiming.terminal_fit.slowest.failed ? " · Failed" : " · Completed"}.
+        </p> : null}
+        <p>Sizing timings are elapsed waits, not CPU or confirmed paint. After-font time includes frame scheduling, measurement and resize. Background throttling can contribute. These separate fit samples are not correlated to the slowest snapshot above; at most 200 fits are retained for one hour and cleared on reload.</p>
         <p>{browserTiming.current.buckets.length} timing buckets · {browserTiming.current.incidents.length} recent incident captures. These are historical evidence, not unresolved alerts.</p>
         {browserTiming.before_reload ? <p>Before-reload snapshot available for comparison.</p> : null}
         <p>Preview report includes the timing evidence. Browser CPU percentage is not available here; compare with your browser task manager.</p>

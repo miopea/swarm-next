@@ -127,6 +127,7 @@ vi.mock("@xterm/xterm", () => ({
 }));
 
 import { XtermSurface } from "./XtermSurface";
+import { terminalFitEvidence } from "./TerminalFitEvidence";
 
 afterEach(() => {
   xterm.gpuMode = "unavailable";
@@ -384,6 +385,8 @@ test("updates the palette in place when the application theme changes", async ()
 });
 
 test("initial attachment reads usable metrics without waiting for a scheduled frame or resizing", async () => {
+  const observation = { milestone: vi.fn(), finish: vi.fn() };
+  const begin = vi.spyOn(terminalFitEvidence, "begin").mockReturnValue(observation);
   const frame = vi.fn(() => 1); // Deliberately never fires: a throttled browser.
   vi.stubGlobal("requestAnimationFrame", frame);
   xterm.propose.mockReturnValue({ rows: 38, cols: 132 });
@@ -393,7 +396,20 @@ test("initial attachment reads usable metrics without waiting for a scheduled fr
     await expect(surface.fitInitial()).resolves.toEqual({ rows: 38, columns: 132 });
     expect(frame).not.toHaveBeenCalled();
     expect(xterm.resize).not.toHaveBeenCalled();
+    expect(begin).toHaveBeenCalledWith(true);
+    expect(observation.milestone).toHaveBeenCalledWith("fonts_ready");
+    expect(observation.finish).toHaveBeenCalledExactlyOnceWith(false);
   } finally { surface.dispose(); }
+});
+
+test("failed follow-up fit settles its diagnostic observation once", async () => {
+  const observation = { milestone: vi.fn(), finish: vi.fn() };
+  const begin = vi.spyOn(terminalFitEvidence, "begin").mockReturnValue(observation);
+  const surface = new XtermSurface();
+  surface.dispose();
+  await expect(surface.fit()).rejects.toThrow("disposed");
+  expect(begin).toHaveBeenCalledWith(false);
+  expect(observation.finish).toHaveBeenCalledExactlyOnceWith(true);
 });
 
 test("initial attachment with unavailable metrics uses bounded stable-frame recovery without resizing", async () => {

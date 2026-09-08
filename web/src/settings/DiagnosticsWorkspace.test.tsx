@@ -27,6 +27,10 @@ test("compute warning displays CPU waiting evidence even when load average is lo
 test("distinguishes unattributed event phases from identified interaction timing", async () => {
   const evidence = browserCapture.readBrowserPerformance();
   vi.spyOn(browserCapture, "readBrowserPerformance").mockReturnValue({ ...evidence,
+    terminal_fit: { samples: 2, failed: 1, slowest: {
+      at: 10, initial: false, failed: true, total_ms: 1050, font_ms: 10,
+      after_fonts_ms: 1040, frames: 2, max_frame_gap_ms: 1000,
+    } },
     recent_interactions: { ...evidence.recent_interactions, observed_interactions: 0, slowest: null,
       unattributed_event_entries: 2, slowest_unattributed: {
         duration_ms: 1200, input_delay_ms: 20, processing_ms: 30, presentation_estimate_ms: 1150,
@@ -40,6 +44,9 @@ test("distinguishes unattributed event phases from identified interaction timing
   expect(screen.getByText(/2 recent event entries had no interaction ID/)).toBeVisible();
   expect(screen.getByText(/Slowest entry without an interaction ID/)).toHaveTextContent("1200 ms · Input delay 20 ms · Handler processing 30 ms · Presentation estimate 1150 ms");
   expect(screen.getByText(/Recent grouped observations/)).toHaveTextContent("0 interaction IDs");
+  expect(screen.getByText(/Follow-up sizing:/)).toHaveTextContent("2 attempts retained, including 1 failed");
+  expect(screen.getByText(/Slowest follow-up fit:/)).toHaveTextContent("1050 ms · Font readiness 10 ms · After fonts 1040 ms · 2 measured frames · Largest frame gap 1000 ms · Failed");
+  expect(screen.getByText(/Sizing timings are elapsed waits/)).toHaveTextContent("not correlated to the slowest snapshot");
 });
 
 test("uses the App resource owner and releases diagnostic sampling on unmount", async () => {
