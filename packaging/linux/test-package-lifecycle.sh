@@ -683,36 +683,44 @@ printf '%s' "$reconcile_out" | grep -q 'mid-turn' \
 grep -q '^cancel-drain$' "$HOME/swarmctl.log" \
   || { echo "a deferred reconcile left the host drained" >&2; exit 1; }
 
-# 2. RESTING SESSIONS PROCEED, SILENTLY. Three sessions, none working, all
-#    readable. This is the case the old predicate could never reach, and the
-#    silence is the assertion: a check that always warns says nothing on the
-#    day it matters.
+# 2. RESTING IS NOT ATOMIC ADMISSION. Loaded legacy sessions must survive.
 restore_pending_engine_change
 printf '3\n' > "$HOME/running-sessions"
 printf '0\n' > "$HOME/busy-sessions"
 printf '0\n' > "$HOME/unreadable-sessions"
 : > "$HOME/return-record.log"
-: > "$HOME/return-record.log"
-quiet_out=$("$package" reconcile-host-if-idle 2>&1)
-grep -q '^recorded$' "$HOME/return-record.log" \
-  || { echo "engine replacement skipped durable worker return preparation" >&2; exit 1; }
-# BOTH halves, because silence alone does not distinguish "proceeded quietly"
-# from "deferred quietly" — and deferring quietly is the original bug.
-printf '%s' "$quiet_out" | grep -q 'now uses' \
-  || { echo "resting sessions did not let the engine update land: $quiet_out" >&2; exit 1; }
-printf '%s' "$quiet_out" | grep -qi 'WARNING' \
-  && { echo "a fully readable idle host warned about nothing: $quiet_out" >&2; exit 1; }
-
-# Return-record failure preserves the old engine and cancels its drain.
-restore_pending_engine_change
-: > "$HOME/return-record-fails"
+: > "$HOME/systemctl.log"
 : > "$HOME/swarmctl.log"
-if "$package" reconcile-host-if-idle; then
-  echo "engine replacement proceeded without durable return preparation" >&2; exit 1
+quiet_out=$("$package" reconcile-host-if-idle 2>&1)
+[ ! -s "$HOME/return-record.log" ]
+! grep -q 'restart swarm-terminal-host.service' "$HOME/systemctl.log"
+# The explicit compatibility reason must distinguish refusal from success.
+printf '%s' "$quiet_out" | grep -q 'deferred.*no atomic maintenance admission' \
+  || { echo "screen census was treated as maintenance admission: $quiet_out" >&2; exit 1; }
+
+# Required mode also cannot replace loaded sessions based on a census.
+restore_pending_engine_change
+: > "$HOME/swarmctl.log"
+if "$package" reconcile-host; then
+  echo "required mode replaced loaded sessions without atomic admission" >&2; exit 1
 fi
-rm -f "$HOME/return-record-fails"
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "1.0.0" ]
 grep -q '^cancel-drain$' "$HOME/swarmctl.log"
+
+# A request file alone is not proof that the manual API stops succeeded.
+printf 'requested_at=%s\ntarget_version=2.0.0\n' "$(date +%s)" > "$SWARM_STATE_ROOT/worker-engine-maintenance.request"
+if "$package" reconcile-host-requested; then
+  echo "request flag authorized replacement while sessions remained" >&2; exit 1
+fi
+! grep -q 'restart swarm-terminal-host.service' "$HOME/systemctl.log"
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "1.0.0" ]
+rm -f "$SWARM_STATE_ROOT/worker-engine-maintenance.request"
+
+# With no sessions to interrupt, automatic replacement still succeeds.
+printf '0\n' > "$HOME/running-sessions"
+"$package" reconcile-host-if-idle
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "2.0.0" ]
+printf '3\n' > "$HOME/running-sessions"
 
 # 3a. A PROVIDER THIS BUILD CANNOT READ: DEFER, and name it. Not proceed —
 #     the worker engine card is the deliberate route, and it exists.
@@ -897,14 +905,23 @@ printf '%s' "$migrate_skew" | grep -q 'cannot report which sessions are busy' \
   || { echo "an unanswerable host did not defer the migration: $migrate_skew" >&2; exit 1; }
 rm -f "$HOME/host-cannot-report-busy"
 
-# AND THE NEGATIVE: everything readable and resting MIGRATES, silently.
-# Asserting the migration HAPPENED rather than that nothing complained —
-# a deferral is also silent, so silence alone would pass against the bug.
+# Resting legacy sessions must also defer both protocol migration paths.
 printf '3\n' > "$HOME/running-sessions"
 printf '0\n' > "$HOME/busy-sessions"
 printf '0\n' > "$HOME/unreadable-sessions"
-"$package" migrate-protocol "$migration_bundle" >/dev/null 2>&1 \
-  || { echo "a resting host refused a protocol migration" >&2; exit 1; }
+if "$package" migrate-protocol "$migration_bundle"; then
+  echo "resting census authorized protocol migration" >&2; exit 1
+fi
+: > "$HOME/systemctl.log"
+"$package" update "$migration_bundle"
+[ -f "$SWARM_STATE_ROOT/protocol-migration.pending" ]
+migration_wait=$("$package" reconcile-host-requested 2>&1)
+printf '%s' "$migration_wait" | grep -q 'no atomic maintenance admission'
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "7.0.0" ]
+! grep -q 'stop .*swarm-terminal-host' "$HOME/systemctl.log"
+# Once sessions actually exit, the pending migration can complete.
+printf '0\n' > "$HOME/running-sessions"
+"$package" reconcile-host-requested
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "4.0.0" ] \
   || { echo "the migration reported success without moving the host" >&2; exit 1; }
 

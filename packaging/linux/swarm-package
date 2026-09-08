@@ -1346,11 +1346,9 @@ install_or_update() {
       printf 'swarm-package: this release changes the terminal-host protocol from %s to %s.\n' \
         "$host_protocol" "$protocol" >&2
       printf 'swarm-package: the API and the worker engine are swapped together, so every worker session ends and workers are brought back afterwards.\n' >&2
-      # Drained first so nothing new attaches between here and the swap.
-      SWARM_TERMINAL_SOCKET=$(terminal_socket) \
-        "$host_release/bin/swarmctl" drain >/dev/null 2>&1 || true
-      drain_release=$host_release
-      activate_protocol_migration "$new_release"
+      # Ordinary update is not explicit permission to interrupt live workers.
+      # Use the same admission/defer path as a prepared protocol migration.
+      migrate_protocol if-idle
       return
     fi
   fi
@@ -1656,6 +1654,20 @@ reconcile_host() {
       die "terminal host update deferred; $reconcile_blocked"
     fi
   fi
+  # ADR 0085 compatibility gate, owned by package lifecycle until engines can
+  # perform protected admission and retained stops. Census is not a permit.
+  # Manual maintenance must actually stop sessions before requesting a swap.
+  if [ "$running" -gt 0 ]; then
+    reconcile_blocked="the running engine has no atomic maintenance admission; $running loaded sessions were left running"
+    SWARM_TERMINAL_SOCKET=$(terminal_socket) "$host_release/bin/swarmctl" cancel-drain >/dev/null 2>&1 || true
+    drain_release=
+    if [ "$reconcile_mode" = "if-idle" ]; then
+      printf 'Terminal host update deferred; %s. Use the warned worker engine maintenance action for this compatibility update.\n' "$reconcile_blocked"
+      note_deferral host-reconcile "the worker engine update" "$reconcile_blocked"
+      return
+    fi
+    die "terminal host update deferred; $reconcile_blocked"
+  fi
   clear_deferrals host-reconcile
 
   record_loaded_worker_returns || die "worker engine update deferred: could not record the loaded workers owed a return; no sessions stopped"
@@ -1851,6 +1863,8 @@ migrate_protocol() {
     migration_blocked="$busy of $running sessions are mid-turn"
   elif [ -n "$unreadable" ] && [ "$unreadable" -ne 0 ]; then
     migration_blocked="$unreadable of $running sessions run a provider this build cannot read"
+  elif [ "$running" -gt 0 ]; then
+    migration_blocked="the running engine has no atomic maintenance admission; $running loaded sessions were left running"
   fi
   if [ -n "$migration_blocked" ]; then
     # DEFER, DO NOT FAIL. This used to die, and on a Hive with any worker
@@ -1871,7 +1885,7 @@ migrate_protocol() {
       # download, and a Hive that defers overnight would have nothing to
       # activate from in the morning.
       printf '%s\n' "$new_release" > "$state_root/protocol-migration.pending"
-      printf 'Protocol migration to %s is prepared and deferred; %s. It will apply itself when they are idle, or you can apply it now from the worker engine card.\n' \
+      printf 'Protocol migration to %s is prepared and deferred; %s. It can apply automatically after sessions end, or through the warned worker engine maintenance action.\n' \
         "$version" "$migration_blocked"
       return
     fi
@@ -1911,6 +1925,8 @@ complete_protocol_migration() {
     completion_blocked="$busy of $running sessions are mid-turn"
   elif [ -n "$unreadable" ] && [ "$unreadable" -ne 0 ]; then
     completion_blocked="$unreadable of $running sessions run a provider this build cannot read"
+  elif [ "$running" -gt 0 ]; then
+    completion_blocked="the running engine has no atomic maintenance admission; $running loaded sessions were left running"
   fi
   if [ -n "$completion_blocked" ]; then
     if [ "$complete_mode" = "if-idle" ]; then
