@@ -2,6 +2,25 @@
 
 ## Current checkpoint — September 8, after Admin intake acceptance
 
+### Live Queen traversal follow-up, September 8 at 23:35 UTC
+
+The live coordinator confirms additional assessments beyond the previously
+observed `01a08349` batch. Run `01a0834f-4842-7760-b1b5-06a41aa3b7c3`
+recorded task `01a06ae3` at 1788909950 and `01a07016-86cb` at 1788909984.
+Run `01a0835b-b968-7e71-a040-854d6035e0ec` then recorded `01a07016-9fb6`,
+`01a07373` and `01a07374` at 1788910312, 1788910319 and 1788910326.
+This is authoritative task-assessment metadata, not a terminal narrative.
+
+The latter run finished with outcome `incomplete`; all three latter assessments
+were `insufficient_evidence`. Queen-owned review count was 23, and three worker
+recovery obligations were `verify_worker_response`. Advancing through later
+batches is now observed across multiple runs; full traversal, resolution of
+missing evidence and productive recovery remain unproven. Do not clear ownership
+or call the orchestration gate complete merely because an assessment exists.
+
+CI for deployed `940d3c8e` and checkpoint `9da7d87a` succeeded. The newer queue
+presentation candidate still awaits deployment after the live observation window.
+
 ### Rendered queue polish, September 8
 
 Live Edge inspection verified owner summary navigation, worker grouping within
