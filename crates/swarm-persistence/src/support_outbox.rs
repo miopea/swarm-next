@@ -635,6 +635,43 @@ mod tests {
     }
 
     #[test]
+    fn deployed_schemas_create_the_previously_unshipped_outbox() {
+        for previous_version in [150, 152] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("deployed.db");
+            let hive = TaskStore::open(&path).unwrap();
+            hive.connection()
+                .unwrap()
+                .execute_batch(&format!(
+                    "DROP TABLE hive_support_outbox; PRAGMA user_version = {previous_version};"
+                ))
+                .unwrap();
+            drop(hive);
+            let hive = TaskStore::open(&path).unwrap();
+            let saved = hive
+                .enqueue_support_submission(
+                    &submission(1, "Exact reviewed report after upgrade"),
+                    DESTINATION,
+                    10,
+                )
+                .unwrap();
+            let version: i64 = hive
+                .connection()
+                .unwrap()
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            assert_eq!(version, crate::CURRENT_SCHEMA_VERSION);
+            assert!(version > previous_version);
+            drop(hive);
+            let hive = TaskStore::open(&path).unwrap();
+            let restored = hive.support_submission(Uuid::from_u128(1)).unwrap();
+            assert_eq!(restored.frozen_submission, saved.frozen_submission);
+            assert_eq!(restored.destination, saved.destination);
+            assert_eq!(restored.delivery.state, SupportDeliveryState::Pending);
+        }
+    }
+
+    #[test]
     fn migration_preserves_existing_hive_and_saved_outbox_content() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("hive.db");

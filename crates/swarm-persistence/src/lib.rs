@@ -9652,7 +9652,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_migrates_deployed_142_without_activating_support_outbox() {
+    fn recovery_migrates_deployed_142_and_prepares_the_private_support_outbox() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("deployed-142.sqlite3");
         let task_id = {
@@ -9662,7 +9662,7 @@ mod tests {
                 .unwrap();
             let connection = store.connection().unwrap();
             connection
-                .execute_batch("DROP TABLE queen_recovery_receipts; PRAGMA user_version=142;")
+                .execute_batch("DROP TABLE queen_recovery_receipts; DROP TABLE hive_support_outbox; PRAGMA user_version=142;")
                 .unwrap();
             task.id
         };
@@ -9683,8 +9683,8 @@ mod tests {
         ).unwrap();
         assert_eq!(
             tables,
-            (true, false),
-            "Recovery must not activate support ingestion"
+            (true, true),
+            "Migration prepares private storage; it does not send feedback"
         );
     }
 

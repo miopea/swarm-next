@@ -1,4 +1,4 @@
-//! Local operator interface. Public central intake is a separate executable.
+//! Local operator interface. BFG Admin owns public intake and central conversations.
 use crate::{ApiError, AppState, authorize};
 use axum::{
     Json,

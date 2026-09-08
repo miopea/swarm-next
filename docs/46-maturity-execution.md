@@ -7,6 +7,31 @@ authorized. No release is authorized.
 
 ## Live dogfood follow-ups — 2026-09-05
 
+### September 8: admission recovery and Admin client promotion checkpoint
+
+- Main `c9fbea27` is deployed; API PID 1687482 is active and terminal-host PID
+  1547164 is unchanged. CI run 34285987693 passed. A read-only authenticated
+  coordinator request returned `held: []`; the misleading sleeping-Swarm-Next
+  prompt warning is no longer present in that projection. Admission currently
+  reports `deferred_advisory`, not an unanswered terminal prompt. No worker was
+  manually woken or typed into for this check.
+- The unpushed Admin client candidate preserves production schema 152 and adds
+  private outbox schema 153. Upgrade tests cover previously unshipped outbox
+  creation from 150 and 152, frozen payload/receipt state across reopen, and
+  preservation of deployed recovery/task storage. Migration sends nothing.
+- Candidate frontend: 146 test files / 1,384 tests pass; TypeScript check passes.
+  All 682 isolated Linux persistence tests passed, including schema upgrades.
+  API/strict workspace validation is still running
+  under PID 1710705 in `/tmp/swarm-admin-intake.FxXHci`, with durable results in
+  `validation.log`. These pending checks are not recorded as passing.
+- Separate Edge tab at the authoritative Hive restored its trusted session and
+  rendered runtime `1.6.0-dev-c9fbea274f44-20260908222811-1684894` with
+  "Nothing needs your attention." No worker-start/prompt warning was rendered.
+- Admin owns central data and approved email; its coordinator reports the live
+  approved mail/attachment roundtrip passed. Native Hive submission/recovery UI
+  still requires live verification. MCP binding remains separately unapproved.
+  No release or integration activation occurred in this checkpoint.
+
 ### Content-free live resource baseline
 
 - Updated the read-only sampler from legacy `swarm-next-*` units to packaged

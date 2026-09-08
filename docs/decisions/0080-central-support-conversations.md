@@ -1,5 +1,29 @@
 # ADR 0080: Central support conversations, separate from Hive execution
 
+## September 8 ownership and activation correction
+
+This section supersedes the historical separate-support-runtime design below.
+BFG Admin owns central conversations in its existing database, including
+approved customer replies. Do not deploy another Swarm support service or
+central database. Swarm owns execution tasks and a bounded private Hive outbox.
+Schema 153 adds that outbox after deployed Queen focus schema 152; migration
+alone neither activates delivery nor exports historical diagnostic reports.
+
+Reviewed native submissions target the configured Admin HTTPS origin at
+`/api/feedback/swarm-support/submissions`, with email as required contact and
+without Admin credentials. Frozen destinations are never silently redirected.
+Exact retries preserve the submission key and bytes. Conflicts stay visible;
+rate limits retain the bounded server deadline across restarts. Native attachment
+upload remains unavailable until its contract exists.
+
+The operator approved development-Hive activation for fictional end-to-end
+testing. Actual Admin-route restart/replay acceptance passed; live Hive UI
+submission and recovery remain a verification gate. Admin separately verified
+its approved mail roundtrip. No customer send is implied by task completion.
+The separate `app_id=swarm` MCP workspace binding remains unapproved and must
+not change as part of intake activation. Historical deployment and schema-143
+checkpoints below are not the current production topology or migration ceiling.
+
 Status: accepted implementation design under the operator's September 6 scope.
 Implementation underway, not connected. Central deployment URL and credentials
 remain unset. Initial domain validation and isolated persistence do not activate
