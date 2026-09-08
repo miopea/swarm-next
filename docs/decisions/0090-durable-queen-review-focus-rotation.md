@@ -88,3 +88,16 @@ Unscoped VM steps: unbounded 217370, deployed bounded 245284, identity bounded
 225574; worker-scoped: 218906, 246820, 227110. This is about 8% less than the
 deployed bounded query, not a claim of universally beating the unbounded query.
 All 35 decision tests pass. Exact-main and live verification are still pending.
+
+The application integration test now also proves that an authenticated unchanged
+operator deferral is excluded from a newly claimed reservation, a non-Queen
+principal cannot reserve focus, and a same-run retry preserves its existing batch
+after evidence changes while the full review snapshot exposes that change. It
+passes in isolated Linux. The main candidate's complete web suite passes 144
+files / 1372 tests, including the separate admission-hold card correction.
+
+The first exact-main Rust run lost SSH mid-suite without a terminal result. The
+test process was confirmed absent; the API and engine retained their existing
+process IDs. Replacement validation is owned by PID 1662834 and logs to
+/tmp/swarm-focus-main.8iuQrn/validation-2.log with a final VALIDATION_EXIT marker.
+Build and test concurrency are each capped at two. No deployment is claimed.

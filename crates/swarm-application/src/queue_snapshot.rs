@@ -515,6 +515,34 @@ mod tests {
                 .review_focus,
             vec![fresh.id]
         );
+        service.store.request_queen_automation_run(200).unwrap();
+        let next_run = service.store.claim_queen_automation(200).unwrap().unwrap();
+        assert_eq!(
+            service
+                .reserve_queen_review_focus(principal, &next_run.run_id, next_run.session_id)
+                .unwrap(),
+            vec![fresh.id],
+            "an authenticated unchanged deferral stays out of a new reservation",
+        );
+        let worker = service
+            .store
+            .create_worker(
+                "Fixture",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace/fixture",
+                false,
+                1,
+            )
+            .unwrap();
+        assert!(
+            service
+                .reserve_queen_review_focus(
+                    AgentPrincipal::from(&worker),
+                    &next_run.run_id,
+                    next_run.session_id,
+                )
+                .is_err()
+        );
         service
             .store
             .append_task_correction(
@@ -526,6 +554,13 @@ mod tests {
         let snapshot = service.queen_queue_snapshot(principal).unwrap();
         assert!(snapshot.review_focus.contains(&held.id));
         assert!(snapshot.review_focus.contains(&fresh.id));
+        assert_eq!(
+            service
+                .reserve_queen_review_focus(principal, &next_run.run_id, next_run.session_id)
+                .unwrap(),
+            vec![fresh.id],
+            "a delivery retry keeps its identity even when the full review changes",
+        );
         assert_eq!(
             service.store.get_task(held.id).unwrap().state,
             TaskState::Blocked
