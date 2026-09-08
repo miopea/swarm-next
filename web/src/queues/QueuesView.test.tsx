@@ -20,6 +20,12 @@ test.each([
   const { rerender } = render(<QueuesView {...props} recovery={{ items: [item], truncated: false }} />);
   expect(screen.getByRole("heading", { name: "Waiting on Queen 1" })).toBeVisible();
   expect(screen.getByText(label)).toBeVisible();
+  const deliveryDetails = screen.getByText("delivered · message message-1");
+  expect(deliveryDetails).not.toBeVisible();
+  const deliverySummary = screen.getByText("Latest recovery delivery: delivered");
+  expect(deliverySummary).toBeVisible();
+  fireEvent.click(deliverySummary);
+  expect(deliveryDetails).toBeVisible();
   expect(screen.queryByText(/Marked active/)).not.toBeInTheDocument();
   fireEvent.click(within(screen.getByRole("region", { name: "Petal" })).getByRole("button"));
   expect(onOpenTask).toHaveBeenCalledWith(current.id);

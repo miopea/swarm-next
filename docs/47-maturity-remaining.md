@@ -2,6 +2,17 @@
 
 ## Current checkpoint — September 8, after Admin intake acceptance
 
+### Rendered queue polish, September 8
+
+Live Edge inspection verified owner summary navigation, worker grouping within
+Queen's section, and separate recovery responsibility while task execution stays
+worker-owned. The view still exposed full recovery message UUIDs inline.
+The next UI candidate keeps delivery state visible and places the exact message
+identity behind a native disclosure. All 41 QueuesView tests and TypeScript
+checking pass, including hidden-then-expanded identity checks for all five
+recovery states. Rendered post-deployment verification remains pending; the
+memory observation window is not interrupted to deploy this presentation change.
+
 This checkpoint supersedes historical statements below that support intake is
 inactive or the separate Edge test browser is locked. It does not close the
 full requirement-by-requirement acceptance in the approved program.

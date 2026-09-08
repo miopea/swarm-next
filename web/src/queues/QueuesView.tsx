@@ -17,13 +17,13 @@ const RECOVERY_LABELS: Record<RecoveryQueueItem["state"], string> = {
 };
 
 /** A scanning hint, never a replacement for the recorded statement. */
-function QueueEvidence({ label, text }: { label: string; text: string }) {
+function QueueEvidence({ label, text, summaryText }: { label: string; text: string; summaryText?: string }) {
   const characters = Array.from(text);
-  if (characters.length <= 96) {
+  if (summaryText === undefined && characters.length <= 96) {
     return <p className="queue-task-meta">{label}: {text}</p>;
   }
   return <details className="decision-argument queue-evidence">
-    <summary>{label}: {characters.slice(0, 96).join("")}…</summary>
+    <summary>{label}: {summaryText ?? `${characters.slice(0, 96).join("")}…`}</summary>
     <p className="decision-prose">{text}</p>
   </details>;
 }
@@ -283,7 +283,7 @@ export default function QueuesView({
                   </button>
                   {checks.has(task.id) && <div className="queue-task-meta">
                     <QueueEvidence label="Recovery observation" text={checks.get(task.id)!.reason} />
-                    {checks.get(task.id)!.delivery && <QueueEvidence label="Latest recovery delivery" text={`${checks.get(task.id)!.delivery!.state} · message ${checks.get(task.id)!.delivery!.message_id}`} />}
+                    {checks.get(task.id)!.delivery && <QueueEvidence label="Latest recovery delivery" summaryText={checks.get(task.id)!.delivery!.state} text={`${checks.get(task.id)!.delivery!.state} · message ${checks.get(task.id)!.delivery!.message_id}`} />}
                     {checks.get(task.id)!.last_assessment && <QueueEvidence label="Previous Queen assessment (not rechecked here)" text={`${checks.get(task.id)!.last_assessment!.reason} Source: ${checks.get(task.id)!.last_assessment!.source}`} />}
                   </div>}
                   {briefing && <p className="queue-task-meta">Briefing held: {holdReason(briefing)} · queued {briefingWait([briefing], now / 1000)} <BlockingTaskLink briefing={briefing} onOpenTask={onOpenTask} /></p>}
