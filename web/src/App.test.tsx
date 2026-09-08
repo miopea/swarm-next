@@ -1367,7 +1367,10 @@ test.each(["Fixture reload terminal", "Refresh control room"])("%s resets the se
   vi.stubGlobal("fetch", fetch);
   const reset = vi.spyOn(terminalWorkspace, "resetSessionRenderer");
   try {
-    render(<App />);
+    // Flush the immediately resolved bootstrap chain and its React effects
+    // before attributing any request to redraw. Seeing TerminalView alone can
+    // precede authenticated startup effects on a busy CI runner.
+    await act(async () => { render(<App />); });
     await screen.findByTestId("terminal-view");
     const previous = screen.getByTestId("terminal-view");
     fetch.mockClear();
