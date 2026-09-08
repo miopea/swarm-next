@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { expect, test, vi } from "vitest";
 import type { QueenReviewQueueSnapshot } from "../api";
 import type { Task } from "../api/tasks";
-import { checkedQueueWaits } from "./reviewQueueProjection";
+import { checkedQueueWaits, pendingQueueRechecks } from "./reviewQueueProjection";
 import QueuesView from "./QueuesView";
 
 const task = { id: "held", title: "Deliberately deferred work", state: "blocked", next_move_owner: "queen", updated_at: 1, created_at: 1, position: 0, assigned_worker_id: null, prerequisites: [] } as unknown as Task;
@@ -48,6 +48,36 @@ test("insufficient evidence stays Queen-owned even with a contradictory covered 
   expect(screen.queryByText(/Queen still needs evidence:/)).not.toBeInTheDocument();
   rerender(<QueuesView {...props} tasks={[{ ...task, description: "Changed evidence" }]} reviewQueue={value} />);
   expect(screen.queryByText(/Queen still needs evidence:/)).not.toBeInTheDocument();
+});
+
+test.each(["no_active_review", "fresh_external_check_required"] as const)("external %s is historical context, not queue clearance", status => {
+  const value = snapshot(status, "external_condition");
+  expect(pendingQueueRechecks([task], value).size).toBe(1);
+  expect(checkedQueueWaits([task], value).size).toBe(0);
+  const props = { tasks: [task], workers: [], onOpenTask: vi.fn(), recovery: { items: [], truncated: false } };
+  const { rerender } = render(<QueuesView {...props} reviewQueue={value} />);
+  expect(screen.getByRole("heading", { name: "Waiting on Queen 1" })).toBeVisible();
+  expect(screen.getByText("Queen needs to recheck an external condition")).toBeVisible();
+  expect(screen.getByText(/Previously waiting for \(not rechecked\):/)).toBeVisible();
+  fireEvent.click(screen.getByText(/Previous external check/));
+  expect(screen.getByText(/This is historical evidence, not a confirmed current blocker/)).toBeVisible();
+  expect(screen.queryByRole("heading", { name: "Blocked on something else 1" })).not.toBeInTheDocument();
+  expect(props.onOpenTask).not.toHaveBeenCalled();
+  for (const changed of [{ ...task, description: "Changed within the same second" }, { ...task, assigned_worker_id: "other" }]) {
+    rerender(<QueuesView {...props} tasks={[changed]} reviewQueue={value} />);
+    expect(screen.queryByText(/Previously waiting for/)).not.toBeInTheDocument();
+  }
+  rerender(<QueuesView {...props} reviewQueue={value} coordinatorUnavailable />);
+  expect(screen.queryByText(/Previously waiting for/)).not.toBeInTheDocument();
+  rerender(<QueuesView {...props} reviewQueue={snapshot("covered_for_current_run", "external_condition")} />);
+  expect(screen.queryByText(/Previously waiting for/)).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Blocked on something else 1" })).toBeVisible();
+});
+
+test("recheck context excludes changed evidence, operator deferrals and absent snapshots", () => {
+  expect(pendingQueueRechecks([task], snapshot("evidence_changed", "external_condition")).size).toBe(0);
+  expect(pendingQueueRechecks([task], snapshot("no_active_review", "operator_deferral")).size).toBe(0);
+  expect(pendingQueueRechecks([task]).size).toBe(0);
 });
 
 test("parked work keeps a concise reason and source; failed refresh restores recorded ownership", () => {

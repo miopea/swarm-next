@@ -30,6 +30,13 @@ export function unresolvedQueueInvestigations(tasks: Task[], snapshot?: QueenRev
     previous.assessment.kind === "insufficient_evidence" && previous.status === "insufficient_evidence"));
 }
 
+/** Historical context only: external conditions are not covered between runs. */
+export function pendingQueueRechecks(tasks: Task[], snapshot?: QueenReviewQueueSnapshot) {
+  return new Map([...currentQueueAssessments(tasks, snapshot)].filter(([, previous]) =>
+    previous.assessment.kind === "external_condition"
+    && (previous.status === "fresh_external_check_required" || previous.status === "no_active_review")));
+}
+
 export function checkedQueueWaits(tasks: Task[], snapshot?: QueenReviewQueueSnapshot) {
   const waits = currentQueueAssessments(tasks, snapshot);
   for (const [id, previous] of waits) {

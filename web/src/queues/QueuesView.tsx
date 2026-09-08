@@ -1,7 +1,7 @@
 import { useId, useMemo } from "react";
 import HeldBriefingList, { BlockingTaskLink, holdReason, waitedFor, briefingWait } from "../orchestration/HeldBriefingList";
 import type { BlockedEscalation, HeldBriefing, HeldDelivery, QueenAutomationStatus, RecoveryQueueItem, RecoveryQueueSnapshot, QueenReviewQueueSnapshot } from "../api";
-import { checkedQueueWaits, unresolvedQueueInvestigations } from "./reviewQueueProjection";
+import { checkedQueueWaits, pendingQueueRechecks, unresolvedQueueInvestigations } from "./reviewQueueProjection";
 import DeliveryWaitList from "./DeliveryWaitList";
 import TaskPrerequisiteList from "./TaskPrerequisiteList";
 import { prerequisiteSatisfied, type NextMoveOwner, type Task } from "../api/tasks";
@@ -195,6 +195,7 @@ export default function QueuesView({
   const checks = useMemo(() => new Map(recoveryChecks.map(item => [item.task_id, item])), [recoveryChecks]);
   const checkedWaits = useMemo(() => checkedQueueWaits(tasks, coordinatorUnavailable ? undefined : reviewQueue), [tasks, reviewQueue, coordinatorUnavailable]);
   const investigations = useMemo(() => unresolvedQueueInvestigations(tasks, coordinatorUnavailable ? undefined : reviewQueue), [tasks, reviewQueue, coordinatorUnavailable]);
+  const rechecks = useMemo(() => pendingQueueRechecks(tasks, coordinatorUnavailable ? undefined : reviewQueue), [tasks, reviewQueue, coordinatorUnavailable]);
 
   const groups = useMemo<Group[]>(() => {
     const open = waitingTasks;
@@ -271,6 +272,7 @@ export default function QueuesView({
                     <span className="queue-task-meta">{checks.has(task.id) ? RECOVERY_LABELS[checks.get(task.id)!.state]
                       : checkedWaits.has(task.id) ? (checkedWaits.get(task.id)!.assessment.kind === "operator_deferral"
                         ? "Operator-deferred · source verified by Queen" : "External condition · checked by Queen")
+                      : rechecks.has(task.id) ? "Queen needs to recheck an external condition"
                       : taskProgress(task, now)}</span>
                     <span className="queue-task-meta">
                       {task.assigned_worker_id
@@ -291,6 +293,14 @@ export default function QueuesView({
                       <p className="decision-prose">{checkedWaits.get(task.id)!.assessment.evidence}</p>
                       <p className="decision-prose">Source: {checkedWaits.get(task.id)!.assessment.source}</p>
                       <p>This records a checked wait, not approval to resume or proof that the task is complete.</p>
+                    </details>
+                  </div>}
+                  {rechecks.has(task.id) && <div className="queue-task-meta">
+                    <QueueEvidence label="Previously waiting for (not rechecked)" text={rechecks.get(task.id)!.assessment.condition} />
+                    <details className="decision-argument"><summary>Previous external check · {new Date(rechecks.get(task.id)!.recorded_at * 1000).toLocaleString()}</summary>
+                      <p className="decision-prose">{rechecks.get(task.id)!.assessment.evidence}</p>
+                      <p className="decision-prose">Source: {rechecks.get(task.id)!.assessment.source}</p>
+                      <p>Queen must check whether this condition still applies. This is historical evidence, not a confirmed current blocker or a request for you.</p>
                     </details>
                   </div>}
                   {investigations.has(task.id) && <div className="queue-task-meta">
