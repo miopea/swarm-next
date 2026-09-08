@@ -368,3 +368,19 @@ claims, dependency completion, changed/withdrawn decisions, concurrent changes,
 lost responses and restart. Then use isolated demo work to show verified gates
 remain protected and actionable work moves. Do not call a new receipt table or
 domain helper the completed orchestration fix.
+
+### Review focus excludes already-covered waits (September 8)
+
+Live consecutive runs selected the same three oldest authenticated operator
+deferrals, although each was already covered. Reusing those valid assessments
+correctly leaves their timestamps unchanged; timestamp-only focus selection
+therefore starved other obligations. Historical age alone is not review demand.
+
+The bounded review focus must prioritize uncovered obligations before covered
+waits. Current validated coverage, or an unchanged authenticated operator
+deferral between runs, removes a task from the small prompt focus only. It stays
+in ownership counts and the full Queen backlog. External conditions between runs,
+insufficient evidence, changed evidence and missing snapshot entries remain
+eligible. Fence separate task reads by the complete projection, not timestamp.
+The final coverage check remains authoritative and unchanged; focus selection
+grants no execution permission, clears no blocker and does not certify recovery.

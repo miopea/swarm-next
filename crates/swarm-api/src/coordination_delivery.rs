@@ -1412,10 +1412,10 @@ pub(super) fn queen_review_focus_message(
     let queue = swarm_application::TaskService::new(store.clone())
         .queen_queue_snapshot(swarm_application::AgentPrincipal::from(&queen))?;
     let ids = queue
-        .queen_tasks
+        .review_focus
         .iter()
         .take(3)
-        .map(|task| task.id.to_string())
+        .map(ToString::to_string)
         .collect::<Vec<_>>();
     let mut message = queen_automation_message(delivery);
     message.bytes.splice(0..0, "UNRESOLVED INVESTIGATIONS. When a fresh check cannot establish a valid wait or next action, record swarm_record_review_disposition kind insufficient_evidence with the missing fact, checked evidence and source. It never covers the review or clears a blocker; it lets unchecked backlog receive attention. Reuse unchanged saved investigations rather than refreshing their timestamps. Keep seeking the missing fact or real assistance, and advance the other outstanding tasks instead of rereading only the same head items.\n\n".bytes());
