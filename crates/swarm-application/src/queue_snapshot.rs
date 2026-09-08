@@ -1,6 +1,18 @@
 use crate::{AgentPrincipal, ApplicationError, TaskService, require_queen};
 use swarm_domain::{NextMoveOwner, Task, TaskState};
 
+/// Shared task membership is a reconciliation candidate, never semantic equality.
+pub struct PendingDecisionOverlap {
+    pub task_id: swarm_domain::TaskId,
+    pub decision_ids: Vec<swarm_domain::DecisionRequestId>,
+    pub pending_count: usize,
+}
+
+pub struct PendingDecisionOverlapSnapshot {
+    pub groups: Vec<PendingDecisionOverlap>,
+    pub truncated: bool,
+}
+
 /// Counts cover the full open board, not the bounded recovery-candidate list.
 /// Owner counts include ordinary active work; they are not the waiting-only
 /// navigation badge. Ownership comes from the same task projection as Queues.
@@ -15,6 +27,54 @@ pub struct QueenQueueSnapshot {
 }
 
 impl TaskService {
+    /// Identify overlapping operator requests without altering any request or grant.
+    ///
+    /// # Errors
+    /// Denies non-Queen callers and propagates persistence failures.
+    pub fn queen_pending_decision_overlaps(
+        &self,
+        principal: AgentPrincipal,
+    ) -> Result<PendingDecisionOverlapSnapshot, ApplicationError> {
+        require_queen(principal)?;
+        // Persistence returns pending requests first; its read cap equals its
+        // enforced pending-request cap. Historical records cannot crowd these out.
+        let decisions = self.store.list_decision_requests()?;
+        let mut membership = std::collections::HashMap::<_, Vec<_>>::new();
+        for decision in decisions {
+            if decision.state != swarm_domain::DecisionRequestState::Pending {
+                continue;
+            }
+            let tasks = decision
+                .task_id
+                .into_iter()
+                .chain(decision.linked_tasks.iter().map(|link| link.task_id))
+                .collect::<std::collections::HashSet<_>>();
+            for task in tasks {
+                membership.entry(task).or_default().push(decision.id);
+            }
+        }
+        let mut groups = membership
+            .into_iter()
+            .filter(|(_, ids)| ids.len() > 1)
+            .map(|(task_id, mut ids)| {
+                ids.sort_by_key(ToString::to_string);
+                PendingDecisionOverlap {
+                    task_id,
+                    pending_count: ids.len(),
+                    decision_ids: ids,
+                }
+            })
+            .collect::<Vec<_>>();
+        groups.sort_by_key(|group| group.task_id.to_string());
+        let mut truncated = groups.len() > 32;
+        groups.truncate(32);
+        for group in &mut groups {
+            truncated |= group.decision_ids.len() > 16;
+            group.decision_ids.truncate(16);
+        }
+        Ok(PendingDecisionOverlapSnapshot { groups, truncated })
+    }
+
     /// Read bounded validated judgments without changing task ownership.
     ///
     /// # Errors

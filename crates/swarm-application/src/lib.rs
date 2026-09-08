@@ -36,7 +36,9 @@ mod queue_snapshot;
 mod support;
 mod task_block;
 pub use ops_tickets::{OpsTicketError, OpsTicketProgress, OpsTicketService};
-pub use queue_snapshot::QueenQueueSnapshot;
+pub use queue_snapshot::{
+    PendingDecisionOverlap, PendingDecisionOverlapSnapshot, QueenQueueSnapshot,
+};
 pub use support::{SupportService, SupportServiceError};
 
 /// The durable agent identity resolved before an application command is invoked.
@@ -3647,6 +3649,108 @@ mod tests {
             deadline: None,
             requested_command: None,
         }
+    }
+
+    #[test]
+    fn decision_overlaps_are_read_only_queen_candidates_and_clear_after_resolution() {
+        let (service, queen, worker) = setup();
+        let principal = AgentPrincipal::from(&queen);
+        let task = service
+            .store
+            .create_task("Same gate", "/workspace/petal")
+            .unwrap();
+        let first = service
+            .create_decision(
+                principal,
+                &decision_input(
+                    Some(task.id),
+                    DecisionRequestKind::Help,
+                    "Operator execution",
+                    &["I will do it"],
+                ),
+            )
+            .unwrap();
+        let mut command = decision_input(
+            Some(task.id),
+            DecisionRequestKind::Approval,
+            "Worker permission",
+            &["Hold"],
+        );
+        command.requested_command = Some("fictional-command --fixture".into());
+        let second = service.create_decision(principal, &command).unwrap();
+        let before = service.store.list_decision_requests().unwrap();
+        assert!(matches!(
+            service.queen_pending_decision_overlaps(AgentPrincipal::from(&worker)),
+            Err(ApplicationError::NotAuthorized)
+        ));
+        let snapshot = service.queen_pending_decision_overlaps(principal).unwrap();
+        assert!(!snapshot.truncated);
+        assert_eq!(snapshot.groups.len(), 1);
+        assert_eq!(snapshot.groups[0].task_id, task.id);
+        assert_eq!(snapshot.groups[0].pending_count, 2);
+        assert!(snapshot.groups[0].decision_ids.contains(&first.id));
+        assert!(snapshot.groups[0].decision_ids.contains(&second.id));
+        assert_eq!(service.store.list_decision_requests().unwrap(), before);
+        service
+            .resolve_operator_decision(first.id, "I will do it", "", "test")
+            .unwrap();
+        assert!(
+            service
+                .queen_pending_decision_overlaps(principal)
+                .unwrap()
+                .groups
+                .is_empty()
+        );
+        assert_eq!(
+            service.store.get_decision_request(second.id).unwrap(),
+            second
+        );
+    }
+
+    #[test]
+    fn decision_overlap_output_has_explicit_group_and_request_bounds() {
+        let (service, queen, _) = setup();
+        let principal = AgentPrincipal::from(&queen);
+        for index in 0..33 {
+            let task = service
+                .store
+                .create_task(&format!("Gate {index}"), "/workspace/petal")
+                .unwrap();
+            for kind in [DecisionRequestKind::Help, DecisionRequestKind::Approval] {
+                service
+                    .create_decision(
+                        principal,
+                        &decision_input(Some(task.id), kind, "Check scope", &["Hold"]),
+                    )
+                    .unwrap();
+            }
+        }
+        let snapshot = service.queen_pending_decision_overlaps(principal).unwrap();
+        assert!(snapshot.truncated);
+        assert_eq!(snapshot.groups.len(), 32);
+        let task = snapshot.groups[0].task_id;
+        for index in 0..20 {
+            service
+                .create_decision(
+                    principal,
+                    &decision_input(
+                        Some(task),
+                        DecisionRequestKind::Help,
+                        &format!("Another scope {index}"),
+                        &["Hold"],
+                    ),
+                )
+                .unwrap();
+        }
+        let snapshot = service.queen_pending_decision_overlaps(principal).unwrap();
+        assert!(snapshot.truncated);
+        let group = snapshot
+            .groups
+            .iter()
+            .find(|group| group.task_id == task)
+            .unwrap();
+        assert_eq!(group.pending_count, 22);
+        assert_eq!(group.decision_ids.len(), 16);
     }
 
     #[test]

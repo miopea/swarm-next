@@ -752,6 +752,7 @@ impl ServerHandler for AgentMcp {
                         .map_err(ApplicationError::Store)
                         .and_then(|attention| {
                             let queue = self.tasks.queen_queue_snapshot(self.principal)?;
+                            let decision_overlaps = self.tasks.queen_pending_decision_overlaps(self.principal)?;
                             let (prerequisite_ready, prerequisite_ready_truncated) = self.tasks
                                 .store().tasks_ready_after_prerequisites(crate::unix_timestamp())?;
                             let (blocked_reassessment, blocked_reassessment_truncated) = self.tasks
@@ -764,6 +765,15 @@ impl ServerHandler for AgentMcp {
                                 })),
                                 "active_work_recovery": crate::coordination_attention_evidence::active_work_recovery(&attention, &terminal_evidence),
                                 "unexplained_briefing_observations": unexplained_briefings,
+                                "pending_decision_overlaps": {
+                                    "groups": decision_overlaps.groups.into_iter().map(|group| json!({
+                                        "task_id": group.task_id,
+                                        "decision_ids": group.decision_ids,
+                                        "pending_count": group.pending_count,
+                                    })).collect::<Vec<_>>(),
+                                    "truncated": decision_overlaps.truncated,
+                                    "next_action": "These pending requests share explicit task membership; they are candidates for reconciliation, NOT proven duplicates. Read each full request, its worker's evidence, requested command and offered actions. Operator execution, command permission and a scope decision are different outcomes. Withdraw your own obsolete duplicate only when the surviving request preserves the actual unresolved need and scope; coordinate with the requester for other requests. Never answer for the operator, merge command grants, or withdraw a distinct permission merely to reduce the count. Recheck current state before acting. Use swarm_list_decisions for complete requests and any truncated groups."
+                                },
                                 "queue_snapshot": {
                                     "observed_at": crate::unix_timestamp(),
                                     "open_tasks": queue.open_tasks,
@@ -5894,6 +5904,15 @@ mod tests {
         let attention =
             response_json(handle(bridge.clone(), plain_state(), request(&queen_token)).await).await;
         assert!(attention["result"]["structuredContent"]["attention"].is_array());
+        let overlaps = &attention["result"]["structuredContent"]["pending_decision_overlaps"];
+        assert!(overlaps["groups"].as_array().unwrap().is_empty());
+        assert_eq!(overlaps["truncated"], false);
+        assert!(
+            overlaps["next_action"]
+                .as_str()
+                .unwrap()
+                .contains("NOT proven duplicates")
+        );
         let queued_observations =
             &attention["result"]["structuredContent"]["unexplained_briefing_observations"];
         assert_eq!(queued_observations["available"], true);
