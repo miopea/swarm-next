@@ -3,6 +3,7 @@ import { recordClientFailure } from "../feedback/clientDiagnostics";
 import { presenceDeviceId } from "../presence/PresenceController";
 import { browserPerformance } from "../runtime/browserPerformance";
 import { TerminalControl } from "./TerminalControl";
+import { recordTerminalGrantRequest } from "./TerminalGrantEvidence";
 
 export type TerminalControlView = "checking" | "owned" | "available" | "elsewhere" | "unsupported";
 
@@ -310,8 +311,10 @@ export class TerminalConnection {
     this.#grantAbortController = grantAbortController;
     this.#armGrantTimer(grantAbortController);
     try {
+      const grantStartedAt = performance.now();
+      const grantPath = `/api/v1/terminal/sessions/${encodeURIComponent(this.#sessionId)}/attach-grants?protocol=swarm-terminal.v4`;
       const response = await this.#fetch(
-        `/api/v1/terminal/sessions/${encodeURIComponent(this.#sessionId)}/attach-grants?protocol=swarm-terminal.v4`,
+        grantPath,
         {
           method: "POST",
           headers: this.#operatorToken === BROWSER_SESSION_AUTH
@@ -331,6 +334,7 @@ export class TerminalConnection {
         this.#fail("Update the Swarm App/API to enable safe terminal control. This client will not use legacy input.");
         return;
       }
+      recordTerminalGrantRequest(new URL(grantPath, this.#locationOrigin).href, grantStartedAt, performance.now());
       this.#finishAttachPhase();
       const websocketUrl = new URL(grant.websocket_path, this.#locationOrigin);
       websocketUrl.protocol = websocketUrl.protocol === "https:" ? "wss:" : "ws:";

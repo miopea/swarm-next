@@ -43,3 +43,19 @@ Tests must prove count/age bounds, invalid input rejection, privacy projection,
 incident coalescing, storage-failure recovery, and observer disposal before the
 slice is accepted. Subsequent server correlation and Dogfood views extend this
 owner rather than create competing browser recorders.
+
+Terminal grant diagnostics also retain at most 200 successful request observations
+for one hour, collected in the existing attachment completion path without an
+observer or timer. A same-origin Resource Timing entry is paired only when exactly
+one valid fetch entry fits the measured request interval. Missing, restricted,
+stale or ambiguous entries remain unknown, never zero. Only numeric durations and
+the observation timestamp survive collection; URLs, session IDs, headers and
+response data are not retained. This local detail is not added to hourly exports.
+
+The report distinguishes full client-observed fetch duration, resource duration,
+request-to-first-byte, body transfer and time from response end to client completion.
+Request-to-first-byte includes network/proxy/server time; response-to-client includes
+browser scheduling, body consumption and JSON parsing. Neither is a server CPU
+measurement or proof of a particular bottleneck. Cold reload measurements on the
+development Hive motivated this attribution; deployment and live comparison are
+still required before drawing a performance conclusion.

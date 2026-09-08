@@ -1,6 +1,7 @@
 import { RecentInteractions } from "./recentInteractions";
 import { terminalApplicationEvidence } from "../terminal/TerminalApplicationEvidence";
 import { terminalFitEvidence } from "../terminal/TerminalFitEvidence";
+import { terminalGrantEvidence } from "../terminal/TerminalGrantEvidence";
 import { currentPageActivity, PageActivityEvidence } from "./pageActivityEvidence";
 
 /** Browser-owned, content-free evidence. Never pass input or terminal bytes here. */
@@ -187,5 +188,5 @@ export function readBrowserPerformance() {
   if (previous && Date.now() - previous.captured_at > EXPIRY_MS) previous = undefined;
   return { collection: installed ? "active" : "not_installed", supported_observers: [...observed], current: browserPerformance.snapshot(), before_reload: previous,
     recent_interactions: recentInteractions.snapshot(), terminal_application: terminalApplicationEvidence.snapshot(),
-    terminal_fit: terminalFitEvidence.snapshot() };
+    terminal_fit: terminalFitEvidence.snapshot(), terminal_grant_request: terminalGrantEvidence.snapshot() };
 }
