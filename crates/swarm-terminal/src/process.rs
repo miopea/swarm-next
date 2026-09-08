@@ -1230,8 +1230,18 @@ impl SessionRegistry {
     ///
     /// Returns an error when a lock is poisoned or a child cannot be polled.
     pub fn activity_census(&self) -> Result<SessionActivityCensus, SessionRegistryError> {
-        let sessions = lock(&self.sessions)?;
-        activity_census(&sessions)
+        self.observe_sessions(activity_census)
+    }
+
+    // Registry membership is sampled once. Slow per-session observations must not
+    // hold the identity lock used by terminal attach/input lookup. These reads are
+    // diagnostics, not an atomic maintenance admission or permission to stop.
+    fn observe_sessions<T>(
+        &self,
+        observe: impl FnOnce(&[Arc<ProcessTerminalSession>]) -> Result<T, SessionRegistryError>,
+    ) -> Result<T, SessionRegistryError> {
+        let sessions = lock(&self.sessions)?.values().cloned().collect::<Vec<_>>();
+        observe(&sessions)
     }
 
     /// Returns a session by immutable identity.
@@ -1553,11 +1563,12 @@ impl SessionRegistry {
     ///
     /// Returns an error for a poisoned registry or failed OS process query.
     pub fn session_states(&self) -> Result<Vec<(WorkerSessionId, bool)>, SessionRegistryError> {
-        let sessions = lock(&self.sessions)?;
-        sessions
-            .values()
-            .map(|session| Ok((session.id(), session.is_running()?)))
-            .collect()
+        self.observe_sessions(|sessions| {
+            sessions
+                .iter()
+                .map(|session| Ok((session.id(), session.is_running()?)))
+                .collect()
+        })
     }
 
     /// Returns immutable identities, process state, and content-free process-tree resources.
@@ -1568,24 +1579,27 @@ impl SessionRegistry {
     pub fn session_resource_states(
         &self,
     ) -> Result<Vec<SessionResourceState>, SessionRegistryError> {
-        let sessions = lock(&self.sessions)?;
-        sessions
-            .values()
-            .map(|session| {
-                Ok(SessionResourceState {
-                    session_id: session.id(),
-                    running: session.is_running()?,
-                    stop_pending_release: session.stop_pending_release.load(Ordering::Acquire),
-                    resources: session.resource_sample()?,
-                    last_output_at: session.last_output_at(),
-                    recovery_attempt: session.recovery_attempt(),
-                    provider_start: session.provider_start()?,
-                    provider_selection: session.provider_selection()?,
-                    continuation_unavailable: session.continuation_unavailable()?,
-                    continuation_recovery: session.recovery_successor.get().copied(),
+        self.observe_sessions(|sessions| {
+            let resources = crate::resources::ProcessResourceSnapshot::capture();
+            sessions
+                .iter()
+                .map(|session| {
+                    let process_id = lock(&session.child)?.process_id();
+                    Ok(SessionResourceState {
+                        session_id: session.id(),
+                        running: session.is_running()?,
+                        stop_pending_release: session.stop_pending_release.load(Ordering::Acquire),
+                        resources: process_id.map(|pid| resources.sample(pid)),
+                        last_output_at: session.last_output_at(),
+                        recovery_attempt: session.recovery_attempt(),
+                        provider_start: session.provider_start()?,
+                        provider_selection: session.provider_selection()?,
+                        continuation_unavailable: session.continuation_unavailable()?,
+                        continuation_recovery: session.recovery_successor.get().copied(),
+                    })
                 })
-            })
-            .collect()
+                .collect()
+        })
     }
 
     /// Returns content-free durable-history diagnostics when history is
@@ -1712,10 +1726,10 @@ pub struct SessionActivityCensus {
 }
 
 fn activity_census(
-    sessions: &HashMap<WorkerSessionId, Arc<ProcessTerminalSession>>,
+    sessions: &[Arc<ProcessTerminalSession>],
 ) -> Result<SessionActivityCensus, SessionRegistryError> {
     let mut census = SessionActivityCensus::default();
-    for session in sessions.values() {
+    for session in sessions {
         if !session.is_running()? {
             continue;
         }
@@ -2013,6 +2027,61 @@ mod tests {
             arguments: vec!["-lc".into(), script.into()],
             working_directory: env::temp_dir(),
         }
+    }
+
+    #[test]
+    fn slow_observation_does_not_hold_the_registry_needed_by_control_status() {
+        let (registry, session) = control_tests::fixture();
+        let (entered, observed) = std::sync::mpsc::sync_channel(0);
+        let (release, released) = std::sync::mpsc::sync_channel(0);
+        let available = thread::scope(|scope| {
+            let registry_ref = &registry;
+            let reader = scope.spawn(move || {
+                registry_ref.observe_sessions(|sessions| {
+                    assert_eq!(sessions.len(), 1);
+                    entered.send(()).unwrap();
+                    released.recv().unwrap();
+                    Ok(sessions[0].id())
+                })
+            });
+            observed.recv().unwrap();
+            // The observer is definitely paused, not merely unscheduled. Avoid
+            // waiting on a contended lock so a regression can unwind cleanly.
+            let available = registry.sessions.try_lock().is_ok();
+            let response = available.then(|| {
+                crate::dispatch_terminal_control(
+                    &registry,
+                    session.id(),
+                    crate::TerminalControlCommand::Status,
+                )
+            });
+            release.send(()).unwrap();
+            assert_eq!(reader.join().unwrap().unwrap(), session.id());
+            if let Some(response) = response {
+                assert!(matches!(response, crate::HostResponse::Control { .. }));
+            }
+            available
+        });
+        assert!(
+            available,
+            "slow fleet observation blocked terminal identity lookup"
+        );
+        assert!(session.is_running().unwrap());
+    }
+
+    #[test]
+    fn failed_observation_releases_membership_and_does_not_change_session_authority() {
+        let (registry, session) = control_tests::fixture();
+        let failed: Result<(), _> =
+            registry.observe_sessions(|_| Err(SessionRegistryError::LockPoisoned));
+        assert!(matches!(failed, Err(SessionRegistryError::LockPoisoned)));
+        assert!(registry.get(session.id()).unwrap().is_running().unwrap());
+        assert_eq!(
+            registry.session_states().unwrap(),
+            vec![(session.id(), true)]
+        );
+        assert_eq!(registry.session_resource_states().unwrap().len(), 1);
+        assert_eq!(session.control_status().unwrap().1, None);
     }
 
     #[test]
