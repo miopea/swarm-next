@@ -576,18 +576,7 @@ impl TaskStore {
         worker_id: Option<WorkerId>,
     ) -> Result<Vec<DecisionRequest>, TaskStoreError> {
         let connection = self.connection()?;
-        let mut statement = connection.prepare(&format!(
-            "{DECISION_COLUMNS}
-             FROM decision_requests d
-             JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1
-             WHERE (?2 IS NULL OR d.requesting_worker_id = ?2 OR EXISTS(
-                 SELECT 1 FROM tasks t WHERE t.id IN (
-                     SELECT task_id FROM task_decision_membership WHERE decision_id=d.id)
-                 AND t.removed_at IS NULL AND t.assigned_worker_id = ?2))
-             ORDER BY state = 'pending' DESC, urgency = 'time_sensitive' DESC,
-                      deadline IS NULL, deadline, created_at DESC, id DESC
-             LIMIT ?1",
-        ))?;
+        let mut statement = connection.prepare(&decision_inbox_sql())?;
         statement
             .query_map(
                 params![MAX_DECISION_RESULTS, worker_id.map(|id| id.to_string())],
@@ -1133,6 +1122,32 @@ fn validate_questions(questions: &[DecisionQuestion]) -> Result<(), TaskStoreErr
 /// normalised, so one list loses nothing. Each caller supplies its own FROM and
 /// WHERE; the columns are alias-qualified `d.` and every caller aliases the table
 /// `d` so the list is portable between them.
+const DECISION_INBOX_ORDER: &str = "state = 'pending' DESC, urgency = 'time_sensitive' DESC,
+    deadline IS NULL, deadline, created_at DESC, id DESC";
+
+fn decision_inbox_scope() -> String {
+    format!(
+        "FROM decision_requests d
+         JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1
+         WHERE (?2 IS NULL OR d.requesting_worker_id = ?2 OR EXISTS(
+             SELECT 1 FROM tasks t WHERE t.id IN (
+                 SELECT task_id FROM task_decision_membership WHERE decision_id=d.id)
+             AND t.removed_at IS NULL AND t.assigned_worker_id = ?2))
+         ORDER BY {DECISION_INBOX_ORDER} LIMIT ?1"
+    )
+}
+
+fn decision_inbox_sql() -> String {
+    // LIMIT on the final projection alone does not bound correlated discharge
+    // work while SQLite sorts history. Materialize the same scoped inbox first;
+    // derive evidence only for those rows, then explicitly retain their order.
+    format!(
+        "WITH inbox AS MATERIALIZED (SELECT d.* {})
+         {DECISION_COLUMNS} FROM inbox d ORDER BY {DECISION_INBOX_ORDER}",
+        decision_inbox_scope()
+    )
+}
+
 const DECISION_COLUMNS: &str =
     "SELECT d.id, d.hive_id, d.requesting_worker_id, d.task_id, d.kind, d.urgency, d.title,
                     reason, risk, evidence, suggested_action, allowed_actions, deadline,
@@ -1725,6 +1740,60 @@ mod tests {
             Some(DecisionDischarge::Discharged),
             "evidence recorded once the ruling existed discharges it"
         );
+    }
+
+    #[test]
+    fn bounded_inbox_preserves_projection_with_less_history_work() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let actions = vec!["Proceed".to_owned()];
+        for _ in 0..MAX_DECISION_RESULTS * 3 {
+            let decision = store
+                .create_decision_request(&request(queen.id, &actions))
+                .unwrap();
+            store
+                .resolve_decision_request(decision.id, "Proceed", "Fictional fixture", "operator")
+                .unwrap();
+        }
+        for _ in 0..24 {
+            store
+                .create_task_with_details(
+                    "Unrelated fictional task",
+                    &"No decision reference here. ".repeat(100),
+                    TaskPriority::Normal,
+                    "/workspace/fixture",
+                )
+                .unwrap();
+        }
+        let connection = store.connection().unwrap();
+        let legacy = format!("{DECISION_COLUMNS} {}", decision_inbox_scope());
+        for scope in [None, Some(queen.id.to_string())] {
+            let read = |sql: &str| {
+                let mut statement = connection.prepare(sql).unwrap();
+                let rows = statement
+                    .query_map(params![MAX_DECISION_RESULTS, scope], decision_from_row)
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                let steps = statement.get_status(rusqlite::StatementStatus::VmStep);
+                (serde_json::to_value(rows).unwrap(), steps)
+            };
+            let (before, before_steps) = read(&legacy);
+            let (after, after_steps) = read(&decision_inbox_sql());
+            assert_eq!(
+                after, before,
+                "every projected field and row order must be identical"
+            );
+            assert_eq!(
+                after.as_array().unwrap().len(),
+                usize::try_from(MAX_DECISION_RESULTS).unwrap()
+            );
+            assert!(
+                after_steps < before_steps,
+                "bounded projection must reduce VM work: before={before_steps}, after={after_steps}"
+            );
+            eprintln!("decision inbox VM steps: before={before_steps}, after={after_steps}");
+        }
     }
 
     /// ⚠️ WORK DONE WHERE THE RULING WAS RAISED IS STILL WORK DONE, and this is
