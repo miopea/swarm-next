@@ -29,8 +29,11 @@ In a separate Edge tab at `https://swarm.bfgsolutions.net/?surface=decisions`:
 Submission `0ac43f48-c286-4df8-85e2-57d15cf2cbed` received conversation
 `ebc282cc-3383-4a47-9ff3-5ec7662e67d7`, message
 `71a869ab-d489-421d-8ed9-09e5d07195be`, timestamp 1788908443.
-Admin-side read-only identity/content verification was requested from its
-existing owner. This fixture requests neither a task nor an email send.
+Admin's owner verified exactly one PostgreSQL submission under source
+`swarm-support` / app `swarm`, with the matching conversation/message and
+revision 1. Its authenticated production UI displayed the exact fictional name,
+contact, subject and body. No task or email action was invoked. This closes the
+paired actual dev-client intake gate without repeating Admin mail tests.
 
 This proves live native submission/receipt/browser-reload retention, not an
 interrupted live sender or mobile device suspension. Interrupted settlement and
