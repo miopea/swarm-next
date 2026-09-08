@@ -663,6 +663,12 @@ export class TerminalConnection {
         return;
       }
       if (this.#hasCanonicalState && sequence < this.#sequence) return;
+      // Valid canonical bytes establish that the attachment responded, not that
+      // the renderer or input is ready. The already-armed parser deadline owns
+      // this stage; retaining the shorter transport deadline would discard a
+      // healthy socket while onSnapshot is still applying its first screen.
+      // An outstanding return probe still requires its correlated reply.
+      if (this.#probeId === undefined) this.#clearConfirmationTimer();
       const truncated = frame[13] === 1;
       const reason = this.#recoveryReason ?? "attached";
       this.#recoveryReason = undefined;

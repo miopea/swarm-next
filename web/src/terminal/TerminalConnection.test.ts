@@ -198,7 +198,7 @@ const documentHasFocus = document.hasFocus.bind(document);
 
 test.each(["snapshot", "output"] as const)("a stalled %s releases its queue and requires view recovery", async (kind) => {
   vi.useFakeTimers();
-  const { connection, handlers, sockets } = harness([], 20_000);
+  const { connection, handlers, sockets } = harness([]);
   let finish!: () => void;
   const pending = new Promise<void>((resolve) => { finish = resolve; });
   if (kind === "snapshot") handlers.onSnapshot = vi.fn(() => pending);
@@ -795,6 +795,46 @@ test("an open-close loop cannot reset the bounded reconnect budget", async () =>
   expect(handlers.onState).toHaveBeenCalledWith("error", expect.stringContaining("still retrying every"));
   expect(handlers.onState).not.toHaveBeenCalledWith("error", expect.stringContaining("reconnect limit reached"));
   expect(sockets.length).toBeGreaterThan(3);
+});
+
+test("a validated snapshot uses the parser deadline instead of restarting a responding socket", async () => {
+  vi.useFakeTimers();
+  const { connection, handlers, sockets } = harness();
+  let finish!: () => void;
+  handlers.onSnapshot = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+  connection.start(handlers);
+  await vi.advanceTimersByTimeAsync(0);
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(10n, 24, 80, "pending"));
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(3_100);
+  expect(sockets[0].close).not.toHaveBeenCalled();
+  expect(sockets).toHaveLength(1);
+  expect(connection.sequence).toBe(0);
+  expect(handlers.onState).not.toHaveBeenCalledWith("connected", undefined);
+  expect(connection.sendInput("not ready")).toBe(false);
+  finish();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(connection.sequence).toBe(10);
+  expect(handlers.onState).toHaveBeenCalledWith("connected", undefined);
+  connection.dispose();
+});
+
+test("a valid snapshot cannot cancel an unanswered return probe", async () => {
+  vi.useFakeTimers();
+  const { connection, handlers, sockets } = harness();
+  connection.start(handlers);
+  await vi.advanceTimersByTimeAsync(0);
+  sockets[0].open();
+  document.dispatchEvent(new Event("visibilitychange"));
+  expect(sockets[0].sent.some(frame => JSON.parse(frame).type === "probe")).toBe(true);
+  sockets[0].message(snapshotFrame(10n, 24, 80, "valid but no probe reply"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(connection.sequence).toBe(10);
+  await vi.advanceTimersByTimeAsync(3_000);
+  expect(sockets[0].close).toHaveBeenCalledWith(4013, "terminal confirmation timed out");
+  expect(connection.sendInput("unconfirmed")).toBe(false);
+  connection.dispose();
 });
 
 test("an unconfirmed socket is abandoned inside the bounded retry budget", async () => {
