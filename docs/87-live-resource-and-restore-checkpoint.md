@@ -3,9 +3,29 @@
 Runtime: `1.6.0-dev-940d3c8ed1f0-20260908230927-1746491`.
 API PID 1748360; terminal-host PID 1547164. No engine restart or release.
 
-## Resource sample in progress
+## Completed resource sample
 
-The bounded read-only 600-second sampler is PID 1749352, log
+The observer finished successfully: 20 samples over its configured 600-second
+window, 574 seconds between first and last samples. All 16 original sessions
+and both service process identities remained. Final CPU averages / largest
+sample intervals, expressed as percent of one core:
+
+| Layer | Average | Largest interval |
+| --- | ---: | ---: |
+| API cgroup | 4.81% | 20.42% |
+| Engine process only | 3.24% | 5.68% |
+| Engine cgroup including workers | 192.67% | 367.59% |
+
+API memory ranged 38,125,568–120,418,304 bytes; worker-inclusive memory ranged
+10,985,586,688–16,058,560,512 bytes. History retention ranged
+534,812,530–536,870,377 bytes with zero reported dropped history bytes. Collection
+took 0–1 seconds per sample. This verifies short-window continuity and CPU
+attribution, not steady-state memory stability or a multi-day soak. A longer
+equivalent workload must distinguish warming/caching from sustained growth.
+
+### Observer identity and preliminary checkpoint
+
+The bounded read-only 600-second sampler was PID 1749352, log
 `/tmp/swarm-live-soak-940d3c8e.log`, samples
 `/home/bschleifer/.local/state/swarm/soak/20260908T231159Z-live-samples.csv`.
 It checks original session/service identity, samples every 30 seconds and

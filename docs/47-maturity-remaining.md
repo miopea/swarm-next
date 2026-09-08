@@ -23,9 +23,10 @@ full requirement-by-requirement acceptance in the approved program.
 - **Performance remains open:** quantitative long-lived browser CPU/heap/input
   latency and equivalent-load server/engine measurements, with aged terminal
   restore tails, are still required. Short healthy samples are not soak proof.
-  A 600-second read-only sampler is running under PID 1749352, log
-  `/tmp/swarm-live-soak-940d3c8e.log`, with 30-second samples in the Hive's
-  private `soak` directory. Results are pending; no acceptance is inferred.
+  The 600-second read-only sample completed with 20 observations, all 16 original
+  sessions and both service PIDs preserved. API/engine CPU averaged 4.81%/3.24%
+  of one core, versus 192.67% including workers. API memory ranged 36–115 MiB:
+  no steady-state memory acceptance follows. See `87-live-resource-and-restore-checkpoint.md`.
 - **Terminal/provider recovery remains open:** desktop reload jumping, mobile
   handoff, attachment paths and exact conversation/continue recovery need their
   remaining live/device gates. Android AskUser multi-question readability was
