@@ -401,10 +401,11 @@ live backlog progression remains an acceptance gate.
 
 ### A saved plan is not ongoing execution (September 8)
 
-Live Admin history contained twelve consecutive recovery assessments describing
-an empty resting prompt, no background work and unfinished buildable steps, yet
-calling that a verified external wait or "between turns." The occasional
-snapshot-sequence change was also treated as progress despite unchanged content.
+Eleven of the twelve latest Admin recovery assessments described an empty
+resting prompt, no background work and unfinished buildable steps, yet called
+that a verified external wait or "between turns." The latest assessment claimed
+activity again; this history read does not independently verify that claim.
+Earlier snapshot-sequence changes were treated as progress despite unchanged content.
 An old delivered instruction is not evidence that the next turn is executing.
 
 The standing brief and every review delivery now explicitly distinguish these
