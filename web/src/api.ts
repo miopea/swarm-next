@@ -441,7 +441,7 @@ export type WorkerEngineMaintenanceResult = {
 export type DevelopmentRuntime = {
   enabled: boolean;
   version: string;
-  state: "disabled" | "idle" | "requested" | "building" | "failed" | "ready" | "source_mismatch"
+  state: "disabled" | "idle" | "requested" | "building" | "failed" | "ready" | "deferred" | "source_mismatch"
     /** Progress stopped, or the paths it reports progress to do not exist. */
     | "stalled" | "unavailable";
   reload_available: boolean;
@@ -521,7 +521,7 @@ export type ReleaseStatus = {
   commits_ahead_of_release: number | null;
   downloaded_version: string | null;
   /** What the install unit last reported, so a failure is visible. */
-  apply_state: "installing" | "installed" | "failed" | "refused" | null;
+  apply_state: "installing" | "installed" | "failed" | "refused" | "deferred" | null;
   /** Why it refused, when it did. */
   apply_reason: string | null;
   /** Which step it failed at, in the operator's vocabulary. */

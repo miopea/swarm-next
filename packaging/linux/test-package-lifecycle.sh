@@ -481,6 +481,21 @@ grep -q '^detail=.*protocol 10 and the installed host speaks 9' "$SWARM_STATE_RO
 # Back to a plainly failing builder for the state the rest of this file expects.
 cat > "$dev_checkout/packaging/linux/build-development-release.sh" <<'EOF'
 #!/bin/sh
+cp -R "$SWARM_TEST_PENDING_BUNDLE" "$1/prepared"
+printf '%s\n' "$1/prepared"
+EOF
+chmod +x "$dev_checkout/packaging/linux/build-development-release.sh"
+printf '3\n' > "$HOME/running-sessions"
+printf 'request\n' > "$SWARM_STATE_ROOT/development-reload.request"
+SWARM_TEST_PENDING_BUNDLE="$test_root/bundle-4.0.0" "$package" reload-development
+grep -q '^state=deferred$' "$SWARM_STATE_ROOT/development-reload.status"
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "1.0.0" ]
+[ -f "$SWARM_STATE_ROOT/protocol-migration.pending" ]
+rm "$SWARM_STATE_ROOT/protocol-migration.pending" "$HOME/running-sessions"
+
+# Restore the failure fixture after proving a successful build can be deferred.
+cat > "$dev_checkout/packaging/linux/build-development-release.sh" <<'EOF'
+#!/bin/sh
 exit 1
 EOF
 chmod +x "$dev_checkout/packaging/linux/build-development-release.sh"
@@ -552,7 +567,8 @@ if grep -Eq '^drain$|^wait-ready$' "$HOME/swarmctl.log"; then
 fi
 [ -f "$SWARM_INSTALL_ROOT/assets/app-1.0.0.js" ]
 [ -f "$SWARM_INSTALL_ROOT/assets/app-2.0.0.js" ]
-[ "$(find "$SWARM_INSTALL_ROOT/releases" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2 ]
+# Includes the earlier prepared-but-not-activated development fixture (4.0.0).
+[ "$(find "$SWARM_INSTALL_ROOT/releases" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 3 ]
 [ "$(cat "$SWARM_STATE_ROOT/backups/pre-update-2.0.0.sqlite3")" = "database-v1" ]
 # THE ROLLBACK TARGET VERIFIES, NOT THE INCOMING RELEASE. This asserted 2.0.0
 # until 2026-08-27, which pinned the defect rather than the requirement:
@@ -925,6 +941,13 @@ if "$package" migrate-protocol "$migration_bundle"; then
 fi
 : > "$HOME/systemctl.log"
 "$package" update "$migration_bundle"
+[ -f "$SWARM_STATE_ROOT/protocol-migration.pending" ]
+mkdir -p "$SWARM_STATE_ROOT/downloads"
+cp -R "$migration_bundle" "$SWARM_STATE_ROOT/downloads/4.0.0"
+printf '%s\n' "$SWARM_STATE_ROOT/downloads/4.0.0" > "$SWARM_STATE_ROOT/release-apply.request"
+"$package" apply-release
+grep -q '^state=deferred$' "$SWARM_STATE_ROOT/release-apply.status"
+grep -q '^version=4.0.0$' "$SWARM_STATE_ROOT/release-apply.status"
 [ -f "$SWARM_STATE_ROOT/protocol-migration.pending" ]
 migration_wait=$("$package" reconcile-host-requested 2>&1)
 printf '%s' "$migration_wait" | grep -q 'no atomic maintenance admission'

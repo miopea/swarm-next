@@ -120,6 +120,13 @@ export default function DevelopmentReloadAction({ busy, runtime, reachable = tru
       The last build completed, and revision {runningRevision} is serving this page.
     </p>
   ) : null;
+  if (runtime.state === "deferred") return (
+    <article className="runtime-subsystem-card runtime-subsystem-restart development-reload-action" aria-label="App and API status" role="status">
+      <header><div><span className="runtime-component-name">App and API</span><strong>Build prepared · waiting for engine maintenance</strong></div></header>
+      <p>The new build is not installed yet. Revision {runningRevision} and your workers remain running.</p>
+      <small>Use the worker engine maintenance action when you are ready for its warned interruption. Rebuilding is not needed.</small>
+    </article>
+  );
   if (runtime.state === "source_mismatch") return (
     <article className="runtime-subsystem-card runtime-subsystem-restart development-reload-action" aria-label="App and API status" role="alert">
       <header><div><span className="runtime-component-name">App and API</span><strong>Development checkout needs to catch up</strong></div><span className="runtime-status-badge restart">Reload blocked</span></header>

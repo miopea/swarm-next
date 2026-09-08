@@ -5,6 +5,18 @@ import DevelopmentReloadAction from "./DevelopmentReloadAction";
 
 afterEach(cleanup);
 
+test("prepared migration is waiting, not installed or still building", () => {
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true, version: "1.5.0", state: "deferred", reload_available: true,
+    source_revision: "next", source_dirty: false, deployed_source_published: true,
+    deployed_source_revision: "previous",
+  }} />);
+  expect(screen.getByText("Build prepared · waiting for engine maintenance")).toBeInTheDocument();
+  expect(screen.getByText(/new build is not installed yet/)).toBeInTheDocument();
+  expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  expect(screen.queryByText(/last build completed/)).not.toBeInTheDocument();
+});
+
 test("explains a failed build without implying that workers or the current app stopped", () => {
   const reload = vi.fn().mockResolvedValue(undefined);
   render(<DevelopmentReloadAction busy={false} onReload={reload} runtime={{

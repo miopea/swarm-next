@@ -211,7 +211,7 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
   }, [operatorToken]);
 
   if (!status?.available) return null;
-  const installInFlight = installed && status.apply_state !== "failed" && status.apply_state !== "refused";
+  const installInFlight = installed && status.apply_state !== "failed" && status.apply_state !== "refused" && status.apply_state !== "deferred";
   const disabled = busy || working || installInFlight;
   const arrived = installing !== null && status.current_version === installing;
 
@@ -320,7 +320,10 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
               {!status.apply_detail && !status.apply_reason ? <> <code>journalctl --user -u swarm-release-apply.service -n 30</code> says more.</> : null}
             </p>
           ) : null}
-          {installed && status.apply_state !== "failed" && status.apply_state !== "refused" ? (
+          {status.apply_state === "deferred" ? (
+            <p role="status">Release prepared · waiting for engine maintenance. {status.current_version} and your workers remain running. Use the worker engine maintenance action when you are ready for its warned interruption.</p>
+          ) : null}
+          {installInFlight ? (
             <>
               {/*
                 * Shaped after the development build card, which the operator
@@ -345,7 +348,7 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
                 </small>
               )}
             </>
-          ) : ready ? (
+          ) : status.apply_state === "deferred" ? null : ready ? (
             confirming ? (
               <div className="maintenance-confirmation" role="group" aria-label="Confirm release install">
                 <strong>Install Swarm {status.offer?.version} now?</strong>

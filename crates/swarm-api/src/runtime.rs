@@ -555,8 +555,10 @@ fn reload_state_from(
         .lines()
         .find_map(|line| line.strip_prefix("revision="));
     let marker_state = value.lines().find_map(|line| line.strip_prefix("state="));
-    if matches!(marker_state, Some("requested" | "building" | "failed"))
-        && marker_revision != source_revision
+    if matches!(
+        marker_state,
+        Some("requested" | "building" | "failed" | "deferred")
+    ) && marker_revision != source_revision
     {
         return "idle";
     }
@@ -577,7 +579,7 @@ fn reload_state_from(
     // recorded no revision, on a Hive that cannot say what it was built from,
     // look superseded — swallowing exactly the failures with the least
     // information attached to them.
-    if marker_state == Some("failed")
+    if matches!(marker_state, Some("failed" | "deferred"))
         && let Some(deployed) = deployed_revision
         && marker_revision == Some(deployed)
     {
@@ -589,6 +591,7 @@ fn reload_state_from(
         Some("building") => "building",
         Some("failed") => "failed",
         Some("ready") => "ready",
+        Some("deferred") => "deferred",
         _ => "idle",
     }
 }
@@ -1107,6 +1110,23 @@ mod tests {
         let failed = "state=failed\nrevision=b9220d224bb2\n";
         assert_eq!(
             reload_state_from(failed, Some("b9220d224bb2"), Some("b9220d224bb2"), false),
+            "idle"
+        );
+    }
+
+    #[test]
+    fn deferred_build_waits_without_becoming_stalled_or_claiming_installation() {
+        let marker = "state=deferred\nrevision=next\n";
+        assert_eq!(
+            reload_state_from(marker, Some("next"), Some("old"), true),
+            "deferred"
+        );
+        assert_eq!(
+            reload_state_from(marker, Some("next"), Some("next"), true),
+            "idle"
+        );
+        assert_eq!(
+            reload_state_from(marker, Some("newer"), Some("old"), false),
             "idle"
         );
     }

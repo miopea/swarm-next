@@ -58,6 +58,17 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+test("a prepared release waits without claiming installation or offering another install", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({
+    downloaded_version: "0.2.0", apply_state: "deferred", carries_protocol_change: true,
+  }));
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+  expect(await screen.findByText(/Release prepared · waiting for engine maintenance/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Install/ })).not.toBeInTheDocument();
+  expect(screen.queryByText(/Installing Swarm/)).not.toBeInTheDocument();
+  expect(api.applyRelease).not.toHaveBeenCalled();
+});
+
 /** "A Hive never contacts an origin its owner did not choose." */
 test("asks once before this Hive ever contacts an origin", async () => {
   vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({ mode: "unset", offer: null, upgrade_available: false, last_checked_at: null, last_outcome: null }));

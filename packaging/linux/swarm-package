@@ -40,6 +40,7 @@ dev_reload_started=
 dev_status_path=
 dev_build_root=
 dev_reload_revision=
+dev_reload_deferred=
 
 # THE FAILURE RECORD — one shape, every path.
 #
@@ -421,7 +422,7 @@ on_exit() {
       "$drain_release/bin/swarmctl" cancel-drain >/dev/null 2>&1 || true
   fi
   if [ -n "$dev_reload_started" ] && [ -n "$dev_status_path" ] && [ "$result" -eq 0 ]; then
-    printf 'state=ready\nrevision=%s\n' "$dev_reload_revision" > "$dev_status_path" 2>/dev/null || true
+    printf 'state=%s\nrevision=%s\n' "${dev_reload_deferred:-ready}" "$dev_reload_revision" > "$dev_status_path" 2>/dev/null || true
   elif [ "$result" -ne 0 ]; then
     # EVERY failing path lands here, including the ones that never thought about
     # a status file. fail_status is empty for an operation that has no surface
@@ -1174,7 +1175,16 @@ Nothing was installed. Reload again once the checkout has stopped moving."
     die "the development build compiled but could not be installed"
   fi
   cat "$dev_log" >&2 || true
+  if release_waits_for_migration "$(cat "$bundle_path/VERSION")"; then
+    dev_reload_deferred=deferred
+  fi
   fail_step=
+}
+
+release_waits_for_migration() {
+  waiting_release=$(pending_protocol_release) || return 1
+  [ "$(cat "$waiting_release/VERSION")" = "$1" ] || return 1
+  [ "$(cat "$install_root/current/VERSION")" != "$1" ]
 }
 
 # Installs a release the operator accepted in the control room.
@@ -1250,7 +1260,11 @@ apply_release() {
   apply_log="$state_root/release-apply.log"
   if "$requested/swarm-package" "$apply_command" "$requested" 2>"$apply_log"; then
     cat "$apply_log" >&2 || true
-    printf 'state=installed\nversion=%s\n%s' "$requested_version" "$migration_marker" > "$status_path"
+    if release_waits_for_migration "$requested_version"; then
+      printf 'state=deferred\nversion=%s\n%s' "$requested_version" "$migration_marker" > "$status_path"
+    else
+      printf 'state=installed\nversion=%s\n%s' "$requested_version" "$migration_marker" > "$status_path"
+    fi
     rm -rf "$requested"
   else
     cat "$apply_log" >&2 || true

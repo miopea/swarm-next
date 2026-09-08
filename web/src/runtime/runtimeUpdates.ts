@@ -117,6 +117,14 @@ function providerUpdate(superseded: SupersededProvider[]): RuntimeUpdateSummary 
 }
 
 function appUpdate(development: DevelopmentRuntime | undefined): RuntimeUpdateSummary | undefined {
+  if (development?.state === "deferred") {
+    return {
+      kind: "worker_engine",
+      label: "Build waiting for engine maintenance",
+      detail: "The build is prepared, not installed. The current app and workers remain running; use the warned worker engine maintenance action when ready.",
+      busy: false,
+    };
+  }
   // A build that stopped making progress, and a development mode configured to
   // write somewhere that does not exist. Both used to read as "nothing is
   // happening", which is what left a build apparently running with nothing
