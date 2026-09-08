@@ -31,9 +31,10 @@ pub fn next_queen_review_focus(
     }
     let mut candidates = candidates.to_vec();
     candidates.sort_by_key(ToString::to_string);
-    let start = after
-        .and_then(|id| candidates.iter().position(|candidate| *candidate == id))
-        .map_or(0, |index| index + 1);
+    let start = after.map_or(0, |id| {
+        let cursor = id.to_string();
+        candidates.partition_point(|candidate| candidate.to_string() <= cursor)
+    });
     Ok(candidates
         .iter()
         .cycle()
@@ -86,6 +87,32 @@ mod focus_rotation_tests {
             }
         }
         assert_eq!(seen.len(), candidates.len());
+    }
+
+    #[test]
+    fn covered_batch_tail_leaving_candidates_does_not_restart_the_backlog() {
+        let mut candidates = (0..12).map(|_| TaskId::new()).collect::<Vec<_>>();
+        candidates.sort_by_key(ToString::to_string);
+        let original = candidates.clone();
+        let mut cursor = None;
+        let mut visited = Vec::new();
+        for _ in 0..4 {
+            let focus = next_queen_review_focus(&candidates, cursor).unwrap();
+            cursor = focus.last().copied();
+            visited.extend(focus);
+            // A checked operator deferral is no longer an uncovered candidate;
+            // recurring external checks earlier in the batch remain eligible.
+            candidates.retain(|id| Some(*id) != cursor);
+        }
+        assert_eq!(visited, original);
+        assert_eq!(
+            next_queen_review_focus(&candidates, cursor).unwrap(),
+            original[..2]
+                .iter()
+                .chain(original[3..4].iter())
+                .copied()
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

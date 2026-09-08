@@ -5,6 +5,20 @@ live acceptance remain in progress.
 
 ## Outcome
 
+### September 8: disappearing focus cursor and unchanged order
+
+A checked operator deferral may leave the focus candidate set. The persisted
+cursor remains an identity boundary: continue with the first greater candidate,
+wrapping only at the end, even if the cursor task itself is now absent. Resetting
+to the beginning on absence lets recurring external checks starve later work.
+This changes attention traversal only, never task authority or coverage.
+
+Reordering must update only tasks whose position actually changes. Unchanged
+positions retain their timestamps and review evidence; exact order replay emits
+no TasksChanged event or row write. Changed positions still invalidate their
+own complete task projection. This does not erase a real dependency or decision
+change, nor treat order changes as task execution progress.
+
 A Queen turn ending is not proof that her outstanding work was examined. A
 review may be settled only when its bounded obligations have current, durable
 dispositions, or the obligations have actually moved out of Queen ownership.

@@ -2182,15 +2182,19 @@ impl TaskStore {
         {
             return Err(TaskStoreError::InvalidTaskOrder);
         }
+        let mut changed = false;
         for (position, task_id) in supplied.iter().enumerate() {
             let position = i64::try_from(position)
                 .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?;
-            transaction.execute(
-                "UPDATE tasks SET position = ?2, updated_at = unixepoch() WHERE id = ?1",
+            changed |= transaction.execute(
+                "UPDATE tasks SET position = ?2, updated_at = unixepoch()
+                 WHERE id = ?1 AND position <> ?2",
                 params![task_id, position],
-            )?;
+            )? > 0;
         }
-        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        if changed {
+            insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        }
         transaction.commit()?;
         drop(connection);
         self.list_tasks()
@@ -6860,6 +6864,39 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![third.id, first.id, second.id]
         );
+    }
+
+    #[test]
+    fn task_reordering_preserves_unchanged_evidence_and_noop_writes() {
+        let store = TaskStore::in_memory().unwrap();
+        let first = store.create_task("First", "/workspace").unwrap();
+        let second = store.create_task("Second", "/workspace").unwrap();
+        let third = store.create_task("Third", "/workspace").unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute("UPDATE tasks SET updated_at=100", [])
+            .unwrap();
+        let before = store.get_task(first.id).unwrap();
+        let evidence = |id| {
+            queen_review::task_review_evidence(&store.connection().unwrap(), id)
+                .unwrap()
+                .evidence_revision
+        };
+        let first_revision = evidence(first.id);
+        let second_revision = evidence(second.id);
+        store
+            .reorder_open_tasks(&[first.id, third.id, second.id])
+            .unwrap();
+        assert_eq!(store.get_task(first.id).unwrap(), before);
+        assert_eq!(evidence(first.id), first_revision);
+        assert_ne!(evidence(second.id), second_revision);
+        let writes = store.connection().unwrap().total_changes();
+        store
+            .reorder_open_tasks(&[first.id, third.id, second.id])
+            .unwrap();
+        assert_eq!(store.connection().unwrap().total_changes(), writes);
+        assert_eq!(evidence(first.id), first_revision);
     }
 
     #[test]
