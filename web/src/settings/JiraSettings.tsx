@@ -385,7 +385,6 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
         </div>
       ) : null}
       {message ? <p className="settings-message" role="status">{message}</p> : null}
-      <small className="privacy-note">Owned tasks continue; new shared claims wait.</small>
       <small className="privacy-note">Jira remains the authority for issue identity, workflow status, and human assignee. Swarm keeps worker assignment, execution evidence, and terminal history local.</small>
     </section>
   );

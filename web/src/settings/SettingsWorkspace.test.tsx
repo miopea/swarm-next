@@ -153,7 +153,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(screen.queryByRole("region", { name: "Your Hive" })).toBeNull();
   expect(screen.getAllByText("Personal Hive").length).toBeGreaterThan(0);
   expect(await screen.findByText("Jira not connected", {}, { timeout: 5_000 })).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "Bring Jira into your Hive" }).closest("section")).toHaveTextContent("Owned tasks continue; new shared claims wait.");
+  expect(screen.getByRole("heading", { name: "Bring Jira into your Hive" }).closest("section")).toHaveTextContent("Jira remains the authority for issue identity");
 
   // What is running, and what an update would cost.
   rerender(<SettingsWorkspace {...props} section="settings-updates" onUpdateWorkerEngine={onUpdateWorkerEngine} />);
