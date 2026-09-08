@@ -8,6 +8,10 @@ const MAX_RECEIPT_BYTES: usize = 16 * 1024;
 const MAX_SUBMISSION_BYTES: usize = 128 * 1024;
 const DEADLINE: Duration = Duration::from_secs(20);
 
+#[cfg(test)]
+#[path = "support_paired_test.rs"]
+mod paired_tests;
+
 /// An HTTP receipt is still untrusted until the application fences its identities.
 pub enum SupportTransportResult {
     Receipt(SupportReceipt),
