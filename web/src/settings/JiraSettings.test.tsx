@@ -58,7 +58,7 @@ test("a connected project says when its mapping has fallen behind, and changes n
 
 test("network unavailability explains the claim hold without implying owned work stopped", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => ok([])));
-  render(<JiraSettings operatorToken="operator-token" readiness={{ configured: true, accepts_api_token: false, connection: "network_unavailable" }} unavailable={false} />);
+  render(<JiraSettings operatorToken="operator-token" readiness={{ configured: true, accepts_api_token: false, connection: "network_unavailable", account_name: null }} unavailable={false} />);
   expect(screen.getByText("Jira is temporarily unavailable")).toBeInTheDocument();
   expect(screen.getByText("Owned work stays available; new shared claims wait.")).toBeInTheDocument();
   await waitFor(() => expect(screen.queryByText("Checking connected Jira projects…")).not.toBeInTheDocument());
