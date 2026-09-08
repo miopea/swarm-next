@@ -171,6 +171,11 @@ test("reports a provider update, which is installed and running nowhere", () => 
   expect(summary.label).toBe("Provider update");
   expect(summary.detail).toContain("Claude 2.1.237 is installed");
   expect(summary.detail).toContain("3 running workers started before that");
+  expect(summary.consequence).toContain("3 running workers are restarted");
+  expect(summary.consequence).toContain("attempts to resume their saved conversations");
+  expect(summary.consequence).toContain("Running work is interrupted");
+  expect(summary.consequence).toContain("unsent terminal input may be lost");
+  expect(summary.consequence).not.toContain("loses its current conversation");
 });
 
 test("ranks a worker engine update above a provider one", () => {

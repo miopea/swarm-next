@@ -112,7 +112,7 @@ function providerUpdate(superseded: SupersededProvider[]): RuntimeUpdateSummary 
     busy: false,
     action: "restart_providers",
     actionLabel: "Restart onto the new release",
-    consequence: `${workers} running worker${workers === 1 ? "" : "s"} ${workers === 1 ? "is" : "are"} restarted. Each loses its current conversation and starts again on the newer release.`,
+    consequence: `${workers} running worker${workers === 1 ? "" : "s"} ${workers === 1 ? "is" : "are"} restarted. Swarm attempts to resume their saved conversations on the newer release. Running work is interrupted; unsent terminal input may be lost.`,
   };
 }
 
