@@ -113,6 +113,7 @@ impl TaskService {
         let judgments = self.store.queen_review_queue_snapshot()?;
         let tasks = self.store.list_board_tasks()?;
         let covered = covered_review_tasks(&tasks, &judgments);
+        let investigated = unchanged_investigations(&tasks, &judgments);
         let mut snapshot = QueenQueueSnapshot {
             open_tasks: 0,
             by_state: [
@@ -158,7 +159,12 @@ impl TaskService {
             }
             if task.next_move_owner == NextMoveOwner::Queen {
                 snapshot.queen_tasks.push(task);
-                order_review_tasks(&mut snapshot.queen_tasks, &checked_at, &covered);
+                order_review_tasks(
+                    &mut snapshot.queen_tasks,
+                    &checked_at,
+                    &covered,
+                    &investigated,
+                );
                 if snapshot.queen_tasks.len() > 64 {
                     snapshot.queen_tasks.pop();
                     snapshot.queen_tasks_truncated = true;
@@ -202,14 +208,36 @@ fn covered_review_tasks(
         .collect()
 }
 
+fn unchanged_investigations(
+    tasks: &[Task],
+    judgments: &swarm_domain::QueenReviewQueueSnapshot,
+) -> std::collections::HashSet<swarm_domain::TaskId> {
+    judgments
+        .items
+        .iter()
+        .filter_map(|item| {
+            let previous = item.previous_assessment.as_ref()?;
+            let current = tasks.iter().find(|task| task.id == item.task.id)?;
+            (*current == item.task
+                && previous.status
+                    == swarm_domain::QueenReviewAssessmentStatus::InsufficientEvidence
+                && previous.assessment.kind
+                    == swarm_domain::QueenReviewDispositionKind::InsufficientEvidence)
+                .then_some(current.id)
+        })
+        .collect()
+}
+
 fn order_review_tasks(
     tasks: &mut [Task],
     checked_at: &std::collections::HashMap<swarm_domain::TaskId, i64>,
     covered: &std::collections::HashSet<swarm_domain::TaskId>,
+    investigated: &std::collections::HashSet<swarm_domain::TaskId>,
 ) {
     tasks.sort_by_key(|task| {
         (
             covered.contains(&task.id),
+            investigated.contains(&task.id),
             checked_at.get(&task.id).copied(),
             task.created_at,
             task.id.to_string(),
@@ -274,7 +302,12 @@ mod tests {
                 covered_review_tasks(&tasks, &judgments(&held, status, Kind::OperatorDeferral));
             // Repeating the selection cannot put the unchanged covered item back first.
             for _ in 0..3 {
-                order_review_tasks(&mut tasks, &checks, &covered);
+                order_review_tasks(
+                    &mut tasks,
+                    &checks,
+                    &covered,
+                    &std::collections::HashSet::new(),
+                );
                 assert_eq!(tasks[0].id, unresolved.id);
                 assert_eq!(tasks.len(), 2);
                 assert_eq!(
@@ -331,13 +364,58 @@ mod tests {
             .unwrap();
         let checks = [(older.id, 100), (recent.id, 200)].into_iter().collect();
         let mut tasks = vec![recent.clone(), older.clone(), unchecked.clone()];
-        order_review_tasks(&mut tasks, &checks, &std::collections::HashSet::new());
+        order_review_tasks(
+            &mut tasks,
+            &checks,
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        );
         assert_eq!(
             tasks.iter().map(|task| task.id).collect::<Vec<_>>(),
             vec![unchecked.id, older.id, recent.id]
         );
         assert!(tasks.iter().all(|task| task.state == TaskState::Draft));
         assert_eq!(store.get_task(recent.id).unwrap().position, recent.position);
+    }
+
+    #[test]
+    fn unchanged_missing_evidence_does_not_monopolize_focus_or_become_coverage() {
+        use swarm_domain::{
+            QueenReviewAssessmentStatus as Status, QueenReviewDispositionKind as Kind,
+        };
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let missing = store
+            .create_task("Already investigated", "/workspace/demo")
+            .unwrap();
+        let other = store
+            .create_task("External condition needs checking", "/workspace/demo")
+            .unwrap();
+        let checks = [(missing.id, 1), (other.id, 2)].into_iter().collect();
+        let evidence = judgments(
+            &missing,
+            Status::InsufficientEvidence,
+            Kind::InsufficientEvidence,
+        );
+        let mut tasks = vec![missing.clone(), other.clone()];
+        let investigated = unchanged_investigations(&tasks, &evidence);
+        let covered = covered_review_tasks(&tasks, &evidence);
+        assert!(covered.is_empty());
+        order_review_tasks(&mut tasks, &checks, &covered, &investigated);
+        assert_eq!(
+            tasks.iter().map(|task| task.id).collect::<Vec<_>>(),
+            vec![other.id, missing.id]
+        );
+        // Missing or changed evidence immediately removes the lower priority.
+        let changed = judgments(
+            &missing,
+            Status::EvidenceChanged,
+            Kind::InsufficientEvidence,
+        );
+        assert!(unchanged_investigations(&tasks, &changed).is_empty());
+        let mut edited = missing.clone();
+        edited.description = "New facts in the same second".into();
+        assert!(unchanged_investigations(&[edited], &evidence).is_empty());
+        assert_eq!(store.get_task(missing.id).unwrap(), missing);
     }
 
     #[test]

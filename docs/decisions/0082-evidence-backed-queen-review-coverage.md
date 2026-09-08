@@ -384,3 +384,17 @@ insufficient evidence, changed evidence and missing snapshot entries remain
 eligible. Fence separate task reads by the complete projection, not timestamp.
 The final coverage check remains authoritative and unchanged; focus selection
 grants no execution permission, clears no blocker and does not certify recovery.
+
+### Unchanged investigations do not precede fresh checks (September 8)
+
+Live run `01a0808e-b347-77d1-81b0-b7879ad0df1b` reused unchanged
+insufficient-evidence investigations for all three focus items and finished
+incomplete. Their old assessment timestamps again occupied the small focus.
+Within uncovered work, prioritize tasks needing a fresh assessment before an
+unchanged insufficient-evidence receipt. Compare complete task projections and
+the persistence-validated evidence status; changed or missing evidence removes
+this lower priority. Keep both sets in the full backlog and eligible focus list.
+Do not refresh receipt timestamps, manufacture coverage, clear blockers or alter
+execution priority. This is attention ordering, not permission to abandon the
+missing fact. Six focused application tests passed on the isolated Linux tree;
+live backlog progression remains an acceptance gate.
