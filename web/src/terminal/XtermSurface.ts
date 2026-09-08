@@ -94,6 +94,8 @@ export class XtermSurface implements TerminalSurface {
   #touchDistanceY = 0;
   #touchRemainderY = 0;
   #restorePending = false;
+  #restoreCompletion: Promise<void> | undefined;
+  #fitAfterRestore = false;
   #geometryPublicationQueued = false;
   #geometryPublicationForced = false;
   #disposed = false;
@@ -368,7 +370,6 @@ export class XtermSurface implements TerminalSurface {
   }
 
   async #performMeasuredFit(onMilestone: ((phase: FitMilestone) => void) | undefined, initial: boolean): Promise<{ rows: number; columns: number }> {
-    try {
       if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
       this.#cancelScheduledFit();
       onMilestone?.("fit_started");
@@ -393,6 +394,12 @@ export class XtermSurface implements TerminalSurface {
       let stableFrames = 0;
       for (let frame = 0; frame < MAX_FIT_FRAMES; frame += 1) {
         await nextAnimationFrame(this.#fitLifetime.signal);
+        // Canonical bytes retain their grid until the parser callback completes.
+        if (this.#restoreCompletion) {
+          await untilDisposed(this.#restoreCompletion, this.#fitLifetime.signal);
+          previous = undefined;
+          stableFrames = 0;
+        }
         if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
         onMilestone?.("fit_frame");
         const dimensions = this.#fit.proposeDimensions();
@@ -441,9 +448,6 @@ export class XtermSurface implements TerminalSurface {
         return usable;
       }
       throw new Error("Terminal renderer metrics were not ready within the bounded fit window");
-    } finally {
-      this.#finishRestore();
-    }
   }
 
   write(bytes: Uint8Array): Promise<void> {
@@ -480,7 +484,13 @@ export class XtermSurface implements TerminalSurface {
     // viewers of one PTY stop arguing over its size. That left the cover up
     // until the page was reloaded. What it hides is the blank between reset
     // and rewrite, and after this write there is no blank left to hide.
-    return this.write(snapshot.bytes).finally(() => this.#finishRestore());
+    const completion = this.write(snapshot.bytes).finally(() => {
+      if (this.#restoreCompletion !== completion) return;
+      this.#restoreCompletion = undefined;
+      this.#finishRestore();
+    });
+    this.#restoreCompletion = completion;
+    return completion;
   }
 
   onData(listener: (text: string) => void): Disposable {
@@ -695,6 +705,10 @@ export class XtermSurface implements TerminalSurface {
   #finishRestore(): void {
     if (!this.#restorePending) return;
     this.#restorePending = false;
+    if (this.#fitAfterRestore) {
+      this.#fitAfterRestore = false;
+      if (!this.#disposed) this.#scheduleFit();
+    }
     if (this.#element) {
       delete this.#element.dataset.terminalRestoring;
       this.#element.removeAttribute("aria-busy");
@@ -726,6 +740,10 @@ export class XtermSurface implements TerminalSurface {
 
   #fitIfUsable(): void {
     if (this.#disposed || !this.#element?.isConnected) return;
+    if (this.#restorePending) {
+      this.#fitAfterRestore = true;
+      return;
+    }
     if (this.#geometrySuspended()) {
       this.#scheduleRedraw();
       return;

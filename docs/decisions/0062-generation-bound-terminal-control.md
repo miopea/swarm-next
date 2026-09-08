@@ -120,6 +120,18 @@ the verified pre-update database backup.
 
 ### September 8 canonical-resize feedback correction
 
+The snapshot parser also owns its local grid until its write callback completes.
+An observer fit during parsing records one deferred fit; an asynchronous measured
+fit waits for the same completion before sampling again. Only snapshot completion
+removes the restoring cover. Disposal cancels waits and schedules no deferred fit.
+This is a browser rendering fence, not new ownership or delay-based readiness.
+
+A delayed-parser regression failed before correction: the observer applied 120x40
+while canonical 80x24 bytes were still pending. It now waits for completion, then
+fits the current viewport. A second test covers the asynchronous fit path. All 52
+surface tests pass. Live desktop reload-jumping acceptance remains open: these
+tests prove a race, not that every reported jump has this cause.
+
 Restoring a server snapshot changes xterm's grid but is not a new viewport
 measurement. The controller must not forward restore-origin resize notifications
 to the connection: doing so overwrites its measured target and can send an older

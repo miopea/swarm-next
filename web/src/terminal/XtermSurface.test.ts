@@ -23,6 +23,7 @@ const xterm = vi.hoisted(() => ({
   gpuConstruct: vi.fn(),
   gpuLoss: undefined as (() => void) | undefined,
   terminalDispose: vi.fn(),
+  deferWrite: undefined as ((complete: () => void) => void) | undefined,
 }));
 
 vi.mock("@xterm/addon-fit", () => ({
@@ -109,7 +110,8 @@ vi.mock("@xterm/xterm", () => ({
     scrollLines(lines: number): void { xterm.scrollLines(lines); }
     scrollToBottom(): void { xterm.scrollToBottom(); }
     write(_bytes: Uint8Array, callback: () => void): void {
-      callback();
+      if (xterm.deferWrite) xterm.deferWrite(callback);
+      else callback();
     }
     onData(): { dispose(): void } {
       return { dispose: vi.fn() };
@@ -130,6 +132,7 @@ import { XtermSurface } from "./XtermSurface";
 import { terminalFitEvidence } from "./TerminalFitEvidence";
 
 afterEach(() => {
+  xterm.deferWrite = undefined;
   xterm.gpuMode = "unavailable";
   xterm.gpuLoss = undefined;
   xterm.gpuDispose.mockClear();
@@ -137,6 +140,62 @@ afterEach(() => {
   xterm.terminalDispose.mockClear();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+test("observer sizing waits until canonical bytes finish parsing", async () => {
+  vi.useFakeTimers();
+  let observe = () => {};
+  vi.stubGlobal("ResizeObserver", class {
+    constructor(callback: () => void) { observe = callback; }
+    observe() {} disconnect() {}
+  });
+  const element = document.createElement("div");
+  document.body.append(element);
+  const surface = new XtermSurface();
+  surface.open(element);
+  xterm.propose.mockReturnValue({ rows: 40, cols: 120 });
+  let complete!: () => void;
+  xterm.deferWrite = callback => { complete = callback; };
+  const restore = surface.restore({ rows: 24, columns: 80, sequence: 1,
+    truncated: false, reason: "attached", bytes: new Uint8Array([65]) });
+  xterm.resize.mockClear();
+  try {
+    observe();
+    await vi.advanceTimersByTimeAsync(120);
+    expect(xterm.resize).not.toHaveBeenCalled();
+    expect(element.getAttribute("aria-busy")).toBe("true");
+    complete();
+    await restore;
+    await vi.advanceTimersByTimeAsync(120);
+    expect(xterm.resize).toHaveBeenCalledWith(120, 40);
+    expect(element.hasAttribute("aria-busy")).toBe(false);
+  } finally { complete(); await restore; surface.dispose(); element.remove(); }
+});
+
+test("an asynchronous fit cannot resize or uncover a snapshot still parsing", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const element = document.createElement("div");
+  document.body.append(element);
+  const surface = new XtermSurface();
+  surface.open(element);
+  xterm.propose.mockReturnValue({ rows: 40, cols: 120 });
+  let complete!: () => void;
+  xterm.deferWrite = callback => { complete = callback; };
+  const restore = surface.restore({ rows: 24, columns: 80, sequence: 1,
+    truncated: false, reason: "attached", bytes: new Uint8Array([65]) });
+  xterm.resize.mockClear();
+  const fit = surface.fit();
+  try {
+    await vi.advanceTimersByTimeAsync(100);
+    expect(xterm.resize).not.toHaveBeenCalled();
+    expect(element.getAttribute("aria-busy")).toBe("true");
+    complete();
+    await restore;
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(fit).resolves.toEqual({ rows: 40, columns: 120 });
+    expect(xterm.resize).toHaveBeenCalledWith(120, 40);
+  } finally { complete(); await restore; surface.dispose(); element.remove(); }
 });
 
 test.each([24, 30])("restoring %i rows cannot mislabel the next viewport resize", async rows => {
