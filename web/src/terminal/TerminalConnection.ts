@@ -334,7 +334,9 @@ export class TerminalConnection {
         this.#fail("Update the Swarm App/API to enable safe terminal control. This client will not use legacy input.");
         return;
       }
-      recordTerminalGrantRequest(new URL(grantPath, this.#locationOrigin).href, grantStartedAt, performance.now());
+      if (this.#attachPhase?.name === "terminal_grant" && this.#rendering && document.visibilityState === "visible") {
+        recordTerminalGrantRequest(new URL(grantPath, this.#locationOrigin).href, grantStartedAt, performance.now());
+      }
       this.#finishAttachPhase();
       const websocketUrl = new URL(grant.websocket_path, this.#locationOrigin);
       websocketUrl.protocol = websocketUrl.protocol === "https:" ? "wss:" : "ws:";

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { BROWSER_SESSION_AUTH } from "../api";
 import { readClientFailures } from "../feedback/clientDiagnostics";
 import { browserPerformance } from "../runtime/browserPerformance";
+import { terminalGrantEvidence } from "./TerminalGrantEvidence";
 import { TerminalConnection, attachGrantFailure, type TerminalConnectionHandlers } from "./TerminalConnection";
 
 const ownedControl = { supported: true, generation: "1", owned: true, occupied: true, lease_remaining_ms: 90_000 };
@@ -480,6 +481,7 @@ test("terminal timing records duration without session identity or content", asy
 });
 
 test("attach phases separate access, socket and applied initial state", async () => {
+  const grantEvidence = vi.spyOn(terminalGrantEvidence, "record");
   const record = vi.spyOn(browserPerformance, "record");
   const clock = vi.spyOn(performance, "now").mockReturnValue(100);
   const { connection, fetch, handlers, sockets } = harness();
@@ -504,6 +506,23 @@ test("attach phases separate access, socket and applied initial state", async ()
   expect(record).toHaveBeenCalledWith("terminal_grant", 50);
   expect(record).toHaveBeenCalledWith("terminal_socket", 80);
   expect(record).toHaveBeenCalledWith("terminal_reconnect", 250);
+  expect(grantEvidence).toHaveBeenCalledWith(100, 150, expect.any(Array));
+  connection.dispose();
+});
+
+test("a grant completed after backgrounding is not a visible request timing sample", async () => {
+  const evidence = vi.spyOn(terminalGrantEvidence, "record");
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  const { connection, fetch, handlers, sockets } = harness();
+  let grant!: (response: unknown) => void;
+  const response = await fetch();
+  fetch.mockReturnValueOnce(new Promise(resolve => { grant = resolve; }));
+  connection.start(handlers);
+  visibility.mockReturnValue("hidden");
+  document.dispatchEvent(new Event("visibilitychange"));
+  grant(response);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  expect(evidence).not.toHaveBeenCalled();
   connection.dispose();
 });
 
