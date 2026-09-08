@@ -57,6 +57,14 @@ the rendering addon, never the terminal, socket, canonical geometry, or worker.
 
 ## Consequences
 
+Terminal selection is a per-tab presentation preference retained across reload in
+session storage. Browser-wide storage seeds new tabs and preserves the existing
+fresh-launch convenience, but cannot override an established tab's selection.
+Both stores remain optional and bounded to identifiers; authoritative worker and
+session reconciliation still decides whether a terminal exists. Restoring a view
+does not wake workers or grant input/control authority. The existing pre-v2
+preference migration retains its frontend owner and removal condition.
+
 - React can be upgraded or replaced without changing backend domain modules,
   terminal protocols, or persistence.
 - React remounts, route changes, and Strict Mode cannot restart sessions.

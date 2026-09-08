@@ -30,22 +30,36 @@ function reconcile(selection: TerminalSelection, workers: Worker[], sessions: Se
 }
 
 export function restoreTerminalSelection(workers: Worker[], sessions: SessionSummary[]): TerminalSelection {
-  let selection: TerminalSelection = {};
-  try {
-    const raw = window.localStorage.getItem(KEY);
-    const parsed = raw && raw.length < 1024 ? JSON.parse(raw) : undefined;
-    if (parsed && typeof parsed === "object") {
-      selection = { workerId: boundedId(parsed.workerId), sessionId: boundedId(parsed.sessionId) };
-    } else {
+  // A tab restores its own view. Shared storage only seeds a new tab; another
+  // window choosing a worker must not redirect this one's next reload.
+  let selection = readSelection(() => window.sessionStorage)
+    ?? readSelection(() => window.localStorage);
+  if (!selection) {
+    try {
       // UI selection owns migration from the previous supported frontend.
       // Remove this read when pre-v2 selection clients are no longer supported.
       selection = { sessionId: boundedId(window.localStorage.getItem(LEGACY_KEY)) };
+    } catch { /* Storage is optional, never a session authority. */ }
+  }
+  const restored = reconcileTerminalSelection(selection ?? {}, workers, sessions);
+  try { window.sessionStorage.setItem(KEY, JSON.stringify(restored)); } catch { /* Optional. */ }
+  return restored;
+}
+
+function readSelection(storage: () => Storage): TerminalSelection | undefined {
+  try {
+    const raw = storage().getItem(KEY);
+    const parsed = raw && raw.length < 1024 ? JSON.parse(raw) : undefined;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const selection = { workerId: boundedId(parsed.workerId), sessionId: boundedId(parsed.sessionId) };
+      if (selection.workerId || selection.sessionId) return selection;
     }
   } catch { /* Storage is an optional convenience, never a session authority. */ }
-  return reconcileTerminalSelection(selection, workers, sessions);
+  return undefined;
 }
 
 export function saveTerminalSelection(selection: TerminalSelection): void {
+  try { window.sessionStorage.setItem(KEY, JSON.stringify(selection)); } catch { /* Optional. */ }
   try { window.localStorage.setItem(KEY, JSON.stringify(selection)); } catch { /* Optional. */ }
 }
 
