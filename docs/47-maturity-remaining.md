@@ -1,5 +1,45 @@
 # Daily-driver maturity: remaining delivery and acceptance
 
+## Current checkpoint — September 8, after Admin intake acceptance
+
+This checkpoint supersedes historical statements below that support intake is
+inactive or the separate Edge test browser is locked. It does not close the
+full requirement-by-requirement acceptance in the approved program.
+
+- **Admin intake verified:** the real dev Hive reviewed, saved and delivered a
+  fictional report, retained its receipt across browser reload, and Admin
+  independently verified exactly one conversation with exact identity/content.
+  See `86-support-ui-acceptance.md`. Native attachments and the linked
+  task-completion-to-approved-reply journey are not covered by that success.
+- **Queen orchestration remains open:** live checks still show 24 Queen-owned
+  review items and a worker recovery obligation. Rotating focus now has a fix
+  for a covered task disappearing at the cursor; task-order replay no longer
+  invalidates unchanged task evidence. Five domain focus tests, four durable
+  reservation tests, two ordering regressions and strict domain/persistence
+  Clippy pass. Main `940d3c8e` is deployed and healthy as
+  `1.6.0-dev-940d3c8ed1f0-20260908230927-1746491`; API PID 1748360,
+  engine PID 1547164 unchanged.
+  Only subsequent live traversal and productive recovery can close this gate.
+- **Performance remains open:** quantitative long-lived browser CPU/heap/input
+  latency and equivalent-load server/engine measurements, with aged terminal
+  restore tails, are still required. Short healthy samples are not soak proof.
+  A 600-second read-only sampler is running under PID 1749352, log
+  `/tmp/swarm-live-soak-940d3c8e.log`, with 30-second samples in the Hive's
+  private `soak` directory. Results are pending; no acceptance is inferred.
+- **Terminal/provider recovery remains open:** desktop reload jumping, mobile
+  handoff, attachment paths and exact conversation/continue recovery need their
+  remaining live/device gates. Android AskUser multi-question readability was
+  operator-verified; that is not blanket iOS or keyboard/picker acceptance.
+- **Operational and UX finish remains open:** safe rolling engine updates,
+  actual Jira recovery, visual/accessibility consistency and sustained normal
+  workday/overnight acceptance. No further engine restart is implied by an
+  App/API deployment; no new release is authorized.
+
+Recent main checkpoints: `52623ab2` deployed Admin client; `66899ece` recorded
+live intake; `daaba1ff` fixed cursor/order churn; `940d3c8e` records Admin-side
+acceptance. Existing schema 153 adds only private Hive outbox storage; BFG Admin
+owns central conversations and approved customer email.
+
 ## September 7: assessment deployment and linked-tab reload follow-up
 
 Root `2b998a01`, main `48019d47`, is deployed and healthy as
