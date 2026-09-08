@@ -178,12 +178,10 @@ impl TaskStore {
         let task_id = task_id
             .parse()
             .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?;
-        let task = self.get_task(task_id)?;
-        // A later operator move must not grant access to another workspace.
-        if task.workspace != workspace {
-            return Err(TaskStoreError::NotFound);
-        }
-        Ok(task)
+        // Authority belongs to the immutable source ticket above, not the
+        // task's mutable execution workspace. Routing changes no source scope.
+        // get_task still refuses removed work; no other task becomes readable.
+        self.get_task(task_id)
     }
 }
 
@@ -329,6 +327,53 @@ mod tests {
         ));
         let mut remapped = scope();
         remapped.bindings[0].workspace = "/work/two".into();
+        assert!(matches!(
+            store.ops_ticket_task(&remapped, "app-one", "request-one"),
+            Err(TaskStoreError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn original_ticket_progress_survives_routing_without_expanding_scope() {
+        let store = TaskStore::in_memory().unwrap();
+        let ticket = store
+            .submit_ops_ticket(&scope().authorize(input()).unwrap())
+            .unwrap();
+        let worker = store
+            .create_worker(
+                "Fixture",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/work/other",
+                false,
+                1,
+            )
+            .unwrap();
+        store
+            .assign_task_to_worker(ticket.task_id, worker.id)
+            .unwrap();
+        let before = count(&store, "task_activity");
+        let task = store
+            .ops_ticket_task(&scope(), "app-one", "request-one")
+            .unwrap();
+        assert_eq!(task.id, ticket.task_id);
+        assert_eq!(task.workspace, "/work/other");
+        assert_eq!(
+            count(&store, "task_activity"),
+            before,
+            "progress is read-only"
+        );
+        let mut other = scope();
+        other.integration_id = "other".into();
+        assert!(matches!(
+            store.ops_ticket_task(&other, "app-one", "request-one"),
+            Err(TaskStoreError::NotFound)
+        ));
+        assert!(matches!(
+            store.ops_ticket_task(&scope(), "app-one", "unknown"),
+            Err(TaskStoreError::NotFound)
+        ));
+        let mut remapped = scope();
+        remapped.bindings[0].workspace = "/work/other".into();
         assert!(matches!(
             store.ops_ticket_task(&remapped, "app-one", "request-one"),
             Err(TaskStoreError::NotFound)

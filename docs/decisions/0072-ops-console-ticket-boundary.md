@@ -41,7 +41,12 @@ Authorized commands expose only immutable accessors after domain validation.
 An IMMEDIATE transaction serializes external-key lookup and creation across
 independent database connections. Removed tasks retain their source keys; replay
 returns the original receipt and never silently recreates removed work. Read
-access refuses tasks moved outside the current approved workspace mapping.
+access requires the original ticket workspace to match the current source mapping.
+Under the operator's September 8 approval, legitimate worker reassignment does
+not revoke bounded progress access to that same immutable linked task. The
+current credential, integration/app/request key and original workspace mapping
+remain mandatory; no other task or workspace access is granted. Removed tasks
+still refuse reads. The integration cannot assign or otherwise mutate the task.
 
 Progress uses Swarm's task state, durable activity and deployment records. Closed
 is not shipped; recorded deployment, evidence-based closure and unverifiable
