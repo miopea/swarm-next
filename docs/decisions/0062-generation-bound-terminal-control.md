@@ -118,6 +118,27 @@ the verified pre-update database backup.
 
 ## Verification
 
+### September 8 canonical-resize feedback correction
+
+Restoring a server snapshot changes xterm's grid but is not a new viewport
+measurement. The controller must not forward restore-origin resize notifications
+to the connection: doing so overwrites its measured target and can send an older
+size back while a newer resize is in flight. Initial measured attachment sizing,
+real viewport changes and owned post-snapshot refits retain their existing paths.
+
+The surface separately scopes the synchronous resize cause and the coalesced
+queued publication cause. A same-size restore emits no xterm resize event, so its
+restore marker must be cleared even then; otherwise the next genuine viewport
+event is mislabeled. Queued events retain the cause of their latest actual size
+change. No generation, ownership, stable-frame or oscillation guard is relaxed.
+
+Both regressions failed before correction: old canonical sizes were reissued as
+resize requests, and a same-size restore mislabeled the next viewport resize.
+All 147 focused terminal tests and TypeScript checking pass after correction.
+This addresses a demonstrated feedback path; the operator's desktop reload
+jumping still requires live verification and must not be declared fixed from
+unit tests alone. This is a post-1.6.0 change, not a modification of its frozen tag.
+
 Post-snapshot sizing is one controller-owned, coalesced asynchronous follow-up.
 Once canonical bytes have applied, queued output and the connection's applied
 cursor do not wait for font/layout frames a second time. The existing stable-fit

@@ -418,8 +418,11 @@ export class TerminalController {
     });
     this.#surfaceSubscriptions.push(
       this.#surface.onResize(({ rows: nextRows, columns: nextColumns, origin }) => {
-        if (this.#geometrySuspended) return;
-        this.#connection.resize(nextRows, nextColumns, origin === "restore" ? "echo" : "operator");
+        // Canonical geometry came from the engine, not this viewport. Echoing
+        // it would replace the measured target and can send an older size back
+        // while a newer viewport resize is in flight.
+        if (this.#geometrySuspended || origin === "restore") return;
+        this.#connection.resize(nextRows, nextColumns, "operator");
       }),
     );
     this.#started = true;

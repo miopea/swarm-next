@@ -139,6 +139,28 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+test.each([24, 30])("restoring %i rows cannot mislabel the next viewport resize", async rows => {
+  const surface = new XtermSurface();
+  const listener = vi.fn();
+  surface.onResize(listener);
+  xterm.resize.mockImplementation((columns: number, nextRows: number) => {
+    if (xterm.terminal?.cols !== columns || xterm.terminal?.rows !== nextRows) {
+      xterm.resizeListener?.({ rows: nextRows, cols: columns });
+    }
+  });
+  try {
+    await surface.restore({ rows, columns: 80, sequence: 1, truncated: false,
+      reason: "attached", bytes: new Uint8Array() });
+    if (rows !== 24) expect(listener).toHaveBeenLastCalledWith({ rows, columns: 80, origin: "restore" });
+    listener.mockClear();
+    xterm.terminal!.rows = 40;
+    xterm.terminal!.cols = 140;
+    xterm.resizeListener?.({ rows: 40, cols: 140 });
+    await Promise.resolve();
+    expect(listener).toHaveBeenCalledExactlyOnceWith({ rows: 40, columns: 140, origin: "viewport" });
+  } finally { surface.dispose(); xterm.resize.mockReset(); }
+});
+
 test("failed GPU activation disposes the allocated addon and leaves the terminal usable", async () => {
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   xterm.gpuMode = "activation-fails";

@@ -562,6 +562,33 @@ test("a matching canonical snapshot finishes without another asynchronous fit", 
   controller.dispose();
 });
 
+test("restoring canonical geometry never republishes an old size as a viewport request", async () => {
+  const surface = fakeSurface();
+  const connection = fakeConnection();
+  const controller = new TerminalController(() => surface, () => connection);
+  controller.attach(document.createElement("div"));
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledOnce());
+  const onResize = vi.mocked(surface.onResize).mock.calls[0][0];
+  const handlers = vi.mocked(connection.start).mock.calls[0][0];
+  vi.mocked(surface.restore).mockImplementation(async snapshot => {
+    onResize({ rows: snapshot.rows, columns: snapshot.columns, origin: "restore" });
+  });
+  // Sizing may be delayed; canonical output still applies in the meantime.
+  vi.mocked(surface.fit).mockImplementation(() => new Promise(() => {}));
+  vi.mocked(connection.resize).mockClear();
+  try {
+    onResize({ rows: 38, columns: 132, origin: "viewport" });
+    await handlers.onSnapshot({ sequence: 1, rows: 24, columns: 80,
+      truncated: false, reason: "attached", bytes: new Uint8Array() });
+    await handlers.onSnapshot({ sequence: 2, rows: 30, columns: 100,
+      truncated: false, reason: "attached", bytes: new Uint8Array() });
+    expect(surface.restore).toHaveBeenCalledTimes(2);
+    expect(connection.resize).toHaveBeenCalledExactlyOnceWith(38, 132, "operator");
+    onResize({ rows: 40, columns: 140, origin: "viewport" });
+    expect(connection.resize).toHaveBeenLastCalledWith(40, 140, "operator");
+  } finally { controller.dispose(); }
+});
+
 test("canonical snapshots reset the renderer through its controller", async () => {
   const surface = fakeSurface();
   vi.mocked(surface.fit)

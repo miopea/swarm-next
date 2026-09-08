@@ -56,6 +56,7 @@ export class XtermSurface implements TerminalSurface {
    * take authority over the PTY.
    */
   #geometryPublicationOrigin: "viewport" | "restore" = "viewport";
+  #queuedGeometryOrigin: "viewport" | "restore" = "viewport";
   /**
    * The size this surface last published purely to repair the host.
    *
@@ -466,7 +467,13 @@ export class XtermSurface implements TerminalSurface {
     // Everything this resize publishes is an echo of a size decided elsewhere.
     this.#geometryPublicationOrigin = "restore";
     this.#lastRepairPublished = undefined;
-    this.#terminal.resize(snapshot.columns, snapshot.rows);
+    try {
+      this.#terminal.resize(snapshot.columns, snapshot.rows);
+    } finally {
+      // A same-size restore may emit no resize event. Its origin must not leak
+      // into the next real viewport event; queued events retain their own cause.
+      this.#geometryPublicationOrigin = "viewport";
+    }
     // The cover comes down when the bytes are on screen, not when someone
     // later re-fits. It used to be removed only by `fit`, and the controller
     // deliberately skips that re-fit when the window is unfocused — so two
@@ -858,6 +865,7 @@ export class XtermSurface implements TerminalSurface {
 
   #queueGeometryPublication(force = false): void {
     if (this.#disposed) return;
+    this.#queuedGeometryOrigin = this.#geometryPublicationOrigin;
     this.#geometryPublicationForced ||= force;
     if (this.#geometryPublicationQueued) return;
     this.#geometryPublicationQueued = true;
@@ -866,7 +874,7 @@ export class XtermSurface implements TerminalSurface {
       if (this.#disposed) return;
       const size = { rows: this.#terminal.rows, columns: this.#terminal.cols };
       const forced = this.#geometryPublicationForced;
-      const origin = this.#geometryPublicationOrigin;
+      const origin = this.#queuedGeometryOrigin;
       this.#geometryPublicationForced = false;
       this.#geometryPublicationOrigin = "viewport";
       for (const [listener, previous] of this.#resizeListeners) {
