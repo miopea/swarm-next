@@ -74,3 +74,12 @@ Missing, malformed, duplicate or implausible durations remain unknown. This can
 be compared with the same request's resource timing without assuming a difference
 is exclusively network latency: API scheduling before handler entry is excluded.
 Old servers and proxies that omit the header continue to work normally.
+
+The same success-only header also separates three non-overlapping numeric stages:
+authentication/request setup, engine capability negotiation, and session validation.
+These are elapsed wall durations, including scheduling and IPC waits, not CPU or
+proof of a specific engine lock. Grant issuance/encoding remains in the total only.
+Each stage uses the existing allowlisted, bounded parser and 200-sample/hour owner;
+no raw header or new timer is retained. Missing stages from an older server remain
+unknown and never prevent attachment. This distinction is needed because a fresh
+demo reload still measured roughly695ms in the handler but25ms applying its snapshot.

@@ -9,7 +9,8 @@ test("pairs network response with client completion without retaining identity",
   evidence.record(100, 900, [{ ...resource, name: "private-session-url" } as typeof resource]);
   expect(evidence.snapshot()).toEqual({ samples: 1, matched_resource_samples: 1, slowest: {
     at: 1000, fetch_elapsed_ms: 800, resource_ms: 90, request_to_first_byte_ms: 60,
-    body_transfer_ms: 20, response_to_client_ms: 700, server_handler_ms: null } });
+    body_transfer_ms: 20, response_to_client_ms: 700, server_handler_ms: null,
+    server_auth_ms: null, server_capability_ms: null, server_validation_ms: null } });
   expect(JSON.stringify(evidence.snapshot())).not.toMatch(/private|url|session/);
   evidence.snapshot().slowest!.resource_ms = 0;
   expect(evidence.snapshot().slowest!.resource_ms).toBe(90);
@@ -53,4 +54,18 @@ test("server timing accepts only one bounded matching duration", () => {
   evidence.record(100, 900, [resource], "edge;desc=private,swarm_grant;dur=12.500");
   expect(evidence.snapshot().slowest!.server_handler_ms).toBe(12.5);
   expect(JSON.stringify(evidence.snapshot())).not.toContain("private");
+});
+
+test("allowlisted grant stages preserve old-server unknowns and reject duplicate or malformed stages", () => {
+  const evidence = new TerminalGrantEvidence(() => 1000);
+  evidence.record(100, 900, [resource], "swarm_grant;dur=500,swarm_grant_auth;dur=2,swarm_grant_capability;dur=150,swarm_grant_validation;dur=340,foreign;desc=private");
+  expect(evidence.snapshot().slowest).toMatchObject({server_handler_ms: 500, server_auth_ms: 2,
+    server_capability_ms: 150, server_validation_ms: 340});
+  expect(JSON.stringify(evidence.snapshot())).not.toContain("private");
+  for (const stage of ["swarm_grant_auth;dur=1,swarm_grant_auth;dur=2", "swarm_grant_auth;dur=NaN", "swarm_grant_auth;dur=1;desc=private", "swarm_grant_auth;dur=900"]) {
+    const invalid = new TerminalGrantEvidence(() => 1000);
+    invalid.record(100, 900, [resource], `swarm_grant;dur=500,${stage}`);
+    expect(invalid.snapshot().slowest).toMatchObject({server_handler_ms: 500, server_auth_ms: null,
+      server_capability_ms: null, server_validation_ms: null});
+  }
 });

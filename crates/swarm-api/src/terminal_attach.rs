@@ -83,7 +83,9 @@ pub(super) async fn issue_grant(
     let session_id = parse_session_id(&session_id)?;
     let client = terminal_client(&state)?;
     let protocol = requested_protocol(query.protocol.as_deref())?;
+    let authorized = Instant::now();
     let controlled = protocol == AttachProtocol::Controlled && supports_control(client).await?;
+    let negotiated = Instant::now();
     let validation = if controlled {
         // A status read confirms identity without copying the terminal journal.
         HostRequest::Control {
@@ -133,6 +135,7 @@ pub(super) async fn issue_grant(
             ));
         }
     }
+    let validated = Instant::now();
     let grant = state
         .attach_grants
         .issue_for(session_id, protocol)
@@ -143,16 +146,31 @@ pub(super) async fn issue_grant(
         websocket_path: format!("/api/v1/terminal/sessions/{session_id}/attach"),
         expires_in_ms: u64::try_from(ATTACH_GRANT_TTL.as_millis()).unwrap_or(u64::MAX),
     };
-    Ok(timed_grant_response(response, started))
+    Ok(timed_grant_response(
+        response,
+        started,
+        [
+            authorized.duration_since(started),
+            negotiated.duration_since(authorized),
+            validated.duration_since(negotiated),
+        ],
+    ))
 }
 
-fn timed_grant_response(grant: AttachGrantResponse, started: Instant) -> Response {
+fn timed_grant_response(
+    grant: AttachGrantResponse,
+    started: Instant,
+    stages: [std::time::Duration; 3],
+) -> Response {
     let mut response = ([(header::CACHE_CONTROL, "no-store")], Json(grant)).into_response();
     // Handler wall time includes authentication, engine validation and encoding.
     // It excludes time before handler entry and subsequent proxy/network delivery.
     let timing = format!(
-        "swarm_grant;dur={:.3}",
-        started.elapsed().as_secs_f64() * 1000.0
+        "swarm_grant;dur={:.3},swarm_grant_auth;dur={:.3},swarm_grant_capability;dur={:.3},swarm_grant_validation;dur={:.3}",
+        started.elapsed().as_secs_f64() * 1000.0,
+        stages[0].as_secs_f64() * 1000.0,
+        stages[1].as_secs_f64() * 1000.0,
+        stages[2].as_secs_f64() * 1000.0,
     );
     if let Ok(value) = header::HeaderValue::from_str(&timing) {
         response.headers_mut().insert("server-timing", value);
@@ -365,17 +383,22 @@ mod tests {
                 expires_in_ms: 10,
             },
             Instant::now(),
+            [std::time::Duration::ZERO; 3],
         );
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         let timing = response.headers()["server-timing"].to_str().unwrap();
         let duration: f64 = timing
+            .split(',')
+            .next()
+            .unwrap()
             .strip_prefix("swarm_grant;dur=")
             .unwrap()
             .parse()
             .unwrap();
         assert!(duration.is_finite() && duration >= 0.0);
         assert!(!timing.contains("private"));
+        assert!(timing.ends_with("swarm_grant_auth;dur=0.000,swarm_grant_capability;dur=0.000,swarm_grant_validation;dur=0.000"));
         let bytes = axum::body::to_bytes(response.into_body(), 1024)
             .await
             .unwrap();

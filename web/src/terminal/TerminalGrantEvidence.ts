@@ -1,6 +1,7 @@
 type Sample = { at: number; fetch_elapsed_ms: number; resource_ms: number | null;
   request_to_first_byte_ms: number | null; body_transfer_ms: number | null;
-  response_to_client_ms: number | null; server_handler_ms: number | null };
+  response_to_client_ms: number | null; server_handler_ms: number | null;
+  server_auth_ms: number | null; server_capability_ms: number | null; server_validation_ms: number | null };
 type Resource = Pick<PerformanceResourceTiming, "entryType" | "initiatorType" | "startTime" | "requestStart" | "responseStart" | "responseEnd">;
 const WINDOW_MS = 3_600_000;
 
@@ -26,7 +27,10 @@ export class TerminalGrantEvidence {
       request_to_first_byte_ms: resource ? resource.responseStart - resource.requestStart : null,
       body_transfer_ms: resource ? resource.responseEnd - resource.responseStart : null,
       response_to_client_ms: resource ? end - resource.responseEnd : null,
-      server_handler_ms: parseGrantServerTiming(serverTiming, end - start) });
+      server_handler_ms: parseGrantServerTiming(serverTiming, end - start),
+      server_auth_ms: parseGrantMetric(serverTiming, end - start, "swarm_grant_auth"),
+      server_capability_ms: parseGrantMetric(serverTiming, end - start, "swarm_grant_capability"),
+      server_validation_ms: parseGrantMetric(serverTiming, end - start, "swarm_grant_validation") });
     if (this.#samples.length > 200) this.#samples.shift();
   }
 
@@ -55,10 +59,15 @@ export function recordTerminalGrantRequest(url: string, start: number, end: numb
 
 /** Accept only Swarm's bounded numeric metric; never retain arbitrary header text. */
 export function parseGrantServerTiming(value: string | null, elapsed: number): number | null {
+  return parseGrantMetric(value, elapsed, "swarm_grant");
+}
+
+function parseGrantMetric(value: string | null, elapsed: number,
+  metric: "swarm_grant" | "swarm_grant_auth" | "swarm_grant_capability" | "swarm_grant_validation"): number | null {
   if (typeof value !== "string" || !value || value.length > 1024 || !Number.isFinite(elapsed) || elapsed < 0) return null;
-  const metrics = value.split(",").filter(part => part.split(";", 1)[0].trim() === "swarm_grant");
+  const metrics = value.split(",").filter(part => part.split(";", 1)[0].trim() === metric);
   if (metrics.length !== 1) return null;
-  const match = /^\s*swarm_grant;dur=(\d+(?:\.\d+)?)\s*$/.exec(metrics[0]);
+  const match = new RegExp(`^\\s*${metric};dur=(\\d+(?:\\.\\d+)?)\\s*$`).exec(metrics[0]);
   if (!match) return null;
   const duration = Number(match[1]);
   // Independent monotonic clocks can round differently at sub-millisecond scale.
