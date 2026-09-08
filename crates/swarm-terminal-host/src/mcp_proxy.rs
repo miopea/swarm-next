@@ -162,6 +162,12 @@ async fn close_session(client: &Client, url: &str, authorization: &str, session_
 
 async fn response_payload(response: Response) -> Result<ForwardedResponse, McpProxyError> {
     let status = response.status();
+    // The HTTP status owns error classification. Reading a broken error body
+    // first can hide a retryable 503 (or a terminal 401) as a body transport
+    // failure. Error bodies are neither needed nor safe to echo to providers.
+    if !status.is_success() {
+        return Err(McpProxyError::HttpStatus(status.as_u16()));
+    }
     let session_id = response
         .headers()
         .get(MCP_SESSION_HEADER)
@@ -174,9 +180,6 @@ async fn response_payload(response: Response) -> Result<ForwardedResponse, McpPr
         .unwrap_or_default()
         .to_owned();
     let bytes = response.bytes().await?;
-    if !status.is_success() {
-        return Err(McpProxyError::HttpStatus(status.as_u16()));
-    }
     if bytes.is_empty() {
         return Ok(ForwardedResponse {
             session_id,

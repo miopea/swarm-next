@@ -8,7 +8,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-def verify(binary, method, statuses, expected_calls, expect_error):
+def verify(binary, method, statuses, expected_calls, expect_error, *, broken_error_body=False):
     received = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -27,9 +27,13 @@ def verify(binary, method, statuses, expected_calls, expect_error):
                                "result": {"fixture": "recovered"}}).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
+            # Status remains authoritative even if an error body is truncated.
+            truncate = broken_error_body and status >= 400
+            self.send_header("Content-Length", str(len(body) + (100 if truncate else 0)))
             self.end_headers()
             self.wfile.write(body)
+            if truncate:
+                self.close_connection = True
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
@@ -49,6 +53,8 @@ def verify(binary, method, statuses, expected_calls, expect_error):
         assert ("error" in response) == expect_error, "never disguise exhaustion as empty tools"
         assert len(received) == expected_calls, f"{method}: unexpected replay count {len(received)}"
         assert all(item == request for item in received), "retry only the original discovery request"
+        if expect_error and statuses[0] in (401, 403):
+            assert f"status {statuses[0]}" in response["error"]["message"], "preserve authentication failure classification"
         print(f"PASS {method}: statuses={statuses}, attempts={len(received)}, error={expect_error}")
     finally:
         server.shutdown()
@@ -67,3 +73,6 @@ if __name__ == "__main__":
     verify(binary, "tools/call", [503, 200], 1, True)
     verify(binary, "initialize", [401, 200], 1, True)
     verify(binary, "tools/list", [503], 6, True)
+    verify(binary, "initialize", [503, 200], 2, False, broken_error_body=True)
+    verify(binary, "initialize", [401, 200], 1, True, broken_error_body=True)
+    verify(binary, "tools/call", [503, 200], 1, True, broken_error_body=True)
