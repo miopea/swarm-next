@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import JiraTaskIntake from "./JiraTaskIntake";
@@ -71,3 +71,59 @@ test("shows a retryable Jira error instead of an empty task source", async () =>
 function ok(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 }
+
+test("a saved claim survives board-refresh failure and retries only the board read", async () => {
+  let claims = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/readiness")) return ok({ configured: true, connection: "ready", account_name: "Demo" });
+    if (url.endsWith("/bindings")) return ok([{ id: "fixture", project_key: "DEMO", project_name: "Fictional", workflow_mapped: true }]);
+    if (url.endsWith("/issues")) return ok([{ id: "one", key: "DEMO-1", summary: "Fictional work", status_name: "Open" }]);
+    if (url.endsWith("/sync")) { claims += 1; return ok([{ id: "saved-task" }]); }
+    throw new Error(`Unexpected request: ${url}`);
+  }));
+  const onImported = vi.fn().mockRejectedValueOnce(new Error("board unavailable")).mockResolvedValue(undefined);
+  render(<JiraTaskIntake operatorToken="operator-token" onImported={onImported} />);
+  fireEvent.click(await screen.findByRole("button", { name: "DEMO Choose work" }));
+  fireEvent.click(await screen.findByRole("checkbox", { name: /DEMO-1/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Add 1 to this board" }));
+  expect(await screen.findByText(/Jira work was saved, but the board could not refresh/)).toBeInTheDocument();
+  expect(screen.queryByRole("checkbox", { name: /DEMO-1/ })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Add 0 to this board" })).toBeDisabled();
+  expect(screen.getByText("1 Jira issue added or refreshed on this board.")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Retry board refresh" }));
+  await waitFor(() => expect(onImported).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Retry board refresh" })).not.toBeInTheDocument());
+  expect(claims).toBe(1);
+});
+
+test("holds selection during a claim and retains it when the claim itself fails", async () => {
+  let complete!: (response: Response) => void;
+  const pending = new Promise<Response>((resolve) => { complete = resolve; });
+  const claim = vi.fn().mockReturnValueOnce(pending).mockResolvedValue(ok([{ id: "saved-task" }]));
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/readiness")) return ok({ configured: true, connection: "ready" });
+    if (url.endsWith("/bindings")) return ok([{ id: "fixture", project_key: "DEMO", project_name: "Fictional", workflow_mapped: true }]);
+    if (url.endsWith("/issues")) return ok([{ id: "one", key: "DEMO-1", summary: "Fictional work", status_name: "Open" }]);
+    if (url.endsWith("/sync")) return claim();
+    throw new Error(`Unexpected request: ${url}`);
+  }));
+  const onImported = vi.fn().mockResolvedValue(undefined);
+  render(<JiraTaskIntake operatorToken="operator-token" onImported={onImported} />);
+  fireEvent.click(await screen.findByRole("button", { name: "DEMO Choose work" }));
+  fireEvent.click(await screen.findByRole("checkbox", { name: /DEMO-1/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Add 1 to this board" }));
+  await waitFor(() => expect(claim).toHaveBeenCalledTimes(1));
+  expect(screen.getByRole("checkbox", { name: /DEMO-1/ })).toBeDisabled();
+  for (const name of ["Close", "Clear", "Select shown"]) expect(screen.getByRole("button", { name })).toBeDisabled();
+  await act(async () => { complete(new Response("claim rejected", { status: 400 })); });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Add 1 to this board" })).toBeEnabled());
+  expect(screen.getByRole("checkbox", { name: /DEMO-1/ })).toBeChecked();
+  expect(onImported).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: "Retry board refresh" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Add 1 to this board" }));
+  expect(await screen.findByText("1 Jira issue added or refreshed on this board.")).toBeInTheDocument();
+  expect(claim).toHaveBeenCalledTimes(2);
+  expect(onImported).toHaveBeenCalledTimes(1);
+});

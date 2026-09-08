@@ -25,6 +25,7 @@ export default function JiraTaskIntake({ operatorToken, onImported }: Props) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [refreshError, setRefreshError] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [loadAttempt, setLoadAttempt] = useState(0);
@@ -80,17 +81,32 @@ export default function JiraTaskIntake({ operatorToken, onImported }: Props) {
   }
 
   async function importSelected() {
-    if (!activeBinding || selectedIds.size === 0) return;
+    if (busy || !activeBinding || selectedIds.size === 0) return;
     setBusy(true);
     setMessage("");
+    const claimedIds = new Set(selectedIds);
     try {
-      const tasks = await syncJiraBinding(operatorToken, activeBinding.id, [...selectedIds]);
-      await onImported();
-      setIssues((current) => current.filter((issue) => !selectedIds.has(issue.id)));
+      const tasks = await syncJiraBinding(operatorToken, activeBinding.id, [...claimedIds]);
+      // Claim acknowledgement and refreshing the board are separate outcomes.
+      // A failed read must not offer an already-saved claim for submission again.
+      setIssues((current) => current.filter((issue) => !claimedIds.has(issue.id)));
       setSelectedIds(new Set());
       setMessage(`${tasks.length} Jira issue${tasks.length === 1 ? "" : "s"} added or refreshed on this board.`);
+      await refreshBoard();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Selected Jira work could not be imported.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refreshBoard() {
+    setBusy(true);
+    setRefreshError(false);
+    try {
+      await onImported();
+    } catch {
+      setRefreshError(true);
     } finally {
       setBusy(false);
     }
@@ -123,7 +139,7 @@ export default function JiraTaskIntake({ operatorToken, onImported }: Props) {
         <section className="jira-intake" aria-label={`Choose ${activeBinding.project_name} work`}>
           <div className="jira-intake-heading">
             <span><strong>{activeBinding.project_key} · {activeBinding.project_name}</strong><small>Unassigned · open only</small></span>
-            <button className="text-button" type="button" onClick={close}>Close</button>
+            <button className="text-button" type="button" disabled={busy} onClick={close}>Close</button>
           </div>
           <p className="privacy-note">Choose work to claim. Swarm assigns it to {readiness.account_name ?? "you"} in Jira, then begins two-way synchronization. Worker assignment happens on the board.</p>
           <label className="jira-intake-filter">
@@ -132,8 +148,8 @@ export default function JiraTaskIntake({ operatorToken, onImported }: Props) {
           </label>
           <div className="jira-intake-actions">
             <span>{visibleIssues.length} shown · {selectedIds.size} selected</span>
-            <button className="text-button" type="button" disabled={visibleIssues.length === 0} onClick={() => setSelectedIds(new Set(visibleIssues.slice(0, 100).map((issue) => issue.id)))}>Select shown</button>
-            <button className="text-button" type="button" disabled={selectedIds.size === 0} onClick={() => setSelectedIds(new Set())}>Clear</button>
+            <button className="text-button" type="button" disabled={busy || visibleIssues.length === 0} onClick={() => setSelectedIds(new Set(visibleIssues.slice(0, 100).map((issue) => issue.id)))}>Select shown</button>
+            <button className="text-button" type="button" disabled={busy || selectedIds.size === 0} onClick={() => setSelectedIds(new Set())}>Clear</button>
           </div>
           <div className="jira-issue-list">
             {visibleIssues.map((issue) => (
@@ -141,7 +157,7 @@ export default function JiraTaskIntake({ operatorToken, onImported }: Props) {
                 <input
                   type="checkbox"
                   checked={selectedIds.has(issue.id)}
-                  disabled={!selectedIds.has(issue.id) && selectedIds.size >= 100}
+                  disabled={busy || (!selectedIds.has(issue.id) && selectedIds.size >= 100)}
                   onChange={(event) => setSelectedIds((current) => {
                     const next = new Set(current);
                     if (event.target.checked) next.add(issue.id); else next.delete(issue.id);
@@ -159,6 +175,7 @@ export default function JiraTaskIntake({ operatorToken, onImported }: Props) {
         </section>
       )}
       {message ? <p className="settings-message" role="status">{message}</p> : null}
+      {refreshError ? <div className="settings-error" role="alert"><span>Jira work was saved, but the board could not refresh. Retry the board refresh; do not claim it again.</span> <button className="text-button" type="button" disabled={busy} onClick={() => void refreshBoard()}>Retry board refresh</button></div> : null}
     </section>
   );
 }
