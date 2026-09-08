@@ -398,3 +398,24 @@ Do not refresh receipt timestamps, manufacture coverage, clear blockers or alter
 execution priority. This is attention ordering, not permission to abandon the
 missing fact. Six focused application tests passed on the isolated Linux tree;
 live backlog progression remains an acceptance gate.
+
+### A saved plan is not ongoing execution (September 8)
+
+Live Admin history contained twelve consecutive recovery assessments describing
+an empty resting prompt, no background work and unfinished buildable steps, yet
+calling that a verified external wait or "between turns." The occasional
+snapshot-sequence change was also treated as progress despite unchanged content.
+An old delivered instruction is not evidence that the next turn is executing.
+
+The standing brief and every review delivery now explicitly distinguish these
+facts. After checking the prior response and actual task gates, Queen should
+request a concrete same-task continuation for remaining authorized work. A
+blocked portion does not prohibit independent buildable steps inside the same
+scope. Real external jobs, dependencies, operator deferrals, uncertain deliveries
+and current input/engagement protections remain unchanged. No prose classifier,
+automatic task transition or repeated generic kick is introduced.
+
+The new delivered-prompt assertion failed before the correction. All 48 delivery
+regressions and the standing-brief test pass afterward. These tests establish
+instruction delivery, not model compliance or completed recovery supervision;
+live continuation and resulting task progress remain required acceptance evidence.
