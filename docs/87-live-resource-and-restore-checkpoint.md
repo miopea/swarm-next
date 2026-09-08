@@ -46,6 +46,24 @@ polling optimization follows from a single request measurement.
 
 ## Real Edge demo reload
 
+### Follow-up memory attribution
+
+After the short sample, `/proc` showed API anonymous RSS 112,696 KiB and
+file-backed RSS 26,384 KiB, with no swap. Cgroup anonymous charge was
+115,400,704 bytes. Thus the increase cannot be dismissed as file-cache accounting;
+this still does not establish a leak.
+
+The read-only sampler now records process RSS, anonymous RSS and file-backed RSS
+independently from cgroup totals. Missing fields refuse the sample; old CSVs
+remain readable with null process-memory attribution, not invented zeros. Six
+summary tests and Bash syntax checks pass. The first live extended row populated
+all three fields successfully.
+
+A bounded 1,800-second follow-up started under PID 1768185 in
+`/tmp/swarm-memory-attribution.nlYZpA`, log `observer.log`, using 30-second
+samples. No application deployment was needed. Results remain pending; normal
+workload and service/session continuity must be checked before interpretation.
+
 Used a separate tab at the authoritative `swarm.bfgsolutions.net`. Quick
 navigation selected only the already-running **Swarm Dogfood Contract** demo.
 Full page reload at `?surface=workers` restored that same worker and its

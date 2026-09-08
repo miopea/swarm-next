@@ -22,6 +22,20 @@ test('accepts CRLF input without inventing completion evidence', () => {
   assert.equal(summarize(fixture.join('\r\n') + '\r\n').sample_count, 3);
 });
 
+test('separates process anonymous memory from cgroup totals without fabricating old fields', () => {
+  const memory = fixture.map((line, i) => i === 0
+    ? `${line},api_process_rss_bytes,api_process_anon_bytes,api_process_file_bytes`
+    : `${line},${1000 + i * 100},${500 + i * 100},500`);
+  const result = summarize(memory.join('\n'));
+  assert.deepEqual(result.memory_bytes.api_process, {
+    rss: { min: 1100, max: 1300 }, anonymous: { min: 600, max: 800 }, file_backed: { min: 500, max: 500 },
+  });
+  assert.equal(summarize(fixture.join('\n')).memory_bytes.api_process, null);
+  assert.equal(result.performance_acceptance, 'not_evaluated');
+  assert.throws(() => summarize(memory.join('\n').replace('api_process_file_bytes', 'missing')));
+  assert.throws(() => summarize(memory.join('\n').replace('api_process_file_bytes', 'api_process_anon_bytes')));
+});
+
 test('engine CPU excludes child workers and respects the host clock rate', () => {
   const engine = fixture.map((line, i) => i === 0
     ? `${line},engine_process_cpu_ticks,engine_process_start_ticks,clock_ticks_per_second`

@@ -32,6 +32,20 @@ process_cpu() {
   awk '{ if (NF < 20 || $12 !~ /^[0-9]+$/ || $13 !~ /^[0-9]+$/ || $20 !~ /^[0-9]+$/) exit 1; printf "%.0f %s\n", $12+$13, $20 }' <<<"$tail"
 }
 
+# RSS attribution is separate from cgroup memory, which includes charged cache.
+# Missing kernel fields are unavailable evidence, never a zero-memory sample.
+process_memory() {
+  awk '
+    /^(VmRSS|RssAnon|RssFile):/ {
+      if ($2 !~ /^[0-9]+$/ || $3 != "kB" || seen[$1]++) exit 1
+      bytes[$1]=$2*1024
+    }
+    END {
+      if (seen["VmRSS:"] != 1 || seen["RssAnon:"] != 1 || seen["RssFile:"] != 1) exit 1
+      printf "%.0f %.0f %.0f\n", bytes["VmRSS:"], bytes["RssAnon:"], bytes["RssFile:"]
+    }' "/proc/$1/status"
+}
+
 if [[ -z "${SWARM_OPERATOR_TOKEN:-}" ]]; then
   echo "SWARM_OPERATOR_TOKEN is required" >&2
   exit 2
@@ -81,7 +95,7 @@ if (( host_pid == 0 || api_pid == 0 )); then
   echo 'Both measured services must be running; PID zero is not continuity evidence' >&2
   exit 1
 fi
-printf 'timestamp_utc,elapsed_seconds,api_memory_bytes,api_tasks,terminal_host_memory_bytes,terminal_host_tasks,running_sessions,retained_sessions,history_bytes,dropped_history_bytes,api_cpu_nanoseconds,terminal_host_cpu_nanoseconds,collection_seconds,engine_process_cpu_ticks,engine_process_start_ticks,clock_ticks_per_second\n' >"${samples_file}"
+printf 'timestamp_utc,elapsed_seconds,api_memory_bytes,api_tasks,terminal_host_memory_bytes,terminal_host_tasks,running_sessions,retained_sessions,history_bytes,dropped_history_bytes,api_cpu_nanoseconds,terminal_host_cpu_nanoseconds,collection_seconds,engine_process_cpu_ticks,engine_process_start_ticks,clock_ticks_per_second,api_process_rss_bytes,api_process_anon_bytes,api_process_file_bytes\n' >"${samples_file}"
 
 started_at="$(date +%s)"
 deadline=$((started_at + duration_seconds))
@@ -106,6 +120,8 @@ while (( $(date +%s) < deadline )); do
   host_status="$(api_json "${base_url}/api/v1/runtime/terminal-host")"
   history="$(api_json "${base_url}/api/v1/terminal/history/diagnostics")"
   api_memory=$(metric "$api_unit" MemoryCurrent)
+  api_process_memory=$(process_memory "$api_pid")
+  read -r api_rss api_anon api_file <<<"$api_process_memory"
   api_tasks=$(metric "$api_unit" TasksCurrent)
   host_memory=$(metric "$host_unit" MemoryCurrent)
   host_tasks=$(metric "$host_unit" TasksCurrent)
@@ -121,11 +137,12 @@ while (( $(date +%s) < deadline )); do
   history_bytes=$(jq -er '.diagnostics.retained_bytes | numbers' <<<"$history")
   dropped_bytes=$(jq -er '.diagnostics.dropped_bytes | numbers' <<<"$history")
   sampled_at=$(date +%s)
-  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$((sampled_at - started_at))" \
     "$api_memory" "$api_tasks" "$host_memory" "$host_tasks" \
     "$running_sessions" "$retained_sessions" "$history_bytes" "$dropped_bytes" \
-    "$api_cpu" "$host_cpu" "$((sampled_at - now))" "$engine_cpu" "$engine_started" "$clock_ticks" >>"${samples_file}"
+    "$api_cpu" "$host_cpu" "$((sampled_at - now))" "$engine_cpu" "$engine_started" "$clock_ticks" \
+    "$api_rss" "$api_anon" "$api_file" >>"${samples_file}"
   sample_count=$((sample_count + 1))
   sleep "${sample_seconds}"
 done

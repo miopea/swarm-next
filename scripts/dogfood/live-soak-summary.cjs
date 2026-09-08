@@ -12,6 +12,9 @@ function summarize(csv) {
   const engineColumns = ['engine_process_cpu_ticks', 'engine_process_start_ticks', 'clock_ticks_per_second'];
   const hasEngine = engineColumns.some(key => columns.includes(key));
   if (hasEngine) required.push(...engineColumns);
+  const memoryColumns = ['api_process_rss_bytes', 'api_process_anon_bytes', 'api_process_file_bytes'];
+  const hasProcessMemory = memoryColumns.some(key => columns.includes(key));
+  if (hasProcessMemory) required.push(...memoryColumns);
   if (required.some(key => columns.filter(column => column === key).length !== 1)) {
     throw new Error('Missing or duplicated sample columns');
   }
@@ -55,7 +58,10 @@ function summarize(csv) {
     continuity: 'requires_observer_final_report',
     cpu: { api_cgroup: cpu('api_cpu_nanoseconds'), terminal_host_cgroup_including_workers: cpu('terminal_host_cpu_nanoseconds'),
       engine_process_only: hasEngine ? cpu('engine_process_cpu_ticks', first.clock_ticks_per_second) : null },
-    memory_bytes: { api_cgroup: range('api_memory_bytes'), terminal_host_cgroup_including_workers: range('terminal_host_memory_bytes') },
+    memory_bytes: { api_cgroup: range('api_memory_bytes'), terminal_host_cgroup_including_workers: range('terminal_host_memory_bytes'),
+      api_process: hasProcessMemory ? {
+        rss: range('api_process_rss_bytes'), anonymous: range('api_process_anon_bytes'), file_backed: range('api_process_file_bytes'),
+      } : null },
     running_sessions: range('running_sessions'),
     history_bytes: range('history_bytes'),
     dropped_history_bytes: range('dropped_history_bytes'),
