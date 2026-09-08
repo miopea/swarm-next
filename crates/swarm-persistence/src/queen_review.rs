@@ -300,8 +300,12 @@ impl TaskStore {
             });
         }
         let active: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM queen_automation WHERE id=1 AND run_id=?1 AND state IN ('running','uncertain'))",
-            [&input.run_id], |row| row.get(0),
+            "SELECT EXISTS(SELECT 1 FROM queen_automation WHERE id=1 AND run_id=?1
+             AND delivery_session_id IS NOT NULL
+             AND (state IN ('running','uncertain')
+                 OR (state IN ('queued','delivering') AND delivered_at IS NOT NULL)))",
+            [&input.run_id],
+            |row| row.get(0),
         )?;
         if !active || current.evidence_revision != input.expected_revision {
             return Err(TaskStoreError::IntegrityFailure("review run or task evidence changed; reread current evidence before recording a disposition".into()));
@@ -954,6 +958,47 @@ mod tests {
                 .iter()
                 .all(|item| item.task.id != input.task_id)
         );
+    }
+
+    #[test]
+    fn disposition_accepts_delivered_continuations_but_not_undelivered_or_closed_runs() {
+        for (state, delivered, session_present, accepted) in [
+            ("running", true, true, true),
+            ("uncertain", true, true, true),
+            ("queued", true, true, true),
+            ("delivering", true, true, true),
+            ("queued", false, true, false),
+            ("delivering", false, true, false),
+            ("queued", true, false, false),
+            ("completed", true, true, false),
+        ] {
+            let store = TaskStore::in_memory().unwrap();
+            let input = external_wait(&store);
+            store.connection().unwrap().execute(
+                "UPDATE queen_automation SET state=?1,
+                 delivered_at=CASE WHEN ?2 THEN delivered_at ELSE NULL END,
+                 delivery_session_id=CASE WHEN ?3 THEN delivery_session_id ELSE NULL END WHERE id=1",
+                rusqlite::params![state, delivered, session_present],
+            ).unwrap();
+            let before = store
+                .list_task_activity(input.task_id, 100)
+                .unwrap()
+                .events
+                .len();
+            let result =
+                store.record_queen_review_disposition(&input, &TaskActivityActor::operator(), 101);
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "{state}, delivered={delivered}, session={session_present}: {result:?}"
+            );
+            let after = store
+                .list_task_activity(input.task_id, 100)
+                .unwrap()
+                .events
+                .len();
+            assert_eq!(after, before + usize::from(accepted));
+        }
     }
 
     #[test]

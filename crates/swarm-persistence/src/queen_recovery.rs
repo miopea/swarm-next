@@ -230,13 +230,15 @@ impl TaskStore {
         }
         let active: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM queen_automation WHERE id=1 AND run_id=?1
-             AND state IN ('running','uncertain'))",
+             AND delivery_session_id IS NOT NULL
+             AND (state IN ('running','uncertain')
+                 OR (state IN ('queued','delivering') AND delivered_at IS NOT NULL)))",
             [&input.run_id],
             |row| row.get(0),
         )?;
         if !active {
             return Err(refused(
-                "recovery assessment requires the current running review",
+                "recovery assessment requires the current unfinished delivered review",
             ));
         }
         // External conditions remain explicit authenticated judgments, not
@@ -751,6 +753,36 @@ mod tests {
             },
             facts,
         )
+    }
+
+    #[test]
+    fn recovery_receipt_accepts_delivered_continuations_only() {
+        for (state, delivered, accepted) in [
+            ("queued", true, true),
+            ("delivering", true, true),
+            ("queued", false, false),
+            ("delivering", false, false),
+            ("completed", true, false),
+        ] {
+            let store = TaskStore::in_memory().unwrap();
+            let (input, facts) = fixture(&store);
+            store
+                .connection()
+                .unwrap()
+                .execute(
+                    "UPDATE queen_automation SET state=?1,
+                 delivered_at=CASE WHEN ?2 THEN delivered_at ELSE NULL END WHERE id=1",
+                    params![state, delivered],
+                )
+                .unwrap();
+            let result =
+                store.record_queen_recovery(&input, &facts, &TaskActivityActor::operator(), NOW);
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "{state}, delivered={delivered}: {result:?}"
+            );
+        }
     }
 
     #[test]

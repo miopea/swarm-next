@@ -136,6 +136,14 @@ that continuation. This is bounded recovery, not a claim that exhausting the
 budget resolves the underlying failure. Exhaustion visibility and full adapter
 failure/restart acceptance must be verified before this slice is deployed.
 
+Task-review and worker-recovery dispositions use that same unfinished-run rule: a delivered queued
+or delivering continuation can record an assessment against its exact run and
+current task evidence. Requeueing does not invalidate ongoing Queen judgment.
+An initial undelivered continuation, missing delivery session or closed run
+cannot accept a new assessment. This corrects the September 8 live mismatch
+where the read advertised a current run but the write rejected unchanged
+evidence. It does not enqueue delivery, reset attempts or waive coverage checks.
+
 Recovery receipts have their own bounded persistence record, separate from task
 review dispositions. One record per task retains the exact attention, worker,
 session, task-evidence revision and optional canonical-terminal revision, plus
