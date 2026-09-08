@@ -164,7 +164,7 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
     { label: "Loaded worker runtimes", value: workerMemory, healthy: healthyPressure(workerPressure), className: resourceClass(workerPressure) },
     { label: "Machine memory", value: machineMemoryLabel(machine), healthy: healthyPressure(machine?.pressure), className: resourceClass(machine?.pressure) },
     { label: "Memory stall", value: pressureLabel(machine?.memory_pressure_avg10), healthy: healthyPressure(machine?.pressure), className: resourceClass(machine?.pressure) },
-    { label: "Compute load", value: loadLabel(machine?.load_average, machine?.logical_cpus), healthy: healthyPressure(computePressure(machine)), className: resourceClass(computePressure(machine)) },
+    { label: "Compute load", value: computeLoadLabel(machine), healthy: healthyPressure(computePressure(machine)), className: resourceClass(computePressure(machine)) },
     ...(runtime.resources?.storage?.map((storage) => ({
       label: { system: "System storage", temporary: "Temporary storage", database: "Hive storage" }[storage.scope],
       value: storageValue(storage), healthy: storage.pressure === "normal", className: resourceClass(storage.pressure),
@@ -363,6 +363,15 @@ function pressureLabel(value: number | null | undefined) {
 
 function loadLabel(load: [number, number, number] | null | undefined, cpus: number | null | undefined) {
   return !load ? "Unavailable" : `${load.map((value) => value.toFixed(2)).join(" / ")} · ${cpus ?? "?"} CPUs`;
+}
+
+/** Show the evidence used by computePressure, not load averages alone when PSI wins. */
+export function computeLoadLabel(machine: MachineResources | undefined): string {
+  const wait = machine?.cpu_pressure_avg10;
+  const load = loadLabel(machine?.load_average, machine?.logical_cpus);
+  return wait != null && Number.isFinite(wait) && wait >= 0
+    ? `CPU wait ${pressureLabel(wait)} · Load ${load}`
+    : `CPU wait unavailable · Load ${load}`;
 }
 
 function swapLabel(used: number | null | undefined, total: number | null | undefined, percent: number | null | undefined) {

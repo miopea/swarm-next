@@ -2,7 +2,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, expect, test, vi } from "vitest";
 
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
-import { workerTreePressure } from "./DiagnosticsWorkspace";
+import { computeLoadLabel, workerTreePressure } from "./DiagnosticsWorkspace";
+import type { MachineResources } from "../api";
 import type { SharedMachineResources } from "../runtime/machinePressure";
 import * as browserCapture from "../runtime/browserPerformance";
 
@@ -11,6 +12,16 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+test("compute warning displays CPU waiting evidence even when load average is low", () => {
+  const machine = { cpu_pressure_avg10: 12, load_average: [2.41, 1.36, 0.91], logical_cpus: 8 } as MachineResources;
+  expect(computeLoadLabel(machine)).toBe("CPU wait 12.0% waiting · last 10 seconds · Load 2.41 / 1.36 / 0.91 · 8 CPUs");
+  expect(computeLoadLabel({ ...machine, cpu_pressure_avg10: 0 })).toContain("CPU wait 0.0% waiting");
+  for (const missing of [null, NaN, -1]) {
+    expect(computeLoadLabel({ ...machine, cpu_pressure_avg10: missing })).toBe("CPU wait unavailable · Load 2.41 / 1.36 / 0.91 · 8 CPUs");
+  }
+  expect(computeLoadLabel(undefined)).toBe("CPU wait unavailable · Load Unavailable");
 });
 
 test("distinguishes unattributed event phases from identified interaction timing", async () => {
