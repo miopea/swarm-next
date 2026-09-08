@@ -932,30 +932,53 @@ printf '%s' "$migrate_skew" | grep -q 'cannot report which sessions are busy' \
   || { echo "an unanswerable host did not defer the migration: $migrate_skew" >&2; exit 1; }
 rm -f "$HOME/host-cannot-report-busy"
 
-# Resting legacy sessions must also defer both protocol migration paths.
+# Resting legacy sessions defer the EXPLICIT migration command.
 printf '3\n' > "$HOME/running-sessions"
 printf '0\n' > "$HOME/busy-sessions"
 printf '0\n' > "$HOME/unreadable-sessions"
 if "$package" migrate-protocol "$migration_bundle"; then
   echo "resting census authorized protocol migration" >&2; exit 1
 fi
+
+# ⚠️ BUT `update` PERFORMS IT, SESSIONS OR NOT, AND THIS ASSERTION USED TO SAY
+# THE OPPOSITE. It required update to defer and leave protocol-migration.pending.
+#
+# That is the behaviour test-field-upgrade.sh proves strands every Hive in the
+# field: `update` is the ONLY entry point a release arrives through — every
+# vintage's apply_release ends in `"$requested/swarm-package" update` — so a
+# deferring update means the API is never upgraded at all. Measured against the
+# real v1.5.0 script: "the API was not upgraded by the field install".
+#
+# THE DEFERRAL CANNOT COMPLETE IN PRODUCTION, WHICH IS WHY THIS TEST PASSED AND
+# THE FIELD STILL BROKE. Here running-sessions is a file the harness sets to 0.
+# On a real Hive supervise_workers revives an autostart worker within seconds,
+# so the count never reaches 0 — measured at 34 workers, every pass reporting
+# "1 sessions are active" after the operator had killed everything. This test
+# was asserting a recovery that only its own fixture could reach.
+#
+# The interruption is announced rather than deferred: update prints that the API
+# and engine swap together and that worker sessions end, then does it.
 : > "$HOME/systemctl.log"
-"$package" update "$migration_bundle"
-[ -f "$SWARM_STATE_ROOT/protocol-migration.pending" ]
+update_out=$("$package" update "$migration_bundle" 2>&1) && update_rc=0 || update_rc=$?
+[ "$update_rc" = "0" ] \
+  || { echo "update exited $update_rc on a protocol change: $update_out" >&2; exit 1; }
+printf '%s' "$update_out" | grep -q 'changes the terminal-host protocol from' \
+  || { echo "update did not announce the protocol change: $update_out" >&2; exit 1; }
+[ ! -f "$SWARM_STATE_ROOT/protocol-migration.pending" ] \
+  || { echo "update deferred a protocol change instead of performing it" >&2; exit 1; }
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "4.0.0" ] \
+  || { echo "update announced the migration without moving the host" >&2; exit 1; }
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "4.0.0" ] \
+  || { echo "update moved the host but not the API — they must swap together" >&2; exit 1; }
+
+# And the control-room route reaches the same place, because it ends in update.
 mkdir -p "$SWARM_STATE_ROOT/downloads"
 cp -R "$migration_bundle" "$SWARM_STATE_ROOT/downloads/4.0.0"
 printf '%s\n' "$SWARM_STATE_ROOT/downloads/4.0.0" > "$SWARM_STATE_ROOT/release-apply.request"
 "$package" apply-release
-grep -q '^state=deferred$' "$SWARM_STATE_ROOT/release-apply.status"
 grep -q '^version=4.0.0$' "$SWARM_STATE_ROOT/release-apply.status"
-[ -f "$SWARM_STATE_ROOT/protocol-migration.pending" ]
-migration_wait=$("$package" reconcile-host-requested 2>&1)
-printf '%s' "$migration_wait" | grep -q 'no atomic maintenance admission'
-[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "7.0.0" ]
-! grep -q 'stop .*swarm-terminal-host' "$HOME/systemctl.log"
-# Once sessions actually exit, the pending migration can complete.
-printf '0\n' > "$HOME/running-sessions"
-"$package" reconcile-host-requested
+grep -q '^state=deferred$' "$SWARM_STATE_ROOT/release-apply.status" \
+  && { echo "apply-release deferred a protocol change instead of installing it" >&2; exit 1; }
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "4.0.0" ] \
   || { echo "the migration reported success without moving the host" >&2; exit 1; }
 

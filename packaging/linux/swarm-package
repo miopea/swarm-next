@@ -1169,7 +1169,10 @@ Build and migrate instead, which swaps the API and the host together. It STOPS E
 Nothing was installed. Reload again once the checkout has stopped moving."
   fi
   fail_step=install
-  if ! "$bundle_path/swarm-package" update "$bundle_path" 2>"$dev_log"; then
+  # Names this as a reload so the installer keeps live terminals rather than
+  # swapping the engine under them — see the protocol branch in
+  # install_or_update. A release install passes nothing and performs it.
+  if ! SWARM_RELOAD_DEVELOPMENT=1 "$bundle_path/swarm-package" update "$bundle_path" 2>"$dev_log"; then
     fail_detail=$(last_error "$dev_log")
     cat "$dev_log" >&2 || true
     die "the development build compiled but could not be installed"
@@ -1399,6 +1402,22 @@ install_or_update() {
       # ANNOUNCING it — the two lines printed just above — not by waiting for a
       # condition that cannot occur.
       #
+      # ⚠️ A DEVELOPMENT RELOAD IS THE ONE CASE THAT STILL DEFERS, and it is not
+      # an exception to the reasoning above — it is a different job. A reload
+      # deliberately leaves the terminal host running so a developer's live
+      # worker terminals survive rebuilding the API dozens of times a day. Ending
+      # fourteen terminals to apply a protocol change nobody asked to install
+      # yet is the trade this guard exists to refuse.
+      #
+      # The signal is explicit rather than inferred: reload_development sets it
+      # on the subprocess it invokes. A release arriving from the field carries
+      # no such variable — every vintage's apply_release runs a bare
+      # `"$requested/swarm-package" update` — so a real install always takes the
+      # performing path, which is the whole point of the fix.
+      if [ "${SWARM_RELOAD_DEVELOPMENT:-0}" = "1" ]; then
+        migrate_protocol if-idle
+        return
+      fi
       # Drained first so nothing new attaches between here and the swap.
       SWARM_TERMINAL_SOCKET=$(terminal_socket) \
         "$host_release/bin/swarmctl" drain >/dev/null 2>&1 || true
