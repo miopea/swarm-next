@@ -21,9 +21,10 @@ authorized. No release is authorized.
   preservation of deployed recovery/task storage. Migration sends nothing.
 - Candidate frontend: 146 test files / 1,384 tests pass; TypeScript check passes.
   All 682 isolated Linux persistence tests passed, including schema upgrades.
-  API/strict workspace validation is still running
-  under PID 1710705 in `/tmp/swarm-admin-intake.FxXHci`, with durable results in
-  `validation.log`. These pending checks are not recorded as passing.
+  API support tests passed (16 passed, one separately exercised paired fixture
+  ignored by default), followed by strict workspace all-target/all-feature
+  Clippy. `/tmp/swarm-admin-intake.FxXHci/validation.log` ends VALIDATION_EXIT=0.
+  The final email-reply copy correction passes all nine dialog tests.
 - Separate Edge tab at the authoritative Hive restored its trusted session and
   rendered runtime `1.6.0-dev-c9fbea274f44-20260908222811-1684894` with
   "Nothing needs your attention." No worker-start/prompt warning was rendered.

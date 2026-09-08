@@ -141,7 +141,7 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
             {busy ? "Saving…" : attempted ? "Retry this exact report" : "Send to Swarm Support"}</button>
         </div>}
       </section> : null}
-      <small className="privacy-note">Only the reviewed message and contact details are sent. Attachments, diagnostics, and reply delivery are not enabled in this integration yet.</small>
+      <small className="privacy-note">Only the reviewed message and contact details are sent. Swarm Support may reply by email. Attachments and automatic diagnostic uploads are not available here.</small>
       <small className="privacy-note">An unsent retry copy stays in this tab until the Hive confirms saving it. Reopening never sends it automatically.</small>
       {error && <p role="alert">{error}</p>}
       {status.sender === "failed" && <p role="alert">Support delivery has stopped. Saved reports remain on this Hive.</p>}

@@ -10,6 +10,13 @@ const status: SupportStatus = { configured: true, sender: "running", deliveries:
 afterEach(() => { cleanup(); sessionStorage.clear(); vi.resetAllMocks(); });
 function open() { return render(<SupportFeedbackDialog operatorToken="fixture" status={status} onClose={vi.fn()} />); }
 
+test("explains email replies without implying attachments or automatic diagnostics are sent", () => {
+  open();
+  expect(screen.getByText(/Swarm Support may reply by email/)).toHaveTextContent("Attachments and automatic diagnostic uploads are not available here.");
+  expect(screen.queryByText(/reply delivery are not enabled/)).not.toBeInTheDocument();
+  expect(submitSupport).not.toHaveBeenCalled();
+});
+
 test("rate-limited reports show their retained deadline without an immediate retry", () => {
   render(<SupportFeedbackDialog operatorToken="fixture" onClose={vi.fn()} status={{ ...status, deliveries: [{
     submission_key: "fictional-key", created_at: 1,
