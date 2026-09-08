@@ -1,4 +1,5 @@
 import { BROWSER_SESSION_AUTH } from "../api";
+import { recordClientFailure } from "../feedback/clientDiagnostics";
 import { presenceDeviceId } from "../presence/PresenceController";
 import { browserPerformance } from "../runtime/browserPerformance";
 import { TerminalControl } from "./TerminalControl";
@@ -849,6 +850,9 @@ export class TerminalConnection {
     this.#confirmationTimer = setTimeout(() => {
       this.#confirmationTimer = undefined;
       if (socket !== this.#socket || this.#disposed || this.#fatal) return;
+      recordClientFailure(this.#probeId !== undefined ? "terminal_probe_timeout"
+        : socket.readyState === WebSocket.CONNECTING ? "terminal_socket_open_timeout"
+        : "terminal_restore_timeout");
       this.#probeId = undefined;
       this.#socket = undefined;
       socket.close(CLOSE_FRESH_SNAPSHOT, "terminal confirmation timed out");
@@ -861,6 +865,7 @@ export class TerminalConnection {
     this.#confirmationTimer = setTimeout(() => {
       this.#confirmationTimer = undefined;
       if (controller !== this.#grantAbortController || this.#disposed || this.#fatal) return;
+      recordClientFailure("terminal_grant_timeout");
       this.#grantAbortController = undefined;
       controller.abort();
       this.#scheduleReconnect("terminal attach grant received no response");

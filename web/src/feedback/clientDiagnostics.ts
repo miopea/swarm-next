@@ -1,5 +1,11 @@
+const FAILURE_KINDS = [
+  "window_error", "unhandled_rejection", "react_render",
+  "terminal_grant_timeout", "terminal_socket_open_timeout",
+  "terminal_restore_timeout", "terminal_probe_timeout",
+] as const;
+
 export type ClientFailure = {
-  kind: "window_error" | "unhandled_rejection" | "react_render";
+  kind: typeof FAILURE_KINDS[number];
   occurred_at: number;
 };
 
@@ -19,7 +25,9 @@ export function readClientFailures(): ClientFailure[] {
   try {
     const parsed = JSON.parse(window.sessionStorage.getItem(STORAGE_KEY) ?? "[]") as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isClientFailure).slice(-MAX_FAILURES);
+    // Project storage onto the allowlist; extra fields must not enter reports.
+    return parsed.filter(isClientFailure).slice(-MAX_FAILURES)
+      .map(({ kind, occurred_at }) => ({ kind, occurred_at }));
   } catch {
     return [];
   }
@@ -33,6 +41,8 @@ export function installClientFailureCapture() {
 function isClientFailure(value: unknown): value is ClientFailure {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<ClientFailure>;
-  return (candidate.kind === "window_error" || candidate.kind === "unhandled_rejection" || candidate.kind === "react_render")
-    && typeof candidate.occurred_at === "number";
+  return (FAILURE_KINDS as readonly unknown[]).includes(candidate.kind)
+    && typeof candidate.occurred_at === "number"
+    && Number.isFinite(candidate.occurred_at)
+    && candidate.occurred_at >= 0;
 }

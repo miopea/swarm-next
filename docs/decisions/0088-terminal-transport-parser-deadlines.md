@@ -38,3 +38,17 @@ The regression verifies refusal of input after stale completion, expiration of
 the silent replacement, and successful canonical recovery on the next socket.
 All 94 focused terminal tests and the TypeScript/Vite build pass. Live acceptance
 of this second correction is not yet recorded here.
+
+## Failed-attempt attribution
+
+The September 8 live reload recovered in 4,292 ms but retained only successful
+phase durations. This is insufficient to prove where its first attempt failed.
+The existing 20-entry session-local client failure history now records four
+allowlisted timeout categories: grant, socket opening, initial restore, and
+correlated return probe. Each entry contains only its category and timestamp;
+storage reads project away all unexpected fields. No new timers, polling,
+terminal identifiers, text, grants, URLs, or operator alerts are introduced.
+Existing timeout owners record the category only when their current attempt
+actually expires; disposed or replaced attempts do not report a failure.
+This improves future diagnosis and does not establish the slow reload's cause.
+It is a post-1.6.0 maturity change, not part of that frozen release artifact.

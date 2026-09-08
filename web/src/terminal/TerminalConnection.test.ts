@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { BROWSER_SESSION_AUTH } from "../api";
+import { readClientFailures } from "../feedback/clientDiagnostics";
 import { browserPerformance } from "../runtime/browserPerformance";
 import { TerminalConnection, attachGrantFailure, type TerminalConnectionHandlers } from "./TerminalConnection";
 
@@ -195,6 +196,42 @@ beforeEach(() => {
 });
 
 const documentHasFocus = document.hasFocus.bind(document);
+
+test.each(["grant", "socket_open", "restore", "probe"] as const)(
+  "a %s timeout retains its phase without terminal content or identity",
+  async (phase) => {
+    vi.useFakeTimers();
+    window.sessionStorage.clear();
+    const { connection, fetch, handlers, sockets } = harness([], 100);
+    if (phase === "grant") fetch.mockReturnValueOnce(new Promise(() => {}));
+    connection.start(handlers);
+    await vi.advanceTimersByTimeAsync(0);
+    if (phase === "restore" || phase === "probe") sockets[0].open();
+    if (phase === "probe") {
+      sockets[0].message(snapshotFrame(0n, 24, 80, "private screen"));
+      await vi.advanceTimersByTimeAsync(0);
+      document.dispatchEvent(new Event("visibilitychange"));
+    }
+    await vi.advanceTimersByTimeAsync(100);
+    expect(readClientFailures()).toEqual([
+      { kind: `terminal_${phase}_timeout`, occurred_at: expect.any(Number) },
+    ]);
+    expect(JSON.stringify(readClientFailures())).not.toMatch(/private|session-1|secret/);
+    connection.dispose();
+    window.sessionStorage.clear();
+  },
+);
+
+test("disposing an unconfirmed connection does not record a timeout", async () => {
+  vi.useFakeTimers();
+  window.sessionStorage.clear();
+  const { connection, handlers } = harness([], 100);
+  connection.start(handlers);
+  await vi.advanceTimersByTimeAsync(0);
+  connection.dispose();
+  await vi.advanceTimersByTimeAsync(100);
+  expect(readClientFailures()).toEqual([]);
+});
 
 test.each(["snapshot", "output"] as const)("a stalled %s releases its queue and requires view recovery", async (kind) => {
   vi.useFakeTimers();
