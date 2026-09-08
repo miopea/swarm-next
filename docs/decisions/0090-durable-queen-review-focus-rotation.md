@@ -101,3 +101,17 @@ test process was confirmed absent; the API and engine retained their existing
 process IDs. Replacement validation is owned by PID 1662834 and logs to
 /tmp/swarm-focus-main.8iuQrn/validation-2.log with a final VALIDATION_EXIT marker.
 Build and test concurrency are each capped at two. No deployment is claimed.
+
+Later September 8 acceptance: exact-main validation completed with 667 persistence
+tests passing, the API focus test passing and strict API Clippy passing. Main
+5dc34137 was pushed and deployed as 1.6.0-dev-5dc34137f952-20260908220617-1667504.
+API PID became 1669695; engine PID remained 1547164 and all 15 running sessions
+remained. A newer engine build is reported available but was not activated.
+Edge confirmed the served runtime and the corrected start-admission card.
+
+Queen run 01a0830a-2d84-7951-8851-97569f84786d delivered once at 1788905457 and
+finished with outcome incomplete. Three fresh assessments followed: two external
+conditions and insufficient-evidence task 01a05dc6-2041-7281-a366-096742c5b9d5.
+The review snapshot still contains 24 items. This proves a delivered review and
+fresh persisted assessments, not complete backlog recovery or multi-run fairness.
+Subsequent distinct batches and productive investigation remain acceptance gates.

@@ -435,11 +435,10 @@ mod tests {
         assert_eq!(store.get_task(missing.id).unwrap(), missing);
     }
 
-    #[test]
-    fn persisted_deferral_leaves_focus_but_not_ownership_and_returns_when_evidence_changes() {
+    fn persisted_deferral_fixture() -> (TaskService, AgentPrincipal, Task, String) {
         use swarm_domain::{
-            QueenAutomationOutcome, QueenReviewDispositionInput, QueenReviewDispositionKind,
-            TaskActivityActor, WorkerSessionId,
+            QueenReviewDispositionInput, QueenReviewDispositionKind, TaskActivityActor,
+            WorkerSessionId,
         };
         let store = swarm_persistence::TaskStore::in_memory().unwrap();
         let queen = store.ensure_queen("/workspace/queen").unwrap();
@@ -492,11 +491,18 @@ mod tests {
             .unwrap();
         let service = TaskService::new(store);
         let principal = AgentPrincipal::from(&queen);
+        (service, principal, held, run.run_id)
+    }
+
+    #[test]
+    fn persisted_deferral_leaves_focus_but_not_ownership_and_returns_when_evidence_changes() {
+        use swarm_domain::{QueenAutomationOutcome, TaskActivityActor};
+        let (service, principal, held, run_id) = persisted_deferral_fixture();
         for active in [true, false] {
             if !active {
                 service
                     .store
-                    .finish_queen_automation_run(&run.run_id, QueenAutomationOutcome::NoAction, 102)
+                    .finish_queen_automation_run(&run_id, QueenAutomationOutcome::NoAction, 102)
                     .unwrap();
             }
             let snapshot = service.queen_queue_snapshot(principal).unwrap();

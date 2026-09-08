@@ -1628,6 +1628,14 @@ impl AppState {
             }
             return;
         }
+        // Admission recovered. Retire only its obsolete warnings, even if there
+        // is no new wake to claim. Prompt holds and uncertain deliveries require
+        // their own evidence and must not be cleared by healthy machine capacity.
+        let now = unix_timestamp();
+        if let Err(error) = store.clear_recovered_start_admission_refusals(now) {
+            tracing::warn!(message = %error, "could not reconcile recovered start admission");
+            return;
+        }
         let actions = match store.claim_coordinator_worker_wakes(unix_timestamp()) {
             Ok(actions) => actions,
             Err(error) => {
@@ -10260,6 +10268,44 @@ mod tests {
         }
 
         AppState::default()
+            .run_deterministic_worker_wakes(
+                &store,
+                runtime::CoordinatorStartAdmission::DeferredAdvisory,
+            )
+            .await;
+        assert_eq!(
+            store
+                .standing_coordinator_refusals(unix_timestamp(), 0)
+                .unwrap()
+                .len(),
+            5
+        );
+        AppState::default()
+            .run_deterministic_worker_wakes(
+                &store,
+                runtime::CoordinatorStartAdmission::DeferredUnavailable,
+            )
+            .await;
+        assert_eq!(
+            store
+                .standing_coordinator_refusals(unix_timestamp(), 0)
+                .unwrap()
+                .len(),
+            5,
+            "unavailable capacity is not proof of recovery"
+        );
+        store
+            .record_coordinator_refusal(
+                swarm_persistence::REFUSAL_DELIVERY_HELD_UNSENT_TEXT,
+                "fixture-unsent",
+                None,
+                None,
+                "Preserve the operator's unsent line",
+                unix_timestamp(),
+            )
+            .unwrap();
+
+        AppState::default()
             .run_deterministic_worker_wakes(&store, runtime::CoordinatorStartAdmission::Allowed)
             .await;
 
@@ -10272,6 +10318,14 @@ mod tests {
         assert_eq!(
             pressure_refusals, 0,
             "an admitted Hive must not report pressure it is not under"
+        );
+        assert!(
+            store
+                .standing_coordinator_refusals(unix_timestamp(), 0)
+                .unwrap()
+                .iter()
+                .any(|entry| entry.subject == "fixture-unsent"),
+            "healthy admission cannot clear an unrelated terminal hold"
         );
     }
 

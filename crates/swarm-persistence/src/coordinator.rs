@@ -3217,6 +3217,68 @@ mod reviewed_work_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn admission_recovery_clears_aged_holds_once_without_clearing_prompt_evidence() {
+        let store = crate::TaskStore::in_memory().unwrap();
+        store
+            .record_coordinator_refusal(
+                super::REFUSAL_WAKE_NOT_ADMITTED,
+                "wake:fixture",
+                None,
+                None,
+                "Pressure",
+                1,
+            )
+            .unwrap();
+        store
+            .record_coordinator_refusal(
+                super::REFUSAL_DELIVERY_HELD_UNSENT_TEXT,
+                "fixture-input",
+                None,
+                None,
+                "Unsent input",
+                1,
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .clear_recovered_start_admission_refusals(10_000)
+                .unwrap(),
+            1
+        );
+        let changes = store.connection().unwrap().total_changes();
+        assert_eq!(
+            store
+                .clear_recovered_start_admission_refusals(10_001)
+                .unwrap(),
+            0
+        );
+        assert_eq!(store.connection().unwrap().total_changes(), changes);
+        let remaining = store.standing_coordinator_refusals(10_001, 0).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].subject, "fixture-input");
+    }
+
+    #[test]
+    fn admission_recovery_overflow_preserves_every_hold() {
+        let store = crate::TaskStore::in_memory().unwrap();
+        for index in 0..257 {
+            store
+                .record_coordinator_refusal(
+                    super::REFUSAL_WAKE_NOT_ADMITTED,
+                    &format!("wake:{index}"),
+                    None,
+                    None,
+                    "Pressure",
+                    1,
+                )
+                .unwrap();
+        }
+        let changes = store.connection().unwrap().total_changes();
+        assert!(store.clear_recovered_start_admission_refusals(2).is_err());
+        assert_eq!(store.connection().unwrap().total_changes(), changes);
+    }
+
     use super::{WorkerId, WorkerSessionId};
     use crate::TaskStore;
 
@@ -6360,6 +6422,41 @@ impl TaskStore {
             params![kind, subject, now],
         )? > 0;
         if changed {
+            insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        }
+        transaction.commit()?;
+        Ok(changed)
+    }
+
+    /// Retire admission refusals independently of presentation age filters.
+    /// This reconciliation is called only after the admission owner observes
+    /// starts are allowed. It does not certify any delivery or worker recovery.
+    ///
+    /// # Errors
+    /// Refuses unavailable storage or more than 256 outstanding admission holds.
+    pub fn clear_recovered_start_admission_refusals(
+        &self,
+        now: i64,
+    ) -> Result<usize, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let count: usize = transaction.query_row(
+            "SELECT count(*) FROM (SELECT 1 FROM coordinator_refusals
+             WHERE kind='wake_not_admitted' AND cleared_at IS NULL LIMIT 257)",
+            [],
+            |row| row.get(0),
+        )?;
+        if count > 256 {
+            return Err(TaskStoreError::IntegrityFailure(
+                "start admission refusal reconciliation limit exceeded".into(),
+            ));
+        }
+        let changed = transaction.execute(
+            "UPDATE coordinator_refusals SET cleared_at=?1
+             WHERE kind='wake_not_admitted' AND cleared_at IS NULL",
+            [now],
+        )?;
+        if changed > 0 {
             insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
         }
         transaction.commit()?;
