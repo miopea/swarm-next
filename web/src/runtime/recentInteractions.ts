@@ -1,6 +1,8 @@
-/** Numeric-only, local evidence. No event names, targets, input or persisted IDs. */
+import type { ObservationActivity } from "./pageActivityEvidence";
+
+/** Local timing and allowlisted context. No names, targets, input or persisted IDs. */
 type Entry = { interactionId?: number; duration: number; startTime: number; processingStart?: number; processingEnd?: number };
-type Timing = { duration_ms: number; input_delay_ms: number; processing_ms: number; presentation_estimate_ms: number };
+type Timing = { duration_ms: number; input_delay_ms: number; processing_ms: number; presentation_estimate_ms: number; page_activity?: ObservationActivity };
 const WINDOW_MS = 60_000;
 const MAX_INTERACTIONS = 200;
 
@@ -9,7 +11,7 @@ export class RecentInteractions {
   #unattributed: { at: number; timing: Timing }[] = [];
   constructor(private readonly now: () => number = Date.now) {}
 
-  record(entry: Entry): void {
+  record(entry: Entry, activity: ObservationActivity = "unknown"): void {
     const { interactionId: id, duration, startTime, processingStart: start, processingEnd: end } = entry;
     if ((id !== undefined && (!Number.isSafeInteger(id) || id < 0)) || !Number.isFinite(duration) || duration < 0 || duration > WINDOW_MS
       || !Number.isFinite(startTime) || startTime < 0 || !Number.isFinite(start) || !Number.isFinite(end)
@@ -20,7 +22,7 @@ export class RecentInteractions {
     // Keep their numeric phases separately so raw-event delays remain explainable.
     if (id === undefined || id === 0) {
       this.#unattributed.push({ at: now, timing: {
-        duration_ms: duration, input_delay_ms: start! - startTime,
+        page_activity: activity, duration_ms: duration, input_delay_ms: start! - startTime,
         processing_ms: end! - start!,
         presentation_estimate_ms: Math.max(0, duration - (end! - startTime)),
       } });
@@ -30,7 +32,7 @@ export class RecentInteractions {
     const prior = this.#entries.get(id!);
     // All phases belong to the same slowest entry, not independently selected maxima.
     const timing = !prior || duration > prior.timing.duration_ms ? {
-      duration_ms: duration,
+      page_activity: activity, duration_ms: duration,
       input_delay_ms: start! - startTime,
       processing_ms: end! - start!,
       // Native duration is quantized; a small negative remainder is not negative paint time.

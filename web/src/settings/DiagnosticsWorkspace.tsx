@@ -232,6 +232,7 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
           {" · Input delay "}{Math.round(browserTiming.recent_interactions.slowest.input_delay_ms)} ms
           {" · Handler processing "}{Math.round(browserTiming.recent_interactions.slowest.processing_ms)} ms
           {" · Presentation estimate "}{Math.round(browserTiming.recent_interactions.slowest.presentation_estimate_ms)} ms
+          {" · Page activity during entry: "}{browserTiming.recent_interactions.slowest.page_activity ?? "unknown"}
         </p> : null}
         <p>{browserTiming.recent_interactions.coverage}</p>
         {browserTiming.recent_interactions.unattributed_event_entries > 0 ? <>
@@ -241,9 +242,11 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
             {" · Input delay "}{Math.round(browserTiming.recent_interactions.slowest_unattributed.input_delay_ms)} ms
             {" · Handler processing "}{Math.round(browserTiming.recent_interactions.slowest_unattributed.processing_ms)} ms
             {" · Presentation estimate "}{Math.round(browserTiming.recent_interactions.slowest_unattributed.presentation_estimate_ms)} ms.
+            {" Page activity during entry: "}{browserTiming.recent_interactions.slowest_unattributed.page_activity ?? "unknown"}.
             This is event timing, not proof of a slow click or keystroke. No event names or targets are retained.
           </p> : null}
         </> : null}
+        <p>Page activity uses observed focus and visibility changes across that entry, not just report-time focus. Changed means the state changed during the interval; unknown means coverage was unavailable. Foreground means visible and focused, not proof of a responsive frame. This local context is bounded to 200 transitions over one minute and is not persisted.</p>
         <p>Snapshot application breakdown: {browserTiming.terminal_application.samples} completed samples, at most 200 from the last hour in this page.</p>
         {browserTiming.terminal_application.slowest ? <p>
           Slowest snapshot: {Math.round(browserTiming.terminal_application.slowest.total_ms)} ms

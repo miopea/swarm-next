@@ -33,7 +33,7 @@ test("distinguishes unattributed event phases from identified interaction timing
     } },
     recent_interactions: { ...evidence.recent_interactions, observed_interactions: 0, slowest: null,
       unattributed_event_entries: 2, slowest_unattributed: {
-        duration_ms: 1200, input_delay_ms: 20, processing_ms: 30, presentation_estimate_ms: 1150,
+        duration_ms: 1200, input_delay_ms: 20, processing_ms: 30, presentation_estimate_ms: 1150, page_activity: "changed",
       } },
   });
   vi.stubGlobal("fetch", vi.fn(async () => new Response("[]")));
@@ -44,6 +44,7 @@ test("distinguishes unattributed event phases from identified interaction timing
   expect(screen.getByText(/2 recent event entries had no interaction ID/)).toBeVisible();
   expect(screen.getByText(/Slowest entry without an interaction ID/)).toHaveTextContent("1200 ms · Input delay 20 ms · Handler processing 30 ms · Presentation estimate 1150 ms");
   expect(screen.getByText(/Recent grouped observations/)).toHaveTextContent("0 interaction IDs");
+  expect(screen.getByText(/Slowest entry without an interaction ID/)).toHaveTextContent("Page activity during entry: changed");
   expect(screen.getByText(/Follow-up sizing:/)).toHaveTextContent("2 attempts retained, including 1 failed");
   expect(screen.getByText(/Slowest follow-up fit:/)).toHaveTextContent("1050 ms · Font readiness 10 ms · After fonts 1040 ms · 2 measured frames · Largest frame gap 1000 ms · Failed");
   expect(screen.getByText(/Sizing timings are elapsed waits/)).toHaveTextContent("not correlated to the slowest snapshot");

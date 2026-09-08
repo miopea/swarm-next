@@ -6,10 +6,10 @@ const event = (interactionId = 1, duration = 200) => ({ interactionId, duration,
 test("groups entries across callbacks and retains phases from the slowest entry", () => {
   const capture = new RecentInteractions(() => 1000);
   capture.record(event());
-  capture.record({ ...event(1, 300), processingStart: 140, processingEnd: 180 });
-  capture.record({ ...event(1, 150), processingStart: 200, processingEnd: 240 });
+  capture.record({ ...event(1, 300), processingStart: 140, processingEnd: 180 }, "changed");
+  capture.record({ ...event(1, 150), processingStart: 200, processingEnd: 240 }, "foreground");
   expect(capture.snapshot()).toMatchObject({ observed_interactions: 1, slowest: {
-    duration_ms: 300, input_delay_ms: 40, processing_ms: 40, presentation_estimate_ms: 220,
+    duration_ms: 300, input_delay_ms: 40, processing_ms: 40, presentation_estimate_ms: 220, page_activity: "changed",
   } });
   capture.record(event(2));
   expect(capture.snapshot().observed_interactions).toBe(2);
@@ -18,12 +18,12 @@ test("groups entries across callbacks and retains phases from the slowest entry"
 test("unattributed native entries explain raw timing without becoming interactions", () => {
   let now = 1000;
   const capture = new RecentInteractions(() => now);
-  capture.record(event(0, 1200));
+  capture.record(event(0, 1200), "hidden");
   capture.record({ ...event(0, 1100), processingStart: 500, processingEnd: 600 });
   const snapshot = capture.snapshot();
   expect(snapshot).toMatchObject({ observed_interactions: 0, slowest: null,
     unattributed_event_entries: 2, slowest_unattributed: {
-      duration_ms: 1200, input_delay_ms: 20, processing_ms: 30, presentation_estimate_ms: 1150,
+      duration_ms: 1200, input_delay_ms: 20, processing_ms: 30, presentation_estimate_ms: 1150, page_activity: "hidden",
     } });
   snapshot.slowest_unattributed!.duration_ms = 5;
   expect(capture.snapshot().slowest_unattributed!.duration_ms).toBe(1200);

@@ -1,6 +1,7 @@
 import { RecentInteractions } from "./recentInteractions";
 import { terminalApplicationEvidence } from "../terminal/TerminalApplicationEvidence";
 import { terminalFitEvidence } from "../terminal/TerminalFitEvidence";
+import { currentPageActivity, PageActivityEvidence } from "./pageActivityEvidence";
 
 /** Browser-owned, content-free evidence. Never pass input or terminal bytes here. */
 export const BROWSER_METRICS = ["long_task", "interaction", "route", "terminal_render", "terminal_reconnect", "terminal_grant", "terminal_socket", "terminal_restore"] as const;
@@ -137,6 +138,13 @@ export function installBrowserPerformanceCapture(): () => void {
   recentInteractions = new RecentInteractions();
   try { previous = readPreviousBrowserPerformance(window.sessionStorage); } catch { previous = undefined; }
   const observers: PerformanceObserver[] = [];
+  const activity = new PageActivityEvidence();
+  let stopped = false;
+  const observeActivity = () => activity.record(currentPageActivity());
+  observeActivity();
+  window.addEventListener("focus", observeActivity);
+  window.addEventListener("blur", observeActivity);
+  document.addEventListener("visibilitychange", observeActivity);
   observed = [];
   if (typeof PerformanceObserver !== "undefined") {
     for (const type of ["longtask", "event"]) {
@@ -144,11 +152,13 @@ export function installBrowserPerformanceCapture(): () => void {
       let observer: PerformanceObserver | undefined;
       try {
         observer = new PerformanceObserver((list) => {
+          if (stopped) return;
+          observeActivity();
           if (document.visibilityState !== "visible") return;
           for (const entry of list.getEntries()) {
             // Event Timing names and targets may expose content; retain duration only.
             browserPerformance.record(type === "longtask" ? "long_task" : "interaction", entry.duration);
-            if (type === "event") recentInteractions.record(entry);
+            if (type === "event") recentInteractions.record(entry, activity.during(entry.startTime, entry.duration));
           }
         });
         observer.observe({ type, buffered: false });
@@ -159,12 +169,14 @@ export function installBrowserPerformanceCapture(): () => void {
   }
   const persist = () => { try { saveBrowserPerformance(window.sessionStorage); } catch { /* Optional storage. */ } };
   window.addEventListener("pagehide", persist);
-  let stopped = false;
   return () => {
     if (stopped) return;
     stopped = true;
     observers.forEach((observer) => observer.disconnect());
     window.removeEventListener("pagehide", persist);
+    window.removeEventListener("focus", observeActivity);
+    window.removeEventListener("blur", observeActivity);
+    document.removeEventListener("visibilitychange", observeActivity);
     persist();
     installed = false;
     observed = [];

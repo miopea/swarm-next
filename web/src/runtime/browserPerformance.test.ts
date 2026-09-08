@@ -1,7 +1,43 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { BrowserPerformanceRecorder, installBrowserPerformanceCapture, readBrowserPerformance, readPreviousBrowserPerformance, saveBrowserPerformance } from "./browserPerformance";
 
-afterEach(() => { vi.unstubAllGlobals(); window.sessionStorage.clear(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); window.sessionStorage.clear(); });
+
+test("event context covers focus changes before delivery and listeners stop with capture", () => {
+  let now = 0;
+  let focused = true;
+  let callback: PerformanceObserverCallback | undefined;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  vi.spyOn(document, "hasFocus").mockImplementation(() => focused);
+  const removeWindow = vi.spyOn(window, "removeEventListener");
+  const removeDocument = vi.spyOn(document, "removeEventListener");
+  vi.stubGlobal("PerformanceObserver", class {
+    static supportedEntryTypes = ["event"];
+    constructor(cb: PerformanceObserverCallback) { callback = cb; }
+    observe() {}
+    disconnect() {}
+  });
+  const stop = installBrowserPerformanceCapture();
+  const emit = () => callback!({ getEntries: () => [{ interactionId: 17, duration: 200,
+    startTime: 10, processingStart: 20, processingEnd: 30 }] } as unknown as PerformanceObserverEntryList, {} as PerformanceObserver);
+  try {
+    now = 50;
+    focused = false;
+    window.dispatchEvent(new Event("blur"));
+    now = 100;
+    focused = true;
+    window.dispatchEvent(new Event("focus"));
+    now = 250;
+    emit();
+    expect(readBrowserPerformance().recent_interactions.slowest?.page_activity).toBe("changed");
+  } finally { stop(); }
+  expect(removeWindow.mock.calls.some(([type]) => type === "focus")).toBe(true);
+  expect(removeWindow.mock.calls.some(([type]) => type === "blur")).toBe(true);
+  expect(removeDocument.mock.calls.some(([type]) => type === "visibilitychange")).toBe(true);
+  const before = readBrowserPerformance();
+  emit();
+  expect(readBrowserPerformance().recent_interactions).toEqual(before.recent_interactions);
+});
 
 test("high event volume is aggregated and bounded by count and age", () => {
   let now = 1_000_000;
