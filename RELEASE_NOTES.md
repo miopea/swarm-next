@@ -12,6 +12,91 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.6.0
+
+A more comfortable daily-driver Hive: clearer decisions, better terminal
+handoffs, and more observable coordination. These highlights consolidate 491
+commits since 1.5.0, not completion of the full maturity program.
+
+**Before upgrading:** back up your database. This release migrates schema 124
+to 150 and changes the worker-engine protocol from 10 to 16. Plan a maintenance
+window for the engine transition; do not assume this upgrade preserves running
+provider processes. App/API updates and worker-engine updates are separate.
+
+### New features
+- **Needs You, simplified:** clearer recommendations and quick answers, with
+  **Say something else** whenever you want to give your own response.
+- **Queues by next owner:** see who has the next move, grouped by worker, with
+  waiting reasons, prerequisites, and recorded hold dates.
+- **Resume Here:** explicitly move terminal control between devices while the
+  other view stays read-only (after the worker engine update)
+- **Night Watch on a schedule:** configure a time zone and overnight window,
+  override it manually, and return to daytime behavior on desktop activity.
+- **Reachable without being at your desk:** phone use and locked-desktop
+  presence are distinguished from actively working in a terminal.
+- **Task prerequisites:** record and inspect dependencies directly on tasks,
+  rather than leaving the relationship buried in notes.
+- **Less routine review friction:** eligible work can complete from verified
+  evidence without waiting for a separate Queen approval.
+- **Shared operator decisions:** Queen can link an existing decision to related
+  work within its original scope instead of asking the same question again.
+- **Verifiable operator instructions:** supported authored submissions carry
+  source evidence that Queen and workers can check.
+- **Browser-aware diagnostics:** distinguish local delays from server evidence
+  and inspect bounded terminal connection and rendering timings.
+- **Developer dogfood history:** development builds can retain bounded,
+  content-free browser evidence for comparisons across builds.
+- **Database recovery tools:** bounded daily snapshots, visible backup failures,
+  and offline restore checks that preserve corruption evidence.
+
+### Fixes
+- Reduced redundant background polling, hidden-window refreshes, and obsolete
+  terminal controllers that added browser work over time.
+- Reduced task refresh payloads and indexed task-history lookups so settled
+  work does not continually weigh down the active board.
+- Fixed overlapping text in Claude's multi-question AskUser screens on mobile.
+- Stabilized terminal geometry during mobile keyboard and composer use.
+- Preserved mobile composer drafts and attachment intent through disconnects.
+- Made interrupted attachment selection and upload recovery visible and
+  cancellable; incomplete clipboard data no longer breaks attachment handling.
+- Prevented mobile toolbar keys from interleaving with a composer submission.
+- Kept healthy terminal sockets open while validated snapshots are applied,
+  and tied render confirmation to the socket that supplied the data.
+- Cancelled obsolete render and fit work when leaving a terminal; failed GPU
+  renderers can recover without abandoning the whole control room.
+- Preserved explicit conversation choices across worker restarts and retained
+  conversation evidence when a session stops (after the worker engine update)
+- Kept the selected worker visible when its underlying session is replaced.
+- Fixed blocked-to-Ready transitions so additional work can wait without
+  preempting a worker's current active task.
+- Rebriefed cleared blocked work and removed obsolete holds from former
+  assignments instead of leaving tasks silently stranded.
+- Routed unstructured blocking explanations back to Queen for reassessment,
+  while keeping ordinary active work out of waiting piles.
+- Removed age-only stalls and conversation-history uncertainty from Needs You;
+  pending operator decisions can be opened directly from Queues.
+- Preserved confirmed Queen reviews across App/API updates and gave fresh
+  review checks priority over unchanged investigations.
+- Improved bounded briefing submission and recovery, including wrapped paste
+  markers, while retaining protection for active work and operator input.
+- Restored workers' access to their own completed-task evidence and history.
+- Prevented Jira reconciliation from restoring removed work or treating
+  dismissed work as a new workflow conflict.
+- Joined background deliveries during graceful API shutdown and retained
+  binaries still needed by the running worker engine.
+- Repaired migration collisions from the earlier schema 124 release and
+  rejected empty or damaged backup candidates before restoration.
+- Required explicit experimental-provider admission and kept experimental
+  workers out of unattended Night Watch startup.
+
+### Known limitations
+
+Automatic rolling engine updates, full unattended backlog recovery, and
+sustained browser-performance acceptance remain in progress. A slow reconnect
+of about 4.3 seconds was observed during release checks. Android/iOS background
+and camera/gallery behavior still need broader real-device verification.
+The unfinished BFG Admin support integration is not included.
+
 ## 1.5.0
 
 ⚠️ **This release migrates your database (schema 124).** A tarball install is not
