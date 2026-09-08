@@ -116,7 +116,7 @@ export default function DevelopmentReloadAction({ busy, runtime, reachable = tru
   ) : null;
   const lastBuildLanded = runtime.state === "ready" ? (
     <p className="development-build-landed" role="status">
-      The last build completed, and revision {runningRevision} is serving this page.
+      The last build completed, and API revision {runningRevision} is active. Other open tabs may still need reloading.
     </p>
   ) : null;
   if (runtime.state === "deferred") return (

@@ -5,7 +5,7 @@ import DatabaseRecoveryCard from "./runtime/DatabaseRecoveryCard";
 import BroadcastToWorkers from "./workers/BroadcastToWorkers";
 import ConversationDriftCard, { type WorkerConversation } from "./workers/ConversationDriftCard";
 import PublicAddressWarning from "./PublicAddressWarning";
-import StaleBundleNotice from "./StaleBundleNotice";
+import StaleBundleNotice, { reloadBrowser } from "./StaleBundleNotice";
 import { watchDevelopmentBuild as observeDevelopmentBuild } from "./runtime/watchDevelopmentBuild";
 import { useDogfoodCollection } from "./runtime/useDogfoodCollection";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
@@ -1411,7 +1411,7 @@ export function App() {
     const result = await observeDevelopmentBuild(operatorToken, previousVersion, owner.signal);
     if (owner.signal.aborted || developmentBuildWatch.current !== owner) return;
     developmentBuildWatch.current = null;
-    if (result.kind === "changed") window.location.reload();
+    if (result.kind === "changed") reloadBrowser(result.version);
     else if (result.kind === "failed") setOperationError(developmentFailureMessage(result.runtime));
     else if (result.kind === "error") setOperationError(result.message);
     else if (result.kind === "timeout") setOperationError("The development build did not become healthy within 20 minutes");

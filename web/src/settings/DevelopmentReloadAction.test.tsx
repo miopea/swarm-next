@@ -167,7 +167,7 @@ test("confirms the last build landed, even while offering the next one", () => {
   }} />);
 
   const status = screen.getByLabelText("App and API status");
-  expect(status).toHaveTextContent("The last build completed, and revision a50fcb4 is serving this page");
+  expect(status).toHaveTextContent("The last build completed, and API revision a50fcb4 is active. Other open tabs may still need reloading.");
   expect(status).toHaveTextContent("Build and switch the browser and API to working-copy revision 9668d65");
 });
 

@@ -16,7 +16,7 @@ test("a healthy different version completes one watcher and clears its timers", 
   const { owner, fetch } = fixture();
   const result = watchDevelopmentBuild("token", "old", owner.signal);
   await vi.advanceTimersByTimeAsync(2_000);
-  expect(await result).toEqual({ kind: "changed" });
+  expect(await result).toEqual({ kind: "changed", version: "new" });
   expect(fetch).toHaveBeenCalledTimes(2);
   expect(vi.getTimerCount()).toBe(0);
 });
@@ -52,7 +52,7 @@ test("request deadlines recover without parallel polling", async () => {
   await vi.advanceTimersByTimeAsync(9_999);
   expect(fetch).toHaveBeenCalledTimes(2);
   await vi.advanceTimersByTimeAsync(2_001);
-  expect(await result).toEqual({ kind: "changed" });
+  expect(await result).toEqual({ kind: "changed", version: "new" });
   expect(fetch).toHaveBeenCalledTimes(4);
   expect(vi.getTimerCount()).toBe(0);
 });

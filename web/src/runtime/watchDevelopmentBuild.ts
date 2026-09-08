@@ -1,7 +1,7 @@
 import { fetchDevelopmentRuntime, fetchHealth, RuntimeRequestError, type DevelopmentRuntime } from "../api";
 
 export type DevelopmentBuildObservation =
-  | { kind: "changed" }
+  | { kind: "changed"; version: string }
   | { kind: "failed"; runtime: DevelopmentRuntime }
   | { kind: "error"; message: string }
   | { kind: "timeout" }
@@ -24,7 +24,7 @@ export async function watchDevelopmentBuild(token: string, previousVersion: stri
       // Even an adapter that completes after cancellation cannot authorize navigation.
       if (signal.aborted) break;
       if (request.signal.aborted) continue;
-      if (health.version !== previousVersion) return { kind: "changed" };
+      if (health.version !== previousVersion) return { kind: "changed", version: health.version };
       if (runtime.state === "failed") return { kind: "failed", runtime };
     } catch (error) {
       if (signal.aborted) break;
