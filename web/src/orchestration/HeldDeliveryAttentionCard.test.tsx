@@ -6,6 +6,38 @@ import HeldDeliveryAttentionCard from "./HeldDeliveryAttentionCard";
 
 afterEach(cleanup);
 
+test("start admission holds show their actual reason without offering a wake", () => {
+  const reason = "Swarm Next is not running: this machine is under memory pressure.";
+  render(<HeldDeliveryAttentionCard held={[
+    held({ kind: "wake_not_admitted", subject: "wake:one", worker_name: "Swarm Next", reason }),
+    held({ kind: "wake_not_admitted", subject: "wake:two", worker_name: "Swarm Next", reason }),
+  ]} workerIsAwake={() => false} onOpenWorker={vi.fn()} />);
+  expect(screen.getByText("Worker start paused")).toBeInTheDocument();
+  expect(screen.getByText("2 items are waiting")).toBeInTheDocument();
+  expect(screen.getAllByText(reason)).toHaveLength(1);
+  expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  expect(screen.queryByText(/Answer the prompt/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/retried/)).not.toBeInTheDocument();
+});
+
+test("mixed holds preserve the actual prompt action without miscounting start holds", () => {
+  const { rerender } = render(<HeldDeliveryAttentionCard held={[
+    held({ kind: "wake_not_admitted", subject: "wake:one", worker_name: "Swarm Next", reason: "Memory pressure" }),
+    held({ subject: "task:two", worker_name: "Poppy" }),
+  ]} workerIsAwake={() => true} onOpenWorker={vi.fn()} />);
+  expect(screen.getByRole("button", { name: "Open Poppy" })).toBeInTheDocument();
+  expect(screen.queryByText("2 things are waiting at worker prompts")).not.toBeInTheDocument();
+  rerender(<HeldDeliveryAttentionCard held={[]} />);
+  expect(screen.queryByText("Memory pressure")).not.toBeInTheDocument();
+});
+
+test("unknown holds preserve evidence without fabricating a prompt or wake remedy", () => {
+  render(<HeldDeliveryAttentionCard held={[held({ kind: "future_policy", reason: "A new safeguard is holding delivery" })]} onOpenWorker={vi.fn()} />);
+  expect(screen.getByText("A new safeguard is holding delivery")).toBeInTheDocument();
+  expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  expect(screen.queryByText(/Queen cannot review/)).not.toBeInTheDocument();
+});
+
 function held(overrides: Partial<HeldDelivery> = {}): HeldDelivery {
   return {
     kind: "delivery_held_open_prompt",
@@ -29,7 +61,7 @@ test("names Queen's stalled review as the reason nothing is moving", () => {
   expect(screen.getByText("Queen cannot review until a prompt is answered")).toBeInTheDocument();
   expect(screen.getByText(/Nothing gets routed while Queen's terminal has an open question/)).toBeInTheDocument();
   // The count is the evidence that this is stuck rather than merely slow.
-  expect(screen.getByText(/retried 1503 times/)).toBeInTheDocument();
+  expect(screen.getByText(/observed 1503 times/)).toBeInTheDocument();
 });
 
 test("says a worker's work is waiting rather than lost", () => {

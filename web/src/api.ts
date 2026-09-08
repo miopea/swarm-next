@@ -410,8 +410,9 @@ export type HeldBriefing = {
 export type HeldDelivery = {
   /**
    * "delivery_held_open_prompt", "delivery_held_unsent_text" or
-   * "wake_uncertain". Three situations with three different remedies: answer
-   * the question, clear the line you typed, or wake the worker yourself.
+   * "wake_uncertain" need distinct terminal remedies. "wake_not_admitted"
+   * is a start-policy hold, not an unanswered question. Unknown kinds must
+   * display their supplied reason without inventing a terminal action.
    */
   kind: string;
   subject: string;

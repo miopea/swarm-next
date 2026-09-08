@@ -24,7 +24,28 @@ type Props = {
  * "stranded input was a real category, something waiting in a terminal nobody
  * was looking at" — so it is surfaced where the operator already looks.
  */
-export default function HeldDeliveryAttentionCard({ held, onOpenWorker, workerIsAwake }: Props) {
+export default function HeldDeliveryAttentionCard(props: Props) {
+  const terminalKinds = new Set([
+    "delivery_held_open_prompt", "delivery_held_unsent_text", "delivery_held", "wake_uncertain",
+  ]);
+  const terminal = props.held.filter((entry) => terminalKinds.has(entry.kind));
+  const other = props.held.filter((entry) => !terminalKinds.has(entry.kind));
+  const reasons = [...new Set(other.map((entry) => entry.reason))];
+  const starts = other.length > 0 && other.every((entry) => entry.kind === "wake_not_admitted");
+  return <>
+    {other.length > 0 && <section className="queen-attention-card held-delivery-card" aria-label="Work held by system safeguards">
+      <div>
+        <p className="eyebrow">{starts ? "Worker start paused" : "Delivery paused"}</p>
+        <h3>{other.length === 1 ? "1 item is waiting" : `${other.length} items are waiting`}</h3>
+        {reasons.map((reason) => <p key={reason}>{reason || "The coordinator has not provided a reason."}</p>)}
+        {starts && <p>This is a worker-start safeguard, not an unanswered terminal question.</p>}
+      </div>
+    </section>}
+    <TerminalHeldDeliveryAttentionCard {...props} held={terminal} />
+  </>;
+}
+
+function TerminalHeldDeliveryAttentionCard({ held, onOpenWorker, workerIsAwake }: Props) {
   if (held.length === 0) return null;
   const queen = held.find((entry) => entry.subject === "queen-review");
   const oldest = held.reduce((worst, entry) =>
@@ -72,7 +93,7 @@ export default function HeldDeliveryAttentionCard({ held, onOpenWorker, workerIs
               : "Swarm will not type into a terminal with an open question. Answer the prompt and it delivers itself."}
         </p>
         <p className="held-delivery-since">
-          Since {new Date(oldest.first_observed_at * 1000).toLocaleString()} · retried {oldest.observations} times
+          Since {new Date(oldest.first_observed_at * 1000).toLocaleString()} · observed {oldest.observations} times
         </p>
       </div>
       {onOpenWorker && (queen ? "Queen" : oldest.worker_name) ? (() => {
