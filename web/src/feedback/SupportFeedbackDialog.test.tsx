@@ -9,6 +9,27 @@ vi.mock("../api/support", () => ({ fetchSupportStatus: vi.fn(), submitSupport: v
 const status: SupportStatus = { configured: true, sender: "running", deliveries: [] };
 afterEach(() => { cleanup(); sessionStorage.clear(); vi.resetAllMocks(); });
 function open() { return render(<SupportFeedbackDialog operatorToken="fixture" status={status} onClose={vi.fn()} />); }
+
+test("rate-limited reports show their retained deadline without an immediate retry", () => {
+  render(<SupportFeedbackDialog operatorToken="fixture" onClose={vi.fn()} status={{ ...status, deliveries: [{
+    submission_key: "fictional-key", created_at: 1,
+    delivery: { state: "rate_limited", refusal: "rate_limited", retry_not_before: 120, attempts: 1, attempt_id: "attempt" },
+  }] }} />);
+  fireEvent.click(screen.getByText(/Delivery status ·/));
+  expect(screen.getByText(/Support is busy — retry no earlier than/)).toBeVisible();
+  expect(retrySupport).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
+});
+
+test("conflict details are visible without exposing a remote error body", () => {
+  render(<SupportFeedbackDialog operatorToken="fixture" onClose={vi.fn()} status={{ ...status, deliveries: [{
+    submission_key: "fictional-key", created_at: 1,
+    delivery: { state: "failed", refusal: "conflict", attempts: 1, attempt_id: "attempt" },
+  }] }} />);
+  fireEvent.click(screen.getByText(/Delivery status ·/));
+  expect(screen.getByText(/Support refused a conflicting report key/)).toBeVisible();
+  expect(submitSupport).not.toHaveBeenCalled();
+});
 function review() {
   fireEvent.change(screen.getByLabelText("Email"), { target: { value: "fictional@example.invalid" } });
   fireEvent.change(screen.getByLabelText("Subject"), { target: { value: "Fictional report" } });

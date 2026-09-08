@@ -2,7 +2,7 @@
 use std::time::Duration;
 
 use swarm_application::SupportDestination;
-use swarm_persistence::SupportReceipt;
+use swarm_persistence::{SupportReceipt, SupportRefusal};
 
 const MAX_RECEIPT_BYTES: usize = 16 * 1024;
 const MAX_SUBMISSION_BYTES: usize = 128 * 1024;
@@ -11,6 +11,10 @@ const DEADLINE: Duration = Duration::from_secs(20);
 /// An HTTP receipt is still untrusted until the application fences its identities.
 pub enum SupportTransportResult {
     Receipt(SupportReceipt),
+    Refused {
+        reason: swarm_persistence::SupportRefusal,
+        retry_after_seconds: Option<u32>,
+    },
     /// No accepted receipt: never infer rejection, generate a new key, or claim sent.
     Uncertain,
 }
@@ -45,7 +49,7 @@ impl SupportTransport {
         )
         .await
         {
-            Ok(Some(receipt)) => SupportTransportResult::Receipt(receipt),
+            Ok(Some(result)) => result,
             _ => SupportTransportResult::Uncertain,
         }
     }
@@ -63,7 +67,7 @@ async fn receive(
     client: &reqwest::Client,
     endpoint: &str,
     frozen_submission: &str,
-) -> Option<SupportReceipt> {
+) -> Option<SupportTransportResult> {
     let mut response = client
         .post(endpoint)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -71,6 +75,25 @@ async fn receive(
         .send()
         .await
         .ok()?;
+    let refusal = match response.status().as_u16() {
+        409 => Some((SupportRefusal::Conflict, None)),
+        429 => Some((
+            SupportRefusal::RateLimited,
+            response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(retry_seconds),
+        )),
+        400 | 401 | 403 | 404 | 413 | 422 => Some((SupportRefusal::Rejected, None)),
+        _ => None,
+    };
+    if let Some((reason, retry_after_seconds)) = refusal {
+        return Some(SupportTransportResult::Refused {
+            reason,
+            retry_after_seconds,
+        });
+    }
     if !response.status().is_success()
         || response
             .content_length()
@@ -85,7 +108,19 @@ async fn receive(
         }
         bytes.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&bytes).ok()
+    serde_json::from_slice(&bytes)
+        .ok()
+        .map(SupportTransportResult::Receipt)
+}
+
+fn retry_seconds(value: &str) -> Option<u32> {
+    if value.is_empty() || value.len() > 6 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    value
+        .parse::<u32>()
+        .ok()
+        .filter(|seconds| (1..=604_800).contains(seconds))
 }
 
 #[cfg(test)]
@@ -102,6 +137,67 @@ mod tests {
 
     fn client() -> reqwest::Client {
         transport_client(Duration::from_secs(2)).unwrap()
+    }
+
+    #[test]
+    fn retry_after_is_bounded_seconds_not_arbitrary_header_text() {
+        assert_eq!(retry_seconds("120"), Some(120));
+        for invalid in [
+            "",
+            "0",
+            "-1",
+            "604801",
+            "1234567",
+            "1.5",
+            " 60",
+            "Wed, 09 Sep 2026 00:00:00 GMT",
+        ] {
+            assert_eq!(retry_seconds(invalid), None);
+        }
+    }
+
+    #[tokio::test]
+    async fn conflict_and_rate_limit_are_typed_without_reading_error_bodies() {
+        for status in [409, 429] {
+            let router = Router::new().route(
+                "/",
+                post(move || async move {
+                    Response::builder()
+                        .status(status)
+                        .header("retry-after", "120")
+                        .body(Body::from_stream(futures_util::stream::pending::<
+                            Result<Vec<u8>, std::io::Error>,
+                        >()))
+                        .unwrap()
+                }),
+            );
+            let (endpoint, task) = server(router).await;
+            let result = tokio::time::timeout(
+                Duration::from_secs(1),
+                receive(&client(), &endpoint, "fictional"),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let SupportTransportResult::Refused {
+                reason,
+                retry_after_seconds,
+            } = result
+            else {
+                panic!("expected refusal")
+            };
+            assert!(matches!(
+                (status, reason),
+                (409, swarm_persistence::SupportRefusal::Conflict)
+                    | (429, swarm_persistence::SupportRefusal::RateLimited)
+            ));
+            assert_eq!(
+                retry_after_seconds,
+                if status == 429 { Some(120) } else { None }
+            );
+            task.abort();
+            let _ = task.await;
+        }
     }
 
     #[tokio::test]
@@ -123,7 +219,10 @@ mod tests {
         let result = receive(&client(), &endpoint, "{\"reviewed\":\"fictional only\"}")
             .await
             .unwrap();
-        assert_eq!(result.submission_key, "untrusted-key");
+        let SupportTransportResult::Receipt(receipt) = result else {
+            panic!("expected a receipt")
+        };
+        assert_eq!(receipt.submission_key, "untrusted-key");
         task.abort();
         let _ = task.await;
     }

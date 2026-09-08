@@ -42,6 +42,10 @@ pub struct SupportOutboxEntry {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SupportOutboxDelivery {
     #[serde(default)]
+    pub retry_not_before: Option<i64>,
+    #[serde(default)]
+    pub refusal: Option<SupportRefusal>,
+    #[serde(default)]
     pub manual_retry_id: Option<Uuid>,
     #[serde(default)]
     pub manual_retry_expected_attempt: Option<Uuid>,
@@ -52,6 +56,14 @@ pub struct SupportOutboxDelivery {
     pub attempt_id: Option<Uuid>,
     pub updated_at: i64,
     pub receipt: Option<SupportReceipt>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SupportRefusal {
+    Conflict,
+    Rejected,
+    RateLimited,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -220,6 +232,8 @@ impl TaskStore {
             return Err(SupportOutboxError::Capacity);
         }
         let delivery = SupportOutboxDelivery {
+            retry_not_before: None,
+            refusal: None,
             manual_retry_id: None,
             manual_retry_expected_attempt: None,
             manual_retry_pending: false,
@@ -303,8 +317,17 @@ impl TaskStore {
         } else {
             entry.delivery.state.begin(entry.delivery.attempts)
         };
+        if entry
+            .delivery
+            .retry_not_before
+            .is_some_and(|deadline| now < deadline)
+        {
+            return Err(SupportOutboxError::InvalidTransition);
+        }
         let (state, attempts) = transition.map_err(|_| SupportOutboxError::InvalidTransition)?;
         entry.delivery = SupportOutboxDelivery {
+            retry_not_before: None,
+            refusal: None,
             manual_retry_id: entry.delivery.manual_retry_id,
             manual_retry_expected_attempt: entry.delivery.manual_retry_expected_attempt,
             manual_retry_pending: false,
@@ -334,6 +357,9 @@ impl TaskStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let entry = read(&transaction, key)?.ok_or(SupportOutboxError::NotFound)?;
+        if outcome == SupportDeliveryState::RateLimited {
+            return Err(SupportOutboxError::InvalidTransition);
+        }
         if entry.delivery.attempt_id != Some(attempt)
             || entry.delivery.state != SupportDeliveryState::Delivering
         {
@@ -358,6 +384,8 @@ impl TaskStore {
             }
         }
         let delivery = SupportOutboxDelivery {
+            retry_not_before: None,
+            refusal: None,
             manual_retry_id: entry.delivery.manual_retry_id,
             manual_retry_expected_attempt: entry.delivery.manual_retry_expected_attempt,
             manual_retry_pending: false,
@@ -368,6 +396,52 @@ impl TaskStore {
             receipt,
         };
         save_delivery(&transaction, key, &delivery)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Records an explicit remote refusal under the original attempt fence.
+    /// # Errors
+    /// Refuses stale attempts, malformed retry bounds and unavailable storage.
+    pub fn refuse_support_submission(
+        &self,
+        key: Uuid,
+        attempt: Uuid,
+        refusal: SupportRefusal,
+        retry_after_seconds: Option<u32>,
+        now: i64,
+    ) -> Result<(), SupportOutboxError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut entry = read(&transaction, key)?.ok_or(SupportOutboxError::NotFound)?;
+        if entry.delivery.attempt_id != Some(attempt)
+            || entry.delivery.state != SupportDeliveryState::Delivering
+        {
+            return Err(SupportOutboxError::StaleAttempt);
+        }
+        if now < 0
+            || (!matches!(refusal, SupportRefusal::RateLimited) && retry_after_seconds.is_some())
+            || retry_after_seconds.is_some_and(|seconds| seconds == 0 || seconds > 604_800)
+        {
+            return Err(SupportOutboxError::InvalidTransition);
+        }
+        let outcome =
+            if matches!(refusal, SupportRefusal::RateLimited) && retry_after_seconds.is_some() {
+                SupportDeliveryState::RateLimited
+            } else {
+                SupportDeliveryState::Failed
+            };
+        entry.delivery.state = entry
+            .delivery
+            .state
+            .settle(outcome)
+            .map_err(|_| SupportOutboxError::InvalidTransition)?;
+        entry.delivery.retry_not_before =
+            retry_after_seconds.map(|seconds| now.saturating_add(i64::from(seconds)));
+        entry.delivery.refusal = Some(refusal);
+        entry.delivery.manual_retry_pending = false;
+        entry.delivery.updated_at = now;
+        save_delivery(&transaction, key, &entry.delivery)?;
         transaction.commit()?;
         Ok(())
     }
@@ -447,6 +521,89 @@ mod tests {
     use swarm_domain::{SupportKind, SupportSubmissionInput};
 
     const DESTINATION: &str = "https://support.example.invalid/api/support/v1/submissions";
+
+    #[test]
+    fn rate_limit_survives_restart_and_refusal_cannot_settle_a_new_attempt() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("hive.db");
+        let hive = TaskStore::open(&path).unwrap();
+        let key = Uuid::from_u128(1);
+        let saved = hive
+            .enqueue_support_submission(&submission(1, "Fictional only"), DESTINATION, 1)
+            .unwrap();
+        let first = hive
+            .claim_support_submission(key, 2)
+            .unwrap()
+            .delivery
+            .attempt_id
+            .unwrap();
+        hive.refuse_support_submission(key, first, SupportRefusal::RateLimited, Some(120), 3)
+            .unwrap();
+        drop(hive);
+        let hive = TaskStore::open(&path).unwrap();
+        assert_eq!(hive.recover_support_submissions(4).unwrap(), 0);
+        assert!(hive.claim_support_submission(key, 122).is_err());
+        assert_eq!(
+            hive.support_submission_statuses().unwrap()[0]
+                .delivery
+                .attempts,
+            1
+        );
+        let second = hive.claim_support_submission(key, 123).unwrap();
+        assert_eq!(second.frozen_submission, saved.frozen_submission);
+        assert!(matches!(
+            hive.refuse_support_submission(key, first, SupportRefusal::Conflict, None, 124),
+            Err(SupportOutboxError::StaleAttempt)
+        ));
+        hive.refuse_support_submission(
+            key,
+            second.delivery.attempt_id.unwrap(),
+            SupportRefusal::Conflict,
+            None,
+            125,
+        )
+        .unwrap();
+        assert!(hive.claim_support_submission(key, 1000).is_err());
+        let status = hive.support_submission_statuses().unwrap();
+        assert_eq!(status[0].delivery.state, SupportDeliveryState::Failed);
+        assert!(matches!(
+            status[0].delivery.refusal,
+            Some(SupportRefusal::Conflict)
+        ));
+    }
+
+    #[test]
+    fn invalid_rate_limit_is_held_without_guessing_an_automatic_retry() {
+        let hive = TaskStore::in_memory().unwrap();
+        let key = Uuid::from_u128(1);
+        hive.enqueue_support_submission(&submission(1, "Fictional only"), DESTINATION, 1)
+            .unwrap();
+        let attempt = hive
+            .claim_support_submission(key, 2)
+            .unwrap()
+            .delivery
+            .attempt_id
+            .unwrap();
+        assert!(
+            hive.refuse_support_submission(
+                key,
+                attempt,
+                SupportRefusal::RateLimited,
+                Some(604_801),
+                3
+            )
+            .is_err()
+        );
+        hive.refuse_support_submission(key, attempt, SupportRefusal::RateLimited, None, 3)
+            .unwrap();
+        assert!(hive.claim_support_submission(key, 1000).is_err());
+        assert_eq!(
+            hive.support_submission_statuses().unwrap()[0]
+                .delivery
+                .state,
+            SupportDeliveryState::Failed
+        );
+    }
 
     #[test]
     fn status_is_content_free_and_clock_correction_cannot_strand_a_fenced_attempt() {

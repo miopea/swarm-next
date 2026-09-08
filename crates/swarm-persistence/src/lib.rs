@@ -83,6 +83,7 @@ pub use support::{
 };
 pub use support_outbox::{
     SupportOutboxDelivery, SupportOutboxEntry, SupportOutboxError, SupportOutboxStatus,
+    SupportRefusal,
 };
 mod jira;
 mod legacy_source;

@@ -11,7 +11,7 @@ export type SupportSubmission = {
 export type SupportDelivery = {
   submission_key: string;
   created_at: number;
-  delivery: { state: "pending" | "delivering" | "uncertain" | "failed" | "confirmed"; attempts: number; attempt_id?: string | null; manual_retry_pending?: boolean; receipt?: { message_id: string } | null };
+  delivery: { state: "pending" | "delivering" | "uncertain" | "failed" | "confirmed" | "rate_limited"; attempts: number; attempt_id?: string | null; manual_retry_pending?: boolean; retry_not_before?: number | null; refusal?: "conflict" | "rejected" | "rate_limited" | null; receipt?: { message_id: string } | null };
 };
 export type SupportStatus = { configured: boolean; sender: "configured" | "running" | "stopped" | "failed" | null; deliveries: SupportDelivery[] };
 export type SupportRetry = { submission_key: string; retry_id: string; expected_attempt_id: string };

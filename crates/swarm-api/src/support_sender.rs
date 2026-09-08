@@ -110,6 +110,17 @@ async fn run_owned(
             let receipt = match transport.send(&entry.frozen_submission).await {
                 SupportTransportResult::Receipt(receipt) => Some(receipt),
                 SupportTransportResult::Uncertain => None,
+                SupportTransportResult::Refused {
+                    reason,
+                    retry_after_seconds,
+                } => {
+                    let settlement = service.clone();
+                    storage(move || {
+                        settlement.refuse(key, attempt, reason, retry_after_seconds, now())
+                    })
+                    .await?;
+                    continue;
+                }
             };
             let settlement = service.clone();
             storage(move || settlement.settle(key, attempt, receipt, now())).await?;
@@ -200,6 +211,49 @@ mod tests {
             1
         );
         assert!(hive.retryable_keys().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn shutdown_durably_retains_refusal_and_its_retry_deadline() {
+        struct RefusingTransport(watch::Sender<bool>);
+        impl Transport for RefusingTransport {
+            async fn send(&self, _body: &str) -> SupportTransportResult {
+                self.0.send_replace(true);
+                SupportTransportResult::Refused {
+                    reason: swarm_persistence::SupportRefusal::RateLimited,
+                    retry_after_seconds: Some(120),
+                }
+            }
+        }
+        let (hive, _, input) = fixture();
+        let key = input.submission_key;
+        hive.submit_reviewed(input, 1).unwrap();
+        let before = now();
+        let (stop, receiver) = watch::channel(false);
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            run_owned(
+                hive.clone(),
+                RefusingTransport(stop),
+                receiver,
+                Arc::new(Notify::new()),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let delivery = hive.statuses().unwrap().remove(0).delivery;
+        assert_eq!(delivery.state, SupportDeliveryState::RateLimited);
+        assert_eq!(delivery.attempts, 1);
+        assert!(matches!(
+            delivery.refusal,
+            Some(swarm_persistence::SupportRefusal::RateLimited)
+        ));
+        let deadline = delivery.retry_not_before.unwrap();
+        assert!(deadline >= before + 120);
+        assert_eq!(hive.recover_interrupted(deadline - 1).unwrap(), 0);
+        assert!(hive.claim(key, deadline - 1).is_err());
+        assert_eq!(hive.claim(key, deadline).unwrap().delivery.attempts, 2);
     }
 
     #[tokio::test]

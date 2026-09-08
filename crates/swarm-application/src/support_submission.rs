@@ -17,6 +17,8 @@ pub enum HiveSupportServiceError {
         "support destination must be an HTTPS origin without credentials, path, query or fragment"
     )]
     InvalidDestination,
+    #[error("email messages belong to Admin's mail intake, not native feedback submission")]
+    UnsupportedKind,
     #[error("support delivery status contains an invalid saved identity")]
     InvalidSavedIdentity,
     #[error(transparent)]
@@ -56,7 +58,7 @@ impl SupportDestination {
             return Err(HiveSupportServiceError::InvalidDestination);
         }
         Ok(Self(format!(
-            "{}/api/support/v1/submissions",
+            "{}/api/feedback/swarm-support/submissions",
             url.origin().ascii_serialization()
         )))
     }
@@ -118,6 +120,9 @@ impl HiveSupportService {
         input: SupportSubmissionInput,
         now: i64,
     ) -> Result<SupportOutboxEntry, HiveSupportServiceError> {
+        if matches!(input.kind, swarm_domain::SupportKind::Email) {
+            return Err(HiveSupportServiceError::UnsupportedKind);
+        }
         Ok(self.store.enqueue_support_submission(
             &input.validate()?,
             self.destination.endpoint(),
@@ -217,6 +222,22 @@ impl HiveSupportService {
             now,
         )?)
     }
+
+    /// Preserve an explicit Admin refusal and its bounded retry deadline.
+    /// # Errors
+    /// Refuses superseded attempts and invalid retry bounds without changing history.
+    pub fn refuse(
+        &self,
+        key: Uuid,
+        attempt: Uuid,
+        reason: swarm_persistence::SupportRefusal,
+        retry_after_seconds: Option<u32>,
+        now: i64,
+    ) -> Result<(), HiveSupportServiceError> {
+        Ok(self
+            .store
+            .refuse_support_submission(key, attempt, reason, retry_after_seconds, now)?)
+    }
 }
 
 #[cfg(test)]
@@ -256,7 +277,7 @@ mod tests {
             SupportDestination::parse("https://SUPPORT.example.invalid:443/")
                 .unwrap()
                 .endpoint(),
-            "https://support.example.invalid/api/support/v1/submissions"
+            "https://support.example.invalid/api/feedback/swarm-support/submissions"
         );
     }
 
@@ -293,6 +314,35 @@ mod tests {
         assert_eq!(claimed.destination, saved.destination);
         assert_eq!(claimed.delivery.attempts, 1);
         assert!(original.claim(saved.submission_key, 4).is_err());
+    }
+
+    #[test]
+    fn old_route_is_held_and_native_intake_cannot_impersonate_mail() {
+        let store = TaskStore::in_memory().unwrap();
+        let saved = store
+            .enqueue_support_submission(
+                &input().validate().unwrap(),
+                "https://support.example.invalid/api/support/v1/submissions",
+                1,
+            )
+            .unwrap();
+        let service = HiveSupportService::new(
+            store,
+            SupportDestination::parse("https://support.example.invalid").unwrap(),
+        );
+        assert!(matches!(
+            service.claim(saved.submission_key, 2),
+            Err(HiveSupportServiceError::Outbox(
+                SupportOutboxError::Conflict
+            ))
+        ));
+        let mut email = input();
+        email.kind = swarm_domain::SupportKind::Email;
+        assert!(matches!(
+            service.submit_reviewed(email, 3),
+            Err(HiveSupportServiceError::UnsupportedKind)
+        ));
+        assert_eq!(service.statuses().unwrap()[0].delivery.attempts, 0);
     }
 
     #[test]

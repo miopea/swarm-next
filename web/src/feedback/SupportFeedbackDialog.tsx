@@ -10,7 +10,19 @@ const labels: Record<SupportDelivery["delivery"]["state"], string> = {
   pending: "Saved to Hive — waiting to send", delivering: "Sending to Swarm Support",
   uncertain: "Delivery unconfirmed — original report retained", failed: "Delivery failed — report retained",
   confirmed: "Received by Swarm Support",
+  rate_limited: "Support is busy — original report retained",
 };
+
+function deliveryLabel(row: SupportDelivery) {
+  if (row.delivery.refusal === "conflict") return "Support refused a conflicting report key — original report retained";
+  if (row.delivery.refusal === "rejected") return "Support refused this report — original report retained";
+  if (row.delivery.refusal === "rate_limited") {
+    if (row.delivery.attempts >= 5) return "Support is busy — automatic retry limit reached; report retained";
+    if (row.delivery.retry_not_before) return `Support is busy — retry no earlier than ${new Date(row.delivery.retry_not_before * 1000).toLocaleString()}`;
+    return "Support is busy — retry time unavailable; report retained for manual retry";
+  }
+  return labels[row.delivery.state];
+}
 
 export default function SupportFeedbackDialog({ operatorToken, status: initial, onClose, onSaved }: Props) {
   const [recovery] = useState(() => {
@@ -123,7 +135,7 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
       </form> : review ? <section aria-label="Review support message">
         <h3>{review.subject}</h3><p>{review.name ? `${review.name} · ` : ""}{review.email}</p>
         <pre className="support-review-text">{review.body}</pre>
-        {saved ? <p role="status">{labels[saved.delivery.state]}</p> : <div className="diagnostic-actions">
+        {saved ? <p role="status">{deliveryLabel(saved)}</p> : <div className="diagnostic-actions">
           {!attempted && <button type="button" className="secondary-button" onClick={() => setReview(undefined)}>Edit message</button>}
           <button type="button" className="primary-action" disabled={busy || !status.configured} onClick={() => void send()}>
             {busy ? "Saving…" : attempted ? "Retry this exact report" : "Send to Swarm Support"}</button>
@@ -135,9 +147,9 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
       {status.sender === "failed" && <p role="alert">Support delivery has stopped. Saved reports remain on this Hive.</p>}
       <details><summary>Delivery status · {status.deliveries.length}</summary>
         <button type="button" className="secondary-button" disabled={busy} onClick={() => void refresh()}>Check delivery status</button>
-        <ul>{status.deliveries.slice(0, visibleCount).map((row) => <li key={row.submission_key}>Report …{row.submission_key.slice(-8)} · {labels[row.delivery.state]} · {new Date(row.created_at * 1000).toLocaleString()}
+        <ul>{status.deliveries.slice(0, visibleCount).map((row) => <li key={row.submission_key}>Report …{row.submission_key.slice(-8)} · {deliveryLabel(row)} · {new Date(row.created_at * 1000).toLocaleString()}
           {row.delivery.manual_retry_pending ? <span> · One retry requested</span> : status.configured && row.delivery.attempt_id
-            && (row.delivery.state === "failed" || (row.delivery.state === "uncertain" && row.delivery.attempts >= 5))
+            && (row.delivery.state === "failed" || (["uncertain", "rate_limited"].includes(row.delivery.state) && row.delivery.attempts >= 5))
             ? <button type="button" className="secondary-button" disabled={busy} onClick={() => void retryOnce(row)}>Retry once</button> : null}
           {row.delivery.state === "confirmed" && row.delivery.receipt?.message_id && (removing === row.submission_key
             ? <div><p>Remove this confirmed copy from this Hive? Its conversation and history remain in Swarm Support. The local copy cannot be restored here.</p>

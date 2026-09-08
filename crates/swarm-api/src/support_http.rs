@@ -220,7 +220,8 @@ fn service_error(error: &HiveSupportServiceError) -> ApiError {
             "support_not_found",
             "This saved support report could not be found.",
         ),
-        HiveSupportServiceError::InvalidSubmission(_) => ApiError::new(
+        HiveSupportServiceError::InvalidSubmission(_)
+        | HiveSupportServiceError::UnsupportedKind => ApiError::new(
             StatusCode::BAD_REQUEST,
             "support_invalid",
             "Check the email, subject and report text.",

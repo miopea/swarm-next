@@ -26,6 +26,7 @@ pub enum SupportDeliveryState {
     Pending,
     Delivering,
     Uncertain,
+    RateLimited,
     Failed,
     Confirmed,
 }
@@ -51,7 +52,7 @@ impl SupportDeliveryState {
         self,
         attempts: u32,
     ) -> Result<(Self, u32), SupportDeliveryTransitionError> {
-        if !matches!(self, Self::Uncertain | Self::Failed) {
+        if !matches!(self, Self::Uncertain | Self::Failed | Self::RateLimited) {
             return Err(SupportDeliveryTransitionError::NotRetryable);
         }
         let attempts = attempts
@@ -64,7 +65,7 @@ impl SupportDeliveryState {
     /// # Errors
     /// In-flight/confirmed/definitively failed reports cannot start automatically.
     pub fn begin(self, attempts: u32) -> Result<(Self, u32), SupportDeliveryTransitionError> {
-        if !matches!(self, Self::Pending | Self::Uncertain) {
+        if !matches!(self, Self::Pending | Self::Uncertain | Self::RateLimited) {
             return Err(SupportDeliveryTransitionError::NotRetryable);
         }
         if attempts >= SUPPORT_OUTBOX_MAX_ATTEMPTS {
@@ -81,7 +82,10 @@ impl SupportDeliveryState {
         if self != Self::Delivering {
             return Err(SupportDeliveryTransitionError::NotDelivering);
         }
-        if !matches!(outcome, Self::Confirmed | Self::Uncertain | Self::Failed) {
+        if !matches!(
+            outcome,
+            Self::Confirmed | Self::Uncertain | Self::Failed | Self::RateLimited
+        ) {
             return Err(SupportDeliveryTransitionError::InvalidOutcome);
         }
         Ok(outcome)
