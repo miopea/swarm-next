@@ -1378,9 +1378,32 @@ install_or_update() {
       printf 'swarm-package: this release changes the terminal-host protocol from %s to %s.\n' \
         "$host_protocol" "$protocol" >&2
       printf 'swarm-package: the API and the worker engine are swapped together, so every worker session ends and workers are brought back afterwards.\n' >&2
-      # Ordinary update is not explicit permission to interrupt live workers.
-      # Use the same admission/defer path as a prepared protocol migration.
-      migrate_protocol if-idle
+      # ⚠️ NOT `migrate_protocol if-idle`, AND THAT IS THE POINT OF EVERYTHING
+      # ABOVE. Deferring here is what "refusing the release" looks like when it
+      # is spelled politely: if-idle waits for running_sessions to reach zero,
+      # and it never does, because supervise_workers revives an autostart worker
+      # within seconds of it stopping. Measured when that path was first tried:
+      # 34 workers, one autostart, every pass reporting "1 sessions are active"
+      # after the operator had killed everything.
+      #
+      # THE OBSERVABLE COST IS THAT THE API IS NEVER UPGRADED AT ALL.
+      # test-field-upgrade.sh catches it exactly there — "the API was not
+      # upgraded by the field install" — driving the real swarm-package from the
+      # v1.5.0 tag, which is what the field is actually running.
+      #
+      # "Ordinary update is not explicit permission to interrupt live workers"
+      # is a reasonable sentence arguing for a refusal this comment block has
+      # already rejected: `update` is the ONLY entry point a release can arrive
+      # through on a Hive in the field, so declining here strands the release
+      # rather than protecting anyone. The permission question is answered by
+      # ANNOUNCING it — the two lines printed just above — not by waiting for a
+      # condition that cannot occur.
+      #
+      # Drained first so nothing new attaches between here and the swap.
+      SWARM_TERMINAL_SOCKET=$(terminal_socket) \
+        "$host_release/bin/swarmctl" drain >/dev/null 2>&1 || true
+      drain_release=$host_release
+      activate_protocol_migration "$new_release"
       return
     fi
   fi

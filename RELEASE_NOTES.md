@@ -18,10 +18,16 @@ A more comfortable daily-driver Hive: clearer decisions, better terminal
 handoffs, and more observable coordination. These highlights consolidate 491
 commits since 1.5.0, not completion of the full maturity program.
 
-**Before upgrading:** back up your database. This release migrates schema 124
-to 150 and changes the worker-engine protocol from 10 to 16. Plan a maintenance
-window for the engine transition; do not assume this upgrade preserves running
-provider processes. App/API updates and worker-engine updates are separate.
+**Before upgrading:** back up your database — copy `swarm.sqlite3` somewhere
+safe. This release migrates schema 124 to 150 and changes the worker-engine
+protocol from 10 to 16.
+
+**Every worker session ends during this install.** A protocol change is the one
+upgrade that cannot preserve running terminals: the API and the worker engine
+have to be swapped together. Swarm announces this, drains the host, performs the
+migration, and brings workers back afterwards — you do not need a separate
+command, and accepting the release from the control room is enough. Plan a
+window rather than taking it mid-task.
 
 ### New features
 - **Needs You, simplified:** clearer recommendations and quick answers, with
