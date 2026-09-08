@@ -7,7 +7,116 @@ use serde::{Deserialize, Serialize};
 use crate::{DecisionRequestId, NextMoveOwner, TaskId, TaskState};
 
 pub const MAX_QUEEN_REVIEW_OBLIGATIONS: usize = 256;
+pub const QUEEN_REVIEW_FOCUS_SIZE: usize = 3;
 const MAX_EVIDENCE_REVISION_BYTES: usize = 128;
+
+/// Rotate attention through a bounded candidate set in stable identity order.
+/// Check timestamps and refreshed judgments must not move the cursor's peers.
+/// This is not
+/// coverage, execution priority, or permission to alter a task's gate.
+///
+/// # Errors
+/// Rejects partial-sized overflow and duplicate identities rather than claiming
+/// a fair traversal of an ambiguous candidate list.
+pub fn next_queen_review_focus(
+    candidates: &[TaskId],
+    after: Option<TaskId>,
+) -> Result<Vec<TaskId>, &'static str> {
+    if candidates.len() > MAX_QUEEN_REVIEW_OBLIGATIONS {
+        return Err("review focus candidate capacity exceeded");
+    }
+    let unique = candidates.iter().copied().collect::<HashSet<_>>();
+    if unique.len() != candidates.len() {
+        return Err("review focus candidates contain duplicate tasks");
+    }
+    let mut candidates = candidates.to_vec();
+    candidates.sort_by_key(ToString::to_string);
+    let start = after
+        .and_then(|id| candidates.iter().position(|candidate| *candidate == id))
+        .map_or(0, |index| index + 1);
+    Ok(candidates
+        .iter()
+        .cycle()
+        .skip(start)
+        .take(QUEEN_REVIEW_FOCUS_SIZE.min(candidates.len()))
+        .copied()
+        .collect())
+}
+
+#[cfg(test)]
+mod focus_rotation_tests {
+    use super::*;
+
+    #[test]
+    fn recurring_fresh_checks_cannot_monopolize_a_stable_backlog() {
+        // Six recurring external checks precede nine unchanged investigations.
+        // Taking the first three each run never reaches any investigation.
+        let mut candidates = (0..15).map(|_| TaskId::new()).collect::<Vec<_>>();
+        candidates.sort_by_key(ToString::to_string);
+        let mut cursor = None;
+        let mut seen = HashSet::new();
+        for _ in 0..5 {
+            let focus = next_queen_review_focus(&candidates, cursor).unwrap();
+            assert_eq!(focus.len(), QUEEN_REVIEW_FOCUS_SIZE);
+            cursor = focus.last().copied();
+            seen.extend(focus);
+        }
+        assert_eq!(seen.len(), candidates.len());
+        assert_eq!(
+            next_queen_review_focus(&candidates, cursor).unwrap(),
+            candidates[..3]
+        );
+    }
+
+    #[test]
+    fn refreshed_check_order_cannot_skip_older_investigations() {
+        let mut candidates = (0..15).map(|_| TaskId::new()).collect::<Vec<_>>();
+        let mut cursor = None;
+        let mut seen = HashSet::new();
+        for _ in 0..5 {
+            candidates.rotate_left(2);
+            candidates.reverse();
+            let focus = next_queen_review_focus(&candidates, cursor).unwrap();
+            cursor = focus.last().copied();
+            for task in focus {
+                assert!(
+                    seen.insert(task),
+                    "repeated before reaching every candidate"
+                );
+            }
+        }
+        assert_eq!(seen.len(), candidates.len());
+    }
+
+    #[test]
+    fn shrinking_empty_and_removed_cursor_sets_do_not_repeat_an_identity() {
+        let mut candidates = [TaskId::new(), TaskId::new()];
+        candidates.sort_by_key(ToString::to_string);
+        assert_eq!(
+            next_queen_review_focus(&candidates, Some(candidates[0])).unwrap(),
+            vec![candidates[1], candidates[0]]
+        );
+        assert_eq!(
+            next_queen_review_focus(&candidates, Some(TaskId::new())).unwrap(),
+            candidates
+        );
+        assert!(
+            next_queen_review_focus(&[], Some(candidates[0]))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn ambiguous_or_oversized_snapshots_cannot_claim_fairness() {
+        let id = TaskId::new();
+        assert!(next_queen_review_focus(&[id, id], None).is_err());
+        let overflow = (0..=MAX_QUEEN_REVIEW_OBLIGATIONS)
+            .map(|_| TaskId::new())
+            .collect::<Vec<_>>();
+        assert!(next_queen_review_focus(&overflow, None).is_err());
+    }
+}
 
 /// Evidence revisions are supplied by the authoritative application snapshot.
 /// They must include dependency/decision changes, not just a task timestamp.
