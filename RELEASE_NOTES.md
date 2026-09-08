@@ -18,9 +18,10 @@ A more comfortable daily-driver Hive: clearer decisions, better terminal
 handoffs, and more observable coordination. These highlights consolidate 491
 commits since 1.5.0, not completion of the full maturity program.
 
-**Before upgrading:** back up your database — copy `swarm.sqlite3` somewhere
-safe. This release migrates schema 124 to 150 and changes the worker-engine
-protocol from 10 to 16.
+**Before upgrading:** nothing. The installer takes a verified database backup
+itself, before it migrates anything, and checks that backup can still be opened
+by the release it would roll back to. This release migrates schema 124 to 150
+and changes the worker-engine protocol from 10 to 16.
 
 **Every worker session ends during this install.** A protocol change is the one
 upgrade that cannot preserve running terminals: the API and the worker engine
