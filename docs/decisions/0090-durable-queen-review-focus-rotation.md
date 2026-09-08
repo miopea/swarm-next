@@ -56,3 +56,19 @@ unfinished. No production behavior has changed from this checkpoint.
 
 Separately, replacement main CI run 34278624037 completed successfully after the
 browser test bootstrap synchronization correction; no release was created.
+
+The persistence reservation and application/API delivery path are now implemented.
+Reservations require the current delivering run and its live Queen session;
+same-run retries reuse the saved identities without writes. Four persistence
+tests passed for reopen/replay, stale run/session refusal, failed-write rollback,
+new-run advance, corrupt payload refusal and migration from schema 150. The
+updated API focus/identity/replay test and strict API all-target/all-feature
+Clippy passed in the isolated Linux workspace. Focus schema 152 is separate from
+the still-inactive support schema, moved to 153 on the development branch.
+
+Deployment remains gated: the broader persistence run reported a reproducible
+existing inbox VM-work assertion failure (229418 baseline steps, 245332 bounded
+query steps), despite equal projected results. The decisions source matches the
+current branch and main; determine the baseline/environment cause before
+promoting. Exact-main migration isolation, the full regression result, covered
+task integration fences and live backlog acceptance remain outstanding.

@@ -1409,19 +1409,17 @@ pub(super) fn queen_review_focus_message(
     delivery: &QueenAutomationDelivery,
 ) -> Result<CoordinationMessage, swarm_application::ApplicationError> {
     let queen = store.get_worker_profile(delivery.worker_id)?;
-    let queue = swarm_application::TaskService::new(store.clone())
-        .queen_queue_snapshot(swarm_application::AgentPrincipal::from(&queen))?;
-    let ids = queue
-        .review_focus
-        .iter()
-        .take(3)
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
+    let focus = swarm_application::TaskService::new(store.clone()).reserve_queen_review_focus(
+        swarm_application::AgentPrincipal::from(&queen),
+        &delivery.run_id,
+        delivery.session_id,
+    )?;
+    let ids = focus.iter().map(ToString::to_string).collect::<Vec<_>>();
     let mut message = queen_automation_message(delivery);
     message.bytes.splice(0..0, "UNRESOLVED INVESTIGATIONS. When a fresh check cannot establish a valid wait or next action, record swarm_record_review_disposition kind insufficient_evidence with the missing fact, checked evidence and source. It never covers the review or clears a blocker; it lets unchecked backlog receive attention. Reuse unchanged saved investigations rather than refreshing their timestamps. Keep seeking the missing fact or real assistance, and advance the other outstanding tasks instead of rereading only the same head items.\n\n".bytes());
     if !ids.is_empty() {
         let focus = format!(
-            "CURRENT REVIEW FOCUS: {}. These are the first three tasks in the current fairness-ordered Queen backlog. Read their current task history and review evidence in this run, alongside any urgent new work. For each, route a verified next action, record a checked external wait or authenticated operator deferral, or state the concrete missing evidence. Do not just repeat assessments of the recent cluster and leave these unread. For an authenticated resolved operator ruling on another task, you may use swarm_set_task_decision_link with a concise explanation of why its ORIGINAL scope also applies here, then reread review evidence and cite that decision for a deferral. Preserve the original wording and answer; this grants no new permission and sends no answer into another terminal. Ask the operator if applicability is uncertain. This focus does not authorize starting reserved drafts, clearing blockers, or expanding an old decision. Recheck current state; a resolved or completed item needs no repeated action. The rest of the full review still matters.\n\n",
+            "CURRENT REVIEW FOCUS: {}. These are this run's reserved rotating focus from the uncovered Queen backlog; retries preserve this batch. Read their current task history and review evidence in this run, alongside any urgent new work. For each, route a verified next action, record a checked external wait or authenticated operator deferral, or state the concrete missing evidence. Do not just repeat assessments of the recent cluster and leave these unread. For an authenticated resolved operator ruling on another task, you may use swarm_set_task_decision_link with a concise explanation of why its ORIGINAL scope also applies here, then reread review evidence and cite that decision for a deferral. Preserve the original wording and answer; this grants no new permission and sends no answer into another terminal. Ask the operator if applicability is uncertain. This focus does not authorize starting reserved drafts, clearing blockers, or expanding an old decision. Recheck current state; a resolved or completed item needs no repeated action. The rest of the full review still matters.\n\n",
             ids.join(", ")
         );
         message.bytes.splice(0..0, focus.bytes());
@@ -3782,14 +3780,11 @@ mod tests {
         store
             .transition_task(tasks[0].id, swarm_domain::TaskState::Abandoned)
             .unwrap();
-        let delivery = QueenAutomationDelivery {
-            run_id: "focus-run".into(),
-            session_id: WorkerSessionId::new(),
-            worker_id: queen.id,
-            trigger: QueenAutomationTrigger::ActionableWork,
-            actionable_count: 4,
-            presence: PresenceMode::AtHive,
-        };
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        store.request_queen_automation_run(100).unwrap();
+        let delivery = store.claim_queen_automation(100).unwrap().unwrap();
         let message = queen_review_focus_message(&store, &delivery).unwrap();
         let text = String::from_utf8(message.bytes).unwrap();
         let focus = text.split("\n\n").next().unwrap();
@@ -3798,10 +3793,24 @@ mod tests {
         assert!(focus.contains("ORIGINAL scope"));
         assert!(focus.contains("Ask the operator if applicability is uncertain"));
         assert!(!focus.contains(&tasks[0].id.to_string()));
-        for task in &tasks[1..4] {
-            assert!(focus.contains(&task.id.to_string()));
+        let expected = swarm_domain::next_queen_review_focus(
+            &tasks[1..].iter().map(|task| task.id).collect::<Vec<_>>(),
+            None,
+        )
+        .unwrap();
+        for task in &expected {
+            assert!(focus.contains(&task.to_string()));
         }
-        assert!(!focus.contains(&tasks[4].id.to_string()));
+        for task in &tasks[1..] {
+            assert_eq!(
+                focus.contains(&task.id.to_string()),
+                expected.contains(&task.id)
+            );
+        }
+        assert_eq!(
+            queen_review_focus_message(&store, &delivery).unwrap().bytes,
+            text.as_bytes()
+        );
         assert!(text.contains("The rest of the full review still matters"));
         assert!(
             text.as_bytes()

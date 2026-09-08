@@ -26,6 +26,7 @@ mod coordinator;
 mod database_integrity;
 mod queen_recovery;
 mod queen_review;
+mod queen_review_focus;
 mod task_block;
 mod task_decision_links;
 mod task_prerequisites;
@@ -259,7 +260,8 @@ const TASK_QUEUE_AGE_SCHEMA_VERSION: i64 = 146;
 // 147 remains reserved for inactive support; shared blockers ship independently.
 const TASK_DECISION_LINKS_SCHEMA_VERSION: i64 = 148;
 const QUEEN_INCOMPLETE_ASSESSMENTS_SCHEMA_VERSION: i64 = 150;
-const CURRENT_SCHEMA_VERSION: i64 = QUEEN_INCOMPLETE_ASSESSMENTS_SCHEMA_VERSION;
+const QUEEN_REVIEW_FOCUS_SCHEMA_VERSION: i64 = 152;
+const CURRENT_SCHEMA_VERSION: i64 = QUEEN_REVIEW_FOCUS_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -3949,6 +3951,9 @@ fn migrate_ops_intake_schema_steps(
     }
     if schema_version < QUEEN_INCOMPLETE_ASSESSMENTS_SCHEMA_VERSION {
         queen_review::migrate_incomplete_assessments(transaction)?;
+    }
+    if schema_version < QUEEN_REVIEW_FOCUS_SCHEMA_VERSION {
+        queen_review_focus::migrate(transaction)?;
     }
     Ok(())
 }
@@ -9140,6 +9145,12 @@ mod tests {
             artifact: "insufficient_evidence",
             undo_sql: include_str!("fixtures/undo-incomplete-review-assessments.sql"),
             probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='queen_task_review_receipts' AND instr(sql, 'insufficient_evidence')>0)",
+        },
+        SchemaStep {
+            table: "queen_review_focus",
+            artifact: "",
+            undo_sql: "DROP TABLE queen_review_focus",
+            probe_sql: "",
         },
     ];
 

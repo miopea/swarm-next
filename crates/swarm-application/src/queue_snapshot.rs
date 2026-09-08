@@ -27,6 +27,23 @@ pub struct QueenQueueSnapshot {
 }
 
 impl TaskService {
+    /// Reserve bounded attention for a claimed Queen run; never move task state.
+    ///
+    /// # Errors
+    /// Denies non-Queen callers, stale claims and unavailable queue evidence.
+    pub fn reserve_queen_review_focus(
+        &self,
+        principal: AgentPrincipal,
+        run_id: &str,
+        session_id: swarm_domain::WorkerSessionId,
+    ) -> Result<Vec<swarm_domain::TaskId>, ApplicationError> {
+        require_queen(principal)?;
+        let queue = self.queen_queue_snapshot(principal)?;
+        Ok(self
+            .store
+            .reserve_queen_review_focus(run_id, session_id, &queue.review_focus)?)
+    }
+
     /// Identify overlapping operator requests without altering any request or grant.
     ///
     /// # Errors
