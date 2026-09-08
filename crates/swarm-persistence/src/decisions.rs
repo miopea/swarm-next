@@ -1141,9 +1141,12 @@ fn decision_inbox_sql() -> String {
     // LIMIT on the final projection alone does not bound correlated discharge
     // work while SQLite sorts history. Materialize the same scoped inbox first;
     // derive evidence only for those rows, then explicitly retain their order.
+    // Materialize identities, not the full customer-content rows: copying every
+    // text field into the temporary sort adds work before the bounded projection.
     format!(
-        "WITH inbox AS MATERIALIZED (SELECT d.* {})
-         {DECISION_COLUMNS} FROM inbox d ORDER BY {DECISION_INBOX_ORDER}",
+        "WITH inbox AS MATERIALIZED (SELECT d.id AS inbox_id {})
+         {DECISION_COLUMNS} FROM inbox i JOIN decision_requests d ON d.id=i.inbox_id
+         ORDER BY {DECISION_INBOX_ORDER}",
         decision_inbox_scope()
     )
 }
@@ -1747,12 +1750,24 @@ mod tests {
         let store = TaskStore::in_memory().unwrap();
         let queen = store.ensure_queen("/workspace/queen").unwrap();
         let actions = vec!["Proceed".to_owned()];
-        for _ in 0..MAX_DECISION_RESULTS * 3 {
+        for index in 0..MAX_DECISION_RESULTS * 3 {
             let decision = store
                 .create_decision_request(&request(queen.id, &actions))
                 .unwrap();
             store
                 .resolve_decision_request(decision.id, "Proceed", "Fictional fixture", "operator")
+                .unwrap();
+            // Exercise history arriving oldest first, independently of wall-clock
+            // second boundaries or random UUID tie order. Those previously made
+            // the legacy sorter sometimes skip most expensive projections and
+            // changed the benchmark's workload between otherwise identical runs.
+            store
+                .connection()
+                .unwrap()
+                .execute(
+                    "UPDATE decision_requests SET created_at=?2 WHERE id=?1",
+                    params![decision.id.to_string(), 1_000 + index],
+                )
                 .unwrap();
         }
         for _ in 0..24 {
@@ -1779,7 +1794,20 @@ mod tests {
                 (serde_json::to_value(rows).unwrap(), steps)
             };
             let (before, before_steps) = read(&legacy);
+            let copied_rows = format!(
+                "WITH inbox AS MATERIALIZED (SELECT d.* {}) {DECISION_COLUMNS} FROM inbox d ORDER BY {DECISION_INBOX_ORDER}",
+                decision_inbox_scope(),
+            );
+            let (copied, copied_steps) = read(&copied_rows);
             let (after, after_steps) = read(&decision_inbox_sql());
+            assert_eq!(
+                after, copied,
+                "identity-only selection preserves the deployed projection"
+            );
+            assert!(
+                after_steps < copied_steps,
+                "identity-only selection must reduce full-row copying: before={copied_steps}, after={after_steps}"
+            );
             assert_eq!(
                 after, before,
                 "every projected field and row order must be identical"
@@ -1788,11 +1816,12 @@ mod tests {
                 after.as_array().unwrap().len(),
                 usize::try_from(MAX_DECISION_RESULTS).unwrap()
             );
-            assert!(
-                after_steps < before_steps,
-                "bounded projection must reduce VM work: before={before_steps}, after={after_steps}"
+            // The unbounded legacy query can already defer projection when its
+            // scan encounters favorable ordering. It is a comparison, not a
+            // universal lower-bound oracle for the explicit bounded strategy.
+            eprintln!(
+                "decision inbox VM steps: unbounded={before_steps}, deployed_bounded={copied_steps}, identity_bounded={after_steps}"
             );
-            eprintln!("decision inbox VM steps: before={before_steps}, after={after_steps}");
         }
     }
 

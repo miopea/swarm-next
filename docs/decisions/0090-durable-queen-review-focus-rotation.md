@@ -72,3 +72,19 @@ query steps), despite equal projected results. The decisions source matches the
 current branch and main; determine the baseline/environment cause before
 promoting. Exact-main migration isolation, the full regression result, covered
 task integration fences and live backlog acceptance remain outstanding.
+
+Follow-up: the broad initial run completed with 695/697 passing. Its second
+failure was the generic previous-schema fixture still choosing the old last
+entry; fixture entries now follow their actual migration ceiling, and the
+targeted migration test passes. Main's candidate migrates only focus schema 152;
+no support-outbox module or migration is included.
+
+The inbox benchmark's universal comparison against the old unbounded query was
+invalid: favorable scan order lets SQLite defer its expensive projection already.
+Identity-only materialization now reduces work against the deployed full-row
+bounded query while retaining explicit bounded evidence evaluation. With
+deterministic fixture timestamps, all returned fields/order match both queries.
+Unscoped VM steps: unbounded 217370, deployed bounded 245284, identity bounded
+225574; worker-scoped: 218906, 246820, 227110. This is about 8% less than the
+deployed bounded query, not a claim of universally beating the unbounded query.
+All 35 decision tests pass. Exact-main and live verification are still pending.
