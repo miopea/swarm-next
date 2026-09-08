@@ -315,8 +315,9 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                         <p className="eyebrow">Command this would allow</p>
                         <pre><code>{decision.requested_command}</code></pre>
                         <small>
-                          Allowing runs exactly this, once, for this worker only. It stops working
-                          when the task leaves the board. Any other command is still refused.
+                          Grants permission for this exact command, once, for this worker only.
+                          The worker still needs to run it. Permission expires when the task leaves
+                          the board. Any other command is still refused.
                         </small>
                       </div>
                     ) : null}
@@ -423,7 +424,12 @@ function deliveryLabel(state: DecisionRequest["delivery_state"]): string {
   }
 }
 function humanize(value: string): string {
-  return value.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
+  // Older actions are bare lower-case machine keys. Authored action sentences
+  // can contain exact commands, identifiers and case-sensitive settings; their
+  // wording is evidence for a decision and must not be rewritten for display.
+  return /^[a-z]+(?:_[a-z]+)*$/.test(value)
+    ? value.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase())
+    : value;
 }
 
 const queenSectionLabels: Record<string, string> = {

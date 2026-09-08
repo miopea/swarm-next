@@ -71,6 +71,26 @@ const uncertain = { ...resolved, id: "decision-5", title: "Uncertain release", d
 const task = { id: "task-1", title: "Stabilize reloads" } as Task;
 const worker = { id: "worker-1", name: "Petal" } as Worker;
 
+test.each([
+  "Enable FEAST_SIGNUP_ENABLED on staging now",
+  "use feature_flag=false until the check passes",
+  "FEAST_SIGNUP_ENABLED",
+  "Run npm run verify_contract before proceeding",
+])("preserves authored action identifiers in recommendation, submission and history: %s", async (action) => {
+  const onResolve = vi.fn().mockResolvedValue(undefined);
+  const request = { ...pending, allowed_actions: [action], suggested_action: action };
+  const props = { tasks: [task], workers: [worker], busy: false, onResolve };
+  const view = render(<DecisionInbox {...props} decisions={[request]} />);
+  const button = screen.getByRole("button", { name: action });
+  expect(button).toHaveClass("primary-action");
+  expect(screen.getAllByText(action, { exact: true })).toHaveLength(2);
+  fireEvent.click(button);
+  await waitFor(() => expect(onResolve).toHaveBeenCalledWith(request, action, "", "inbox_action"));
+  view.rerender(<DecisionInbox {...props} decisions={[{ ...request, state: "resolved", resolution_action: action }]} />);
+  fireEvent.click(screen.getByRole("checkbox", { name: "Show history" }));
+  expect(screen.getAllByText(action, { exact: true }).some(node => node.tagName === "STRONG")).toBe(true);
+});
+
 test("answers precede supporting evidence while risk remains ahead of the action", () => {
   render(<DecisionInbox decisions={[pending]} tasks={[task]} workers={[worker]} busy={false} onResolve={vi.fn()} />);
   const action = screen.getByRole("button", { name: "Durable path" });
@@ -708,7 +728,7 @@ test("a decision that would grant a command shows the operator that command", ()
   // of a command has not read what they are allowing.
   expect(screen.getByText(command)).toBeInTheDocument();
   expect(
-    screen.getByText(/Allowing runs exactly this, once, for this worker only/),
+    screen.getByText(/Grants permission for this exact command, once, for this worker only/),
   ).toBeInTheDocument();
 });
 
