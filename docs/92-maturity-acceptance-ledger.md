@@ -8,7 +8,7 @@ an old unchecked deployment note is not automatically current missing code.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-75ea754c3a42-20260909100826-2461816`.
+- App/API: `1.6.0-dev-0a69fb8e9ebd-20260909102351-2469070`.
 - Engine: retained PID 2271655, `cf83c980`; candidate `cf179f73` remains pending.
 - Latest App/API deployment preserved all 34 worker records and twelve exact
   running session/conversation pairs. Swarm Next and D365 remained asleep.
@@ -279,7 +279,7 @@ mutation: auto-review refused reading the demo terminal's current screen. Specif
 demo-screen permission was requested; no alternate capture path was used. The
 demo remains in confirmed conversation c4435eee-57b0-4546-b6ef-dc182080e7b5.
 
-### Single-pass review presentation — not yet deployed
+### Single-pass review presentation — deployed with worker continuity
 
 A rendered regression measured three complete task/snapshot comparisons for one
 queue refresh: checked waits, historical rechecks and investigations each repeated
@@ -300,4 +300,8 @@ observable write rather than assuming the heading establishes it. A new test
 proves reload during that window rejects the stale session while retaining the
 chosen worker, both during the gap and after its replacement returns. No runtime
 selection or recovery semantics changed. The full web suite passes: 152 files,
-1,430 tests. This checkpoint is ready for development deployment, not a release.
+1,430 tests. Development deployment completed successfully. Exact snapshots in
+`/tmp/swarm-queue-projection.5lGqqa` preserve all 34 worker records and twelve
+running session/provider/conversation pairs; engine PID 2271655 did not change.
+The separate Edge tab loaded Queues with its owner sections intact and was closed
+after inspection. This is not whole-program acceptance or a release.
