@@ -253,6 +253,12 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
               ?? workerRepos.get(decision.requesting_worker_id);
             const note = notes[decision.id] ?? "";
             const decisionBusy = busy || submittingIds.has(decision.id);
+            // Combine only an exact displayed match. Authored commands and
+            // identifiers are case-sensitive; a similar answer is not advice.
+            const recommendedAction = decision.state === "pending" && !decision.questions?.length
+              ? decision.allowed_actions.find(action => humanize(action).trim() === humanize(decision.suggested_action).trim())
+              : undefined;
+            const recommendationId = `${tabId}-recommendation-${decision.id}`;
             return (
               <article className={`decision-card urgency-${decision.urgency} state-${decision.state}`} data-decision-id={decision.id} key={decision.id} tabIndex={-1}>
                 <header>
@@ -263,17 +269,17 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                       <h4>{decision.title}</h4>
                     </div>
                   </div>
-                  <span className={`decision-urgency ${decision.urgency}`}>{decision.state === "withdrawn" ? "Withdrawn" : decision.urgency === "time_sensitive" ? "Time-sensitive" : "When ready"}</span>
+                  <span className={`decision-urgency ${decision.state === "pending" ? decision.urgency : "settled"}`}>{decision.state === "withdrawn" ? "Withdrawn" : decision.state === "resolved" ? "Answered" : decision.urgency === "time_sensitive" ? "Time-sensitive" : "When ready"}</span>
                 </header>
                 {/* What is being decided comes first and stays short. The
                     reason, risk and evidence are the argument behind it — on
                     the live inbox they ran to about five thousand characters
                     together — so they fold behind it rather than in front. */}
                 {decision.summary ? <div className="decision-summary"><LongText text={decision.summary} label="the summary" foldAbove={300} /></div> : null}
-                {decision.suggested_action && <div className="decision-ask"><span>{requester} recommends</span><LongText text={humanize(decision.suggested_action)} label="the recommendation" foldAbove={300} /></div>}
-                <dl className="decision-context">
-                  {decision.risk && <div className="decision-risk"><dt>Risk</dt><dd><LongText text={decision.risk} label="the risk" foldAbove={300} /></dd></div>}
-                </dl>
+                {decision.suggested_action && recommendedAction === undefined && <div className="decision-ask"><span>{requester} {decision.state === "pending" ? "recommends" : "recommended"}</span><LongText text={humanize(decision.suggested_action)} label="the recommendation" foldAbove={300} /></div>}
+                {decision.risk && <dl className="decision-context">
+                  <div className="decision-risk"><dt>Risk</dt><dd><LongText text={decision.risk} label="the risk" foldAbove={300} /></dd></div>
+                </dl>}
                 {decision.state === "pending" && decision.questions?.length ? (
                   <div className="decision-resolution">
                     {/* An interview offers no buttons: the asker did not know
@@ -327,7 +333,14 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                     </details>
                     <div className="decision-actions">
                       {decision.allowed_actions.map((action) => (
-                        <button key={action} type="button" className={humanize(action).trim().toLowerCase() === humanize(decision.suggested_action).trim().toLowerCase() ? "primary-action" : "secondary-button"} disabled={decisionBusy} onClick={() => { setDismissConfirmId(undefined); void submitDecision(decision, () => onResolve(decision, action, note, "inbox_action")); }}>{humanize(action)}</button>
+                        <button key={action} type="button"
+                          className={action === recommendedAction ? "primary-action decision-recommended-action" : "secondary-button"}
+                          aria-describedby={action === recommendedAction ? recommendationId : undefined}
+                          disabled={decisionBusy}
+                          onClick={() => { setDismissConfirmId(undefined); void submitDecision(decision, () => onResolve(decision, action, note, "inbox_action")); }}>
+                          {action === recommendedAction && <span id={recommendationId} className="decision-action-recommendation" aria-hidden="true">{requester} recommends</span>}
+                          <span>{humanize(action)}</span>
+                        </button>
                       ))}
                       {/* The buttons above are the asker's guesses. When none
                           of them is the answer, the answer is still the

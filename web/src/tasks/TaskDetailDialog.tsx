@@ -15,9 +15,14 @@ import { useModalFocus } from "../shared/useModalFocus";
 import UnsavedChangesPrompt from "../shared/UnsavedChangesPrompt";
 import ImageViewer from "../shared/ImageViewer";
 import { TITLE_BYTE_LIMIT, clampTitleToBytes, titleByteLength, titleFits } from "./titleLimit";
+import { priorityLabels, taskStateLabel } from "./TaskMetadata";
 
 type LoadedImage = JiraTaskAttachment & { url: string };
 const noEmailSources: EmailTaskSource[] = [];
+const nextMoveLabels = {
+  operator: "You", queen: "Queen", worker: "Assigned worker", blocked: "Dependency or hold",
+  release: "Shipping", nobody: "No next move",
+};
 
 export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmailSources, operatorToken, busy, onClose, onSave, onRemove }: {
   task: Task;
@@ -163,8 +168,9 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
           <button type="button" onClick={requestClose}>Close</button>
         </header>
         <div className="task-detail-summary" aria-label="Task summary">
-          <span><small>Swarm status</small><strong>{task.state}</strong></span>
-          <span><small>Priority</small><strong>{task.priority}</strong></span>
+          <span><small>Swarm status</small><strong>{taskStateLabel(task)}</strong></span>
+          <span><small>Priority</small><strong>{priorityLabels[task.priority]}</strong></span>
+          <span><small>Next move</small><strong>{task.next_move_owner ? nextMoveLabels[task.next_move_owner] : "Not recorded"}</strong></span>
           {jiraLink && <span><small>Jira issue</small><strong>{jiraLink.issue_key}</strong></span>}
           {jiraLink && <span><small>Jira status</small><strong>{jiraLink.jira_status_name}</strong></span>}
           {jiraLink && <span><small>Project</small><strong>{jiraLink.project_name}</strong></span>}

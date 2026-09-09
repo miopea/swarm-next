@@ -42,7 +42,7 @@ identity; personality stays visual, lightweight and reduced-motion friendly.
 - Source main includes `71a85719`, a test-only correction after CI exposed a
   package-return fixture expecting an outdated engine to permit a return.
   Both corrected current/old-engine cases and strict API checks pass locally.
-  Full CI run `34391815461` must finish before its gate is counted passed.
+  Full CI run `34391815461` passed all four jobs. The next UI commit has its own gate.
 - September 9 live Edge inspection shows eight Needs You requests. Every card
   has Say something else, but the page remains tall: repeated recommendation/
   action wording, long summaries and generous internal gaps dominate the first
@@ -59,6 +59,29 @@ identity; personality stays visual, lightweight and reduced-motion friendly.
   content-free diagnostic, not product behavior.
 
 ## Delivery order and exit gates
+
+### UI-1 implementation checkpoint — September 9, afternoon
+
+Implemented the first cohesive presentation batch: recommended answers appear
+once, explicitly labelled on their action; unmatched advice remains separate;
+case-sensitive authored actions cannot be incorrectly highlighted. Empty risk
+dividers are removed, but real risks and exact commands stay ahead of actions.
+Resolved history says Answered and treats prior advice as historical. Queue rows
+show full titles and wait reasons on separate lines within the existing worker
+groups. Task detail reuses board status labels and shows recorded next ownership.
+
+Verified in Edge against isolated fixtures: desktop light/dark decision cards;
+390-by-844 phone Needs You, custom text, Queues owner jumps and task detail;
+quick/custom failed-send retry, exact multiline receipt and cleared attention
+count; linked queue prerequisite opens the correct task, with consistent Assigned
+status in its detail dialog. No real decision was answered or worker woken.
+Focused coverage passes: 45 DecisionInbox, 2 inbox activity, 1 answer fixture,
+44 queue and 8 task-detail tests. TypeScript and production web build pass.
+
+This is not yet a deployed UI-1 acceptance claim. Next: commit/push this batch,
+verify the worker-preserving dev deployment and inspect the real long-card/queue
+layout; finish outstanding UI-1 refresh/deep-link evidence before moving to UI-2.
+Native-device acceptance and backend decision reconciliation remain separate.
 
 ### UI-1 — Needs You, Queues and task detail form one understandable workflow
 

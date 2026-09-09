@@ -1197,7 +1197,7 @@ input[aria-invalid="true"] { border-color: var(--danger); }
    it, so this cannot be outgrown. */
 .decision-inbox > * { max-width: var(--attention-measure); margin-inline: auto; }
 .decision-list { display: grid; gap: 14px; }
-.decision-card { display: grid; gap: 16px; padding: 21px; border: 1px solid var(--line); border-left: 4px solid var(--good); border-radius: var(--radius-lg); background: var(--panel); box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 6%, transparent); }
+.decision-card { display: grid; gap: 12px; padding: 18px; border: 1px solid var(--line); border-left: 4px solid var(--good); border-radius: var(--radius-lg); background: var(--panel); box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 6%, transparent); }
 .decision-card.urgency-time_sensitive { border-left-color: var(--accent); background: color-mix(in srgb, var(--warn-soft) 22%, var(--panel)); }
 .decision-card.state-resolved { border-left-color: var(--line-strong); opacity: .82; }
 .decision-card > header { display: flex; align-items: start; justify-content: space-between; gap: 18px; }
@@ -1211,7 +1211,7 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .decision-repo { font-variant-numeric: tabular-nums; color: var(--ink); }
 /* The ask, directly under the question rather than as the last row of a list
    below the folded argument, which is where it was being missed. */
-.decision-ask { margin: 8px 0 0; font-size: .92rem; color: var(--ink); }
+.decision-ask { margin: 0; font-size: .92rem; color: var(--ink); }
 .decision-ask span { margin-right: 6px; font-size: .68rem; font-weight: 500; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
 .decision-urgency { flex: 0 0 auto; padding: 4px 8px; border-radius: 999px; color: var(--good); background: var(--good-soft); font-size: .68rem; font-weight: 500; }
 .decision-urgency.time_sensitive { color: var(--accent-strong); background: var(--warn-soft); }
@@ -1244,6 +1244,9 @@ input[aria-invalid="true"] { border-color: var(--danger); }
    answers, then the ways out. Right-aligned wrapping put the primary action
    in a different place on every card depending on how the row broke. */
 .decision-actions { display: flex; flex-wrap: wrap; justify-content: flex-start; align-items: center; gap: 8px; }
+.decision-actions button { min-height: 44px; max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: left; }
+.decision-recommended-action { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.decision-action-recommendation { font-size: .66rem; line-height: 1.2; font-weight: 650; }
 .decision-actions .decision-dismiss { margin-left: 6px; border-color: var(--line); color: var(--muted); }
 .primary-action { border-color: var(--accent-strong); color: var(--text); background: var(--accent-soft); }
 .primary-action:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-soft) 78%, var(--panel)); }
@@ -1661,7 +1664,7 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .task-detail-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; border-bottom: 1px solid var(--line); background: var(--line); }
 .task-detail-summary > span { display: grid; min-width: 0; gap: 3px; padding: 10px 14px; background: var(--panel-soft); }
 .task-detail-summary small { color: var(--muted); font-size: .68rem; text-transform: uppercase; letter-spacing: .07em; }
-.task-detail-summary strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .82rem; text-transform: capitalize; }
+.task-detail-summary strong { overflow-wrap: anywhere; font-size: .82rem; }
 .task-detail-content { display: grid; min-height: 0; gap: 20px; padding: 20px 22px 26px; overflow-y: auto; overscroll-behavior: contain; }
 .task-detail-content section { display: grid; gap: 9px; }
 .task-detail-content h3 { margin: 0; font-size: .92rem; }
@@ -1689,7 +1692,7 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .task-state::before { flex: 0 0 auto; }
 .worker-overdue { color: var(--bad); font-weight: 700; }
 .decision-summary { margin: 0; color: var(--text); font-size: .95rem; line-height: 1.5; }
-.decision-argument > summary { color: var(--muted); cursor: pointer; font-size: .78rem; }
+.decision-argument > summary { width: fit-content; max-width: 100%; min-height: 32px; padding-block: 7px; color: var(--muted); cursor: pointer; font-size: .78rem; }
 .decision-argument[open] > summary { margin-bottom: 7px; }
 .decision-prose { margin: 0; white-space: pre-wrap; }
 .decision-prose.clamped { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 6; }
@@ -2353,6 +2356,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .task-remove-confirm { align-items: stretch; flex-direction: column; }
   .modal-close-confirm { align-items: stretch; flex-direction: column; }
   .task-detail-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .task-detail-summary > span:last-child:nth-child(odd) { grid-column: 1 / -1; }
   .task-detail-content { padding: 16px 15px 22px; }
   .task-detail-gallery { grid-template-columns: minmax(0, 1fr); }
   .task-detail-attachments li, .task-detail-error { align-items: stretch; flex-direction: column; }
@@ -2393,6 +2397,10 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .decision-resolution { grid-template-columns: 1fr; }
   .decision-resolved { align-items: flex-start; flex-direction: column; }
   .decision-actions { justify-content: stretch; }
+  .decision-actions > button { flex: 1 1 auto; }
+  .decision-actions > .decision-recommended-action { flex-basis: 100%; }
+  .decision-actions .decision-dismiss { margin-left: 0; }
+  .decision-argument > summary { min-height: 44px; padding-block: 12px; }
   .task-dispatch { display: inline-flex; align-items: center; gap: 7px; width: fit-content; margin: 8px 0 0; color: var(--muted); font-size: .69rem; line-height: 1.35; }
 .task-dispatch::before { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: currentColor; content: ""; }
 .task-dispatch-queued, .task-dispatch-dispatching { color: var(--warn); }
@@ -2831,11 +2839,18 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .queue-group li { min-width: 0; }
 .queue-worker-group { margin-top: 1rem; padding-top: .75rem; border-top: 1px solid var(--line); min-width: 0; }
 .queue-worker-group h3 { margin: 0; font-size: .9rem; overflow-wrap: anywhere; }
+.queue-worker-group > .queue-task-meta { margin: 4px 0 6px; }
 .queue-group li button {
   width: 100%; text-align: left; display: flex; justify-content: space-between; gap: 1rem;
   color: var(--text); background: none; border: 1px solid transparent; border-radius: 6px; padding: 0.35rem 0.5rem; cursor: pointer;
 }
 .queue-group li button:hover, .queue-group li button:focus-visible { border-color: var(--line); }
+/* Task identity and its current wait get separate lines. A long hold used to
+   squeeze the title into an ellipsis even on desktop. Worker ownership is
+   already visible in the containing group; keep it in the accessible name. */
+.queue-group li .queue-task-open { flex-wrap: wrap; justify-content: flex-start; gap: 4px 12px; min-height: 44px; padding-block: 9px; }
+.queue-task-open .queue-task-title { flex-basis: 100%; white-space: normal; overflow: visible; overflow-wrap: anywhere; line-height: 1.45; }
+.queue-task-open .queue-task-meta { min-width: 0; flex-shrink: 1; white-space: normal; overflow-wrap: anywhere; }
 /* min-width:0 ON EVERY ITEM IN THE CHAIN, not just the leaf.
 
    A flex OR grid item defaults to min-width:auto, so it refuses to shrink below
@@ -2852,7 +2867,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
    repo a card rebuild. */
 .queue-task-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .queue-task-meta { flex: 0 0 auto; color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
-.queue-group li > .queue-task-meta { white-space: normal; overflow-wrap: anywhere; }
+.queue-group li > .queue-task-meta { margin: 4px 8px 8px; white-space: normal; overflow-wrap: anywhere; }
 .queue-prerequisites { margin: 0.35rem 0.5rem 0.65rem; padding-left: 0.75rem; border-left: 2px solid var(--line); }
 .task-prerequisite-dialog { max-width: 720px; }
 .task-prerequisite-dialog select { width: 100%; max-width: 100%; min-height: 44px; }

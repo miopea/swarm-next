@@ -17,6 +17,19 @@ function renderDialog(onClose = vi.fn()) {
   return onClose;
 }
 
+test.each([
+  [{ state: "ready", assigned_worker_id: "worker-1", next_move_owner: "worker" }, "Assigned", "Assigned worker"],
+  [{ state: "active", dispatch_state: "uncertain", next_move_owner: "queen" }, "Delivery unconfirmed", "Queen"],
+  [{ state: "completed", closed_on_evidence: false, next_move_owner: "nobody" }, "Finished · unverified", "No next move"],
+  [{ state: "blocked", next_move_owner: "operator" }, "Blocked", "You"],
+  [{ state: "draft" }, "Draft", "Not recorded"],
+])("task detail agrees with board state and preserves recorded next ownership: %j", (fields, status, nextMove) => {
+  render(<TaskDetailDialog task={{ ...task, ...fields } as Task} operatorToken="token" busy={false} onClose={vi.fn()} onSave={vi.fn()} onRemove={vi.fn()} />);
+  const summary = screen.getByLabelText("Task summary");
+  expect(summary).toHaveTextContent(status);
+  expect(summary).toHaveTextContent(`Next move${nextMove}`);
+});
+
 test("guards edits from close, backdrop, and Escape until the operator chooses", () => {
   const onClose = renderDialog();
   fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Repair every worker picker" } });

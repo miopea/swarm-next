@@ -83,7 +83,8 @@ test.each([
   const view = render(<DecisionInbox {...props} decisions={[request]} />);
   const button = screen.getByRole("button", { name: action });
   expect(button).toHaveClass("primary-action");
-  expect(screen.getAllByText(action, { exact: true })).toHaveLength(2);
+  expect(screen.getAllByText(action, { exact: true })).toHaveLength(1);
+  expect(button).toHaveAccessibleDescription("Petal recommends");
   fireEvent.click(button);
   await waitFor(() => expect(onResolve).toHaveBeenCalledWith(request, action, "", "inbox_action"));
   view.rerender(<DecisionInbox {...props} decisions={[{ ...request, state: "resolved", resolution_action: action }]} />);
@@ -98,6 +99,32 @@ test("answers precede supporting evidence while risk remains ahead of the action
   expect(screen.getByText(pending.risk).compareDocumentPosition(action) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(action.compareDocumentPosition(evidence) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(evidence.closest("details")).not.toHaveAttribute("open");
+});
+
+test("matching advice is shown once on the action without an empty risk divider", () => {
+  const request = { ...pending, risk: "", allowed_actions: ["durable_path"], suggested_action: "durable_path" };
+  const { container } = render(<DecisionInbox decisions={[request]} tasks={[]} workers={[worker]} busy={false} onResolve={vi.fn()} />);
+  expect(screen.getAllByText("Durable path", { exact: true })).toHaveLength(1);
+  expect(screen.getByRole("button", { name: "Durable path" })).toHaveAccessibleDescription("Petal recommends");
+  expect(container.querySelector(".decision-ask")).toBeNull();
+  expect(container.querySelector(".decision-card > .decision-context")).toBeNull();
+  expect(screen.getByRole("button", { name: "Say something else" })).toBeVisible();
+});
+
+test("case-sensitive advice never highlights a different authored action", () => {
+  render(<DecisionInbox decisions={[{ ...pending, suggested_action: "Set MODE=ReadOnly", allowed_actions: ["Set MODE=readonly"] }]} tasks={[]} workers={[worker]} busy={false} onResolve={vi.fn()} />);
+  expect(screen.getByText("Set MODE=ReadOnly")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Set MODE=readonly" })).not.toHaveClass("primary-action");
+});
+
+test("resolved history labels advice as historical rather than a new request", () => {
+  render(<DecisionInbox decisions={[{ ...resolved, urgency: "time_sensitive" }]} tasks={[]} workers={[worker]} busy={false} onResolve={vi.fn()} />);
+  fireEvent.click(screen.getByRole("checkbox", { name: "Show history" }));
+  expect(screen.getByText("Answered")).toBeVisible();
+  expect(screen.getByText("Petal recommended")).toBeVisible();
+  expect(screen.queryByText("When ready")).not.toBeInTheDocument();
+  expect(screen.queryByText("Time-sensitive")).not.toBeInTheDocument();
+  expect(screen.queryByText("Petal recommends")).not.toBeInTheDocument();
 });
 
 test("one shared decision lists its other tasks without duplicating the answer or permission", () => {

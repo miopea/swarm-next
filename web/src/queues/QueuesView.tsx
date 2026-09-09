@@ -274,14 +274,14 @@ export default function QueuesView({
                 const executionWait = workerExecutionWait(task, assignedWorker);
                 return (
                 <li key={task.id}>
-                  <button type="button" onClick={() => onOpenTask(task.id)}>
+                  <button className="queue-task-open" type="button" onClick={() => onOpenTask(task.id)}>
                     <span className="queue-task-title">{task.title}</span>
                     <span className="queue-task-meta">{checks.has(task.id) ? RECOVERY_LABELS[checks.get(task.id)!.state]
                       : checkedWaits.has(task.id) ? (checkedWaits.get(task.id)!.assessment.kind === "operator_deferral"
                         ? "Operator-deferred · source verified by Queen" : "External condition · checked by Queen")
                       : rechecks.has(task.id) ? "Queen needs to recheck an external condition"
                       : taskProgress(task, now)}</span>
-                    <span className="queue-task-meta">
+                    <span className="sr-only">
                       {task.assigned_worker_id
                         ? (workerNames.get(task.assigned_worker_id) ?? "assigned")
                         : "unassigned"}

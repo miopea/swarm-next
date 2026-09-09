@@ -12,14 +12,14 @@ const stateLabels: Record<TaskState, string> = {
   abandoned: "Abandoned",
 };
 
-const priorityLabels: Record<TaskPriority, string> = {
+export const priorityLabels: Record<TaskPriority, string> = {
   low: "Low",
   normal: "Normal",
   high: "High",
   urgent: "Urgent",
 };
 
-function taskStateLabel(task: Task): string {
+export function taskStateLabel(task: Task): string {
   // Returning work to Active reserves its worker before its new briefing is
   // consumed. The lifecycle claim is not evidence of execution yet (ADR 0016).
   if (task.state === "active") {
