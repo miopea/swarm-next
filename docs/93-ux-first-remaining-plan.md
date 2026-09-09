@@ -2,6 +2,30 @@
 
 Operator-directed priority change: September 9, 2026.
 
+**Design acceptance principle:** developer users should get the right information
+at the point of action, with clear, logical, easy-to-use controls. Keep Swarm's
+adorable Hive identity through lightweight visual personality, without obscuring
+technical meaning or adding expensive effects. Judge increments by improved
+understanding and task completion, not visual novelty. The operator explicitly
+endorsed this direction; ordinary-user improvements remain ahead of reload-only
+developer inconveniences.
+
+Worker setup follow-through: the roster now exposes a named accessible group
+for each worker, keeping its Edit/reorder/editor controls associated with that
+identity without changing the compact visible layout or bee artwork. The real
+Edge fixture verified opening Field Notes and cancelling back to its same group.
+All 25 WorkerSettings tests pass, including group identity and cancellation;
+TypeScript and web build pass. Together with a17d7b72 this is queued locally.
+CI 34408932476 exposed one missed Settings integration assertion from the prior
+diagnostics change: its epoch-second-1 sample must say Last known metrics, not
+Live metrics. Update that assertion, retain it after refresh, and run the full
+web suite before publishing. This is not a runtime regression or a full-program
+completion claim. Verification now passes: all 154 web test files / 1,488 tests,
+plus the earlier TypeScript and production build. Phone-width Edge inspection
+retains readable worker names, bees, and separate edit/reorder controls. CI's
+prior run has completed (web failed on that old assertion); publish this
+corrected batch and verify the app-only deployment next.
+
 **Latest operator direction, evening:** stop the reload investigation. Prioritize
 visible improvements for ordinary users with one to five workers; incremental
 updates are welcome. Finish the already-running search-layout deployment, then

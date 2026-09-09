@@ -10,6 +10,22 @@ const studio = worker("studio", "Poppy", "/projects/sculpt-studio", 2);
 
 afterEach(cleanup);
 
+test("worker controls remain grouped by identity through editing and cancellation", () => {
+  const onUpdate = vi.fn();
+  render(<WorkerSettings workers={[budget, studio]} workspaces={[]} busy={false}
+    providers={{ claude_code: true, codex: true }} onCreate={vi.fn()} onUpdate={onUpdate}
+    onChooseMark={vi.fn()} onRemove={vi.fn()} onDraftDescription={vi.fn()} onReorder={vi.fn()} />);
+  const daisy = within(screen.getByRole("group", { name: "Worker Daisy" }));
+  const poppy = within(screen.getByRole("group", { name: "Worker Poppy" }));
+  expect(daisy.getByRole("button", { name: "Move Daisy later" })).toBeEnabled();
+  fireEvent.click(poppy.getByRole("button", { name: "Edit" }));
+  expect(poppy.getByRole("form", { name: "Edit Poppy" })).toBeInTheDocument();
+  expect(daisy.queryByRole("form")).not.toBeInTheDocument();
+  fireEvent.click(poppy.getByRole("button", { name: "Cancel" }));
+  expect(poppy.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+  expect(onUpdate).not.toHaveBeenCalled();
+});
+
 test.each([false, true])("repository setup distinguishes empty discovery from assigned repositories (%s)", (discovered) => {
   render(<WorkerSettings workers={[]} workspaces={discovered
     ? [{ name: "trial", path: "/projects/trial", kind: "repository", configured_worker_id: "existing" }] : []}

@@ -389,6 +389,8 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
   return (
     <div
       className={`configured-worker${dragging ? " configured-worker-dragging" : ""}${dropTarget ? " drop-target-before" : ""}`}
+      role="group"
+      aria-label={`Worker ${worker.name}`}
       draggable={!managed && !orderingDisabled && !busy && !editing}
       onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", worker.id); onDragStart(); }}
       onDragEnd={onDragEnd}

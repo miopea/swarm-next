@@ -182,13 +182,17 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect((await screen.findByText("API memory", {}, { timeout: 5_000 })).parentElement).toHaveTextContent("API memoryNormal · 18.0 MiB");
   expect(screen.getByText("Terminal host service").parentElement).toHaveTextContent("Terminal host service9.0 MiB");
   expect(screen.getByText("Loaded worker runtimes").parentElement).toHaveTextContent("Loaded worker runtimesNormal · 476.0 MiB · 1 loaded");
-  expect(screen.getByText("Live metrics")).toBeInTheDocument();
+  // The fixture's sample is from epoch second 1: a successful read does not
+  // make old evidence live. Fresh-sample behavior is covered in DiagnosticsWorkspace.
+  expect(screen.getByText("Last known metrics")).toBeInTheDocument();
+  expect(screen.queryByText("Live metrics")).not.toBeInTheDocument();
   expect(screen.getByText(/refreshes every 10 seconds/)).toBeInTheDocument();
   expect(screen.getByText("Jira").parentElement).toHaveTextContent("JiraNot connected");
   const resourceRequests = () => vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("runtime/resources")).length;
   const resourceRequestsBeforeRefresh = resourceRequests();
   fireEvent.click(screen.getByRole("button", { name: "Refresh now" }));
   await vi.waitFor(() => expect(resourceRequests()).toBeGreaterThan(resourceRequestsBeforeRefresh), { timeout: 5_000 });
+  expect(screen.getByText("Last known metrics")).toBeInTheDocument();
   const savedReportSummary = await screen.findByText("Terminal wrapped too narrowly", { selector: "summary span" }, { timeout: 5_000 });
   expect(savedReportSummary).toBeInTheDocument();
   fireEvent.click(savedReportSummary);
