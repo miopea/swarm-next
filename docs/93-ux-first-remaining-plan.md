@@ -40,6 +40,18 @@ Edge 390px phone fixture shows the entire bee explanation after the fix;
 61 style/worker tests and production web build pass. Queue for the next coherent
 publication after current CI; continue UI-3/4 everyday journeys meanwhile.
 
+**Latest verified deployment:** `85c2efc7`, live
+`1.6.0-dev-85c2efc7cb45-20260909222759-3509505`. The worker-editor wrapping
+and focus-return fixes are now deployed, not pending. Health is good with no
+degraded services; all 34 worker identity projections (12 running) and the
+engine PID/start match exactly in `/tmp/swarm-worker-editor-deploy.OPnGkT`.
+Prior CI 34410878270 passed completely. Focused worker/style tests: 64 passed;
+support/Night Watch: 15 passed; TypeScript and production web build passed.
+Edge full-App task search also verified a no-match explanation and Show all
+open work restoring the existing board. No real task or worker was edited.
+Next: continue UI-4 task/notification navigation and empty/error-state coverage;
+preserve the explicit native-device and backend gaps in the matrix below.
+
 **Latest operator direction, evening:** stop the reload investigation. Prioritize
 visible improvements for ordinary users with one to five workers; incremental
 updates are welcome. Finish the already-running search-layout deployment, then
