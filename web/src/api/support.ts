@@ -8,12 +8,17 @@ export type SupportSubmission = {
   subject: string;
   body: string;
 };
+export type SupportFile = {
+  metadata: { id: string; file_name: string; media_type: string; size_bytes: number; sha256: string };
+  bytes: ArrayBuffer;
+};
+export type SupportFileReport = { submission: SupportSubmission; files: SupportFile[] };
 export type SupportDelivery = {
   submission_key: string;
   created_at: number;
   delivery: { state: "pending" | "delivering" | "uncertain" | "failed" | "confirmed" | "rate_limited"; attempts: number; attempt_id?: string | null; manual_retry_pending?: boolean; retry_not_before?: number | null; refusal?: "conflict" | "rejected" | "rate_limited" | null; receipt?: { message_id: string } | null };
 };
-export type SupportStatus = { configured: boolean; sender: "configured" | "running" | "stopped" | "failed" | null; deliveries: SupportDelivery[] };
+export type SupportStatus = { configured: boolean; attachments_supported?: boolean; sender: "configured" | "running" | "stopped" | "failed" | null; deliveries: SupportDelivery[] };
 export type SupportRetry = { submission_key: string; retry_id: string; expected_attempt_id: string };
 
 export async function forgetSupportCopy(token: string, row: SupportDelivery, signal?: AbortSignal): Promise<void> {
@@ -47,6 +52,31 @@ export async function submitSupport(token: string, submission: SupportSubmission
   });
   const value = await response.json() as SupportDelivery;
   if (value.submission_key !== submission.submission_key || !value.delivery
+    || !["pending", "delivering", "uncertain", "failed", "confirmed", "rate_limited"].includes(value.delivery.state)) {
+    throw new Error("Support save could not be confirmed");
+  }
+  return value;
+}
+
+/** Build the explicit manifest field with JSON content type and no filename. */
+export async function submitSupportFiles(token: string, report: SupportFileReport, signal?: AbortSignal): Promise<SupportDelivery> {
+  if (!report.files.length || report.files.length > 4 || report.files.some((file) =>
+    !/^[0-9a-f-]{36}$/i.test(file.metadata.id) || !["image/png", "image/jpeg", "image/webp", "text/plain"].includes(file.metadata.media_type)
+    || file.bytes.byteLength !== file.metadata.size_bytes || file.bytes.byteLength > 5 * 1024 * 1024)
+    || report.files.reduce((sum, file) => sum + file.bytes.byteLength, 0) > 12 * 1024 * 1024) throw new Error("Invalid reviewed attachments");
+  const boundary = `swarm-${crypto.randomUUID()}`;
+  const manifest = JSON.stringify({ submission: report.submission, attachments: report.files.map((file) => file.metadata) });
+  if (new TextEncoder().encode(manifest).length > 128 * 1024) throw new Error("Reviewed report is too large");
+  const parts: BlobPart[] = [`--${boundary}\r\nContent-Disposition: form-data; name="manifest"\r\nContent-Type: application/json\r\n\r\n${manifest}\r\n`];
+  for (const file of report.files) {
+    parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="file:${file.metadata.id}"; filename="attachment"\r\nContent-Type: ${file.metadata.media_type}\r\n\r\n`, file.bytes, "\r\n");
+  }
+  parts.push(`--${boundary}--\r\n`);
+  const response = await authenticatedFetch(token, "/api/v1/feedback/support/attachments", {
+    method: "POST", headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` }, body: new Blob(parts), signal,
+  });
+  const value = await response.json() as SupportDelivery;
+  if (value.submission_key !== report.submission.submission_key || !value.delivery
     || !["pending", "delivering", "uncertain", "failed", "confirmed", "rate_limited"].includes(value.delivery.state)) {
     throw new Error("Support save could not be confirmed");
   }

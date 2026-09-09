@@ -12,7 +12,7 @@ function open() { return render(<SupportFeedbackDialog operatorToken="fixture" s
 
 test("explains email replies without implying attachments or automatic diagnostics are sent", () => {
   open();
-  expect(screen.getByText(/Swarm Support may reply by email/)).toHaveTextContent("Attachments and automatic diagnostic uploads are not available here.");
+  expect(screen.getByText(/Swarm Support may reply by email/)).toHaveTextContent("Diagnostics are never uploaded automatically.");
   expect(screen.queryByText(/reply delivery are not enabled/)).not.toBeInTheDocument();
   expect(submitSupport).not.toHaveBeenCalled();
 });
@@ -78,6 +78,20 @@ test("save does not imply received and explicit refresh reconciles confirmation"
   fireEvent.click(screen.getByRole("button", { name: "Check delivery status" }));
   await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Received by Swarm Support"));
   expect(submitSupport).toHaveBeenCalledTimes(1);
+});
+
+test("a status-only matching key cannot discard an uncertain reviewed payload", async () => {
+  vi.mocked(submitSupport).mockRejectedValueOnce(new Error("lost response"));
+  open(); review(); fireEvent.click(screen.getByRole("button", { name: "Send to Swarm Support" }));
+  await screen.findByRole("alert");
+  const original = loadPendingSupport()!;
+  vi.mocked(fetchSupportStatus).mockResolvedValue({ ...status, deliveries: [{ submission_key: original.submission_key,
+    created_at: 1, delivery: { state: "confirmed", attempts: 1 } }] });
+  fireEvent.click(screen.getByText(/Delivery status ·/));
+  fireEvent.click(screen.getByRole("button", { name: "Check delivery status" }));
+  await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("confirm its contents"));
+  expect(screen.getByRole("button", { name: "Retry this exact report" })).toBeEnabled();
+  expect(loadPendingSupport()).toEqual(original);
 });
 
 test("failure to retain a safe retry copy prevents sending", async () => {

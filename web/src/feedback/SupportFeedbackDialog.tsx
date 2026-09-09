@@ -1,9 +1,10 @@
-import { useRef, useState } from "react";
-import { fetchSupportStatus, submitSupport, retrySupport, forgetSupportCopy, type SupportDelivery, type SupportStatus, type SupportSubmission } from "../api/support";
+import { useEffect, useRef, useState } from "react";
+import { fetchSupportStatus, submitSupport, submitSupportFiles, retrySupport, forgetSupportCopy, type SupportFile, type SupportDelivery, type SupportStatus, type SupportSubmission } from "../api/support";
 import { useModalFocus } from "../shared/useModalFocus";
 import { RuntimeRequestError } from "../api/request";
 import UnsavedChangesPrompt from "../shared/UnsavedChangesPrompt";
 import { clearPendingSupport, loadPendingSupport, savePendingSupport, prepareSupportRetry, clearSupportRetry } from "./supportDraft";
+import { prepareSupportFiles, savePendingSupportFiles, loadPendingSupportFiles, clearPendingSupportFiles } from "./supportFiles";
 
 type Props = { operatorToken: string; status: SupportStatus; onClose: () => void; onSaved?: () => void };
 const labels: Record<SupportDelivery["delivery"]["state"], string> = {
@@ -35,6 +36,10 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [review, setReview] = useState(recovery.pending);
+  const [files, setFiles] = useState<SupportFile[]>([]);
+  const [readingFiles, setReadingFiles] = useState(false);
+  const [recoveringFiles, setRecoveringFiles] = useState(typeof indexedDB !== "undefined");
+  const [filesRecoveryFailed, setFilesRecoveryFailed] = useState(false);
   const [attempted, setAttempted] = useState(Boolean(recovery.pending));
   const [status, setStatus] = useState(initial);
   const [saved, setSaved] = useState<SupportDelivery>();
@@ -44,26 +49,57 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
   const [removing, setRemoving] = useState<string>();
   const [visibleCount, setVisibleCount] = useState(10);
   const inFlight = useRef(false);
-  const dirty = !saved && Boolean(email || name || subject || body || review);
+  const dirty = !saved && Boolean(email || name || subject || body || review || files.length);
   function close() { if (dirty && !attempted) setDiscard(true); else onClose(); }
   const modal = useModalFocus<HTMLElement>(close);
+
+  useEffect(() => {
+    if (typeof indexedDB === "undefined") return;
+    let active = true;
+    void loadPendingSupportFiles().then((pending) => {
+      if (!active || !pending) return;
+      if (recovery.pending) throw new Error("A text report and an attachment report both await confirmation. Check delivery status before sending another.");
+      setReview(pending.submission); setFiles(pending.files); setAttempted(true);
+    }).catch((failure: unknown) => {
+      if (active) { setError(failure instanceof Error ? failure.message : "Saved files could not be recovered."); setFilesRecoveryFailed(true); }
+    }).finally(() => { if (active) setRecoveringFiles(false); });
+    return () => { active = false; };
+  }, [recovery.pending]);
+
+  async function selectFiles(selected: File[]) {
+    if (inFlight.current || !selected.length) return;
+    inFlight.current = true; setBusy(true); setReadingFiles(true); setError("");
+    try { setFiles(await prepareSupportFiles(selected)); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : "The files could not be read. No report was sent."); }
+    finally { inFlight.current = false; setBusy(false); setReadingFiles(false); }
+  }
+
+  async function clearBrowserCopy(key: string) {
+    if (files.length) await clearPendingSupportFiles(key);
+    else clearPendingSupport();
+  }
 
   async function send() {
     if (!review || inFlight.current) return;
     inFlight.current = true; setBusy(true); setError("");
     const controller = new AbortController();
-    const deadline = window.setTimeout(() => controller.abort(), 15_000);
+    const deadline = window.setTimeout(() => controller.abort(), files.length ? 65_000 : 15_000);
+    let retained = false;
     try {
       // If browser persistence fails, do not risk an unrecoverable duplicate.
-      savePendingSupport(review);
+      if (files.length) await savePendingSupportFiles({ submission: review, files });
+      else savePendingSupport(review);
+      retained = true;
       setAttempted(true);
-      const result = await submitSupport(operatorToken, review, controller.signal);
+      const result = files.length
+        ? await submitSupportFiles(operatorToken, { submission: review, files }, controller.signal)
+        : await submitSupport(operatorToken, review, controller.signal);
       setSaved(result);
       setStatus((old) => ({ ...old, deliveries: [result, ...old.deliveries.filter((row) => row.submission_key !== result.submission_key)] }));
-      try { clearPendingSupport(); } catch { /* exact replay remains safe if browser cleanup fails */ }
+      try { await clearBrowserCopy(result.submission_key); } catch { /* exact replay remains safe if browser cleanup fails */ }
       onSaved?.();
-    } catch {
-      setError("The save could not be confirmed. Keep this exact report and retry; a retry will not create a second report.");
+    } catch (failure) {
+      setError(!retained && failure instanceof Error ? failure.message : "The save could not be confirmed. Keep this exact report and retry; a retry will not create a second report.");
     } finally { window.clearTimeout(deadline); inFlight.current = false; setBusy(false); }
   }
 
@@ -76,7 +112,13 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
       const next = await fetchSupportStatus(operatorToken, controller.signal);
       setStatus(next); setError("");
       const known = next.deliveries.find((row) => row.submission_key === review?.submission_key);
-      if (known) { setSaved(known); try { clearPendingSupport(); } catch { /* retained exact key is safe */ } }
+      if (known && saved?.submission_key === known.submission_key) {
+        setSaved(known); try { await clearBrowserCopy(known.submission_key); } catch { /* retained exact key is safe */ }
+      } else if (known) {
+        // Status contains identity, not a reviewed-content digest. Only exact POST
+        // replay can establish that the saved report includes these same files/text.
+        setError("A report with this key is saved. Retry this exact report to confirm its contents before removing the browser copy.");
+      }
     } catch { setError("Delivery status is unavailable. Your original report is retained."); }
     finally { window.clearTimeout(deadline); inFlight.current = false; setBusy(false); }
   }
@@ -120,7 +162,8 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
         <button type="button" className="secondary-button" onClick={close}>Close</button></header>
       <p>Share feedback privately with Swarm Support. Only an email address is required for contact. No GitHub account is needed.</p>
       {!status.configured && <p role="status">Central support is disabled. Existing reports are retained; new reports cannot be sent here.</p>}
-      {!review && !recovery.error && status.configured ? <form onSubmit={(event) => { event.preventDefault(); setReview({
+      {recoveringFiles && <p role="status">Checking for a saved attachment report…</p>}
+      {!review && !recovery.error && !recoveringFiles && !filesRecoveryFailed && status.configured ? <form onSubmit={(event) => { event.preventDefault(); setReview({
         submission_key: crypto.randomUUID(), kind, email, name: name || null, subject, body,
       }); }}>
         <div className="feedback-fields">
@@ -131,18 +174,30 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
           </select></label>
           <label>Subject<input required maxLength={240} value={subject} onChange={(event) => setSubject(event.target.value)} /></label>
           <label className="support-message-field">Message<textarea required maxLength={20000} value={body} onChange={(event) => setBody(event.target.value)} /></label>
-        </div><button className="primary-action" type="submit" disabled={!email.trim() || !subject.trim() || !body.trim()}>Review message</button>
+          {status.attachments_supported && typeof indexedDB !== "undefined" && <label className="support-message-field">Attachments (optional)
+            <input type="file" accept="image/png,image/jpeg,image/webp,text/plain" multiple disabled={busy} onChange={(event) => { const selected = [...(event.target.files ?? [])]; event.target.value = ""; void selectFiles(selected); }} />
+            <small>Up to 4 PNG, JPEG, WebP or text files. 5 MiB each, 12 MiB total. Selecting again replaces the list.</small>
+          </label>}
+        </div>
+        {readingFiles && <p role="status">Reading selected files…</p>}
+        {!!files.length && <ul className="support-files">{files.map((file) => <li key={file.metadata.id}><span>{file.metadata.file_name} · {Math.ceil(file.bytes.byteLength / 1024)} KiB</span>
+          <button type="button" className="secondary-button" disabled={busy} onClick={() => setFiles((old) => old.filter((item) => item.metadata.id !== file.metadata.id))}>Remove {file.metadata.file_name}</button></li>)}</ul>}
+        <button className="primary-action" type="submit" disabled={busy || !email.trim() || !subject.trim() || !body.trim()}>Review message</button>
       </form> : review ? <section aria-label="Review support message">
         <h3>{review.subject}</h3><p>{review.name ? `${review.name} · ` : ""}{review.email}</p>
         <pre className="support-review-text">{review.body}</pre>
+        {!!files.length && <div aria-label="Reviewed attachments"><h4>Files included</h4><ul className="support-files">{files.map((file) => <li key={file.metadata.id}>
+          <span>{file.metadata.file_name} · {Math.ceil(file.bytes.byteLength / 1024)} KiB</span></li>)}</ul>
+          <p>The exact selected files will be shared, including any image metadata. No files are added automatically.</p></div>}
         {saved ? <p role="status">{deliveryLabel(saved)}</p> : <div className="diagnostic-actions">
           {!attempted && <button type="button" className="secondary-button" onClick={() => setReview(undefined)}>Edit message</button>}
-          <button type="button" className="primary-action" disabled={busy || !status.configured} onClick={() => void send()}>
+          <button type="button" className="primary-action" disabled={busy || !status.configured || (!!files.length && !status.attachments_supported)} onClick={() => void send()}>
             {busy ? "Saving…" : attempted ? "Retry this exact report" : "Send to Swarm Support"}</button>
         </div>}
       </section> : null}
-      <small className="privacy-note">Only the reviewed message and contact details are sent. Swarm Support may reply by email. Attachments and automatic diagnostic uploads are not available here.</small>
-      <small className="privacy-note">An unsent retry copy stays in this tab until the Hive confirms saving it. Reopening never sends it automatically.</small>
+      {!!files.length && !status.attachments_supported && <p role="status">This Hive does not currently support file uploads. The original report is retained; update the Hive before retrying.</p>}
+      <small className="privacy-note">Only the reviewed message, contact details and selected files are sent. Swarm Support may reply by email. Diagnostics are never uploaded automatically.</small>
+      <small className="privacy-note">An unsent retry copy stays in this browser until the Hive confirms saving it. Reopening never sends it automatically.</small>
       {error && <p role="alert">{error}</p>}
       {status.sender === "failed" && <p role="alert">Support delivery has stopped. Saved reports remain on this Hive.</p>}
       <details><summary>Delivery status · {status.deliveries.length}</summary>

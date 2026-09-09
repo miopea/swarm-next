@@ -2,6 +2,31 @@
 
 ## September 9 native attachment contract agreement
 
+### Hive upload/review implementation checkpoint
+
+The local authenticated `/api/v1/feedback/support/attachments` adapter now accepts
+the reviewed multipart envelope. Two process-owned upload permits cover stream
+reading through the final blocking save; parsing has a 60-second deadline, a
+13 MiB body cap and per-field bounds. Authentication and upload admission precede
+reading. All files must match the ordered manifest before the single outbox
+transaction; unknown, duplicate, missing or changed parts never save partial work.
+The request only saves and wakes the existing sender; it does not perform a
+central network send itself.
+
+The browser retains one explicitly reviewed attachment report per origin in a
+private IndexedDB record, including immutable byte copies and the existing report
+identity. Its cap is four files/12 MiB plus bounded text and metadata; no periodic
+sender or cleanup loop is introduced. Different pending reports cannot overwrite
+each other across tabs. Exact replay is allowed. Only confirmation from the
+content-comparing save endpoint clears the retry copy; a status row with the same
+key alone does not prove that the reviewed content was saved. Existing text-only
+tab retry copies remain compatible. The UI discloses file and image-metadata
+sharing, allows removal before review, and never automatically attaches diagnostics.
+
+This is not yet live acceptance: paired Admin upload/storage verification and
+deployment remain gates. Desktop Edge fixture review/failure/reload/explicit-retry
+passed; real mobile picker/device acceptance is not inferred from that check.
+
 The Admin owner supplied and agreed the design in BFG Admin's
 `docs/specs/native-feedback-attachments-proposal.md` (based on Admin main
 `3a0f8bdbac5640776704af5c1922d679fab1d6c9`). This is an implementation contract,

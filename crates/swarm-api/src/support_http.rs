@@ -14,12 +14,16 @@ use swarm_application::{HiveSupportService, HiveSupportServiceError, SupportDest
 use swarm_domain::SupportSubmissionInput;
 use tokio::sync::{Notify, watch};
 
+#[path = "support_upload.rs"]
+mod upload;
+
 #[derive(Clone)]
 pub(super) struct SupportRuntime {
     service: HiveSupportService,
     wake: Arc<Notify>,
     // 0 configured, 1 running, 2 stopped, 3 failed. Never restart a live owner.
     state: Arc<AtomicU8>,
+    uploads: Arc<tokio::sync::Semaphore>,
 }
 
 impl AppState {
@@ -42,6 +46,7 @@ impl AppState {
             service: HiveSupportService::new(store, destination),
             wake: Arc::new(Notify::new()),
             state: Arc::new(AtomicU8::new(0)),
+            uploads: Arc::new(tokio::sync::Semaphore::new(2)),
         });
         Ok(self)
     }
@@ -104,7 +109,7 @@ pub(super) async fn status(
                 _ => "failed",
             });
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(serde_json::json!({
-        "configured": state.central_support.is_some(), "sender": sender, "deliveries": deliveries,
+        "configured": state.central_support.is_some(), "attachments_supported": state.central_support.is_some(), "sender": sender, "deliveries": deliveries,
     }))).into_response())
 }
 
@@ -126,6 +131,42 @@ pub(super) async fn submit(
     let saved = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         service.submit_reviewed(input, crate::unix_timestamp())
+    })
+    .await
+    .map_err(|_| unavailable())?
+    .map_err(|error| service_error(&error))?;
+    runtime.wake.notify_one();
+    Ok((StatusCode::ACCEPTED, [(header::CACHE_CONTROL, "no-store")], Json(serde_json::json!({
+        "submission_key": saved.submission_key, "created_at": saved.created_at, "delivery": saved.delivery,
+    }))).into_response())
+}
+
+pub(super) async fn submit_files(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    multipart: axum::extract::Multipart,
+) -> Result<Response, ApiError> {
+    // Multipart extraction constructs a stream; no upload bytes are read before auth/admission.
+    authorize(&state, &headers)?;
+    let runtime = state.central_support.as_ref().ok_or_else(unavailable)?;
+    let upload_permit = runtime.uploads.clone().try_acquire_owned().map_err(|_| {
+        ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "support_upload_busy",
+            "Two support uploads are already in progress. Retry this same report.",
+        )
+    })?;
+    let parsed = upload::read_with_deadline(multipart, std::time::Duration::from_secs(60)).await?;
+    let permit = admission(&state)?;
+    let service = runtime.service.clone();
+    let saved = tokio::task::spawn_blocking(move || {
+        let _upload_permit = upload_permit;
+        let _permit = permit;
+        service.submit_reviewed_with_attachments(
+            parsed.submission,
+            &parsed.files,
+            crate::unix_timestamp(),
+        )
     })
     .await
     .map_err(|_| unavailable())?
@@ -221,6 +262,7 @@ fn service_error(error: &HiveSupportServiceError) -> ApiError {
             "This saved support report could not be found.",
         ),
         HiveSupportServiceError::InvalidSubmission(_)
+        | HiveSupportServiceError::Outbox(SupportOutboxError::InvalidAttachment(_))
         | HiveSupportServiceError::UnsupportedKind => ApiError::new(
             StatusCode::BAD_REQUEST,
             "support_invalid",

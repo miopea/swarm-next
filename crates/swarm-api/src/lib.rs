@@ -3911,6 +3911,10 @@ fn api_router(state: AppState) -> Router {
                 .layer(DefaultBodyLimit::max(128 * 1024)),
         )
         .route(
+            "/api/v1/feedback/support/attachments",
+            post(support_http::submit_files).layer(DefaultBodyLimit::max(13 * 1024 * 1024)),
+        )
+        .route(
             "/api/v1/integrations/github/connect",
             post(feedback::github_connect_start),
         )

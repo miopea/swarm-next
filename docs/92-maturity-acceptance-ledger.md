@@ -55,12 +55,12 @@ authenticated download-only and its reader token must never be placed in a Hive.
 The Admin-owned bounded attachment contract has now been agreed in ADR 0080;
 Admin implementation is in progress, with migration/storage permission review
 required before deployment. Swarm schema 155 and its transport now preserve
-reviewed file bytes and identity through the outbox. The authenticated local
-attachment ingress and review UI remain unwired, and no live attachment route
-acceptance is claimed. The existing fictional request remains untouched and
+reviewed file bytes and identity through the outbox. Authenticated local ingress,
+review UI and browser retry-byte retention are now implemented and verified in
+isolation; no live attachment route acceptance is claimed. The existing fictional request remains untouched and
 dispatch still requires restored Admin sign-in.
 
-1. Finish the local attachment ingress/review UI and paired Admin verification.
+1. Complete paired Admin verification and review its deployment/storage changes.
    Reuse the existing source and idempotent report identity. Keep the
    existing linked-task fixture; Admin authentication is an external acceptance gate.
 2. Resolve the pending scoped operator-source linking proposal, then implement
@@ -100,3 +100,30 @@ delivery recovery; four application boundary tests and strict all-target Clippy
 across domain, persistence, application and API. The optional paired Admin test was explicitly ignored without
 its fixture, not counted as acceptance. The local upload/review UI, populated
 browser tests and real paired Admin attachment journey remain required.
+
+### Local ingress and browser recovery checkpoint
+
+The authenticated bounded multipart route and file review/retry UI are now wired,
+not deployed. Four new ingress tests cover auth/admission before stalled-body
+reads, exact atomic save/replay, invalid/duplicate/missing files and deadline
+failure. All 23 focused API tests passed (the optional paired fixture remained
+ignored); strict API all-target Clippy passed. The compiler first hit an incremental
+fingerprint ICE; disabling incremental compilation completed the same checks
+without changing unrelated source or deleting shared build caches.
+
+All 25 focused browser tests pass, including bounded file-reader cancellation,
+durable byte-copy recovery, cross-tab
+overwrite/deletion refusal, storage failure before sending, explicit same-report
+retry and refusal to clear an unconfirmed payload merely from a status-only key.
+A broader run before the ArrayBuffer correction passed 150 files/1410 tests and
+failed the two new recovery tests; the focused rerun after the correction passed.
+Type checking and production build passed; the test-only IndexedDB implementation
+adds no runtime dependency.
+
+In Edge at 1465 x 1339 (document width also 1465), the real dialog retained both
+fictional filenames and report text after a failed upload and full page reload.
+Explicit retry reached Saved to Hive / waiting to send, not delivery confirmation.
+A subsequent reload showed the empty form, confirming browser-copy cleanup.
+The test used the no-proxy local harness and its fictional retry seed; it is not
+proof of native camera/gallery selection, mobile layout, or a central Admin send.
+The owned tab and harness server were closed after the check.
