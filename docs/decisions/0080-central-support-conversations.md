@@ -1,5 +1,50 @@
 # ADR 0080: Central support conversations, separate from Hive execution
 
+## September 9 native attachment contract agreement
+
+The Admin owner supplied and agreed the design in BFG Admin's
+`docs/specs/native-feedback-attachments-proposal.md` (based on Admin main
+`3a0f8bdbac5640776704af5c1922d679fab1d6c9`). This is an implementation contract,
+not evidence that its routes or storage operations are deployed.
+
+Keep the existing strict text-only JSON route unchanged. The new Admin-owned
+`POST /api/feedback/:sourceId/submissions-with-attachments` accepts multipart
+with a first JSON `manifest` part containing exactly `submission` and ordered
+`attachments`. Each attachment has a nonnil UUID `id`, `file_name`, `media_type`,
+`size_bytes`, and lowercase SHA256 `sha256`; exactly one `file:<id>` part supplies
+its bytes. Manifest order is immutable; file-part order and multipart boundaries
+are transport details. Both routes share source plus submission-key uniqueness.
+The six-field receipt remains unchanged.
+
+Limits are 1-4 files, 5 MiB per file, 12 MiB combined, 13 MiB HTTP body, and a
+128 KiB manifest. Types are PNG, JPEG, WebP and UTF-8 plain text without NUL;
+Admin validates raster signatures and bounded decoding up to 25 megapixels,
+rejecting animation. Filenames contain 1-180 characters without separators or
+control characters. No arbitrary URLs, public reads, SVG, PDF or archives.
+
+Swarm must save exact reviewed metadata and immutable byte copies atomically
+in its bounded private outbox before delivery. Recovered attempts never reread
+an original path, recreate attachment IDs, omit a file, or downgrade to text.
+Changing content, attachment metadata or manifest order under the same key
+conflicts. Timeout, rate-limit and unavailable outcomes retain the same key
+for exact retry. Local retention and global admission must include attachment
+bytes, not merely JSON size. Existing text rows retain their encoding and retry
+semantics. Browser lifecycle must not own delivery after the local save.
+
+Admin owns private storage, reservation/quota accounting, atomic publication,
+commit-versus-cleanup fencing and authenticated attachment retrieval. Hives
+receive no storage or Admin-read credentials. Archive retains committed bytes;
+explicit original deletion keeps receipt/hash tombstones, and an exact replay
+must not resurrect deleted objects. No attachment is sent to AI or customers
+merely by intake or task completion.
+
+Implementation and activation remain separate gates: prove exact replay,
+changed-file conflict, interrupted local save and delivery recovery, byte and
+concurrency limits, explicit review, and populated mobile/desktop behavior.
+Admin must separately prove private storage and cleanup safety. Review its
+concrete migration and storage permissions before production deployment.
+Use fictional fixtures only and preserve the reserved linked-task fixture.
+
 ## September 8 ownership and activation correction
 
 This section supersedes the historical separate-support-runtime design below.
