@@ -49,7 +49,7 @@ test("exact-session input waits remain visible and clear when the worker resumes
   expect(waiting.taskCount).toBe(1);
   for (const change of [
     { attention_state: "buzzing" as const }, { attention_state: "resting" as const },
-    { running: false }, { active_session_id: "new-session" }, { id: "other-worker" },
+    { id: "other-worker" },
   ]) {
     const projection = projectTaskQueues([current], [], [], [{ ...worker, ...change }]);
     expect(projection.taskCount).toBe(0);
@@ -57,6 +57,22 @@ test("exact-session input waits remain visible and clear when the worker resumes
   }
   expect(current.state).toBe("active");
   expect(current.next_move_owner).toBe("worker");
+});
+
+test("known stopped or replaced execution stays visible without inferring an owner change", () => {
+  const current = task("active", { state: "active", dispatch_state: "delivered", assigned_worker_id: "w", assigned_session_id: "s" });
+  const worker = { id: "w", running: true, active_session_id: "s", attention_state: "resting" } as Worker;
+  for (const change of [{ running: false }, { active_session_id: "replacement" }]) {
+    const projection = projectTaskQueues([current], [], [], [{ ...worker, ...change }]);
+    expect(projection.waitingTasks).toEqual([current]);
+    expect(projection.activeTasks).toEqual([]);
+    expect(projection.taskCount).toBe(1);
+  }
+  for (const workers of [[], [worker], [{ id: "w" } as Worker], [{ ...worker, active_session_id: null }]]) {
+    expect(projectTaskQueues([current], [], [], workers).activeTasks).toEqual([current]);
+  }
+  expect(current.next_move_owner).toBe("worker");
+  expect(current.state).toBe("active");
 });
 
 test("waiting count excludes ordinary active work but includes unknown owners and uncertain delivery", () => {

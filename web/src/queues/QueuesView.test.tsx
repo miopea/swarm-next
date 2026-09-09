@@ -55,6 +55,23 @@ function task(overrides: Partial<Task>): Task {
 }
 
 describe("QueuesView", () => {
+  test("Active execution mismatches are visible and clear when the exact worker session returns", () => {
+    const active = task({ state: "active", next_move_owner: "worker", assigned_worker_id: "w", assigned_session_id: "s", dispatch_state: "delivered" });
+    const worker = { id: "w", name: "Petal", running: false, active_session_id: null } as Worker;
+    const onOpenWorker = vi.fn();
+    const props = { tasks: [active], onOpenTask: vi.fn(), onOpenWorker };
+    const { rerender } = render(<QueuesView {...props} workers={[worker]} />);
+    expect(screen.getByRole("heading", { name: "Waiting on a worker 1" })).toBeVisible();
+    expect(screen.getByText("Assigned worker is not running")).toBeVisible();
+    rerender(<QueuesView {...props} workers={[{ ...worker, running: true, active_session_id: "replacement" }]} />);
+    expect(screen.getByText("Task session differs from the worker's current session · awaiting reconciliation")).toBeVisible();
+    rerender(<QueuesView {...props} workers={[{ ...worker, running: true, active_session_id: "s" }]} />);
+    expect(screen.queryByRole("heading", { name: "Waiting on a worker 1" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/awaiting reconciliation/)).not.toBeInTheDocument();
+    expect(screen.getByText("Marked active", { selector: "summary" })).toBeVisible();
+    expect(onOpenWorker).not.toHaveBeenCalled();
+  });
+
   test("Ready work exposes observed stopped/waking state and clears it on recovery", () => {
     const ready = task({ state: "ready", next_move_owner: "worker", assigned_worker_id: "w" });
     const worker = { id: "w", name: "Petal", running: false } as Worker;

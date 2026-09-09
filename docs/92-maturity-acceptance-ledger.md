@@ -249,3 +249,25 @@ bindings and all twelve provider/conversation selections. Swarm Next and D365
 remain asleep. Health is okay; support file intake remains disabled. No engine
 activation, central Admin infrastructure change, customer send or release occurred.
 CI for 8145b902 remains separate from the passing local suite and live continuity.
+
+### Queue execution mismatch visibility — not yet deployed
+
+The task-only Active projection hid work even when the roster explicitly showed
+its assigned worker stopped or using a different immutable session. Two new
+regressions failed before correction. These cases now remain in the recorded
+owner's visible queue with a short stopped/waking or session-reconciliation reason.
+Navigation counts use that same projection. Exact-session return clears the
+exception; absent/unknown roster data and ordinary Resting activity do not invent
+a stopped worker. No wake, reassignment, task transition or Needs You decision is
+created by presentation. Existing exact recovery evidence still identifies Queen's
+own check without changing execution ownership.
+
+All 118 queue/application tests and TypeScript checking pass. Edge rendered the
+fictional mismatch fixture at a measured 390px container/scroll width without
+overflow, with both explanations visible. This is a narrow desktop rendering,
+not native mobile acceptance. The fixture tab/server were closed.
+
+The separate native /resume acceptance attempt stopped before any input or worker
+mutation: auto-review refused reading the demo terminal's current screen. Specific
+demo-screen permission was requested; no alternate capture path was used. The
+demo remains in confirmed conversation c4435eee-57b0-4546-b6ef-dc182080e7b5.

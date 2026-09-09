@@ -5,7 +5,7 @@ import { checkedQueueWaits, pendingQueueRechecks, unresolvedQueueInvestigations 
 import DeliveryWaitList from "./DeliveryWaitList";
 import TaskPrerequisiteList from "./TaskPrerequisiteList";
 import { prerequisiteSatisfied, type NextMoveOwner, type Task } from "../api/tasks";
-import { groupQueueByWorker, projectTaskQueues, workerAwaitingAnswer } from "./taskQueueProjection";
+import { groupQueueByWorker, projectTaskQueues, workerAwaitingAnswer, workerExecutionWait } from "./taskQueueProjection";
 import type { Worker } from "../api/workers";
 
 const RECOVERY_LABELS: Record<RecoveryQueueItem["state"], string> = {
@@ -268,8 +268,7 @@ export default function QueuesView({
                 const assignedWorker = workerById.get(task.assigned_worker_id ?? "");
                 // Display an observed lifecycle fact, not a reason for sleeping
                 // or permission to wake. Unknown roster data stays unknown.
-                const stoppedReadyWorker = task.state === "ready"
-                  && task.next_move_owner === "worker" && assignedWorker?.running === false;
+                const executionWait = workerExecutionWait(task, assignedWorker);
                 return (
                 <li key={task.id}>
                   <button type="button" onClick={() => onOpenTask(task.id)}>
@@ -286,9 +285,7 @@ export default function QueuesView({
                     </span>
                     {task.state === "blocked" && waits.has(task.id) && <span className="queue-task-meta">Blocked for {ageLabel(Math.max(0, Math.floor(waits.get(task.id)!.blocked_for_seconds / 3600)))}</span>}
                   </button>
-                  {stoppedReadyWorker && <p className="queue-task-meta">{assignedWorker.waking_since != null
-                    ? "Worker wake queued or in progress"
-                    : "Assigned worker is not running"}</p>}
+                  {executionWait && <p className="queue-task-meta">{executionWait}</p>}
                   {checks.has(task.id) && <div className="queue-task-meta">
                     <QueueEvidence label="Recovery observation" text={checks.get(task.id)!.reason} />
                     {checks.get(task.id)!.delivery && <QueueEvidence label="Latest recovery delivery" summaryText={checks.get(task.id)!.delivery!.state} text={`${checks.get(task.id)!.delivery!.state} · message ${checks.get(task.id)!.delivery!.message_id}`} />}

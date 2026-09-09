@@ -598,6 +598,19 @@ export const SURFACES: Surface[] = [
       onOpenTask={() => undefined} />,
   },
   {
+    id: "queues-session-mismatch",
+    title: "Active work without matching execution",
+    why: "Fictional stopped and replaced sessions stay visible; no wake or task mutation",
+    render: () => <div style={{ maxWidth: 390 }}><QueuesView onOpenTask={() => undefined}
+      workers={[{ ...demoWorkers[0], running: false, active_session_id: null },
+        { ...demoWorkers[1], running: true, active_session_id: "replacement" }]}
+      tasks={demoWorkers.slice(0, 2).map((worker, index) => ({ ...demoTasks[0],
+        id: `fixture-mismatch-${index}`, title: index === 0 ? "Finish the fictional export" : "Verify the fictional response",
+        state: "active", next_move_owner: "worker", dispatch_state: "delivered",
+        assigned_worker_id: worker.id, assigned_session_id: "previous", prerequisites: [],
+      }))} /></div>,
+  },
+  {
     id: "queues-prerequisites",
     title: "Explicit task prerequisites",
     why: "fictional blocked, completed and reopened prerequisite states; layout only",

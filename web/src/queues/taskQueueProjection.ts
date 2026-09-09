@@ -41,6 +41,19 @@ export function ordinaryActiveWork(task: Task): boolean {
     && (task.dispatch_state == null || task.dispatch_state === "delivered");
 }
 
+/** Known lifecycle mismatch, not inferred inactivity or permission to wake. */
+export function workerExecutionWait(task: Task, worker: Worker | undefined): string | undefined {
+  if ((task.state !== "ready" && task.state !== "active") || task.next_move_owner !== "worker"
+    || !worker || task.assigned_worker_id !== worker.id) return undefined;
+  if (worker.running === false) return worker.waking_since != null
+    ? "Worker wake queued or in progress" : "Assigned worker is not running";
+  if (task.state === "active" && worker.running === true && worker.active_session_id != null
+    && task.assigned_session_id != null && task.assigned_session_id !== worker.active_session_id) {
+    return "Task session differs from the worker's current session · awaiting reconciliation";
+  }
+  return undefined;
+}
+
 /** One task-count definition for the navigation and rendered queue rows. */
 export function projectTaskQueues(tasks: Task[], held: HeldBriefing[], blocked: BlockedEscalation[], workers: Worker[] = [], recovery: RecoveryQueueItem[] = []) {
   const known = new Map(tasks.map((task) => [task.id, task]));
@@ -56,6 +69,7 @@ export function projectTaskQueues(tasks: Task[], held: HeldBriefing[], blocked: 
   const recoveryIds = new Set(recoveryChecks.map(item => item.task_id));
   const ordinary = (task: Task) => ordinaryActiveWork(task)
     && !recoveryIds.has(task.id)
+    && !workerExecutionWait(task, workerById.get(task.assigned_worker_id ?? ""))
     && !workerAwaitingAnswer(task, workerById.get(task.assigned_worker_id ?? ""));
   const waitingTasks = tasks.filter((task) => isOpenTaskState(task.state) && !ordinary(task));
   const activeTasks = tasks.filter(ordinary);
