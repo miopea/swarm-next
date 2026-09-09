@@ -706,13 +706,19 @@ impl TaskStore {
                 i64::from(delivers_whole_task)
             ],
         )?;
-        let record = transaction.query_row(
-            "SELECT id, task_id, environment, reference, deployed_at, recorded_at
+        let (record, saved_whole_task) = transaction.query_row(
+            "SELECT id, task_id, environment, reference, deployed_at, recorded_at, delivers_whole_task
              FROM task_deployments
              WHERE task_id = ?1 AND environment = ?2 AND reference = ?3",
             params![task_id.to_string(), environment, reference],
-            deployment_from_row,
+            |row| Ok((deployment_from_row(row)?, row.get::<_, bool>(6)?)),
         )?;
+        // INSERT OR IGNORE may have returned an earlier receipt. A retry's
+        // arguments cannot grant more completion scope than that durable fact.
+        // Refuse both directions instead of acknowledging a change not saved.
+        if saved_whole_task != delivers_whole_task {
+            return Err(TaskStoreError::DeploymentScopeConflict);
+        }
         // AWAITING RELEASE SETTLES ITSELF HERE, and this is the whole point of
         // the state. Work parked waiting to ship has already been accepted; the
         // only open question was whether it shipped, and this call answers it.
@@ -2282,6 +2288,60 @@ mod tests {
         assert_eq!(closed.len(), 1);
         assert_eq!(closed[0].task_id, task.id);
         assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Completed);
+    }
+
+    #[test]
+    fn deployment_retries_cannot_change_the_scope_of_saved_evidence() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store
+            .create_task("Ship both demo components", "/workspace")
+            .unwrap();
+        for state in [
+            TaskState::Ready,
+            TaskState::Active,
+            TaskState::Review,
+            TaskState::AwaitingRelease,
+        ] {
+            store.transition_task(task.id, state).unwrap();
+        }
+        let partial = store
+            .record_partial_task_deployment(task.id, "demo", "component-one", 2_000)
+            .unwrap();
+        let retry = store
+            .record_partial_task_deployment(task.id, "demo", "component-one", 2_001)
+            .unwrap();
+        assert_eq!(partial.id, retry.id);
+        let before = store.list_task_activity(task.id, 50).unwrap().events.len();
+        assert!(
+            store
+                .record_task_deployment(task.id, "demo", "component-one", 2_002)
+                .is_err(),
+            "a conflicting retry must not upgrade immutable partial evidence"
+        );
+        assert_eq!(
+            store.get_task(task.id).unwrap().state,
+            TaskState::AwaitingRelease
+        );
+        assert_eq!(
+            store.list_task_activity(task.id, 50).unwrap().events.len(),
+            before
+        );
+        assert!(
+            store
+                .complete_reviewed_work_with_deployment()
+                .unwrap()
+                .is_empty()
+        );
+        store
+            .record_task_deployment(task.id, "demo", "both-components-verified", 2_003)
+            .unwrap();
+        assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Completed);
+        assert!(
+            store
+                .record_partial_task_deployment(task.id, "demo", "both-components-verified", 2_004)
+                .is_err(),
+            "the reverse scope conflict must also be explicit"
+        );
     }
 
     #[test]

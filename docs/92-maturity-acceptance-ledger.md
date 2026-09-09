@@ -31,7 +31,7 @@ or implementation boundary to inspect before changing it again.
 | TERM-02 | Operator accepted Android native AskUser questions 2/3 on September 7; renderer regressions recorded in [47](47-maturity-remaining.md). | iOS acceptance and current-build repeated redraw/scroll/replay checks; selection correctness alone is insufficient. |
 | MOB-01 | Existing composer, draft and failed-submission protections retained. | Real keyboard/dictation, suspension and immutable-session draft recovery on both mobile platforms. |
 | MOB-02 | Attachment lifecycle fixes and tests recorded in [47](47-maturity-remaining.md). | Camera/gallery selection through shared-file receipt and provider reference acceptance on Android/iOS; desktop task-image previews do not prove this. |
-| QUEEN-01 | Autonomous two-demo dependency journey, routine documentation settlement and executable-code/no-deployment settlement; [91](91-engine-return-dependency-acceptance.md). | Actual deployment settlement and worker-first escalation journeys; resolve actual evidence gaps rather than normalizing incomplete runs to success. |
+| QUEEN-01 | Autonomous two-demo dependency journey, routine documentation, executable-code/no-deployment and actual isolated local deployment settlement; [91](91-engine-return-dependency-acceptance.md). | Queen-owned Awaiting Release handoff and worker-first escalation journeys; the local Review-to-system-completion proof does not establish production rollout or fixture crash recovery. |
 | QUEEN-02 | Engagement and task-scoped recovery guards; bounded recovery delivery. | Demonstrate safe kicks and escalation without mid-task derailment across representative work; no real-project terminal experiments. |
 | QUEEN-03 | Authenticated composer source records and exact-ID reads exist. | Direct-terminal/AskUser authored-answer capture and exact decision correlation remain unwired. Proposed source-to-deferral linking awaits the operator's answer. |
 | QUEUE-01 | Owner grouping, worker grouping, structural prerequisites, exact held-briefing reasons, calendar reassessment journey. | Prove owner/reason consistency through remaining handoff/review/operator-resolution paths. Text-only deferrals without authoritative links remain a real evidence gap. |
@@ -305,3 +305,14 @@ selection or recovery semantics changed. The full web suite passes: 152 files,
 running session/provider/conversation pairs; engine PID 2271655 did not change.
 The separate Edge tab loaded Queues with its owner sections intact and was closed
 after inspection. This is not whole-program acceptance or a release.
+
+### Deployment retry scope — validated, awaiting development deployment
+
+A partial deployment retried with whole-task scope reproduced premature
+Awaiting Release completion despite the saved receipt remaining partial.
+ADR 0092 now rejects scope conflicts atomically in both directions and exposes
+an explicit conflict rather than acknowledging an unsaved scope change. Exact
+retries remain idempotent; a genuinely new whole-task receipt restores normal
+settlement. The regression failed before the fix and passes after it. All 697
+persistence tests and strict API Clippy checks passed on the isolated Linux tree.
+No migration, engine activation, customer send or release is part of this fix.

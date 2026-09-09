@@ -8914,6 +8914,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "deployment_evidence_too_early",
             error.to_string(),
         ),
+        TaskStoreError::DeploymentScopeConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            "deployment_scope_conflict",
+            error.to_string(),
+        ),
         TaskStoreError::InvalidEmailMessage
         | TaskStoreError::InvalidEmailAttachment
         | TaskStoreError::InvalidTaskDeployment { .. }

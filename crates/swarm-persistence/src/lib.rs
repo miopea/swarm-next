@@ -565,6 +565,10 @@ pub enum TaskStoreError {
     InvalidTaskDeployment { max: usize },
     #[error("deployment evidence belongs on work that is finished: move this task to review first")]
     DeploymentEvidenceTooEarly,
+    #[error(
+        "this deployment reference is already recorded with a different whole-task scope; preserve that receipt and record the newly verified delivery under its own distinct reference"
+    )]
+    DeploymentScopeConflict,
     #[error("email resolution reply content is invalid")]
     InvalidEmailReply,
     // NAMES BOTH CONDITIONS, because the old wording cost eleven days. It read

@@ -146,6 +146,39 @@ Ready. It does not establish actual service deployment settlement, all Queen
 recovery paths or long-running backlog clearance. No original worker or engine
 was restarted, and intentionally sleeping workers remained asleep.
 
+## Actual isolated deployment settlement — September 9
+
+Task `01a085bb-4eeb-7141-b316-fbb277962a25` used the same idle Swarm Dogfood
+worker and disposable repository. Normal creation, Ready and assignment were
+the only controller mutations. Delivery succeeded; no terminal input, manual
+completion, retry, reassignment or wake was used afterward.
+
+Durable activity: Ready at 1788950040 (9392), worker Active at 1788950094 (9394),
+worker Review at 1788950405 (9398), system Completed at 1788950475 (9400).
+That is 435 seconds from Ready, with `closed_on_evidence=true` and
+`closed_unverifiable=false`. Completion cited the actual `isolated-local-demo`
+deployment. The worker attempted Awaiting Release and correctly received an
+authority refusal; it stayed in Review and recorded deployment evidence instead.
+This proves the Review-to-system-completion path, not a Queen-owned transition
+through Awaiting Release.
+
+Independent inspection confirmed clean commit
+`ac60b9d79bffe6935de8752bcc019eb7fc0ac9ac`: seven new fixture source/test files,
+no pre-existing file changes. The committed artifact and independently read
+`deployment-fixture-20260909/deployed/status.json` both hash to
+`920999e66e856c6c6efd3c278a945b0935801d71e43823835b645839ffe9a432`.
+An independent bounded loopback server served the deployed 164 bytes with HTTP
+200 and that same hash, then closed in finally. No public or permanent service
+or release was created. The worker's 39 passing tests are reported evidence,
+not an independently repeated full-suite result.
+
+Do not promote the disposable deploy script into production tooling. Its stale
+replacement uses two renames with a missing-path interval and lacks restoration
+if the second rename fails. The observed first deployment and unchanged-byte
+retry do not establish atomic replacement or crash recovery. This limitation
+does not invalidate the independently verified deployed bytes, but prevents
+claiming that the fixture's broader atomicity comments are proved.
+
 ## Still open
 
 Automatic loaded-engine admission, long-session performance, real mobile
