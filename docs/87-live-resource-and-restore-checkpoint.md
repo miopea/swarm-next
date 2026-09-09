@@ -1,5 +1,45 @@
 # September 8–9 live resource and restore checkpoints
 
+## September 9: bounded synthetic terminal-output checks
+
+At 07:08–07:11 UTC, the existing Swarm Dogfood Contract session
+`01a0846e-4385-7dd3-9867-64279705b742` was exercised in a separate Edge tab at
+`https://swarm.bfgsolutions.net`. Its provider conversation remained
+`c4435eee-57b0-4546-b6ef-dc182080e7b5`. Before each output write, process 2274183
+was verified as Claude in the contract-fixture workspace with stdout `/dev/pts/11`.
+These were output-only fixture writes, not commands submitted to the model:
+a 249,856-byte burst (1,024 lines), then 1,843,200 bytes over 30 seconds in 30
+bounded batches. Both end markers appeared on screen. Ctrl+L was used only in
+that demo terminal to restore the provider display. No real-project PTY was
+inspected or written, no worker was restarted, and the demo checkout stayed clean.
+
+During the paced window, API PID 2358464 consumed 173 jiffies and engine PID
+2271655 consumed 85 at 100 Hz: 1.73 and 0.85 CPU-seconds, respectively, or about
+5.77% and 2.83% of one core averaged over 30 seconds. This includes ordinary
+background activity and is not exclusive attribution to the synthetic stream.
+API RSS moved from 68,680 to 68,708 KiB; engine RSS from 91,756 to 96,820 KiB.
+The short window proves neither a plateau nor a leak. Both PIDs stayed unchanged;
+App/API remained healthy on `1.6.0-dev-202519adabe9-20260909065218-2355110`.
+
+The browser's cumulative observations, including setup/navigation and both
+streams, showed 238 terminal-apply samples (mean 1 ms, max 36 ms), one 62 ms
+main-thread block, and one 811 ms connection (565 ms access, 133 ms socket,
+113 ms initial state). Quick navigation could be opened and searched during
+the stream. This is qualitative menu usability, not provider-input latency.
+The same aggregate had 73 event entries (mean 2,216 ms, max 4,088 ms) and five
+navigation frame estimates (mean 835 ms, max 2,017 ms). Those slow values remain
+unresolved; low terminal-apply timings do not establish smooth screen paint.
+Code inspection confirms the route estimate uses two animation frames without
+a timeout fallback and excludes observed hidden intervals. Visible state does
+not prove the locked/remote desktop was foreground or continuously presenting.
+
+An on-demand Chromium heap estimate was 39.4 MiB used / 58.4 MiB allocated,
+without a paired baseline; it is not total browser memory or leak evidence.
+One browser automation read timed out during Settings navigation and subsequent
+reads succeeded. The workload is synthetic engine-to-browser output, not a
+matched fifteen-worker aged-session comparison. CPU, responsiveness under normal
+interactive work, and instrumentation overhead acceptance remain open.
+
 ## September 9: uninterrupted one-hour post-return observation
 
 Both services ran `1.6.0-dev-cf83c980bf17-20260909041327-2251164`:

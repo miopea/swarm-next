@@ -35,8 +35,8 @@ API and expanded UI show 275 seconds request-to-delivery, 50 seconds
 delivery-to-finish, and requested `completed` versus accepted `incomplete`.
 The next queued run did not overwrite that evidence. Public unauthenticated
 history requests return 401; direct loopback retains the existing approved
-local-trust policy. CI `34320999540` has web, package and audit passing; Rust was
-still running at this checkpoint. This accepts the bounded explicit-finish
+local-trust policy. CI `34320999540` subsequently completed with all four jobs
+(Rust, web, package and audit) passing. This accepts the bounded explicit-finish
 history slice, not task productivity or all orchestration metrics. DOG-01,
 native direct-answer correlation and engine admission remain open.
 
