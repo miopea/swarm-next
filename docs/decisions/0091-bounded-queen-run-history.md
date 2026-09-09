@@ -1,6 +1,6 @@
 # ADR 0091: Bounded history of confirmed Queen run finishes
 
-Status: Accepted under DOG-01; implemented and locally verified, live acceptance pending.
+Status: Accepted under DOG-01; implemented and live-verified September 9, 2026.
 
 The current `queen_automation` row owns the live run and is overwritten by the
 next run. Browser history cannot answer how often Queen finishes without action,
@@ -38,3 +38,10 @@ retention/count bounds, migration/restart, unknown timings, private API access,
 UI failure/recovery, and live normal Queen finishes before accepting this slice.
 Broader server aggregates, verified task-review yield, recovery metrics, and the
 full DOG-01 requirement remain separate work; this history does not close them.
+
+Live acceptance: commit 202519ad, schema-153 backup before activation, all twelve
+running session/conversation pairs preserved, public unauthenticated read refused.
+An ordinary Queen finish retained requested completed versus accepted incomplete;
+the authenticated API and rendered Developer Dogfood panel agree on the record
+and 275-second delivery wait / 50-second delivered-to-finish interval. The next
+queued run leaves it intact. Full persistence suite: 689 passed. See docs/47.

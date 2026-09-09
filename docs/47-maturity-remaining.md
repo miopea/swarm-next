@@ -2,7 +2,7 @@
 
 ## Current checkpoint — September 8, after Admin intake acceptance
 
-### Bounded Queen run history implementation, September 9 (not yet deployed)
+### Bounded Queen run history delivered, September 9
 
 ADR 0091 adds a private, metadata-only finish history to replace reliance on the
 single overwritten live-run row when comparing Queen delivery and outcomes.
@@ -17,11 +17,28 @@ tests (including rollback/retry, duplicate/stale finish, retention and migration
 three authenticated API/error tests, and strict affected-crate all-target/all-feature
 Clippy. Eleven focused web tests, TypeScript and the production web build pass.
 The full persistence suite passed all 689 tests, including the immediately prior
-schema upgrade. Deployment and rendered/live normal Queen-finish acceptance
-remain pending. The shared-domain addition changes the engine fingerprint, so
-the existing loaded-session compatibility guard must defer engine replacement;
-this delivery requests only App/API reload. This does not close DOG-01 or the native
-direct-answer correlation and engine-admission gaps.
+schema upgrade. Commit `202519adabe97c18f23901de944a44f9fd09cf40` is live as
+`1.6.0-dev-202519adabe9-20260909065218-2355110`. The normal reload guard created
+`pre-v153-reload-202519adabe9-20260909T065218Z.sqlite3` (43,048,960 bytes) before
+activation. The service finished with Result=success and ExecMainStatus=0;
+health is healthy with no degraded subsystems or database-recovery requirement.
+All 34 worker lifecycle records and all twelve exact running session/conversation
+pairs match the pre-update snapshot. Engine PID 2271655 remains unchanged. The
+shared-domain addition changes the candidate engine fingerprint to `cf179f73`,
+but the existing loaded-session guard correctly leaves that update pending.
+Neither sleeping Swarm Next nor D365 was woken.
+
+Edge at the authoritative URL rendered empty history honestly, then the first
+ordinary finish without a manual nudge: run `01a084f0-be2c-7cc2-a2a9-d7854a4131e7`,
+requested 1788936764, delivered 1788937039, finished 1788937089. Both the private
+API and expanded UI show 275 seconds request-to-delivery, 50 seconds
+delivery-to-finish, and requested `completed` versus accepted `incomplete`.
+The next queued run did not overwrite that evidence. Public unauthenticated
+history requests return 401; direct loopback retains the existing approved
+local-trust policy. CI `34320999540` has web, package and audit passing; Rust was
+still running at this checkpoint. This accepts the bounded explicit-finish
+history slice, not task productivity or all orchestration metrics. DOG-01,
+native direct-answer correlation and engine admission remain open.
 
 ### Calendar hold and stopped-worker queue evidence, September 9
 
