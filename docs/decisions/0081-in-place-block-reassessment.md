@@ -27,3 +27,18 @@ the referenced tasks before linking them and follow the chain to movable work.
 An elapsed date returns verification ownership to Queen, never auto-starts work.
 This command supplies a missing repair capability, not proof that Queen used it
 or that no-action review coverage is enforced. Those remain live acceptance work.
+
+## September 9: connect the command to recurring guidance
+
+Live task records still contained future calendar dates only in blocked prose,
+with no `blocked_until`, while Queen repeatedly recorded external-condition
+assessments. The shared block-recovery instructions named dependency and decision
+commands but omitted this command. Both the standing brief and every recurring
+delivery now name `swarm_reassess_task_block`, the latest activity fence, evidence
+and `not_before`. The same guidance is returned by coordination attention.
+
+This does not parse prose into dates, invent a time zone, schedule a cooldown or
+change any task automatically. Queen must verify the source and record the hold
+explicitly. Expiry still returns verification to Queen, not execution authority.
+Tests establish instruction delivery; live structural scheduling and eventual
+reassessment remain separate acceptance evidence.

@@ -3853,6 +3853,9 @@ mod tests {
         assert!(message.contains("Never retry a superseded review question"));
         assert!(message.contains("not because of age"));
         assert!(message.contains(crate::agent::QUEEN_BLOCK_RECOVERY_GUIDANCE));
+        assert!(message.contains("swarm_reassess_task_block"));
+        assert!(message.contains("A date written only in prose is not a scheduled hold"));
+        assert!(message.contains("does not authorize automatic resumption"));
         assert!(message.contains(crate::agent::QUEEN_EVIDENCE_GUIDANCE));
         // An approval must cite what it rests on, or the second pair of eyes
         // is a click. A stamp under load is what approved a false claim.
