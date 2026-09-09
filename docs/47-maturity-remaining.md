@@ -11,8 +11,13 @@ fictional task `01a084ad-60cc-7fe1-82d1-77af96a3b7d2` as a structural hold until
 2026-09-09 06:00 UTC. Activity 9220 records the source, checked time and date;
 the task now has `blocked_until=1788933600` and next owner `blocked`.
 At 05:51:49 UTC its receipt file was absent and the demo worktree clean.
-Automatic due-time reassessment and completion remain pending; do not manually
-resume this fixture. This is not evidence that every real calendar hold is fixed.
+At expiry the task stayed Blocked while its next owner returned to Queen; Edge
+independently rendered that reassessment requirement. Queen rechecked and resumed
+it at 06:03:21 UTC, the worker picked it up 31 seconds later, and ordinary
+documentation settlement completed it at 06:04:44 UTC. The one-file commit and
+byte-exact receipt were independently verified, with a clean worktree. No manual
+unblock or terminal nudge was used. See `91-engine-return-dependency-acceptance.md`.
+This is not evidence that every real calendar hold is fixed.
 
 Rendered Queues showed the two Ready tasks assigned to the intentionally sleeping
 Swarm Next worker without explaining its stopped state. The UI now additionally

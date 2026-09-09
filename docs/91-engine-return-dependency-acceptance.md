@@ -1,4 +1,38 @@
-# September 9: post-engine-return dependency acceptance
+# September 9: post-engine-return dependency and calendar acceptance
+
+## Calendar-gate follow-up on a501bc9b
+
+The App/API-only guidance update preserved all twelve exact sessions and engine
+PID 2271655. Its four CI jobs passed (`34315529668`). One additional fictional
+task, `01a084ad-60cc-7fe1-82d1-77af96a3b7d2`, was admitted Blocked in the existing
+workflow-fixture repository, assigned to Swarm Dogfood, with an exact earliest
+start of 2026-09-09 06:00 UTC. Queen had to record the written date structurally,
+then recheck and resume it after expiry. No new operator decision was required.
+
+- Activity 9220: Queen used block reassessment to record `blocked_until=1788933600`,
+  checked evidence and original assignment. Next owner became `blocked`.
+- At 05:51:49 UTC the expected file did not exist and the worktree was clean.
+- After expiry, the task remained Blocked and next owner became Queen. At
+  06:01:55 UTC Edge showed it under Waiting on Queen with “Blocked · Queen
+  reassessment needed”, not under scheduled work.
+- Activity 9233, 06:03:21 UTC: Queen rechecked the date and moved it to Ready.
+- Activity 9237, 06:03:52 UTC: the original worker picked it up, independently
+  checked the clock, and marked it Active (31 seconds after resumption).
+- Activities 9238/9239, 06:04:44 UTC: worker submitted Review and the system
+  automatically settled documentation-only work. Due-to-completion was 284 seconds.
+
+Commit `4c8defdee737413a30b7e316d02ff38e865dea01` changes only the new
+`calendar-window-20260909.txt`. Independent `cmp` verified its exact contents:
+`swarm-calendar-window-20260909:verified` followed by one newline. SHA-256 is
+`e146f91229511fa254ec95d4d9301bac37f53d044cc6517577f8448c0a7c5310`.
+The repository is clean. The bounded read-only observer exited successfully;
+there was no manual unblock, direct prompt, synthetic settlement or deployment
+during the due-time journey. No real-project terminal was read or typed into.
+
+This establishes one actual scheduled-hold/resumption journey and routine
+settlement, not clearance of the real backlog, universal date interpretation,
+automatic engine admission or full performance acceptance. Expiry returns a
+verification obligation; it does not independently authorize execution.
 
 ## Environment and scope
 
