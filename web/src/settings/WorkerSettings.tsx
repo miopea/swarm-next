@@ -1,4 +1,4 @@
-import { useState, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
 
 import type { ProviderCapabilities, ProviderKind, Worker, WorkspaceChoice } from "../api";
 import BeeMascot from "../brand/BeeMascot";
@@ -290,6 +290,14 @@ type WorkerPreferenceRowProps = {
 
 function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, orderingDisabled, dragging, dropTarget, onMove, onUpdate, onChooseMark, onRemove, onDraftDescription, onImproveDescription, providers, providerCapabilitiesUnavailable, onDragStart, onDragEnd, onDragTarget, onDragLeave, onDrop }: WorkerPreferenceRowProps) {
   const [editing, setEditing] = useState(false);
+  const editButton = useRef<HTMLButtonElement>(null);
+  const returnToEdit = useRef(false);
+  useEffect(() => {
+    if (!editing && !busy && returnToEdit.current && editButton.current) {
+      returnToEdit.current = false;
+      editButton.current.focus();
+    }
+  }, [editing, busy]);
   const [name, setName] = useState(worker.name);
   const [description, setDescription] = useState(worker.description ?? "");
   const [provider, setProvider] = useState(worker.provider);
@@ -326,6 +334,7 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
       return;
     }
     setAllowExperimental(false);
+    returnToEdit.current = true;
     setEditing(false);
   }
 
@@ -343,6 +352,7 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
     setDraftStatus("");
     setDraftSource(undefined);
     setConfirmingCancel(false);
+    returnToEdit.current = true;
     setEditing(false);
   }
 
@@ -457,7 +467,7 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
       ) : (
         <>
           <span className="configured-worker-summary"><strong>{worker.name}</strong><small>{repositoryName(worker.workspace)} · {providerLabel(worker.provider)} · {attention.label}{worker.autostart ? " · always active" : ""}</small>{worker.description && <small className="worker-routing-summary">{worker.description}</small>}</span>
-          <button type="button" className="worker-edit-button secondary-button" disabled={busy} onClick={() => setEditing(true)}>Edit</button>
+          <button ref={editButton} type="button" className="worker-edit-button secondary-button" disabled={busy} onClick={() => setEditing(true)}>Edit</button>
           {!managed && !orderingDisabled && <span className="worker-order-actions">
             <button type="button" className="secondary-button" aria-label={`Move ${worker.name} earlier`} disabled={busy || first} onClick={() => onMove(-1)}>↑</button>
             <button type="button" className="secondary-button" aria-label={`Move ${worker.name} later`} disabled={busy || last} onClick={() => onMove(1)}>↓</button>

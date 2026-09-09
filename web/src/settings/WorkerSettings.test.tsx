@@ -10,6 +10,30 @@ const studio = worker("studio", "Poppy", "/projects/sculpt-studio", 2);
 
 afterEach(cleanup);
 
+test.each(["cancel", "discard", "retry"])("returns focus to the edited worker after %s", async (action) => {
+  const onUpdate = vi.fn().mockRejectedValueOnce(new Error("Save failed; retry is available")).mockResolvedValue(undefined);
+  render(<WorkerSettings workers={[budget, studio]} workspaces={[]} busy={false}
+    providers={{ claude_code: true, codex: true }} onCreate={vi.fn()} onUpdate={onUpdate}
+    onChooseMark={vi.fn()} onRemove={vi.fn()} onDraftDescription={vi.fn()} onReorder={vi.fn()} />);
+  const row = within(screen.getByRole("group", { name: "Worker Poppy" }));
+  expect(row.getByRole("button", { name: "Edit" })).not.toHaveFocus();
+  fireEvent.click(row.getByRole("button", { name: "Edit" }));
+  const name = row.getByLabelText("Worker name");
+  expect(name).toHaveFocus();
+  if (action === "discard") fireEvent.change(name, { target: { value: "Poppy draft" } });
+  if (action === "retry") {
+    fireEvent.click(row.getByRole("button", { name: "Save worker" }));
+    expect(await row.findByRole("alert")).toHaveTextContent("Save failed");
+    expect(row.getByRole("form", { name: "Edit Poppy" })).toBeInTheDocument();
+    fireEvent.click(row.getByRole("button", { name: "Save worker" }));
+  } else {
+    fireEvent.click(row.getByRole("button", { name: "Cancel" }));
+    if (action === "discard") fireEvent.click(row.getByRole("button", { name: "Discard changes" }));
+  }
+  await waitFor(() => expect(row.getByRole("button", { name: "Edit" })).toHaveFocus());
+  expect(onUpdate).toHaveBeenCalledTimes(action === "retry" ? 2 : 0);
+});
+
 test("worker controls remain grouped by identity through editing and cancellation", () => {
   const onUpdate = vi.fn();
   render(<WorkerSettings workers={[budget, studio]} workspaces={[]} busy={false}

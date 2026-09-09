@@ -132,9 +132,10 @@ samples. TypeScript and production build pass. Prior a716dad8 CI has now passed.
 | --- | --- | --- |
 | Settings discovery and search recovery | Desktop/390px light/dark; schedule/theme/notification searches, empty result, clear/Escape; deployed a716dad8 | None for this increment |
 | Restart decision and cancellation | Unknown/zero/positive count tests; desktop/phone warning and Not now; deployed a716dad8 | Does not prove actual engine recovery |
-| Support draft and retry | Discard/Escape; exact fictional attachment review, failed save/retry/receipt; 14 tests | Native picker and initial contact-field browser automation unresolved |
-| Night Watch form | 3 validation/recovery tests pass; visible schedule and timezone copy checked | Browser text replacement was unreliable; corrected-save browser journey not claimed; physical return behavior remains |
-| Diagnostics preview | Visible fixture preview, distinct browser/server evidence, stale-state correction; no copy/upload | Current stale-state correction pending deployment |
+| Support draft and retry | Discard/Escape; fictional attachment review/failure/retry/receipt; full Edge text entry -> review -> edit -> review -> saved-pending receipt now verified | Native picker and end-to-end Admin delivery remain; fixture is not an external send |
+| Night Watch form | 3 load/save/recovery tests; Edge changed timezone to UTC and showed Schedule saved with UTC still visible | Fixture does not validate server timezone rules or physical desktop/phone return behavior; empty-string browser fill remains inconclusive |
+| Diagnostics preview | Visible fixture preview, distinct browser/server evidence; stale-state correction deployed 51cadc40; Settings integration assertion corrected in 55e51327 | No new presentation gap identified by these checks; long-term measurement acceptance remains separate |
+| Worker editor keyboard return | Edge reproduced focus loss to BODY on cancel; fix returns focus to the same worker's Edit button. Tests cover cancel, discard, failed save and retry; 64 style/worker tests pass | Queued implementation after 7174a115; no live worker editing performed |
 
 This is an incremental evidence matrix, not closure of UI-3, UI-4 or the overall
 goal. Next focus is ordinary-user worker/navigation/dialog usability. Do not
