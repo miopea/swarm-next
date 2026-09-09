@@ -184,3 +184,48 @@ confirmation was subsequently received: the operator manually applied the update
 This was deliberate maintenance, not an unexplained automatic engine replacement.
 The interrupted observation must not be silently restarted or combined across
 engine replacement into a continuity or equivalent-workload acceptance result.
+
+### Browser navigation on deployed 4736324e
+
+A separate authenticated Edge tab exercised three cycles through Settings,
+Needs You and Queues (nine transitions). Each destination heading became
+visible without a timeout. Over 55.44 seconds, DevTools thread-tick metrics
+reported 0.548 seconds main-thread CPU, 0.176 seconds script execution and
+0.051 seconds layout. Heap fell from 27,616,012 to 22,638,712 bytes. A subsequent
+19.18-second window used 0.088 seconds main-thread CPU; listener count fell
+from 868 to 635. No warning/error entries were returned by the browser log read.
+These short samples do not close aged-session performance. Automation round trips
+included tool overhead and are not application interaction latency measurements.
+
+The same tab was temporarily emulated at 390 by 844 CSS pixels. Document and body
+scroll widths both measured 390; visible primary navigation and header buttons
+were 44 pixels high, owner links at least 48, and the visible blocker disclosure
+48. The rendered queue remained readable without horizontal clipping. Desktop
+viewport was restored (1465 by 1339), and performance collection was disabled.
+This is responsive-layout evidence, not real Android/iOS keyboard, attachment or
+terminal handoff acceptance. No project terminal was opened or changed.
+
+### Post-VPN observation, September 9 at 03:10 UTC
+
+The new observer (PID 2169502) completed 30 samples before its strict original-
+session guard stopped it. Evidence is retained in
+`/tmp/swarm-review-deployed-soak.ghb2Ar/20260909T031017Z-live-samples.csv` and
+`observer.log`. At the final sample (03:24:55 UTC, elapsed 878 seconds), all 13
+original sessions remained. D365 subsequently became sleeping; the operator
+explicitly confirmed putting it to sleep. This is intentional workload change,
+not an unexplained worker failure or an engine restart. Do not join a replacement
+window to this one or report the one-hour continuity gate passed.
+
+Direct checks after the observation retained API PID 2036888 and engine PID
+1996041. API process RSS was 112,271,360 bytes at the first sample and 115,884,032
+at the last; anonymous RSS was 85,909,504 and 89,325,568 respectively. These are
+short-window measurements under changing real work, not long-duration acceptance.
+
+The approved central integration configuration now includes the exclusive
+`swarm` source binding while preserving the existing four app bindings and
+credential. This required no service restart. Admin's single fictional request
+hit its own feedback-conversation ID validation before Swarm dispatch; Admin
+owns that correction and the same-request retry. End-to-end completion and an
+unsent Admin reply remain unverified. Normal operator assignment to an existing
+isolated demo worker can preserve the immutable source ticket while allowing
+truthful worker evidence; operator completion alone cannot invent that evidence.

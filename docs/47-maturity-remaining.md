@@ -20,9 +20,10 @@ passed all 685 tests (332.24 seconds). Commit `4736324e` was pushed to main and
 the clean Linux clone fast-forwarded. A single App/API reload request produced
 `1.6.0-dev-4736324e6df9-20260909015855-2034793`; the separate authenticated Edge
 tab reloaded successfully on Queues and verified that revision. Thirteen workers
-remain visible. Direct SSH then timed out, so exact post-update engine PID and
-session identity comparison remains unverified; do not substitute the roster
-count for continuity. The captured pre-update engine PID was 1996041.
+remain visible. After the operator restored the VPN, direct SSH verified engine
+PID 1996041 unchanged and all thirteen exact pre-update session identities
+preserved. This closes this App/API deployment's continuity check, not planned
+engine-replacement or provider-conversation acceptance.
 
 Live dark-theme inspection on the preceding `1bbc4cbb` build also verified the
 previously unreadable Queue task titles now render legibly without hover. Light
