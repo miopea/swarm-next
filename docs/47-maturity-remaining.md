@@ -1,5 +1,8 @@
 # Daily-driver maturity: remaining delivery and acceptance
 
+Current requirement routing: [maturity acceptance ledger](92-maturity-acceptance-ledger.md).
+Use that index before interpreting an old unchecked historical checkpoint as new work.
+
 ## Current checkpoint — September 8, after Admin intake acceptance
 
 ### Task image-reader lifecycle correction, September 9

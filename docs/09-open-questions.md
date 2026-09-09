@@ -1,5 +1,23 @@
 # Open product questions
 
+## Pending narrow maturity proposals — September 9, 2026
+
+These do not reopen the approved interview. Responses have been requested in the
+operator task; no approval is inferred while the operator is away.
+
+- May Queen attach an existing authenticated composer submission to a task as
+  evidence for a deferral? Proposed boundary: audited exact-ID link only when the
+  original words clearly cover that task, with ambiguity unresolved. This grants
+  no new authority, claims no delivery, and does not automatically answer Needs You.
+  Direct terminal/AskUser correlation remains separate implementation work.
+- Whether to proceed with the proposed opt-in Claude background-agent prototype
+  for native execution evidence. It is not permission to replace current workers'
+  interactive execution mode or to treat a Stop hook as proof of quiescence.
+  ADR 0085's automatic-maintenance requirements remain unchanged.
+
+The BFG Admin attachment route is a contract-coordination question, not a request
+to approve customer sending. BFG Admin owns sending and its operator approval.
+
 ## BFG Admin integration follow-up — 2026-09-06
 
 The operator approved the integration scope in section 1 of the maturity plan.
