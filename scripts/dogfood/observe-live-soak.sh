@@ -69,7 +69,19 @@ summary_file="${report_dir}/${run_id}-summary.json"
 curl_config="$(mktemp "${TMPDIR:-/tmp}/swarm-next-live-soak.XXXXXX")"
 chmod 600 "${curl_config}"
 printf 'header = "Authorization: Bearer %s"\n' "${SWARM_OPERATOR_TOKEN}" >"${curl_config}"
-trap 'rm -f "${curl_config}"' EXIT INT TERM
+phase=initialization
+sample_count=0
+finish_observation() {
+  local status=$?
+  if (( status != 0 )); then
+    # Never print BASH_COMMAND, arguments, payloads or the authentication config.
+    printf 'Observation incomplete: phase=%s exit=%s completed_samples=%s\n' "$phase" "$status" "$sample_count" >&2
+  fi
+  rm -f "${curl_config}"
+}
+trap finish_observation EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 api_json() {
   curl --fail --silent --show-error --config "${curl_config}" --max-time 5 "$@"
@@ -102,11 +114,17 @@ deadline=$((started_at + duration_seconds))
 sample_count=0
 while (( $(date +%s) < deadline )); do
   now="$(date +%s)"
+  phase=health
   curl --fail --silent --show-error --max-time 5 "${base_url}/health" >/dev/null
+  phase=session_continuity
   sessions="$(api_json "${base_url}/api/v1/terminal/sessions")"
   for session_id in "${session_ids[@]}"; do
-    jq -e --arg id "${session_id}" '.sessions[] | select(.session_id == $id and .running == true)' <<<"${sessions}" >/dev/null
+    if ! jq -e --arg id "${session_id}" '.sessions[] | select(.session_id == $id and .running == true)' <<<"${sessions}" >/dev/null; then
+      echo 'An original session is no longer observed running; refusing to join different workloads' >&2
+      exit 1
+    fi
   done
+  phase=service_continuity
   current_host_pid="$(metric "$host_unit" MainPID)"
   if [[ "${current_host_pid}" != "${host_pid}" ]]; then
     echo "terminal host changed from ${host_pid} to ${current_host_pid}" >&2
@@ -117,6 +135,7 @@ while (( $(date +%s) < deadline )); do
     echo "API changed from ${api_pid} to ${current_api_pid}; its memory series is no longer continuous" >&2
     exit 1
   fi
+  phase=metrics
   host_status="$(api_json "${base_url}/api/v1/runtime/terminal-host")"
   history="$(api_json "${base_url}/api/v1/terminal/history/diagnostics")"
   api_memory=$(metric "$api_unit" MemoryCurrent)
@@ -147,6 +166,7 @@ while (( $(date +%s) < deadline )); do
   sleep "${sample_seconds}"
 done
 
+phase=summary
 summary_stats="$(
   awk -F, 'NR == 2 { amin=$3; amax=$3; hmin=$5; hmax=$5; rmin=$9; rmax=$9; dmax=$10 }
     NR > 2 { if ($3 < amin) amin=$3; if ($3 > amax) amax=$3; if ($5 < hmin) hmin=$5; if ($5 > hmax) hmax=$5; if ($9 < rmin) rmin=$9; if ($9 > rmax) rmax=$9; if ($10 > dmax) dmax=$10 }

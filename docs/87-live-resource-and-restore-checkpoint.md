@@ -61,8 +61,36 @@ all three fields successfully.
 
 A bounded 1,800-second follow-up started under PID 1768185 in
 `/tmp/swarm-memory-attribution.nlYZpA`, log `observer.log`, using 30-second
-samples. No application deployment was needed. Results remain pending; normal
-workload and service/session continuity must be checked before interpretation.
+samples. No application deployment was needed.
+
+The observer ended without a completion report. Preserve its 59 samples as a
+partial run, not completed 30-minute acceptance: first-to-last span is 1,755
+seconds, last sample elapsed 1,756 seconds. At 23:57 UTC the original observer
+process was gone; a subsequent API census showed 12 running sessions instead of
+16, while API PID 1748360 and engine PID 1547164 were unchanged. This is consistent
+with the original-session continuity guard refusing the next sample, but the
+old script's empty error log cannot establish the exact failing check or why
+sessions ended. No controller restart or deployment occurred in this window.
+
+Across the partial series, API anonymous RSS rose from 115,400,704 to 341,786,624
+bytes (110 to 326 MiB), and RSS from 140,439,552 to 367,542,272 bytes. File-backed
+RSS stayed between 25,038,848 and 25,837,568 bytes. A separate `/proc` read found
+nine threads, no swap and most anonymous resident memory outside the main heap
+mapping. Allocator retention versus retained application data remains unresolved;
+neither a leak nor a stable plateau is proved. This does not close PERF-01/PERF-02.
+
+Average/max interval CPU, as percent of one core: API 4.81/45.44, engine process
+2.50/9.61, engine cgroup including providers 280.70/751.87. All recorded samples
+showed 16 sessions, history remained bounded and no dropped history bytes were
+reported. Those observations do not restore the missing final continuity proof.
+
+The observer now reports failure phase, exit status and completed sample count,
+and explicitly names a failed original-session check without terminal content.
+It never logs shell commands or credentials. A Linux failure fixture proves exit
+28 retains its status, reports initialization failure and removes its temporary
+authentication file without exposing the fictional token. Bash syntax passes.
+The gated passkey validation correctly refused the missing observation report;
+after the observer was independently confirmed ended, separate validation began.
 
 Used a separate tab at the authoritative `swarm.bfgsolutions.net`. Quick
 navigation selected only the already-running **Swarm Dogfood Contract** demo.
