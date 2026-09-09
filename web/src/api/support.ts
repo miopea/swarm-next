@@ -62,7 +62,7 @@ export async function submitSupport(token: string, submission: SupportSubmission
 export async function submitSupportFiles(token: string, report: SupportFileReport, signal?: AbortSignal): Promise<SupportDelivery> {
   if (!report.files.length || report.files.length > 4 || report.files.some((file) =>
     !/^[0-9a-f-]{36}$/i.test(file.metadata.id) || !["image/png", "image/jpeg", "image/webp", "text/plain"].includes(file.metadata.media_type)
-    || file.bytes.byteLength !== file.metadata.size_bytes || file.bytes.byteLength > 5 * 1024 * 1024)
+    || !file.bytes.byteLength || file.bytes.byteLength !== file.metadata.size_bytes || file.bytes.byteLength > 5 * 1024 * 1024)
     || report.files.reduce((sum, file) => sum + file.bytes.byteLength, 0) > 12 * 1024 * 1024) throw new Error("Invalid reviewed attachments");
   const boundary = `swarm-${crypto.randomUUID()}`;
   const manifest = JSON.stringify({ submission: report.submission, attachments: report.files.map((file) => file.metadata) });

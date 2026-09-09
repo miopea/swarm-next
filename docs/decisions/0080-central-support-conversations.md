@@ -41,7 +41,7 @@ its bytes. Manifest order is immutable; file-part order and multipart boundaries
 are transport details. Both routes share source plus submission-key uniqueness.
 The six-field receipt remains unchanged.
 
-Limits are 1-4 files, 5 MiB per file, 12 MiB combined, 13 MiB HTTP body, and a
+Limits are 1-4 nonempty files, 5 MiB per file, 12 MiB combined, 13 MiB HTTP body, and a
 128 KiB manifest. Types are PNG, JPEG, WebP and UTF-8 plain text without NUL;
 Admin validates raster signatures and bounded decoding up to 25 megapixels,
 rejecting animation. Filenames contain 1-180 characters without separators or

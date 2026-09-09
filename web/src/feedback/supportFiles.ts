@@ -14,8 +14,8 @@ function checkMetadata(metadata: SupportFile["metadata"]) {
   if (!metadata || Object.keys(metadata).sort().join() !== "file_name,id,media_type,sha256,size_bytes"
     || !UUID.test(metadata.id) || typeof metadata.file_name !== "string" || !metadata.file_name.length || metadata.file_name.length > 180
     || /[\u0000-\u001f\u007f-\u009f/\\]/.test(metadata.file_name) || !TYPES.includes(metadata.media_type)
-    || !Number.isSafeInteger(metadata.size_bytes) || metadata.size_bytes < 0 || metadata.size_bytes > SUPPORT_FILE_LIMIT
-    || !/^[0-9a-f]{64}$/.test(metadata.sha256)) throw new Error("Use PNG, JPEG, WebP or plain text files, up to 5 MiB each.");
+    || !Number.isSafeInteger(metadata.size_bytes) || metadata.size_bytes <= 0 || metadata.size_bytes > SUPPORT_FILE_LIMIT
+    || !/^[0-9a-f]{64}$/.test(metadata.sha256)) throw new Error("Use nonempty PNG, JPEG, WebP or plain text files, up to 5 MiB each.");
 }
 
 async function digest(bytes: ArrayBuffer) {
@@ -66,7 +66,7 @@ export async function prepareSupportFiles(selected: File[]): Promise<SupportFile
   if (selected.reduce((total, file) => total + file.size, 0) > SUPPORT_FILES_LIMIT) throw new Error("Attachments must total 12 MiB or less.");
   const files: SupportFile[] = [];
   for (const file of selected) {
-    if (file.size > SUPPORT_FILE_LIMIT || !TYPES.includes(file.type)) throw new Error("Use PNG, JPEG, WebP or plain text files, up to 5 MiB each.");
+    if (!file.size || file.size > SUPPORT_FILE_LIMIT || !TYPES.includes(file.type)) throw new Error("Use nonempty PNG, JPEG, WebP or plain text files, up to 5 MiB each.");
     const bytes = await readFileBytes(file);
     files.push({ metadata: { id: crypto.randomUUID(), file_name: file.name, media_type: file.type, size_bytes: bytes.byteLength, sha256: await digest(bytes) }, bytes });
   }

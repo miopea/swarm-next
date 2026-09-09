@@ -127,3 +127,24 @@ A subsequent reload showed the empty form, confirming browser-copy cleanup.
 The test used the no-proxy local harness and its fictional retry seed; it is not
 proof of native camera/gallery selection, mobile layout, or a central Admin send.
 The owned tab and harness server were closed after the check.
+
+### Paired native file transport — September 9
+
+The opt-in Rust acceptance test passed against BFG Admin's real routes/schema in
+its loopback-only, memory-object-storage fixture. A new fictional text attachment
+was frozen in the Hive outbox and accepted remotely. Dropping the Hive handles
+before settlement, reopening SQLite and recovering the interrupted claim replayed
+the same bytes and returned the same conversation, message and creation timestamp.
+Changed bytes under that same submission key returned Conflict; the original
+receipt remained replayable afterward. No reserved linked-task fixture, customer
+data, production Admin state or email sends were involved.
+
+The contract now explicitly requires nonempty files; domain and browser rejection
+match Admin. Two focused domain tests and 15 focused web tests passed. This paired
+text-file journey does not establish raster decoding, real camera/gallery input,
+mobile layout, private operator downloads or production storage behavior.
+
+Admin's owner supplied and root reviewed the bounded relay upload deadline and
+persistent deletion-marker/conditional-create fence. Production schema 17-to-18
+and feedback-only storage credential activation remain held for explicit operator
+approval. The Swarm attachment tranche is not deployed while that gate is open.

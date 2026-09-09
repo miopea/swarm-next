@@ -38,13 +38,14 @@ test("another tab cannot overwrite or delete a pending report", async () => {
 
 test("changed bytes and unsafe metadata cannot become a safe retry copy", async () => {
   const original = await report();
-  for (const change of ["hash", "type", "path", "count", "size"]) {
+  for (const change of ["hash", "type", "path", "count", "size", "empty"]) {
     const changed = structuredClone(original);
     if (change === "hash") new Uint8Array(changed.files[0].bytes)[0] = 0;
     if (change === "type") changed.files[0].metadata.media_type = "text/html";
     if (change === "path") changed.files[0].metadata.file_name = "../secret";
     if (change === "count") changed.files = Array(5).fill(changed.files[0]);
     if (change === "size") changed.files[0].metadata.size_bytes = 6 * 1024 * 1024;
+    if (change === "empty") { changed.files[0].metadata.size_bytes = 0; changed.files[0].bytes = new ArrayBuffer(0); }
     await expect(savePendingSupportFiles(changed)).rejects.toThrow();
   }
   expect(await loadPendingSupportFiles()).toBeUndefined();

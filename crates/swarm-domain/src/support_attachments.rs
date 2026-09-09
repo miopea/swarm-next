@@ -81,7 +81,10 @@ impl SupportAttachment {
         ) {
             return Err(SupportAttachmentError::MediaType);
         }
-        if bytes.len() != metadata.size_bytes || bytes.len() > SUPPORT_ATTACHMENT_MAX_BYTES {
+        if bytes.is_empty()
+            || bytes.len() != metadata.size_bytes
+            || bytes.len() > SUPPORT_ATTACHMENT_MAX_BYTES
+        {
             return Err(SupportAttachmentError::Size);
         }
         if metadata.sha256.len() != 64 || metadata.sha256 != format!("{:x}", Sha256::digest(&bytes))
@@ -166,6 +169,10 @@ mod tests {
             );
         }
         assert!(SupportAttachment::validate(metadata(bytes), b"different".to_vec()).is_err());
+        assert!(matches!(
+            SupportAttachment::validate(metadata(b""), vec![]),
+            Err(SupportAttachmentError::Size)
+        ));
         for invalid in [vec![0], vec![255]] {
             assert!(matches!(
                 SupportAttachment::validate(metadata(&invalid), invalid),

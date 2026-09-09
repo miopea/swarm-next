@@ -1,5 +1,5 @@
 //! Opt-in real Admin-route acceptance. Never runs against a production origin.
-use super::{SupportTransportResult, receive, transport_client};
+use super::{SupportTransportResult, receive, receive_attachments, transport_client};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use swarm_application::{HiveSupportService, SupportDestination};
 use swarm_domain::{SupportDeliveryState, SupportSubmissionInput};
@@ -91,5 +91,125 @@ async fn admin_fixture_recovers_frozen_submission_after_hive_restart() {
     assert_eq!(unchanged.message_id, original.message_id);
     eprintln!(
         "Admin paired acceptance: frozen replay, Hive reopen, receipt identity and conflict preservation passed"
+    );
+}
+
+fn fictional_file(bytes: &[u8]) -> swarm_domain::SupportAttachment {
+    use sha2::{Digest, Sha256};
+    use swarm_domain::{SupportAttachment, SupportAttachmentMetadata};
+    SupportAttachment::validate(
+        SupportAttachmentMetadata {
+            id: "00000000-0000-4000-8000-000000000001".parse().unwrap(),
+            file_name: "fictional-diagnostic.txt".into(),
+            media_type: "text/plain".into(),
+            size_bytes: bytes.len(),
+            sha256: format!("{:x}", Sha256::digest(bytes)),
+        },
+        bytes.to_vec(),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "requires an explicitly started fictional Admin loopback fixture"]
+async fn admin_fixture_recovers_native_files_after_hive_restart() {
+    let endpoint = std::env::var("SWARM_TEST_ADMIN_ATTACHMENTS_ENDPOINT").unwrap();
+    let url = reqwest::Url::parse(&endpoint).unwrap();
+    assert_eq!(url.scheme(), "http");
+    assert_eq!(url.host_str(), Some("127.0.0.1"));
+    assert!(url.port().is_some());
+    assert!(url.username().is_empty() && url.password().is_none());
+    assert!(url.query().is_none() && url.fragment().is_none());
+    assert_eq!(
+        url.path(),
+        "/api/feedback/swarm-support/submissions-with-attachments"
+    );
+    let files = vec![fictional_file(
+        b"Fictional diagnostic only. No customer information.\n",
+    )];
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
+        & 0xffff_ffff_ffff;
+    let input: SupportSubmissionInput = serde_json::from_value(serde_json::json!({
+        "submission_key": format!("00000000-0000-4000-8000-{nonce:012x}"),
+        "kind": "bug_report", "email": "paired-files@example.invalid",
+        "name": "Fictional File Operator", "subject": "Fictional native file replay",
+        "body": "Isolated acceptance only. No task execution or customer sends."
+    }))
+    .unwrap();
+    let key = input.submission_key;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("fictional-files.db");
+    let destination = SupportDestination::parse("https://admin.example.invalid").unwrap();
+    let client = transport_client(Duration::from_secs(10)).unwrap();
+    let (frozen, original) = {
+        let hive = HiveSupportService::new(TaskStore::open(&path).unwrap(), destination.clone());
+        hive.submit_reviewed_with_attachments(input, &files, 1)
+            .unwrap();
+        let claim = hive.claim(key, 2).unwrap();
+        assert!(claim.attachments == files);
+        let Some(SupportTransportResult::Receipt(receipt)) = receive_attachments(
+            &client,
+            &endpoint,
+            &claim.frozen_submission,
+            &claim.attachments,
+        )
+        .await
+        else {
+            panic!("fictional Admin did not accept native files");
+        };
+        assert!(!receipt.deduplicated);
+        // Lose the response before local settlement; reopen the durable outbox.
+        (claim.frozen_submission, receipt)
+    };
+    let hive = HiveSupportService::new(TaskStore::open(&path).unwrap(), destination);
+    assert_eq!(hive.recover_interrupted(3).unwrap(), 1);
+    let claim = hive.claim(key, 4).unwrap();
+    assert_eq!(claim.frozen_submission, frozen);
+    assert!(claim.attachments == files);
+    let Some(SupportTransportResult::Receipt(replayed)) = receive_attachments(
+        &client,
+        &endpoint,
+        &claim.frozen_submission,
+        &claim.attachments,
+    )
+    .await
+    else {
+        panic!("fictional Admin did not replay native files");
+    };
+    assert!(replayed.deduplicated);
+    assert_eq!(replayed.conversation_id, original.conversation_id);
+    assert_eq!(replayed.message_id, original.message_id);
+    assert_eq!(replayed.created_at, original.created_at);
+    hive.settle(key, claim.delivery.attempt_id.unwrap(), Some(replayed), 5)
+        .unwrap();
+    assert_eq!(
+        hive.statuses().unwrap()[0].delivery.state,
+        SupportDeliveryState::Confirmed
+    );
+    assert!(hive.retryable_keys().unwrap().is_empty());
+    assert!(matches!(
+        receive_attachments(
+            &client,
+            &endpoint,
+            &frozen,
+            &[fictional_file(b"Changed fictional bytes")]
+        )
+        .await,
+        Some(SupportTransportResult::Refused {
+            reason: SupportRefusal::Conflict,
+            ..
+        })
+    ));
+    let Some(SupportTransportResult::Receipt(unchanged)) =
+        receive_attachments(&client, &endpoint, &frozen, &files).await
+    else {
+        panic!("changed-file conflict damaged the original receipt");
+    };
+    assert_eq!(unchanged.message_id, original.message_id);
+    eprintln!(
+        "Native Admin pairing passed: durable files, lost receipt, restart, exact replay, changed-file conflict"
     );
 }
