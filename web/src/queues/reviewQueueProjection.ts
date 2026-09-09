@@ -25,27 +25,29 @@ function currentQueueAssessments(tasks: Task[], snapshot?: QueenReviewQueueSnaps
   return waits;
 }
 
-export function unresolvedQueueInvestigations(tasks: Task[], snapshot?: QueenReviewQueueSnapshot) {
-  return new Map([...currentQueueAssessments(tasks, snapshot)].filter(([, previous]) =>
-    previous.assessment.kind === "insufficient_evidence" && previous.status === "insufficient_evidence"));
-}
-
-/** Historical context only: external conditions are not covered between runs. */
-export function pendingQueueRechecks(tasks: Task[], snapshot?: QueenReviewQueueSnapshot) {
-  return new Map([...currentQueueAssessments(tasks, snapshot)].filter(([, previous]) =>
-    previous.assessment.kind === "external_condition"
-    && (previous.status === "fresh_external_check_required" || previous.status === "no_active_review")));
-}
-
-export function checkedQueueWaits(tasks: Task[], snapshot?: QueenReviewQueueSnapshot) {
-  const waits = currentQueueAssessments(tasks, snapshot);
-  for (const [id, previous] of waits) {
+/** Match full evidence once per refresh, then partition presentation categories.
+ * No cross-refresh cache can retain a stale authorization or task projection. */
+export function projectReviewQueue(tasks: Task[], snapshot?: QueenReviewQueueSnapshot) {
+  const current = currentQueueAssessments(tasks, snapshot);
+  const checkedWaits: typeof current = new Map();
+  const investigations: typeof current = new Map();
+  const rechecks: typeof current = new Map();
+  for (const [id, previous] of current) {
+    const kind = previous.assessment.kind;
+    if (kind === "insufficient_evidence" && previous.status === "insufficient_evidence") {
+      investigations.set(id, previous);
+    }
+    // Historical context only: external conditions are not covered between runs.
+    if (kind === "external_condition"
+      && (previous.status === "fresh_external_check_required" || previous.status === "no_active_review")) {
+      rechecks.set(id, previous);
+    }
     // External judgments need a fresh check each run. Authenticated operator
     // deferrals remain applicable between runs while local evidence matches.
-    if (previous.assessment.kind === "insufficient_evidence" || !(previous.status === "covered_for_current_run"
-      || (previous.status === "no_active_review" && previous.assessment.kind === "operator_deferral"))) {
-      waits.delete(id);
+    if (kind !== "insufficient_evidence" && (previous.status === "covered_for_current_run"
+      || (previous.status === "no_active_review" && kind === "operator_deferral"))) {
+      checkedWaits.set(id, previous);
     }
   }
-  return waits;
+  return { checkedWaits, investigations, rechecks };
 }

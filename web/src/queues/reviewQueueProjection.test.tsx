@@ -2,10 +2,26 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { expect, test, vi } from "vitest";
 import type { QueenReviewQueueSnapshot } from "../api";
 import type { Task } from "../api/tasks";
-import { checkedQueueWaits, pendingQueueRechecks } from "./reviewQueueProjection";
+import { projectReviewQueue } from "./reviewQueueProjection";
 import QueuesView from "./QueuesView";
 
+const checkedQueueWaits = (tasks: Task[], value?: QueenReviewQueueSnapshot) => projectReviewQueue(tasks, value).checkedWaits;
+const pendingQueueRechecks = (tasks: Task[], value?: QueenReviewQueueSnapshot) => projectReviewQueue(tasks, value).rechecks;
+
 const task = { id: "held", title: "Deliberately deferred work", state: "blocked", next_move_owner: "queen", updated_at: 1, created_at: 1, position: 0, assigned_worker_id: null, prerequisites: [] } as unknown as Task;
+
+test("one queue refresh compares each full task projection once, not once per category", () => {
+  const current = { ...task };
+  const value = snapshot();
+  let taskReads = 0;
+  let snapshotReads = 0;
+  Object.defineProperty(current, "description", { enumerable: true, get: () => { taskReads++; return "Fictional evidence"; } });
+  Object.defineProperty(value.items[0].task, "description", { enumerable: true, get: () => { snapshotReads++; return "Fictional evidence"; } });
+  render(<QueuesView tasks={[current]} workers={[]} onOpenTask={vi.fn()} reviewQueue={value} />);
+  expect(screen.getByRole("heading", { name: "Scheduled / deliberately parked 1" })).toBeVisible();
+  expect(taskReads).toBe(1);
+  expect(snapshotReads).toBe(1);
+});
 function snapshot(status: "covered_for_current_run" | "fresh_external_check_required" | "evidence_changed" | "no_active_review" = "covered_for_current_run", kind: "operator_deferral" | "external_condition" = "operator_deferral"): QueenReviewQueueSnapshot {
   return { checked_at: 10, truncated: false, items: [{ task: { ...task }, previous_assessment: { status, recorded_at: 9,
     assessment: { kind, condition: "Wait for the operator's chosen scope to change", evidence: "Read the original ruling", source: "Existing authenticated decision" } } }] };

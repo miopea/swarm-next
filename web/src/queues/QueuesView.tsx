@@ -1,7 +1,7 @@
 import { useId, useMemo } from "react";
 import HeldBriefingList, { BlockingTaskLink, holdReason, waitedFor, briefingWait } from "../orchestration/HeldBriefingList";
 import type { BlockedEscalation, HeldBriefing, HeldDelivery, QueenAutomationStatus, RecoveryQueueItem, RecoveryQueueSnapshot, QueenReviewQueueSnapshot } from "../api";
-import { checkedQueueWaits, pendingQueueRechecks, unresolvedQueueInvestigations } from "./reviewQueueProjection";
+import { projectReviewQueue } from "./reviewQueueProjection";
 import DeliveryWaitList from "./DeliveryWaitList";
 import TaskPrerequisiteList from "./TaskPrerequisiteList";
 import { prerequisiteSatisfied, type NextMoveOwner, type Task } from "../api/tasks";
@@ -18,7 +18,9 @@ const RECOVERY_LABELS: Record<RecoveryQueueItem["state"], string> = {
 
 /** A scanning hint, never a replacement for the recorded statement. */
 function QueueEvidence({ label, text, summaryText }: { label: string; text: string; summaryText?: string }) {
-  const characters = Array.from(text);
+  // At most two UTF-16 units per code point: enough for 96 characters and
+  // one overflow witness, without allocating an array for the full evidence.
+  const characters = summaryText === undefined ? Array.from(text.slice(0, 194)) : [];
   if (summaryText === undefined && characters.length <= 96) {
     return <p className="queue-task-meta">{label}: {text}</p>;
   }
@@ -193,9 +195,10 @@ export default function QueuesView({
   const projection = useMemo(() => projectTaskQueues(tasks, sourceBriefings, sourceBlockedWaits, workers, recovery?.items), [tasks, sourceBriefings, sourceBlockedWaits, workers, recovery]);
   const { waitingTasks, activeTasks: activeWork, heldBriefings, blockedWaits, extraBlockedWaits: extraWaits, recoveryChecks } = projection;
   const checks = useMemo(() => new Map(recoveryChecks.map(item => [item.task_id, item])), [recoveryChecks]);
-  const checkedWaits = useMemo(() => checkedQueueWaits(tasks, coordinatorUnavailable ? undefined : reviewQueue), [tasks, reviewQueue, coordinatorUnavailable]);
-  const investigations = useMemo(() => unresolvedQueueInvestigations(tasks, coordinatorUnavailable ? undefined : reviewQueue), [tasks, reviewQueue, coordinatorUnavailable]);
-  const rechecks = useMemo(() => pendingQueueRechecks(tasks, coordinatorUnavailable ? undefined : reviewQueue), [tasks, reviewQueue, coordinatorUnavailable]);
+  const { checkedWaits, investigations, rechecks } = useMemo(
+    () => projectReviewQueue(tasks, coordinatorUnavailable ? undefined : reviewQueue),
+    [tasks, reviewQueue, coordinatorUnavailable],
+  );
 
   const groups = useMemo<Group[]>(() => {
     const open = waitingTasks;

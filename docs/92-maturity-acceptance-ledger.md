@@ -278,3 +278,26 @@ The separate native /resume acceptance attempt stopped before any input or worke
 mutation: auto-review refused reading the demo terminal's current screen. Specific
 demo-screen permission was requested; no alternate capture path was used. The
 demo remains in confirmed conversation c4435eee-57b0-4546-b6ef-dc182080e7b5.
+
+### Single-pass review presentation — not yet deployed
+
+A rendered regression measured three complete task/snapshot comparisons for one
+queue refresh: checked waits, historical rechecks and investigations each repeated
+the same canonical serialization. One memoized projection now performs that exact
+comparison once and partitions the accepted results. It does not cache evidence
+across refreshes, weaken same-second change checks, alter ownership or accept a
+different authorization source. The regression now measures one comparison per
+task/snapshot pair. This removes two-thirds of these serialization passes, not
+two-thirds of overall browser CPU. Preview character allocation is also capped
+at 194 UTF-16 units rather than expanding the full explanation; a failing-before
+8,000-unit Unicode example now retains the exact 96-character preview and complete
+expandable statement. All 138 related queue/application/selection tests and the
+production web build pass, including stale/failed refresh and changed evidence.
+
+The combined run exposed an existing test ordering race: the external roster
+renders before the saved-selection effect finishes. The test now waits for that
+observable write rather than assuming the heading establishes it. A new test
+proves reload during that window rejects the stale session while retaining the
+chosen worker, both during the gap and after its replacement returns. No runtime
+selection or recovery semantics changed. The full web suite passes: 152 files,
+1,430 tests. This checkpoint is ready for development deployment, not a release.

@@ -65,6 +65,15 @@ test("reload during a gap preserves worker identity and restores a replacement",
   expect(restoreTerminalSelection([worker("daisy", "new")], sessions("new"))).toEqual({ workerId: "daisy", sessionId: "new" });
 });
 
+test("reload before the gap persistence effect rejects the stale session and keeps the worker", () => {
+  saveTerminalSelection({ workerId: "daisy", sessionId: "old" });
+  expect(restoreTerminalSelection([worker("queen", "q"), worker("daisy", null)], sessions("q")))
+    .toEqual({ workerId: "daisy", sessionId: undefined });
+  saveTerminalSelection({ workerId: "daisy", sessionId: "old" });
+  expect(restoreTerminalSelection([worker("queen", "q"), worker("daisy", "new")], sessions("q", "new")))
+    .toEqual({ workerId: "daisy", sessionId: "new" });
+});
+
 test("legacy session preferences migrate only through current worker bindings", () => {
   window.localStorage.setItem("swarm-next.active-session.v1", "old");
   expect(restoreTerminalSelection([worker("daisy", "old")], sessions("old"))).toEqual({ workerId: "daisy", sessionId: "old" });

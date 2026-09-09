@@ -496,7 +496,9 @@ test.each([["refresh", false], ["events", false], ["events", true]] as const)("k
   await refresh();
   expect(await screen.findByRole("heading", { name: "Daisy has no active terminal" })).toBeInTheDocument();
   expect(screen.queryByTestId("terminal-view")).not.toBeInTheDocument();
-  expect(JSON.parse(window.localStorage.getItem("swarm-next.terminal-selection.v2")!)).toEqual({ workerId: "daisy" });
+  // The external roster snapshot renders before the selection persistence
+  // effect commits. Wait for that observable outcome, not an arbitrary delay.
+  await waitFor(() => expect(JSON.parse(window.localStorage.getItem("swarm-next.terminal-selection.v2")!)).toEqual({ workerId: "daisy" }));
   if (switchAway) fireEvent.click(screen.getByRole("button", { name: /^Queen Resting/ }));
   phase = "returned";
   await refresh();

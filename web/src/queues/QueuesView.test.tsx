@@ -319,6 +319,19 @@ describe("QueuesView", () => {
     expect(details?.querySelector("summary")).toHaveTextContent(`Recorded when blocked: ${note.slice(0, 96)}…`);
   });
 
+  test("Unicode evidence previews bound character allocation without truncating the full statement", () => {
+    const note = "🐝".repeat(4000);
+    const from = vi.spyOn(Array, "from");
+    try {
+      const { container } = render(<QueuesView workers={[]} onOpenTask={vi.fn()} tasks={[task({ state: "blocked", next_move_owner: "blocked", blocked_note: note })]} />);
+      const strings = from.mock.calls.map(([input]) => input).filter((input): input is string => typeof input === "string" && input.startsWith("🐝"));
+      expect(strings.length).toBeGreaterThan(0);
+      expect(Math.max(...strings.map(input => input.length))).toBeLessThanOrEqual(194);
+      expect(container.querySelector(".queue-evidence summary")?.textContent).toBe(`Recorded when blocked: ${"🐝".repeat(96)}…`);
+      expect(container.querySelector(".decision-prose")?.textContent).toBe(note);
+    } finally { from.mockRestore(); }
+  });
+
   test("medium review questions collapse without losing the exact full evidence", () => {
     const question = "Verify the worker's recorded test result before proceeding. ".repeat(3);
     render(<QueuesView workers={[]} onOpenTask={vi.fn()} tasks={[task({
