@@ -24,8 +24,16 @@ concurrency, progressive-preview, unchanged-source and late-result cancellation
 regressions, plus existing partial-image retry and draft-preservation coverage.
 The production frontend build and type check passed. This addresses request
 ownership and unnecessary repeated work, not a total image-memory budget or
-proof that overall browser sluggishness is solved. Deployment and rendered
-acceptance of the correction remain pending at this checkpoint.
+proof that overall browser sluggishness is solved. The additional 67 App tests
+passed. Commit `f476861e` is now live as
+`1.6.0-dev-f476861e2d57-20260909072626-2380411`; the reload unit completed with
+Result=success and ExecMainStatus=0, and health has no degraded subsystem or
+database-recovery requirement. All 34 worker records and twelve exact running
+session/conversation pairs match the pre-update observation. Engine PID 2271655
+is unchanged; the previously pending engine update remains deferred. Edge
+independently loaded that version, and the owned tab was closed. CI run
+`34323789584` was still in progress. Controlled rendered multi-image acceptance
+remains outstanding; the live version check is not that proof.
 
 ### Bounded Queen run history delivered, September 9
 
