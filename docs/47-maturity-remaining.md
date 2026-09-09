@@ -2,6 +2,18 @@
 
 ## Current checkpoint — September 8, after Admin intake acceptance
 
+### Autonomous dependency journey accepted, September 9
+
+The current engine completed a real two-demo dependency chain without manual
+repair: worker pickup, verified missing input, Queen-created and structurally
+linked prerequisite, second-worker execution, automatic documentation settlement,
+Queen resumption of the original worker, and final automatic settlement. Both
+commits and byte-exact artifacts were independently verified; only the two
+intended fixture files changed. The journey took 12 minutes 57 seconds from
+Ready to Completed, including shared delivery pacing. Evidence and limitations
+are in `91-engine-return-dependency-acceptance.md`. This does not close the real
+Queen backlog, automatic engine admission or full performance/mobile gates.
+
 ### Verified planned engine return, September 9
 
 Corrected candidate `cf83c980` passed all four CI jobs in run `34310117569`.
