@@ -328,9 +328,9 @@ export class TerminalConnection {
       if (!response.ok) throw new Error(attachGrantFailure(response.status));
       const grant = (await response.json()) as GrantResponse;
       if (this.#disposed || this.#grantAbortController !== grantAbortController) return;
-      this.#grantAbortController = undefined;
       this.#clearConfirmationTimer();
       if (grant.protocol !== "swarm-terminal.v4") {
+        this.#grantAbortController = undefined;
         this.#fail("Update the Swarm App/API to enable safe terminal control. This client will not use legacy input.");
         return;
       }
@@ -355,6 +355,9 @@ export class TerminalConnection {
       socket.addEventListener("message", (event) => this.#handleMessage(socket, event));
       socket.addEventListener("close", () => this.#handleClose(socket));
       socket.addEventListener("error", () => this.#handleSocketError(socket));
+      // Retain this attempt's fence through URL parsing and socket construction.
+      // Synchronous failures must enter owned recovery, not look like a stale grant.
+      this.#grantAbortController = undefined;
     } catch (error) {
       if (this.#grantAbortController !== grantAbortController) return;
       this.#grantAbortController = undefined;

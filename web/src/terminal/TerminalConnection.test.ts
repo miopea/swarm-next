@@ -170,6 +170,13 @@ function harness(
     onState: vi.fn(),
     onRunningChange: vi.fn(),
   };
+  const websocketFactory = vi.fn((_url: string, protocols: string[]) => {
+    expect(protocols[0]).toBe("swarm-terminal.v4");
+    expect(protocols[1]).toMatch(/^swarm-grant\./);
+    const socket = new FakeWebSocket();
+    sockets.push(socket);
+    return socket as unknown as WebSocket;
+  });
   const connection = new TerminalConnection({
     sessionId: "session-1",
     operatorToken,
@@ -178,17 +185,34 @@ function harness(
     ...(useDefaultRetries ? {} : { retryDelaysMs }),
     confirmationTimeoutMs,
     deviceId: "019fedfc-1c30-70e1-a5e2-9a3c94268093",
-    websocketFactory: (_url, protocols) => {
-      expect(protocols[0]).toBe("swarm-terminal.v4");
-      expect(protocols[1]).toMatch(/^swarm-grant\./);
-      const socket = new FakeWebSocket();
-      sockets.push(socket);
-      return socket as unknown as WebSocket;
-    },
+    websocketFactory,
   });
   connection.resize(24, 80);
-  return { connection, fetch, handlers, sockets };
+  return { connection, fetch, handlers, sockets, websocketFactory };
 }
+
+test.each(["url", "constructor"])("post-grant %s failure recovers instead of hanging connecting", async (failure) => {
+  vi.useFakeTimers();
+  const { connection, fetch, handlers, sockets, websocketFactory } = harness([10]);
+  if (failure === "url") fetch.mockResolvedValueOnce({ ok: true, json: async () => ({
+    protocol: "swarm-terminal.v4", grant: "fixture", websocket_path: "http://[", expires_in_ms: 30_000,
+  }) });
+  else websocketFactory.mockImplementationOnce(() => { throw new Error("fictional socket construction failure"); });
+  try {
+    connection.start(handlers);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(handlers.onState).toHaveBeenCalledWith("disconnected", expect.any(String));
+    expect(connection.sendInput("must not be replayed")).toBe(false);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(sockets).toHaveLength(1);
+    sockets[0].open();
+    sockets[0].message(snapshotFrame(0n, 24, 80, "fictional snapshot"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(handlers.onState).toHaveBeenCalledWith("connected", undefined);
+    expect(sockets[0].sent.join("")).not.toContain("must not be replayed");
+  } finally { connection.dispose(); vi.useRealTimers(); }
+});
 
 // jsdom reports the document as unfocused, and every case below except the
 // pop-out one is a single focused window.

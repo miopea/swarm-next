@@ -148,3 +148,17 @@ Admin's owner supplied and root reviewed the bounded relay upload deadline and
 persistent deletion-marker/conditional-create fence. Production schema 17-to-18
 and feedback-only storage credential activation remain held for explicit operator
 approval. The Swarm attachment tranche is not deployed while that gate is open.
+
+### Terminal post-grant recovery correction
+
+Two new regressions reproduced a terminal remaining at Connecting after either
+an invalid socket URL or a synchronous WebSocket-construction exception. The
+connection cleared its attach-attempt identity before those operations, so its
+catch handler discarded their errors as if an obsolete request had failed.
+The attempt fence now survives until socket setup finishes; failures use the
+existing bounded-rate reconnect owner. Legacy-protocol refusal remains explicit.
+Both regressions pass, including recovery through a new grant and canonical
+snapshot with no replay of refused input; all 61 connection tests and TypeScript
+checking pass. This is a demonstrated failure-path repair, not proof that it
+caused the reported desktop redraw jump or every mobile reconnection delay.
+Deployment is pending.
