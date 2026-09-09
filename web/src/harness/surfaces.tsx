@@ -277,7 +277,7 @@ export const SURFACES: Surface[] = [
     render: () => <main style={{ padding: 16, height: "100dvh", display: "flex", flexDirection: "column" }}>
       <h1>Terminal handoff fixture</h1>
       <p>Invented terminal. No Hive, worker, or provider. This tests browser wiring, not engine ownership.</p>
-      <div style={{ flex: 1, minHeight: 0 }}><TerminalView session={{ session_id: "fixture-terminal-handoff", running: true }} operatorToken="fixture-only" busy={false} /></div>
+      <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}><TerminalView session={{ session_id: "fixture-terminal-handoff", running: true }} operatorToken="fixture-only" busy={false} /></div>
     </main>,
   },
   {

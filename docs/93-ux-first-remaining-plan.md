@@ -2,6 +2,36 @@
 
 Operator-directed priority change: September 9, 2026.
 
+### September 9 evening checkpoint — local terminal layout correction
+
+The operator is applying a worker-engine update. Do not overlap it with another
+deployment; re-observe the completed update and use its engine/session identities
+as the new baseline before any later app-only deployment.
+
+Fixed a separately reproduced terminal-search layout defect: the stage was a
+row flex container, putting search beside the output and squeezing its width.
+It now stacks search above a flexible output mount without a competing 100%
+height. The handoff fixture now constrains height like the application.
+Edge verification: at desktop width 1433px, opening search preserves terminal
+width and stage height (1157.56px); the 52px search row reduces mount height
+from 1157.56px to 1105.56px. The grid settles from 1120px to 1072px high.
+Search failure displays No match, Escape closes search and restores input focus.
+The 390x844 fixture keeps search, No match, Close and composer controls readable.
+TerminalView's 29 tests, TypeScript and production Vite build pass. This change
+is local only until a subsequent deployment is explicitly verified.
+
+This does NOT close desktop reload jumping. The preceding live demo sample
+showed about 5.2 seconds before the terminal appeared and about 6.9 seconds
+before connected canonical geometry, but no repeated oscillation in that sample.
+Source inspection shows browser-session restoration awaits the whole control-room
+snapshot (including tasks, decisions and Jira links) before terminal selection.
+That is a candidate startup bottleneck, not a measured attribution or a fix.
+Next: attribute the startup delay and verify reload/switch stability, then return
+to the separately open clarification/direct-worker decision reconciliation gate.
+
+CI 34402184205 for f482b460 has now completed successfully. Its earlier pending
+references below are historical; do not rerun that unchanged gate.
+
 Resume checkpoint: UI-1 presentation `eb931114` and UI-2 controls `221e66cd`
 are deployed with passing full CI. Runtime safeguard placement is `f482b460`;
 its normal dev reload completed with evidence in `/tmp/swarm-ui3-deploy.mlsUrp`.
