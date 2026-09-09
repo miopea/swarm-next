@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchSupportStatus, submitSupport, submitSupportFiles, retrySupport, forgetSupportCopy, type SupportFile, type SupportDelivery, type SupportStatus, type SupportSubmission } from "../api/support";
 import { useModalFocus } from "../shared/useModalFocus";
+import ModalPortal from "../shared/ModalPortal";
 import { RuntimeRequestError } from "../api/request";
 import UnsavedChangesPrompt from "../shared/UnsavedChangesPrompt";
 import { clearPendingSupport, loadPendingSupport, savePendingSupport, prepareSupportRetry, clearSupportRetry } from "./supportDraft";
@@ -156,7 +157,7 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
     finally { window.clearTimeout(deadline); inFlight.current = false; setBusy(false); }
   }
 
-  return <div className="feedback-backdrop" role="presentation">
+  return <ModalPortal><div className="feedback-backdrop" role="presentation">
     <section ref={modal} tabIndex={-1} className="feedback-dialog support-feedback-dialog" role="dialog" aria-modal="true" aria-labelledby="support-heading">
       <header><div><p className="eyebrow">A note to the hive keepers</p><h2 id="support-heading">Swarm Support</h2></div>
         <button type="button" className="secondary-button" onClick={close}>Close</button></header>
@@ -218,5 +219,5 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
       </details>
       {discard && <UnsavedChangesPrompt label="Discard this message?" description="This draft has not been saved or sent." discardLabel="Discard message" onDiscard={onClose} onKeep={() => setDiscard(false)} />}
     </section>
-  </div>;
+  </div></ModalPortal>;
 }

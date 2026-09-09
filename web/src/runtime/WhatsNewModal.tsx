@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useModalFocus } from "../shared/useModalFocus";
+import ModalPortal from "../shared/ModalPortal";
 
 import type { ReleaseVersionNotes } from "../api";
 import { anyAwaitingWorkerEngine } from "./whatsNew";
@@ -45,7 +46,7 @@ export default function WhatsNewModal({
     headingOverride ??
     (releases.length === 1 ? `What's new in ${releases[0].version}` : "What's new since you were last here");
   return (
-    <div className="dialog-backdrop" role="presentation" onClick={onDismiss}>
+    <ModalPortal><div className="dialog-backdrop" role="presentation" onClick={onDismiss}>
       <div
         ref={dialog}
         tabIndex={-1}
@@ -96,7 +97,7 @@ export default function WhatsNewModal({
           </button>
         </div>
       </div>
-    </div>
+    </div></ModalPortal>
   );
 }
 

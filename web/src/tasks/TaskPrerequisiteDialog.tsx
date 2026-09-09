@@ -2,6 +2,7 @@ import { useId, useRef, useState, type FormEvent } from "react";
 import { changeTaskPrerequisite, type Task } from "../api/tasks";
 import { RuntimeRequestError } from "../api/request";
 import { useModalFocus } from "../shared/useModalFocus";
+import ModalPortal from "../shared/ModalPortal";
 import UnsavedChangesPrompt from "../shared/UnsavedChangesPrompt";
 
 export default function TaskPrerequisiteDialog({ task, candidates, operatorToken, onChanged, onClose }: {
@@ -62,7 +63,7 @@ export default function TaskPrerequisiteDialog({ task, candidates, operatorToken
       setSaving(false);
     }
   }
-  return <div className="task-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}>
+  return <ModalPortal><div className="task-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}>
     <section ref={dialog} tabIndex={-1} className="task-detail-dialog task-prerequisite-dialog" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`}>
       <header><div><span className="eyebrow">Task coordination</span><h2 id={`${id}-title`}>Prerequisites</h2></div><button type="button" disabled={saving} onClick={requestClose}>Close</button></header>
       <form id={`${id}-form`} className="task-detail-content task-detail-editor" onSubmit={(event) => void submit(event)}>
@@ -93,5 +94,5 @@ export default function TaskPrerequisiteDialog({ task, candidates, operatorToken
       </form>
       <footer>{confirmClose ? <UnsavedChangesPrompt label="Unsaved prerequisite change" description="Your current choices will be discarded." onDiscard={onClose} onKeep={() => setConfirmClose(false)} /> : <button form={`${id}-form`} disabled={saving || !valid}>{saving ? "Saving…" : operation === "add" ? "Add prerequisite" : "Remove prerequisite"}</button>}</footer>
     </section>
-  </div>;
+  </div></ModalPortal>;
 }

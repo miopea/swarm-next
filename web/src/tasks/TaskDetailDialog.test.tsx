@@ -17,6 +17,18 @@ function renderDialog(onClose = vi.fn()) {
   return onClose;
 }
 
+test("task dialog escapes workspace containment and removes its overlay on close", () => {
+  const { container, unmount } = render(<div className="workspace" style={{ contain: "layout paint" }}>
+    <TaskDetailDialog task={task} operatorToken="token" busy={false} onClose={vi.fn()} onSave={vi.fn()} onRemove={vi.fn()} />
+  </div>);
+  const dialog = screen.getByRole("dialog", { name: "Review and edit task" });
+  expect(dialog.closest(".workspace")).toBeNull();
+  expect(dialog.closest(".task-detail-backdrop")?.parentElement).toBe(document.body);
+  expect(container.querySelector("[role=dialog]")).toBeNull();
+  unmount();
+  expect(document.querySelector(".task-detail-backdrop")).toBeNull();
+});
+
 test.each([
   [{ state: "ready", assigned_worker_id: "worker-1", next_move_owner: "worker" }, "Assigned", "Assigned worker"],
   [{ state: "active", dispatch_state: "uncertain", next_move_owner: "queen" }, "Delivery unconfirmed", "Queen"],

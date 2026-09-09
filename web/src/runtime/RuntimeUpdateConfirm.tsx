@@ -1,6 +1,7 @@
 import type { RuntimeUpdateSummary } from "./runtimeUpdates";
 import { useRef } from "react";
 import { useModalFocus } from "../shared/useModalFocus";
+import ModalPortal from "../shared/ModalPortal";
 
 /**
  * Asks before running a runtime update from the control room.
@@ -23,7 +24,7 @@ export default function RuntimeUpdateConfirm({ update, busy, onConfirm, onCancel
   const cancel = () => { if (!busy) onCancel(); };
   const dialog = useModalFocus<HTMLDivElement>(cancel, true, destructive ? undefined : confirm);
   return (
-    <div className="dialog-backdrop" role="presentation" onClick={cancel}>
+    <ModalPortal><div className="dialog-backdrop" role="presentation" onClick={cancel}>
       <div
         ref={dialog}
         tabIndex={-1}
@@ -55,6 +56,6 @@ export default function RuntimeUpdateConfirm({ update, busy, onConfirm, onCancel
           </button>
         </div>
       </div>
-    </div>
+    </div></ModalPortal>
   );
 }

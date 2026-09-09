@@ -18,6 +18,15 @@ function choose() {
   fireEvent.change(screen.getByLabelText("Prerequisite task"), { target: { value: upstream.id } });
   fireEvent.change(screen.getByLabelText("Why change this link?"), { target: { value: "Need the agreed contract" } });
 }
+
+test("prerequisite editor escapes the contained workspace", () => {
+  render(<div className="workspace" style={{ contain: "layout paint" }}>
+    <TaskPrerequisiteDialog task={task} candidates={[task, upstream]} operatorToken="token" onChanged={vi.fn()} onClose={vi.fn()} />
+  </div>);
+  const dialog = screen.getByRole("dialog");
+  expect(dialog.closest(".workspace")).toBeNull();
+  expect(dialog.closest(".task-detail-backdrop")?.parentElement).toBe(document.body);
+});
 test.each(["blocked", "review"] as const)("sends one explicit audited change for %s work and preserves its state", async (state) => {
   const source = { ...task, state };
   const updated = { ...source, prerequisites: [edge] };

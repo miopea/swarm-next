@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useModalFocus } from "../shared/useModalFocus";
+import ModalPortal from "../shared/ModalPortal";
 
 export type CommandChoice = { id: string; label: string; detail: string; group: "Go to" | "Workers" | "Work" | "Attention"; run: () => void };
 
@@ -35,7 +36,7 @@ export default function CommandPalette({ choices, onClose }: { choices: CommandC
     const choice = filtered[activeIndex];
     if (choice) document.getElementById(`command-${choice.id}`)?.scrollIntoView?.({ block: "nearest" });
   }, [activeIndex, filtered]);
-  return <div className="command-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+  return <ModalPortal><div className="command-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section ref={dialog} tabIndex={-1} className="command-palette" role="dialog" aria-modal="true" aria-labelledby="command-heading">
       <header className="command-header">
         <div><p className="eyebrow">Quick navigation</p><h2 id="command-heading">Where would you like to go?</h2></div>
@@ -82,5 +83,5 @@ export default function CommandPalette({ choices, onClose }: { choices: CommandC
         <small className="privacy-note">Tip: press Alt+K anywhere outside a terminal or text field. Sleeping workers wake when selected.</small>
       </footer>
     </section>
-  </div>;
+  </div></ModalPortal>;
 }

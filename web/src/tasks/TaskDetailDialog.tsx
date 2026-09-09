@@ -12,6 +12,7 @@ import {
   type TaskUpdateInput,
 } from "../api";
 import { useModalFocus } from "../shared/useModalFocus";
+import ModalPortal from "../shared/ModalPortal";
 import UnsavedChangesPrompt from "../shared/UnsavedChangesPrompt";
 import ImageViewer from "../shared/ImageViewer";
 import { TITLE_BYTE_LIMIT, clampTitleToBytes, titleByteLength, titleFits } from "./titleLimit";
@@ -158,7 +159,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
   }
 
   return (
-    <div className="task-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}>
+    <ModalPortal><div className="task-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}>
       <section ref={dialog} tabIndex={-1} className="task-detail-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <header>
           <div>
@@ -243,7 +244,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
           <button form={formId} disabled={busy || !title.trim() || titleTooLong}>{busy ? "Saving…" : "Save changes"}</button></>}
         </footer>
       </section>
-    </div>
+    </div></ModalPortal>
   );
 }
 

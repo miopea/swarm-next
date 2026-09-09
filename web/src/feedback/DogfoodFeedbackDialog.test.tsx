@@ -183,7 +183,8 @@ test("names the destination once it is known, and only then", () => {
  * `primary-action`, so the dialog nominated two winners.
  */
 test("exactly one action in the row reads as the primary one", () => {
-  const { container } = render(<DogfoodFeedbackDialog activeSessionId={undefined} health={{ status: "ok", version: "0.1.0" }} hiveIdentity={undefined} liveFeedState="connected" onClose={vi.fn()} operatorToken="token" recentEvents={[]} sessions={[]} surface="workers" workers={[]} />);
+  render(<DogfoodFeedbackDialog activeSessionId={undefined} health={{ status: "ok", version: "0.1.0" }} hiveIdentity={undefined} liveFeedState="connected" onClose={vi.fn()} operatorToken="token" recentEvents={[]} sessions={[]} surface="workers" workers={[]} />);
+  const container = screen.getByRole("dialog");
   // THE WHOLE DIALOG, not just the action row. The claim is that one control
   // reads as primary; scoping the query to the row would leave a second primary
   // anywhere else in the dialog — including the connect panel it renders —

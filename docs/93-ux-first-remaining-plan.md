@@ -1,5 +1,28 @@
 # Remaining maturity work — UX/UI first
 
+### Current UI-4 defect: modal navigation bypass
+
+Edge reproduced a dirty task editor at 390px leaving the top navigation exposed.
+Clicking Settings removed the editor without an unsaved-changes prompt. The
+fixed-position backdrop was constrained by `.workspace { contain: layout paint }`.
+Do not remove that terminal-rendering protection: place blocking overlays at the
+document body through a shared ModalPortal, keeping their existing focus, draft,
+save, and cancellation owners. Apply the same placement to task/prerequisite,
+feedback, migration, broadcast, handoff, command, and update/release-note dialogs.
+Shell and image viewers already use document portals and remain unchanged.
+
+Local Edge now shows the task dialog filling the 390px phone frame, with the
+navigation covered and the changed title retained through Keep editing. Desktop
+DOM measurements show backdrop (0,0,1465,1339), matching the viewport exactly;
+the hit-test at the navigation corner returns the backdrop, not navigation.
+New regression checks require task/prerequisite overlays outside a contained
+workspace and verify task-overlay cleanup. All 154 web test files / 1,494 tests,
+TypeScript and the production web build pass. The existing feedback-primary-action
+test now queries the whole portalled dialog rather than its old mount container;
+the prerequisite rerender tests retain their original component identity. No
+worker, save, cancellation or send policy changed. Deployment is next; this
+section is not a claim that the change is live yet.
+
 Operator-directed priority change: September 9, 2026.
 
 **Design acceptance principle:** developer users should get the right information

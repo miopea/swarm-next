@@ -21,6 +21,7 @@ import {
 } from "../api/migration";
 import { downloadJson } from "../shared/download";
 import { useModalFocus } from "../shared/useModalFocus";
+import ModalPortal from "../shared/ModalPortal";
 
 type Props = {
   busy: boolean;
@@ -522,7 +523,7 @@ function MigrationConfirmationDialog({ title, detail, confirmLabel, failure, dis
 }) {
   const dialog = useModalFocus<HTMLElement>(onCancel);
   return (
-    <div className="task-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
+    <ModalPortal><div className="task-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
       <section ref={dialog} tabIndex={-1} className="migration-confirm-dialog" role="dialog" aria-modal="true" aria-label="Confirm Legacy migration">
         <p className="eyebrow">Final confirmation</p>
         <h3>{title}</h3>
@@ -537,7 +538,7 @@ function MigrationConfirmationDialog({ title, detail, confirmLabel, failure, dis
           <button type="button" className={danger ? "danger-button" : "primary-action"} disabled={disabled} onClick={onConfirm}>{confirmLabel}</button>
         </div>
       </section>
-    </div>
+    </div></ModalPortal>
   );
 }
 

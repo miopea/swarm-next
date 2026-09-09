@@ -1,6 +1,7 @@
 import { useEffect, useState, type ComponentProps } from "react";
 import { fetchSupportStatus, type SupportStatus } from "../api/support";
 import { useModalFocus } from "../shared/useModalFocus";
+import ModalPortal from "../shared/ModalPortal";
 import DogfoodFeedbackDialog from "./DogfoodFeedbackDialog";
 import SupportFeedbackDialog from "./SupportFeedbackDialog";
 import { loadPendingSupport } from "./supportDraft";
@@ -25,9 +26,9 @@ export default function FeedbackDialog(props: ComponentProps<typeof DogfoodFeedb
   }, [props.operatorToken, revision]);
   if (status && (status.configured || status.deliveries.length > 0 || hasPending)) return <SupportFeedbackDialog operatorToken={props.operatorToken} status={status} onClose={props.onClose} onSaved={props.onSaved} />;
   if (status) return <DogfoodFeedbackDialog {...props} />;
-  return <div className="feedback-backdrop"><section ref={modal} tabIndex={-1} className="feedback-dialog" role="dialog" aria-modal="true" aria-label="Feedback destination">
+  return <ModalPortal><div className="feedback-backdrop"><section ref={modal} tabIndex={-1} className="feedback-dialog" role="dialog" aria-modal="true" aria-label="Feedback destination">
     <h2>Feedback</h2><p role={error ? "alert" : "status"}>{error ? "Unable to check where feedback will go. Nothing has been sent." : "Checking the feedback destination…"}</p>
     {error && <button className="secondary-button" onClick={() => setRevision((value) => value + 1)}>Retry</button>}
     <button className="secondary-button" onClick={props.onClose}>Close</button>
-  </section></div>;
+  </section></div></ModalPortal>;
 }

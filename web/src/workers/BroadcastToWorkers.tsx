@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { useModalFocus } from "../shared/useModalFocus";
+import ModalPortal from "../shared/ModalPortal";
 import UnsavedChangesPrompt from "../shared/UnsavedChangesPrompt";
 
 /**
@@ -71,7 +72,7 @@ export default function BroadcastToWorkers({
   }
 
   return (
-    <div className="dialog-backdrop" role="presentation" onClick={requestClose}>
+    <ModalPortal><div className="dialog-backdrop" role="presentation" onClick={requestClose}>
       <div
         ref={dialog}
         tabIndex={-1}
@@ -121,6 +122,6 @@ export default function BroadcastToWorkers({
           onDiscard={close}
         />}
       </div>
-    </div>
+    </div></ModalPortal>
   );
 }

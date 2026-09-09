@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { TEMPORARY_PROVIDERS, type ProviderCapabilities, type ProviderKind, type Worker } from "../api";
 import { ExperimentalProviderControl, isExperimentalProvider } from "../settings/ExperimentalProviderControl";
 import { useModalFocus } from "../shared/useModalFocus";
+import ModalPortal from "../shared/ModalPortal";
 
 export default function ExperimentalHandoffDialog({ worker, provider, providers, capabilitiesUnavailable, onConfirm, onClose }: {
   worker: Worker;
@@ -34,7 +35,7 @@ export default function ExperimentalHandoffDialog({ worker, provider, providers,
       setSaving(false);
     }
   }
-  return <div className="dialog-backdrop" role="presentation" onClick={close}>
+  return <ModalPortal><div className="dialog-backdrop" role="presentation" onClick={close}>
     <div className="dialog" ref={dialog} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="experimental-handoff-heading" onClick={event => event.stopPropagation()}>
       <p className="eyebrow">Experimental provider</p>
       <h3 id="experimental-handoff-heading">Try {label} alongside {worker.name}</h3>
@@ -47,5 +48,5 @@ export default function ExperimentalHandoffDialog({ worker, provider, providers,
         <button type="button" disabled={saving || !acknowledged || available !== true} onClick={() => void confirm()}>{saving ? "Creating…" : "Create temporary worker"}</button>
       </div>
     </div>
-  </div>;
+  </div></ModalPortal>;
 }

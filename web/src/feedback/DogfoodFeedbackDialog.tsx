@@ -18,6 +18,7 @@ import {
 } from "../api";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 import { useModalFocus } from "../shared/useModalFocus";
+import ModalPortal from "../shared/ModalPortal";
 import UnsavedChangesPrompt from "../shared/UnsavedChangesPrompt";
 import { serializeDiagnosticReport, type RuntimeDiagnostics } from "../settings/diagnosticReport";
 
@@ -252,7 +253,7 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
   }
 
   return (
-    <div className="feedback-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}>
+    <ModalPortal><div className="feedback-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}>
       <section ref={dialog} tabIndex={-1} className="feedback-dialog" role="dialog" aria-modal="true" aria-labelledby="feedback-heading" onPaste={pastedImage} onDragOver={(event) => event.preventDefault()} onDrop={droppedImage}>
         <header>
           <div><p className="eyebrow">Dogfood feedback</p><h2 id="feedback-heading">Capture what felt wrong</h2></div>
@@ -330,7 +331,7 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
         {saveState === "error" ? <p role="alert">The report was not saved. Your notes and screenshot remain in this dialog.</p> : null}
         {preview ? <pre className="diagnostic-preview feedback-preview" aria-label="Dogfood feedback bundle">{preview}</pre> : null}
       </section>
-    </div>
+    </div></ModalPortal>
   );
 }
 
