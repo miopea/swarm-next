@@ -8,7 +8,7 @@ an old unchecked deployment note is not automatically current missing code.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-03e4584e324b-20260909150026-2834623`.
+- App/API: `1.6.0-dev-86100b8b5f7e-20260909151834-2859465`.
 - Engine: retained PID 2271655, `cf83c980`; candidate `cf179f73` remains pending.
 - Latest App/API deployment preserved all 34 worker records and twelve exact
   running session/conversation pairs. Swarm Next and D365 remained asleep.
@@ -36,7 +36,13 @@ interview verified dark unselected choices at 12.62:1 and selected choices at
 10.00:1 dark / 5.25:1 light. At 390x844 there was no horizontal overflow; a custom
 answer submitted exactly into the local receipt. No Hive decision was resolved.
 Viewport was reset, the owned tab closed and the harness stopped. This is rendered
-desktop Edge evidence, not native Android/iOS acceptance. Deployment remains pending.
+desktop Edge evidence, not native Android/iOS acceptance. Development deployment
+completed with healthy status and exact before/after equality of all 34 worker
+records, twelve running session/provider/conversation bindings and engine PID
+2271655 in `/tmp/swarm-component-contrast.yC9vaL`. The separate live Edge tab
+loaded Queues, the exact new version and the new base-hover selector; the user's
+live light theme was not changed. The tab was closed. CI 34369343017 remains in
+progress; the preceding snapshot-ordering and documentation CI runs passed.
 
 ### Live navigation attribution and snapshot ordering
 
