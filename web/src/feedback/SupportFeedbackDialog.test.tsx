@@ -82,6 +82,24 @@ test("review does not send and uncertain reload retries the exact original repor
   expect(screen.queryByText("Received by Swarm Support")).toBeNull();
 });
 
+test("draft retention wording follows actual unsaved, retained and saved states", async () => {
+  vi.mocked(submitSupport).mockRejectedValueOnce(new Error("Lost response"));
+  open(); review();
+  expect(screen.getByText(/Your draft has not been saved or sent/)).toBeInTheDocument();
+  expect(screen.queryByText(/A retry copy stays/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Send to Swarm Support" }));
+  await screen.findByRole("alert");
+  expect(screen.getByText(/A retry copy stays/)).toBeInTheDocument();
+  expect(screen.queryByText(/Your draft has not been saved or sent/)).not.toBeInTheDocument();
+  vi.mocked(submitSupport).mockImplementationOnce(async (_token, input) => ({
+    submission_key: input.submission_key, created_at: 1, delivery: { state: "pending", attempts: 0 },
+  }));
+  fireEvent.click(screen.getByRole("button", { name: "Retry this exact report" }));
+  await screen.findByText("Saved to Hive — waiting to send");
+  expect(screen.queryByText(/A retry copy stays/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Your draft has not been saved or sent/)).not.toBeInTheDocument();
+});
+
 test("save does not imply received and explicit refresh reconciles confirmation", async () => {
   vi.mocked(submitSupport).mockImplementation(async (_token, input) => ({
     submission_key: input.submission_key, created_at: 1, delivery: { state: "pending", attempts: 0 },

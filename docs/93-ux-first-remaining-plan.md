@@ -54,6 +54,32 @@ counts and cancellation without a callback. TypeScript and web build pass.
 Prior CI 34405066863 has now passed completely; the queued Settings changes can
 be published without cancelling it.
 
+Settings increments are deployed as `a716dad8`, live
+`1.6.0-dev-a716dad84cea-20260909212842-3442412`. Health is good and all 34 worker
+identity projections (twelve running) plus engine PID/start match the before
+snapshot. Evidence: `/tmp/swarm-settings-ux-deploy.fzEfrZ`. Current CI is
+34407100626, in progress; prior f23bb3cb CI passed. The phone support-form
+review/cancel check remains unverified after browser-control timeouts and fields
+not retaining automated fills; this is not established as a product defect.
+No support submission or worker restart was performed. Continue ordinary-user
+UI-3/4 journey checks, not reload profiling or BFG Admin coordination.
+
+### Support draft-state clarity
+
+The support form previously promised an unsent retry copy even before it had
+saved one, while its discard confirmation correctly said the draft was unsaved.
+The privacy note now distinguishes an unsaved draft (reload may lose it), a
+retained exact retry, and a confirmed Hive save (the obsolete retry note clears).
+No persistence or sending behavior changed. Fourteen support/file tests pass,
+including those three states, and TypeScript/production build pass.
+In Edge's isolated support fixture, closing an unsaved draft asks for confirmation
+and Escape returns to the intact form. Existing fictional retained-file setup
+shows the exact two attachments; its first simulated save failure preserves the
+retry, and the second reaches the fictional Hive receipt. No external send or
+BFG Admin communication occurred. Initial email-field automation and real phone
+picker/keyboard acceptance remain separate, not proven by this seeded retry.
+This increment is local pending publication; a716dad8 CI is still in progress.
+
 ### September 9 evening checkpoint — local terminal layout correction
 
 The operator is applying a worker-engine update. Do not overlap it with another

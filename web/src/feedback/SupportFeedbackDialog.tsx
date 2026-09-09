@@ -197,7 +197,9 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
       </section> : null}
       {!!files.length && !status.attachments_supported && <p role="status">This Hive does not currently support file uploads. The original report is retained; update the Hive before retrying.</p>}
       <small className="privacy-note">Only the reviewed message, contact details and selected files are sent. Swarm Support may reply by email. Diagnostics are never uploaded automatically.</small>
-      <small className="privacy-note">An unsent retry copy stays in this browser until the Hive confirms saving it. Reopening never sends it automatically.</small>
+      {!saved && <small className="privacy-note">{attempted
+        ? "A retry copy stays in this browser until the Hive confirms saving it. Reopening never sends it automatically."
+        : "Your draft has not been saved or sent. Closing asks before discarding it; reloading this page can lose it."}</small>}
       {error && <p role="alert">{error}</p>}
       {status.sender === "failed" && <p role="alert">Support delivery has stopped. Saved reports remain on this Hive.</p>}
       <details><summary>Delivery status · {status.deliveries.length}</summary>
