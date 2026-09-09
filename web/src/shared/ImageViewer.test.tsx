@@ -2,8 +2,27 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
 import ImageViewer from "./ImageViewer";
+import { useModalFocus } from "./useModalFocus";
 
 afterEach(cleanup);
+
+function ParentDialog() {
+  const dialog = useModalFocus<HTMLElement>(() => { throw new Error("Parent must not close with its image"); });
+  return <section ref={dialog} tabIndex={-1} role="dialog" aria-label="Task parent">
+    <ImageViewer src="/fictional.png" filename="fictional.png" />
+  </section>;
+}
+
+test("Escape closes a portalled image without closing its task dialog", () => {
+  render(<ParentDialog />);
+  const trigger = screen.getByRole("button", { name: "View fictional.png at full size" });
+  trigger.focus();
+  fireEvent.click(trigger);
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(screen.queryByRole("dialog", { name: "fictional.png" })).not.toBeInTheDocument();
+  expect(screen.getByRole("dialog", { name: "Task parent" })).toBeInTheDocument();
+  expect(trigger).toHaveFocus();
+});
 
 test("an attached image announces that it can be opened, and opens", () => {
   // The reported case: a 338 KB phone screenshot rendered at roughly 175px, its

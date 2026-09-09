@@ -10,6 +10,23 @@ const status: SupportStatus = { configured: true, sender: "running", deliveries:
 afterEach(() => { cleanup(); sessionStorage.clear(); vi.resetAllMocks(); });
 function open() { return render(<SupportFeedbackDialog operatorToken="fixture" status={status} onClose={vi.fn()} />); }
 
+test("Escape from discard confirmation keeps the original draft and parent dialog", () => {
+  const onClose = vi.fn();
+  render(<SupportFeedbackDialog operatorToken="fixture" status={status} onClose={onClose} />);
+  const email = screen.getByLabelText("Email");
+  email.focus();
+  fireEvent.change(email, { target: { value: "fictional@example.invalid" } });
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(screen.getByRole("alertdialog", { name: "Discard this message?" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Keep editing" })).toHaveFocus();
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  expect(email).toHaveValue("fictional@example.invalid");
+  expect(email).toHaveFocus();
+  expect(onClose).not.toHaveBeenCalled();
+  expect(submitSupport).not.toHaveBeenCalled();
+});
+
 test("explains email replies without implying attachments or automatic diagnostics are sent", () => {
   open();
   expect(screen.getByText(/Swarm Support may reply by email/)).toHaveTextContent("Diagnostics are never uploaded automatically.");

@@ -181,3 +181,22 @@ attachments_supported=false. No central Admin infrastructure, file-intake
 activation, worker-engine activation, customer send or release was performed.
 Local production web build passed. Earlier native paired-test CI 34332128576
 passed; full CI for this final intake-gated revision remains separately pending.
+
+### Shared dialog keyboard and draft safety
+
+Three failing-before regressions demonstrated nested Escape closing both dialogs,
+background focus escaping the active modal, and hidden/collapsed controls becoming
+Tab endpoints. The shared hook now derives the top mounted modal from the DOM,
+contains focus there, filters unavailable controls and includes disclosure summaries.
+It owns and removes its listeners/marker without a retained stack or timer.
+Unsaved-changes confirmation uses the same contract, with Escape meaning Keep
+editing rather than closing or discarding the parent. Portal image zoom and support
+draft confirmation have dedicated integration regressions.
+
+All 152 web test files / 1,423 tests and TypeScript checking passed. In Edge's
+isolated no-Hive task-preview fixture, Escape closed image zoom only and returned
+focus to its thumbnail. A changed fictional title survived Escape from the discard
+confirmation; the editor remained open and focus returned to the title. Viewport
+and document widths were both 1465 pixels. No live task save/delete occurred.
+The owned browser tab and fixture server were closed. This is desktop keyboard
+evidence, not full mobile/screen-reader acceptance. Deployment remains pending.
