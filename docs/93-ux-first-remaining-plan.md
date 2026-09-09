@@ -103,6 +103,23 @@ goal. Next focus is ordinary-user worker/navigation/dialog usability. Do not
 resume reload profiling or contact BFG Admin. Automated schedule saves in this
 pass were confined to fictional responses and did not change the live schedule.
 
+Clarity deployment verified: `51cadc40`, live
+`1.6.0-dev-51cadc405a76-20260909214905-3459418`, healthy. Engine PID/start and
+worker identity projections match before/after snapshots in
+`/tmp/swarm-clarity-ux-deploy.lTVzMZ`. No engine activation or release occurred.
+
+### Worker setup empty-state guidance
+
+The roster fixture with no discovered repositories incorrectly said every
+repository already had a worker and advertised a future settings location.
+The message now distinguishes empty discovery from all discovered repositories
+being assigned; both give the supported next step of entering an existing full
+project path. The unmatched suggestion also points to that path and the existing
+folder warning. No admission, folder-security or provider policy changed.
+Edge confirms the empty-discovery guidance. All 24 WorkerSettings tests pass,
+including both empty states and preservation of the explicit folder opt-in.
+This increment remains local pending publication/deployment verification.
+
 ### September 9 evening checkpoint — local terminal layout correction
 
 The operator is applying a worker-engine update. Do not overlap it with another

@@ -246,7 +246,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, p
                     <small className="workspace-kind">{choice.kind === "repository" ? "Repository" : "Folder"}</small>
                   </button>
                 ))}
-                {matchingWorkspaces.length === 0 && <p>No suggestion yet. Keep typing an existing path inside your projects folder.</p>}
+                {matchingWorkspaces.length === 0 && <p>No matching repository. Enter an existing folder’s full path and review any folder warning below.</p>}
               </div>
             )}
           </div>
@@ -256,7 +256,9 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, p
         <button disabled={busy || providerCapabilitiesUnavailable || experimentalBlocked || !name.trim() || !workspace || (customWorkspace && !allowOutsideRoots)}>Add sleeping worker</button>
       </form>
       <small className="privacy-note">New workers receive a private Queen-routing draft from local README and project metadata. Review or refresh it from Edit whenever the repository changes.</small>
-      {available.length === 0 && <small className="privacy-note">Every discovered repository already has a worker. Advanced repository-root configuration will live in backup and installation settings.</small>}
+      {available.length === 0 && <small className="privacy-note">{workspaces.length === 0
+        ? "No repositories were discovered. Enter the full path to an existing project folder above."
+        : "Every discovered repository already has a worker. To add a different repository, enter its full path above."}</small>}
     </section>
   );
 }

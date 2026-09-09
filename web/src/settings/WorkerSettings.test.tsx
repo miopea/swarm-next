@@ -10,6 +10,22 @@ const studio = worker("studio", "Poppy", "/projects/sculpt-studio", 2);
 
 afterEach(cleanup);
 
+test.each([false, true])("repository setup distinguishes empty discovery from assigned repositories (%s)", (discovered) => {
+  render(<WorkerSettings workers={[]} workspaces={discovered
+    ? [{ name: "trial", path: "/projects/trial", kind: "repository", configured_worker_id: "existing" }] : []}
+    busy={false} providers={{ claude_code: true, codex: true }}
+    onCreate={vi.fn()} onUpdate={vi.fn()} onChooseMark={vi.fn()} onRemove={vi.fn()}
+    onDraftDescription={vi.fn()} onReorder={vi.fn()} />);
+  expect(screen.getByText(discovered ? /Every discovered repository already has a worker/ : /No repositories were discovered/))
+    .toHaveTextContent(/full path/);
+  expect(screen.queryByText(/configuration will live/)).not.toBeInTheDocument();
+  if (!discovered) expect(screen.queryByText(/Every discovered repository/)).not.toBeInTheDocument();
+  fireEvent.change(screen.getByRole("combobox", { name: "Repository" }), { target: { value: "/projects/new" } });
+  expect(screen.getByText(/No matching repository/)).toBeInTheDocument();
+  expect(screen.getByLabelText(/Use this path outside discovered project folders/)).not.toBeChecked();
+  expect(screen.getByRole("button", { name: "Add sleeping worker" })).toBeDisabled();
+});
+
 test("experimental creation requires opt-in and retains the selected provider when admission is withdrawn", async () => {
   const onCreate = vi.fn().mockRejectedValue(new Error("Provider availability changed"));
   const props = { workers: [], workspaces: [{ name: "trial", path: "/projects/trial", kind: "repository" as const, configured_worker_id: null }], busy: false,
@@ -193,7 +209,7 @@ test("accepts a complete typed path when it is not in the bounded suggestions", 
 
   fireEvent.change(rendered.getByPlaceholderText("Daisy"), { target: { value: "Clover" } });
   fireEvent.change(rendered.getByPlaceholderText("Search by name or path"), { target: { value: "/home/bschleifer/projects/personal/budgetbug" } });
-  expect(rendered.getByText(/No suggestion yet/)).toBeInTheDocument();
+  expect(rendered.getByText(/No matching repository/)).toBeInTheDocument();
   fireEvent.click(rendered.getByLabelText(/Use this path outside discovered project folders/));
   fireEvent.click(rendered.getByRole("button", { name: "Add sleeping worker" }));
   expect(onCreate).toHaveBeenCalledWith("Clover", "/home/bschleifer/projects/personal/budgetbug", "claude_code", true);
