@@ -67,6 +67,12 @@ impl SupportDestination {
     pub fn endpoint(&self) -> &str {
         &self.0
     }
+
+    /// Attachment routing is deployment-owned, never supplied in a report.
+    #[must_use]
+    pub fn attachment_endpoint(&self) -> String {
+        format!("{}-with-attachments", self.0)
+    }
 }
 
 /// Adapters must authenticate the local operator before accepting reviewed input.
@@ -120,12 +126,26 @@ impl HiveSupportService {
         input: SupportSubmissionInput,
         now: i64,
     ) -> Result<SupportOutboxEntry, HiveSupportServiceError> {
+        self.submit_reviewed_with_attachments(input, &[], now)
+    }
+
+    /// Saves reviewed text and verified immutable files before any network effect.
+    ///
+    /// # Errors
+    /// Rejects mail impersonation, invalid files, conflicts and bounded capacity.
+    pub fn submit_reviewed_with_attachments(
+        &self,
+        input: SupportSubmissionInput,
+        attachments: &[swarm_domain::SupportAttachment],
+        now: i64,
+    ) -> Result<SupportOutboxEntry, HiveSupportServiceError> {
         if matches!(input.kind, swarm_domain::SupportKind::Email) {
             return Err(HiveSupportServiceError::UnsupportedKind);
         }
-        Ok(self.store.enqueue_support_submission(
+        Ok(self.store.enqueue_support_submission_with_attachments(
             &input.validate()?,
             self.destination.endpoint(),
+            attachments,
             now,
         )?)
     }

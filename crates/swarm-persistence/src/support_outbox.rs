@@ -2,7 +2,8 @@
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use swarm_domain::{
-    SUPPORT_OUTBOX_MAX_BYTES, SUPPORT_OUTBOX_MAX_ROWS, SupportDeliveryState, SupportSubmission,
+    SUPPORT_OUTBOX_MAX_BYTES, SUPPORT_OUTBOX_MAX_ROWS, SupportAttachment, SupportDeliveryState,
+    SupportSubmission, validate_support_attachment_set,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -11,6 +12,8 @@ use crate::{SupportReceipt, TaskStore, TaskStoreError};
 
 #[derive(Debug, Error)]
 pub enum SupportOutboxError {
+    #[error(transparent)]
+    InvalidAttachment(#[from] swarm_domain::SupportAttachmentError),
     #[error("support submission not found")]
     NotFound,
     #[error("support submission identity conflicts with saved content or destination")]
@@ -34,6 +37,7 @@ pub struct SupportOutboxEntry {
     pub submission_key: Uuid,
     pub destination: String,
     pub frozen_submission: String,
+    pub attachments: Vec<SupportAttachment>,
     pub delivery: SupportOutboxDelivery,
     pub created_at: i64,
 }
@@ -209,25 +213,58 @@ impl TaskStore {
         destination: &str,
         now: i64,
     ) -> Result<SupportOutboxEntry, SupportOutboxError> {
+        self.enqueue_support_submission_with_attachments(submission, destination, &[], now)
+    }
+
+    /// Saves reviewed text and immutable file copies in one bounded transaction.
+    /// The same key cannot append, remove, reorder or replace previously saved files.
+    ///
+    /// # Errors
+    /// Invalid files, changed replay or capacity refusal leaves the old report intact.
+    pub fn enqueue_support_submission_with_attachments(
+        &self,
+        submission: &SupportSubmission,
+        destination: &str,
+        attachments: &[SupportAttachment],
+        now: i64,
+    ) -> Result<SupportOutboxEntry, SupportOutboxError> {
+        validate_support_attachment_set(attachments)?;
         if destination.is_empty() || destination.len() > 2048 || now < 0 {
             return Err(SupportOutboxError::InvalidTransition);
         }
         let frozen = serde_json::to_string(submission)?;
+        let manifest = serde_json::to_string(
+            &attachments
+                .iter()
+                .map(SupportAttachment::metadata)
+                .collect::<Vec<_>>(),
+        )?;
         let key = submission.submission_key();
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         if let Some(existing) = read(&transaction, key)? {
-            if existing.frozen_submission != frozen || existing.destination != destination {
+            if existing.frozen_submission != frozen
+                || existing.destination != destination
+                || existing.attachments != attachments
+            {
                 return Err(SupportOutboxError::Conflict);
             }
             return Ok(existing);
         }
         let (count, bytes): (usize, usize) = transaction.query_row(
-            "SELECT count(*), coalesce(sum(length(CAST(frozen_submission AS BLOB))), 0) FROM hive_support_outbox",
+            "SELECT count(*), coalesce(sum(length(CAST(frozen_submission AS BLOB)) + length(CAST(attachments_manifest AS BLOB))), 0) +
+                (SELECT coalesce(sum(length(bytes) + length(CAST(metadata AS BLOB))), 0) FROM hive_support_outbox_attachments)
+                FROM hive_support_outbox",
             [], |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         if count >= SUPPORT_OUTBOX_MAX_ROWS
-            || bytes.saturating_add(frozen.len()) > SUPPORT_OUTBOX_MAX_BYTES
+            || bytes
+                .saturating_add(frozen.len())
+                .saturating_add(manifest.len())
+                .saturating_add(crate::support_outbox_attachments::encoded_size(
+                    attachments,
+                )?)
+                > SUPPORT_OUTBOX_MAX_BYTES
         {
             return Err(SupportOutboxError::Capacity);
         }
@@ -244,20 +281,23 @@ impl TaskStore {
             receipt: None,
         };
         transaction.execute(
-            "INSERT INTO hive_support_outbox VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO hive_support_outbox (submission_key, destination, frozen_submission, delivery, created_at, attachments_manifest) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 key.to_string(),
                 destination,
                 frozen,
                 serde_json::to_string(&delivery)?,
-                now
+                now,
+                manifest
             ],
         )?;
+        crate::support_outbox_attachments::insert(&transaction, key, attachments)?;
         transaction.commit()?;
         Ok(SupportOutboxEntry {
             submission_key: key,
             destination: destination.into(),
             frozen_submission: frozen,
+            attachments: attachments.to_vec(),
             delivery,
             created_at: now,
         })
@@ -488,18 +528,21 @@ fn read(
     key: Uuid,
 ) -> Result<Option<SupportOutboxEntry>, SupportOutboxError> {
     let row = connection.query_row(
-        "SELECT destination, frozen_submission, delivery, created_at FROM hive_support_outbox WHERE submission_key = ?1",
-        [key.to_string()], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?)),
+        "SELECT destination, frozen_submission, delivery, created_at, attachments_manifest FROM hive_support_outbox WHERE submission_key = ?1",
+        [key.to_string()], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?, row.get::<_, String>(4)?)),
     ).optional()?;
-    row.map(|(destination, frozen_submission, delivery, created_at)| {
-        Ok(SupportOutboxEntry {
-            submission_key: key,
-            destination,
-            frozen_submission,
-            delivery: serde_json::from_str(&delivery)?,
-            created_at,
-        })
-    })
+    row.map(
+        |(destination, frozen_submission, delivery, created_at, manifest)| {
+            Ok(SupportOutboxEntry {
+                submission_key: key,
+                destination,
+                frozen_submission,
+                attachments: crate::support_outbox_attachments::read(connection, key, &manifest)?,
+                delivery: serde_json::from_str(&delivery)?,
+                created_at,
+            })
+        },
+    )
     .transpose()
 }
 

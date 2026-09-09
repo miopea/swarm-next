@@ -2,6 +2,7 @@
 use std::time::Duration;
 
 use swarm_application::SupportDestination;
+use swarm_domain::{SupportAttachment, validate_support_attachment_set};
 use swarm_persistence::{SupportReceipt, SupportRefusal};
 
 const MAX_RECEIPT_BYTES: usize = 16 * 1024;
@@ -43,16 +44,40 @@ impl SupportTransport {
     /// Sends the exact frozen payload to the deployment-owned endpoint.
     /// The process owner bounds concurrency, claims first, and durably settles afterward.
     /// Dropping this future cancels the request; an interrupted claim stays uncertain.
+    #[cfg(test)]
     pub async fn send(&self, frozen_submission: &str) -> SupportTransportResult {
+        self.send_with_attachments(frozen_submission, &[]).await
+    }
+
+    /// Uses only saved immutable bytes. A failed multipart attempt never falls back
+    /// to text, and transport boundaries do not change the reviewed manifest.
+    pub async fn send_with_attachments(
+        &self,
+        frozen_submission: &str,
+        attachments: &[SupportAttachment],
+    ) -> SupportTransportResult {
         if frozen_submission.len() > MAX_SUBMISSION_BYTES {
             return SupportTransportResult::Uncertain;
         }
-        match tokio::time::timeout(
-            DEADLINE,
-            receive(&self.client, self.destination.endpoint(), frozen_submission),
-        )
-        .await
-        {
+        let result = if attachments.is_empty() {
+            tokio::time::timeout(
+                DEADLINE,
+                receive(&self.client, self.destination.endpoint(), frozen_submission),
+            )
+            .await
+        } else {
+            tokio::time::timeout(
+                DEADLINE,
+                receive_attachments(
+                    &self.client,
+                    &self.destination.attachment_endpoint(),
+                    frozen_submission,
+                    attachments,
+                ),
+            )
+            .await
+        };
+        match result {
             Ok(Some(result)) => result,
             _ => SupportTransportResult::Uncertain,
         }
@@ -72,13 +97,54 @@ async fn receive(
     endpoint: &str,
     frozen_submission: &str,
 ) -> Option<SupportTransportResult> {
-    let mut response = client
+    let response = client
         .post(endpoint)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .body(frozen_submission.to_owned())
         .send()
         .await
         .ok()?;
+    read_receipt(response).await
+}
+
+async fn receive_attachments(
+    client: &reqwest::Client,
+    endpoint: &str,
+    frozen: &str,
+    files: &[SupportAttachment],
+) -> Option<SupportTransportResult> {
+    if files.is_empty()
+        || frozen.len() > MAX_SUBMISSION_BYTES
+        || validate_support_attachment_set(files).is_err()
+    {
+        return None;
+    }
+    let submission: serde_json::Value = serde_json::from_str(frozen).ok()?;
+    let manifest = serde_json::to_vec(&serde_json::json!({
+        "submission": submission, "attachments": files.iter().map(SupportAttachment::metadata).collect::<Vec<_>>()
+    })).ok()?;
+    if manifest.len() > MAX_SUBMISSION_BYTES {
+        return None;
+    }
+    let mut form = reqwest::multipart::Form::new().part(
+        "manifest",
+        reqwest::multipart::Part::bytes(manifest)
+            .mime_str("application/json")
+            .ok()?,
+    );
+    for file in files {
+        form = form.part(
+            format!("file:{}", file.metadata().id),
+            reqwest::multipart::Part::bytes(file.bytes().to_vec())
+                .file_name(file.metadata().file_name.clone())
+                .mime_str(&file.metadata().media_type)
+                .ok()?,
+        );
+    }
+    read_receipt(client.post(endpoint).multipart(form).send().await.ok()?).await
+}
+
+async fn read_receipt(mut response: reqwest::Response) -> Option<SupportTransportResult> {
     let refusal = match response.status().as_u16() {
         409 => Some((SupportRefusal::Conflict, None)),
         429 => Some((
@@ -89,7 +155,7 @@ async fn receive(
                 .and_then(|value| value.to_str().ok())
                 .and_then(retry_seconds),
         )),
-        400 | 401 | 403 | 404 | 413 | 422 => Some((SupportRefusal::Rejected, None)),
+        400 | 401 | 403 | 404 | 413 | 415 | 422 => Some((SupportRefusal::Rejected, None)),
         _ => None,
     };
     if let Some((reason, retry_after_seconds)) = refusal {
@@ -141,6 +207,142 @@ mod tests {
 
     fn client() -> reqwest::Client {
         transport_client(Duration::from_secs(2)).unwrap()
+    }
+
+    fn attachment() -> SupportAttachment {
+        use sha2::{Digest, Sha256};
+        let bytes = b"Fictional screenshot notes";
+        SupportAttachment::validate(
+            swarm_domain::SupportAttachmentMetadata {
+                id: "00000000-0000-0000-0000-000000000001".parse().unwrap(),
+                file_name: "fictional.txt".into(),
+                media_type: "text/plain".into(),
+                size_bytes: bytes.len(),
+                sha256: format!("{:x}", Sha256::digest(bytes)),
+            },
+            bytes.to_vec(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn multipart_replay_preserves_manifest_and_file_bytes_without_credentials() {
+        use std::sync::{Arc, Mutex};
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let capture = seen.clone();
+        let router = Router::new().route(
+            "/",
+            post(
+                move |headers: axum::http::HeaderMap, mut multipart: axum::extract::Multipart| {
+                    let capture = capture.clone();
+                    async move {
+                        assert!(headers.get("authorization").is_none());
+                        assert!(headers.get("cookie").is_none());
+                        let first = multipart.next_field().await.unwrap().unwrap();
+                        assert_eq!(first.name(), Some("manifest"));
+                        assert_eq!(first.content_type(), Some("application/json"));
+                        let manifest: serde_json::Value =
+                            serde_json::from_slice(&first.bytes().await.unwrap()).unwrap();
+                        let file = multipart.next_field().await.unwrap().unwrap();
+                        assert_eq!(
+                            file.name(),
+                            Some("file:00000000-0000-0000-0000-000000000001")
+                        );
+                        assert_eq!(file.file_name(), Some("fictional.txt"));
+                        assert_eq!(file.content_type(), Some("text/plain"));
+                        let bytes = file.bytes().await.unwrap().to_vec();
+                        assert!(multipart.next_field().await.unwrap().is_none());
+                        capture.lock().unwrap().push((manifest, bytes));
+                        axum::Json(SupportReceipt {
+                            submission_key: "00000000-0000-0000-0000-00000000000a".into(),
+                            conversation_id: "00000000-0000-0000-0000-000000000014".into(),
+                            message_id: "00000000-0000-0000-0000-00000000001e".into(),
+                            created_at: 1,
+                            deduplicated: false,
+                        })
+                    }
+                },
+            ),
+        );
+        let (endpoint, task) = server(router).await;
+        let files = vec![attachment()];
+        let frozen = "{\"submission_key\":\"00000000-0000-0000-0000-00000000000a\",\"body\":\"Reviewed words\"}";
+        for _ in 0..2 {
+            assert!(matches!(
+                receive_attachments(&client(), &endpoint, frozen, &files).await,
+                Some(SupportTransportResult::Receipt(_))
+            ));
+        }
+        {
+            let records = seen.lock().unwrap();
+            assert_eq!(records.len(), 2);
+            assert_eq!(records[0], records[1]);
+            assert_eq!(
+                records[0].0["submission"],
+                serde_json::from_str::<serde_json::Value>(frozen).unwrap()
+            );
+            assert_eq!(
+                records[0].0["attachments"],
+                serde_json::json!([files[0].metadata()])
+            );
+            assert_eq!(records[0].1, files[0].bytes());
+        }
+        task.abort();
+        let _ = task.await;
+    }
+
+    #[tokio::test]
+    async fn multipart_failure_never_retries_as_text_or_follows_redirect() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        for status in [307, 409, 415, 503] {
+            let requests = Arc::new(AtomicUsize::new(0));
+            let capture = requests.clone();
+            let router = Router::new().route(
+                "/",
+                post(move |headers: axum::http::HeaderMap| {
+                    let capture = capture.clone();
+                    async move {
+                        assert!(
+                            headers["content-type"]
+                                .to_str()
+                                .unwrap()
+                                .starts_with("multipart/form-data;")
+                        );
+                        capture.fetch_add(1, Ordering::SeqCst);
+                        Response::builder()
+                            .status(status)
+                            .header("location", "/")
+                            .body(Body::empty())
+                            .unwrap()
+                    }
+                }),
+            );
+            let (endpoint, task) = server(router).await;
+            let result = receive_attachments(&client(), &endpoint, "{}", &[attachment()]).await;
+            assert_eq!(requests.load(Ordering::SeqCst), 1);
+            match status {
+                409 => assert!(matches!(
+                    result,
+                    Some(SupportTransportResult::Refused {
+                        reason: SupportRefusal::Conflict,
+                        ..
+                    })
+                )),
+                415 => assert!(matches!(
+                    result,
+                    Some(SupportTransportResult::Refused {
+                        reason: SupportRefusal::Rejected,
+                        ..
+                    })
+                )),
+                _ => assert!(result.is_none()),
+            }
+            task.abort();
+            let _ = task.await;
+        }
     }
 
     #[test]

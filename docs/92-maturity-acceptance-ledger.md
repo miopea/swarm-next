@@ -12,8 +12,8 @@ an old unchecked deployment note is not automatically current missing code.
 - Engine: retained PID 2271655, `cf83c980`; candidate `cf179f73` remains pending.
 - Latest App/API deployment preserved all 34 worker records and twelve exact
   running session/conversation pairs. Swarm Next and D365 remained asleep.
-- CI `34323789584` completed successfully. The subsequent commits are evidence
-  and a no-Hive image-reader fixture; they are not another runtime deployment.
+- CI `34323789584` completed successfully. Subsequent support backend changes
+  and the no-Hive image-reader fixture are not another runtime deployment.
 - No release is authorized. No customer-facing send is authorized by task closure.
 
 ## Requirement-by-requirement disposition
@@ -52,14 +52,16 @@ Admin's owner confirmed source revision `3a0f8bdbac5640776704af5c1922d679fab1d6c
 the public `/api/feedback/swarm-support/submissions` route is strict text-only JSON;
 unknown attachment fields are rejected. The retained-email attachment route is
 authenticated download-only and its reader token must never be placed in a Hive.
-An Admin-owned bounded attachment extension has been requested for contract review
-before implementation. No native upload, finalization or orphan-cleanup contract
-exists yet. The existing fictional request remains untouched and dispatch still
-requires restored Admin sign-in. This is a verified feature gap, not failed upload
-recovery or permission to guess another route.
+The Admin-owned bounded attachment contract has now been agreed in ADR 0080;
+Admin implementation is in progress, with migration/storage permission review
+required before deployment. Swarm schema 155 and its transport now preserve
+reviewed file bytes and identity through the outbox. The authenticated local
+attachment ingress and review UI remain unwired, and no live attachment route
+acceptance is claimed. The existing fictional request remains untouched and
+dispatch still requires restored Admin sign-in.
 
-1. Complete Admin-owned native attachment transport once its current contract is
-   confirmed. Reuse the existing source and idempotent report identity. Keep the
+1. Finish the local attachment ingress/review UI and paired Admin verification.
+   Reuse the existing source and idempotent report identity. Keep the
    existing linked-task fixture; Admin authentication is an external acceptance gate.
 2. Resolve the pending scoped operator-source linking proposal, then implement
    exact authored-source/decision reconciliation with no implicit authorization.
@@ -74,3 +76,27 @@ recovery or permission to guess another route.
 
 The program is active, not achieved. Its remaining scope cannot truthfully be
 reduced to a release checklist or a count of passing commits.
+
+## Native attachment backend checkpoint — September 9, not deployed
+
+Schema 155 adds immutable ordered metadata and private file BLOBs in the same
+transaction as the report. Existing text payload/destination/attempt identities
+remain unchanged. Files and their metadata count against the existing 16 MiB
+outbox cap; new work is refused at capacity without purging pending reports.
+The parent manifest prevents missing rows from becoming a silent text-only send.
+Confirmed local-copy removal cascades to its files, never central attachments.
+
+The application saves reviewed files before network effects. The sole sender
+uses the agreed multipart route for saved attachment reports, retains the same
+IDs, hashes, bytes and manifest order across attempts, refuses redirects, and
+never downgrades failures to text. Existing text-only routing is unchanged.
+Admin remains responsible for bounded raster decoding, private object storage,
+atomic publication and original-channel customer replies.
+
+Isolated checks passed: two domain validation tests; all 695 persistence tests
+before the additional independent-connection race test, which also passed;
+19 focused API tests including HTTP multipart replay and process-owner uncertain
+delivery recovery; four application boundary tests and strict all-target Clippy
+across domain, persistence, application and API. The optional paired Admin test was explicitly ignored without
+its fixture, not counted as acceptance. The local upload/review UI, populated
+browser tests and real paired Admin attachment journey remain required.

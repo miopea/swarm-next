@@ -65,6 +65,7 @@ pub use federation_tasks::MAX_FEDERATION_TASK_COMMAND_BATCH;
 mod feedback;
 mod support;
 mod support_outbox;
+mod support_outbox_attachments;
 pub use federation::{
     MAX_CONNECTION_CARD_LIFETIME_SECONDS, MAX_FEDERATION_INVITATION_LIFETIME_SECONDS,
     MIN_CONNECTION_CARD_LIFETIME_SECONDS, MIN_FEDERATION_INVITATION_LIFETIME_SECONDS,
@@ -269,7 +270,8 @@ const QUEEN_INCOMPLETE_ASSESSMENTS_SCHEMA_VERSION: i64 = 150;
 const QUEEN_REVIEW_FOCUS_SCHEMA_VERSION: i64 = 152;
 const SUPPORT_OUTBOX_SCHEMA_VERSION: i64 = 153;
 const QUEEN_RUN_HISTORY_SCHEMA_VERSION: i64 = 154;
-const CURRENT_SCHEMA_VERSION: i64 = QUEEN_RUN_HISTORY_SCHEMA_VERSION;
+const SUPPORT_OUTBOX_ATTACHMENTS_SCHEMA_VERSION: i64 = 155;
+const CURRENT_SCHEMA_VERSION: i64 = SUPPORT_OUTBOX_ATTACHMENTS_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -3972,6 +3974,9 @@ fn migrate_ops_intake_schema_steps(
     }
     if schema_version < QUEEN_RUN_HISTORY_SCHEMA_VERSION {
         queen_run_history::migrate(transaction)?;
+    }
+    if schema_version < SUPPORT_OUTBOX_ATTACHMENTS_SCHEMA_VERSION {
+        support_outbox_attachments::migrate(transaction)?;
     }
     Ok(())
 }
@@ -9213,6 +9218,12 @@ mod tests {
             table: "queen_run_history",
             artifact: "",
             undo_sql: "DROP TABLE queen_run_history",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "hive_support_outbox_attachments",
+            artifact: "",
+            undo_sql: "DROP TABLE hive_support_outbox_attachments; ALTER TABLE hive_support_outbox DROP COLUMN attachments_manifest",
             probe_sql: "",
         },
     ];

@@ -34,12 +34,20 @@ pub async fn run(
 }
 
 trait Transport: Send + Sync {
-    fn send(&self, body: &str) -> impl std::future::Future<Output = SupportTransportResult> + Send;
+    fn send(
+        &self,
+        body: &str,
+        attachments: &[swarm_domain::SupportAttachment],
+    ) -> impl std::future::Future<Output = SupportTransportResult> + Send;
 }
 
 impl Transport for SupportTransport {
-    async fn send(&self, body: &str) -> SupportTransportResult {
-        self.send(body).await
+    async fn send(
+        &self,
+        body: &str,
+        attachments: &[swarm_domain::SupportAttachment],
+    ) -> SupportTransportResult {
+        self.send_with_attachments(body, attachments).await
     }
 }
 
@@ -107,7 +115,10 @@ async fn run_owned(
                 .attempt_id
                 .ok_or(SupportSenderError::StorageTask)?;
             // Finish this bounded network attempt and its durable settlement even on shutdown.
-            let receipt = match transport.send(&entry.frozen_submission).await {
+            let receipt = match transport
+                .send(&entry.frozen_submission, &entry.attachments)
+                .await
+            {
                 SupportTransportResult::Receipt(receipt) => Some(receipt),
                 SupportTransportResult::Uncertain => None,
                 SupportTransportResult::Refused {
@@ -143,7 +154,15 @@ mod tests {
     }
 
     impl Transport for FictionalTransport {
-        async fn send(&self, body: &str) -> SupportTransportResult {
+        async fn send(
+            &self,
+            body: &str,
+            attachments: &[swarm_domain::SupportAttachment],
+        ) -> SupportTransportResult {
+            assert!(
+                attachments.is_empty(),
+                "text-only fixture cannot accept files"
+            );
             let input = serde_json::from_str(body).unwrap();
             let receipt = self.central.submit(input, 10).unwrap();
             // Shutdown arrives after remote acceptance but before local settlement.
@@ -217,7 +236,12 @@ mod tests {
     async fn shutdown_durably_retains_refusal_and_its_retry_deadline() {
         struct RefusingTransport(watch::Sender<bool>);
         impl Transport for RefusingTransport {
-            async fn send(&self, _body: &str) -> SupportTransportResult {
+            async fn send(
+                &self,
+                _body: &str,
+                attachments: &[swarm_domain::SupportAttachment],
+            ) -> SupportTransportResult {
+                assert!(attachments.is_empty());
                 self.0.send_replace(true);
                 SupportTransportResult::Refused {
                     reason: swarm_persistence::SupportRefusal::RateLimited,
@@ -281,5 +305,91 @@ mod tests {
                 .conversations
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn next_owner_sends_the_same_saved_files_after_an_uncertain_attempt() {
+        use sha2::{Digest, Sha256};
+        use std::sync::Mutex;
+        use swarm_domain::{SupportAttachment, SupportAttachmentMetadata};
+        type Seen = Arc<Mutex<Vec<(String, Vec<SupportAttachment>)>>>;
+        struct FileTransport {
+            seen: Seen,
+            stop: watch::Sender<bool>,
+            uncertain: bool,
+        }
+        impl Transport for FileTransport {
+            async fn send(
+                &self,
+                body: &str,
+                attachments: &[SupportAttachment],
+            ) -> SupportTransportResult {
+                self.seen
+                    .lock()
+                    .unwrap()
+                    .push((body.into(), attachments.to_vec()));
+                self.stop.send_replace(true);
+                if self.uncertain {
+                    return SupportTransportResult::Uncertain;
+                }
+                SupportTransportResult::Receipt(swarm_persistence::SupportReceipt {
+                    submission_key: "00000000-0000-0000-0000-000000000007".into(),
+                    conversation_id: "00000000-0000-0000-0000-000000000008".into(),
+                    message_id: "00000000-0000-0000-0000-000000000009".into(),
+                    created_at: 1,
+                    deduplicated: true,
+                })
+            }
+        }
+        let (hive, _, input) = fixture();
+        let bytes = b"reviewed fictional bytes";
+        let files = vec![
+            SupportAttachment::validate(
+                SupportAttachmentMetadata {
+                    id: "00000000-0000-0000-0000-000000000001".parse().unwrap(),
+                    file_name: "fictional.txt".into(),
+                    media_type: "text/plain".into(),
+                    size_bytes: bytes.len(),
+                    sha256: format!("{:x}", Sha256::digest(bytes)),
+                },
+                bytes.to_vec(),
+            )
+            .unwrap(),
+        ];
+        hive.submit_reviewed_with_attachments(input, &files, 1)
+            .unwrap();
+        let seen: Seen = Arc::default();
+        for uncertain in [true, false] {
+            let (stop, receiver) = watch::channel(false);
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                run_owned(
+                    hive.clone(),
+                    FileTransport {
+                        seen: seen.clone(),
+                        stop,
+                        uncertain,
+                    },
+                    receiver,
+                    Arc::new(Notify::new()),
+                ),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                hive.statuses().unwrap()[0].delivery.state,
+                if uncertain {
+                    SupportDeliveryState::Uncertain
+                } else {
+                    SupportDeliveryState::Confirmed
+                }
+            );
+        }
+        let records = seen.lock().unwrap();
+        assert_eq!(records.len(), 2);
+        assert!(records[0] == records[1]);
+        assert!(records[0].1 == files);
+        assert_eq!(hive.statuses().unwrap()[0].delivery.attempts, 2);
     }
 }

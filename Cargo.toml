@@ -20,7 +20,7 @@ license = "MIT"
 repository = "https://github.com/miopea/swarm-next"
 
 [workspace.dependencies]
-axum = { version = "0.8.9", features = ["ws"] }
+axum = { version = "0.8.9", features = ["ws", "multipart"] }
 futures-util = "0.3"
 base64ct = { version = "1.8", features = ["alloc"] }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
@@ -34,7 +34,7 @@ sha2 = "0.10"
 rusqlite = { version = "0.37", features = ["backup", "bundled", "hooks"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json", "stream"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json", "stream", "multipart"] }
 subtle = "2"
 thiserror = "2"
 tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
