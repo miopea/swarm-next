@@ -1166,6 +1166,7 @@ impl ServerHandler for AgentMcp {
                             crate::unix_timestamp(),
                             &recovery_observations,
                             observations_complete,
+                            Some(crate::build_version()),
                         )
                         .map_err(ApplicationError::Store)?;
                     // Say which of the reasons it was. The old text claimed no

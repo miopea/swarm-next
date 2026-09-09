@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { DevelopmentRuntime } from "../api";
 import type { DogfoodCollectionStatus } from "../runtime/useDogfoodCollection";
 import SavedBrowserEvidence from "./SavedBrowserEvidence";
+import QueenRunHistory from "./QueenRunHistory";
 import { BROWSER_METRICS, readBrowserPerformance } from "../runtime/browserPerformance";
 import { terminalWorkspace } from "../terminal/TerminalWorkspace";
 import { browserTimingLabels, browserTimingLimitations } from "./browserTimingLabels";
@@ -52,6 +53,7 @@ export default function DeveloperDogfoodWorkspace({ runtime, version, reachable,
     <small>Up to 24 pending hourly captures are saved in this tab on backgrounding or reload, where browser storage is available. Abrupt browser termination can still lose recent samples. Private Hive storage retains up to 4,096 captures for 90 days. No external publishing.</small>
     {collection?.persistence_unavailable && <p role="status">Pending history could not be restored or saved in this browser. Reload may lose unsaved evidence.</p>}
     {operatorToken && <SavedBrowserEvidence key={operatorToken} operatorToken={operatorToken} />}
+    {operatorToken && <QueenRunHistory key={`queen-${operatorToken}`} operatorToken={operatorToken} />}
     <h4>Terminal warm-pool experiment</h4>
     <p>Off by default. Retain the active terminal and four recent renderers; colder views reconnect to the engine’s newest snapshot. Workers keep running. This browser only; reload resets the experiment.</p>
     <p>Evaluate repeated cold restores against the 500 ms p95 target before adopting this policy. These counts do not prove restore speed or resource savings.</p>

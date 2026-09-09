@@ -989,7 +989,8 @@ mod tests {
                     swarm_domain::QueenAutomationOutcome::NoAction,
                     NOW,
                     &[facts],
-                    true
+                    true,
+                    None
                 )
                 .unwrap(),
             crate::QueenAutomationFinish::Closed(swarm_domain::QueenAutomationOutcome::NoAction)

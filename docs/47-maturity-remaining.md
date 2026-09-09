@@ -2,6 +2,27 @@
 
 ## Current checkpoint — September 8, after Admin intake acceptance
 
+### Bounded Queen run history implementation, September 9 (not yet deployed)
+
+ADR 0091 adds a private, metadata-only finish history to replace reliance on the
+single overwritten live-run row when comparing Queen delivery and outcomes.
+Schema 154 records requested versus accepted outcomes atomically with exact-run
+finish, retains at most 4,096 rows for 30 days and exposes at most 100 recent rows
+with the retained count. Developer Dogfood groups those observations by build at
+finish. Missing timing remains unavailable; explicit finishes are not task
+productivity and exclude unfinished, abandoned and pre-feature runs.
+
+Isolated Linux validation has passed two domain tests, four history persistence
+tests (including rollback/retry, duplicate/stale finish, retention and migration),
+three authenticated API/error tests, and strict affected-crate all-target/all-feature
+Clippy. Eleven focused web tests, TypeScript and the production web build pass.
+The full persistence suite passed all 689 tests, including the immediately prior
+schema upgrade. Deployment and rendered/live normal Queen-finish acceptance
+remain pending. The shared-domain addition changes the engine fingerprint, so
+the existing loaded-session compatibility guard must defer engine replacement;
+this delivery requests only App/API reload. This does not close DOG-01 or the native
+direct-answer correlation and engine-admission gaps.
+
 ### Calendar hold and stopped-worker queue evidence, September 9
 
 App/API `a501bc9b` is deployed with all twelve exact sessions preserved and
@@ -25,8 +46,18 @@ shows the observed stopped or queued/in-progress wake state for worker-owned Rea
 tasks. Unknown roster data is not called stopped, running recovery clears the
 message, and operator-owned work retains its decision explanation. Delivery
 uncertainty remains visible. This neither infers why a worker stopped nor grants
-permission to wake one. All 55 queue tests and the frontend type check pass;
-deployment and rendered acceptance of this small projection remain pending.
+permission to wake one. All 55 queue tests, the frontend type check and production
+build pass. Code commit `0219183e` passed all four CI jobs (`34316650109`).
+Including the calendar evidence, `ea71bb3d` is now live as
+`1.6.0-dev-ea71bb3dce18-20260909060729-2328532`; the reload service finished
+successfully and health reports no degraded subsystems. All 34 worker lifecycle
+records and all twelve running session/conversation pairs exactly match the
+pre-update snapshot; engine PID 2271655 is unchanged. All twenty-two sleepers
+remain asleep. Edge verified the two Ready Swarm Next rows now explain that their
+assigned worker is not running, and the completed calendar fixture is absent
+from waiting work. Viewport and scroll width both measured 1465px. The dedicated
+tab was closed. CI for the documentation-only successor `ea71bb3d` was still
+running at this checkpoint; its runtime code matches the fully green predecessor.
 
 ### Autonomous dependency journey accepted, September 9
 

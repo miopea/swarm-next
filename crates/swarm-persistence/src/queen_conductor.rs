@@ -660,7 +660,7 @@ impl TaskStore {
         outcome: QueenAutomationOutcome,
         now: i64,
     ) -> Result<QueenAutomationFinish, TaskStoreError> {
-        self.finish_queen_automation_run_with_recovery(run_id, outcome, now, &[], true)
+        self.finish_queen_automation_run_with_recovery(run_id, outcome, now, &[], true, None)
     }
 
     /// Finish using fresh recovery observations; absent facts cannot cover stalls.
@@ -674,7 +674,9 @@ impl TaskStore {
         now: i64,
         observations: &[swarm_domain::QueenRecoveryFacts],
         observations_complete: bool,
+        finished_on_build: Option<&str>,
     ) -> Result<QueenAutomationFinish, TaskStoreError> {
+        let requested_outcome = outcome;
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         // "I need the operator" is a claim about something they can act on, so
@@ -755,6 +757,12 @@ impl TaskStore {
             params![run_id, outcome.to_string(), now],
         )? == 1;
         if changed {
+            crate::queen_run_history::record_finish(
+                &transaction,
+                requested_outcome,
+                finished_on_build,
+                now,
+            )?;
             insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
             transaction.commit()?;
             return Ok(QueenAutomationFinish::Closed(outcome));
@@ -1202,7 +1210,7 @@ fn waiting_reason(
     }))
 }
 
-fn parse_outcome(value: &str) -> Result<QueenAutomationOutcome, rusqlite::Error> {
+pub(super) fn parse_outcome(value: &str) -> Result<QueenAutomationOutcome, rusqlite::Error> {
     match value {
         "completed" => Ok(QueenAutomationOutcome::Completed),
         "needs_operator" => Ok(QueenAutomationOutcome::NeedsOperator),

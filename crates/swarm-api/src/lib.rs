@@ -40,6 +40,7 @@ mod presence;
 mod presentation;
 mod private_store;
 mod provider_activity;
+mod queen_run_history;
 mod release;
 mod reload_backup;
 mod runtime;
@@ -3885,6 +3886,10 @@ fn api_router(state: AppState) -> Router {
             get(dogfood_evidence::list)
                 .post(dogfood_evidence::record)
                 .layer(DefaultBodyLimit::max(4_096)),
+        )
+        .route(
+            "/api/v1/runtime/queen-history",
+            get(queen_run_history::list),
         )
         .route(
             "/api/v1/feedback/reports",
