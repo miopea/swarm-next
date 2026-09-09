@@ -7,8 +7,11 @@ The active execution contract is at the top of
 are in [93](93-ux-first-remaining-plan.md). Read those before the historical entries
 below. Current acceptance evidence belongs in [92](92-maturity-acceptance-ledger.md).
 
-Next: **UI-1 Needs You / Queues / task details**, then UI-2 terminal/mobile,
-UI-3 Settings/runtime and UI-4 whole-product finish. Finish, browser-verify,
+Next: **remaining UI-2 desktop reload / worker-switch stabilization**. UI-1
+presentation and UI-2 controls have been deployed and CI-verified; `f482b460`
+contains the next runtime placement fix, whose deployment/CI must be verified.
+UI-1 clarification and direct-answer reconciliation are still open. Then finish
+remaining UI-3 Settings/runtime and UI-4 whole-product finish. Browser-verify,
 commit and safely deploy each coherent package. Backend/performance requirements
 remain open in the handoff; do not resume deep backend work by following an old
 checkpoint. No BFG Admin worker messages without fresh approval. No releases.

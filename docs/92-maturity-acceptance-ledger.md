@@ -15,7 +15,7 @@ is historical where superseded by the verified deployment section.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-221e66cdec78-20260909201955-3383452`.
+- App/API: `1.6.0-dev-f482b460b146-20260909203810-3396484`.
 - Engine: current PID 2947820, started September 9 at 12:37:54 Eastern. The
   earlier continuity checkpoint retained PID 2271655; this later restart's
   initiator has not been established by the current read-only check.
@@ -28,6 +28,19 @@ is historical where superseded by the verified deployment section.
 - No release is authorized. No customer-facing send is authorized by task closure.
 
 ## Requirement-by-requirement disposition
+
+### September 9 runtime safeguard placement deployment
+
+`f482b460` is live and healthy. `/tmp/swarm-ui3-deploy.mlsUrp` records identical
+before/after identity projections for all 34 workers, twelve running session/
+provider identities, and unchanged engine PID 2947820/start time. Coordinator
+start admission is currently allowed with no standing holds; no pause notice is
+expected in that recovered state. Full-App fictional desktop/phone light/dark
+checks verified the pending safeguard remains visible in runtime without inflating
+Needs You, and opens diagnostics correctly. Seventy-two focused tests, TypeScript
+and the production build pass. Current full CI remains a separate pending gate.
+The last completed full CI is `34400256735` for `221e66cd`.
+No worker engine update, release, real task decision or BFG message was sent.
 
 ### September 9 terminal controls deployment
 

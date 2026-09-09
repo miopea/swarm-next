@@ -6,9 +6,13 @@ Read this section and [the UX-first remaining plan](93-ux-first-remaining-plan.m
 first after any compaction or restart. They supersede older sequencing and
 coordination instructions below, not the approved requirements.
 
-- **Next package: UI-1 — Needs You, Queues and linked task details.** Then UI-2
-  terminal/mobile controls, UI-3 Settings/runtime/recovery, and UI-4 integrated
-  visual finish. Complete packages rather than accumulating partial foundations.
+- **Resume at the remaining UI-2 desktop reload/worker-switch stabilization.**
+  UI-1 presentation (`eb931114`) and UI-2 controls (`221e66cd`) are deployed with
+  passing CI. UI-3 runtime safeguard placement is `f482b460`; verify its activation
+  and current CI in [93](93-ux-first-remaining-plan.md) before claiming it live.
+  Do not redo those implemented batches. Then finish remaining UI-3 Settings/
+  runtime/recovery and UI-4 integrated visual finish. UI-1 clarification and
+  direct-worker decision reconciliation remain open, not solved by presentation.
 - Inspect the rendered experience in a separate Edge tab at
   `https://swarm.bfgsolutions.net`. Preserve the cute bee identity and ordinary
   one-to-five-worker experience. Use fictional fixtures for intrusive tests.

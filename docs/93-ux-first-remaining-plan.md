@@ -2,6 +2,17 @@
 
 Operator-directed priority change: September 9, 2026.
 
+Resume checkpoint: UI-1 presentation `eb931114` and UI-2 controls `221e66cd`
+are deployed with passing full CI. Runtime safeguard placement is `f482b460`;
+its normal dev reload completed with evidence in `/tmp/swarm-ui3-deploy.mlsUrp`.
+It is live as `1.6.0-dev-f482b460b146-20260909203810-3396484`, healthy, with
+twelve exact running identities and engine PID/start time preserved. Its full CI
+is still a separate pending gate; `221e66cd` passed full CI. Next substantive
+UI work is the remaining desktop terminal reload/worker-switch stabilization,
+then remaining Settings and the integrated finish pass. Do not repeat completed
+card/control refinements or restart native-provider experiments. The direct-worker
+decision reconciliation and clarification gap remains explicit and uncompleted.
+
 This changes delivery order, not the requirements in [45](45-daily-driver-maturity-plan.md)
 or the evidence standard in [92](92-maturity-acceptance-ledger.md). The overall
 maturity goal remains open. A user-facing release candidate and completion of
@@ -221,8 +232,9 @@ Seventy-two focused tests pass, including full-App queue/runtime placement and
 badge consistency, explicit failure/recovery, and unknown-kind preservation.
 TypeScript passes. Edge full-App fictional desktop and 390px phone journeys show
 one decision plus a separate runtime start pause, expandable reasons, and correct
-diagnostics navigation. Current build/deployment evidence remains required for
-this runtime change; this does not close the entire Settings/finish package.
+diagnostics navigation. The production build passes. This runtime change is now
+deployed as recorded at the top of this plan; its full CI remains pending. This
+does not close the entire Settings/finish package.
 
 1. Use the runtime area as the compact home for system state. Avoid duplicate
    warnings and conflicting attention counts; disappearance after recovery needs
