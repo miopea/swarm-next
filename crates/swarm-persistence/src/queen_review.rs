@@ -441,13 +441,23 @@ pub(super) fn task_review_evidence(
     connection: &Connection,
     task_id: TaskId,
 ) -> Result<QueenReviewObligation, TaskStoreError> {
-    let task = connection.query_row(
+    let mut task = connection.query_row(
         &format!("{} WHERE t.id = ?1 AND t.removed_at IS NULL AND t.hive_id = (SELECT hive_id FROM local_hive_identity WHERE singleton = 1)", TaskStore::TASK_PROJECTION),
         [task_id.to_string()],
         crate::task_from_row,
     ).optional()?.ok_or(TaskStoreError::NotFound)?;
     let mut digest = Sha256::new();
-    digest.update(b"swarm-queen-review-evidence-v1");
+    if task.state == swarm_domain::TaskState::Blocked {
+        // A retained worker's new PTY is not new evidence about its blocker.
+        // Keep durable ownership, every task fact and all decision/message/
+        // activity sources below. Recovery receipts retain their own exact
+        // session fence; this normalization cannot cover worker execution.
+        task.assigned_session_id = None;
+        task.updated_at = 0;
+        digest.update(b"swarm-queen-blocked-review-evidence-v2");
+    } else {
+        digest.update(b"swarm-queen-review-evidence-v1");
+    }
     let projection = serde_json::to_vec(&task)
         .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
     digest.update((projection.len() as u64).to_be_bytes());
@@ -1380,6 +1390,95 @@ mod tests {
         assert_eq!(before, store.queen_task_review_evidence(task.id).unwrap());
         store
             .append_task_correction(task.id, "New evidence", &TaskActivityActor::operator())
+            .unwrap();
+        assert_ne!(before, store.queen_task_review_evidence(task.id).unwrap());
+    }
+
+    #[test]
+    fn blocked_review_survives_session_replacement_but_not_changed_evidence() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Fixture",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace/demo",
+                false,
+                0,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let mut input = external_wait(&store);
+        store
+            .assign_task_to_worker(input.task_id, worker.id)
+            .unwrap();
+        input.expected_revision = store
+            .queen_task_review_evidence(input.task_id)
+            .unwrap()
+            .evidence_revision;
+        store
+            .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 101)
+            .unwrap();
+        let before = store.queen_task_review_evidence(input.task_id).unwrap();
+        store.release_session_assignments(session).unwrap();
+        store.release_worker_session(session).unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET updated_at=updated_at+1 WHERE id=?1",
+                [input.task_id.to_string()],
+            )
+            .unwrap();
+        assert_eq!(
+            before,
+            store.queen_task_review_evidence(input.task_id).unwrap()
+        );
+        store
+            .bind_worker_session(worker.id, WorkerSessionId::new())
+            .unwrap();
+        assert_eq!(
+            before,
+            store.queen_task_review_evidence(input.task_id).unwrap()
+        );
+        store
+            .append_task_correction(
+                input.task_id,
+                "The external gate changed",
+                &TaskActivityActor::operator(),
+            )
+            .unwrap();
+        assert_ne!(
+            before,
+            store.queen_task_review_evidence(input.task_id).unwrap()
+        );
+    }
+
+    #[test]
+    fn active_review_evidence_remains_session_bound() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Fixture",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace/demo",
+                false,
+                0,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store
+            .create_task("Active fixture", "/workspace/demo")
+            .unwrap();
+        store.assign_task_to_worker(task.id, worker.id).unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        let before = store.queen_task_review_evidence(task.id).unwrap();
+        store.release_session_assignments(session).unwrap();
+        store.release_worker_session(session).unwrap();
+        store
+            .bind_worker_session(worker.id, WorkerSessionId::new())
             .unwrap();
         assert_ne!(before, store.queen_task_review_evidence(task.id).unwrap());
     }

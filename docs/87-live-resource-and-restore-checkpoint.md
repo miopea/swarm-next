@@ -160,3 +160,27 @@ the same demo conversation; its 68,612-byte snapshot applied in 32 ms, with no
 follow-up sizing attempt recorded. One later browser-control navigation timed
 out and succeeded on retry. These observations do not close desktop jumping,
 browser sluggishness, mobile recovery, PERF-02, or long-duration acceptance.
+
+### Post-deployment observation interrupted, September 8, 21:25 Eastern
+
+The one-hour observation of deployed `1bbc4cbb` did not complete. Its existing
+observer terminated with `phase=session_continuity exit=22 completed_samples=35`
+after an HTTP 503. Last sample: 2026-09-09T01:25:08Z, elapsed 1,028 seconds,
+API RSS 112,889,856 bytes, anonymous RSS 85,442,560 bytes, 13 running sessions
+and all 13 original sessions retained at that sample. Evidence remains in
+`/tmp/swarm-arena-deployed-soak.H4jTtS`; do not report a one-hour soak pass.
+
+Systemd records `swarm-host-reconcile.service` starting at 21:25:35 Eastern,
+then graceful engine replacement at 21:25:36. Engine PID changed from 1547164
+to 1996041, while API PID remained 1982503. A subsequent authenticated metadata
+check found engine build `d1780215d3b8b0a335e9379a31dbec3f40be971dfb5778325e68205f57a9310b`,
+13 running sessions, zero unreadable sessions, and entirely new session IDs.
+Worker return is observed; correct provider-conversation resumption is not
+verified by these metadata checks. No real worker transcript was inspected.
+
+This inspection did not request engine maintenance. The service name alone does
+not distinguish an operator request from timer reconciliation. Operator
+confirmation was subsequently received: the operator manually applied the update.
+This was deliberate maintenance, not an unexplained automatic engine replacement.
+The interrupted observation must not be silently restarted or combined across
+engine replacement into a continuity or equivalent-workload acceptance result.

@@ -5,6 +5,23 @@ live acceptance remain in progress.
 
 ## Outcome
 
+### Blocker evidence survives worker session replacement (September 8)
+
+Manual engine maintenance changed session assignments on unchanged blocked tasks
+and invalidated their saved judgments. For Blocked tasks only, the task-review
+fingerprint excludes the ephemeral assigned session and bookkeeping updated_at.
+It retains durable worker ownership, task contents/state/order, dependencies,
+decision contents, messages/delivery and task activity. An actual correction or
+owner change still invalidates it. External conditions still need a fresh check
+each run; this does not mark work complete or authorize resumption.
+
+Active/Ready/Review evidence and separate worker-recovery receipts retain their
+session fences. The normalized blocked fingerprint has a new version marker;
+existing blocked receipts require one fresh review after deployment rather than
+being silently relabeled as valid. Subsequent session-only changes preserve the
+new evidence revision. Verify release/rebind, timestamp-only bookkeeping, real
+corrections, dependency/decision changes and active-session invalidation.
+
 ### September 8: disappearing focus cursor and unchanged order
 
 A checked operator deferral may leave the focus candidate set. The persisted

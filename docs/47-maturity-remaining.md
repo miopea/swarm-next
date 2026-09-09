@@ -2,6 +2,22 @@
 
 ## Current checkpoint — September 8, after Admin intake acceptance
 
+### Session-replacement review churn, September 8 late evening
+
+The operator confirmed manually applying the engine update at 21:25 Eastern.
+Thirteen workers returned with new terminal-session identities. The one-hour
+memory observation ended on a 503 after 35 samples and is incomplete, not passed
+(details in `87-live-resource-and-restore-checkpoint.md`).
+
+The coordinator then exposed unchanged blocked work as `evidence_changed`.
+A new persistence regression reproduced session release/rebind invalidating its
+saved task-review fingerprint. The candidate normalizes only Blocked tasks'
+ephemeral assigned-session ID and bookkeeping timestamp; durable ownership and
+all semantic evidence remain fenced. Active and worker-recovery session fences
+remain intact. The regression failed before the change; all 26 review tests and
+strict persistence Clippy pass after it. Deployment and live review behavior
+remain unverified. This is not full Queen-backlog or rolling-update acceptance.
+
 ### Deployment and reproduced dark-mode defect, September 8 at 20:07 Eastern
 
 Main `999b5f1c` is healthy as
