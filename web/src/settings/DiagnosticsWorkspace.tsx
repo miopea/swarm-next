@@ -162,8 +162,8 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
     { label: "API memory", value: apiMemory, healthy: healthyPressure(runtime.resources?.api.pressure), className: resourceClass(runtime.resources?.api.pressure) },
     { label: "Terminal host service", value: hostMemory, healthy: true },
     { label: "Loaded worker runtimes", value: workerMemory, healthy: healthyPressure(workerPressure), className: resourceClass(workerPressure) },
-    { label: "Machine memory", value: machineMemoryLabel(machine), healthy: healthyPressure(machine?.pressure), className: resourceClass(machine?.pressure) },
-    { label: "Memory stall", value: pressureLabel(machine?.memory_pressure_avg10), healthy: healthyPressure(machine?.pressure), className: resourceClass(machine?.pressure) },
+    { label: "Machine memory", value: machineMemoryLabel(machine), healthy: healthyPressure(machine?.memory_pressure), className: resourceClass(machine?.memory_pressure) },
+    { label: "Memory stall", value: `${pressureLabel(machine?.memory_pressure_avg10)}${machine?.memory_stall_pressure == null || machine.memory_stall_pressure === "unavailable" ? " · classification unavailable" : ""}`, healthy: healthyPressure(machine?.memory_stall_pressure), className: resourceClass(machine?.memory_stall_pressure) },
     { label: "Compute load", value: computeLoadLabel(machine), healthy: healthyPressure(computePressure(machine)), className: resourceClass(computePressure(machine)) },
     ...(runtime.resources?.storage?.map((storage) => ({
       label: { system: "System storage", temporary: "Temporary storage", database: "Hive storage" }[storage.scope],
@@ -320,11 +320,11 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
   );
 }
 export function resourceLabel(resource: RuntimeResources["api"] | undefined) {
-  if (!resource || resource.resident_memory_bytes === null) return "Unavailable";
+  if (!resource || resource.resident_memory_bytes == null) return "Unavailable";
   const memory = formatBytes(resource.resident_memory_bytes);
   if (resource.pressure === "critical") return `Critical · ${memory}`;
   if (resource.pressure === "advisory") return `Watch · ${memory}`;
-  return `Normal · ${memory}`;
+  return `${resource.pressure === "normal" ? "Normal" : "Classification unavailable"} · ${memory}`;
 }
 
 function resourceClass(pressure: RuntimeResources["api"]["pressure"] | undefined) {
@@ -348,7 +348,7 @@ function workerTreeLabel(resource: RuntimeResources["api"] | undefined, sessions
   if (resource?.process_tree_resident_memory_bytes == null) return "Unavailable";
   const workerBytes = Math.max(0, resource.process_tree_resident_memory_bytes - (resource.resident_memory_bytes ?? 0));
   const pressure = workerTreePressure(resource);
-  const label = pressure === "critical" ? "Critical" : pressure === "advisory" ? "Watch" : "Normal";
+  const label = pressure === "critical" ? "Critical" : pressure === "advisory" ? "Watch" : pressure === "normal" ? "Normal" : "Classification unavailable";
   return `${label} · ${formatBytes(workerBytes)} · ${sessions} loaded`;
 }
 
@@ -378,7 +378,7 @@ export function workerTreePressure(resource: RuntimeResources["api"] | undefined
 function machineMemoryLabel(machine: RuntimeResources["machine"] | undefined) {
   if (machine?.memory_total_bytes == null || machine.memory_available_bytes == null || machine.memory_used_percent == null) return "Unavailable";
   const used = machine.memory_total_bytes - machine.memory_available_bytes;
-  return `${formatBytes(used)} / ${formatBytes(machine.memory_total_bytes)} · ${machine.memory_used_percent.toFixed(0)}% used`;
+  return `${formatBytes(used)} / ${formatBytes(machine.memory_total_bytes)} · ${machine.memory_used_percent.toFixed(0)}% used${machine.memory_pressure == null || machine.memory_pressure === "unavailable" ? " · classification unavailable" : ""}`;
 }
 
 function pressureLabel(value: number | null | undefined) {
@@ -434,10 +434,10 @@ function machineHeadline(machine: MachineResources | undefined): string {
   if (!machine || machine.memory_total_bytes == null) return "Machine capacity unavailable";
   const cpus = machine.logical_cpus ? `${machine.logical_cpus} CPU${machine.logical_cpus === 1 ? "" : "s"}` : "unknown CPUs";
   const verdict = machine.pressure === "critical"
-    ? "under memory pressure"
+    ? "under resource pressure"
     : machine.pressure === "advisory"
-      ? "starting to feel memory pressure"
-      : machine.pressure === "normal" ? "not under memory pressure" : "memory pressure unavailable";
+      ? "resource pressure observed"
+      : machine.pressure === "normal" ? "no resource pressure reported" : "resource pressure unavailable";
   return `${formatBytes(machine.memory_total_bytes)} of memory · ${cpus} · ${verdict}`;
 }
 

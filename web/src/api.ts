@@ -592,6 +592,9 @@ export type MachineResources = {
   memory_pressure_avg10: number | null;
   cpu_pressure_avg10: number | null;
   io_pressure_avg10: number | null;
+  /** Separate server-owned verdicts; absent on older runtimes, never inferred from CPU pressure. */
+  memory_pressure?: ResourcePressure;
+  memory_stall_pressure?: ResourcePressure;
   pressure: ResourcePressure;
 };
 export type HistoryDiagnostics = {

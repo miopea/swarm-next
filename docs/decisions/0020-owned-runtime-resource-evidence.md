@@ -42,6 +42,25 @@ and cannot be inferred from the server.
 
 ## Consequences
 
+### Separate memory from combined machine pressure (September 9, 2026)
+
+The runtime machine verdict combines memory and compute evidence for automatic
+start admission. It is not a memory verdict. Memory and memory-stall verdicts are
+now separately classified in the domain using the established 85/95-percent use
+and 2/10-percent memory-PSI thresholds. The resource response exposes both; older
+responses lacking them remain unclassified in the UI. The memory footprint of
+the API/worker tree is judged against memory pressure, never CPU-only contention.
+The combined machine guard still defers automatic starts under compute pressure.
+No worker is stopped, no new sampler is introduced, and CPU admission thresholds
+are unchanged. The headline names resource pressure; each row carries its own
+evidence rather than inheriting the worst machine color.
+
+This repairs live evidence from an eight-CPU Hive: CPU wait and load were high
+while memory use was about 43 percent and memory PSI effectively zero, yet memory
+rows and the worker footprint were marked pressured. Both UI and API regressions
+failed before correction. Tests cover independent classifications, invalid and
+missing evidence, CPU-only admission deferral, older responses and quiet recovery.
+
 - Diagnostics can identify API and terminal-host memory pressure separately.
 - A normal API update can expose API memory immediately while honestly showing
   an older sidecar as unavailable until a zero-session reconciliation.

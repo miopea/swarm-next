@@ -216,7 +216,7 @@ test("states the machine's size and verdict above the rows it makes sense of", a
   const headline = await screen.findByText(/of memory ·/);
   expect(headline).toHaveTextContent("32.0 GiB of memory");
   expect(headline).toHaveTextContent("8 CPUs");
-  expect(headline).toHaveTextContent("not under memory pressure");
+  expect(headline).toHaveTextContent("no resource pressure reported");
   // A machine that is not stalling must not have its layers called critical.
   expect(headline.className).toContain("normal");
 });
@@ -296,6 +296,47 @@ test("maintenance recovery details distinguish a missing reply from a confirmed 
   expect(screen.getByText(/missing start reply does not prove the process failed/)).toHaveTextContent("Startup reply was lost.");
   expect(screen.getByText(/Correct the reported cause/)).toHaveTextContent("Provider executable is unavailable.");
   expect(screen.queryByRole("button", { name: /wake|retry.*worker/i })).not.toBeInTheDocument();
+});
+
+test.each(["reported", "missing"] as const)("CPU-only contention does not accuse memory and clears when load recovers (%s memory verdicts)", async (verdicts) => {
+  const machine = {
+    memory_total_bytes: 32 * 1024 ** 3, memory_available_bytes: 18 * 1024 ** 3,
+    memory_used_percent: 43.75, memory_pressure_avg10: 0,
+    memory_pressure: verdicts === "reported" ? "normal" : undefined,
+    memory_stall_pressure: verdicts === "reported" ? "normal" : undefined,
+    cpu_pressure_avg10: 65, load_average: [18, 8, 4], logical_cpus: 8,
+    io_pressure_avg10: 0, pressure: "critical",
+  };
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).includes("runtime/resources")) return new Response(JSON.stringify({
+      sampled_at: Date.now() / 1000, machine,
+      policy: { mode: "observe_only", advisory_percent: 15, critical_percent: 25 },
+      api: { resident_memory_bytes: 100, pressure: verdicts === "reported" ? "normal" : "unavailable" },
+      terminal_host: { resident_memory_bytes: 100, process_tree_resident_memory_bytes: 7 * 1024 ** 3, pressure: verdicts === "reported" ? "normal" : "unavailable" },
+    }));
+    return new Response("unavailable", { status: 503 });
+  }));
+  render(<DiagnosticsWorkspace feedbackRevision={0} operatorToken="fixture" health={undefined} hiveIdentity={undefined} liveFeedState="connected" recentEvents={[]} sessions={[]} workers={[]} jiraReadiness={undefined} jiraUnavailable={true} />);
+  const headline = await screen.findByText(/of memory ·/);
+  expect(headline).not.toHaveTextContent("under memory pressure");
+  expect(screen.getByText("Compute load")).toBeInTheDocument();
+  expect(screen.queryByText("Machine memory")).not.toBeInTheDocument();
+  expect(screen.queryByText("Memory stall")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /Show all \d+ checks/ }));
+  expect(screen.getByText("Machine memory").nextElementSibling).toHaveClass(verdicts === "reported" ? "normal" : "unavailable");
+  expect(screen.getByText("Memory stall").nextElementSibling).toHaveClass(verdicts === "reported" ? "normal" : "unavailable");
+  if (verdicts === "missing") {
+    expect(screen.getByText("Machine memory").nextElementSibling).toHaveTextContent("classification unavailable");
+    expect(screen.getByText("Memory stall").nextElementSibling).toHaveTextContent("classification unavailable");
+    expect(screen.getByText("API memory").nextElementSibling).toHaveTextContent("Classification unavailable");
+    expect(screen.getByText("Loaded worker runtimes").nextElementSibling).toHaveTextContent("Classification unavailable");
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Show only what needs attention" }));
+  machine.cpu_pressure_avg10 = 0;
+  machine.load_average = [1, 1, 1];
+  machine.pressure = "normal";
+  fireEvent.click(screen.getByRole("button", { name: "Refresh now" }));
+  await waitFor(() => expect(screen.queryByText("Compute load")).not.toBeInTheDocument());
 });
 
 test("a subsystem disabled at startup leads the page instead of sitting unnoticed", () => {

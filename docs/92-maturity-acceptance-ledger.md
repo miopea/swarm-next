@@ -20,6 +20,32 @@ an old unchecked deployment note is not automatically current missing code.
 
 ## Requirement-by-requirement disposition
 
+### CPU contention is not memory pressure (local, not deployed)
+
+Live Edge diagnostics on September 9 around 13:43 Eastern reported about 65 percent
+CPU wait and load 17.91 on eight CPUs, but also called 43-percent memory use and
+near-zero memory stall pressured. A subsequent read-only Linux snapshot measured
+CPU PSI avg10 34.52, memory PSI zero and load 14.53. Several short-lived Vitest
+processes led the process CPU listing; these are point/lifetime process counters,
+not a complete causal profile or browser CPU measurement. No process was stopped.
+The live warning later cleared without intervention.
+
+The API had reused combined CPU/memory pressure to judge memory footprints; the
+UI also reused it for memory rows and the headline. Both failing-before regressions
+now pass. Memory classification is domain-owned and independently exposed, with
+unchanged thresholds. CPU-only pressure still defers automatic starts; older
+responses do not invent a memory verdict. Quiet recovery is covered in the UI.
+
+Verification: all 146 domain tests; API pressure (6) and runtime (45) filtered
+runs, with overlap; strict all-target/all-feature domain/API Clippy; 27 related
+web tests; TypeScript and production build pass. The existing terminal-chunk
+warning remains. Logs are `cpu-memory-*.log` under
+`/tmp/swarm-maintenance-admission.BsOnHB`. Separate Edge inspection of the full
+fictional App with `machinePressure=cpu-only` verified the compute row leads while
+memory remains neutral in the expanded checks. No native-device acceptance,
+performance improvement or deployment is claimed. PERF-01/02 and broader DIAG-01
+acceptance remain open. No BFG Admin communication or release occurred.
+
 ### Verified package rollback (local, not deployed)
 
 Failed updates no longer claim successful rollback after ignored service, link,

@@ -20,6 +20,7 @@ import { demoDecision, demoTasks, demoWorkers } from "./productFixtures";
 const now = Math.floor(Date.now() / 1000);
 
 export function hiveFixture(path: string): unknown | undefined {
+  const cpuOnlyPressure = new URLSearchParams(window.location.search).get("machinePressure") === "cpu-only";
   if (path === "/api/v1/runtime/queen-history") return {
     retention_days: 30, max_retained: 4096, retained_count: 0, records: [],
     review_returns: { retention_days: 30, max_retained: 4096, retained_count: 200, records: [
@@ -112,12 +113,14 @@ export function hiveFixture(path: string): unknown | undefined {
           swap_total_bytes: 8 * 1024 ** 3,
           swap_used_bytes: 0,
           swap_used_percent: 0,
-          load_average: [0.9, 0.8, 0.7],
+          load_average: cpuOnlyPressure ? [18, 8, 4] : [0.9, 0.8, 0.7],
           logical_cpus: 8,
           memory_pressure_avg10: 0,
-          cpu_pressure_avg10: 0.4,
+          cpu_pressure_avg10: cpuOnlyPressure ? 65 : 0.4,
           io_pressure_avg10: 0,
-          pressure: "normal",
+          memory_pressure: "normal",
+          memory_stall_pressure: "normal",
+          pressure: cpuOnlyPressure ? "critical" : "normal",
         },
       };
     default:

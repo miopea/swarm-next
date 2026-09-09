@@ -7,6 +7,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
+pub(super) use swarm_domain::ResourcePressure;
+#[cfg(target_os = "linux")]
+use swarm_domain::{machine_memory_pressure, memory_stall_pressure};
 use swarm_terminal::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, HostRequest, HostResponse,
     MAX_CANONICAL_SNAPSHOT_BYTES, MAX_TERMINAL_CELLS, MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS,
@@ -180,6 +183,8 @@ pub(super) struct MachineResourceResponse {
     memory_pressure_avg10: Option<f64>,
     cpu_pressure_avg10: Option<f64>,
     io_pressure_avg10: Option<f64>,
+    memory_pressure: ResourcePressure,
+    memory_stall_pressure: ResourcePressure,
     pressure: ResourcePressure,
 }
 
@@ -190,6 +195,7 @@ pub(super) struct MachineResourceResponse {
 pub(super) fn machine_of(total_bytes: u64, pressure: ResourcePressure) -> MachineResourceResponse {
     MachineResourceResponse {
         memory_total_bytes: Some(total_bytes),
+        memory_pressure: pressure,
         pressure,
         ..Default::default()
     }
@@ -204,16 +210,6 @@ struct ResourcePolicyResponse {
     /// healthy workers Critical on a 32 GiB machine that was not stalling.
     advisory_percent: u64,
     critical_percent: u64,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum ResourcePressure {
-    #[default]
-    Normal,
-    Advisory,
-    Critical,
-    Unavailable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -739,14 +735,7 @@ fn sample_machine_resources() -> MachineResourceResponse {
         let io_pressure_avg10 = read_psi_avg10("/proc/pressure/io");
         // Memory, unchanged. These were tuned against a real report and 01a04982
         // fenced them explicitly.
-        let memory = match (memory_used_percent, memory_pressure_avg10) {
-            (_, Some(psi)) if psi >= 10.0 => ResourcePressure::Critical,
-            (Some(used), _) if used >= 95.0 => ResourcePressure::Critical,
-            (_, Some(psi)) if psi >= 2.0 => ResourcePressure::Advisory,
-            (Some(used), _) if used >= 85.0 => ResourcePressure::Advisory,
-            (Some(_), _) => ResourcePressure::Normal,
-            _ => ResourcePressure::Unavailable,
-        };
+        let memory = machine_memory_pressure(memory_used_percent, memory_pressure_avg10);
         // Read once and shared with the response below, so the verdict and the
         // number an operator reads in Diagnostics cannot disagree.
         let logical_cpus = std::thread::available_parallelism().ok().map(usize::from);
@@ -763,6 +752,8 @@ fn sample_machine_resources() -> MachineResourceResponse {
             memory_pressure_avg10,
             cpu_pressure_avg10,
             io_pressure_avg10,
+            memory_pressure: memory,
+            memory_stall_pressure: memory_stall_pressure(memory_pressure_avg10),
             pressure,
         }
     }
@@ -779,6 +770,8 @@ fn sample_machine_resources() -> MachineResourceResponse {
         memory_pressure_avg10: None,
         cpu_pressure_avg10: None,
         io_pressure_avg10: None,
+        memory_pressure: ResourcePressure::Unavailable,
+        memory_stall_pressure: ResourcePressure::Unavailable,
         pressure: ResourcePressure::Unavailable,
     }
 }
@@ -909,10 +902,11 @@ fn layer_pressure(bytes: Option<u64>, machine: &MachineResourceResponse) -> Reso
         .map(|total| bytes.saturating_mul(100) / total);
     // Without the machine's size there is nothing to judge against, and a
     // guess dressed as a verdict is worse than saying so.
-    let (Some(share), machine_pressure) = (share, machine.pressure) else {
+    let (Some(share), machine_pressure) = (share, machine.memory_pressure) else {
         return ResourcePressure::Unavailable;
     };
     match machine_pressure {
+        ResourcePressure::Unavailable => ResourcePressure::Unavailable,
         // A layer holding almost nothing is not the reason a machine is
         // struggling, whatever the machine is doing.
         ResourcePressure::Critical if share >= LAYER_CRITICAL_PERCENT => ResourcePressure::Critical,
@@ -1163,6 +1157,20 @@ mod tests {
     }
 
     const GIB: u64 = 1024 * 1024 * 1024;
+
+    #[test]
+    fn cpu_only_contention_does_not_classify_worker_memory_as_pressured() {
+        let mut observed = machine(32 * GIB, ResourcePressure::Normal);
+        observed.pressure = ResourcePressure::Critical;
+        assert_eq!(
+            layer_pressure(Some(10 * GIB), &observed),
+            ResourcePressure::Normal
+        );
+        assert_eq!(
+            super::combine_coordinator_start_admission(observed.pressure, ResourcePressure::Normal),
+            super::CoordinatorStartAdmission::DeferredCritical
+        );
+    }
 
     /// The report the operator sent: ten loaded worker runtimes holding six
     /// gigabytes, on a machine with thirty-two and no memory stall at all,
