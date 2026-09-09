@@ -4,7 +4,7 @@
 use std::{
     convert::Infallible,
     sync::{
-        Mutex,
+        Mutex, MutexGuard, TryLockError,
         atomic::{AtomicBool, Ordering},
     },
     time::Instant,
@@ -45,6 +45,27 @@ impl Default for TerminalControlGate {
 }
 
 impl TerminalControlGate {
+    /// Admission never queues behind a blocked PTY writer or explicit stop.
+    /// The caller must hold every session guard before inspecting eligibility.
+    pub(crate) fn try_maintenance(&self) -> Result<MaintenanceGuard<'_>, MaintenanceHoldError> {
+        let stop = self
+            .stop_effect
+            .try_lock()
+            .map_err(|error| maintenance_lock_error(&error))?;
+        let control = self
+            .control
+            .try_lock()
+            .map_err(|error| maintenance_lock_error(&error))?;
+        if self.stopped.load(Ordering::Acquire) {
+            return Err(MaintenanceHoldError::Stopped);
+        }
+        Ok(MaintenanceGuard {
+            gate: self,
+            control,
+            _stop: stop,
+        })
+    }
+
     // Effect callers hold the control mutex; explicit stop can cancel a blocked
     // writer without waiting for that mutex. An in-flight effect is checked again.
     fn require_running<E>(&self) -> Result<(), ControlGateError<E>> {
@@ -73,6 +94,15 @@ impl TerminalControlGate {
             .stop_effect
             .lock()
             .map_err(|_| ControlGateError::Poisoned)?;
+        self.stop_held(effect)
+    }
+
+    // Both callers own stop_effect. Automatic admission additionally owns the
+    // input/control mutex; explicit cancellation must never wait for that mutex.
+    fn stop_held<E>(
+        &self,
+        effect: impl FnOnce() -> Result<(), E>,
+    ) -> Result<(), ControlGateError<E>> {
         if self.stopped.load(Ordering::Acquire) {
             return Ok(());
         }
@@ -230,6 +260,39 @@ impl TerminalControlGate {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MaintenanceHoldError {
+    InFlight,
+    Poisoned,
+    Stopped,
+}
+
+fn maintenance_lock_error<T>(error: &TryLockError<T>) -> MaintenanceHoldError {
+    match error {
+        TryLockError::WouldBlock => MaintenanceHoldError::InFlight,
+        TryLockError::Poisoned(_) => MaintenanceHoldError::Poisoned,
+    }
+}
+
+pub(crate) struct MaintenanceGuard<'a> {
+    gate: &'a TerminalControlGate,
+    control: MutexGuard<'a, TerminalControl>,
+    _stop: MutexGuard<'a, ()>,
+}
+
+impl MaintenanceGuard<'_> {
+    pub(crate) fn has_owner(&self) -> bool {
+        self.control.owner(self.gate.now()).is_some()
+    }
+
+    pub(crate) fn stop<E>(
+        &self,
+        effect: impl FnOnce() -> Result<(), E>,
+    ) -> Result<(), ControlGateError<E>> {
+        self.gate.stop_held(effect)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,6 +304,25 @@ mod tests {
             device: PresenceDeviceId::new(),
             view: TerminalViewId::new(),
         }
+    }
+
+    #[test]
+    fn maintenance_poison_refuses_without_leaking_the_stop_guard() {
+        let gate = TerminalControlGate::default();
+        std::thread::scope(|scope| {
+            let _ = scope
+                .spawn(|| {
+                    let _guard = gate.control.lock().unwrap();
+                    panic!("fictional poisoned control state");
+                })
+                .join();
+        });
+        assert!(matches!(
+            gate.try_maintenance(),
+            Err(MaintenanceHoldError::Poisoned)
+        ));
+        // Explicit cancellation remains usable even when ordinary control failed.
+        gate.stop(|| Ok::<_, ()>(())).unwrap();
     }
 
     fn effect_while_locked(gate: &TerminalControlGate) -> Result<(), &'static str> {

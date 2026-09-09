@@ -1666,6 +1666,102 @@ impl SessionRegistry {
         running_sessions(&sessions)
     }
 
+    /// Stops only an atomically admitted complete running set. The trusted API
+    /// must first durably record return obligations for these exact identities.
+    /// This is NOT enabled for current providers: native settled-turn and
+    /// background-work evidence is still unavailable (ADR 0085).
+    ///
+    /// # Errors
+    /// Registry poisoning or a failed process-status observation refuses the
+    /// operation before any stop. A partial stop is returned explicitly.
+    pub fn admit_maintenance(
+        &self,
+        return_sessions: &[WorkerSessionId],
+    ) -> Result<crate::MaintenanceOutcome, SessionRegistryError> {
+        use crate::{MaintenanceOutcome, MaintenanceRefusal};
+        // Match local claim/input lock ordering: remote authority -> registry
+        // -> per-session stop/control. Never wait behind a remote/local write.
+        let takeovers = match self.takeovers.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Ok(MaintenanceOutcome::refused(
+                    MaintenanceRefusal::InputOrStopInFlight,
+                    None,
+                ));
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return Ok(MaintenanceOutcome::refused(
+                    MaintenanceRefusal::LockPoisoned,
+                    None,
+                ));
+            }
+        };
+        // Freeze membership and drain cancellation through the entire operation.
+        // try_maintenance never waits behind an input effect needing the registry.
+        let sessions = lock(&self.sessions)?;
+        if !self.draining.load(Ordering::Acquire) {
+            return Ok(MaintenanceOutcome::refused(
+                MaintenanceRefusal::NotDraining,
+                None,
+            ));
+        }
+        if return_sessions.len() > self.max_sessions {
+            return Ok(MaintenanceOutcome::refused(
+                MaintenanceRefusal::ReturnSetMismatch,
+                None,
+            ));
+        }
+        let mut running = Vec::new();
+        for session in sessions.values() {
+            if session.is_running()? {
+                running.push(session);
+            }
+        }
+        running.sort_by_key(|session| session.id.to_string());
+        let expected = return_sessions
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
+        if expected.len() != return_sessions.len()
+            || expected.len() != running.len()
+            || running
+                .iter()
+                .any(|session| !expected.contains(&session.id))
+        {
+            return Ok(MaintenanceOutcome::refused(
+                MaintenanceRefusal::ReturnSetMismatch,
+                None,
+            ));
+        }
+        let controls = running
+            .iter()
+            .map(|session| (session.id, &session.control))
+            .collect::<Vec<_>>();
+        Ok(crate::maintenance::stop_set(
+            &controls,
+            // No caller-supplied "idle" boolean, provider name, Stop callback or
+            // resting screen may manufacture a settled execution proof. Shells
+            // also lack this proof: a shell prompt can own background jobs.
+            |index| {
+                if takeovers
+                    .get(&running[index].id)
+                    .is_some_and(|lease| lease.expires_at > unix_timestamp())
+                {
+                    Err(MaintenanceRefusal::InteractiveOwner)
+                } else {
+                    Err(MaintenanceRefusal::ProviderEvidenceUnavailable)
+                }
+            },
+            |index| {
+                let session = running[index];
+                session.stop_unchecked()?;
+                session.stop_pending_release.store(true, Ordering::Release);
+                session.control_changes.send_replace(());
+                Ok::<_, SessionRegistryError>(())
+            },
+        ))
+    }
+
     /// Cancels a pending update drain and allows new sessions again.
     ///
     /// # Errors
@@ -1826,6 +1922,65 @@ pub(crate) mod control_tests {
             panic!("fresh snapshot required")
         };
         TerminalSize::new(snapshot.rows, snapshot.columns)
+    }
+
+    #[test]
+    fn maintenance_requires_exact_return_set_and_native_evidence_without_stopping() {
+        use crate::{MaintenanceOutcome, MaintenanceRefusal};
+        let (registry, session) = fixture();
+        assert_eq!(
+            registry.admit_maintenance(&[session.id]).unwrap(),
+            MaintenanceOutcome::refused(MaintenanceRefusal::NotDraining, None)
+        );
+        registry.begin_drain().unwrap();
+        let remote = TerminalTakeoverLease {
+            lease_id: FederationStewardTakeoverLeaseId::new(),
+            revision: 1,
+            expires_at: unix_timestamp() + 300,
+        };
+        registry.install_takeover(session.id, remote).unwrap();
+        assert_eq!(
+            registry.admit_maintenance(&[session.id]).unwrap(),
+            MaintenanceOutcome::refused(MaintenanceRefusal::InteractiveOwner, Some(session.id))
+        );
+        registry
+            .release_takeover(session.id, remote.lease_id, remote.revision)
+            .unwrap();
+        {
+            let _remote_write = registry.takeovers.lock().unwrap();
+            assert_eq!(
+                registry.admit_maintenance(&[session.id]).unwrap(),
+                MaintenanceOutcome::refused(MaintenanceRefusal::InputOrStopInFlight, None)
+            );
+        }
+        for expected in [
+            vec![],
+            vec![WorkerSessionId::new()],
+            vec![session.id, session.id],
+        ] {
+            assert_eq!(
+                registry.admit_maintenance(&expected).unwrap(),
+                MaintenanceOutcome::refused(MaintenanceRefusal::ReturnSetMismatch, None)
+            );
+        }
+        assert_eq!(
+            registry.admit_maintenance(&[session.id]).unwrap(),
+            MaintenanceOutcome::refused(
+                MaintenanceRefusal::ProviderEvidenceUnavailable,
+                Some(session.id)
+            )
+        );
+        assert!(session.is_running().unwrap());
+        assert!(!session.stop_pending_release.load(Ordering::Acquire));
+        session.control.legacy(false, || Ok::<_, ()>(())).unwrap();
+        registry.cancel_drain().unwrap();
+        session.stop_retained().unwrap();
+        registry.begin_drain().unwrap();
+        // Even after a lost response, old identities cannot authorize a new set.
+        assert_eq!(
+            registry.admit_maintenance(&[session.id]).unwrap(),
+            MaintenanceOutcome::refused(MaintenanceRefusal::ReturnSetMismatch, None)
+        );
     }
 
     #[test]

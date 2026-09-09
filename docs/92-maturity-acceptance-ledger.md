@@ -18,6 +18,27 @@ an old unchecked deployment note is not automatically current missing code.
 
 ## Requirement-by-requirement disposition
 
+### Engine maintenance admission core (not activated)
+
+ADR 0085 now has an engine-library all-session transaction core. It freezes
+membership and remote authority, acquires all stop/control guards before any
+eligibility check, validates the exact running-session return set, refuses local
+and remote owners or in-flight effects, and reports exact partial stop progress.
+Refusal releases every hold; successful stops fence subsequent input. Seven new
+focused tests, 141 terminal tests in the final rerun, 27 host tests and strict
+all-target clippy passed in `/tmp/swarm-maintenance-admission.BsOnHB`. The unchanged
+sustained-output test passed in the first full run; it was not repeated, and the
+existing explicit process-profiling test remains ignored.
+
+This does **not** close OPS-01. There is no production IPC/package caller yet.
+Current providers cannot supply the required settled-turn/background proof and
+therefore refuse admission. Exact durable return recording, input-to-completion
+correlation, negotiated protocol activation, failed/lost-response recovery across
+API/package replacement, and a real demo update/return journey remain required.
+The provisional IPC addition was removed after the protocol-pin test correctly
+required a migration: do not force a worker restart for an unfinished interface.
+Protocol 16 and live package behavior remain unchanged. No live engine was updated.
+
 ### Component-owned hover and interview contrast
 
 The earlier queue-title fix is present; it was not reimplemented. Rendered Edge
@@ -179,7 +200,7 @@ or implementation boundary to inspect before changing it again.
 | PRES-01 | Schedule/DST/desktop-return policy and persistence tests exist; live locked desktop observed as Reachable. | Real scheduled/manual Night Watch, mobile non-dismissal and desktop dismissal. Live schedule is unset; do not change overnight policy merely for testing. |
 | REC-01 | Planned engine replacement returned all twelve workers to exact conversations; [91](91-engine-return-dependency-acceptance.md). | Full chosen-conversation switch and missing-context safe/continue/fresh ladder with real provider evidence, plus failure/cancellation journeys. |
 | REC-02 | Isolated corruption containment, backup/restore and package failure drills recorded in [87](87-live-resource-and-restore-checkpoint.md) and [47](47-maturity-remaining.md). | Retain this acceptance; no reason to corrupt or restore the live Hive. |
-| OPS-01 | App/API continuity and one planned engine-return journey verified; resource admission guards exist. | Automatic engine-owned all-session admission, durable exact return set and trustworthy native completion/background evidence; ADR 0085 is not implemented. Rolling provider/tool freshness and pressure-to-resumption acceptance remain. |
+| OPS-01 | App/API continuity and one planned engine-return journey verified; resource admission guards exist. ADR 0085 engine-library all-session guard/stop core passes isolated concurrency and failure tests. | Native input/completion/background evidence, durable exact return set, negotiated IPC/package integration and live all-session admission remain unimplemented/unaccepted. Rolling provider/tool freshness and pressure-to-resumption acceptance remain. |
 | PROV-01 | Opt-in framework, host availability and Night Watch exclusions checked; [48](48-provider-acceptance.md). | Required provider journeys remain distinct from framework acceptance. Unavailable alpha CLIs stay unavailable; only the builder promotes providers. |
 | UX-01/P6 | Approved visual direction retained; focused rendered queue, runtime, support and task-reader checks. | Coherent complete desktop/mobile accessibility, empty/error/offline and shortcut journeys. Optional return briefing still requires its mockup gate. |
 | BFG Admin integration | Actual development-Hive text intake/receipt/reload retention accepted; [86](86-support-ui-acceptance.md). Admin readiness independently confirmed at e6a2167 on September 9. | One Swarm-UI fictional attachment submission and the existing fictional task's completion remain approval-gated below. No Admin worker communication is authorized; no customer reply is authorized by task closure. |

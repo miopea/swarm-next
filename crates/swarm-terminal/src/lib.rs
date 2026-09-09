@@ -3,6 +3,7 @@ mod control_protocol;
 mod history;
 mod ipc;
 mod journal;
+mod maintenance;
 mod process;
 mod provider;
 mod provider_activity;
@@ -31,6 +32,7 @@ pub use ipc::{
     TerminalControlCursor, TerminalControlStatus,
 };
 pub use journal::{JournalLimits, SequencedFrame};
+pub use maintenance::{MaintenanceOutcome, MaintenanceRefusal};
 pub use process::{
     ContinuationRecoveryOutcome, FreshRecoveryLaunch, MAX_TERMINAL_CELLS, MAX_TERMINAL_COLUMNS,
     MAX_TERMINAL_ROWS, MIN_TERMINAL_COLUMNS, MIN_TERMINAL_ROWS, ProcessTerminalSession,

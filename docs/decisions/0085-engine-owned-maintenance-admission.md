@@ -1,7 +1,9 @@
 # ADR 0085: Engine-owned maintenance admission
 
-Status: Accepted implementation direction under the approved update-safety scope;
-not implemented or live-validated. The release gate remains open.
+Status: Accepted implementation direction under the approved update-safety scope.
+The engine-library admission core is implemented and tested; native evidence,
+durable return integration, negotiated IPC/package activation and live validation
+remain incomplete. The release gate remains open.
 
 ## Incident and requirement
 
@@ -57,6 +59,42 @@ boundary before the engine itself exits. Returning a process is not proof of
 resuming the intended conversation.
 
 ## Compatibility and package ownership
+
+### September 9 implementation checkpoint
+
+The engine library now freezes remote takeover authority, registry membership
+and drain cancellation, then acquires every session's stop/control guards before
+checking eligibility. Per-session acquisition is non-blocking: an in-flight write
+or stop refuses admission rather than waiting behind a blocked PTY. Lock order is
+takeover authority, registry, then each session's stop/control guards; no terminal
+output guard spans a stop. A live local or remote owner refuses admission.
+The supplied return-session set must exactly match all running immutable sessions;
+duplicates, omissions and replacements refuse before stopping anything.
+
+Retained stops run while all guards remain held. Failed eligibility releases all
+holds without a stop; failed execution returns the exact stopped identities and
+the failed identity, leaving subsequent sessions untouched. Successful stop
+tombstones reject later input/control effects. Explicit cancellation still uses
+its separate stop guard and does not wait for a blocked ordinary writer.
+
+This is a prerequisite, not an enabled updater. Current providers (including
+scratch shells) return `ProviderEvidenceUnavailable`; screen activity and startup
+hooks cannot authorize maintenance. Positive execution in tests uses fictional
+eligibility, not a claim of verified Claude behavior. The library has no production
+IPC caller yet. Adding that command requires a protocol bump, so it must land with
+the actual native evidence and durable return workflow, not force a migration for
+an unusable partial interface. Protocol 16 and ordinary package behavior remain
+unchanged. The API's existing worker-only revival intents do not satisfy the
+exact durable session-return obligation required above.
+
+Seven focused tests cover all-guards-before-checking, all-or-none refusal,
+local/remote ownership, in-flight input, input losing to maintenance, poisoned
+state, duplicate/missing/changed return sets, refusal recovery and exact partial
+failure. Barriers establish ordering; one receive deadline bounds test failure,
+never production eligibility. Linux terminal tests passed (141 in the final
+rerun, with the already-passed sustained-output test not repeated and one existing
+profiling test ignored); 27 terminal-host tests and strict all-target clippy pass.
+No live worker was used, stopped or restarted for this checkpoint.
 
 Explicitly negotiate the new engine capability. An old engine cannot safely
 apply the missing admission mechanism to itself. Its loaded-session automatic
