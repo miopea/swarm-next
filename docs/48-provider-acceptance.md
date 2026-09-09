@@ -31,7 +31,43 @@ provider/device exercises for the journeys they can establish; do not require an
 unrelated full platform matrix for every ordinary patch. New provider promotion,
 however, requires all applicable journeys, with failure and recovery evidence.
 
-## Current implementation boundary — 2026-09-05
+## Current implementation boundary — 2026-09-09
+
+Rechecked against main `b1e993d4` and the live App/API and engine
+`1.6.0-dev-cf83c980bf17-20260909041327-2251164`. The historical implementation
+notes below are superseded by this checkpoint; this is not a provider promotion.
+
+- Host-owned discovery reports Claude and Codex available; Gemini, Grok and
+  OpenCode are explicitly unavailable. No alpha CLI was installed for this check.
+- Creation, changed bindings and temporary-worker commands enforce explicit
+  acknowledgement plus positive host evidence. Unknown/absent capability refuses
+  the change. Unrelated edits preserve an existing experimental binding.
+- Live Edge Settings initially offered Claude/Codex. Enabling the unsaved opt-in
+  revealed all three alpha choices labelled unavailable and the explicit warning
+  about missing Swarm tools, automatic recovery and Night Watch eligibility.
+  Opt-in was cleared and the test tab closed without saving or creating a worker.
+- The current source gates supervisor startup, coordinator startup, Queen startup,
+  retained-worker revival and the common coordination submission path on provider
+  policy. Policy lookup failure refuses automation; it does not switch provider.
+- The builder-owned promotion list remains Claude/Codex. No UI setting changes it.
+- Focused web verification passed 43 tests across WorkerSettings (22), temporary
+  experimental handoff (3), worker API requests (2) and held-briefing presentation
+  (16). This includes failed-save retention, withdrawn consent, unknown discovery,
+  unchanged bindings and duplicate-submit prevention. These tests do not launch a
+  real alpha provider or prove its terminal behavior.
+
+- Current Linux verification also passed both domain admission tests, the builder
+  promotion policy test, the old/new engine availability fixture, the persistence
+  Night Watch hold/return test, and five API route/delivery tests. The hold/return
+  test covers all three alpha providers; the shared submission test covers both
+  immediate and cooled delivery without contacting the terminal.
+
+Remaining acceptance: demonstrate an installed alpha's launch/manual-recovery
+limitations only in a disposable fixture when that provider is available. The provider-specific
+promotion journeys above remain separate from acceptance of the opt-in framework.
+Do not interpret their unverified rows as permission to enable Night Watch.
+
+### Historical implementation sequence (September 5)
 
 `ProviderKind::NIGHT_WATCH_APPROVED` currently contains Claude Code and Codex.
 This reports the existing builder-owned policy, not a claim that this maturity

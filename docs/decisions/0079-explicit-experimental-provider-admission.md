@@ -1,7 +1,9 @@
 # ADR 0079: Explicit experimental-provider admission
 
-Status: Accepted implementation design under the approved PROV-01 scope;
-implementation and live acceptance pending.
+Status: Accepted under the approved PROV-01 scope. Command enforcement and UI
+are implemented; live unavailable-provider presentation was checked September 9.
+Installed-alpha launch/manual-recovery acceptance remains unverified. See
+`../48-provider-acceptance.md` for current evidence; no provider is promoted.
 
 ## Context
 
