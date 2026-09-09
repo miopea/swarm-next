@@ -8,7 +8,7 @@ an old unchecked deployment note is not automatically current missing code.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-59448bc20028-20260909134635-2750222`.
+- App/API: `1.6.0-dev-03e4584e324b-20260909150026-2834623`.
 - Engine: retained PID 2271655, `cf83c980`; candidate `cf179f73` remains pending.
 - Latest App/API deployment preserved all 34 worker records and twelve exact
   running session/conversation pairs. Swarm Next and D365 remained asleep.
@@ -38,7 +38,12 @@ existing feed retries without advancing its cursor. All nine snapshot mutation
 paths, overlapping refreshes, cancellation and recovery are covered; 98 targeted
 model/feed/application tests and the production web build pass. ADR 0071 records
 the ordering rule. This is not a claim that the race caused every stale queue or
-CPU complaint. App/API deployment and exact worker-continuity checks are pending.
+CPU complaint. Development deployment completed successfully. Exact snapshots in
+`/tmp/swarm-snapshot-order.lBpLXb` match all 34 worker records and twelve running
+session/provider/conversation pairs; engine PID 2271655 did not change. Health has
+no degraded components, and a separate Edge tab loaded Queues and the exact new
+runtime version. The owned tab was closed. CI 34367317966 remains in progress;
+this checkpoint does not claim its outcome or completion of the wider program.
 
 ### Restart warnings and remaining runtime dialogs
 
