@@ -15,19 +15,36 @@ is historical where superseded by the verified deployment section.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-f482b460b146-20260909203810-3396484`.
-- Engine: current PID 2947820, started September 9 at 12:37:54 Eastern. The
-  earlier continuity checkpoint retained PID 2271655; this later restart's
-  initiator has not been established by the current read-only check.
+- App/API: `1.6.0-dev-d090bbb956bf-20260909225909-3569261`.
+- Engine: last verified PID 3408834, started September 9 at 17:01:49 Eastern,
+  after the operator's manually applied update. Subsequent app-only deployments
+  preserved that engine and its running worker identity projections.
 - Latest App/API deployment preserved all 34 worker records and twelve exact
   running session/provider identities. The worker-list projection did not expose
   conversation IDs, so this does not independently prove conversation continuity.
   Swarm Next and D365 remained asleep.
-- CI through gated-intake `34333537210`, modal `34334885015` and shortcut
-  `34335279693` passed. Later acceptance-document CI remains separate.
+- Latest full CI `34414805240` for the dialog boundary fix passed, as did
+  `34412315650` for the worker editor focus correction.
 - No release is authorized. No customer-facing send is authorized by task closure.
 
 ## Requirement-by-requirement disposition
+
+### UI-3/UI-4 ordinary-user checkpoint
+
+Settings search recovery, explicit update interruption warnings, honest stale
+diagnostics, support draft/retry copy, worker setup guidance/readability/focus,
+and blocking dialog coverage are deployed through d090bbb9. Detailed journeys
+and exact evidence remain in [93](93-ux-first-remaining-plan.md).
+The operator accepted the Android task editor: it covers navigation and retains
+unsaved changes through Close -> Keep editing. This closes that specific device
+check. It does not close the entire maturity goal, native attachment picker,
+iOS, physical presence, non-authorizing decision clarification, direct-worker
+answer reconciliation or the backend/performance handoff.
+
+Current local follow-through: distinguish unavailable saved-session checks from
+expired authentication and offer explicit reconnection without another token.
+New tests cover failures from both session and snapshot reads, repeated failure,
+successful recovery and actual authentication rejection. Deployment is pending.
 
 ### September 9 runtime safeguard placement deployment
 

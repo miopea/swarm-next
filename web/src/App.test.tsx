@@ -195,9 +195,13 @@ test.each(["restored", "signed-out", "failed"])("does not ask for credentials wh
   await waitFor(() => expect(screen.queryByRole("status", { name: "Restoring Hive session" })).not.toBeInTheDocument());
   if (outcome === "restored") {
     expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
-  } else {
+  } else if (outcome === "signed-out") {
     expect(screen.getByLabelText("Operator token")).toBeVisible();
-    if (outcome === "failed") expect(screen.getByText(/Runtime request returned 403/)).toBeVisible();
+  } else {
+    expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try reconnecting" })).toBeVisible();
+    fireEvent.click(screen.getByText("Connection details"));
+    expect(screen.getByText(/Runtime request returned 403/)).toBeVisible();
   }
 });
 
@@ -411,6 +415,51 @@ test("restores the saved session after a rolling API interruption", async () => 
   // The saved session was rejected once by the interruption and retried, which
   // is the recovery this test is about.
   expect(sessionAttempts).toBeGreaterThanOrEqual(2);
+});
+
+test.each(["/api/v1/auth/session", "/api/v1/tasks"])("offers saved-session recovery, not a token prompt, when %s fails", async (failedPath) => {
+  const base = bootFetch();
+  let unavailable = true;
+  const fetch = vi.fn((input: string | URL | Request) => {
+    if (String(input) === failedPath && unavailable) {
+      return Promise.resolve({ ok: false, status: 500, json: async () => ({ message: "Fictional service unavailable; reference 4010" }) });
+    }
+    return base(input);
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(<App />);
+  await screen.findByRole("heading", { name: "We couldn’t reconnect to your Hive" });
+  expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
+  expect(screen.queryByText("Unlock this runtime to access tasks and workers.")).not.toBeInTheDocument();
+  expect(screen.getByText("Waiting to reconnect to your Hive.")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Try reconnecting" }));
+  await screen.findByRole("heading", { name: "We couldn’t reconnect to your Hive" });
+  expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
+
+  unavailable = false;
+  fireEvent.click(screen.getByRole("button", { name: "Try reconnecting" }));
+  await waitFor(() => expect(screen.queryByRole("status", { name: "Restoring Hive session" })).not.toBeInTheDocument());
+  expect(screen.queryByRole("button", { name: "Try reconnecting" })).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Refresh control room" })).toBeInTheDocument();
+  expect(fetch.mock.calls.filter(([url]) => String(url).includes("/auth/session")).length).toBe(3);
+});
+
+test("offers unlocking when retry proves the saved session has expired", async () => {
+  let unavailable = true;
+  const base = bootFetch();
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => String(input) === "/api/v1/auth/session"
+    ? unavailable ? Promise.reject(new Error("Session check unavailable")) : Promise.resolve(unauthorized())
+    : base(input)));
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Try reconnecting" }));
+  await screen.findByRole("button", { name: "Try reconnecting" });
+  unavailable = false;
+  fireEvent.click(screen.getByRole("button", { name: "Try reconnecting" }));
+  await screen.findByLabelText("Operator token");
+  expect(screen.queryByRole("button", { name: "Try reconnecting" })).not.toBeInTheDocument();
+  expect(screen.getByText("Unlock this runtime to access tasks and workers.")).toBeInTheDocument();
 });
 
 test("restores the worker surface after a refresh", async () => {

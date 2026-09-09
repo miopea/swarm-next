@@ -1,6 +1,25 @@
 # Remaining maturity work — UX/UI first
 
-### Current UI-4 defect: modal navigation bypass
+### UI-4: saved-session connection recovery
+
+The ordinary-user first/repeat-entry audit found that a failed session or initial
+board read opened the token form even when authentication had not been rejected.
+The browser now distinguishes a failed check from an actual HTTP 401. A failed
+check offers Try reconnecting using the existing session, with technical details
+collapsed; only confirmed missing/expired authentication opens the unlock form.
+Retries use the existing bounded recovery policy and have no worker commands,
+new timers, cookie/storage changes or automatic sign-in bypass.
+
+Edge's isolated fictional journey verifies repeated failure, restored service
+and successful entry without credentials. The 390px phone view is readable;
+unlock/recovery buttons and details have 44px minimum targets. Tests cover both
+session-check and snapshot failure, recovery, and retry discovering an expired
+session; a message containing 4010 is not mistaken for authentication failure.
+All 154 web files / 1,497 tests, TypeScript and the production build pass before
+the final touch-target style adjustment. Deployment remains pending for this
+increment. This does not close native-device, clarification or engine gates.
+
+### UI-4 closed defect: modal navigation bypass
 
 Edge reproduced a dirty task editor at 390px leaving the top navigation exposed.
 Clicking Settings removed the editor without an unsaved-changes prompt. The
@@ -20,8 +39,18 @@ workspace and verify task-overlay cleanup. All 154 web test files / 1,494 tests,
 TypeScript and the production web build pass. The existing feedback-primary-action
 test now queries the whole portalled dialog rather than its old mount container;
 the prerequisite rerender tests retain their original component identity. No
-worker, save, cancellation or send policy changed. Deployment is next; this
-section is not a claim that the change is live yet.
+worker, save, cancellation or send policy changed.
+
+Deployment completed: `d090bbb9`, live
+`1.6.0-dev-d090bbb956bf-20260909225909-3569261`, healthy with no degraded
+services. All 34 worker identity projections (12 running) and the engine PID/start
+match before/after in `/tmp/swarm-modal-boundary-deploy.eJmFD3`. CI 34414805240
+passed completely, as did prior 34412315650. Quick-navigation overlay
+coverage was also measured at the full 1465x1339 fixture viewport. The operator
+confirmed the Android PWA task-editor check with "Looks good": full-screen
+coverage and Close -> Keep editing preserving the unsaved change. This closes
+the Android confirmation for this dialog fix alongside desktop/390px fixture
+proof; it does not close unrelated native picker, presence or iOS gates.
 
 Operator-directed priority change: September 9, 2026.
 
@@ -170,7 +199,9 @@ samples. TypeScript and production build pass. Prior a716dad8 CI has now passed.
 | Support draft and retry | Discard/Escape; fictional attachment review/failure/retry/receipt; full Edge text entry -> review -> edit -> review -> saved-pending receipt now verified | Native picker and end-to-end Admin delivery remain; fixture is not an external send |
 | Night Watch form | 3 load/save/recovery tests; Edge changed timezone to UTC and showed Schedule saved with UTC still visible | Fixture does not validate server timezone rules or physical desktop/phone return behavior; empty-string browser fill remains inconclusive |
 | Diagnostics preview | Visible fixture preview, distinct browser/server evidence; stale-state correction deployed 51cadc40; Settings integration assertion corrected in 55e51327 | No new presentation gap identified by these checks; long-term measurement acceptance remains separate |
-| Worker editor keyboard return | Edge reproduced focus loss to BODY on cancel; fix returns focus to the same worker's Edit button. Tests cover cancel, discard, failed save and retry; 64 style/worker tests pass | Queued implementation after 7174a115; no live worker editing performed |
+| Worker editor keyboard return | Edge reproduced focus loss to BODY on cancel; fix returns focus to the same worker's Edit button. Tests cover cancel, discard, failed save and retry; 64 style/worker tests pass; deployed 85c2efc7, full CI passed | No live worker editing performed; fictional journey complete |
+| Blocking task dialogs | Document-level overlay covers navigation; desktop and 390px draft/cancel proof; deployed d090bbb9, full CI passed; Android operator accepted "Looks good" | This dialog gate closed; not an iOS claim |
+| Saved-session entry failure | Failed check -> repeated retry -> recovered connection opens app without a token; actual 401 still opens unlock | New increment pending deployment; not a physical network-suspension test |
 
 This is an incremental evidence matrix, not closure of UI-3, UI-4 or the overall
 goal. Next focus is ordinary-user worker/navigation/dialog usability. Do not

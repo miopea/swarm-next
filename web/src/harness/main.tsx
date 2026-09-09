@@ -7,6 +7,7 @@ import { FixtureWebSocket, fixtureTranscript } from "./terminalFixture";
 import { SURFACES } from "./surfaces";
 import { supportFixtureResponse } from "./SupportFeedbackFixture";
 import { taskPreviewFixtureResponse } from "./TaskPreviewFixture";
+import { sessionRecoveryResponse } from "./SessionRecoveryFixture";
 
 /**
  * A place to LOOK at the interface, with no Hive and no credential.
@@ -59,6 +60,8 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   // what lets the WHOLE APP mount here instead of a single card. Everything
   // else keeps answering empty.
   const path = url.split("?")[0];
+  const recovery = sessionRecoveryResponse(path);
+  if (recovery) return recovery;
   const preview = taskPreviewFixtureResponse(path, init);
   if (preview) return preview;
   const support = supportFixtureResponse(path, init);

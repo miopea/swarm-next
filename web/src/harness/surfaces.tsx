@@ -15,6 +15,7 @@ import TaskPreviewFixture from "./TaskPreviewFixture";
 import RuntimeDialogsFixture from "./RuntimeDialogsFixture";
 import TerminalComposerFixture from "./TerminalComposerFixture";
 import DecisionInterviewFixture from "./DecisionInterviewFixture";
+import SessionRecoveryFixture from "./SessionRecoveryFixture";
 
 import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
 import { App } from "../App";
@@ -231,6 +232,8 @@ export const SURFACES: Surface[] = [
     render: () => <TaskPreviewFixture />,
   },
   { id: "support-feedback", title: "Private support feedback", why: "Review, delivery, retry and local retention with fictional data only.", render: () => <SupportFeedbackFixture /> },
+  { id: "session-recovery", title: "Saved-session connection recovery", why: "Unavailable check and explicit retry, without a Hive or a new credential.", render: () => <SessionRecoveryFixture /> },
+  { id: "session-recovery-phone", title: "Phone saved-session recovery", why: "Connection recovery at 390px with fictional transport only.", render: () => <iframe title="Phone session recovery" src="/harness.html?surface=session-recovery" style={{ display: "block", width: 390, height: 844, border: 0 }} /> },
   {
     id: "composer-source", title: "Composer source recording failure", why: "Synthetic narrow layout; no terminal or API writes.",
     render: () => <main className="composer-source-fixture" style={{ maxWidth: 390, padding: 16 }}>

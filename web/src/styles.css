@@ -749,6 +749,9 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .unlock-symbol { width: 76px; height: 76px; margin-bottom: 8px; }
 .unlock-symbol .bee-mascot { width: 76px; height: 76px; }
 .unlock-panel h3 { margin: 0; font-size: 1.5rem; letter-spacing: -.025em; }
+.unlock-panel button { min-height: 44px; }
+.unlock-panel summary { min-height: 44px; padding-block: 10px; }
+.unlock-panel details p { overflow-wrap: anywhere; }
 .unlock-panel p:not(.eyebrow) { margin-bottom: 8px; color: var(--muted); font-size: .9rem; line-height: 1.6; }
 .apiary-handoff-page { min-height: 100dvh; display: grid; place-items: center; padding: 28px; background: radial-gradient(circle at 20% 15%, var(--accent-soft), transparent 38%), var(--surface); }
 .apiary-handoff-card { display: grid; width: min(720px, 100%); gap: 14px; padding: clamp(24px, 5vw, 44px); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); box-shadow: var(--shadow); }

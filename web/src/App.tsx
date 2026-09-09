@@ -13,6 +13,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import {
   assignTask,
   BROWSER_SESSION_AUTH,
+  RuntimeRequestError,
   createBrowserSession,
   createTask,
   fetchReleaseNotes,
@@ -228,6 +229,8 @@ export function App() {
   const [tokenDraft, setTokenDraft] = useState("");
   const [operatorToken, setOperatorToken] = useState<string>();
   const [sessionRestoring, setSessionRestoring] = useState(true);
+  const [sessionRestoreError, setSessionRestoreError] = useState<string>();
+  const [sessionRestoreAttempt, setSessionRestoreAttempt] = useState(0);
   const controlRoomModel = useControlRoomModel();
   const {
     hiveIdentity, sessions, workers, workspaces, tasks, jiraTaskLinks, decisions, stewardAssists, recentEvents,
@@ -707,6 +710,8 @@ export function App() {
 
   useEffect(() => {
     const controller = new AbortController();
+    setSessionRestoring(true);
+    setSessionRestoreError(undefined);
     void recoverTransientRuntime(async () => {
       const next = await controlRoomModel.restoreBrowserSession(controller.signal);
       if (!next) throw new DOMException("Aborted", "AbortError");
@@ -723,12 +728,15 @@ export function App() {
         if (controller.signal.aborted) return;
         terminalWorkspace.logout();
         setSessionRestoring(false);
-        if (!(error instanceof Error && error.message.includes("401"))) {
-          setOperationError(error instanceof Error ? error.message : "Saved authentication could not be restored");
+        // An unreadable session/snapshot is not evidence that the device lost
+        // its trust. Only an actual authentication rejection opens the token
+        // form; connection recovery retries the existing cookie, not a login.
+        if (!(error instanceof RuntimeRequestError && error.status === 401)) {
+          setSessionRestoreError(error instanceof Error ? error.message : "The saved session could not be checked.");
         }
       })
     return () => controller.abort();
-  }, []);
+  }, [sessionRestoreAttempt]);
 
   useEffect(() => {
     if (!operatorToken) {
@@ -2014,7 +2022,7 @@ export function App() {
               </div>
             )}
           </>
-        ) : <p className="empty-rail">{sessionRestoring ? "Restoring your Hive session…" : "Unlock this runtime to access tasks and workers."}</p>}
+        ) : <p className="empty-rail">{sessionRestoring ? "Restoring your Hive session…" : sessionRestoreError ? "Waiting to reconnect to your Hive." : "Unlock this runtime to access tasks and workers."}</p>}
 
         {/* Beside the runtime line rather than in the lockup: this is what the
             version it sits next to is about, and the lockup is a row the
@@ -2375,6 +2383,16 @@ export function App() {
             <div className="unlock-symbol"><BeeMascot expression="available" /></div>
             <h3>Restoring your Hive session…</h3>
             <p>Checking this trusted device. Your workers keep running.</p>
+          </section> : sessionRestoreError ? <section className="unlock-panel" aria-labelledby="session-recovery-title">
+            <div className="unlock-symbol"><BeeMascot expression="available" /></div>
+            <h3 id="session-recovery-title">We couldn’t reconnect to your Hive</h3>
+            <p>Swarm couldn’t check your saved session. Check your connection, then try again. You don’t need to enter a new token unless this device needs unlocking.</p>
+            <button type="button" onClick={() => {
+              setSessionRestoring(true);
+              setSessionRestoreAttempt((attempt) => attempt + 1);
+            }}>Try reconnecting</button>
+            <p>Retrying won’t restart your workers.</p>
+            <details><summary>Connection details</summary><p>{sessionRestoreError}</p></details>
           </section> :
           <form className="unlock-panel" onSubmit={(event) => void authenticate(event)}>
             <div className="unlock-symbol"><BeeMascot expression="available" /></div>
