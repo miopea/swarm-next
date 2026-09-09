@@ -111,6 +111,41 @@ The independent one-hour Linux observation remains under
 sessions remained, with no dropped history bytes. Its final result was pending
 when this acceptance record was written. No deployment interrupted that window.
 
+## Executable-code and no-deployment settlement — September 9
+
+Task `01a08585-edab-7a02-a10a-0f3c593eb854` used the existing Swarm Dogfood worker
+`01a06eda-bdd1-7a82-928e-cffbee0be6c1` and its isolated workflow-fixture repository.
+The operator-authorized admission requested a bounded retry lookup and built-in
+Node tests, with no real-project changes, deployment, publication or customer send.
+Assignment and Ready admission used normal API transitions; nothing injected a
+terminal prompt or repaired task state afterward.
+
+Durable activity records (UTC, September 9):
+
+- 09:35:43 — Ready, operator admission (sequence 9357).
+- 09:36:37 — Active, assigned demo worker (9360).
+- 09:39:21 — Review, assigned demo worker (9362).
+- 09:42:15 — Completed, Queen (9363).
+
+Queen approved the explicit no-deployment exemption for executable code that is
+used only by its own tests in the isolated fixture. She stated that her assessment
+relied on recorded worker commit/test evidence and authorized scope, not an
+independent execution she could not perform. The result did not pretend to be a
+documentation-only task or invent deployment evidence.
+
+Independent inspection after settlement verified a clean tree and commit
+`18126b3199c7744620127cd54cd2d980857216d9` containing exactly two new files:
+`retry-budget-20260909.mjs` and `retry-budget-20260909.test.mjs`. Source review
+confirmed the requested integer/count/delay limits, empty and exhausted behavior,
+RangeError contract and nonmutation. `node --test retry-budget-20260909.test.mjs`
+passed all 12 tests. The worker additionally recorded a 21-test full-suite pass
+and four mutation checks; those mutation checks were not independently repeated.
+
+This is autonomous supported code/no-deployment settlement in 392 seconds from
+Ready. It does not establish actual service deployment settlement, all Queen
+recovery paths or long-running backlog clearance. No original worker or engine
+was restarted, and intentionally sleeping workers remained asleep.
+
 ## Still open
 
 Automatic loaded-engine admission, long-session performance, real mobile

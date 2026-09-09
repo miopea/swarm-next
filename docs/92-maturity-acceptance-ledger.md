@@ -8,12 +8,12 @@ an old unchecked deployment note is not automatically current missing code.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-fccc31e22a32-20260909092844-2441378`.
+- App/API: `1.6.0-dev-a65e14b5a800-20260909093256-2444143`.
 - Engine: retained PID 2271655, `cf83c980`; candidate `cf179f73` remains pending.
 - Latest App/API deployment preserved all 34 worker records and twelve exact
   running session/conversation pairs. Swarm Next and D365 remained asleep.
-- CI `34323789584` completed successfully. Subsequent support backend changes
-  and the no-Hive image-reader fixture are not another runtime deployment.
+- CI through gated-intake `34333537210` and evidence `34334094185` passed.
+  Modal/shortcut runs `34334885015` and `34335279693` remain pending at this checkpoint.
 - No release is authorized. No customer-facing send is authorized by task closure.
 
 ## Requirement-by-requirement disposition
@@ -31,7 +31,7 @@ or implementation boundary to inspect before changing it again.
 | TERM-02 | Operator accepted Android native AskUser questions 2/3 on September 7; renderer regressions recorded in [47](47-maturity-remaining.md). | iOS acceptance and current-build repeated redraw/scroll/replay checks; selection correctness alone is insufficient. |
 | MOB-01 | Existing composer, draft and failed-submission protections retained. | Real keyboard/dictation, suspension and immutable-session draft recovery on both mobile platforms. |
 | MOB-02 | Attachment lifecycle fixes and tests recorded in [47](47-maturity-remaining.md). | Camera/gallery selection through shared-file receipt and provider reference acceptance on Android/iOS; desktop task-image previews do not prove this. |
-| QUEEN-01 | Autonomous two-demo dependency journey and routine documentation settlement; [91](91-engine-return-dependency-acceptance.md). | Supported code/deployment settlement and worker-first escalation journeys; resolve actual evidence gaps rather than normalizing incomplete runs to success. |
+| QUEEN-01 | Autonomous two-demo dependency journey, routine documentation settlement and executable-code/no-deployment settlement; [91](91-engine-return-dependency-acceptance.md). | Actual deployment settlement and worker-first escalation journeys; resolve actual evidence gaps rather than normalizing incomplete runs to success. |
 | QUEEN-02 | Engagement and task-scoped recovery guards; bounded recovery delivery. | Demonstrate safe kicks and escalation without mid-task derailment across representative work; no real-project terminal experiments. |
 | QUEEN-03 | Authenticated composer source records and exact-ID reads exist. | Direct-terminal/AskUser authored-answer capture and exact decision correlation remain unwired. Proposed source-to-deferral linking awaits the operator's answer. |
 | QUEUE-01 | Owner grouping, worker grouping, structural prerequisites, exact held-briefing reasons, calendar reassessment journey. | Prove owner/reason consistency through remaining handoff/review/operator-resolution paths. Text-only deferrals without authoritative links remain a real evidence gap. |
@@ -208,5 +208,20 @@ A further failing-before application regression showed Alt+4 navigating behind
 an open dialog when the event did not originate from a text field. Global
 navigation now yields to the mounted modal owner and already-handled events;
 closing the modal restores normal shortcuts. All 78 application, palette and
-focus tests plus TypeScript checking pass. This shortcut follow-up is not yet
-part of the fccc31e2 deployed build.
+focus tests plus TypeScript checking pass. The a65e14b5 development update is live;
+exact before/after snapshots in `/tmp/swarm-modal-shortcuts.W9RY1D` preserved all
+34 worker records and twelve session/conversation pairs, with engine PID 2271655.
+In the owned live Edge tab, Alt+4 on the open navigation dialog left Needs You
+unchanged. Escape closed only the palette and returned focus to its opener.
+The test tab was closed immediately afterward. No engine activation occurred.
+
+### Executable-code orchestration acceptance
+
+Task `01a08585-edab-7a02-a10a-0f3c593eb854` completed through ordinary assignment,
+briefing, worker execution, code evidence, Queen review and approved no-deployment
+settlement. No terminal nudge or task repair followed admission. Independent
+inspection found only the two requested demo files in commit `18126b3199c7744620127cd54cd2d980857216d9`;
+all twelve new tests passed. Durable events distinguish operator admission, demo
+worker execution and Queen completion. See [91](91-engine-return-dependency-acceptance.md)
+for the exact timeline and evidence boundary; this does not close deployment or
+real-backlog recovery acceptance.
