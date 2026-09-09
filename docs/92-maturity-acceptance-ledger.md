@@ -20,6 +20,16 @@ an old unchecked deployment note is not automatically current missing code.
 
 ## Requirement-by-requirement disposition
 
+### Queen staged-delivery handoff — live partial acceptance
+
+Fictional task `01a08761-415f-7810-91e2-28ff5ce31356` progressed unattended
+from Ready through Active and Review to evidence-based Completed, preserving
+its worker session. Independent hashes matched committed and delivered artifact
+bytes. However, Queen's requested Awaiting Release transition never occurred;
+the system completed directly from Review. This is not a pass for the missing
+release-handoff acceptance case. Exact events and verification limits are in
+[91](91-engine-return-dependency-acceptance.md#staged-delivery-exercise--partial-not-awaiting-release-acceptance).
+
 ### CPU contention is not memory pressure (local, not deployed)
 
 Live Edge diagnostics on September 9 around 13:43 Eastern reported about 65 percent

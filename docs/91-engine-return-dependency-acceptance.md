@@ -209,6 +209,39 @@ resumed activity, unchanged engine conversation, second commit and settlement.
 Protected-input/background-work and failed-recovery escalation remain separate
 acceptance cases. Do not rerun this passing fixture to substitute for them.
 
+## Staged delivery exercise — partial, not Awaiting Release acceptance
+
+On September 9, task `01a08761-415f-7810-91e2-28ff5ce31356` used the existing
+Swarm Dogfood worker and only the new `queen-release-handoff-20260909/` fixture
+directory. The controller created, readied and assigned it, then made no further
+task mutations, terminal inputs, nudges or restarts. The task explicitly requested
+Queen's Review -> Awaiting Release handoff before confined local delivery.
+
+Activity records show Ready at 1788977694 (9549), worker Active at 1788977723
+(9551), worker Review at 1788977844 (9555), and system Completed directly from
+Review at 1788978324 (9556). The untruncated activity page has no Awaiting Release
+transition. The browser showed Queen returning a review request beginning
+"Stage one reviewed and accepted"; the full request was not independently
+captured before settlement cleared the current review-request projection.
+Do not infer the reason for Queen's chosen route from that excerpt.
+
+Independent read-only repository checks confirmed commit
+`6f102413d6d6fd32b04b3e9f29af48e32eb1760e` added exactly four files, all inside
+the fixture directory, and the final tree was clean. The committed artifact,
+working source and delivered file all independently hash to
+`2b578e30f004f8a9c9ccb25fc322e7493b6a9f666c6fb3f8105b3632f078acfd`.
+The worker reported 12 fixture tests and 51 repository tests passing; these were
+not independently rerun and are not proof of general installer crash safety.
+The worker session remained `01a08709-dcbd-7e11-9a60-feef357c2ec0` throughout
+the bounded observer's snapshots. No product release or customer send occurred.
+
+This verifies an unattended staged local delivery and evidence-based settlement,
+but **does not pass the required Queen-owned Awaiting Release path**. Preserve
+that gap; do not relabel direct Review completion as successful state handoff.
+The reproducible controller is `scripts/dogfood/queen-release-handoff.sh`;
+its status mode is read-only and its start mode refuses unrelated unfinished
+demo work and reuses the existing uniquely identified fixture task.
+
 ## Still open
 
 Automatic loaded-engine admission, long-session performance, real mobile
