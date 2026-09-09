@@ -38,8 +38,8 @@ worker records' identity fields and twelve running session/provider identities
 match before/after, as do engine PID 2947820 and start time. Evidence is in
 `/tmp/swarm-ui1-deploy.N3wwzR`. Conversation IDs were not exposed by this list;
 do not claim independent provider-conversation proof. No engine update requested.
-CI `34396506702` has passed web, linux-package and rust-audit; Rust was still
-running at this checkpoint. Preceding CI `34391815461` passed all jobs.
+CI `34396506702` completed successfully with web, linux-package, rust-audit and
+Rust passing. Preceding CI `34391815461` also passed all jobs.
 
 Live Edge confirms shorter decision cards and unclipped queue titles. The
 operator's RCG Networks report remains an explicit UI-1/QUEEN-03 blocker:

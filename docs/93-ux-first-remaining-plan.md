@@ -85,7 +85,7 @@ engine PID/start time were unchanged. Health is good. Live Edge: the same eight
 queue task titles fit without horizontal clipping. Fixture refresh preserves an
 unsent custom answer, and quick navigation focuses its exact card without losing
 the draft. A subsequent late-response regression passes (46 inbox tests total).
-CI `34396506702`: web, linux-package and audit passed; Rust was still running.
+CI `34396506702` completed successfully: web, linux-package, audit and Rust passed.
 Evidence: `/tmp/swarm-ui1-deploy.N3wwzR`. No release or engine update requested.
 
 ### UI-1 next: clarification is not a final answer
@@ -95,6 +95,24 @@ resuming work, while Needs You stayed unchanged. A live API check confirmed the
 four krbtgt/A1b/A2b/licence requests still Pending, their linked tasks still
 Blocked/next owner Operator, and RCG Networks running. This is server-side
 reconciliation debt, not just a refresh defect or something the layout fixes close.
+
+Required regression journey: an operator opens an unclear request, asks its
+context-owning worker a question, gets clarification, and settles the issue there.
+Returning to Needs You must show the authoritative outcome without another answer
+or a manual refresh. A clarification alone is not a final decision. A final answer
+requires verified operator provenance and exact request/scope correlation. If the
+question has instead become obsolete, use explicit audited withdrawal with a
+reason, not an invented operator approval. Preserve the original exchange in
+history and invalidate the attention count and linked task/queue projections.
+Resolving one request must not clear other requests merely because they share a
+worker, project or similar wording. Resumed worker activity is never sufficient.
+
+Cover pending clarification, lost/failed send with retained draft, idempotent
+retry, a late response after resolution, and direct-worker resolution while the
+inbox is open. Do not add an optimistic Done button or treat Say something else
+as an informal question: it currently submits a final answer. The direct-answer
+backend gap remains separately visible in the handoff; no new native-provider
+experiment is authorized merely to make this UI checkpoint look complete.
 
 The current `/decisions/{id}/resolution` action is final; Say something else
 also resolves. Do not disguise clarification as a resolution. Finish a distinct
