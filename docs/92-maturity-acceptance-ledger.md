@@ -8,7 +8,7 @@ an old unchecked deployment note is not automatically current missing code.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-4184ae2f157c-20260909112742-2500458`.
+- App/API: `1.6.0-dev-912cb83a741e-20260909124725-2650968`.
 - Engine: retained PID 2271655, `cf83c980`; candidate `cf179f73` remains pending.
 - Latest App/API deployment preserved all 34 worker records and twelve exact
   running session/conversation pairs. Swarm Next and D365 remained asleep.
@@ -50,7 +50,11 @@ or implementation boundary to inspect before changing it again.
 
 Current Swarm-owned change: attachment-revision sizing fence validated by a
 failing-before regression, 1,435 passing browser tests and the fifteen-worker
-synthetic Edge journey (ADR 0062). Development deployment is pending. This
+synthetic Edge journey (ADR 0062). Development deployment completed; exact
+before/after worker/session/conversation and engine-PID snapshots match in
+`/tmp/swarm-attachment-sizing.LW9sst`. Health is good and the public URL loaded
+in a separate Edge tab, which was then closed. No engine activation or release.
+This
 does not close the real-device, aged-workload or remaining orchestration gates.
 
 Admin's owner confirmed source revision `3a0f8bdbac5640776704af5c1922d679fab1d6c9`:
