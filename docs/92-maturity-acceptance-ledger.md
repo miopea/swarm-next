@@ -8,7 +8,7 @@ an old unchecked deployment note is not automatically current missing code.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-912cb83a741e-20260909124725-2650968`.
+- App/API: `1.6.0-dev-400a023d5aeb-20260909131830-2703455`.
 - Engine: retained PID 2271655, `cf83c980`; candidate `cf179f73` remains pending.
 - Latest App/API deployment preserved all 34 worker records and twelve exact
   running session/conversation pairs. Swarm Next and D365 remained asleep.
@@ -37,6 +37,26 @@ owned tab closed. This is desktop Edge viewport evidence, not real-phone accepta
 All 152 web test files / 1,440 tests and the production TypeScript/Vite build pass.
 The existing large terminal-chunk warning remains; this change does not claim a
 resource-performance improvement or completion of the wider UX acceptance row.
+Development deployment completed successfully. Exact before/after snapshots in
+`/tmp/swarm-runtime-dialogs.ctJvxD` preserve all 34 worker records and twelve
+running session/provider/conversation selections; engine PID 2271655 is unchanged.
+Health is good. CI for 912cb83a and 400a023d (34356215924) passed.
+
+### Review-return metrics — validated candidate, deployment pending
+
+ADR 0093 adds content-free, build-linked review-return episodes keyed by exact
+request ID, and answers only after the existing reply-to/assignee checks. This
+preserves repeated follow-ups which the current per-task marker replaces. It is
+not a task completion, review quality score or current waiting count. Four focused
+Linux transaction tests pass, covering replaced requests, exact/conflicting replies,
+rollback/recovery, expiry and bounds; eight web tests and the production web build
+pass. All 701 persistence/migration tests pass. The expanded panel was checked in
+the isolated Developer Dogfood fixture at desktop and 390px width; the page has no
+horizontal overflow. Fixture browser metrics were brought up to the current eight
+fields to restore this existing surface. Four private API tests and strict
+`cargo clippy -p swarm-api --all-targets --all-features -- -D warnings` pass.
+The schema and UI are ready for the normal backed-up App/API deployment; no live
+review-return acceptance is claimed yet. Broader DOG-01 remains open.
 
 No row labelled partial is a program-completion pass. Links identify the evidence
 or implementation boundary to inspect before changing it again.

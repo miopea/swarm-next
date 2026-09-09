@@ -202,11 +202,12 @@ impl TaskStore {
             body,
             now,
         )?;
-        if reply_to.is_some() {
+        if let Some(request_id) = reply_to {
             tx.execute(
                 "UPDATE task_returned_reviews SET answered_at = ?2, answer_message_id = ?3 WHERE task_id = ?1",
                 params![task_id.to_string(), now, message.id],
             )?;
+            crate::review_return_history::record_answer(&tx, request_id, now)?;
         }
         insert_control_room_event(&tx, ControlRoomEventKind::TasksChanged)?;
         tx.commit()?;

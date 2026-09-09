@@ -18,6 +18,13 @@ export type QueenRunHistory = {
   max_retained: number;
   retained_count: number;
   records: QueenRunEvidence[];
+  // Absent on an older API during an App/API update, never interpreted as zero.
+  review_returns?: {
+    retained_count: number;
+    max_retained: number;
+    retention_days: number;
+    records: { request_id: string; returned_on_build: string | null; returned_at: number; answered_at: number | null }[];
+  };
 };
 
 export async function fetchQueenRunHistory(token: string, signal: AbortSignal): Promise<QueenRunHistory> {

@@ -123,6 +123,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn review_returns_expose_exact_timing_without_message_or_task_content() {
+        use swarm_domain::{ProviderKind, TaskState, WorkerSessionId};
+        let store = TaskStore::in_memory().unwrap();
+        let now = unix_timestamp();
+        let worker = store
+            .create_worker(
+                "Private name",
+                ProviderKind::ClaudeCode,
+                "/private/path",
+                false,
+                now,
+            )
+            .unwrap();
+        store
+            .bind_worker_session(worker.id, WorkerSessionId::new())
+            .unwrap();
+        let task = store
+            .create_task("Private task title", "/private/path")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(task.id, worker.id).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        let returned = store
+            .return_review_to_worker_on_build(
+                task.id,
+                "Private review question",
+                now - 2,
+                Some("dev-return"),
+            )
+            .unwrap();
+        store
+            .message_queen_from_worker(
+                task.id,
+                worker.id,
+                "Private answer",
+                Some(&returned.id),
+                now - 1,
+            )
+            .unwrap();
+        let response = app(store).oneshot(request(true)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 8192).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let history = &payload["review_returns"];
+        assert_eq!(history["retained_count"], 1);
+        assert_eq!(history["records"][0]["request_id"], returned.id);
+        assert_eq!(history["records"][0]["returned_on_build"], "dev-return");
+        assert_eq!(history["records"][0]["answered_at"], now - 1);
+        assert!(
+            !String::from_utf8(bytes.to_vec())
+                .unwrap()
+                .to_lowercase()
+                .contains("private")
+        );
+    }
+
+    #[tokio::test]
     async fn empty_history_is_explicitly_bounded_not_invented_past_evidence() {
         let response = app(TaskStore::in_memory().unwrap())
             .oneshot(request(true))

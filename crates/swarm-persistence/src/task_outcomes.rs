@@ -1357,6 +1357,20 @@ impl TaskStore {
         request: &str,
         now: i64,
     ) -> Result<super::TaskMessage, TaskStoreError> {
+        self.return_review_to_worker_on_build(task_id, request, now, None)
+    }
+
+    /// Returns reviewed work and records the serving build without claiming review quality.
+    ///
+    /// # Errors
+    /// Refuses invalid returns or persistence failure atomically, as the ordinary return path.
+    pub fn return_review_to_worker_on_build(
+        &self,
+        task_id: TaskId,
+        request: &str,
+        now: i64,
+        build: Option<&str>,
+    ) -> Result<super::TaskMessage, TaskStoreError> {
         let request = request.trim();
         if request.is_empty() {
             return Err(TaskStoreError::CompletionEvidenceRequired);
@@ -1403,6 +1417,7 @@ impl TaskStore {
                  request_worker_id = ?3, answer_message_id = NULL WHERE task_id = ?1",
             params![task_id.to_string(), message.id, worker_id.to_string()],
         )?;
+        crate::review_return_history::record_return(&transaction, &message.id, build, now)?;
         insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
         Ok(message)

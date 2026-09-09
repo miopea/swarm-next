@@ -20,6 +20,13 @@ import { demoDecision, demoTasks, demoWorkers } from "./productFixtures";
 const now = Math.floor(Date.now() / 1000);
 
 export function hiveFixture(path: string): unknown | undefined {
+  if (path === "/api/v1/runtime/queen-history") return {
+    retention_days: 30, max_retained: 4096, retained_count: 0, records: [],
+    review_returns: { retention_days: 30, max_retained: 4096, retained_count: 200, records: [
+      { request_id: "fixture-return-a", returned_on_build: "1.6.0-dev-fictional-review", returned_at: now-120, answered_at: now-60 },
+      { request_id: "fixture-return-b", returned_on_build: "1.6.0-dev-fictional-review", returned_at: now-90, answered_at: null },
+    ] },
+  };
   if (path === "/api/v1/diagnostics/browser-evidence") {
     const empty = { count: 0, total_ms: 0, max_ms: 0 };
     return ["1.4.1-dev-synthetic-a", "1.4.1-dev-synthetic-b"].map((build, index) => ({
@@ -27,6 +34,7 @@ export function hiveFixture(path: string): unknown | undefined {
       hour: Math.floor(now / 3600) * 3600 - index * 3600, revision: 1,
       route: { count: 10, total_ms: 200 + index * 100, max_ms: 70 },
       long_task: empty, interaction: empty, terminal_render: empty, terminal_reconnect: empty,
+      terminal_grant: empty, terminal_socket: empty, terminal_restore: empty,
     }));
   }
   if (path === "/api/v1/presence/night-watch") return { enabled: false, timezone: "America/New_York", start_minute: 1320, end_minute: 420 };

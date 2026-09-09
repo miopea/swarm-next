@@ -28,6 +28,7 @@ mod queen_recovery;
 mod queen_review;
 mod queen_review_focus;
 mod queen_run_history;
+mod review_return_history;
 mod task_block;
 mod task_decision_links;
 mod task_prerequisites;
@@ -271,7 +272,8 @@ const QUEEN_REVIEW_FOCUS_SCHEMA_VERSION: i64 = 152;
 const SUPPORT_OUTBOX_SCHEMA_VERSION: i64 = 153;
 const QUEEN_RUN_HISTORY_SCHEMA_VERSION: i64 = 154;
 const SUPPORT_OUTBOX_ATTACHMENTS_SCHEMA_VERSION: i64 = 155;
-const CURRENT_SCHEMA_VERSION: i64 = SUPPORT_OUTBOX_ATTACHMENTS_SCHEMA_VERSION;
+const REVIEW_RETURN_HISTORY_SCHEMA_VERSION: i64 = 156;
+const CURRENT_SCHEMA_VERSION: i64 = REVIEW_RETURN_HISTORY_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -3981,6 +3983,9 @@ fn migrate_ops_intake_schema_steps(
     }
     if schema_version < SUPPORT_OUTBOX_ATTACHMENTS_SCHEMA_VERSION {
         support_outbox_attachments::migrate(transaction)?;
+    }
+    if schema_version < REVIEW_RETURN_HISTORY_SCHEMA_VERSION {
+        review_return_history::migrate(transaction)?;
     }
     Ok(())
 }
@@ -9228,6 +9233,12 @@ mod tests {
             table: "hive_support_outbox_attachments",
             artifact: "",
             undo_sql: "DROP TABLE hive_support_outbox_attachments; ALTER TABLE hive_support_outbox DROP COLUMN attachments_manifest",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "review_return_history",
+            artifact: "",
+            undo_sql: "DROP TABLE review_return_history",
             probe_sql: "",
         },
     ];

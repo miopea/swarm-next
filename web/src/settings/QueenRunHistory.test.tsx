@@ -13,6 +13,28 @@ function history(): History {
   }] };
 }
 
+test("review follow-ups retain build and sample boundaries without claiming pending work or yield", async () => {
+  vi.mocked(fetchQueenRunHistory).mockResolvedValue({ ...history(), review_returns: {
+    retained_count: 200, max_retained: 4096, retention_days: 30, records: [
+      { request_id: "a", returned_on_build: "return-build", returned_at: 100, answered_at: 110 },
+      { request_id: "b", returned_on_build: "return-build", returned_at: 101, answered_at: null },
+      { request_id: "c", returned_on_build: "return-build", returned_at: 102, answered_at: 99 },
+    ],
+  } });
+  render(<QueenRunHistory operatorToken="token" />);
+  expect(await screen.findByText(/3 recent returns shown of 200 retained/)).toBeInTheDocument();
+  expect(screen.getByText("return-build · 3 follow-ups · 2 exact answers")).toBeInTheDocument();
+  expect(screen.getByText("Mean return-to-answer: 10 seconds (1 sample).")).toBeInTheDocument();
+  expect(screen.getByText(/Without a recorded exact answer: 1/)).toHaveTextContent("not the current waiting queue");
+});
+
+test("an older API does not imply that no reviews were returned", async () => {
+  vi.mocked(fetchQueenRunHistory).mockResolvedValue(history());
+  render(<QueenRunHistory operatorToken="token" />);
+  expect(await screen.findByText(/Review-return history is unavailable on this API/)).toBeInTheDocument();
+  expect(screen.queryByText(/0 recent returns/)).not.toBeInTheDocument();
+});
+
 test("shows partial coverage and normalized outcomes without claiming task productivity", async () => {
   vi.mocked(fetchQueenRunHistory).mockResolvedValue(history());
   render(<QueenRunHistory operatorToken="token" />);

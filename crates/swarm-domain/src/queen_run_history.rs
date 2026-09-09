@@ -46,6 +46,24 @@ pub struct QueenRunHistory {
     pub max_retained: u32,
     pub retained_count: u32,
     pub records: Vec<QueenRunEvidence>,
+    pub review_returns: ReviewReturnHistory,
+}
+
+/// Exact follow-up episodes, not a judgment that a return improved the work.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReviewReturnEvidence {
+    pub request_id: String,
+    pub returned_on_build: Option<String>,
+    pub returned_at: i64,
+    pub answered_at: Option<i64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReviewReturnHistory {
+    pub retained_count: u32,
+    pub max_retained: u32,
+    pub retention_days: u32,
+    pub records: Vec<ReviewReturnEvidence>,
 }
 
 #[cfg(test)]

@@ -1835,7 +1835,12 @@ impl AgentMcp {
         let now = now_seconds();
         // Persistence rechecks the current assignee and Review state, then
         // commits the next-move marker and message in one transaction.
-        let request = store.return_review_to_worker(task_id, &input.request, now)?;
+        let request = store.return_review_to_worker_on_build(
+            task_id,
+            &input.request,
+            now,
+            Some(crate::build_version()),
+        )?;
         self.changed.notify_waiters();
         structured(json!({
             "task_id": input.task_id,

@@ -110,12 +110,14 @@ impl TaskStore {
                 })?
                 .collect::<Result<Vec<_>, _>>()?
         };
+        let review_returns = crate::review_return_history::read(&tx, now, limit)?;
         tx.commit()?;
         Ok(QueenRunHistory {
             retention_days: RETENTION_DAYS,
             max_retained: MAX_RETAINED,
             retained_count,
             records,
+            review_returns,
         })
     }
 }

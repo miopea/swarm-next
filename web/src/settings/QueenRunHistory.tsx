@@ -55,6 +55,35 @@ export default function QueenRunHistory({ operatorToken }: { operatorToken: stri
     })}
     <p>Explicit run finishes, not task completions or a productivity score. Unfinished, abandoned and pre-feature runs are not included.</p>
     <small>Build is recorded at finish; runs may span updates. Timing includes interruptions and continuations, not model CPU time. Means are not p95; compare equivalent workloads. Missing timing stays unavailable. Private Hive history; no terminal or message content.</small>
+    <ReviewReturns history={history} />
     <button type="button" onClick={() => void refresh()}>Refresh Queen history</button>
+  </section>;
+}
+
+function ReviewReturns({ history }: { history: History | undefined }) {
+  if (!history) return null;
+  const returns = history.review_returns;
+  if (!returns) return <p>Review-return history is unavailable on this API. No zero-return result was inferred.</p>;
+  const groups = new Map<string, typeof returns.records>();
+  for (const record of returns.records) {
+    const build = record.returned_on_build ?? "Build not recorded";
+    const rows = groups.get(build) ?? [];
+    rows.push(record);
+    groups.set(build, rows);
+  }
+  return <section aria-labelledby="review-return-history-heading">
+    <h4 id="review-return-history-heading">Review follow-ups</h4>
+    <p>{returns.records.length} recent returns shown of {returns.retained_count} retained · up to {returns.max_retained.toLocaleString()} records for {returns.retention_days} days.</p>
+    {[...groups].map(([build, rows]) => {
+      const answered = rows.filter(row => row.answered_at !== null).length;
+      const waits = rows.flatMap(row => { const seconds = interval(row.returned_at, row.answered_at); return seconds === null ? [] : [seconds]; });
+      const mean = waits.length ? `${Math.round(waits.reduce((sum,value) => sum+value,0)/waits.length)} seconds (${waits.length} ${waits.length === 1 ? "sample" : "samples"})` : "Unavailable";
+      return <details key={build}>
+        <summary className="decision-prose">{build} · {rows.length} {rows.length === 1 ? "follow-up" : "follow-ups"} · {answered} exact {answered === 1 ? "answer" : "answers"}</summary>
+        <p>Mean return-to-answer: {mean}.</p>
+        <p>Without a recorded exact answer: {rows.length - answered}. These requests may have been superseded or reassigned; this is not the current waiting queue.</p>
+      </details>;
+    })}
+    <small>Counts actual return requests and exact replies, not whether review improved the work. Repeated follow-ups count separately. History starts with this feature; build is recorded at return. No task or message content is collected.</small>
   </section>;
 }
