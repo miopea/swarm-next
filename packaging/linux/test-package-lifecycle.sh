@@ -311,6 +311,14 @@ fi
 grep -q 'ReadWritePaths=-%h/.claude$' "$SWARM_SYSTEMD_USER_ROOT/swarm-api.service"
 grep -q 'ReadWritePaths=-%h/.claude.json$' "$SWARM_SYSTEMD_USER_ROOT/swarm-api.service"
 grep -q 'PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin' "$SWARM_SYSTEMD_USER_ROOT/swarm-api.service"
+grep -q '^Environment=MALLOC_ARENA_MAX=2$' "$SWARM_SYSTEMD_USER_ROOT/swarm-api.service"
+for allocator_unit in "$SWARM_SYSTEMD_USER_ROOT"/*.service; do
+  [ "$allocator_unit" = "$SWARM_SYSTEMD_USER_ROOT/swarm-api.service" ] && continue
+  if grep -q 'MALLOC_ARENA_MAX' "$allocator_unit"; then
+    printf 'API allocator policy leaked into %s\n' "$allocator_unit" >&2
+    exit 1
+  fi
+done
 grep -q '^Wants=swarm-terminal-host.service$' "$SWARM_SYSTEMD_USER_ROOT/swarm-api.service"
 if grep -q '^Requires=swarm-terminal-host.service$' "$SWARM_SYSTEMD_USER_ROOT/swarm-api.service"; then
   echo "API must remain online during a controlled terminal-host restart" >&2

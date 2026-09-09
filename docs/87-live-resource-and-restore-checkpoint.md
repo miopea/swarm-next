@@ -109,3 +109,54 @@ including 989 ms input delay. The slowest identified interaction was 112 ms.
 The server reported no measured pressure at the sampled time. No event target
 or cause was identified; an ungrouped event cannot be called a slow keystroke
 or attributed to Swarm code without stronger evidence.
+
+## API allocator retention experiment, 2026-09-09 UTC
+
+PERF-01 follow-up on the same eight-core, 32-GiB Linux/glibc 2.39 host,
+API build `fcb4f1743897`. A temporary, non-shipped preload library read only
+aggregate `mallinfo2` counters: one observer thread, 41 samples at 30-second
+intervals, no allocator interception, trimming, pointers or application content.
+Both default and two-arena observations reached their explicit final sample.
+
+| Allocator bytes at 20 minutes | Default | `MALLOC_ARENA_MAX=2` |
+| --- | ---: | ---: |
+| Total arena space | 178,614,272 | 96,219,136 |
+| In use | 12,098,512 | 20,814,784 |
+| Free within arenas | 166,515,760 | 75,404,352 |
+| Separate mmap allocations | 0 | 0 |
+
+The candidate ended with 46% less arena space despite more live allocations.
+This identifies substantial allocator retention in this workload, not a proof
+that every prior memory increase was the same cause or that memory is capped.
+The service default now limits arena proliferation only in the API; it does
+not change the terminal host, providers, Rust allocator, or correctness policy.
+[GNU documents the arena-count setting](https://sourceware.org/glibc/manual/latest/html_node/Memory-Allocation-Tunables.html).
+An operator EnvironmentFile or service drop-in can override the default;
+`MALLOC_ARENA_MAX=0` restores glibc's default policy on the next API-only restart.
+
+The restart preserved engine PID 1547164 and all 12 original session IDs.
+The final strict equality guard exited 8 because a thirteenth session appeared,
+not because an original session disappeared. Preserve that refused aggregate
+result: this was normal live use, not a perfectly controlled identical workload.
+API PID 1909140 and the engine stayed unchanged through the candidate window.
+Evidence: `/tmp/swarm-arena-comparison.oRYxDn/{default,arena2}-allocator.log`.
+Both temporary systemd preload configurations were removed after startup;
+neither the diagnostic library nor its flags ship in the package.
+
+Separate 80-request, sequential, read-only coordinator checks discarded bodies
+and verified API, engine and session identity before and after. Default mean/max
+were 34.37/71.94 ms; candidate final mean/max were 23.80/54.19 ms, with no RSS
+increase during either burst. Request-window API CPU was 2.5875 seconds default
+and 2.0204 seconds candidate. Reports are
+`/tmp/swarm-allocator-default-requests.pl1uWY` and
+`/tmp/swarm-arena2-final-requests.6HZ2Dv`. Overall background load differed, so
+these narrow checks do not establish universal latency or CPU improvement.
+
+The isolated package lifecycle suite passed, including failure/rollback paths
+and a new assertion that the allocator setting exists only in the API unit.
+In a separate Edge tab at the authoritative URL, six switches between the two
+already-running demo workers retained terminal input. A full reload restored
+the same demo conversation; its 68,612-byte snapshot applied in 32 ms, with no
+follow-up sizing attempt recorded. One later browser-control navigation timed
+out and succeeded on retry. These observations do not close desktop jumping,
+browser sluggishness, mobile recovery, PERF-02, or long-duration acceptance.

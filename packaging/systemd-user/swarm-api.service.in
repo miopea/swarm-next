@@ -9,6 +9,10 @@ Type=simple
 EnvironmentFile=@CONFIG_ROOT@/swarm.env
 EnvironmentFile=-@CONFIG_ROOT@/swarm-dev.env
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Limit glibc arena proliferation and retained free space in the long-lived API.
+# This is API-only: provider and terminal-host allocator policy is unchanged.
+# An operator EnvironmentFile or service drop-in can override this default.
+Environment=MALLOC_ARENA_MAX=2
 Environment=SWARM_TERMINAL_SOCKET=%t/swarm/terminal.sock
 Environment=SWARM_WEB_ROOT=@INSTALL_ROOT@/current/web
 Environment=SWARM_ASSET_ROOT=@INSTALL_ROOT@/assets
