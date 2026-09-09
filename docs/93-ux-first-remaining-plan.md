@@ -159,6 +159,24 @@ source state cannot yet reconcile; a visual improvement does not close QUEEN-03.
 
 Requirements: TERM-01/02, MOB-01/02, relevant PERF-01/02, UX-01.
 
+September 9 controls checkpoint: optional key-visibility storage can no longer
+crash the composer or stop its toggle from working. Drafts explain connecting,
+disconnected and viewing-only states without automatic sending. Recovery notices
+span the full composer grid instead of falling into its Send-button column.
+Terminal toolbars, attachment explanations and tools wrap at narrow widths;
+arrow targets use actual 44px grid tracks. Normal 390px arrow/action layout remains
+compact. No worker, terminal ownership, input protocol or provider behavior changed.
+
+Focused verification: 32 composer, 29 TerminalView and four draft tests pass;
+TypeScript and production build pass. Edge fixtures at 390px in light/dark show
+three simultaneous notices, retained multiline text, failed-send recovery, exact
+single retry, no send on reconnect/redraw, collapsed keys with accessible redraw,
+and real TerminalView Resume Here preserving an unsent draft. Transport and
+redraw callbacks in these fixtures are fictional; this is not a provider or
+native-device acceptance. These checks do not close the reload-jump, attachment
+picker, actual keyboard/suspension or cross-device geometry requirements below.
+Deployment and current CI must be recorded separately after activation.
+
 1. Prioritize the reported desktop reload jump and visible restore latency.
    Reproduce using the actual terminal renderer, recorded geometry/ownership
    and output sequence. Fix browser lifecycle/measurement defects where proven;

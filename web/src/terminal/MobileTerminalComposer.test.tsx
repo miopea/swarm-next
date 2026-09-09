@@ -262,6 +262,33 @@ test("reports controlled key visibility for the durable mobile profile", () => {
   expect(onKeysExpandedChange).toHaveBeenCalledWith(true);
 });
 
+test("blocked preference storage cannot prevent opening or toggling terminal keys", () => {
+  vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new DOMException("Blocked", "SecurityError"); });
+  vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new DOMException("Full", "QuotaExceededError"); });
+  const input = vi.fn(() => true);
+  render(<MobileTerminalComposer connectionState="connected" onInput={input} />);
+  fireEvent.click(screen.getByRole("button", { name: "Hide keys" }));
+  expect(screen.queryByRole("button", { name: "Arrow up" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Show keys" }));
+  fireEvent.click(screen.getByRole("button", { name: "Arrow up" }));
+  expect(input).toHaveBeenCalledExactlyOnceWith(MOBILE_TERMINAL_KEYS.up);
+});
+
+test("reconnect explains the held draft and never submits it automatically", () => {
+  const input = vi.fn(() => true);
+  const view = render(<MobileTerminalComposer connectionState="connecting" onInput={input} />);
+  fireEvent.change(screen.getByLabelText(/Message worker/), { target: { value: "Keep this exact draft" } });
+  expect(screen.getByText(/Connecting to the terminal. Your draft stays here/)).toBeVisible();
+  expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  view.rerender(<MobileTerminalComposer connectionState="disconnected" onInput={input} />);
+  expect(screen.getByText(/The terminal is not connected/)).toBeVisible();
+  view.rerender(<MobileTerminalComposer connectionState="connected" onInput={input} />);
+  expect(screen.queryByText(/The terminal is not connected/)).not.toBeInTheDocument();
+  expect(screen.getByLabelText(/Message worker/)).toHaveValue("Keep this exact draft");
+  expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+  expect(input).not.toHaveBeenCalled();
+});
+
 test("retains the draft and blocks controls while disconnected", () => {
   const onInput = vi.fn();
   render(<MobileTerminalComposer connectionState="disconnected" onInput={onInput} />);

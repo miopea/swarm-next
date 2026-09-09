@@ -1774,7 +1774,10 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .workspace-loading svg { width: 36px; height: 36px; }
 .terminal-panel { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; }
 .terminal-toolbar { display: flex; min-height: 48px; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
-.terminal-toolbar > div { display: flex; min-width: 0; align-items: center; gap: 10px; }
+.terminal-toolbar > div { display: flex; min-width: 0; align-items: center; flex-wrap: wrap; gap: 10px; }
+.terminal-connection-summary { flex: 1 1 auto; }
+.terminal-connection-summary > small { overflow-wrap: anywhere; }
+.terminal-connection-summary > button { flex: 0 0 auto; }
 .terminal-toolbar strong { overflow: hidden; color: var(--muted); font-family: "Atkinson Hyperlegible Mono Variable", "Cascadia Code", Consolas, monospace; font-size: .7rem; text-overflow: ellipsis; }
 .terminal-toolbar small { color: var(--bad); }
 .terminal-toolbar .attachment-uploading { color: var(--accent-strong); }
@@ -2408,7 +2411,11 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .task-dispatch-uncertain { color: var(--bad); }
 .task-drop-strip { flex-wrap: wrap; }
   .shortcuts-card { grid-column: auto; }
-  .terminal-toolbar { min-height: 44px; padding: 7px 12px; }
+  .terminal-toolbar { min-height: 44px; padding: 7px 12px; flex-wrap: wrap; gap: 8px; }
+  .terminal-toolbar > div { gap: 8px; }
+  .terminal-toolbar .terminal-worker-controls:empty { display: none; }
+  .terminal-connection-summary > small { flex: 1 1 160px; }
+  .terminal-connection-summary > button { min-height: 44px; }
   .terminal-toolbar strong { display: none; }
   /* The connection state and the sleep action move into the workspace header on
      a phone, so a toolbar with nothing transient left to report gives its row
@@ -2433,25 +2440,27 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .terminal-mount { min-height: 180px; padding: 6px 7px 8px; }
   .mobile-terminal-composer { display: grid; flex: 0 0 auto; gap: 9px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--panel); }
   .mobile-terminal-composer form { display: grid; grid-template-columns: minmax(0, 1fr) 72px; gap: 7px; }
+  .mobile-terminal-composer form > p { grid-column: 1 / -1; min-width: 0; margin: 0; overflow-wrap: anywhere; font-size: .78rem; }
   .mobile-terminal-composer label { display: flex; grid-column: 1 / -1; justify-content: space-between; gap: 12px; }
   .mobile-terminal-composer textarea { min-height: 66px; max-height: 116px; resize: vertical; }
   .mobile-terminal-composer form > button { min-height: 44px; align-self: stretch; border-color: var(--accent-strong); color: var(--text); background: var(--accent-soft); }
-  .mobile-terminal-key-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--text-muted); font-size: .78rem; }
-  .mobile-terminal-key-heading > div { display: flex; gap: 6px; }
+  .mobile-terminal-key-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; color: var(--text-muted); font-size: .78rem; }
+  .mobile-terminal-key-heading > div { display: flex; flex-wrap: wrap; gap: 6px; }
+  .mobile-terminal-key-heading > small { flex-basis: 100%; overflow-wrap: anywhere; }
   .mobile-terminal-key-heading button { min-height: 44px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); background: var(--panel-raised); }
   /* Distinct from the keys beside it: those send something to the worker, this
      one repairs the screen and sends nothing. */
   .terminal-refresh-button { border-color: var(--accent-strong) !important; background: var(--accent-soft) !important; }
-  .mobile-terminal-keys { display: flex; align-items: end; justify-content: space-between; gap: 10px; }
+  .mobile-terminal-keys { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 10px; }
   .mobile-terminal-keys button { min-width: 44px; min-height: 44px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--text); background: var(--panel-raised); }
-  .terminal-dpad { display: grid; grid-template-areas: '. up .' 'left down right'; grid-template-columns: repeat(3, 42px); gap: 4px; }
+  .terminal-dpad { display: grid; grid-template-areas: '. up .' 'left down right'; grid-template-columns: repeat(3, 44px); flex: 0 0 auto; gap: 4px; }
   .terminal-dpad button { font-size: 1.12rem; line-height: 1; }
   .terminal-dpad button:nth-child(1) { grid-area: up; }
   .terminal-dpad button:nth-child(2) { grid-area: left; }
   .terminal-dpad button:nth-child(3) { grid-area: down; }
   .terminal-dpad button:nth-child(4) { grid-area: right; }
   .interrupt-button { color: var(--danger) !important; }
-  .terminal-key-actions { display: flex; flex-wrap: wrap; justify-content: end; gap: 5px; }
+  .terminal-key-actions { display: flex; flex: 1 1 160px; min-width: 0; flex-wrap: wrap; justify-content: end; gap: 5px; }
   .terminal-key-actions .mode-cycle-button { min-width: 92px; color: var(--text); background: var(--good-soft); }
 }
 

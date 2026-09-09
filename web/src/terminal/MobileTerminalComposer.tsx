@@ -44,11 +44,13 @@ export const MOBILE_TERMINAL_KEYS = {
 const MOBILE_KEYS_VISIBILITY = "swarm-next-mobile-keys-expanded";
 
 export function initialMobileKeysVisibility(): boolean {
-  return localStorage.getItem(MOBILE_KEYS_VISIBILITY) !== "false";
+  try { return localStorage.getItem(MOBILE_KEYS_VISIBILITY) !== "false"; }
+  catch { return true; }
 }
 
 export function rememberMobileKeysVisibility(visible: boolean): void {
-  localStorage.setItem(MOBILE_KEYS_VISIBILITY, String(visible));
+  try { localStorage.setItem(MOBILE_KEYS_VISIBILITY, String(visible)); }
+  catch { /* An optional preference must not disable terminal controls. */ }
 }
 
 export function composeTerminalSubmission(draft: string): readonly [string, string] {
@@ -304,7 +306,11 @@ export function MobileTerminalComposer({ sessionId, connectionState, inputAvaila
         {otherDraft && <p role="status">An unsent draft belongs to another terminal. Return there to continue, or <button type="button" onClick={() => terminalDraft.clear()}>Discard the other terminal’s draft</button> to write here.</p>}
         {uncertainDraft && !submitting && <p role="status">This text may already be in the terminal. Inspect it before sending again. <button type="button" onClick={() => { terminalDraft.markUncertain(sessionId!, false); setSubmissionWarning(undefined); }}>I checked; allow editing or resending</button></p>}
         {sessionId && saved.storageUnavailable && <p role="status">Draft storage is unavailable. Text survives view changes in memory, but may be lost if this page reloads.</p>}
-        {!inputAvailable && draft.length > 0 && <p role="status">Your draft stays here while this terminal is viewing only.</p>}
+        {draft.length > 0 && !connected && <p role="status">{connectionState === "connected"
+          ? "Your draft stays here while this terminal is viewing only."
+          : connectionState === "connecting"
+            ? "Connecting to the terminal. Your draft stays here; nothing is sent automatically."
+            : "The terminal is not connected. Your draft stays here; reconnect before sending."}</p>}
         {submissionWarning ? <p role="status">{submissionWarning}</p> : null}
         {sourceWarning ? <p role="status">{sourceWarning}</p> : null}
       </form>

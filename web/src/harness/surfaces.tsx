@@ -13,6 +13,7 @@ import DecisionAnswerFixture from "./DecisionAnswerFixture";
 import SupportFeedbackFixture from "./SupportFeedbackFixture";
 import TaskPreviewFixture from "./TaskPreviewFixture";
 import RuntimeDialogsFixture from "./RuntimeDialogsFixture";
+import TerminalComposerFixture from "./TerminalComposerFixture";
 import DecisionInterviewFixture from "./DecisionInterviewFixture";
 
 import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
@@ -278,6 +279,26 @@ export const SURFACES: Surface[] = [
       <p>Invented terminal. No Hive, worker, or provider. This tests browser wiring, not engine ownership.</p>
       <div style={{ flex: 1, minHeight: 0 }}><TerminalView session={{ session_id: "fixture-terminal-handoff", running: true }} operatorToken="fixture-only" busy={false} /></div>
     </main>,
+  },
+  {
+    id: "terminal-handoff-phone",
+    title: "Phone terminal handoff",
+    why: "Real terminal and composer in a 390px viewport; fictional transport only, not native device acceptance.",
+    render: () => <iframe title="Phone terminal handoff preview" src={`/harness.html?surface=terminal-handoff&terminalControl=${new URLSearchParams(location.search).get("terminalControl") === "elsewhere" ? "elsewhere" : "owned"}`}
+      style={{ display: "block", width: 390, height: 844, border: 0 }} />,
+  },
+  {
+    id: "terminal-composer",
+    title: "Terminal composer recovery",
+    why: "Fictional input refusals, reconnect and source-record failures; no provider or upload.",
+    render: () => <TerminalComposerFixture />,
+  },
+  {
+    id: "terminal-composer-phone",
+    title: "Phone composer recovery",
+    why: "390px recovery layout with actual controls and fictional callbacks, not native keyboard acceptance.",
+    render: () => <iframe title="Phone composer recovery preview" src="/harness.html?surface=terminal-composer"
+      style={{ display: "block", width: 390, height: 844, border: 0 }} />,
   },
   {
     id: "terminal-questions",
