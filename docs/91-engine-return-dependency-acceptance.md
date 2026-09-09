@@ -179,6 +179,36 @@ retry do not establish atomic replacement or crash recovery. This limitation
 does not invalidate the independently verified deployed bytes, but prevents
 claiming that the fixture's broader atomicity comments are proved.
 
+## Same-task idle recovery — September 9
+
+Task `01a08615-bf39-7c53-8827-4a461c8765cb` deliberately ended its first
+provider turn after committing a checkpoint in the existing isolated Swarm
+Dogfood repository. It stayed Active with an explicit remaining authorized step,
+no question, no background job and no request to Queen. Normal task creation,
+Ready and assignment were the only controller mutations.
+
+Durable activity: Ready at 1788955967 (9432), Active at 1788955997 (9437),
+checkpoint at 1788956055 (9438). The provider was subsequently observed Resting
+with no background work. Recovery attention `01a08617-a124-7080-a632-9dde9b9796ab`
+was recorded at 1788956090; Queen review was delivered at 1788956242. The worker
+returned to activity, then Review and system Completed at 1788956414 (9441/9442).
+Ready-to-completion took 447 seconds; this is not an instant-recovery claim.
+
+Independent repository inspection verified the first checkpoint commit
+`a33abed5d496056c55a42ed724a9e2f72936b9db` and completion commit
+`1bef45817a160058e45ce17def9fceaaecc5a602`, changing only
+`idle-recovery-20260909.md`, with both required headings and a clean tree.
+Engine metadata retained session `01a0846e-3ee1-7af3-9a77-3d41e0a5acf6`
+and selected/confirmed conversation `019ff8e1-4a2d-7a11-acff-6a10fb57af3e`.
+No manual nudge, terminal input, restart, reassignment or completion was used.
+
+The worker reported receipt `01a0861a-ee67-75a3-a4eb-48ab9fd2f4ff` and retained
+provider context; those statements were not independently verified from terminal
+content. Independent evidence establishes the resting gap, recovery obligation,
+resumed activity, unchanged engine conversation, second commit and settlement.
+Protected-input/background-work and failed-recovery escalation remain separate
+acceptance cases. Do not rerun this passing fixture to substitute for them.
+
 ## Still open
 
 Automatic loaded-engine admission, long-session performance, real mobile

@@ -8,7 +8,7 @@ an old unchecked deployment note is not automatically current missing code.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-0a69fb8e9ebd-20260909102351-2469070`.
+- App/API: `1.6.0-dev-4184ae2f157c-20260909112742-2500458`.
 - Engine: retained PID 2271655, `cf83c980`; candidate `cf179f73` remains pending.
 - Latest App/API deployment preserved all 34 worker records and twelve exact
   running session/conversation pairs. Swarm Next and D365 remained asleep.
@@ -32,7 +32,7 @@ or implementation boundary to inspect before changing it again.
 | MOB-01 | Existing composer, draft and failed-submission protections retained. | Real keyboard/dictation, suspension and immutable-session draft recovery on both mobile platforms. |
 | MOB-02 | Attachment lifecycle fixes and tests recorded in [47](47-maturity-remaining.md). | Camera/gallery selection through shared-file receipt and provider reference acceptance on Android/iOS; desktop task-image previews do not prove this. |
 | QUEEN-01 | Autonomous two-demo dependency journey, routine documentation, executable-code/no-deployment and actual isolated local deployment settlement; [91](91-engine-return-dependency-acceptance.md). | Queen-owned Awaiting Release handoff and worker-first escalation journeys; the local Review-to-system-completion proof does not establish production rollout or fixture crash recovery. |
-| QUEEN-02 | Engagement and task-scoped recovery guards; bounded recovery delivery. | Demonstrate safe kicks and escalation without mid-task derailment across representative work; no real-project terminal experiments. |
+| QUEEN-02 | Engagement guards and bounded recovery delivery; normal same-task idle recovery completed autonomously in the isolated demo, retaining its exact session/conversation; [91](91-engine-return-dependency-acceptance.md). | Protected-input, background-work and failed-recovery escalation journeys remain; no real-project terminal experiments. |
 | QUEEN-03 | Authenticated composer source records and exact-ID reads exist. | Direct-terminal/AskUser authored-answer capture and exact decision correlation remain unwired. Proposed source-to-deferral linking awaits the operator's answer. |
 | QUEUE-01 | Owner grouping, worker grouping, structural prerequisites, exact held-briefing reasons, calendar reassessment journey. | Prove owner/reason consistency through remaining handoff/review/operator-resolution paths. Text-only deferrals without authoritative links remain a real evidence gap. |
 | ATT-01 | Concise custom-answer UI and resolved/pending decision projection exist. | Direct worker answers must reconcile the same Needs You item without duplicate questions; depends on QUEEN-03. |
@@ -60,9 +60,10 @@ review UI and browser retry-byte retention are now implemented and verified in
 isolation; no live attachment route acceptance is claimed. The existing fictional request remains untouched and
 dispatch still requires restored Admin sign-in.
 
-1. Complete paired Admin verification and review its deployment/storage changes.
-   Reuse the existing source and idempotent report identity. Keep the
-   existing linked-task fixture; Admin authentication is an external acceptance gate.
+1. Continue Swarm-owned orchestration, performance and whole-surface acceptance.
+   Do not communicate with the BFG Admin worker without fresh operator approval.
+   Keep its existing linked-task fixture and external activation gates; do not
+   repeat coordination or passed paired tests while those gates are pending.
 2. Resolve the pending scoped operator-source linking proposal, then implement
    exact authored-source/decision reconciliation with no implicit authorization.
 3. Establish provider-native settled-turn/background evidence before automatic
@@ -306,7 +307,7 @@ running session/provider/conversation pairs; engine PID 2271655 did not change.
 The separate Edge tab loaded Queues with its owner sections intact and was closed
 after inspection. This is not whole-program acceptance or a release.
 
-### Deployment retry scope — validated, awaiting development deployment
+### Deployment retry scope — deployed and continuity verified
 
 A partial deployment retried with whole-task scope reproduced premature
 Awaiting Release completion despite the saved receipt remaining partial.
@@ -316,3 +317,8 @@ retries remain idempotent; a genuinely new whole-task receipt restores normal
 settlement. The regression failed before the fix and passes after it. All 697
 persistence tests and strict API Clippy checks passed on the isolated Linux tree.
 No migration, engine activation, customer send or release is part of this fix.
+
+Development update 4184ae2f completed successfully. Health reports the version
+above. Exact worker and session/provider/conversation snapshots match in
+`/tmp/swarm-deployment-scope.fKQm9U`; engine PID 2271655 is unchanged. This
+verification closes this deployment checkpoint, not the overall maturity goal.
