@@ -147,7 +147,13 @@ mobile layout, private operator downloads or production storage behavior.
 Admin's owner supplied and root reviewed the bounded relay upload deadline and
 persistent deletion-marker/conditional-create fence. Production schema 17-to-18
 and feedback-only storage credential activation remain held for explicit operator
-approval. The Swarm attachment tranche is not deployed while that gate is open.
+approval. Native file intake remains disabled while that gate is open. An explicit
+default-off intake setting now permits installing the additive Hive storage and
+unrelated App/API corrections without activating Admin or exposing a file picker.
+Twelve support HTTP tests and strict API all-target Clippy pass, including refusal
+before reading a stalled upload, preserved saved bytes, truthful disabled capability,
+and ordinary text submission with file intake off. Sender recovery of existing
+frozen reports is unchanged. Actual deployment/continuity remains to be verified.
 
 ### Terminal post-grant recovery correction
 

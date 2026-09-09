@@ -136,7 +136,8 @@ mod tests {
         let state = AppState::default()
             .with_task_store(store.clone())
             .with_central_support("https://admin.example.invalid")
-            .unwrap();
+            .unwrap()
+            .with_central_support_attachments(true);
         *state.operator_token.write().unwrap() = Some(Arc::from("fixture"));
         (state, store)
     }
@@ -164,6 +165,56 @@ mod tests {
         }
         app.oneshot(request.body(body).unwrap()).await.unwrap()
     }
+    #[tokio::test]
+    async fn disabled_intake_rejects_before_reading_and_preserves_saved_files() {
+        let (state, store) = fixture();
+        let app = crate::router(state.clone());
+        assert_eq!(
+            request(app, true, Body::from(body(&manifest(), &[(ID, "one")])))
+                .await
+                .status(),
+            StatusCode::ACCEPTED
+        );
+        let disabled = crate::router(state.with_central_support_attachments(false));
+        let response = tokio::time::timeout(
+            Duration::from_secs(1),
+            request(
+                disabled.clone(),
+                true,
+                Body::from_stream(futures_util::stream::pending::<
+                    Result<axum::body::Bytes, std::io::Error>,
+                >()),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let status = disabled
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/feedback/support")
+                    .header("authorization", "Bearer fixture")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status: serde_json::Value =
+            serde_json::from_slice(&to_bytes(status.into_body(), 8192).await.unwrap()).unwrap();
+        assert_eq!(status["attachments_supported"], false);
+        assert_eq!(status["configured"], true);
+        let saved = store.support_submission_statuses().unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(
+            store
+                .support_submission(saved[0].submission_key.parse().unwrap())
+                .unwrap()
+                .attachments[0]
+                .bytes(),
+            b"one"
+        );
+    }
+
     #[tokio::test]
     async fn exact_authenticated_upload_is_saved_once_and_never_sent_by_request() {
         let (state, store) = fixture();

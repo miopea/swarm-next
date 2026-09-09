@@ -2,6 +2,21 @@
 
 ## September 9 native attachment contract agreement
 
+### Independent intake activation
+
+New Hive file intake defaults disabled even when text support is configured.
+The deployment owner enables `SWARM_SUPPORT_ATTACHMENTS=true` only after Admin's
+native route/storage activation is verified. False or absent keeps file intake
+off; invalid configuration reports a degraded file subsystem without preventing
+the Hive from starting. The status capability and authenticated upload admission
+use the same setting, rejecting disabled intake before reading bytes. Existing
+frozen files, receipts and sender retries are preserved; disabling intake never
+deletes or silently downgrades a previously accepted report. Text support and
+unrelated App/API improvements remain deployable independently of Admin changes.
+This rollout compatibility gate is owned by central support; remove the default-off
+rollout requirement only after supported central destinations all serve the native
+contract. It grants no storage or mail permission and does not activate Admin.
+
 ### Hive upload/review implementation checkpoint
 
 The local authenticated `/api/v1/feedback/support/attachments` adapter now accepts

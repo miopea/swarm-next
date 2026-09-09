@@ -86,6 +86,28 @@ fn configure_github_feedback(state: AppState) -> AppState {
 /// `SWARM_GITHUB_REPOSITORY` so that a maintainer can triage a repository they do
 /// not file feedback into, and so that reading this file tells you which repo
 /// arrives on this board.
+fn configure_central_support(mut state: AppState) -> AppState {
+    state = match env::var("SWARM_SUPPORT_ORIGIN") {
+        Ok(origin) => match state.clone().with_central_support(&origin) {
+            Ok(configured) => configured,
+            Err(error) => state.with_degraded_subsystem("Central support", error),
+        },
+        Err(env::VarError::NotPresent) => state,
+        Err(_) => {
+            state.with_degraded_subsystem("Central support", "Support origin is not valid Unicode")
+        }
+    };
+    match env::var("SWARM_SUPPORT_ATTACHMENTS") {
+        Ok(value) if value == "true" => state.with_central_support_attachments(true),
+        Ok(value) if value == "false" => state,
+        Err(env::VarError::NotPresent) => state,
+        _ => state.with_degraded_subsystem(
+            "Central support files",
+            "SWARM_SUPPORT_ATTACHMENTS must be true or false; file intake remains disabled",
+        ),
+    }
+}
+
 fn configure_github_issue_intake(state: AppState) -> AppState {
     match (
         env::var("SWARM_GITHUB_ISSUE_INTAKE").ok(),
@@ -196,16 +218,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
     }
     state = configure_github_feedback(state);
-    state = match env::var("SWARM_SUPPORT_ORIGIN") {
-        Ok(origin) => match state.clone().with_central_support(&origin) {
-            Ok(configured) => configured,
-            Err(error) => state.with_degraded_subsystem("Central support", error),
-        },
-        Err(env::VarError::NotPresent) => state,
-        Err(_) => {
-            state.with_degraded_subsystem("Central support", "Support origin is not valid Unicode")
-        }
-    };
+    state = configure_central_support(state);
     state = configure_github_issue_intake(state);
     state = state.with_email_oauth_paths(
         email_configuration_path(&database_path),

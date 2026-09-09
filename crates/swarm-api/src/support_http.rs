@@ -24,6 +24,7 @@ pub(super) struct SupportRuntime {
     // 0 configured, 1 running, 2 stopped, 3 failed. Never restart a live owner.
     state: Arc<AtomicU8>,
     uploads: Arc<tokio::sync::Semaphore>,
+    attachments_enabled: bool,
 }
 
 impl AppState {
@@ -47,8 +48,19 @@ impl AppState {
             wake: Arc::new(Notify::new()),
             state: Arc::new(AtomicU8::new(0)),
             uploads: Arc::new(tokio::sync::Semaphore::new(2)),
+            attachments_enabled: false,
         });
         Ok(self)
+    }
+
+    /// Enables new file intake only after the central attachment route is ready.
+    /// Existing frozen reports retain their sender and retry identity when disabled.
+    #[must_use]
+    pub fn with_central_support_attachments(mut self, enabled: bool) -> Self {
+        if let Some(runtime) = self.central_support.as_mut() {
+            runtime.attachments_enabled = enabled;
+        }
+        self
     }
 
     /// Runtime owner calls once and joins this future on graceful shutdown.
@@ -109,7 +121,7 @@ pub(super) async fn status(
                 _ => "failed",
             });
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(serde_json::json!({
-        "configured": state.central_support.is_some(), "attachments_supported": state.central_support.is_some(), "sender": sender, "deliveries": deliveries,
+        "configured": state.central_support.is_some(), "attachments_supported": state.central_support.as_ref().is_some_and(|runtime| runtime.attachments_enabled), "sender": sender, "deliveries": deliveries,
     }))).into_response())
 }
 
@@ -149,6 +161,13 @@ pub(super) async fn submit_files(
     // Multipart extraction constructs a stream; no upload bytes are read before auth/admission.
     authorize(&state, &headers)?;
     let runtime = state.central_support.as_ref().ok_or_else(unavailable)?;
+    if !runtime.attachments_enabled {
+        return Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "support_attachments_disabled",
+            "Support file intake is not enabled. Keep this report and its files for retry.",
+        ));
+    }
     let upload_permit = runtime.uploads.clone().try_acquire_owned().map_err(|_| {
         ApiError::new(
             StatusCode::TOO_MANY_REQUESTS,
@@ -330,6 +349,7 @@ mod tests {
     #[tokio::test]
     async fn operator_only_submission_is_saved_once_and_never_claimed_by_the_request() {
         let (state, store) = fixture();
+        assert!(!state.central_support.as_ref().unwrap().attachments_enabled);
         let app = crate::router(state);
         assert_eq!(
             request(app.clone(), "POST", false, payload())
