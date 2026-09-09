@@ -8,7 +8,7 @@ an old unchecked deployment note is not automatically current missing code.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-f476861e2d57-20260909072626-2380411`.
+- App/API: `1.6.0-dev-f5c30de85f95-20260909091502-2434051`.
 - Engine: retained PID 2271655, `cf83c980`; candidate `cf179f73` remains pending.
 - Latest App/API deployment preserved all 34 worker records and twelve exact
   running session/conversation pairs. Swarm Next and D365 remained asleep.
@@ -167,4 +167,17 @@ Both regressions pass, including recovery through a new grant and canonical
 snapshot with no replay of refused input; all 61 connection tests and TypeScript
 checking pass. This is a demonstrated failure-path repair, not proof that it
 caused the reported desktop redraw jump or every mobile reconnection delay.
-Deployment is pending.
+The correction is deployed in the f5c30de8 development build below.
+
+### Worker-preserving gated-intake deployment
+
+The configured development updater completed f5c30de85f95 successfully; API PID
+is 2436275 and engine PID remains 2271655. Exact sorted snapshots before/after
+match all 34 worker identities/running/assignment records and all 12 session IDs,
+provider selections and confirmed conversation selections. Swarm Next and D365
+remain asleep. Evidence: `/tmp/swarm-intake-gated-update.atA9ld` on bgsdev.
+Health is okay with no database recovery; support reports configured/running and
+attachments_supported=false. No central Admin infrastructure, file-intake
+activation, worker-engine activation, customer send or release was performed.
+Local production web build passed. Earlier native paired-test CI 34332128576
+passed; full CI for this final intake-gated revision remains separately pending.
