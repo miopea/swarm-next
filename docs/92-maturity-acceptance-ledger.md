@@ -8,7 +8,7 @@ an old unchecked deployment note is not automatically current missing code.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-a65e14b5a800-20260909093256-2444143`.
+- App/API: `1.6.0-dev-8145b9023c7d-20260909095202-2453393`.
 - Engine: retained PID 2271655, `cf83c980`; candidate `cf179f73` remains pending.
 - Latest App/API deployment preserved all 34 worker records and twelve exact
   running session/conversation pairs. Swarm Next and D365 remained asleep.
@@ -226,7 +226,7 @@ worker execution and Queen completion. See [91](91-engine-return-dependency-acce
 for the exact timeline and evidence boundary; this does not close deployment or
 real-backlog recovery acceptance.
 
-### Inactive terminal presentation cleanup — not yet deployed
+### Inactive terminal presentation cleanup
 
 Two failing-before regressions showed that hidden views retained pending redraw
 work and detached retained surfaces scheduled timers on global viewport events.
@@ -241,3 +241,11 @@ The isolated Edge WebGL fixture switched away and back with two retained rendere
 one attached and one inactive, and showed the intact fictional terminal. The
 fixture tab and server were closed. This proves the lifecycle correction, not a
 measured reduction in whole-app CPU or acceptance of aged production responsiveness.
+
+The normal development updater installed 8145b902 successfully. App/API PID is
+2454791; engine PID remains 2271655. Exact sorted before/after snapshots in
+`/tmp/swarm-inactive-render.jSTPUx` match all 34 worker identities/running/session
+bindings and all twelve provider/conversation selections. Swarm Next and D365
+remain asleep. Health is okay; support file intake remains disabled. No engine
+activation, central Admin infrastructure change, customer send or release occurred.
+CI for 8145b902 remains separate from the passing local suite and live continuity.
