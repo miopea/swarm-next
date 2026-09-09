@@ -111,6 +111,14 @@ domain_id!(FederationStewardTakeoverLeaseId);
 domain_id!(StewardshipId);
 domain_id!(ProviderConversationId);
 domain_id!(ConversationRecoveryId);
+domain_id!(WorkerRevivalAttemptId);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerReturnAttention {
+    Failed,
+    Unconfirmed,
+}
 domain_id!(PresenceDeviceId);
 domain_id!(TerminalViewId);
 domain_id!(JiraProjectBindingId);

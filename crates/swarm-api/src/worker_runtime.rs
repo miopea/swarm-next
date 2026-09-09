@@ -85,16 +85,58 @@ pub(super) async fn start_worker_process(
     size: TerminalSize,
 ) -> Result<crate::WorkerView, ApiError> {
     let _guard = state.worker_lifecycle.lock().await;
-    start_worker_process_unlocked(state, worker_id, size).await
+    let result = start_worker_process_unlocked(state, worker_id, size).await;
+    if result.is_ok() {
+        task_store(state)?
+            .clear_worker_return_attention(worker_id)
+            .map_err(|error| task_store_error(&error))?;
+        state.worker_errors.write().await.remove(&worker_id);
+    }
+    result
 }
 
-/// Queen startup revalidates policy after acquiring lifecycle ownership.
+/// Exclusive lifecycle ownership proves no in-process return is still launching.
+pub(super) fn recover_worker_returns_if_idle(state: &AppState) -> Result<(), ApiError> {
+    if let Ok(_lifecycle) = state.worker_lifecycle.try_lock() {
+        let count = task_store(state)?
+            .recover_interrupted_worker_returns()
+            .map_err(|error| task_store_error(&error))?;
+        if count > 0 {
+            state.control_room_notify.notify_waiters();
+        }
+    }
+    Ok(())
+}
+
+/// Caller holds lifecycle ownership: an abandoned start cannot still be local work.
+pub(super) fn require_confirmed_worker_return(
+    state: &AppState,
+    worker_id: WorkerId,
+) -> Result<(), ApiError> {
+    task_store(state)?
+        .recover_interrupted_worker_returns()
+        .map_err(|error| task_store_error(&error))?;
+    if task_store(state)?
+        .worker_return_attention()
+        .map_err(|error| task_store_error(&error))?
+        .contains_key(&worker_id)
+    {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "worker_return_needs_review",
+            "Automatic start is paused after an unresolved maintenance return; inspect recovery before retrying.",
+        ));
+    }
+    Ok(())
+}
+
 pub(super) async fn start_queen_worker_process(
     state: &AppState,
     worker_id: WorkerId,
     size: TerminalSize,
 ) -> Result<crate::WorkerView, ApiError> {
     let _guard = state.worker_lifecycle.lock().await;
+    require_confirmed_worker_return(state, worker_id)?;
     let profile = task_store(state)?
         .get_worker_profile(worker_id)
         .map_err(|error| task_store_error(&error))?;
@@ -117,6 +159,7 @@ pub(super) async fn start_coordinator_worker_process(
     size: TerminalSize,
 ) -> Result<Option<crate::WorkerView>, ApiError> {
     let _guard = state.worker_lifecycle.lock().await;
+    require_confirmed_worker_return(state, action.worker_id)?;
     let store = task_store(state)?;
     if !store
         .coordinator_wake_can_start(action)
@@ -170,9 +213,15 @@ pub(super) async fn revive_worker_process(
     // Recheck after acquiring ownership: another maintenance run may have
     // started after the supervisor's earlier host observation.
     let host = crate::maintenance::host_status_snapshot(state).await?;
-    if host.draining {
+    if host.draining || crate::maintenance::worker_engine_update_required(&host) {
         return Ok(None);
     }
+    let Some(attempt) = store
+        .claim_worker_revival_attempt(worker_id, crate::unix_timestamp())
+        .map_err(|error| task_store_error(&error))?
+    else {
+        return Ok(None);
+    };
     let result = start_worker_process_unlocked(state, worker_id, size).await;
     if let Err(error) = &result {
         state
@@ -180,17 +229,28 @@ pub(super) async fn revive_worker_process(
             .write()
             .await
             .insert(worker_id, error.message.clone());
+        // Only an explicit engine refusal proves failure. A lost transport reply
+        // or subsequent persistence error may have followed a real launch.
+        let attention = if error.code == "terminal_operation_failed" {
+            swarm_domain::WorkerReturnAttention::Failed
+        } else {
+            swarm_domain::WorkerReturnAttention::Unconfirmed
+        };
+        store
+            .record_worker_return_attention(worker_id, attempt, attention)
+            .map_err(|error| task_store_error(&error))?;
+    } else {
+        store
+            .complete_worker_revival_attempt(worker_id, attempt)
+            .map_err(|error| task_store_error(&error))?;
     }
     // Start outcome and promise settlement share the same lifecycle lock.
     // A caller must not clear a newer promise or overwrite a newer success
     // after this operation gives up ownership.
-    store
-        .clear_worker_revival_intent(worker_id)
-        .map_err(|error| task_store_error(&error))?;
     result.map(Some)
 }
 
-async fn start_worker_process_unlocked(
+pub(super) async fn start_worker_process_unlocked(
     state: &AppState,
     worker_id: WorkerId,
     size: TerminalSize,
@@ -2074,6 +2134,55 @@ mod tests {
     }
 
     use super::*;
+
+    #[tokio::test]
+    async fn unresolved_return_blocks_queen_and_task_wakes_without_contacting_host() {
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Return fixture",
+                ProviderKind::ClaudeCode,
+                "/fictional",
+                true,
+                1,
+            )
+            .unwrap();
+        let state = AppState::default().with_task_store(store.clone());
+        for attention in [None, Some(swarm_domain::WorkerReturnAttention::Failed)] {
+            store
+                .record_worker_revival_intents(&[worker.id], 1)
+                .unwrap();
+            let attempt = store
+                .claim_worker_revival_attempt(worker.id, 2)
+                .unwrap()
+                .unwrap();
+            if let Some(attention) = attention {
+                store
+                    .record_worker_return_attention(worker.id, attempt, attention)
+                    .unwrap();
+            }
+            let error = start_queen_worker_process(&state, worker.id, TerminalSize::default())
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(error.code, "worker_return_needs_review");
+            let wake = swarm_persistence::CoordinatorWorkerWake {
+                action_id: "fictional-wake".to_owned(),
+                worker_id: worker.id,
+                task_id: swarm_domain::TaskId::new(),
+            };
+            let error = start_coordinator_worker_process(&state, &wake, TerminalSize::default())
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(error.code, "worker_return_needs_review");
+            assert_eq!(
+                store.worker_return_attention().unwrap().get(&worker.id),
+                Some(&attention.unwrap_or(swarm_domain::WorkerReturnAttention::Unconfirmed))
+            );
+            assert!(state.worker_lifecycle.try_lock().is_ok());
+        }
+    }
 
     #[tokio::test]
     async fn revival_rechecks_cancellation_and_policy_before_host_contact() {

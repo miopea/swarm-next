@@ -1202,6 +1202,10 @@ impl AppState {
             .copied()
             .collect::<std::collections::HashSet<_>>();
         provider_activity::refresh(self, &profiles, &live_ids).await;
+        if let Err(error) = worker_runtime::recover_worker_returns_if_idle(self) {
+            tracing::warn!(message = %error.message, "interrupted worker returns could not be recovered");
+            return;
+        }
         let now = unix_timestamp();
         {
             let mut attempts = self.worker_recovery_attempts.write().await;
@@ -1367,6 +1371,12 @@ impl AppState {
         if !admission.permits_start() {
             return false;
         }
+        let _lifecycle = self.worker_lifecycle.lock().await;
+        if worker_runtime::require_confirmed_worker_return(self, profile.id).is_err()
+            || self.worker_errors.read().await.contains_key(&profile.id)
+        {
+            return false;
+        }
         if self
             .worker_recovery_attempts
             .write()
@@ -1383,7 +1393,8 @@ impl AppState {
             return false;
         }
         if let Err(error) =
-            worker_runtime::start_worker_process(self, profile.id, TerminalSize::default()).await
+            worker_runtime::start_worker_process_unlocked(self, profile.id, TerminalSize::default())
+                .await
         {
             self.worker_errors
                 .write()
@@ -2829,6 +2840,8 @@ struct WorkerView {
     engagement_expires_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     runtime_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    return_attention: Option<swarm_domain::WorkerReturnAttention>,
     /// Why this worker is resting, when somebody said. NOT `runtime_error`: a
     /// worker stood down on purpose has not failed, and filing a deliberate act
     /// under "error" is how a resting worker starts looking broken.
@@ -3190,6 +3203,7 @@ fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
         waking_since,
         engagement_expires_at,
         runtime_error,
+        return_attention: None,
         rest_reason,
         system_role,
         last_output_at,
@@ -17128,6 +17142,7 @@ mod tests {
             state.revive_workers_owed_a_return().await;
             assert_eq!(state.worker_errors.read().await.len(), 4);
             assert_eq!(store.worker_revival_intents().unwrap().len(), 1);
+            assert_eq!(store.worker_return_attention().unwrap().len(), 4);
             state.revive_workers_owed_a_return().await;
             assert_eq!(state.worker_errors.read().await.len(), 5);
             assert!(store.worker_revival_intents().unwrap().is_empty());
@@ -17135,8 +17150,44 @@ mod tests {
         .await
         .unwrap();
         assert!(state.worker_lifecycle.try_lock().is_ok());
+        assert_return_attention_survives_api_replacement(store, &socket).await;
         server_task.abort();
         let _ = server_task.await;
+    }
+
+    async fn assert_return_attention_survives_api_replacement(store: TaskStore, socket: &FilePath) {
+        let mut replacement = AppState::default()
+            .with_terminal_host(HostClient::new(socket), "secret")
+            .with_task_store(store.clone());
+        replacement.test_start_admission = Some(runtime::CoordinatorStartAdmission::Allowed);
+        replacement.revive_workers_owed_a_return().await;
+        assert!(replacement.worker_errors.read().await.is_empty());
+        assert_eq!(store.worker_return_attention().unwrap().len(), 5);
+        for profile in store.list_worker_profiles().unwrap() {
+            assert!(
+                !replacement
+                    .try_autostart_recovery(
+                        &profile,
+                        unix_timestamp(),
+                        runtime::CoordinatorStartAdmission::Allowed
+                    )
+                    .await
+            );
+        }
+        assert!(replacement.worker_recovery_attempts.read().await.is_empty());
+        let response = authorized_get(router(replacement), "/api/v1/workers").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let workers = response_json(response).await;
+        for worker in workers.as_array().unwrap() {
+            assert_eq!(worker["return_attention"], "failed");
+            assert_eq!(worker["attention_state"], "blocked");
+            assert!(
+                worker["runtime_error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("after maintenance")
+            );
+        }
     }
 
     #[tokio::test]

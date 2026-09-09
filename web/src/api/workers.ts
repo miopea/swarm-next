@@ -87,6 +87,8 @@ export type Worker = {
   engaged_device_class?: "desktop" | "mobile";
   engagement_expires_at?: number;
   runtime_error?: string;
+  /** Durable post-maintenance return outcome; absent means no unresolved outcome. */
+  return_attention?: "failed" | "unconfirmed";
   /**
    * The bee this worker wears. Absent means it is derived from the worker's id,
    * so a Hive that has never chosen one still shows everybody differently.

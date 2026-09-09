@@ -205,6 +205,17 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
           layer needs attention did not answer it. What is wrong leads; what is
           fine collapses. When nothing is wrong the honest page is one line. */}
       <PerformanceEvidence evidence={assessPerformance(browserTiming, runtime.resources)} />
+      {workers.some((worker) => worker.return_attention) && <section aria-label="Worker return recovery details">
+        <h4>Worker return recovery</h4>
+        <p>These outcomes survive an app reload. Swarm will not automatically repeat an unconfirmed start.</p>
+        <dl className="diagnostic-list">{workers.filter((worker) => worker.return_attention).map((worker) => <div key={worker.id}>
+          <dt>{worker.name}</dt><dd>{worker.runtime_error}
+            {worker.running ? " An existing bound session is running; open that worker to inspect it." : worker.return_attention === "failed"
+              ? " Correct the reported cause, then retry this worker from the roster."
+              : " Check the terminal engine for an existing session before manually retrying. A missing start reply does not prove the process failed."}
+          </dd>
+        </div>)}</dl>
+      </section>}
       {needsAttention.length === 0 ? (
         <p className="diagnostic-verdict healthy" role="status">No faults reported by the available checks.</p>
       ) : (

@@ -5,6 +5,7 @@ import TerminalView from "../terminal/TerminalView";
 import { MobileTerminalComposer } from "../terminal/MobileTerminalComposer";
 import DeveloperDogfoodWorkspace from "../settings/DeveloperDogfoodWorkspace";
 import DatabaseRecoveryCard from "../runtime/DatabaseRecoveryCard";
+import WorkerReturnAttentionCard from "../workers/WorkerReturnAttentionCard";
 import NightWatchSettings from "../settings/NightWatchSettings";
 import TerminalPoolFixture from "./TerminalPoolFixture";
 import PerformanceEvidenceFixture from "./PerformanceEvidenceFixture";
@@ -685,6 +686,22 @@ export const SURFACES: Surface[] = [
     title: "Database recovery attention",
     why: "synthetic failure notice rendered without reading or changing a database",
     render: () => <div style={{ maxWidth: 390 }}><DatabaseRecoveryCard /></div>,
+  },
+  {
+    id: "worker-return-recovery",
+    title: "Worker return recovery",
+    why: "Fictional failed and unconfirmed starts; no provider or Hive is contacted",
+    render: () => <WorkerReturnAttentionCard workers={[
+      { id: "poppy", name: "Poppy", return_attention: "failed" },
+      { id: "clover", name: "Clover", return_attention: "unconfirmed" },
+    ]} onReview={() => {}} />,
+  },
+  {
+    id: "worker-return-recovery-phone",
+    title: "Worker return at phone width",
+    why: "390px iframe of the fictional recovery notice; not a physical-device acceptance test",
+    render: () => <iframe title="Phone worker recovery preview" src="/harness.html?surface=worker-return-recovery"
+      style={{ display: "block", width: 390, height: 844, border: 0 }} />,
   },
   {
     id: "tasks",

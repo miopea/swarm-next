@@ -1126,6 +1126,13 @@ impl TaskStore {
             "INSERT INTO worker_sessions (session_id, worker_id) VALUES (?1, ?2)",
             params![session_id.to_string(), worker_id.to_string()],
         )?;
+        // A newly confirmed immutable binding fulfils an old return promise in
+        // the SAME transaction. A crash after binding cannot leave a phantom
+        // failed return, nor authorize a duplicate provider start after restart.
+        transaction.execute(
+            "DELETE FROM worker_revival_intents WHERE worker_id=?1",
+            [worker_id.to_string()],
+        )?;
         transaction.execute(
             "INSERT INTO worker_startup_context(worker_id, session_id, selected_conversation, status)
              SELECT id, ?2, provider_conversation_id, 'pending' FROM worker_profiles WHERE id = ?1
@@ -1932,6 +1939,12 @@ impl TaskStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         for worker_id in worker_ids {
+            // This recorder is used by explicit maintenance actions. Starting a
+            // new such operation deliberately creates a fresh return obligation.
+            transaction.execute(
+                "DELETE FROM worker_revival_attempts WHERE worker_id=?1",
+                [worker_id.to_string()],
+            )?;
             crate::worker_engine_returns::record_intent(&transaction, *worker_id, now)?;
         }
         crate::worker_engine_returns::check_capacity(&transaction)?;
@@ -1939,8 +1952,9 @@ impl TaskStore {
         Ok(())
     }
 
-    /// One bounded page of workers still owed a revival. Only explicit lifecycle
-    /// actions cancel the promise; time spent deferred cannot erase it.
+    /// One bounded page of unattempted returns. Failed or interrupted attempts
+    /// remain durable attention outside this automatic queue. Only explicit
+    /// lifecycle actions cancel the promise; elapsed time cannot erase it.
     ///
     /// # Errors
     /// Returns an error when persistence is unavailable.
@@ -1948,7 +1962,8 @@ impl TaskStore {
         let connection = self.connection()?;
         let intents = connection
             .prepare(
-                "SELECT worker_id FROM worker_revival_intents
+                "SELECT worker_id FROM worker_revival_intents i
+                 WHERE NOT EXISTS(SELECT 1 FROM worker_revival_attempts a WHERE a.worker_id=i.worker_id)
                  ORDER BY recorded_at, worker_id LIMIT 256",
             )?
             .query_map([], |row| row.get::<_, String>(0))?
@@ -1959,13 +1974,14 @@ impl TaskStore {
             .collect())
     }
 
-    /// Whether the exact worker still has a promised restart.
+    /// Whether the exact worker has an unattempted automatic return.
     ///
     /// # Errors
     /// Returns an error when persistence is unavailable.
     pub fn worker_revival_pending(&self, worker_id: WorkerId) -> Result<bool, TaskStoreError> {
         Ok(self.connection()?.query_row(
-            "SELECT EXISTS(SELECT 1 FROM worker_revival_intents WHERE worker_id = ?1)",
+            "SELECT EXISTS(SELECT 1 FROM worker_revival_intents i WHERE worker_id = ?1
+             AND NOT EXISTS(SELECT 1 FROM worker_revival_attempts a WHERE a.worker_id=i.worker_id))",
             [worker_id.to_string()],
             |row| row.get(0),
         )?)

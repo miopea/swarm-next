@@ -128,6 +128,17 @@ authenticated preparation, rejection of live unbound sessions, explicit maintena
 and bounded return behavior. Strict all-target persistence/API clippy passes.
 The schema and API changes have not been deployed to the development Hive.
 
+### Durable return outcomes
+
+Schema 158 and ADR 0077 now retain an exact attempt before launching a returning
+worker. Failed or unconfirmed outcomes survive API replacement and are excluded
+from automatic supervisor, Queen and task-dispatch starts. Exclusive lifecycle
+ownership, not a timer, identifies abandoned attempts. A confirmed new binding
+settles the promise transactionally; old replies cannot clear a newer attempt.
+Needs You links the concise unresolved outcome to diagnostic recovery guidance.
+This is local implementation, not proof of successful native conversation return
+or a completed combined engine-admission/package-update journey.
+
 Explicitly negotiate the new engine capability. An old engine cannot safely
 apply the missing admission mechanism to itself. Its loaded-session automatic
 replacement must defer; the existing warned manual path can bridge that first

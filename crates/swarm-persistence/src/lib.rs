@@ -276,7 +276,8 @@ const QUEEN_RUN_HISTORY_SCHEMA_VERSION: i64 = 154;
 const SUPPORT_OUTBOX_ATTACHMENTS_SCHEMA_VERSION: i64 = 155;
 const REVIEW_RETURN_HISTORY_SCHEMA_VERSION: i64 = 156;
 const WORKER_ENGINE_RETURN_SESSIONS_SCHEMA_VERSION: i64 = 157;
-const CURRENT_SCHEMA_VERSION: i64 = WORKER_ENGINE_RETURN_SESSIONS_SCHEMA_VERSION;
+const WORKER_REVIVAL_ATTEMPTS_SCHEMA_VERSION: i64 = 158;
+const CURRENT_SCHEMA_VERSION: i64 = WORKER_REVIVAL_ATTEMPTS_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -3994,6 +3995,9 @@ fn migrate_ops_intake_schema_steps(
     }
     if schema_version < WORKER_ENGINE_RETURN_SESSIONS_SCHEMA_VERSION {
         worker_engine_returns::migrate(transaction)?;
+    }
+    if schema_version < WORKER_REVIVAL_ATTEMPTS_SCHEMA_VERSION {
+        worker_engine_returns::migrate_attempts(transaction)?;
     }
     Ok(())
 }
@@ -9253,6 +9257,12 @@ mod tests {
             table: "worker_engine_return_sessions",
             artifact: "",
             undo_sql: "DROP TABLE worker_engine_return_sessions",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "worker_revival_attempts",
+            artifact: "",
+            undo_sql: "DROP TABLE worker_revival_attempts",
             probe_sql: "",
         },
     ];

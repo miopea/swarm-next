@@ -6,6 +6,7 @@ import { computeLoadLabel, workerTreePressure } from "./DiagnosticsWorkspace";
 import type { MachineResources } from "../api";
 import type { SharedMachineResources } from "../runtime/machinePressure";
 import * as browserCapture from "../runtime/browserPerformance";
+import { demoWorkers } from "../harness/productFixtures";
 
 afterEach(() => {
   cleanup();
@@ -285,6 +286,17 @@ const diagnosticsProps = {
   jiraReadiness: undefined,
   jiraUnavailable: true,
 };
+
+test("maintenance recovery details distinguish a missing reply from a confirmed start failure", () => {
+  render(<DiagnosticsWorkspace {...diagnosticsProps} health={undefined} workers={[
+    { ...demoWorkers[0], id: "lost", name: "Clover", running: false, return_attention: "unconfirmed", runtime_error: "Startup reply was lost." },
+    { ...demoWorkers[0], id: "failed", name: "Poppy", running: false, return_attention: "failed", runtime_error: "Provider executable is unavailable." },
+  ]} />);
+  expect(screen.getByRole("region", { name: "Worker return recovery details" })).toBeInTheDocument();
+  expect(screen.getByText(/missing start reply does not prove the process failed/)).toHaveTextContent("Startup reply was lost.");
+  expect(screen.getByText(/Correct the reported cause/)).toHaveTextContent("Provider executable is unavailable.");
+  expect(screen.queryByRole("button", { name: /wake|retry.*worker/i })).not.toBeInTheDocument();
+});
 
 test("a subsystem disabled at startup leads the page instead of sitting unnoticed", () => {
   // THE ABLATION. Drop the degraded rows and this Hive looks entirely healthy:

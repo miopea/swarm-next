@@ -107,6 +107,9 @@ pub(super) async fn list_workers(
         .engaged_devices_by_worker(crate::unix_timestamp())
         .map_err(|error| task_store_error(&error))?;
     let errors = state.worker_errors.read().await;
+    let return_attention = task_store(&state)?
+        .worker_return_attention()
+        .map_err(|error| task_store_error(&error))?;
     let scout_id = task_store(&state)?
         .scout_worker_id()
         .map_err(|error| task_store_error(&error))?;
@@ -119,7 +122,11 @@ pub(super) async fn list_workers(
             let running = profile
                 .active_session_id
                 .is_some_and(|session_id| live.contains_key(&session_id));
-            let runtime_error = errors.get(&profile.id).cloned();
+            let return_status = return_attention.get(&profile.id).copied();
+            let runtime_error = errors.get(&profile.id).cloned().or_else(|| return_status.map(|status| match status {
+                swarm_domain::WorkerReturnAttention::Failed => "Worker did not return after maintenance. Retry when ready.".to_owned(),
+                swarm_domain::WorkerReturnAttention::Unconfirmed => "Worker return was interrupted before confirmation. Inspect terminal sessions before retrying.".to_owned(),
+            }));
             let needs_operator = awaiting_operator.contains(&profile.id);
             let signals = profile
                 .active_session_id
@@ -132,7 +139,7 @@ pub(super) async fn list_workers(
                 .active_session_id
                 .and_then(|session_id| live.get(&session_id).copied())
                 .flatten();
-            worker_view(
+            let mut view = worker_view(
                 profile,
                 WorkerViewFacts {
                     running,
@@ -160,7 +167,9 @@ pub(super) async fn list_workers(
                     unconfirmed_delivery: unconfirmed.contains(&profile_id),
                     engaged_device: engaged.remove(&profile_id),
                 },
-            )
+            );
+            view.return_attention = return_status;
+            view
         })
         .collect::<Vec<_>>();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(workers)).into_response())

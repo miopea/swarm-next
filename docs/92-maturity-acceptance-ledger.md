@@ -9,7 +9,9 @@ an old unchecked deployment note is not automatically current missing code.
 ## Verified runtime and delivery
 
 - App/API: `1.6.0-dev-86100b8b5f7e-20260909151834-2859465`.
-- Engine: retained PID 2271655, `cf83c980`; candidate `cf179f73` remains pending.
+- Engine: current PID 2947820, started September 9 at 12:37:54 Eastern. The
+  earlier continuity checkpoint retained PID 2271655; this later restart's
+  initiator has not been established by the current read-only check.
 - Latest App/API deployment preserved all 34 worker records and twelve exact
   running session/conversation pairs. Swarm Next and D365 remained asleep.
 - CI through gated-intake `34333537210`, modal `34334885015` and shortcut
@@ -17,6 +19,37 @@ an old unchecked deployment note is not automatically current missing code.
 - No release is authorized. No customer-facing send is authorized by task closure.
 
 ## Requirement-by-requirement disposition
+
+### Durable failed and unconfirmed worker returns (local, not deployed)
+
+Schema 158 records an exact attempt before a maintenance return contacts the
+provider. Failed and unconfirmed outcomes retain their source promise outside
+the automatic queue. Exclusive lifecycle ownership identifies abandoned attempts;
+neither elapsed time nor an API restart silently authorizes another launch.
+Supervisor, Queen and task-dispatch starts respect this hold. A confirmed binding
+settles the promise transactionally, and stale replies cannot settle newer work.
+Needs You now has a concise affected-worker card linking to recovery diagnostics.
+No terminal content or raw provider error is persisted in the attempt records.
+
+Verification: 713 persistence tests passed, including schema 157 upgrade, database
+reopen, stale-result fencing, atomic binding settlement and content-free events.
+The final API rerun passed 26 targeted tests: bounded return/API replacement,
+Queen/task-wake refusal and the recovery suite. Strict all-target persistence/API
+clippy passed. An incremental Rust compiler error required disabling incremental
+compilation for the final rerun; this was not an application code workaround.
+Sixteen UI tests, TypeScript checking and the production web build passed.
+Edge inspection of fictional fixtures caught and corrected an inherited icon-grid
+layout error, then verified readable desktop and 390px iframe layouts. This is not
+physical Android/iOS acceptance. The standard terminal bundle-size warning remains.
+
+This checkpoint has not been pushed or deployed while push permission is pending.
+The live API remains healthy on 86100b8b with no degraded components. A read-only
+check found engine PID 2947820, started September 9 at 12:37:54 Eastern, replacing
+the older ledger baseline. This turn issued no production restart or deployment;
+the initiator of that restart is not established here. No BFG Admin communication
+or release occurred. OPS-01 remains partial: native settled-turn/background proof,
+combined admission/return receipts, negotiated IPC/package activation and live
+all-session maintenance/return acceptance are still required.
 
 ### Exact source records for engine returns (local, not deployed)
 
@@ -224,7 +257,7 @@ or implementation boundary to inspect before changing it again.
 | PRES-01 | Schedule/DST/desktop-return policy and persistence tests exist; live locked desktop observed as Reachable. | Real scheduled/manual Night Watch, mobile non-dismissal and desktop dismissal. Live schedule is unset; do not change overnight policy merely for testing. |
 | REC-01 | Planned engine replacement returned all twelve workers to exact conversations; [91](91-engine-return-dependency-acceptance.md). | Full chosen-conversation switch and missing-context safe/continue/fresh ladder with real provider evidence, plus failure/cancellation journeys. |
 | REC-02 | Isolated corruption containment, backup/restore and package failure drills recorded in [87](87-live-resource-and-restore-checkpoint.md) and [47](47-maturity-remaining.md). | Retain this acceptance; no reason to corrupt or restore the live Hive. |
-| OPS-01 | App/API continuity and one planned engine-return journey verified; resource admission guards exist. ADR 0085 engine-library all-session core passes isolated concurrency/failure tests. Local schema-157 exact source-return recording is wired into preparation and explicit maintenance. | Native input/completion/background evidence, combined durable-record/admission receipts, negotiated IPC/package integration, durable failed-return reporting and live all-session admission remain unimplemented/unaccepted. Rolling provider/tool freshness and pressure-to-resumption acceptance remain. |
+| OPS-01 | App/API continuity and one planned engine-return journey verified; resource admission guards exist. ADR 0085 engine-library all-session core passes isolated concurrency/failure tests. Local schema-157 exact source records and schema-158 failed/unconfirmed return reporting are implemented and tested. | Native input/completion/background evidence, combined durable-record/admission receipts, negotiated IPC/package integration, deployment of the local return changes and live all-session admission remain unimplemented/unaccepted. Rolling provider/tool freshness and pressure-to-resumption acceptance remain. |
 | PROV-01 | Opt-in framework, host availability and Night Watch exclusions checked; [48](48-provider-acceptance.md). | Required provider journeys remain distinct from framework acceptance. Unavailable alpha CLIs stay unavailable; only the builder promotes providers. |
 | UX-01/P6 | Approved visual direction retained; focused rendered queue, runtime, support and task-reader checks. | Coherent complete desktop/mobile accessibility, empty/error/offline and shortcut journeys. Optional return briefing still requires its mockup gate. |
 | BFG Admin integration | Actual development-Hive text intake/receipt/reload retention accepted; [86](86-support-ui-acceptance.md). Admin readiness independently confirmed at e6a2167 on September 9. | One Swarm-UI fictional attachment submission and the existing fictional task's completion remain approval-gated below. No Admin worker communication is authorized; no customer reply is authorized by task closure. |
