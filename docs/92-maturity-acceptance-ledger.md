@@ -48,6 +48,16 @@ or implementation boundary to inspect before changing it again.
 
 ## Next work, in dependency order
 
+Admin's owner confirmed source revision `3a0f8bdbac5640776704af5c1922d679fab1d6c9`:
+the public `/api/feedback/swarm-support/submissions` route is strict text-only JSON;
+unknown attachment fields are rejected. The retained-email attachment route is
+authenticated download-only and its reader token must never be placed in a Hive.
+An Admin-owned bounded attachment extension has been requested for contract review
+before implementation. No native upload, finalization or orphan-cleanup contract
+exists yet. The existing fictional request remains untouched and dispatch still
+requires restored Admin sign-in. This is a verified feature gap, not failed upload
+recovery or permission to guess another route.
+
 1. Complete Admin-owned native attachment transport once its current contract is
    confirmed. Reuse the existing source and idempotent report identity. Keep the
    existing linked-task fixture; Admin authentication is an external acceptance gate.
