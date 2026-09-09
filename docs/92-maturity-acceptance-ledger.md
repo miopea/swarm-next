@@ -182,7 +182,7 @@ or implementation boundary to inspect before changing it again.
 | OPS-01 | App/API continuity and one planned engine-return journey verified; resource admission guards exist. | Automatic engine-owned all-session admission, durable exact return set and trustworthy native completion/background evidence; ADR 0085 is not implemented. Rolling provider/tool freshness and pressure-to-resumption acceptance remain. |
 | PROV-01 | Opt-in framework, host availability and Night Watch exclusions checked; [48](48-provider-acceptance.md). | Required provider journeys remain distinct from framework acceptance. Unavailable alpha CLIs stay unavailable; only the builder promotes providers. |
 | UX-01/P6 | Approved visual direction retained; focused rendered queue, runtime, support and task-reader checks. | Coherent complete desktop/mobile accessibility, empty/error/offline and shortcut journeys. Optional return briefing still requires its mockup gate. |
-| BFG Admin integration | Actual development-Hive text intake/receipt/reload retention accepted; [86](86-support-ui-acceptance.md). | Native attachments; existing fictional linked-task dispatch/closure and Admin-approved original-channel reply. Admin contract clarification is now active, without new fixture duplication. |
+| BFG Admin integration | Actual development-Hive text intake/receipt/reload retention accepted; [86](86-support-ui-acceptance.md). Admin readiness independently confirmed at e6a2167 on September 9. | One Swarm-UI fictional attachment submission and the existing fictional task's completion remain approval-gated below. No Admin worker communication is authorized; no customer reply is authorized by task closure. |
 | P7 | Operator dogfooding plus bounded server/demo observations. | Integrated current-build workday/overnight/mobile evidence and operator acceptance. Narrow passing tests do not close this gate. |
 
 ## Next work, in dependency order
@@ -227,6 +227,34 @@ The program is active, not achieved. Its remaining scope cannot truthfully be
 reduced to a release checklist or a count of passing commits.
 
 ## Native attachment backend checkpoint — September 9, not deployed
+
+### Current activation and existing-task gates — September 9
+
+This supersedes historical Admin-deployment-pending statements below. Read-only
+inspection found the current Admin contract in
+`C:/projects/bfg-operations/.worktrees/admin-mail-contract`, not its older main
+checkout. Its release evidence records deployed schema18/private attachment
+storage and exact production replay. Independently, Admin's canonical
+`/api/ready` returned `ok:true, build:e6a2167` from the Linux host. No certificate
+validation was bypassed when the Windows client's revocation check failed.
+Swarm's authenticated support status returned `configured:true` and
+`attachments_supported:false`; no activation or submission was performed.
+
+The existing fictional task `01a08652-9d8e-7793-96cb-02493c5bc022` remains Draft
+and unassigned. Its current description explicitly requires leaving it unassigned
+and recruiting no worker. The later Admin handoff instead points to the existing
+Swarm Dogfood Contract worker for normal lifecycle verification. Neither external
+instruction is a substitute for operator direction. That demo worker exists and
+is running; no screen was read, input sent or assignment changed. The ordinary
+operator exemption endpoint approves an existing no-deployment claim rather than
+creating one, so it is not a shortcut to fabricate this task's verified completion.
+
+Two concise operator approvals were requested: enable native intake and create
+one fictional PNG/text report through Swarm's UI after readiness verification;
+and use the existing demo worker for this one no-code task despite its original
+unassigned instruction. Pending answers do not authorize customer mail, a new
+replacement task, real-project workers, scope-credential changes or Admin worker
+communication. Existing reports and the reserved linked task are preserved.
 
 Schema 155 adds immutable ordered metadata and private file BLOBs in the same
 transaction as the report. Existing text payload/destination/attempt identities
