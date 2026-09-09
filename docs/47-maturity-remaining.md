@@ -2,6 +2,27 @@
 
 ## Current checkpoint — September 8, after Admin intake acceptance
 
+### Calendar hold and stopped-worker queue evidence, September 9
+
+App/API `a501bc9b` is deployed with all twelve exact sessions preserved and
+engine PID 2271655 unchanged. CI run `34315529668` passed all four jobs.
+Queen independently used the newly explicit shared guidance to record the
+fictional task `01a084ad-60cc-7fe1-82d1-77af96a3b7d2` as a structural hold until
+2026-09-09 06:00 UTC. Activity 9220 records the source, checked time and date;
+the task now has `blocked_until=1788933600` and next owner `blocked`.
+At 05:51:49 UTC its receipt file was absent and the demo worktree clean.
+Automatic due-time reassessment and completion remain pending; do not manually
+resume this fixture. This is not evidence that every real calendar hold is fixed.
+
+Rendered Queues showed the two Ready tasks assigned to the intentionally sleeping
+Swarm Next worker without explaining its stopped state. The UI now additionally
+shows the observed stopped or queued/in-progress wake state for worker-owned Ready
+tasks. Unknown roster data is not called stopped, running recovery clears the
+message, and operator-owned work retains its decision explanation. Delivery
+uncertainty remains visible. This neither infers why a worker stopped nor grants
+permission to wake one. All 55 queue tests and the frontend type check pass;
+deployment and rendered acceptance of this small projection remain pending.
+
 ### Autonomous dependency journey accepted, September 9
 
 The current engine completed a real two-demo dependency chain without manual

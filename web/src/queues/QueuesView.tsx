@@ -265,6 +265,11 @@ export default function QueuesView({
             <ul>
               {workerGroup.tasks.map((task) => {
                 const briefing = briefings.get(task.id);
+                const assignedWorker = workerById.get(task.assigned_worker_id ?? "");
+                // Display an observed lifecycle fact, not a reason for sleeping
+                // or permission to wake. Unknown roster data stays unknown.
+                const stoppedReadyWorker = task.state === "ready"
+                  && task.next_move_owner === "worker" && assignedWorker?.running === false;
                 return (
                 <li key={task.id}>
                   <button type="button" onClick={() => onOpenTask(task.id)}>
@@ -281,6 +286,9 @@ export default function QueuesView({
                     </span>
                     {task.state === "blocked" && waits.has(task.id) && <span className="queue-task-meta">Blocked for {ageLabel(Math.max(0, Math.floor(waits.get(task.id)!.blocked_for_seconds / 3600)))}</span>}
                   </button>
+                  {stoppedReadyWorker && <p className="queue-task-meta">{assignedWorker.waking_since != null
+                    ? "Worker wake queued or in progress"
+                    : "Assigned worker is not running"}</p>}
                   {checks.has(task.id) && <div className="queue-task-meta">
                     <QueueEvidence label="Recovery observation" text={checks.get(task.id)!.reason} />
                     {checks.get(task.id)!.delivery && <QueueEvidence label="Latest recovery delivery" summaryText={checks.get(task.id)!.delivery!.state} text={`${checks.get(task.id)!.delivery!.state} · message ${checks.get(task.id)!.delivery!.message_id}`} />}

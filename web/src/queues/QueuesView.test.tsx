@@ -55,6 +55,28 @@ function task(overrides: Partial<Task>): Task {
 }
 
 describe("QueuesView", () => {
+  test("Ready work exposes observed stopped/waking state and clears it on recovery", () => {
+    const ready = task({ state: "ready", next_move_owner: "worker", assigned_worker_id: "w" });
+    const worker = { id: "w", name: "Petal", running: false } as Worker;
+    const props = { tasks: [ready], onOpenTask: vi.fn(), onOpenWorker: vi.fn() };
+    const { rerender } = render(<QueuesView {...props} workers={[worker]} />);
+    expect(screen.getByText("Assigned worker is not running")).toBeVisible();
+    expect(screen.getByText("Ready · briefing delivery not recorded")).toBeVisible();
+    rerender(<QueuesView {...props} workers={[{ ...worker, waking_since: 1 }]} />);
+    expect(screen.getByText("Worker wake queued or in progress")).toBeVisible();
+    expect(screen.queryByText("Assigned worker is not running")).not.toBeInTheDocument();
+    for (const workers of [[{ ...worker, running: true }], [], [{ id: "w", name: "Petal" } as Worker]]) {
+      rerender(<QueuesView {...props} workers={workers} />);
+      expect(screen.queryByText("Assigned worker is not running")).not.toBeInTheDocument();
+      expect(screen.queryByText("Worker wake queued or in progress")).not.toBeInTheDocument();
+    }
+    rerender(<QueuesView {...props} workers={[worker]} tasks={[{ ...ready, next_move_owner: "operator" }]} />);
+    expect(screen.getByText("Waiting for your decision")).toBeVisible();
+    expect(screen.queryByText("Assigned worker is not running")).not.toBeInTheDocument();
+    expect(props.onOpenWorker).not.toHaveBeenCalled();
+    expect(props.onOpenTask).not.toHaveBeenCalled();
+  });
+
   test.each(["queued", "dispatching", "delivered", "uncertain"] as const)("operator-owned Ready work explains the decision before %s briefing history", (dispatch_state) => {
     render(<QueuesView workers={[]} onOpenTask={vi.fn()} tasks={[task({ state: "ready", next_move_owner: "operator", dispatch_state })]} />);
     expect(screen.getByRole("heading", { name: "Waiting on you 1" })).toBeVisible();
