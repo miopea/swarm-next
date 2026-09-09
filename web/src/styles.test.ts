@@ -14,6 +14,18 @@ test("queue task buttons use themed text before hover or focus", () => {
   expect(rule).toMatch(/color:\s*var\(--text\)/);
 });
 
+test("base button hover does not outrank component-owned surfaces", () => {
+  expect(/button:where\(:hover:not\(:disabled\)\)\s*\{/.test(stylesheet)).toBe(true);
+  expect(/^button:hover:not\(:disabled\)\s*\{/m.test(stylesheet)).toBe(false);
+});
+
+test("interview choices use readable text for both unselected and selected surfaces", () => {
+  const option = stylesheet.match(/\.decision-option\s*\{([^}]+)\}/)?.[1];
+  const selected = stylesheet.match(/\.decision-option\.selected\s*\{([^}]+)\}/)?.[1];
+  expect(option).toMatch(/color:\s*var\(--text\)/);
+  expect(selected).toMatch(/color:\s*var\(--on-accent\)/);
+});
+
 test("defines every design token referenced by the application stylesheet", () => {
   const defined = new Set([...stylesheet.matchAll(/(--[a-z0-9-]+)\s*:/gi)].map((match) => match[1]));
   const referenced = new Set([...stylesheet.matchAll(/var\((--[a-z0-9-]+)/gi)].map((match) => match[1]));

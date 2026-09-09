@@ -466,7 +466,9 @@ textarea { resize: vertical; line-height: 1.45; }
 input::placeholder, textarea::placeholder { color: var(--quiet); }
 input:focus, select:focus, textarea:focus { border-color: var(--focus); box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 18%, transparent); }
 button { min-height: 38px; padding: 8px 12px; border: 1px solid var(--accent-strong); border-radius: var(--radius-sm); color: #282317; background: var(--accent); transition: transform .12s, background .12s, border-color .12s; }
-button:hover:not(:disabled) { border-color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 86%, var(--panel)); }
+/* Base actions keep honey hover. Component-owned surfaces must outrank this
+   fallback; otherwise a dark queue row becomes amber behind pale text. */
+button:where(:hover:not(:disabled)) { border-color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 86%, var(--panel)); }
 button:active:not(:disabled) { transform: translateY(1px); }
 .surface-nav button:hover:not(:disabled), .worker-button:hover:not(:disabled) { border-color: transparent; color: var(--text); background: color-mix(in srgb, var(--text) 5%, transparent); }
 .surface-nav button.selected:hover:not(:disabled), .worker-button[aria-current="page"]:hover:not(:disabled) { border-color: color-mix(in srgb, var(--good) 40%, transparent); background: color-mix(in srgb, var(--good-soft) 68%, transparent); }
@@ -1700,9 +1702,9 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .decision-question legend { padding: 0 5px; color: var(--muted); font-size: .68rem; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
 .decision-question p { margin: 0; }
 .decision-question-options { display: flex; flex-wrap: wrap; gap: 6px; }
-.decision-option { min-height: 44px; max-width: 100%; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-raised); font-size: .8rem; line-height: 1.45; text-align: start; overflow-wrap: anywhere; }
+.decision-option { min-height: 44px; max-width: 100%; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; color: var(--text); background: var(--panel-raised); font-size: .8rem; line-height: 1.45; text-align: start; overflow-wrap: anywhere; }
 .decision-option:hover { border-color: var(--accent-strong); }
-.decision-option.selected { border-color: var(--accent-strong); color: var(--bg); background: var(--accent-strong); font-weight: 600; }
+.decision-option.selected { border-color: var(--accent-strong); color: var(--on-accent); background: var(--accent-strong); font-weight: 600; }
 .decision-dismiss-reason { display: grid; min-width: 0; flex: 1 1 14rem; gap: 3px; }
 .engine-update-cost { margin: 0; font-size: .78rem; color: var(--muted); }
 .engine-update-cost.busy { color: var(--warn); font-weight: 500; }

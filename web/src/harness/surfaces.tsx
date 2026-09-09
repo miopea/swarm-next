@@ -12,6 +12,7 @@ import DecisionAnswerFixture from "./DecisionAnswerFixture";
 import SupportFeedbackFixture from "./SupportFeedbackFixture";
 import TaskPreviewFixture from "./TaskPreviewFixture";
 import RuntimeDialogsFixture from "./RuntimeDialogsFixture";
+import DecisionInterviewFixture from "./DecisionInterviewFixture";
 
 import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
 import { App } from "../App";
@@ -433,6 +434,12 @@ export const SURFACES: Surface[] = [
         />
       </nav>
     ),
+  },
+  {
+    id: "decision-interview",
+    title: "Fictional decision interview",
+    why: "Selected, unselected and custom answers in both themes; no Hive mutations",
+    render: () => <DecisionInterviewFixture />,
   },
   {
     id: "needs-you",

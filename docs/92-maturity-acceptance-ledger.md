@@ -18,6 +18,26 @@ an old unchecked deployment note is not automatically current missing code.
 
 ## Requirement-by-requirement disposition
 
+### Component-owned hover and interview contrast
+
+The earlier queue-title fix is present; it was not reimplemented. Rendered Edge
+inspection found a remaining cascade defect: generic button hover outranked the
+queue's transparent background, painting amber behind pale dark-theme text.
+The measured foreground/background contrast was 2.25:1. Base hover now uses
+zero-specificity state matching so component-owned backgrounds take precedence;
+ordinary action buttons retain their honey hover. The same pass found interview
+choices inheriting dark button ink when unselected and using page-background ink
+when selected. They now use existing text/on-accent tokens.
+
+Two regressions failed before the change; 121 style/decision/queue tests and the
+production build pass after it. Real Edge rendering of the isolated full App
+verified dark queue hover at 13.65:1 and retained honey task actions. A fictional
+interview verified dark unselected choices at 12.62:1 and selected choices at
+10.00:1 dark / 5.25:1 light. At 390x844 there was no horizontal overflow; a custom
+answer submitted exactly into the local receipt. No Hive decision was resolved.
+Viewport was reset, the owned tab closed and the harness stopped. This is rendered
+desktop Edge evidence, not native Android/iOS acceptance. Deployment remains pending.
+
 ### Live navigation attribution and snapshot ordering
 
 On September 9, a separate authenticated Edge tab at swarm.bfgsolutions.net
