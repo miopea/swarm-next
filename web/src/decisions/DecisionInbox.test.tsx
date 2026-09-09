@@ -608,6 +608,24 @@ test("a view without answer transport reports a failure instead of silently cons
   expect(screen.getByLabelText("Tell the worker what to do instead")).toHaveValue("Keep my answer");
 });
 
+test("a late failed send cannot resurrect an answer resolved by a newer snapshot", async () => {
+  let rejectSend!: (reason: Error) => void;
+  const onAnswer = vi.fn(() => new Promise<void>((_resolve, reject) => { rejectSend = reject; }));
+  const props = { tasks: [task], workers: [worker], busy: false, onResolve: vi.fn(), onAnswer };
+  const view = render(<DecisionInbox {...props} decisions={[pending]} />);
+  fireEvent.click(screen.getByRole("button", { name: "Say something else" }));
+  fireEvent.change(screen.getByLabelText("Tell the worker what to do instead"), { target: { value: "Prepare a preview first" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send this instead" }));
+  view.rerender(<DecisionInbox {...props} decisions={[{ ...pending, state: "resolved", resolution_action: "answered", resolution_note: "Prepare a preview first", delivery_state: "queued" }]} />);
+  rejectSend(new Error("The old response was lost"));
+  await waitFor(() => expect(screen.queryByRole("textbox", { name: "Tell the worker what to do instead" })).not.toBeInTheDocument());
+  fireEvent.click(screen.getByRole("checkbox", { name: "Show history" }));
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.getByText("Waiting for a quiet moment")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Say something else" })).not.toBeInTheDocument();
+  expect(onAnswer).toHaveBeenCalledOnce();
+});
+
 test("long summaries expand without hiding the ask or losing source text", () => {
   const summary = "A long explanation of the decision. ".repeat(20);
   render(<DecisionInbox decisions={[{ ...pending, summary }]} tasks={[task]} workers={[worker]} busy={false} onResolve={vi.fn()} />);

@@ -15,7 +15,7 @@ is historical where superseded by the verified deployment section.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-7c648e4d88f0-20260909183740-3162396`.
+- App/API: `1.6.0-dev-eb931114675e-20260909194140-3319797`.
 - Engine: current PID 2947820, started September 9 at 12:37:54 Eastern. The
   earlier continuity checkpoint retained PID 2271655; this later restart's
   initiator has not been established by the current read-only check.
@@ -28,6 +28,32 @@ is historical where superseded by the verified deployment section.
 - No release is authorized. No customer-facing send is authorized by task closure.
 
 ## Requirement-by-requirement disposition
+
+### September 9 UI-first package checkpoint
+
+`eb931114` implements and deploys the first UI-1 presentation batch. Changes and
+focused browser evidence are recorded in [93](93-ux-first-remaining-plan.md).
+Normal development reload activation succeeded; health is good. All 34 exact
+worker records' identity fields and twelve running session/provider identities
+match before/after, as do engine PID 2947820 and start time. Evidence is in
+`/tmp/swarm-ui1-deploy.N3wwzR`. Conversation IDs were not exposed by this list;
+do not claim independent provider-conversation proof. No engine update requested.
+CI `34396506702` has passed web, linux-package and rust-audit; Rust was still
+running at this checkpoint. Preceding CI `34391815461` passed all jobs.
+
+Live Edge confirms shorter decision cards and unclipped queue titles. The
+operator's RCG Networks report remains an explicit UI-1/QUEEN-03 blocker:
+four original requests still exist server-side as Pending despite direct worker
+discussion and resumed activity. Clarification is currently missing as a distinct
+non-resolving inbox action; typed-answer provenance and exact decision correlation
+remain necessary. Do not close cards based on activity or inferred approval.
+
+The existing read-only observation completed without being restarted: 30 samples
+over 1,800 seconds, 12 sessions, engine PID 2947820 retained. Evidence:
+`/tmp/swarm-maturity-deploy.KyeMzE7g/normal-workload/20260909T185605Z-live-samples.csv`.
+API RSS ranged 63,963,136–92,442,624 bytes; terminal-host cgroup memory (including
+workers) ranged 5,777,129,472–11,575,361,536 bytes. This observation is explicitly
+`performance_acceptance: not_evaluated`, not a browser or long-session pass.
 
 ### September 9 approved deployment — worker continuity verified
 

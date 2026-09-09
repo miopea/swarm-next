@@ -78,10 +78,36 @@ status in its detail dialog. No real decision was answered or worker woken.
 Focused coverage passes: 45 DecisionInbox, 2 inbox activity, 1 answer fixture,
 44 queue and 8 task-detail tests. TypeScript and production web build pass.
 
-This is not yet a deployed UI-1 acceptance claim. Next: commit/push this batch,
-verify the worker-preserving dev deployment and inspect the real long-card/queue
-layout; finish outstanding UI-1 refresh/deep-link evidence before moving to UI-2.
-Native-device acceptance and backend decision reconciliation remain separate.
+Deployed `eb931114` as `1.6.0-dev-eb931114675e-20260909194140-3319797`.
+All 34 worker identities and twelve running session/provider identities matched;
+engine PID/start time were unchanged. Health is good. Live Edge: the same eight
+880px-wide cards are 44–49px shorter without removing answer wording; all 34
+queue task titles fit without horizontal clipping. Fixture refresh preserves an
+unsent custom answer, and quick navigation focuses its exact card without losing
+the draft. A subsequent late-response regression passes (46 inbox tests total).
+CI `34396506702`: web, linux-package and audit passed; Rust was still running.
+Evidence: `/tmp/swarm-ui1-deploy.N3wwzR`. No release or engine update requested.
+
+### UI-1 next: clarification is not a final answer
+
+The operator reported clarifying Needs You items directly with RCG Networks and
+resuming work, while Needs You stayed unchanged. A live API check confirmed the
+four krbtgt/A1b/A2b/licence requests still Pending, their linked tasks still
+Blocked/next owner Operator, and RCG Networks running. This is server-side
+reconciliation debt, not just a refresh defect or something the layout fixes close.
+
+The current `/decisions/{id}/resolution` action is final; Say something else
+also resolves. Do not disguise clarification as a resolution. Finish a distinct
+non-authorizing question/reply path attached to the original request, preserving
+exact operator text, context and history. A clarification must not grant command
+permission or make its request appear answered. Distinguish waiting for a reply
+from waiting for an operator decision. Correlate a proven final operator answer
+given in the worker to the original decision; resumed activity or a worker's
+prose claim alone is not proof. Keep QUEEN-03 open until that provenance and
+reconciliation work is verified. This directly blocks the selected UI journey,
+so it is an allowed bounded backend exception, not a return to engine work.
+
+UI-1 is therefore not closed. Native-device acceptance also remains separate.
 
 ### UI-1 — Needs You, Queues and task detail form one understandable workflow
 
