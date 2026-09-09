@@ -8,7 +8,7 @@ an old unchecked deployment note is not automatically current missing code.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-f5c30de85f95-20260909091502-2434051`.
+- App/API: `1.6.0-dev-fccc31e22a32-20260909092844-2441378`.
 - Engine: retained PID 2271655, `cf83c980`; candidate `cf179f73` remains pending.
 - Latest App/API deployment preserved all 34 worker records and twelve exact
   running session/conversation pairs. Swarm Next and D365 remained asleep.
@@ -199,4 +199,14 @@ focus to its thumbnail. A changed fictional title survived Escape from the disca
 confirmation; the editor remained open and focus returned to the title. Viewport
 and document widths were both 1465 pixels. No live task save/delete occurred.
 The owned browser tab and fixture server were closed. This is desktop keyboard
-evidence, not full mobile/screen-reader acceptance. Deployment remains pending.
+evidence, not full mobile/screen-reader acceptance. The fccc31e2 development
+deployment completed with API PID 2442360 and unchanged engine PID 2271655.
+Exact worker/session/conversation snapshots match before/after in
+`/tmp/swarm-modal-update.qMsHV3`; no worker was restarted.
+
+A further failing-before application regression showed Alt+4 navigating behind
+an open dialog when the event did not originate from a text field. Global
+navigation now yields to the mounted modal owner and already-handled events;
+closing the modal restores normal shortcuts. All 78 application, palette and
+focus tests plus TypeScript checking pass. This shortcut follow-up is not yet
+part of the fccc31e2 deployed build.

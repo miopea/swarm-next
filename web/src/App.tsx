@@ -148,7 +148,7 @@ import WorkerContextBar from "./workers/WorkerContextBar";
 import { workerWork } from "./workers/workerWork";
 import { normalizeRosterQuery, orphanSessionMatchesRosterQuery, repositoryName, workerMatchesRosterQuery } from "./workers/workerRoster";
 import { useWorkerRailWidth } from "./layout/useWorkerRailWidth";
-import { useModalFocus } from "./shared/useModalFocus";
+import { hasActiveModal, useModalFocus } from "./shared/useModalFocus";
 import { isExpectedRuntimeHandoff, requestRuntimeHandoff } from "./runtime/runtimeMaintenance";
 import { useRuntimeUpdate } from "./runtime/useRuntimeUpdate";
 import { useVisiblePolling } from "./runtime/useVisiblePolling";
@@ -1154,7 +1154,7 @@ export function App() {
   }
 
   function handleShortcut(event: KeyboardEvent) {
-    if (!operatorToken || !event.altKey || event.ctrlKey || event.metaKey || isTypingTarget(event.target)) return;
+    if (!operatorToken || !event.altKey || event.ctrlKey || event.metaKey || event.defaultPrevented || isTypingTarget(event.target) || hasActiveModal()) return;
     if (event.key.toLocaleLowerCase() === "k") {
       event.preventDefault();
       setShowCommands(true);

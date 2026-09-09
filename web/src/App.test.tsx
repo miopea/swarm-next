@@ -865,6 +865,10 @@ test("keyboard shortcuts switch workspaces but pause while editing a field", asy
   fireEvent.keyDown(screen.getByRole("button", { name: "Tasks 0" }), { key: "k", altKey: true });
   expect(screen.getByRole("dialog", { name: "Where would you like to go?" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: /Add worker Configure a repository worker/ })).toBeInTheDocument();
+  // Buttons and the dialog container are not typing fields. They must still own
+  // interaction rather than letting a global shortcut replace the workspace.
+  fireEvent.keyDown(screen.getByRole("dialog", { name: "Where would you like to go?" }), { key: "4", altKey: true });
+  expect(screen.getByRole("heading", { name: "Task board" })).toBeInTheDocument();
   fireEvent.keyDown(window, { key: "Escape" });
   expect(screen.queryByRole("dialog", { name: "Where would you like to go?" })).not.toBeInTheDocument();
 

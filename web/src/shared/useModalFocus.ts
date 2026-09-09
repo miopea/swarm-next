@@ -11,6 +11,9 @@ const focusableSelector = [
 ].join(",");
 
 const modalSelector = "[data-swarm-modal-focus]";
+export function hasActiveModal(): boolean {
+  return document.querySelector(modalSelector) !== null;
+}
 // The mounted DOM owns modal order, including portals. No retained stack or timer.
 function topModal(): HTMLElement | undefined {
   return [...document.querySelectorAll<HTMLElement>(modalSelector)].at(-1);
