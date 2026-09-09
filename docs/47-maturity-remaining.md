@@ -32,8 +32,18 @@ database-recovery requirement. All 34 worker records and twelve exact running
 session/conversation pairs match the pre-update observation. Engine PID 2271655
 is unchanged; the previously pending engine update remains deferred. Edge
 independently loaded that version, and the owned tab was closed. CI run
-`34323789584` was still in progress. Controlled rendered multi-image acceptance
-remains outstanding; the live version check is not that proof.
+`34323789584` was still in progress at the subsequent rendered check.
+
+The isolated `task-previews` harness now renders the actual reader with eight
+fictional SVG attachments and deliberately holds the first request until close.
+At 1465px width, Edge decoded and displayed previews 2–8 while the loading state
+remained visible, opened the second image at full size, and decoded all seven
+again after closing/reopening. The screenshot showed the gallery and zoomed image
+legibly; document width equaled viewport width. The fixture's three boundary and
+cancellation tests and the frontend type check passed. Its dedicated browser tab
+and harness server were closed afterward. This closes the desktop fixture's
+progressive-preview/reader-recovery check, not live Jira transport, phone image
+upload, or real Android/iOS acceptance. No customer artifact was downloaded.
 
 ### Bounded Queen run history delivered, September 9
 

@@ -10,6 +10,7 @@ import TerminalPoolFixture from "./TerminalPoolFixture";
 import PerformanceEvidenceFixture from "./PerformanceEvidenceFixture";
 import DecisionAnswerFixture from "./DecisionAnswerFixture";
 import SupportFeedbackFixture from "./SupportFeedbackFixture";
+import TaskPreviewFixture from "./TaskPreviewFixture";
 
 import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
 import { App } from "../App";
@@ -219,6 +220,12 @@ export type Surface = { id: string; title: string; why: string; render: () => Re
 const FILED = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
 
 export const SURFACES: Surface[] = [
+  {
+    id: "task-previews",
+    title: "Task image previews",
+    why: "fictional linked images remain readable while one download is held",
+    render: () => <TaskPreviewFixture />,
+  },
   { id: "support-feedback", title: "Private support feedback", why: "Review, delivery, retry and local retention with fictional data only.", render: () => <SupportFeedbackFixture /> },
   {
     id: "composer-source", title: "Composer source recording failure", why: "Synthetic narrow layout; no terminal or API writes.",
