@@ -1774,6 +1774,9 @@ fn control_error<E: std::fmt::Display>(error: ControlGateError<E>) -> SessionReg
         ControlGateError::Stopped => SessionRegistryError::Terminal(
             "terminal session has been stopped; input was not delivered".into(),
         ),
+        ControlGateError::Interrupted => SessionRegistryError::Terminal(
+            "terminal stopped during this operation; delivery is uncertain and must not be replayed".into(),
+        ),
         ControlGateError::Effect(error) => terminal_error(error),
     }
 }

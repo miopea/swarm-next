@@ -101,15 +101,18 @@ that the incident's exact last-screen contents were recovered.
 
 ### Explicit-stop serialization prerequisite
 
-An explicitly authorized single-session stop must use the same engine control
-guard as input, resize and ownership acquisition. A successful stop leaves a
-session-local tombstone: subsequent input/control effects are refused, while
-canonical output and final conversation evidence remain readable. Failed stops
-release the guard without claiming success; successful retries do not repeat a
-kill. The stop lock order is control, child, then provider lifecycle; terminal
-output locks are not held during termination. This closes the individual stop
-race, not the all-session admission requirement. It does not turn a Resting
-screen into automatic-stop authority or enable automatic loaded-engine updates.
+An explicitly authorized single-session stop fences new input/control effects
+before terminating the process. It must not wait for the ordinary control guard:
+a provider that stops reading can leave a PTY write holding that guard forever.
+Stop attempts serialize separately, then acquire child and provider-lifecycle
+locks; neither output nor control locks span termination. A successful stop leaves
+a session-local tombstone. An effect already in flight reports uncertain delivery
+and must not be replayed; an effect refused before it starts reports non-delivery.
+Canonical output and final conversation evidence remain readable. Failed stops
+permit ordinary recovery without claiming success; successful retries do not
+repeat a kill. This is explicit cancellation, not automatic maintenance admission:
+the automatic path must still acquire all input/control guards and prove no work
+is in flight before stopping any session. A Resting screen grants no such authority.
 
 The Claude hook reference checked September 8 documents `background_tasks` and
 `session_crons` on Stop, but also parallel hook execution and Stop hooks that can

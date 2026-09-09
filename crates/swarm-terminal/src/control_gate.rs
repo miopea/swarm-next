@@ -21,6 +21,7 @@ pub(crate) enum ControlGateError<E> {
     GenerationRequired,
     Poisoned,
     Stopped,
+    Interrupted,
     Effect(E),
 }
 
@@ -28,6 +29,7 @@ pub(crate) enum ControlGateError<E> {
 pub(crate) struct TerminalControlGate {
     control: Mutex<TerminalControl>,
     stopped: AtomicBool,
+    stop_effect: Mutex<()>,
     epoch: Instant,
 }
 
@@ -36,13 +38,15 @@ impl Default for TerminalControlGate {
         Self {
             control: Mutex::new(TerminalControl::default()),
             stopped: AtomicBool::new(false),
+            stop_effect: Mutex::new(()),
             epoch: Instant::now(),
         }
     }
 }
 
 impl TerminalControlGate {
-    // Called only while the control mutex is held, including the stop effect.
+    // Effect callers hold the control mutex; explicit stop can cancel a blocked
+    // writer without waiting for that mutex. An in-flight effect is checked again.
     fn require_running<E>(&self) -> Result<(), ControlGateError<E>> {
         if self.stopped.load(Ordering::Acquire) {
             return Err(ControlGateError::Stopped);
@@ -50,23 +54,36 @@ impl TerminalControlGate {
         Ok(())
     }
 
-    /// Explicitly authorized stop, not automatic-maintenance admission. The
-    /// effect and its terminal tombstone serialize with every input/control path.
-    /// Failed stops leave control available; a successful stop is never repeated.
+    fn complete_effect<E, T>(&self, result: Result<T, E>) -> Result<T, ControlGateError<E>> {
+        if self.stopped.load(Ordering::Acquire) {
+            return Err(ControlGateError::Interrupted);
+        }
+        result.map_err(ControlGateError::Effect)
+    }
+
+    /// Explicit cancellation, not automatic-maintenance admission. Fence new
+    /// effects before killing, without waiting for a potentially blocked PTY
+    /// write. In-flight effects report uncertainty rather than a false success.
+    /// Stop attempts serialize separately. Failure permits ordinary recovery.
     pub(crate) fn stop<E>(
         &self,
         effect: impl FnOnce() -> Result<(), E>,
     ) -> Result<(), ControlGateError<E>> {
-        let _control = self
-            .control
+        let _stop = self
+            .stop_effect
             .lock()
             .map_err(|_| ControlGateError::Poisoned)?;
         if self.stopped.load(Ordering::Acquire) {
             return Ok(());
         }
-        effect().map_err(ControlGateError::Effect)?;
         self.stopped.store(true, Ordering::Release);
-        Ok(())
+        match effect() {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.stopped.store(false, Ordering::Release);
+                Err(ControlGateError::Effect(error))
+            }
+        }
     }
 
     fn now(&self) -> u64 {
@@ -114,7 +131,7 @@ impl TerminalControlGate {
             None => proposed.acquire(identity, now),
         }
         .map_err(ControlGateError::Authority)?;
-        resize().map_err(ControlGateError::Effect)?;
+        self.complete_effect(resize())?;
         *control = proposed;
         Ok(grant)
     }
@@ -139,7 +156,7 @@ impl TerminalControlGate {
                 TerminalControlPresence::Typing,
             )
             .map_err(ControlGateError::Authority)?;
-        write().map_err(ControlGateError::Effect)?;
+        self.complete_effect(write())?;
         *control = proposed;
         Ok(())
     }
@@ -158,7 +175,7 @@ impl TerminalControlGate {
         control
             .authorize(identity, generation, self.now())
             .map_err(ControlGateError::Authority)?;
-        resize().map_err(ControlGateError::Effect)
+        self.complete_effect(resize())
     }
 
     pub(crate) fn renew(
@@ -209,7 +226,7 @@ impl TerminalControlGate {
         if control.generation() != 0 && (!coordination || control.owner(self.now()).is_some()) {
             return Err(ControlGateError::GenerationRequired);
         }
-        effect().map_err(ControlGateError::Effect)
+        self.complete_effect(effect())
     }
 }
 
@@ -230,6 +247,16 @@ mod tests {
         match gate.control.try_lock() {
             Err(TryLockError::WouldBlock) => Ok(()),
             _ => Err("the authority guard was released before the effect"),
+        }
+    }
+
+    fn effect_while_stopping(gate: &TerminalControlGate) -> Result<(), &'static str> {
+        if !matches!(gate.stop_effect.try_lock(), Err(TryLockError::WouldBlock)) {
+            return Err("stop attempt guard was released");
+        }
+        match gate.legacy(false, || Ok::<_, ()>(())) {
+            Err(ControlGateError::Stopped) => Ok(()),
+            _ => Err("new input was not fenced"),
         }
     }
 
@@ -362,7 +389,7 @@ mod tests {
         let gate = TerminalControlGate::default();
         let desktop = identity();
         let grant = gate.claim(desktop, None, || Ok::<_, &str>(())).unwrap();
-        gate.stop(|| effect_while_locked(&gate)).unwrap();
+        gate.stop(|| effect_while_stopping(&gate)).unwrap();
         assert_eq!(gate.status().unwrap(), (grant.generation, None));
         assert_eq!(
             gate.claim(identity(), Some(grant.generation), || Ok::<_, &str>(())),
@@ -401,11 +428,11 @@ mod tests {
         );
         gate.input(desktop, grant.generation, || effect_while_locked(&gate))
             .unwrap();
-        gate.stop(|| effect_while_locked(&gate)).unwrap();
+        gate.stop(|| effect_while_stopping(&gate)).unwrap();
     }
 
     #[test]
-    fn accepted_input_finishes_before_concurrent_stop_effect() {
+    fn explicit_stop_does_not_wait_for_blocked_input_or_acknowledge_it() {
         use std::sync::{Barrier, mpsc};
         let gate = TerminalControlGate::default();
         let entered = Barrier::new(2);
@@ -431,19 +458,25 @@ mod tests {
                 gate.control.try_lock(),
                 Err(TryLockError::WouldBlock)
             ));
+            // A deadline bounds a failing test; the channel event, not elapsed
+            // time, proves stop ran while the writer is still held at a barrier.
+            let stopped = received.recv_timeout(Duration::from_secs(2));
             release.wait();
-            input.join().unwrap().unwrap();
+            let input_result = input.join().unwrap();
             stop.join().unwrap().unwrap();
+            assert_eq!(stopped.unwrap(), "stop");
+            assert_eq!(input_result, Err(ControlGateError::Interrupted));
         });
-        assert_eq!(received.try_iter().collect::<Vec<_>>(), ["input", "stop"]);
+        assert_eq!(received.try_iter().collect::<Vec<_>>(), ["input"]);
     }
 
     #[test]
     fn input_waiting_behind_stop_is_rejected_without_its_effect() {
-        use std::sync::Barrier;
+        use std::sync::{Barrier, mpsc};
         let gate = TerminalControlGate::default();
         let entered = Barrier::new(2);
         let release = Barrier::new(2);
+        let (reports, report) = mpsc::channel();
         std::thread::scope(|scope| {
             let stop = scope.spawn(|| {
                 gate.stop(|| {
@@ -453,17 +486,19 @@ mod tests {
                 })
             });
             entered.wait();
-            let input = scope.spawn(|| gate.legacy(false, || panic!("must not write after stop")));
-            assert!(matches!(
-                gate.control.try_lock(),
-                Err(TryLockError::WouldBlock)
-            ));
+            let input = scope.spawn(|| {
+                let result: Result<(), ControlGateError<()>> =
+                    gate.legacy(false, || panic!("must not write after stop"));
+                reports.send(result).unwrap();
+            });
+            let result = report.recv_timeout(Duration::from_secs(2));
             release.wait();
             stop.join().unwrap().unwrap();
             assert_eq!(
-                input.join().unwrap(),
+                result.unwrap(),
                 Err::<(), ControlGateError<()>>(ControlGateError::Stopped)
             );
+            input.join().unwrap();
         });
     }
 }

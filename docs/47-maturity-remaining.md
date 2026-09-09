@@ -6,18 +6,38 @@
 
 Engine stopping previously bypassed the control guard used by input and takeover.
 A real-PTY regression reproduced a retained stopped session still reporting its
-old control grant. The candidate serializes an explicitly authorized stop with
-those effects and permanently refuses later writes, resize, acquisition and
-renewal after a successful stop. Final output remains readable. Barrier-based
-tests cover input winning before stop, stop winning before input, failed-stop
-recovery and idempotent successful stops. The terminal suite passes 135 tests
+old control grant. The initial `f65c0ba4` candidate serialized explicit stop with
+those effects. It passed 135 terminal tests and 27 host tests, but pre-activation
+review found that a blocked PTY writer could hold the control guard indefinitely.
+The engine was not activated. A barrier/channel regression reproduced the issue:
+stop could not run while the simulated writer remained blocked.
+
+The corrected candidate serializes stop attempts separately, fences new effects
+before terminating the provider, and reports in-flight effects as uncertain
+rather than acknowledging or replaying them. Later writes, resize, acquisition
+and renewal are refused after successful stop; final output remains readable.
+Barrier-based tests cover blocked-input cancellation, new input refused during
+stop, failed-stop recovery and idempotent successful stops. Before the correction,
+the terminal suite passed 135 tests
 (one explicit profiling test ignored); strict all-target/all-feature terminal
-Clippy passes. All 27 host-adapter tests also pass. Live activation is pending.
+Clippy passed. All 27 host-adapter tests also passed. The corrected full terminal
+suite now passes 135 tests (81.63 seconds, one profiling test ignored), all 27 host
+tests pass, and strict terminal Clippy passes. The blocked-writer regression fails
+with the control-held stop and passes with the cancellation fence. Live engine
+activation remains pending. CI `34308472369` passed for the preceding `f65c0ba4`,
+not for this correction; a green run did not cover the newly identified deadlock.
 
 This is a prerequisite for ADR 0085, not automatic loaded-engine update admission.
 Provider completion evidence, all-session atomic admission, durable return
 obligations and planned live conversation-return verification remain open. No
 engine restart has been performed for this candidate.
+
+App/API deployment of `f65c0ba4` completed as
+`1.6.0-dev-f65c0ba440ea-20260909034825-2224314`, PID 2225764. All twelve exact
+worker/session pairs were retained; engine PID 1996041 remains unchanged.
+Edge independently confirmed the runtime and the pending engine-update card.
+The test tab was then closed to release foreground presence. The Linux source
+clone is aligned with `f65c0ba4`; do not call its pending engine artifact active.
 
 Admin's feedback conversation-ID correction is deployed as `3a0f8bd`; its single
 saved fictional request still has no Swarm task receipt because the Admin browser
