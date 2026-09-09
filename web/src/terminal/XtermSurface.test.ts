@@ -1,5 +1,50 @@
 import { afterEach, expect, test, vi } from "vitest";
 
+test("hidden terminal cancels pending fit and redraw work and resumes on visibility return", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  const element = document.createElement("div");
+  document.body.append(element);
+  const surface = new XtermSurface();
+  surface.open(element);
+  xterm.propose.mockReturnValue({ rows: 40, cols: 120 });
+  try {
+    window.dispatchEvent(new Event("resize"));
+    await vi.advanceTimersByTimeAsync(120);
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    visibility.mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(vi.getTimerCount()).toBe(0);
+    xterm.propose.mockClear();
+    window.dispatchEvent(new Event("resize"));
+    window.dispatchEvent(new Event("pageshow"));
+    expect(vi.getTimerCount()).toBe(0);
+    expect(xterm.propose).not.toHaveBeenCalled();
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(120);
+    expect(xterm.propose).toHaveBeenCalledTimes(1);
+  } finally { surface.dispose(); element.remove(); visibility.mockRestore(); }
+});
+
+test("detached retained terminals do not schedule work for global viewport events", () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  const surface = new XtermSurface();
+  const element = document.createElement("div");
+  surface.open(element);
+  try {
+    for (let event = 0; event < 15; event++) window.dispatchEvent(new Event("resize"));
+    expect(vi.getTimerCount()).toBe(0);
+    document.body.append(element);
+    window.dispatchEvent(new Event("resize"));
+    expect(vi.getTimerCount()).toBe(1);
+    surface.setRenderingActive(false);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { surface.dispose(); element.remove(); }
+});
+
 const xterm = vi.hoisted(() => ({
   fit: vi.fn(),
   propose: vi.fn<() => { rows: number; cols: number } | undefined>(),

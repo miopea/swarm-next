@@ -12,8 +12,8 @@ an old unchecked deployment note is not automatically current missing code.
 - Engine: retained PID 2271655, `cf83c980`; candidate `cf179f73` remains pending.
 - Latest App/API deployment preserved all 34 worker records and twelve exact
   running session/conversation pairs. Swarm Next and D365 remained asleep.
-- CI through gated-intake `34333537210` and evidence `34334094185` passed.
-  Modal/shortcut runs `34334885015` and `34335279693` remain pending at this checkpoint.
+- CI through gated-intake `34333537210`, modal `34334885015` and shortcut
+  `34335279693` passed. Later acceptance-document CI remains separate.
 - No release is authorized. No customer-facing send is authorized by task closure.
 
 ## Requirement-by-requirement disposition
@@ -225,3 +225,19 @@ all twelve new tests passed. Durable events distinguish operator admission, demo
 worker execution and Queen completion. See [91](91-engine-return-dependency-acceptance.md)
 for the exact timeline and evidence boundary; this does not close deployment or
 real-backlog recovery acceptance.
+
+### Inactive terminal presentation cleanup — not yet deployed
+
+Two failing-before regressions showed that hidden views retained pending redraw
+work and detached retained surfaces scheduled timers on global viewport events.
+Fit/redraw scheduling now refuses disposed, detached and hidden surfaces;
+visibility loss and rendering deactivation cancel their pending presentation work.
+Visibility return still measures current dimensions. No worker, transport history,
+input ownership, canonical parsing or stable-fit contract changes.
+
+All 100 focused surface/controller/workspace tests, the full 152-file/1,425-test
+web suite, TypeScript checking and production web build pass.
+The isolated Edge WebGL fixture switched away and back with two retained renderers,
+one attached and one inactive, and showed the intact fictional terminal. The
+fixture tab and server were closed. This proves the lifecycle correction, not a
+measured reduction in whole-app CPU or acceptance of aged production responsiveness.

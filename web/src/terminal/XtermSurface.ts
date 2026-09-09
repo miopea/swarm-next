@@ -332,6 +332,10 @@ export class XtermSurface implements TerminalSurface {
   setRenderingActive(active: boolean): void {
     const returning = active && !this.#renderingActive;
     this.#renderingActive = active;
+    if (!active) {
+      this.#cancelScheduledFit();
+      this.#cancelScheduledRedraw();
+    }
     if (!returning || this.#disposed || !this.#gpuRecoveryPending
       || !this.#element?.isConnected || document.visibilityState !== "visible") return;
     this.#gpuRecoveryPending = false;
@@ -619,6 +623,10 @@ export class XtermSurface implements TerminalSurface {
   readonly #handleVisibilityChange = (): void => {
     const visible = document.visibilityState === "visible";
     if (visible) this.#scheduleFit();
+    else {
+      this.#cancelScheduledFit();
+      this.#cancelScheduledRedraw();
+    }
     // A hidden tab cannot render: the browser throttles or stops animation
     // frames, and xterm resolves a write only once it has drawn it. That is the
     // same condition as a detached element, reached by a different door — the
@@ -848,6 +856,7 @@ export class XtermSurface implements TerminalSurface {
 
   #scheduleRedraw(): void {
     this.#cancelScheduledRedraw();
+    if (this.#disposed || !this.#element?.isConnected || document.visibilityState !== "visible") return;
     this.#redrawFrame = requestAnimationFrame(() => {
       this.#redrawFrame = undefined;
       if (!this.#element?.isConnected) return;
@@ -922,6 +931,9 @@ export class XtermSurface implements TerminalSurface {
 
   #scheduleFit(): void {
     this.#cancelScheduledFit();
+    // Retained renderers still receive window events, but own no background
+    // layout work. Attachment/visibility return measures the current viewport.
+    if (this.#disposed || !this.#element?.isConnected || document.visibilityState !== "visible") return;
     this.#resizeTimer = setTimeout(() => {
       this.#resizeTimer = undefined;
       this.#fitIfUsable();
