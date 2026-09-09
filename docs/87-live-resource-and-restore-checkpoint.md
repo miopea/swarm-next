@@ -1,4 +1,37 @@
-# September 8 live resource and restore checkpoint
+# September 8–9 live resource and restore checkpoints
+
+## September 9: uninterrupted one-hour post-return observation
+
+Both services ran `1.6.0-dev-cf83c980bf17-20260909041327-2251164`:
+API PID 2252714, engine PID 2271655. Observer PID 2274770 completed its configured
+3,600-second window with 120 samples, 3,592 seconds between first and last.
+All twelve original sessions remained running and both service identities stayed
+unchanged. The final report is in `/tmp/swarm-cf83-return-soak.kIt7SR/observer.log`;
+the CSV is `20260909T043116Z-live-samples.csv` in the same directory.
+
+| Layer | Average CPU, one core | Largest sample interval |
+| --- | ---: | ---: |
+| API cgroup | 2.08% | 38.36% |
+| Engine process only | 1.12% | 5.17% |
+| Engine cgroup including workers | 15.36% | 27.27% |
+
+API RSS ranged from 56,418,304 to 70,017,024 bytes (53.80–66.77 MiB).
+The final twenty samples, spanning the last ten minutes, all reported exactly
+70,017,024 bytes. Anonymous RSS ranged 31,637,504–44,613,632 bytes. API cgroup
+charge ranged 37,769,216–53,030,912 bytes; it is not the same measurement as RSS.
+Worker-inclusive cgroup memory ranged 3,403,526,144–3,697,995,776 bytes.
+Retained history grew from 533,040,463 to 534,807,755 bytes, with zero reported
+dropped bytes. Collection took 0–1 seconds per sample.
+
+This establishes continuity and a late-window API memory plateau under this
+specific workload: twelve loaded sessions, Queen reviews and the two-demo
+dependency journey in `91-engine-return-dependency-acceptance.md`. Most workers
+were idle. Compilation waited until this observer exited. No deployment or
+worker restart interrupted the series. It does not establish heavy multi-worker
+throughput, browser/PWA performance, or a multi-day plateau. Do not compare its
+CPU directly with the earlier sixteen-worker active-work sample as a speedup.
+
+## September 8 observations (historical)
 
 Runtime: `1.6.0-dev-940d3c8ed1f0-20260908230927-1746491`.
 API PID 1748360; terminal-host PID 1547164. No engine restart or release.

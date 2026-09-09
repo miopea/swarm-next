@@ -29,8 +29,12 @@ All twenty-two previously sleeping workers remained asleep, including D365 and
 Swarm Next. No real project terminal transcript was read or typed into.
 
 This closes this planned replacement's conversation-return check, not automatic
-loaded-engine admission. A new one-hour read-only observation started as PID
-2274770 under `/tmp/swarm-cf83-return-soak.kIt7SR`; its result remains pending.
+loaded-engine admission. The one-hour read-only observation (PID 2274770 under
+`/tmp/swarm-cf83-return-soak.kIt7SR`) subsequently completed all 120 samples with
+twelve original sessions, unchanged services and no dropped history. API RSS
+plateaued at 66.77 MiB for the final twenty samples. See
+`87-live-resource-and-restore-checkpoint.md` for CPU attribution and workload
+limits; heavy interactive/browser and multi-day acceptance remain open.
 Do not join it to earlier observations interrupted by operator updates or sleep.
 Presence reports `away` from `screen_locked`, with no saved Night Watch schedule;
 no schedule or manual presence policy was changed. No release was cut.
