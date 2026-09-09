@@ -47,7 +47,7 @@ export async function submitSupport(token: string, submission: SupportSubmission
   });
   const value = await response.json() as SupportDelivery;
   if (value.submission_key !== submission.submission_key || !value.delivery
-    || !["pending", "delivering", "uncertain", "failed", "confirmed"].includes(value.delivery.state)) {
+    || !["pending", "delivering", "uncertain", "failed", "confirmed", "rate_limited"].includes(value.delivery.state)) {
     throw new Error("Support save could not be confirmed");
   }
   return value;
