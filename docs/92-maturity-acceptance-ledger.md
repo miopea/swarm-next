@@ -8,7 +8,7 @@ an old unchecked deployment note is not automatically current missing code.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-8145b9023c7d-20260909095202-2453393`.
+- App/API: `1.6.0-dev-75ea754c3a42-20260909100826-2461816`.
 - Engine: retained PID 2271655, `cf83c980`; candidate `cf179f73` remains pending.
 - Latest App/API deployment preserved all 34 worker records and twelve exact
   running session/conversation pairs. Swarm Next and D365 remained asleep.
@@ -250,7 +250,7 @@ remain asleep. Health is okay; support file intake remains disabled. No engine
 activation, central Admin infrastructure change, customer send or release occurred.
 CI for 8145b902 remains separate from the passing local suite and live continuity.
 
-### Queue execution mismatch visibility — not yet deployed
+### Queue execution mismatch visibility
 
 The task-only Active projection hid work even when the roster explicitly showed
 its assigned worker stopped or using a different immutable session. Two new
@@ -262,10 +262,17 @@ a stopped worker. No wake, reassignment, task transition or Needs You decision i
 created by presentation. Existing exact recovery evidence still identifies Queen's
 own check without changing execution ownership.
 
-All 118 queue/application tests and TypeScript checking pass. Edge rendered the
+All 118 queue/application tests, TypeScript checking and production web build pass. Edge rendered the
 fictional mismatch fixture at a measured 390px container/scroll width without
 overflow, with both explanations visible. This is a narrow desktop rendering,
 not native mobile acceptance. The fixture tab/server were closed.
+
+Development deployment 75ea754c completed successfully with API PID 2463002 and
+unchanged engine PID 2271655. Exact before/after snapshots in
+`/tmp/swarm-queue-execution.wMii0s` preserve all 34 worker identity/running/session
+bindings and all twelve running provider/conversation selections. Swarm Next and
+D365 remain asleep. CI for the earlier inactive-render fix (34337026969) passed;
+this newer queue revision's CI remains a separate pending check.
 
 The separate native /resume acceptance attempt stopped before any input or worker
 mutation: auto-review refused reading the demo terminal's current screen. Specific
