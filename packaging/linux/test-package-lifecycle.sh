@@ -64,6 +64,10 @@ done
 stub_mark() { for stub_unit in $stub_units; do : > "$stub_state/$stub_unit"; done; }
 stub_clear() { for stub_unit in $stub_units; do rm -f "$stub_state/$stub_unit"; done; }
 case "$stub_verb" in
+  daemon-reload)
+    if [ -f "$HOME/package-activation-fails" ] && [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "3.0.0" ]; then
+      exit 1
+    fi;;
   show)
     [ ! -f "$HOME/restore-state-unreadable" ] || exit 1
     if [ -f "$HOME/unit-state/swarm-api.service" ]; then printf 'active\n'; else printf 'inactive\n'; fi
@@ -117,6 +121,14 @@ fi
 printf '%s\n' "$version" >> "$HOME/curl.log"
 [ "$version" != "3.0.0" ] || printf 'database-v3\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
 [ "$version" != "6.0.0" ] || printf 'database-v6\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
+if [ "$version" = "6.0.0" ]; then
+  if [ -f "$HOME/package-rollback-backup-missing" ]; then
+    rm -f "$SWARM_STATE_ROOT/backups/pre-update-6.0.0.sqlite3"
+  fi
+  if [ -f "$HOME/package-rollback-stop-refused" ]; then
+    touch "$HOME/restore-stop-refused"
+  fi
+fi
 [ "$version" != "3.0.0" ] && [ "$version" != "6.0.0" ] && [ "$version" != "8.0.0" ]
 EOF
 chmod +x "$SWARM_SYSTEMCTL_BIN" "$SWARM_CURL_BIN"
@@ -820,6 +832,20 @@ grep -q '^--user restart swarm-terminal-host.service$' "$HOME/systemctl.log"
 
 # A failed API health check restores only the previous API/browser pointer.
 printf 'database-v2\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
+# Failure while installing units must already have rollback armed.
+: > "$HOME/package-activation-fails"
+: > "$HOME/systemctl.log"
+if rollback_report=$("$package" update "$test_root/bundle-3.0.0" 2>&1); then
+  echo "failed unit activation unexpectedly succeeded" >&2; exit 1
+fi
+case "$rollback_report" in *"recovery completed; API health verified"*) :;; *) echo "$rollback_report" >&2; exit 1;; esac
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "2.0.0" ]
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "2.0.0" ]
+[ "$(cat "$SWARM_STATE_ROOT/swarm.sqlite3")" = "database-v2" ]
+if grep -q 'swarm-terminal-host.service' "$HOME/systemctl.log"; then
+  echo "failed API activation recovery touched the worker engine" >&2; exit 1
+fi
+rm "$HOME/package-activation-fails"
 : > "$HOME/check-lifecycle-owner"
 if "$package" update "$test_root/bundle-3.0.0"; then
   echo "unhealthy update unexpectedly succeeded" >&2
@@ -1021,6 +1047,36 @@ fi
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "4.0.0" ]
 [ "$(cat "$SWARM_STATE_ROOT/swarm.sqlite3")" = "database-v4" ]
 [ "$(cat "$SWARM_STATE_ROOT/backups/pre-update-6.0.0.sqlite3")" = "database-v4" ]
+
+# Failed rollback is not healthy recovery. These are fictional files and units;
+# no provider, real database or systemd service is contacted by this fixture.
+: > "$HOME/package-rollback-backup-missing"
+if rollback_report=$("$package" migrate-protocol "$test_root/bundle-6.0.0" 2>&1); then
+  echo "migration with missing rollback backup unexpectedly succeeded" >&2; exit 1
+fi
+case "$rollback_report" in *"PACKAGE ROLLBACK INCOMPLETE"*) :;; *) echo "$rollback_report" >&2; exit 1;; esac
+case "$rollback_report" in *"recovery completed; API health verified"*) echo "missing backup claimed healthy recovery" >&2; exit 1;; esac
+[ "$(cat "$SWARM_STATE_ROOT/swarm.sqlite3")" = "database-v6" ]
+[ ! -f "$HOME/unit-state/swarm-api.service" ]
+[ ! -f "$HOME/unit-state/swarm-terminal-host.service" ]
+[ ! -f "$SWARM_STATE_ROOT/.package-rollback.sqlite3" ]
+rm "$HOME/package-rollback-backup-missing"
+# Restore only the fixture's invented starting state for the next failure case.
+printf 'database-v4\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
+"$SWARM_SYSTEMCTL_BIN" --user start swarm-api.service swarm-terminal-host.service
+: > "$HOME/package-rollback-stop-refused"
+if rollback_report=$("$package" migrate-protocol "$test_root/bundle-6.0.0" 2>&1); then
+  echo "migration with refused rollback stop unexpectedly succeeded" >&2; exit 1
+fi
+case "$rollback_report" in *"PACKAGE ROLLBACK INCOMPLETE"*) :;; *) echo "$rollback_report" >&2; exit 1;; esac
+[ "$(cat "$SWARM_STATE_ROOT/swarm.sqlite3")" = "database-v6" ]
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "6.0.0" ]
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "6.0.0" ]
+[ "$(cat "$SWARM_STATE_ROOT/backups/pre-update-6.0.0.sqlite3")" = "database-v4" ]
+rm "$HOME/package-rollback-stop-refused" "$HOME/restore-stop-refused"
+ln -sfn "$SWARM_INSTALL_ROOT/releases/4.0.0" "$SWARM_INSTALL_ROOT/current"
+ln -sfn "$SWARM_INSTALL_ROOT/releases/4.0.0" "$SWARM_INSTALL_ROOT/host-current"
+printf 'database-v4\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
 
 # Database restore verifies input, creates a rollback snapshot, restarts only
 # the API, and preserves the terminal host and repository root.

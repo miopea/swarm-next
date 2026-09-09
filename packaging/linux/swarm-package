@@ -371,6 +371,14 @@ rollback_restore_database() {
   wait_for_health || return 1
 }
 
+stop_package_rollback_services() {
+  run_systemctl stop "$@" || return 1
+  for rollback_unit in "$@"; do
+    rollback_unit_state=$(run_systemctl show "$rollback_unit" --property=ActiveState --value) || return 1
+    case "$rollback_unit_state" in inactive|failed) :;; *) return 1;; esac
+  done
+}
+
 on_exit() {
   result=$?
   trap - EXIT
@@ -403,19 +411,47 @@ on_exit() {
   # what set `changed`. Concluding it anywhere else would be a guess, and a
   # surface telling an operator "nothing was changed" on a guess is the same
   # defect as telling them a build did not compile when it did.
-  if [ -n "$rollback_host_release" ] && [ -d "$rollback_host_release" ]; then
-    fail_changed=rolled-back
-    activate_link "$rollback_release" >/dev/null 2>&1 || true
-    activate_host_link "$rollback_host_release" >/dev/null 2>&1 || true
-    install_units "$rollback_release" >/dev/null 2>&1 || true
-    restore_update_database >/dev/null || true
-    run_systemctl enable --now swarm.target >/dev/null 2>&1 || true
-  elif [ -n "$rollback_release" ] && [ -d "$rollback_release" ]; then
-    fail_changed=rolled-back
-    activate_link "$rollback_release" >/dev/null 2>&1 || true
-    install_units "$rollback_release" >/dev/null 2>&1 || true
-    restore_update_database >/dev/null || true
-    run_systemctl restart swarm-api.service >/dev/null 2>&1 || true
+  if [ -n "$rollback_release" ]; then
+    fail_changed=partial
+    # Run recovery as a standalone errexit subshell. Calling these multi-step
+    # helpers in an if/AND list would disable their errexit protection. Keep the
+    # parent's lifecycle descriptor until recovery and failure reporting finish.
+    set +e
+    (
+      set -e
+      [ -d "$rollback_release" ]
+      if [ -n "$rollback_host_release" ]; then
+        [ -d "$rollback_host_release" ]
+        stop_package_rollback_services swarm-api.service swarm-terminal-host.service swarm.target
+        activate_link "$rollback_release"
+        activate_host_link "$rollback_host_release"
+      else
+        stop_package_rollback_services swarm-api.service
+        activate_link "$rollback_release"
+      fi
+      install_units "$rollback_release"
+      restore_update_database
+      clear_start_limit swarm-api.service swarm.target
+      if [ -n "$rollback_host_release" ]; then
+        clear_start_limit swarm-terminal-host.service
+        run_systemctl enable --now swarm.target
+        wait_for_host "$rollback_host_release"
+      else
+        run_systemctl restart swarm-api.service
+      fi
+      wait_for_health
+    )
+    package_rollback_result=$?
+    set -e
+    rm -f "$state_root/.package-rollback.sqlite3" "$state_root/.package-rollback.sqlite3-wal" "$state_root/.package-rollback.sqlite3-shm" || true
+    if [ "$package_rollback_result" -eq 0 ]; then
+      fail_changed=rolled-back
+      printf 'Previous package and database recovery completed; API health verified.\n' >&2
+    else
+      fail_detail="Update failed and automatic package rollback could not be verified. Inspect service state and retained backups before retrying."
+      fail_next="Review package diagnostics and retained backups; do not assume the previous release is healthy."
+      printf 'PACKAGE ROLLBACK INCOMPLETE. Recovery was not verified; retained backups are in %s. Inspect service state before retrying.\n' "$state_root/backups" >&2
+    fi
   fi
   if [ -n "$drain_release" ]; then
     SWARM_TERMINAL_SOCKET=$(terminal_socket) \
@@ -587,16 +623,22 @@ restore_update_database() {
       # operator's call, and guessing it for them is how data goes missing.
       printf 'swarm-package: THE ROLLBACK IS INCOMPLETE. The database migrated from schema %s to %s during this update and no pre-update backup exists, so the restored release cannot read it. Restore a backup from %s before starting Swarm:\n\n    swarm-package restore <backup>\n\n' \
         "$update_schema_before" "$schema_now" "$state_root/backups" >&2
+      return 1
     else
       printf 'swarm-package: no pre-update database backup was taken; the database is unchanged and was left as it is\n' >&2
     fi
     return 0
   fi
-  [ -f "$update_rollback" ] || die "pre-update rollback backup is missing"
-  run_systemctl stop swarm-api.service
-  cp "$update_rollback" "$database"
-  chmod 0600 "$database"
-  rm -f "$database-wal" "$database-shm"
+  [ -f "$update_rollback" ] || { printf 'Pre-update rollback backup is missing; database was not replaced.\n' >&2; return 1; }
+  stop_restore_api || return 1
+  # Verify a private staging copy using the release being restored. Never copy
+  # over the live database in place, and never migrate the retained backup.
+  update_restore_incoming="$state_root/.package-rollback.sqlite3"
+  cp "$update_rollback" "$update_restore_incoming" || return 1
+  chmod 0600 "$update_restore_incoming" || return 1
+  "$rollback_release/bin/swarmctl" verify-database "$update_restore_incoming" >/dev/null || return 1
+  mv -f "$update_restore_incoming" "$database" || return 1
+  rm -f "$database-wal" "$database-shm" || return 1
   printf 'swarm-package: restored the pre-update database from %s\n' "$update_rollback" >&2
   update_rollback=
 }
@@ -1476,9 +1518,9 @@ install_or_update() {
   fi
 
   [ "$old_release" = "$new_release" ] || ln -sfn "$old_release" "$install_root/previous"
+  rollback_release=$old_release
   activate_link "$new_release"
   install_units "$new_release"
-  rollback_release=$old_release
   clear_start_limit swarm-api.service swarm.target
   if run_systemctl enable --now swarm.target \
     && run_systemctl enable --now swarm-host-reconcile.path swarm-host-reconcile.timer swarm-release-apply.path \
@@ -1495,17 +1537,7 @@ install_or_update() {
     fi
     return
   fi
-  activate_link "$old_release"
-  install_units "$old_release"
-  restore_update_database
-  clear_start_limit swarm-api.service swarm.target
-  run_systemctl restart swarm-api.service
-  if wait_for_health; then
-    rollback_release=
-    die "new API failed health verification; previous API release restored"
-  fi
-  rollback_release=
-  die "new API and previous API both failed health verification"
+  die "new API failed health verification; attempting verified rollback to the previous release"
 }
 
 rollback() {

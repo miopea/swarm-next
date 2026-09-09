@@ -90,6 +90,22 @@ explicit future operation.
 
 ## Consequences
 
+### Verified failed-update recovery
+
+The package lifecycle lock remains owned through rollback and final reporting.
+Rollback is armed before activation or unit installation, not only before the
+health check. Recovery confirms affected services stopped before changing links
+or replacing the database. API-only recovery does not stop the terminal host.
+The retained backup is copied to a lifecycle-owned staging file and verified by
+the previous release before atomic replacement; the backup itself is not migrated.
+Recovery is reported as rolled back only after service startup and health checks
+succeed. Missing backups, refused stops or unsuccessful recovery remain explicitly
+partial, with retained-backup guidance, rather than being swallowed during exit.
+
+Isolated Linux lifecycle tests cover failed unit installation, failed activation
+health, missing rollback backup and refused rollback stop. The release-apply
+smoke also passes. These fixtures are not live engine-maintenance acceptance.
+
 - Normal browser/API replacement preserves terminal work by construction.
 - A terminal-host replacement is a separate, explicit zero-session operation
   rather than a side effect of application deployment.

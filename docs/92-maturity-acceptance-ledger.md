@@ -20,6 +20,23 @@ an old unchecked deployment note is not automatically current missing code.
 
 ## Requirement-by-requirement disposition
 
+### Verified package rollback (local, not deployed)
+
+Failed updates no longer claim successful rollback after ignored service, link,
+database or health-check failures. Recovery holds the existing lifecycle lock,
+confirms affected services stopped, verifies a staged copy of the retained backup
+with the previous release, and checks restored health. API-only failure recovery
+preserves the worker engine. Rollback is armed before unit installation as well
+as health checking. Missing backups and refused stops remain explicitly partial.
+
+The missing-backup regression failed against the prior script. The final isolated
+Linux package lifecycle smoke passes, including that case, refused stop and failed
+unit installation. Release-apply smoke and shell syntax checks also pass. Logs:
+`/tmp/swarm-maintenance-admission.BsOnHB/rollback-final.log` and
+`rollback-release-apply.log`. No production service or database was changed.
+This closes a package-failure safety gap, not native maintenance admission or
+whole-program acceptance. Publication still awaits fresh push approval.
+
 ### Durable failed and unconfirmed worker returns (local, not deployed)
 
 Schema 158 records an exact attempt before a maintenance return contacts the
