@@ -2827,7 +2827,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .queue-worker-group h3 { margin: 0; font-size: .9rem; overflow-wrap: anywhere; }
 .queue-group li button {
   width: 100%; text-align: left; display: flex; justify-content: space-between; gap: 1rem;
-  background: none; border: 1px solid transparent; border-radius: 6px; padding: 0.35rem 0.5rem; cursor: pointer;
+  color: var(--text); background: none; border: 1px solid transparent; border-radius: 6px; padding: 0.35rem 0.5rem; cursor: pointer;
 }
 .queue-group li button:hover, .queue-group li button:focus-visible { border-color: var(--line); }
 /* min-width:0 ON EVERY ITEM IN THE CHAIN, not just the leaf.

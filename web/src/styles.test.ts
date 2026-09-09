@@ -8,6 +8,12 @@ declare const process: { cwd(): string };
 
 const stylesheet = readFileSync(`${process.cwd()}/src/styles.css`, "utf8");
 
+test("queue task buttons use themed text before hover or focus", () => {
+  const rule = stylesheet.match(/\.queue-group li button\s*\{([^}]+)\}/)?.[1];
+  expect(rule).toBeDefined();
+  expect(rule).toMatch(/color:\s*var\(--text\)/);
+});
+
 test("defines every design token referenced by the application stylesheet", () => {
   const defined = new Set([...stylesheet.matchAll(/(--[a-z0-9-]+)\s*:/gi)].map((match) => match[1]));
   const referenced = new Set([...stylesheet.matchAll(/var\((--[a-z0-9-]+)/gi)].map((match) => match[1]));

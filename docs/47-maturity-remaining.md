@@ -2,6 +2,26 @@
 
 ## Current checkpoint — September 8, after Admin intake acceptance
 
+### Deployment and reproduced dark-mode defect, September 8 at 20:07 Eastern
+
+Main `999b5f1c` is healthy as
+`1.6.0-dev-999b5f1c8e16-20260909000208-1828904`. API PID is 1831469;
+engine PID 1547164 is unchanged. All 12 exact pre-update session IDs remain
+running after activation. This is App/API-only continuity, not engine-update
+acceptance. The prior observation's reduction from 16 to 12 happened before
+this deployment and must not be attributed to it.
+
+The separate Edge tab restored its trusted session and rendered the new build
+at `swarm.bfgsolutions.net`. No recovery-delivery rows were present, so the
+UUID disclosure's live expanded-state gate cannot be claimed from this visit.
+
+A live task reported dark queue titles unreadable until hover. Switching the
+separate tab to dark mode reproduced nearly invisible task titles while metadata
+remained legible. The queue button rule omitted an explicit text color; it now
+uses `var(--text)` in its ordinary state. Original light mode was restored.
+The candidate passes all 33 stylesheet and 41 queue tests; post-deployment
+dark/light rendering remains required. No task was opened, assigned or woken.
+
 ### Bounded passkey ceremonies, September 8
 
 Source inspection found that abandoned registration and sign-in challenges had
