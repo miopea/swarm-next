@@ -6,6 +6,13 @@ replacement specification or a declaration that partially verified rows are done
 Historical implementation notes in [47](47-maturity-remaining.md) remain evidence;
 an old unchecked deployment note is not automatically current missing code.
 
+**Current execution priority:** [93](93-ux-first-remaining-plan.md), directed by
+the operator September 9, puts complete user-facing UX/UI packages first and
+retains backend/performance work as an explicit handoff. At approximately five
+percent account usage remaining, consolidate unfinished work rather than claiming
+the overall goal complete. Earlier "local/not deployed" checkpoint prose below
+is historical where superseded by the verified deployment section.
+
 ## Verified runtime and delivery
 
 - App/API: `1.6.0-dev-7c648e4d88f0-20260909183740-3162396`.
@@ -13,7 +20,9 @@ an old unchecked deployment note is not automatically current missing code.
   earlier continuity checkpoint retained PID 2271655; this later restart's
   initiator has not been established by the current read-only check.
 - Latest App/API deployment preserved all 34 worker records and twelve exact
-  running session/conversation pairs. Swarm Next and D365 remained asleep.
+  running session/provider identities. The worker-list projection did not expose
+  conversation IDs, so this does not independently prove conversation continuity.
+  Swarm Next and D365 remained asleep.
 - CI through gated-intake `34333537210`, modal `34334885015` and shortcut
   `34335279693` passed. Later acceptance-document CI remains separate.
 - No release is authorized. No customer-facing send is authorized by task closure.

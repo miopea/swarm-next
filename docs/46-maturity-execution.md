@@ -1,5 +1,20 @@
 # Maturity execution ledger
 
+## Resume here — current operator-directed priority
+
+The active execution contract is at the top of
+[45](45-daily-driver-maturity-plan.md); the ordered remaining scope and exit gates
+are in [93](93-ux-first-remaining-plan.md). Read those before the historical entries
+below. Current acceptance evidence belongs in [92](92-maturity-acceptance-ledger.md).
+
+Next: **UI-1 Needs You / Queues / task details**, then UI-2 terminal/mobile,
+UI-3 Settings/runtime and UI-4 whole-product finish. Finish, browser-verify,
+commit and safely deploy each coherent package. Backend/performance requirements
+remain open in the handoff; do not resume deep backend work by following an old
+checkpoint. No BFG Admin worker messages without fresh approval. No releases.
+Check usage at package boundaries; stop starting packages around 10% remaining
+and consolidate a durable unfinished-work handoff around 5%.
+
 Approved program: [scope and acceptance](45-daily-driver-maturity-plan.md).
 Branch: `codex/daily-driver-maturity`. Starting revision: `36420b3`.
 Local commits, mainline push, and direct development-Hive deployment are now

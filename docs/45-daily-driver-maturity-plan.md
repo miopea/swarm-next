@@ -1,5 +1,31 @@
 # Swarm daily-driver maturity: scope and delivery plan
 
+## Active execution contract — September 9, 2026
+
+Read this section and [the UX-first remaining plan](93-ux-first-remaining-plan.md)
+first after any compaction or restart. They supersede older sequencing and
+coordination instructions below, not the approved requirements.
+
+- **Next package: UI-1 — Needs You, Queues and linked task details.** Then UI-2
+  terminal/mobile controls, UI-3 Settings/runtime/recovery, and UI-4 integrated
+  visual finish. Complete packages rather than accumulating partial foundations.
+- Inspect the rendered experience in a separate Edge tab at
+  `https://swarm.bfgsolutions.net`. Preserve the cute bee identity and ordinary
+  one-to-five-worker experience. Use fictional fixtures for intrusive tests.
+- Each package ends with focused checks, browser evidence, a coherent commit,
+  and safe development-Hive deployment. No release is authorized.
+- Defer deep engine/performance work to the documented backend handoff unless
+  it directly blocks this package or threatens data, input or session safety.
+  Do not repeat passing tests or start unrelated investigations.
+- **Do not communicate with the BFG Admin worker without fresh operator
+  approval.** A documented handoff is not authorization to send or delegate it.
+- Check account usage at package boundaries. Around 10% remaining, start no new
+  package; around 5%, stop implementation and consolidate unfinished work,
+  revisions, evidence, risks and next steps. Do not consume resets or buy credits.
+- Keep [the acceptance ledger](92-maturity-acceptance-ledger.md) current.
+  Implemented, verified, deployed and accepted are different states. The overall
+  goal stays open until its actual acceptance criteria are met.
+
 Status: scope, delivery sequence, implementation, and local phase commits approved.
 Execution: active goal; local commits, mainline push, and direct development-Hive
 deployment are authorized. The operator chooses releases; no release is authorized.
@@ -480,6 +506,12 @@ web-app behavior for critical journeys. Responsive emulation is useful but does
 not prove OS picker, suspension, keyboard, or device handoff behavior.
 
 ## 9. Recommended delivery sequence and verification plan
+
+**September 9 operator priority update:** [93](93-ux-first-remaining-plan.md)
+supersedes the remaining execution order below with UX/UI-first delivery and an
+approximately 5-percent-usage handoff. All requirements and safety/acceptance
+rules in this plan remain in scope. The historical sequence below is retained
+for context, not permission to defer the user-facing finish pass again.
 
 These are work packages and dependency guidance, NOT an approved delivery order.
 Every phase ends in a reviewed, coherent commit checkpoint with evidence and known
