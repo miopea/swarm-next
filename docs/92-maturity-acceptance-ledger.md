@@ -15,7 +15,7 @@ is historical where superseded by the verified deployment section.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-d090bbb956bf-20260909225909-3569261`.
+- App/API: `1.6.0-dev-414de0575d76-20260909232601-3621464`.
 - Engine: last verified PID 3408834, started September 9 at 17:01:49 Eastern,
   after the operator's manually applied update. Subsequent app-only deployments
   preserved that engine and its running worker identity projections.
@@ -41,10 +41,14 @@ check. It does not close the entire maturity goal, native attachment picker,
 iOS, physical presence, non-authorizing decision clarification, direct-worker
 answer reconciliation or the backend/performance handoff.
 
-Current local follow-through: distinguish unavailable saved-session checks from
+Deployed follow-through `414de057`: distinguish unavailable saved-session checks from
 expired authentication and offer explicit reconnection without another token.
 New tests cover failures from both session and snapshot reads, repeated failure,
-successful recovery and actual authentication rejection. Deployment is pending.
+successful recovery and actual authentication rejection. All 1,497 web tests,
+TypeScript and the production build pass; Edge desktop/390px recovery succeeds
+without credentials. `/tmp/swarm-session-recovery-deploy.E3bxLd` verifies healthy
+activation and unchanged engine plus all 34 worker identities (12 running).
+CI 34416874473 remains pending; this checkpoint is not whole-package closure.
 
 ### September 9 runtime safeguard placement deployment
 

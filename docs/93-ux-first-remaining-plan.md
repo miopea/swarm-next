@@ -15,9 +15,18 @@ and successful entry without credentials. The 390px phone view is readable;
 unlock/recovery buttons and details have 44px minimum targets. Tests cover both
 session-check and snapshot failure, recovery, and retry discovering an expired
 session; a message containing 4010 is not mistaken for authentication failure.
-All 154 web files / 1,497 tests, TypeScript and the production build pass before
-the final touch-target style adjustment. Deployment remains pending for this
-increment. This does not close native-device, clarification or engine gates.
+All 154 web files / 1,497 tests and TypeScript pass. After the final touch-target
+adjustment, all 36 style checks and the production build pass again. Edge also
+verified expanded technical details in 390px dark mode and phone recovery into
+the app without a token field.
+
+Deployed `414de057` as `1.6.0-dev-414de0575d76-20260909232601-3621464`.
+Health is good with no degraded services. Engine PID/start and all 34 worker
+identity projections, including 12 running, are identical before and after in
+`/tmp/swarm-session-recovery-deploy.E3bxLd`. CI 34416874473 is in progress;
+prior dialog CI 34414805240 passed. This does not close native-device,
+clarification or engine gates. Next UX finish work: integrated Apiary/navigation
+and non-authorizing decision clarification, not reload profiling or BFG messaging.
 
 ### UI-4 closed defect: modal navigation bypass
 
@@ -201,7 +210,7 @@ samples. TypeScript and production build pass. Prior a716dad8 CI has now passed.
 | Diagnostics preview | Visible fixture preview, distinct browser/server evidence; stale-state correction deployed 51cadc40; Settings integration assertion corrected in 55e51327 | No new presentation gap identified by these checks; long-term measurement acceptance remains separate |
 | Worker editor keyboard return | Edge reproduced focus loss to BODY on cancel; fix returns focus to the same worker's Edit button. Tests cover cancel, discard, failed save and retry; 64 style/worker tests pass; deployed 85c2efc7, full CI passed | No live worker editing performed; fictional journey complete |
 | Blocking task dialogs | Document-level overlay covers navigation; desktop and 390px draft/cancel proof; deployed d090bbb9, full CI passed; Android operator accepted "Looks good" | This dialog gate closed; not an iOS claim |
-| Saved-session entry failure | Failed check -> repeated retry -> recovered connection opens app without a token; actual 401 still opens unlock | New increment pending deployment; not a physical network-suspension test |
+| Saved-session entry failure | Failed check -> repeated retry -> recovered connection opens app without a token; actual 401 still opens unlock; desktop/390px light/dark; deployed 414de057 | Current CI pending; not a physical network-suspension test |
 
 This is an incremental evidence matrix, not closure of UI-3, UI-4 or the overall
 goal. Next focus is ordinary-user worker/navigation/dialog usability. Do not
