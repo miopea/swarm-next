@@ -61,13 +61,13 @@ export type JiraCommentDispatch = { state: "queued" | "dispatching" | "delivered
 export type JiraTaskAttachment = { id: string; filename: string; media_type: string; byte_size: number; is_image: boolean };
 export type JiraTaskDetail = { summary: string; description: string; attachments: JiraTaskAttachment[] };
 
-export async function fetchJiraTaskDetail(operatorToken: string, taskId: string): Promise<JiraTaskDetail> {
-  const response = await authenticatedFetch(operatorToken, `/api/v1/integrations/jira/task-links/${encodeURIComponent(taskId)}/detail`);
+export async function fetchJiraTaskDetail(operatorToken: string, taskId: string, signal?: AbortSignal): Promise<JiraTaskDetail> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/integrations/jira/task-links/${encodeURIComponent(taskId)}/detail`, { signal });
   return response.json() as Promise<JiraTaskDetail>;
 }
 
-export async function fetchJiraTaskAttachment(operatorToken: string, taskId: string, attachmentId: string): Promise<Blob> {
-  const response = await authenticatedFetch(operatorToken, `/api/v1/integrations/jira/task-links/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}`);
+export async function fetchJiraTaskAttachment(operatorToken: string, taskId: string, attachmentId: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/integrations/jira/task-links/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}`, { signal });
   return response.blob();
 }
 

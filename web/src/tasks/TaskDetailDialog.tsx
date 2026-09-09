@@ -48,6 +48,16 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
   const [attempt, setAttempt] = useState(0);
   const titleInput = useRef<HTMLInputElement>(null);
   const keepTaskButton = useRef<HTMLButtonElement>(null);
+  // Board refreshes recreate source objects. Only changed attachment metadata or
+  // a new Jira revision should discard previews and restart these private reads.
+  const emailAttachmentKey = JSON.stringify(emailSources.flatMap((source) => source.attachments.map((attachment) => ({
+    id: `email:${source.id}:${attachment.storage_name}`,
+    filename: attachment.display_name,
+    media_type: attachment.media_type,
+    byte_size: attachment.byte_size,
+    is_image: attachment.media_type.startsWith("image/"),
+  }))));
+  const jiraRevision = jiraLink ? `${jiraLink.issue_id}:${jiraLink.remote_updated_at}` : undefined;
   const dirty = title !== task.title
     || description !== task.description
     || instruction !== (task.operator_instruction ?? "")
@@ -66,43 +76,45 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
 
   useEffect(() => {
     let active = true;
+    const controller = new AbortController();
     const objectUrls: string[] = [];
+    setImages([]);
+    setAttachments([]);
+    setSourceDescription("");
     setLoading(true);
     setFailed(false);
     setImageLoadFailures(0);
     void (async () => {
       try {
-        const emailAttachments: JiraTaskAttachment[] = emailSources.flatMap((source) => source.attachments.map((attachment) => ({
-          id: `email:${source.id}:${attachment.storage_name}`,
-          filename: attachment.display_name,
-          media_type: attachment.media_type,
-          byte_size: attachment.byte_size,
-          is_image: attachment.media_type.startsWith("image/"),
-        })));
-        const detail = jiraLink ? await fetchJiraTaskDetail(operatorToken, task.id) : undefined;
+        const emailAttachments = JSON.parse(emailAttachmentKey) as JiraTaskAttachment[];
+        const detail = jiraRevision !== undefined ? await fetchJiraTaskDetail(operatorToken, task.id, controller.signal) : undefined;
         if (!active) return;
         setSourceDescription(detail?.description || "");
         const allAttachments = [...(detail?.attachments ?? []), ...emailAttachments];
         setAttachments(allAttachments);
-        let failedImages = 0;
-        const loaded = (await Promise.all(allAttachments.filter((attachment) => attachment.is_image).map(async (attachment) => {
-          try {
-            const blob = attachment.id.startsWith("email:")
-              ? await fetchEmailTaskAttachment(operatorToken, task.id, attachment.id.split(":").slice(2).join(":"))
-              : await fetchJiraTaskAttachment(operatorToken, task.id, attachment.id);
-            if (!active) return null;
-            const url = URL.createObjectURL(blob);
-            objectUrls.push(url);
-            return { ...attachment, url };
-          } catch {
-            failedImages += 1;
-            return null;
+        const candidates = allAttachments.filter((attachment) => attachment.is_image);
+        const loaded: Array<LoadedImage | undefined> = new Array(candidates.length);
+        let next = 0;
+        // The dialog owns at most three downloads. Closing/retrying cancels both
+        // in-flight reads and admission of queued previews; no detached work.
+        await Promise.all(Array.from({ length: Math.min(3, candidates.length) }, async () => {
+          while (active && next < candidates.length) {
+            const index = next++;
+            const attachment = candidates[index];
+            try {
+              const blob = attachment.id.startsWith("email:")
+                ? await fetchEmailTaskAttachment(operatorToken, task.id, attachment.id.split(":").slice(2).join(":"), controller.signal)
+                : await fetchJiraTaskAttachment(operatorToken, task.id, attachment.id, controller.signal);
+              if (!active) return;
+              const url = URL.createObjectURL(blob);
+              objectUrls.push(url);
+              loaded[index] = { ...attachment, url };
+              setImages(loaded.filter((image): image is LoadedImage => image !== undefined));
+            } catch {
+              if (active) setImageLoadFailures((count) => count + 1);
+            }
           }
-        }))).filter((image): image is LoadedImage => image !== null);
-        if (active) {
-          setImages(loaded);
-          setImageLoadFailures(failedImages);
-        }
+        }));
       } catch {
         if (active) setFailed(true);
       } finally {
@@ -111,9 +123,10 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
     })();
     return () => {
       active = false;
+      controller.abort();
       objectUrls.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [attempt, emailSources, jiraLink, operatorToken, task.description, task.id]);
+  }, [attempt, emailAttachmentKey, jiraRevision, operatorToken, task.id]);
 
   const titleTooLong = title.trim().length > 0 && !titleFits(title);
 

@@ -155,8 +155,8 @@ export async function fetchEmailTaskSources(operatorToken: string): Promise<Emai
   return response.json() as Promise<EmailTaskSource[]>;
 }
 
-export async function fetchEmailTaskAttachment(operatorToken: string, taskId: string, storageName: string): Promise<Blob> {
-  const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/email/attachments/${encodeURIComponent(storageName)}`);
+export async function fetchEmailTaskAttachment(operatorToken: string, taskId: string, storageName: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/email/attachments/${encodeURIComponent(storageName)}`, { signal });
   return response.blob();
 }
 

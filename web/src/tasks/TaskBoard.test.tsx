@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import type { HiveIdentity, Task, Worker } from "../api";
@@ -554,6 +554,72 @@ test("keeps Jira identity and remote status visible while routing work", () => {
   expect(within(jiraDetails).getByText("Status")).toBeInTheDocument();
   expect(within(jiraDetails).getByText("Assignee")).toBeInTheDocument();
   expect(within(card).getByText("Assigned", { selector: ".task-state" })).toBeInTheDocument();
+});
+
+test("bounds linked image downloads, shows ready previews and cancels on close", async () => {
+  const createObjectURL = vi.fn().mockReturnValue("blob:ready-preview");
+  const revokeObjectURL = vi.fn();
+  Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
+  Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
+  const pending: Array<{ signal: AbortSignal; resolve: (response: Response) => void }> = [];
+  vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+    if (url.endsWith("/detail")) return Promise.resolve(new Response(JSON.stringify({
+      summary: task.title, description: task.description,
+      attachments: Array.from({ length: 8 }, (_, index) => ({
+        id: `image-${index}`, filename: `evidence-${index}.png`, media_type: "image/png", byte_size: 128, is_image: true,
+      })),
+    }), { status: 200 }));
+    if (url.includes("/attachments/")) return new Promise<Response>((resolve) => {
+      pending.push({ signal: init!.signal as AbortSignal, resolve });
+    });
+    return Promise.resolve(new Response("[]", { status: 200 }));
+  }));
+  const { props, rerender } = renderBoard({ jiraTaskLinks: [jiraTaskLink] });
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  await waitFor(() => expect(pending).toHaveLength(3));
+  rerender(<TaskBoard {...props} jiraTaskLinks={[{ ...jiraTaskLink }]} workers={[{ ...worker }]} />);
+  expect(pending).toHaveLength(3);
+  expect(pending.every(({ signal }) => !signal.aborted)).toBe(true);
+  // The second image finishes first; it need not wait for the first or last.
+  pending[1].resolve(new Response(new Blob(["image"], { type: "image/png" })));
+  expect(await screen.findByRole("img", { name: "evidence-1.png" })).toBeVisible();
+  await waitFor(() => expect(pending).toHaveLength(4));
+  const dialog = screen.getByRole("dialog", { name: "Review and edit task" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+  expect(pending.every(({ signal }) => signal.aborted)).toBe(true);
+  expect(revokeObjectURL).toHaveBeenCalledWith("blob:ready-preview");
+  // A transport ignoring abort still must not publish or start queued reads.
+  await act(async () => {
+    for (const request of pending) request.resolve(new Response(new Blob(["late"])));
+  });
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(pending).toHaveLength(4);
+  expect(createObjectURL).toHaveBeenCalledTimes(1);
+});
+
+test("cancels linked detail discovery before any attachment starts", async () => {
+  let detailSignal: AbortSignal | undefined;
+  let finishDetail!: (response: Response) => void;
+  const fetcher = vi.fn((url: string, init?: RequestInit) => {
+    if (url.endsWith("/detail")) {
+      detailSignal = init!.signal as AbortSignal;
+      return new Promise<Response>((resolve) => { finishDetail = resolve; });
+    }
+    return Promise.resolve(new Response("[]", { status: 200 }));
+  });
+  vi.stubGlobal("fetch", fetcher);
+  renderBoard({ jiraTaskLinks: [jiraTaskLink] });
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  const dialog = screen.getByRole("dialog", { name: "Review and edit task" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+  expect(detailSignal?.aborted).toBe(true);
+  await act(async () => {
+    finishDetail(new Response(JSON.stringify({ summary: task.title, description: "late", attachments: [
+      { id: "late-image", filename: "late.png", media_type: "image/png", byte_size: 1, is_image: true },
+    ] })));
+  });
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(fetcher.mock.calls.some(([url]) => url.includes("/attachments/"))).toBe(false);
 });
 
 test("opens an editable task detail with Jira description and image on double click", async () => {

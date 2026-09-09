@@ -2,6 +2,31 @@
 
 ## Current checkpoint — September 8, after Admin intake acceptance
 
+### Task image-reader lifecycle correction, September 9
+
+Inspection of the live task-board workflow led to a source-level resource issue:
+opening task details started every linked image request concurrently and withheld
+all previews until every request settled. Closing only suppressed publication;
+it did not cancel requests. Ordinary board refreshes recreated source arrays,
+restarting the same preview work even when attachment metadata was unchanged.
+
+The browser correction admits at most three image reads per dialog, publishes
+completed previews in source order as they arrive, and aborts detail/attachment
+reads on close, retry or source replacement. Queued reads cannot start after
+cancellation, even if a transport ignores abort. Object URLs are released by the
+same effect owner. Stable attachment metadata and Jira revision keys prevent
+unrelated board refreshes from restarting downloads. Explicit retry and real
+source changes still refresh the reader. Task state, assignment, integration
+authorization and provider behavior are unchanged.
+
+All 136 focused task/Jira/email tests passed across 14 files, including new
+concurrency, progressive-preview, unchanged-source and late-result cancellation
+regressions, plus existing partial-image retry and draft-preservation coverage.
+The production frontend build and type check passed. This addresses request
+ownership and unnecessary repeated work, not a total image-memory budget or
+proof that overall browser sluggishness is solved. Deployment and rendered
+acceptance of the correction remain pending at this checkpoint.
+
 ### Bounded Queen run history delivered, September 9
 
 ADR 0091 adds a private, metadata-only finish history to replace reliance on the
