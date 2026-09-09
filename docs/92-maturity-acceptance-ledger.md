@@ -18,6 +18,28 @@ an old unchecked deployment note is not automatically current missing code.
 
 ## Requirement-by-requirement disposition
 
+### Live navigation attribution and snapshot ordering
+
+On September 9, a separate authenticated Edge tab at swarm.bfgsolutions.net
+showed twelve loaded workers. A 32.782-second Queues observation consumed
+0.489079 main-thread task seconds (about 1.49% of one core), including 0.161560
+script seconds and 0.062450 layout seconds. Heap point estimates moved from
+24,744,252 to 27,099,804 bytes. This short sample does not reproduce the reported
+sustained CPU pressure or establish a leak/plateau. A separate 45.766-second CPU
+profile covering six Tasks/Queues/Needs You transitions sampled 41.884 seconds
+idle. Automation/native work, GC and app rendering share the remainder; do not
+attribute the whole remainder to Swarm or claim normal-user input latency from
+automation. No terminal input was sent. Profiling was disabled and the tab closed.
+
+Inspection found an independently reproducible ordering defect: an event refresh
+could finish after a confirmed command and replace the newer snapshot. A regression
+failed before the fix. The shared owner now rejects overtaken refreshes so the
+existing feed retries without advancing its cursor. All nine snapshot mutation
+paths, overlapping refreshes, cancellation and recovery are covered; 98 targeted
+model/feed/application tests and the production web build pass. ADR 0071 records
+the ordering rule. This is not a claim that the race caused every stale queue or
+CPU complaint. App/API deployment and exact worker-continuity checks are pending.
+
 ### Restart warnings and remaining runtime dialogs
 
 The busy-worker census no longer promises a lossless engine restart when no

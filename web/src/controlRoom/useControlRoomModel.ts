@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState, type SetStateAction } from "react";
 
 import {
   BROWSER_SESSION_AUTH,
@@ -79,14 +79,21 @@ export function useControlRoomModel({
   const [snapshot, setSnapshot] = useState<ControlRoomSnapshot>(emptySnapshot);
   const [recentEvents, setRecentEvents] = useState<ControlRoomEvent[]>([]);
   const initialized = useRef(false);
+  const revision = useRef<object>({});
+  const commitSnapshot = useCallback((next: SetStateAction<ControlRoomSnapshot>) => {
+    // Advance synchronously, outside React's potentially deferred/replayed updater.
+    // Only the current identity and identities held by in-flight reads survive.
+    revision.current = {};
+    setSnapshot(next);
+  }, []);
 
   const load = useCallback(loadSnapshot, [loadSnapshot]);
-  const replace = useCallback((next: ControlRoomSnapshot) => { initialized.current = true; setSnapshot(next); }, []);
+  const replace = useCallback((next: ControlRoomSnapshot) => { initialized.current = true; commitSnapshot(next); }, [commitSnapshot]);
   const clear = useCallback(() => {
     initialized.current = false;
-    setSnapshot(emptySnapshot);
+    commitSnapshot(emptySnapshot);
     setRecentEvents([]);
-  }, []);
+  }, [commitSnapshot]);
   const restoreBrowserSession = useCallback(async (signal?: AbortSignal) => {
     await validateSession();
     const next = await load(BROWSER_SESSION_AUTH, signal);
@@ -106,42 +113,46 @@ export function useControlRoomModel({
       setRecentEvents((current) => mergeRecentEvents(current, page));
       return undefined;
     }
+    const startedAt = revision.current;
     const next = await load(operatorToken, signal);
     if (signal?.aborted) return undefined;
+    // A command or another refresh committed while these endpoint reads ran.
+    // Reject rather than skip: the feed must retry without advancing its cursor.
+    if (startedAt !== revision.current) throw new Error("Control-room refresh superseded by newer state");
     replace(next);
     setRecentEvents((current) => mergeRecentEvents(current, page));
     return next;
   }, [load, replace]);
   const setHiveIdentity = useCallback((hiveIdentity: HiveIdentity | undefined) => {
-    setSnapshot((current) => ({ ...current, hiveIdentity }));
-  }, []);
+    commitSnapshot((current) => ({ ...current, hiveIdentity }));
+  }, [commitSnapshot]);
   const setSessions = useCallback((sessions: SessionSummary[]) => {
-    setSnapshot((current) => ({ ...current, sessions }));
-  }, []);
+    commitSnapshot((current) => ({ ...current, sessions }));
+  }, [commitSnapshot]);
   const setWorkers = useCallback((workers: Worker[] | ((current: Worker[]) => Worker[])) => {
-    setSnapshot((current) => ({
+    commitSnapshot((current) => ({
       ...current,
       workers: typeof workers === "function" ? workers(current.workers) : workers,
     }));
-  }, []);
+  }, [commitSnapshot]);
   const setWorkspaces = useCallback((workspaces: WorkspaceChoice[]) => {
-    setSnapshot((current) => ({ ...current, workspaces }));
-  }, []);
+    commitSnapshot((current) => ({ ...current, workspaces }));
+  }, [commitSnapshot]);
   const setTasks = useCallback((tasks: Task[] | ((current: Task[]) => Task[])) => {
-    setSnapshot((current) => ({
+    commitSnapshot((current) => ({
       ...current,
       tasks: typeof tasks === "function" ? tasks(current.tasks) : tasks,
     }));
-  }, []);
+  }, [commitSnapshot]);
   const setJiraTaskLinks = useCallback((jiraTaskLinks: JiraTaskLink[]) => {
-    setSnapshot((current) => ({ ...current, jiraTaskLinks }));
-  }, []);
+    commitSnapshot((current) => ({ ...current, jiraTaskLinks }));
+  }, [commitSnapshot]);
   const setDecisions = useCallback((decisions: DecisionRequest[] | ((current: DecisionRequest[]) => DecisionRequest[])) => {
-    setSnapshot((current) => ({
+    commitSnapshot((current) => ({
       ...current,
       decisions: typeof decisions === "function" ? decisions(current.decisions) : decisions,
     }));
-  }, []);
+  }, [commitSnapshot]);
 
   return {
     ...snapshot,

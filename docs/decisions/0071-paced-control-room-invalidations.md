@@ -60,6 +60,19 @@ second no-op recovery pass. Live event-rate comparison remains required.
 
 ## Verification
 
+### In-flight snapshot freshness (2026-09-09)
+
+The shared browser snapshot owner advances an identity on every committed full
+snapshot, command result or clear. Event-driven reads capture that identity
+before fetching; if a newer commit overtakes them, they reject without replacing
+state or admitting recent events. The existing feed then retries from its previous
+cursor with its existing bounded backoff. Silently returning success would lose
+unrelated changes in the rejected event page. Cancellation still returns without
+publishing, and presence/notification-only pages retain their no-snapshot path.
+There is no new timer, cache, server state or inference of command authority.
+This guards browser ordering; it does not make the separate server reads a
+database-transaction snapshot or establish overall performance improvement.
+
 Tests hold the settling owner open and prove ordinary invalidation cannot run
 early, while every action/safety event kind remains immediate. Existing tests
 retain cursor retry, cancellation, restart and hung-poll guarantees. Browser and

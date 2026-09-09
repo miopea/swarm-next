@@ -94,6 +94,72 @@ test("presence-only pages preserve the snapshot but reset and task events reload
   expect(loadSnapshot).toHaveBeenCalledTimes(3);
 });
 
+test("a refresh overtaken by a confirmed task command retries without replacing newer state", async () => {
+  let finishLoad!: (snapshot: ControlRoomSnapshot) => void;
+  const loadSnapshot = vi.fn(() => new Promise<ControlRoomSnapshot>((resolve) => { finishLoad = resolve; }));
+  const { result } = renderHook(() => useControlRoomModel({ loadSnapshot }));
+  act(() => result.current.replace(populated));
+  let refresh!: Promise<ControlRoomSnapshot | undefined>;
+  act(() => { refresh = result.current.refreshFromEvents("operator", eventPage(4, false)); });
+  const newerTasks = [{ ...populated.tasks[0], title: "Confirmed newer task" }];
+  act(() => result.current.setTasks(newerTasks));
+  await act(async () => {
+    finishLoad(populated);
+    await expect(refresh).rejects.toThrow("superseded");
+  });
+  expect(result.current.tasks).toEqual(newerTasks);
+  expect(result.current.recentEvents).toEqual([]);
+  const retrySnapshot = { ...populated, tasks: newerTasks };
+  loadSnapshot.mockResolvedValueOnce(retrySnapshot);
+  await act(async () => { await result.current.refreshFromEvents("operator", eventPage(4, false)); });
+  expect(result.current.tasks).toEqual(newerTasks);
+  expect(result.current.recentEvents.map((event) => event.sequence)).toEqual([4]);
+});
+
+test.each([
+  "clear", "replace", "setHiveIdentity", "setSessions", "setWorkers",
+  "setWorkspaces", "setTasks", "setJiraTaskLinks", "setDecisions",
+] as const)("%s invalidates an older in-flight snapshot", async (command) => {
+  let finishLoad!: (snapshot: ControlRoomSnapshot) => void;
+  const loadSnapshot = vi.fn(() => new Promise<ControlRoomSnapshot>((resolve) => { finishLoad = resolve; }));
+  const { result } = renderHook(() => useControlRoomModel({ loadSnapshot }));
+  act(() => result.current.replace(populated));
+  let refresh!: Promise<ControlRoomSnapshot | undefined>;
+  act(() => { refresh = result.current.refreshFromEvents("operator", eventPage(4, false)); });
+  act(() => {
+    const model = result.current;
+    switch (command) {
+      case "clear": model.clear(); break;
+      case "replace": model.replace(populated); break;
+      case "setHiveIdentity": model.setHiveIdentity(populated.hiveIdentity); break;
+      case "setSessions": model.setSessions(populated.sessions); break;
+      case "setWorkers": model.setWorkers((current) => current); break;
+      case "setWorkspaces": model.setWorkspaces(populated.workspaces); break;
+      case "setTasks": model.setTasks((current) => current); break;
+      case "setJiraTaskLinks": model.setJiraTaskLinks(populated.jiraTaskLinks); break;
+      case "setDecisions": model.setDecisions((current) => current); break;
+    }
+  });
+  await act(async () => { finishLoad(populated); await expect(refresh).rejects.toThrow("superseded"); });
+  expect(result.current.recentEvents).toEqual([]);
+  expect(result.current.tasks).toEqual(command === "clear" ? [] : populated.tasks);
+});
+
+test("the last completed refresh cannot undo a newer already committed refresh", async () => {
+  let finishOld!: (snapshot: ControlRoomSnapshot) => void;
+  const loadSnapshot = vi.fn(() => new Promise<ControlRoomSnapshot>((resolve) => { finishOld = resolve; }));
+  const { result } = renderHook(() => useControlRoomModel({ loadSnapshot }));
+  act(() => result.current.replace(populated));
+  let oldRefresh!: Promise<ControlRoomSnapshot | undefined>;
+  act(() => { oldRefresh = result.current.refreshFromEvents("operator", eventPage(4, false)); });
+  const newer = { ...populated, tasks: [{ ...populated.tasks[0], title: "Newer refresh" }] };
+  loadSnapshot.mockResolvedValueOnce(newer);
+  await act(async () => { await result.current.refreshFromEvents("operator", eventPage(5, false)); });
+  await act(async () => { finishOld(populated); await expect(oldRefresh).rejects.toThrow("superseded"); });
+  expect(result.current.tasks).toEqual(newer.tasks);
+  expect(result.current.recentEvents.map((event) => event.sequence)).toEqual([5]);
+});
+
 test("snapshot reads propagate their owner cancellation to every endpoint", async () => {
   const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const path = String(input);
