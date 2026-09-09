@@ -99,6 +99,8 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
   const providerStatus = launchFailures > 0 ? "Needs attention" : "Healthy";
   const routePaint = routePaintSummary(readRoutePaints());
   const browserTiming = readBrowserPerformance();
+  const performanceEvidence = assessPerformance(browserTiming, runtime.resources);
+  const sampleFresh = Boolean(runtime.resources) && ["pressure", "no_pressure", "incomplete"].includes(performanceEvidence.server_state);
   const terminalStatus = !runtime.loaded ? "Checking…" : runtime.terminalHost
     ? runtime.terminalHost.draining ? "Updating safely" : `Healthy · ${runtimeVersionIdentity(runtime.terminalHost.host_version)}`
     : "Unavailable";
@@ -192,19 +194,19 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
       <div><p className="eyebrow">Diagnostics</p><h3 id="diagnostics-heading">Know which layer needs attention</h3></div>
       <p>The report is previewed before copying and never includes terminal text, task content, workspace paths, credentials, or raw errors.</p>
       <div className="diagnostic-live-status" role="status">
-        <span><span className={`presence ${runtime.loaded ? "online" : ""}`} /><span><strong>{runtime.loaded ? "Live metrics" : "Checking metrics"}</strong><small>{runtime.resources ? `Sampled ${formatSampleTime(runtime.resources.sampled_at)} · refreshes every 10 seconds` : "Waiting for the runtime and terminal host"}</small></span></span>
+        <span><span className={`presence ${sampleFresh ? "online" : ""}`} /><span><strong>{sampleFresh ? "Live metrics" : runtime.resources ? "Last known metrics" : runtime.loaded ? "Metrics unavailable" : "Checking metrics"}</strong><small>{runtime.resources ? `Sampled ${formatSampleTime(runtime.resources.sampled_at)} · refreshes every 10 seconds` : "Waiting for the runtime and terminal host"}</small></span></span>
         <button type="button" className="secondary-button" onClick={() => { void refreshRuntime(); void sharedMachineResources?.refresh(); }}>Refresh now</button>
       </div>
       {/* What everything below is relative to. Six gigabytes of workers means
           something different on a machine with thirty-two than on one with
           eight, and every row underneath was being read without that. */}
       <p className={`diagnostic-machine ${resourceClass(machine?.pressure)}`} role="status">
-        {machineHeadline(machine)}
+        {runtime.resources && !sampleFresh ? "Last sample · " : ""}{machineHeadline(machine)}
       </p>
       {/* Fourteen rows of equal weight under a heading promising to say which
           layer needs attention did not answer it. What is wrong leads; what is
           fine collapses. When nothing is wrong the honest page is one line. */}
-      <PerformanceEvidence evidence={assessPerformance(browserTiming, runtime.resources)} />
+      <PerformanceEvidence evidence={performanceEvidence} />
       {workers.some((worker) => worker.return_attention) && <section aria-label="Worker return recovery details">
         <h4>Worker return recovery</h4>
         <p>These outcomes survive an app reload. Swarm will not automatically repeat an unconfirmed start.</p>

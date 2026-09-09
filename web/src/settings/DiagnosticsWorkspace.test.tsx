@@ -287,6 +287,24 @@ const diagnosticsProps = {
   jiraUnavailable: true,
 };
 
+test.each([
+  [0, "Live metrics"], [-60_000, "Last known metrics"], [60_000, "Last known metrics"],
+  [undefined, "Metrics unavailable"],
+] as const)("diagnostic heading respects sample freshness (%s)", async (offset, expected) => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).includes("runtime/resources") && offset !== undefined) return new Response(JSON.stringify({
+      sampled_at: (Date.now() + offset) / 1000,
+      api: { pressure: "normal" }, terminal_host: { pressure: "normal" },
+      machine: { memory_total_bytes: 32 * 1024 ** 3, logical_cpus: 8, pressure: "normal" },
+    }));
+    return new Response("unavailable", { status: 503 });
+  }));
+  render(<DiagnosticsWorkspace {...diagnosticsProps} health={undefined} />);
+  expect(await screen.findByText(expected)).toBeInTheDocument();
+  if (offset !== 0) expect(screen.queryByText("Live metrics")).not.toBeInTheDocument();
+  if (offset !== undefined && offset !== 0) expect(screen.getByText(/^Last sample ·/)).toBeInTheDocument();
+});
+
 test("maintenance recovery details distinguish a missing reply from a confirmed start failure", () => {
   render(<DiagnosticsWorkspace {...diagnosticsProps} health={undefined} workers={[
     { ...demoWorkers[0], id: "lost", name: "Clover", running: false, return_attention: "unconfirmed", runtime_error: "Startup reply was lost." },

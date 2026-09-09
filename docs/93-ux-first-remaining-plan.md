@@ -80,6 +80,29 @@ BFG Admin communication occurred. Initial email-field automation and real phone
 picker/keyboard acceptance remain separate, not proven by this seeded retry.
 This increment is local pending publication; a716dad8 CI is still in progress.
 
+### Integrated Settings evidence checkpoint
+
+The diagnostics fixture exposed a stale sample headed `Live metrics`, above a
+correct stale-evidence warning. Its heading/indicator now reuse the existing
+performance assessment: fresh, last-known (stale or clock mismatch), or unavailable.
+Old machine readings are labelled `Last sample`; no monitoring or pressure rules
+changed. Edge verifies the stale heading, old machine reading and evidence agree.
+Twenty-five diagnostics/assessment tests pass, covering fresh/stale/future/missing
+samples. TypeScript and production build pass. Prior a716dad8 CI has now passed.
+
+| Ordinary-user journey | Current evidence | Remaining gate |
+| --- | --- | --- |
+| Settings discovery and search recovery | Desktop/390px light/dark; schedule/theme/notification searches, empty result, clear/Escape; deployed a716dad8 | None for this increment |
+| Restart decision and cancellation | Unknown/zero/positive count tests; desktop/phone warning and Not now; deployed a716dad8 | Does not prove actual engine recovery |
+| Support draft and retry | Discard/Escape; exact fictional attachment review, failed save/retry/receipt; 14 tests | Native picker and initial contact-field browser automation unresolved |
+| Night Watch form | 3 validation/recovery tests pass; visible schedule and timezone copy checked | Browser text replacement was unreliable; corrected-save browser journey not claimed; physical return behavior remains |
+| Diagnostics preview | Visible fixture preview, distinct browser/server evidence, stale-state correction; no copy/upload | Current stale-state correction pending deployment |
+
+This is an incremental evidence matrix, not closure of UI-3, UI-4 or the overall
+goal. Next focus is ordinary-user worker/navigation/dialog usability. Do not
+resume reload profiling or contact BFG Admin. Automated schedule saves in this
+pass were confined to fictional responses and did not change the live schedule.
+
 ### September 9 evening checkpoint — local terminal layout correction
 
 The operator is applying a worker-engine update. Do not overlap it with another
