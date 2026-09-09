@@ -16862,6 +16862,15 @@ mod tests {
 
     #[tokio::test]
     async fn package_return_preparation_requires_auth_and_drain_and_preserves_sessions() {
+        assert_package_return_preparation(worker_engine_build_id(), true).await;
+    }
+
+    #[tokio::test]
+    async fn package_return_preparation_preserves_promise_until_engine_is_current() {
+        assert_package_return_preparation("old-engine", false).await;
+    }
+
+    async fn assert_package_return_preparation(engine_id: &str, can_return: bool) {
         let runtime = TempDir::new().unwrap();
         let workspace = env::temp_dir().canonicalize().unwrap();
         let registry = Arc::new(
@@ -16871,7 +16880,7 @@ mod tests {
             .spawn(
                 &ProviderCommand {
                     executable: PathBuf::from("/bin/sh"),
-                    arguments: vec!["-lc".into(), "sleep 10".into()],
+                    arguments: vec!["-c".into(), "cat".into()],
                     working_directory: workspace.clone(),
                 },
                 TerminalSize::default(),
@@ -16881,8 +16890,8 @@ mod tests {
         let server = HostServer::bind_with_identity(
             &socket,
             Arc::clone(&registry),
-            "old-host",
-            "old-engine",
+            "same-engine-older-api",
+            engine_id,
         )
         .unwrap();
         let server_task = tokio::spawn(server.run());
@@ -16910,6 +16919,8 @@ mod tests {
             .with_terminal_host(HostClient::new(&socket), "secret")
             .with_task_store(store.clone());
         // This fixture tests drain/return ownership, not ambient CI pressure.
+        // Cancelling the drain admits an existing session only if its engine
+        // matches; an older engine must retain the unattempted return promise.
         state.test_start_admission = Some(runtime::CoordinatorStartAdmission::Allowed);
         let app = router(state.clone());
         for (token, drained, expected) in [
@@ -16951,17 +16962,36 @@ mod tests {
         );
         assert!(store.worker_revival_pending(worker.id).unwrap());
         registry.cancel_drain().unwrap();
-        let revived =
-            worker_runtime::revive_worker_process(&state, worker.id, TerminalSize::default())
-                .await
-                .unwrap()
-                .unwrap();
-        assert_eq!(revived.profile.active_session_id, Some(session.id()));
-        assert!(!store.worker_revival_pending(worker.id).unwrap());
+        assert_return_after_drain(&state, worker.id, session.id(), can_return).await;
         assert!(session.is_running().unwrap());
         session.stop().unwrap();
         server_task.abort();
         let _ = server_task.await;
+    }
+
+    async fn assert_return_after_drain(
+        state: &AppState,
+        worker_id: swarm_domain::WorkerId,
+        session_id: swarm_domain::WorkerSessionId,
+        can_return: bool,
+    ) {
+        let store = task_store(state).unwrap();
+        let revived =
+            worker_runtime::revive_worker_process(state, worker_id, TerminalSize::default())
+                .await
+                .unwrap();
+        assert_eq!(revived.is_some(), can_return);
+        if let Some(revived) = revived {
+            assert_eq!(revived.profile.active_session_id, Some(session_id));
+        }
+        assert_eq!(
+            store.worker_revival_pending(worker_id).unwrap(),
+            !can_return
+        );
+        assert_eq!(
+            store.worker_revival_intents().unwrap().len(),
+            usize::from(!can_return)
+        );
     }
 
     async fn post_return_preparation(app: Router, token: &str) -> axum::response::Response {

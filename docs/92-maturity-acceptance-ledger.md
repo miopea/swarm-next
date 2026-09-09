@@ -8,7 +8,7 @@ an old unchecked deployment note is not automatically current missing code.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-86100b8b5f7e-20260909151834-2859465`.
+- App/API: `1.6.0-dev-7c648e4d88f0-20260909183740-3162396`.
 - Engine: current PID 2947820, started September 9 at 12:37:54 Eastern. The
   earlier continuity checkpoint retained PID 2271655; this later restart's
   initiator has not been established by the current read-only check.
@@ -19,6 +19,45 @@ an old unchecked deployment note is not automatically current missing code.
 - No release is authorized. No customer-facing send is authorized by task closure.
 
 ## Requirement-by-requirement disposition
+
+### September 9 approved deployment — worker continuity verified
+
+After fresh operator approval, six commits through `7c648e4d` were pushed to
+main, and the clean Linux clone fast-forwarded. The normal development reload
+created `pre-v156-reload-7c648e4d88f0-20260909T183739Z.sqlite3` before requesting
+the build. The updater completed with exit zero and live health reports the
+version above, no degraded subsystems and no database-recovery requirement.
+
+Snapshots in `/tmp/swarm-maturity-deploy.KyeMzE7g` preserve all 34 worker records
+and compare exact IDs, names, providers, running flags and session IDs before
+and after activation: all match, with twelve running sessions. Engine PID
+2947820 and its September 9 12:37:54 Eastern start time are unchanged. The
+worker-list response does not expose conversation IDs; nullable placeholder
+fields in the comparison do not establish conversation continuity independently.
+
+The new engine binary is installed but not activated; the runtime correctly
+reports `worker_engine_update_required=true` and no protocol migration. No
+engine maintenance, worker wake, terminal input, BFG worker communication,
+customer-facing send or product release was performed. The separate Edge tab
+authenticated and loaded Queues with the new runtime version after navigation.
+
+Live resource evidence independently reports memory pressure and memory stalls
+as Normal at 49.13-percent used and zero memory PSI, while combined machine
+pressure is Advisory at load 9.11 on eight CPUs. This verifies the deployed
+CPU/memory classification distinction, not long-session performance acceptance.
+Edge also rendered only Compute load as the actionable check during a later
+CPU-pressure sample, and automatically cleared the warning when measured pressure
+subsided. The verification tab was then closed to stop its diagnostics polling.
+
+CI `34390001518` passed web, Rust audit and package lifecycle jobs but failed one
+API test (555 passed, one failed, three ignored). The package-return fixture
+advertised `old-engine`, then incorrectly expected cancelling drain to bypass
+the engine-version guard. The failure reproduced independently in the isolated
+Linux tree. The fixture now explicitly covers both a matching engine returning
+and an old engine retaining its unattempted promise; its child process is owned
+until explicit cleanup rather than expiring after ten seconds. This is a test
+correction, not a relaxation of production return admission. Final verification
+and replacement CI must be recorded before counting the full CI gate passed.
 
 ### Queen staged-delivery handoff — live partial acceptance
 
