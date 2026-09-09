@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { FixtureWebSocket } from "./terminalFixture";
+import { FixtureWebSocket, fixtureTranscript } from "./terminalFixture";
 import { hiveFixture } from "./hiveFixture";
 
 test("synthetic output preserves bytes and advances the snapshot sequence", async () => {
@@ -60,4 +60,24 @@ test("closing before scheduled open cannot revive a fixture socket", async () =>
   socket.close();
   await Promise.resolve();
   expect(socket.readyState).toBe(FixtureWebSocket.CLOSED);
+});
+
+test("matched large snapshots preserve the same bounded fictional bytes through resize", async () => {
+  const text = fixtureTranscript(true);
+  const encoded = new TextEncoder().encode(text);
+  expect(encoded.byteLength).toBeGreaterThan(65_536);
+  expect(encoded.byteLength).toBeLessThanOrEqual(131_072);
+  expect(text).toContain("END OF FICTIONAL SCROLLBACK · 640 checks");
+  const socket = new FixtureWebSocket("/fixture",[],true,text);
+  const frames: ArrayBuffer[] = [];
+  socket.addEventListener("message", event => { const data = (event as MessageEvent).data; if (typeof data !== "string") frames.push(data); });
+  await Promise.resolve();
+  socket.send(JSON.stringify({type:"resume",rows:24,columns:100}));
+  await Promise.resolve();
+  socket.send(JSON.stringify({type:"resize",generation:"1",rows:30,columns:80}));
+  await Promise.resolve();
+  expect(frames).toHaveLength(2);
+  for (const frame of frames) expect(new TextDecoder().decode(new Uint8Array(frame).subarray(14))).toBe(text);
+  socket.close();
+  expect(() => new FixtureWebSocket("/fixture",[],true,"x".repeat(131_073))).toThrow("bound");
 });

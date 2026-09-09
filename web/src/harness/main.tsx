@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 
 import "../styles.css";
 import { hiveFixture } from "./hiveFixture";
-import { FixtureWebSocket } from "./terminalFixture";
+import { FixtureWebSocket, fixtureTranscript } from "./terminalFixture";
 import { SURFACES } from "./surfaces";
 import { supportFixtureResponse } from "./SupportFeedbackFixture";
 import { taskPreviewFixtureResponse } from "./TaskPreviewFixture";
@@ -77,8 +77,9 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
  * after the fact the way the DOM can.
  */
 const passiveTerminal = new URLSearchParams(window.location.search).get("terminalControl") === "elsewhere";
+const snapshotText = fixtureTranscript(new URLSearchParams(window.location.search).get("history") === "large");
 globalThis.WebSocket = class extends FixtureWebSocket {
-  constructor(url: string, protocols: string[] = []) { super(url, protocols, !passiveTerminal); }
+  constructor(url: string, protocols: string[] = []) { super(url, protocols, !passiveTerminal, snapshotText); }
 } as unknown as typeof WebSocket;
 
 /**

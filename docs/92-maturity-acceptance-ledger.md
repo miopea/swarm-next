@@ -8,7 +8,7 @@ an old unchecked deployment note is not automatically current missing code.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-400a023d5aeb-20260909131830-2703455`.
+- App/API: `1.6.0-dev-59448bc20028-20260909134635-2750222`.
 - Engine: retained PID 2271655, `cf83c980`; candidate `cf179f73` remains pending.
 - Latest App/API deployment preserved all 34 worker records and twelve exact
   running session/conversation pairs. Swarm Next and D365 remained asleep.
@@ -42,7 +42,7 @@ Development deployment completed successfully. Exact before/after snapshots in
 running session/provider/conversation selections; engine PID 2271655 is unchanged.
 Health is good. CI for 912cb83a and 400a023d (34356215924) passed.
 
-### Review-return metrics — validated candidate, deployment pending
+### Review-return metrics — deployed with worker continuity
 
 ADR 0093 adds content-free, build-linked review-return episodes keyed by exact
 request ID, and answers only after the existing reply-to/assignee checks. This
@@ -55,8 +55,54 @@ the isolated Developer Dogfood fixture at desktop and 390px width; the page has 
 horizontal overflow. Fixture browser metrics were brought up to the current eight
 fields to restore this existing surface. Four private API tests and strict
 `cargo clippy -p swarm-api --all-targets --all-features -- -D warnings` pass.
-The schema and UI are ready for the normal backed-up App/API deployment; no live
-review-return acceptance is claimed yet. Broader DOG-01 remains open.
+Development deployment completed successfully; CI 34359188725 passed. Exact
+before/after snapshots in `/tmp/swarm-review-history-deploy.d5BEoM` preserve all
+34 worker records and twelve running session/provider/conversation selections;
+engine PID 2271655 is unchanged. The pre-update SQLite backup exists with mode
+0600 (43,515,904 bytes). Health reports no degradation. The private history API
+reports the new bounded review-return page with zero episodes since activation;
+that is not historical zero work or live review-return acceptance. Broader
+DOG-01 remains open.
+
+### Matched renderer-retention experiment — keep production default
+
+September 9 Edge comparison at 1438x959 used fifteen fictional terminals, real
+WebGL and a fixed 81,333-byte ANSI snapshot (640 rows). Reproduce with
+`pnpm --dir web run harness --port 5211`, then open
+`/harness.html?surface=terminal-pool&gpu=enabled&history=large`. Visit workers
+1 through 15, then repeat that order twice. Reload and repeat with the
+five-renderer experiment enabled. No Hive calls or real worker input are involved.
+The fixture refuses snapshots above 131,072 bytes; initial and resize snapshots
+are tested to preserve identical bytes. Five fixture tests, TypeScript and the
+production build pass; the existing terminal chunk warning remains.
+
+Both modes kept one live WebGL context. The default retained 15 terminal instances;
+the experiment retained five, with 40 evictions after 45 visits. All 30 cold
+returns completed: p95 178 ms, maximum 179 ms, no pending, abandoned or failed
+attempts. The slowest return comprised 43 ms setup and 136 ms connection through
+applied state. This passes the synthetic timing threshold, not real-network
+paint/input-ownership acceptance.
+
+Content-free CDP Performance counters (thread ticks, no forced collection):
+
+| Mode / checkpoint | JS heap bytes | DOM nodes | JS listeners | Cumulative task seconds |
+| --- | ---: | ---: | ---: | ---: |
+| 15 / populated | 23,108,176 | 1,124 | 1,455 | 2.747936 |
+| 15 / return cycle 1 | 21,337,276 | 1,440 | 1,815 | 3.933692 |
+| 15 / return cycle 2 | 22,008,756 | 1,492 | 1,828 | 5.123831 |
+| 5 / populated | 22,605,876 | 656 | 595 | 2.758733 |
+| 5 / return cycle 1 | 21,450,968 | 680 | 682 | 5.120946 |
+| 5 / return cycle 2 | 20,725,104 | 892 | 889 | 7.883944 |
+
+The 30 return switches consumed 2.376 task seconds retaining fifteen versus
+5.125 retaining five; script time increased by 1.504 versus 3.483 seconds.
+Final heap was only about 5.8% lower in the smaller pool. These point samples
+include instrumentation and automation, variable inter-action gaps and normal GC;
+they are not total browser/GPU memory, a leak finding, matched-duration CPU
+percentages or a production soak. In particular, fewer retained renderers did
+not demonstrate lower switching CPU. Keep the production default unchanged;
+PERF-01/02 still require live matched workloads and sustained resource evidence.
+Profiling was disabled, the experiment stopped and the owned tab closed.
 
 No row labelled partial is a program-completion pass. Links identify the evidence
 or implementation boundary to inspect before changing it again.

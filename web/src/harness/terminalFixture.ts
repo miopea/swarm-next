@@ -81,6 +81,14 @@ const TRANSCRIPT: string = [
   `${D}>${R} `,
 ].join("\r\n");
 
+/** Fixed-size fictional scrollback for matched renderer-retention experiments. */
+export function fixtureTranscript(large = false): string {
+  if (!large) return TRANSCRIPT;
+  return Array.from({ length: 640 }, (_, index) =>
+    `${D}${String(index + 1).padStart(4,"0")}${R} ${GREEN}verified${R} fictional orchard boundary: request, response, retry and recovery remain in order.`,
+  ).join("\r\n") + `\r\n${BOLD}END OF FICTIONAL SCROLLBACK · 640 checks${R}\r\n> `;
+}
+
 function encodeSnapshotFrame(text: string, rows: number, columns: number, sequence: number): ArrayBuffer {
   const payload = new TextEncoder().encode(text);
   // 1 type + 8 sequence + 2 rows + 2 columns + 1 truncated, then the bytes.
@@ -120,9 +128,12 @@ export class FixtureWebSocket extends EventTarget {
   #sequence = 1;
   #rows = 32;
   #columns = 120;
+  readonly #transcript: string;
 
-  constructor(url: string, protocols: string[] = [], initiallyOwned = true) {
+  constructor(url: string, protocols: string[] = [], initiallyOwned = true, transcript = TRANSCRIPT) {
     super();
+    if (new TextEncoder().encode(transcript).byteLength > 131_072) throw new Error("Fixture snapshot exceeds its bound");
+    this.#transcript = transcript;
     this.url = url;
     this.protocol = protocols[0] ?? "";
     this.#owned = initiallyOwned;
@@ -189,7 +200,7 @@ export class FixtureWebSocket extends EventTarget {
     queueMicrotask(() => {
       if (this.readyState !== FixtureWebSocket.OPEN) return;
       this.dispatchEvent(
-        new MessageEvent("message", { data: encodeSnapshotFrame(TRANSCRIPT, rows, columns, this.#sequence) }),
+        new MessageEvent("message", { data: encodeSnapshotFrame(this.#transcript, rows, columns, this.#sequence) }),
       );
       this.dispatchEvent(
         new MessageEvent("message", {
@@ -231,7 +242,7 @@ export class FixtureWebSocket extends EventTarget {
     if (!rows || !columns || rows <= 0 || columns <= 0 || (rows === this.#rows && columns === this.#columns)) return;
     this.#rows = rows;
     this.#columns = columns;
-    const frame = encodeSnapshotFrame(TRANSCRIPT, rows, columns, ++this.#sequence);
+    const frame = encodeSnapshotFrame(this.#transcript, rows, columns, ++this.#sequence);
     queueMicrotask(() => {
       if (this.readyState === FixtureWebSocket.OPEN) this.dispatchEvent(new MessageEvent("message", { data: frame }));
     });
