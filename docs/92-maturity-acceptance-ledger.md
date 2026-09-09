@@ -48,6 +48,11 @@ or implementation boundary to inspect before changing it again.
 
 ## Next work, in dependency order
 
+Current Swarm-owned change: attachment-revision sizing fence validated by a
+failing-before regression, 1,435 passing browser tests and the fifteen-worker
+synthetic Edge journey (ADR 0062). Development deployment is pending. This
+does not close the real-device, aged-workload or remaining orchestration gates.
+
 Admin's owner confirmed source revision `3a0f8bdbac5640776704af5c1922d679fab1d6c9`:
 the public `/api/feedback/swarm-support/submissions` route is strict text-only JSON;
 unknown attachment fields are rejected. The retained-email attachment route is

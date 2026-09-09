@@ -118,6 +118,29 @@ the verified pre-update database backup.
 
 ## Verification
 
+### September 9 attachment-bound browser sizing
+
+A measured fit belongs to one controller attachment revision. Detaching or
+reattaching invalidates its result even if that same controller is attached and
+owns geometry again when the promise completes. A pending initial fit cannot
+start transport using an abandoned container's size; a pending follow-up fit
+cannot publish it. Completion schedules one fresh measurement only when an
+actual attachment change occurred and a current view remains. Failed old fits
+follow the same rule; disposal or staying detached schedules nothing. There is
+no timing retry, new connection, provider restart or authority change.
+
+The regression failed before the fence: a remount reused the old pending fit
+without measuring its new container. Coverage includes successful/failed stale
+fits, rapid multiple remounts before initial connection, detached/disposed
+completion and existing snapshot/control guards. All 105 focused tests and the
+full 1,435-test browser suite passed, as did TypeScript and production build.
+The separate no-proxy Edge fixture visited fifteen fictional workers and returned
+between retained views: fifteen retained, one attached, fourteen inactive,
+readable real-WebGL terminal and no restore cover at inspection. One automation
+batch timed out at worker eleven; inspection established its position and the
+remaining workers were completed without restarting the fixture. This is not a
+real-provider latency benchmark or blanket desktop reload-jumping acceptance.
+
 ### September 8 canonical-resize feedback correction
 
 The snapshot parser also owns its local grid until its write callback completes.

@@ -104,6 +104,7 @@ export class TerminalController {
    * never detaches.
    */
   #attached = false;
+  #attachmentRevision = 0;
   #visible = true;
   readonly #surfaceSubscriptions: Disposable[];
   readonly #statusSubscribers = new Set<TerminalStatusListener>();
@@ -143,6 +144,7 @@ export class TerminalController {
 
   attach(container: HTMLElement): void {
     if (this.#disposed) throw new Error("Cannot attach a disposed terminal");
+    this.#attachmentRevision += 1;
     container.replaceChildren(this.#host);
     this.#lifecycle?.attached();
     if (!this.#opened) {
@@ -163,6 +165,7 @@ export class TerminalController {
     // Keep the surface, but stop output work while its host is detached. The
     // connection restores current canonical state if output was abandoned.
     this.#attached = false;
+    this.#attachmentRevision += 1;
     this.#connection.releaseControl?.();
     this.#updateRendering();
     this.#host.remove();
@@ -263,11 +266,12 @@ export class TerminalController {
 
   #startWhenFitted(): void {
     if (this.#started || this.#startPromise) return;
+    const attachmentRevision = this.#attachmentRevision;
     const startPromise = this.#fitAndStart();
     this.#startPromise = startPromise;
     void startPromise
       .catch((error: unknown) => {
-        if (!this.#disposed) {
+        if (!this.#disposed && attachmentRevision === this.#attachmentRevision) {
           this.#setState(
             "error",
             error instanceof Error ? error.message : "terminal renderer fit failed",
@@ -276,11 +280,14 @@ export class TerminalController {
       })
       .finally(() => {
         if (this.#startPromise === startPromise) this.#startPromise = undefined;
+        if (!this.#disposed && this.#attached && !this.#started
+          && attachmentRevision !== this.#attachmentRevision) this.#startWhenFitted();
       });
   }
 
   #refitWhenAttached(): Promise<void> {
     if (this.#refitPromise) return this.#refitPromise;
+    const attachmentRevision = this.#attachmentRevision;
     const refitPromise = this.#refitAttachedSurface("echo")
       // A started terminal already owns a valid PTY size. Reattachment can race
       // a hidden or not-yet-laid-out container; ResizeObserver will publish the
@@ -289,6 +296,12 @@ export class TerminalController {
       .catch(() => undefined)
       .finally(() => {
         if (this.#refitPromise === refitPromise) this.#refitPromise = undefined;
+        // A remount may have joined this pending measurement. That measurement
+        // belongs to its old container: discard it and measure the latest one.
+        // Only an actual attachment change schedules this follow-up, not time
+        // or a failed fit, and there is still at most one refit in flight.
+        if (!this.#disposed && this.#attached && this.#visible
+          && attachmentRevision !== this.#attachmentRevision) void this.#refitWhenAttached();
       });
     this.#refitPromise = refitPromise;
     return refitPromise;
@@ -331,17 +344,20 @@ export class TerminalController {
 
   async #refitAttachedSurface(intent: "operator" | "echo" = "operator"): Promise<void> {
     if (this.#geometrySuspended) return;
+    const attachmentRevision = this.#attachmentRevision;
     // A phone hides and shows its address bar as the operator scrolls, which
     // resizes the container and wakes the observer. The old comment claiming
     // the container "never changed" was true of a column-count change and false
     // of a phone, so this path re-shredded the terminal on every scroll.
     const measured = await this.#measureForResize();
     if (!measured) return;
+    if (attachmentRevision !== this.#attachmentRevision) return;
     if (!this.#mayResizeNow() || !this.#visible || !this.#started || !this.#host.parentElement || !documentHasFocus()) return;
     this.#connection.resize(measured.rows, measured.columns, intent);
   }
 
   async #fitAndStart(): Promise<void> {
+    const attachmentRevision = this.#attachmentRevision;
     // The surface owns the ResizeObserver, so it has to know this too. A
     // predicate rather than a value: ownership changes mid-session when another
     // device takes or releases the claim, and a copied boolean goes stale.
@@ -354,7 +370,8 @@ export class TerminalController {
       : await this.#measureForResize(this.#lifecycle?.fitMilestone);
     if (!measured) return;
     const { rows, columns } = measured;
-    if (this.#disposed || this.#started || !this.#host.parentElement) return;
+    if (this.#disposed || this.#started || !this.#host.parentElement
+      || attachmentRevision !== this.#attachmentRevision) return;
     // Connecting is not a claim; the resume frame carries that intent.
     this.#connection.resize(rows, columns, "echo");
     this.#lifecycle?.connectionStarting?.();

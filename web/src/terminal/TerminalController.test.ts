@@ -132,6 +132,72 @@ test.each(["ownership", "focus", "composer"])("losing %s eligibility during defe
   } finally { record.mockRestore(); controller.dispose(); }
 });
 
+test.each([false, true])("reattachment replaces the prior view's pending fit even when it fails: %s", async (fails) => {
+  const surface = fakeSurface();
+  const connection = fakeConnection();
+  const controller = new TerminalController(() => surface, () => connection);
+  controller.attach(document.createElement("div"));
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledOnce());
+  let finishOldFit!: (size: { rows: number; columns: number }) => void;
+  let failOldFit!: (error: Error) => void;
+  vi.mocked(surface.fit).mockClear()
+    .mockImplementationOnce(() => new Promise((resolve, reject) => { finishOldFit = resolve; failOldFit = reject; }))
+    .mockResolvedValue({ rows: 40, columns: 120 });
+  vi.mocked(connection.resize).mockClear();
+  try {
+    controller.attach(document.createElement("div"));
+    expect(surface.fit).toHaveBeenCalledOnce();
+    controller.detach();
+    controller.attach(document.createElement("div"));
+    expect(surface.fit).toHaveBeenCalledOnce();
+    if (fails) failOldFit(new Error("Old container disappeared"));
+    else finishOldFit({ rows: 20, columns: 60 });
+    await vi.waitFor(() => expect(surface.fit).toHaveBeenCalledTimes(2));
+    expect(connection.resize).toHaveBeenCalledExactlyOnceWith(40, 120, "echo");
+  } finally { controller.dispose(); }
+});
+
+test("initial fitting uses the latest attachment without opening a second transport", async () => {
+  const surface = fakeSurface();
+  let finishOldFit!: (size: { rows: number; columns: number }) => void;
+  surface.fitInitial = vi.fn()
+    .mockImplementationOnce(() => new Promise(resolve => { finishOldFit = resolve; }))
+    .mockResolvedValue({ rows: 40, columns: 120 });
+  const connection = fakeConnection();
+  const controller = new TerminalController(() => surface, () => connection);
+  try {
+    controller.attach(document.createElement("div"));
+    controller.detach();
+    controller.attach(document.createElement("div"));
+    controller.detach();
+    controller.attach(document.createElement("div"));
+    expect(surface.fitInitial).toHaveBeenCalledOnce();
+    finishOldFit({ rows: 20, columns: 60 });
+    await vi.waitFor(() => expect(connection.start).toHaveBeenCalledOnce());
+    expect(surface.fitInitial).toHaveBeenCalledTimes(2);
+    expect(connection.resize).toHaveBeenCalledExactlyOnceWith(40, 120, "echo");
+    expect(surface.open).toHaveBeenCalledOnce();
+  } finally { controller.dispose(); }
+});
+
+test.each(["detached", "disposed"])("an abandoned initial fit cannot start or retry while %s", async (state) => {
+  const surface = fakeSurface();
+  let finishFit!: (size: { rows: number; columns: number }) => void;
+  surface.fitInitial = vi.fn(() => new Promise<{ rows: number; columns: number }>(resolve => { finishFit = resolve; }));
+  const connection = fakeConnection();
+  const controller = new TerminalController(() => surface, () => connection);
+  controller.attach(document.createElement("div"));
+  if (state === "disposed") controller.dispose();
+  else controller.detach();
+  finishFit({ rows: 20, columns: 60 });
+  // Drain the fit and its controller-owned completion, without a timing retry.
+  for (let step = 0; step < 8; step++) await Promise.resolve();
+  expect(surface.fitInitial).toHaveBeenCalledOnce();
+  expect(connection.start).not.toHaveBeenCalled();
+  expect(connection.resize).not.toHaveBeenCalled();
+  controller.dispose();
+});
+
 test("a failed follow-up fit preserves applied canonical output and allows a later fit", async () => {
   const surface = fakeSurface();
   const connection = fakeConnection();
@@ -305,7 +371,8 @@ test("view detach does not dispose, reopen, or reconnect a terminal", async () =
   await vi.waitFor(() => expect(connection.start).toHaveBeenCalledTimes(1));
 
   expect(surface.open).toHaveBeenCalledTimes(1);
-  expect(surface.fit).toHaveBeenCalledTimes(1);
+  // The first asynchronous fit belonged to the abandoned mount, not this one.
+  expect(surface.fit).toHaveBeenCalledTimes(2);
   expect(connection.resize).toHaveBeenCalledWith(24, 80, "echo");
   expect(surface.dispose).not.toHaveBeenCalled();
   expect(connection.start).toHaveBeenCalledTimes(1);
