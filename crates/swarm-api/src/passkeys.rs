@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::Json;
 use axum::extract::{Path, State};
@@ -40,8 +41,62 @@ const OPERATOR_NAME: &str = "operator";
 /// waiting on, and losing it costs one button press.
 #[derive(Default)]
 pub(super) struct PasskeyChallenges {
-    registrations: std::sync::Mutex<HashMap<String, PasskeyRegistration>>,
-    authentications: std::sync::Mutex<HashMap<String, PasskeyAuthentication>>,
+    registrations: PendingChallenges<PasskeyRegistration>,
+    authentications: PendingChallenges<PasskeyAuthentication>,
+}
+
+const MAX_PENDING_CHALLENGES: usize = 128;
+const CHALLENGE_LIFETIME: Duration = Duration::from_secs(300);
+
+/// The API owns abandoned ceremonies as well as completed ones. Expiry is
+/// checked on access, without a timer or background task. Full stores refuse
+/// new challenges instead of evicting an operator's ceremony in progress.
+struct PendingChallenges<T> {
+    entries: std::sync::Mutex<HashMap<String, (Instant, T)>>,
+}
+
+impl<T> Default for PendingChallenges<T> {
+    fn default() -> Self {
+        Self {
+            entries: std::sync::Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl<T> PendingChallenges<T> {
+    fn insert(&self, id: String, value: T, now: Instant) -> Result<(), ApiError> {
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| challenge_store_unavailable())?;
+        entries.retain(|_, (expires, _)| *expires > now);
+        if entries.len() >= MAX_PENDING_CHALLENGES || entries.contains_key(&id) {
+            return Err(ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "passkey_challenge_capacity",
+                "too many passkey attempts are in progress — wait a few minutes or use your token",
+            ));
+        }
+        entries.insert(id, (now + CHALLENGE_LIFETIME, value));
+        Ok(())
+    }
+
+    fn take(&self, id: &str, now: Instant) -> Result<Option<T>, ApiError> {
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| challenge_store_unavailable())?;
+        entries.retain(|_, (expires, _)| *expires > now);
+        Ok(entries.remove(id).map(|(_, value)| value))
+    }
+}
+
+fn challenge_store_unavailable() -> ApiError {
+    ApiError::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "passkey_challenge_store_unavailable",
+        "passkey attempts are temporarily unavailable — use your token to sign in",
+    )
 }
 
 /// The domain a credential belongs to, taken from where the browser actually is.
@@ -139,9 +194,11 @@ pub(super) async fn register_start(
             )
         })?;
     let challenge_id = Uuid::new_v4().to_string();
-    if let Ok(mut pending) = state.passkey_challenges.registrations.lock() {
-        pending.insert(challenge_id.clone(), registration);
-    }
+    state.passkey_challenges.registrations.insert(
+        challenge_id.clone(),
+        registration,
+        Instant::now(),
+    )?;
     Ok(Json(RegisterStartResponse {
         challenge_id,
         options,
@@ -167,9 +224,7 @@ pub(super) async fn register_finish(
     let registration = state
         .passkey_challenges
         .registrations
-        .lock()
-        .ok()
-        .and_then(|mut pending| pending.remove(&request.challenge_id))
+        .take(&request.challenge_id, Instant::now())?
         .ok_or_else(|| {
             ApiError::new(
                 StatusCode::CONFLICT,
@@ -239,9 +294,11 @@ pub(super) async fn authenticate_start(
         )
     })?;
     let challenge_id = Uuid::new_v4().to_string();
-    if let Ok(mut pending) = state.passkey_challenges.authentications.lock() {
-        pending.insert(challenge_id.clone(), authentication);
-    }
+    state.passkey_challenges.authentications.insert(
+        challenge_id.clone(),
+        authentication,
+        Instant::now(),
+    )?;
     Ok(Json(AuthenticateStartResponse {
         challenge_id,
         options,
@@ -269,9 +326,7 @@ pub(super) async fn authenticate_finish(
     let authentication = state
         .passkey_challenges
         .authentications
-        .lock()
-        .ok()
-        .and_then(|mut pending| pending.remove(&request.challenge_id))
+        .take(&request.challenge_id, Instant::now())?
         .ok_or_else(|| {
             ApiError::new(
                 StatusCode::CONFLICT,
@@ -397,4 +452,134 @@ pub(super) async fn remove_passkey(
 fn encode_credential_id(bytes: &[u8]) -> String {
     use base64ct::{Base64UrlUnpadded, Encoding as _};
     Base64UrlUnpadded::encode_string(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn registration_start_refuses_capacity_and_recovers_without_restart() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt as _;
+
+        let state =
+            AppState::default().with_task_store(swarm_persistence::TaskStore::in_memory().unwrap());
+        *state.operator_token.write().unwrap() = Some("fictional-passkey-test".into());
+        let challenges = Arc::clone(&state.passkey_challenges);
+        let app = crate::router(state);
+        let request = || {
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/passkeys/register/start")
+                .header("host", "swarm.example.com")
+                .header("authorization", "Bearer fictional-passkey-test")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"label":"Fictional test"}"#))
+                .unwrap()
+        };
+        for _ in 0..MAX_PENDING_CHALLENGES {
+            assert_eq!(
+                app.clone().oneshot(request()).await.unwrap().status(),
+                StatusCode::OK
+            );
+        }
+        assert_eq!(
+            app.clone().oneshot(request()).await.unwrap().status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        // Explicit fixture time, not a sleep: all abandoned ceremonies have expired.
+        for (expires, _) in challenges
+            .registrations
+            .entries
+            .lock()
+            .unwrap()
+            .values_mut()
+        {
+            *expires = Instant::now();
+        }
+        assert_eq!(
+            app.oneshot(request()).await.unwrap().status(),
+            StatusCode::OK
+        );
+        assert_eq!(challenges.registrations.entries.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn abandoned_challenges_are_bounded_and_expiry_restores_capacity() {
+        let pending = PendingChallenges::default();
+        let now = Instant::now();
+        for id in 0..MAX_PENDING_CHALLENGES {
+            pending.insert(id.to_string(), id, now).unwrap();
+        }
+        assert!(pending.insert("overflow".into(), 999, now).is_err());
+        assert_eq!(
+            pending.entries.lock().unwrap().len(),
+            MAX_PENDING_CHALLENGES
+        );
+        // Refusal has not displaced an existing ceremony; consumption frees room.
+        assert_eq!(pending.take("0", now).unwrap(), Some(0));
+        pending.insert("replacement".into(), 1000, now).unwrap();
+        pending
+            .insert("after-expiry".into(), 1001, now + CHALLENGE_LIFETIME)
+            .unwrap();
+        assert_eq!(pending.entries.lock().unwrap().len(), 1);
+        assert_eq!(
+            pending
+                .take("replacement", now + CHALLENGE_LIFETIME)
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            pending
+                .take("after-expiry", now + CHALLENGE_LIFETIME)
+                .unwrap(),
+            Some(1001)
+        );
+    }
+
+    #[test]
+    fn challenges_are_one_time_and_expire_at_the_boundary() {
+        let pending = PendingChallenges::default();
+        let now = Instant::now();
+        pending.insert("once".into(), 1, now).unwrap();
+        assert_eq!(pending.take("once", now).unwrap(), Some(1));
+        assert_eq!(pending.take("once", now).unwrap(), None);
+        pending.insert("expired".into(), 2, now).unwrap();
+        assert_eq!(
+            pending.take("expired", now + CHALLENGE_LIFETIME).unwrap(),
+            None
+        );
+        assert!(pending.entries.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn duplicate_identity_cannot_replace_a_pending_ceremony() {
+        let pending = PendingChallenges::default();
+        let now = Instant::now();
+        pending.insert("same".into(), 1, now).unwrap();
+        assert!(pending.insert("same".into(), 2, now).is_err());
+        assert_eq!(pending.take("same", now).unwrap(), Some(1));
+    }
+
+    #[test]
+    fn poisoned_store_reports_failure_instead_of_an_unusable_challenge() {
+        let pending = Arc::new(PendingChallenges::default());
+        let other = Arc::clone(&pending);
+        assert!(
+            std::thread::spawn(move || {
+                let _guard = other.entries.lock().unwrap();
+                panic!("fictional store failure");
+            })
+            .join()
+            .is_err()
+        );
+        assert!(
+            pending
+                .insert("unavailable".into(), 1, Instant::now())
+                .is_err()
+        );
+        assert!(pending.take("unavailable", Instant::now()).is_err());
+    }
 }

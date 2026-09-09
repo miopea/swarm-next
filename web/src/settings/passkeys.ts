@@ -98,6 +98,12 @@ export async function signInWithPasskey(): Promise<void> {
     cache: "no-store",
   });
   if (!started.ok) {
+    if (started.status === 429) {
+      throw new Error("Too many passkey attempts are in progress. Wait a few minutes, or sign in with your token.");
+    }
+    if (started.status === 503) {
+      throw new Error("Passkey sign-in is temporarily unavailable. You can sign in with your token.");
+    }
     throw new Error(
       started.status === 404
         ? "No passkey is registered for this address yet."

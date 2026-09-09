@@ -21,6 +21,19 @@ test("says plainly when no passkey is registered for this address", async () => 
   await expect(signInWithPasskey()).rejects.toThrow(/No passkey is registered for this address/);
 });
 
+test.each([
+  [429, /Wait a few minutes, or sign in with your token/],
+  [503, /temporarily unavailable.*sign in with your token/],
+])("explains passkey start refusal %s without retrying or opening a device prompt", async (status, message) => {
+  const request = vi.fn(async () => new Response("", { status }));
+  const get = vi.fn();
+  vi.stubGlobal("fetch", request);
+  vi.stubGlobal("navigator", { credentials: { get } });
+  await expect(signInWithPasskey()).rejects.toThrow(message);
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(get).not.toHaveBeenCalled();
+});
+
 test("does not swallow a rejected passkey", async () => {
   vi.stubGlobal(
     "fetch",

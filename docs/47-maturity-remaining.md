@@ -2,6 +2,30 @@
 
 ## Current checkpoint — September 8, after Admin intake acceptance
 
+### Bounded passkey ceremonies, September 8
+
+Source inspection found that abandoned registration and sign-in challenges had
+neither expiry nor a count limit. This is a concrete retention defect, not the
+established cause of the live API memory increase. Each ceremony store now holds
+at most 128 challenges with a five-minute monotonic lifetime. Access prunes expired
+entries; consumption remains one-time. Capacity refuses new starts without
+displacing current ceremonies, and poisoned locks return an explicit unavailable
+response instead of reporting an unusable challenge as successfully started.
+The sign-in UI explains capacity/unavailability and offers the existing token
+fallback without an automatic retry or device prompt.
+
+Five Rust tests pass, including actual registration-route exhaustion and recovery,
+expiry boundary, consumption, duplicate identity and poisoned-store failure.
+Strict API all-target/all-feature Clippy, five frontend tests and TypeScript
+checking pass. No schema, credential, signed-in session or worker-engine change.
+App/API deployment and rendered sign-in recovery verification remain pending.
+
+Admin contract coordination confirmed no missing field for the fictional linked
+development-task/completion/reviewed-reply journey. Operator approval of the
+exclusive `app_id=swarm` to Swarm Next workspace binding remains outstanding;
+neither activation nor reuse of the intake-only fixture is authorized by that
+coordination. Keep that gate distinct from already-accepted feedback intake.
+
 ### Live Queen traversal follow-up, September 8 at 23:35 UTC
 
 The live coordinator confirms additional assessments beyond the previously
