@@ -2,6 +2,24 @@
 
 Operator-directed priority change: September 9, 2026.
 
+**Latest operator direction, evening:** stop the reload investigation. Prioritize
+visible improvements for ordinary users with one to five workers; incremental
+updates are welcome. Finish the already-running search-layout deployment, then
+work through Settings/navigation, mobile controls/attachments, readable messages
+and integrated layout consistency. Do not substitute a deeper reconciliation or
+performance project for this user-facing pass. Those unfinished requirements
+stay recorded, not silently dropped or represented as completed. This sequencing
+supersedes the older reload-first pointers below and in the execution log.
+
+Search-layout deployment completed: live version
+`1.6.0-dev-f23bb3cba88c-20260909210727-3415103`, healthy with no degraded
+services. The operator's engine update finished first (PID 3408834, start
+17:01:49 EDT); this app-only deployment preserved that exact engine PID/start
+and all 34 worker projections, including twelve running session/provider
+identities. Evidence: `/tmp/swarm-terminal-search-deploy.zi0a90`.
+No provider conversation-ID proof is implied by the worker-list projection.
+Next rendered surface: Settings/navigation for everyday users, not reload work.
+
 ### September 9 evening checkpoint — local terminal layout correction
 
 The operator is applying a worker-engine update. Do not overlap it with another

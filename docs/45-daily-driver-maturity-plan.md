@@ -6,7 +6,15 @@ Read this section and [the UX-first remaining plan](93-ux-first-remaining-plan.m
 first after any compaction or restart. They supersede older sequencing and
 coordination instructions below, not the approved requirements.
 
-- **Resume at the remaining UI-2 desktop reload/worker-switch stabilization.**
+- **Latest operator direction: ordinary-user UX first; incremental delivery is
+  welcome.** Focus on one-to-five-worker navigation, Settings, mobile controls,
+  attachments, understandable messages and consistent layouts. Defer reload
+  profiling and deep orchestration; neither should dominate this pass. Finish
+  verifying the in-flight search-layout deployment, then resume remaining UI-3
+  Settings and UI-4 integrated visual finish. Do not restart reload profiling
+  after compaction. Reload and direct-worker reconciliation remain open scope,
+  not acceptance claims or reasons to postpone everyday usability improvements.
+- Earlier UI-2 checkpoint:
   UI-1 presentation (`eb931114`) and UI-2 controls (`221e66cd`) are deployed with
   passing CI. UI-3 runtime safeguard placement is `f482b460`; verify its activation
   and current CI in [93](93-ux-first-remaining-plan.md) before claiming it live.
