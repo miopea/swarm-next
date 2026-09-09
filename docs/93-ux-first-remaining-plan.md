@@ -20,6 +20,26 @@ identities. Evidence: `/tmp/swarm-terminal-search-deploy.zi0a90`.
 No provider conversation-ID proof is implied by the worker-list projection.
 Next rendered surface: Settings/navigation for everyday users, not reload work.
 
+### Everyday Settings search increment
+
+Live Edge reproduced a discovery defect: `night watch` showed Queen policy but
+not the actual schedule. Search now indexes the visible presence/schedule,
+opening-screen and notification labels, and matches all query words across one
+card's existing title/section/keywords. `night watch schedule`, `dark theme`,
+`opening screen` and `phone notifications` find their expected controls. Unknown
+combinations stay empty; developer cards remain hidden outside development mode.
+No fuzzy-search service, new polling or backend changes were introduced.
+
+The phone fixture exposed duplicate native/custom clear buttons. Hide the native
+clear affordance as the worker search already does; give Settings search and its
+single labelled clear action 44px mobile targets. Full-App fictional desktop and
+390x844 phone checks cover schedule discovery, light/dark appearance, notification
+search, no-match state, clear and Escape recovery. The phone fixture is not a
+claim about physical-device keyboard behavior. Focused tests: 11 navigation and
+25 SettingsWorkspace tests pass; TypeScript and production web build pass.
+This increment is local pending commit/deployment verification. Previous search-
+layout CI 34405066863 remains in progress; do not cancel it just to publish notes.
+
 ### September 9 evening checkpoint — local terminal layout correction
 
 The operator is applying a worker-engine update. Do not overlap it with another

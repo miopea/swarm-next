@@ -90,6 +90,22 @@ test("matches the section name too, so browsing by group still works", () => {
     .toEqual(["settings-access", "settings-remote"]);
 });
 
+test("finds visible settings labels and multi-word queries without requiring a literal phrase", () => {
+  const ids = (query: string, development = false) => filterSettingsCards(query, development).map((card) => card.id);
+  expect(ids("night watch")).toContain("settings-presence");
+  expect(ids("night watch schedule")).toEqual(["settings-presence"]);
+  expect(ids(" SCHEDULE   night WATCH ")).toEqual(["settings-presence"]);
+  expect(ids("opening screen")).toEqual(["settings-presence"]);
+  expect(ids("time zone")).toEqual(["settings-presence"]);
+  expect(ids("dark theme")).toEqual(["settings-appearance"]);
+  expect(ids("notifications")).toEqual(["settings-notifications"]);
+  expect(ids("notify me")).toEqual(["settings-notifications"]);
+  expect(ids("phone notifications")).toEqual(["settings-notifications"]);
+  expect(ids("passkey schedule")).toEqual([]);
+  expect(ids("developer evidence")).toEqual([]);
+  expect(ids("developer evidence", true)).toEqual(["settings-dogfood"]);
+});
+
 test("an empty query is a way to jump, not a way to browse", () => {
   expect(filterSettingsCards("")).toEqual([]);
   expect(filterSettingsCards("   ")).toEqual([]);

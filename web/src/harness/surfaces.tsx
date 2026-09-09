@@ -725,6 +725,13 @@ export const SURFACES: Surface[] = [
       style={{ display: "block", width: 390, height: 844, border: 0 }} />,
   },
   {
+    id: "settings-phone",
+    title: "Phone Settings",
+    why: "Real Settings navigation and search in a 390px viewport; fictional Hive responses only.",
+    render: () => <iframe title="Phone Settings preview" src="/harness.html?surface=app&screen=settings"
+      style={{ display: "block", width: 390, height: 844, border: 0 }} />,
+  },
+  {
     id: "runtime-start-hold-phone",
     title: "Phone runtime start safeguard",
     why: "Fictional automatic start pause stays in runtime status, not in the operator decision count.",

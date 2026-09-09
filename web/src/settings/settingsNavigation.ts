@@ -48,11 +48,11 @@ export const SETTINGS_CARDS: readonly SettingsCard[] = [
   { id: "settings-queen", section: "settings-workers", title: "Queen",
     keywords: ["queen", "autonomy", "ceiling", "coordinate", "night watch", "review", "automation"] },
   { id: "settings-presence", section: "settings-hive", title: "Presence",
-    keywords: ["presence", "away", "at hive", "night", "lock", "screen lock", "asleep"] },
+    keywords: ["presence", "away", "reachable", "automatic", "at hive", "night watch", "schedule", "daily", "time zone", "starts", "ends", "opening screen", "lock", "screen lock", "asleep"] },
   { id: "settings-appearance", section: "settings-hive", title: "Appearance",
     keywords: ["appearance", "theme", "dark", "light", "colour", "color", "terminal keys", "keyboard"] },
   { id: "settings-notifications", section: "settings-hive", title: "Alerts",
-    keywords: ["alerts", "notification", "push", "subscribe", "phone", "quiet"] },
+    keywords: ["alerts", "notifications", "notify me", "push", "subscribe", "phone", "device", "quiet"] },
   { id: "settings-access", section: "settings-access", title: "Operator access",
     keywords: ["access", "token", "operator token", "passkey", "password", "sign in", "sign out", "rotate", "credential", "webauthn", "unlock", "security"] },
   { id: "settings-remote", section: "settings-access", title: "Open on my phone",
@@ -114,16 +114,18 @@ export function readSettingsSection(
  *
  * Matches the card's title, its section's name and its keywords, so "phone"
  * finds both the tunnel and alerts, and "token" finds access. An empty query
- * matches nothing: the filter is a way to jump, not a way to browse.
+ * matches nothing: the filter is a way to jump, not a way to browse. Every
+ * query word must match the same card, but may come from different labels.
  */
 export function filterSettingsCards(query: string, developmentMode = false): readonly SettingsCard[] {
-  const needle = query.trim().toLowerCase();
-  if (!needle) return [];
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
   const sectionLabel = new Map<string, string>(SETTINGS_SECTIONS.map(([id, label]) => [id, label.toLowerCase()]));
-  return SETTINGS_CARDS.filter((card) => developmentMode || card.id !== "settings-dogfood").filter((card) =>
-    card.title.toLowerCase().includes(needle)
-    || (sectionLabel.get(card.section) ?? "").includes(needle)
-    || card.keywords.some((keyword) => keyword.includes(needle)));
+  return SETTINGS_CARDS.filter((card) => developmentMode || card.id !== "settings-dogfood").filter((card) => {
+    const searchable = [card.title, sectionLabel.get(card.section) ?? "", ...card.keywords]
+      .join(" ").toLowerCase();
+    return words.every((word) => searchable.includes(word));
+  });
 }
 
 export function sectionLabel(section: SettingsSection): string {

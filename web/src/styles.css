@@ -281,7 +281,8 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .rail-context .worker-list, .rail-context .empty-rail { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .worker-search { position: relative; margin: 0 7px 10px; }
 .worker-search input { width: 100%; min-height: 32px; padding: 5px 26px 5px 9px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--panel-soft); font-size: .82rem; }
-.worker-search input::-webkit-search-cancel-button { display: none; }
+.worker-search input::-webkit-search-cancel-button,
+.rail-settings-search input::-webkit-search-cancel-button { display: none; }
 .worker-search-clear { position: absolute; top: 50%; right: 4px; display: flex; width: 22px; height: 22px; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 999px; color: var(--quiet); background: transparent; font-size: 1rem; line-height: 1; transform: translateY(-50%); }
 .worker-search-clear:hover { color: var(--text); background: var(--panel-raised); }
 .rail-heading { display: flex; min-height: 28px; align-items: center; justify-content: space-between; gap: 8px; margin: 0 7px 10px; color: var(--quiet); font-size: .69rem; font-weight: 500; letter-spacing: .09em; text-transform: uppercase; }
@@ -2083,6 +2084,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   /* Except settings, which has nowhere else to navigate from now that its own
      bar is gone. A scroller here is the same affordance that bar had. */
   .control-rail.surface-settings .rail-context { display: flex; padding-top: 8px; }
+  .rail-settings-search input { min-height: 44px; padding-right: 48px; }
+  .rail-settings-search .worker-search-clear { width: 44px; height: 44px; right: 0; }
   .rail-settings-sections { display: flex; gap: 6px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
   .rail-settings-sections button { min-height: var(--pill-touch-height); flex: 0 0 auto; border-color: var(--line); border-radius: 999px; }
   .start-worker { margin-top: 12px; padding-top: 12px; }
