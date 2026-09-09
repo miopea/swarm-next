@@ -26,9 +26,7 @@ test("falls back to release identity while an older host has no artifact id", ()
 });
 
 test("separates workers that are merely loaded from workers actually working", () => {
-  // Replacing the engine while a worker rests costs nothing; doing it
-  // mid-command kills work in progress. The warning only meant anything once
-  // it could tell those apart.
+  // Observed activity identifies likely interruptions; it is not admission.
   const workers = [
     { name: "Queen", attention_state: "buzzing" },
     { name: "Public Website", attention_state: "resting" },
@@ -39,16 +37,18 @@ test("separates workers that are merely loaded from workers actually working", (
   expect(workersMidCommand(workers)).toEqual(["Queen", "BudgetBug"]);
 });
 
-test("says plainly when an engine update costs nothing in progress", () => {
-  expect(engineUpdateCost([])).toContain("nothing in progress is lost");
+test("an empty busy roster does not authorize a safe restart", () => {
+  expect(engineUpdateCost([])).toContain("not proof");
+  expect(engineUpdateCost([])).not.toContain("nothing in progress is lost");
+  expect(engineUpdateCost([])).toContain("unsent input");
 });
 
 test("names the work an engine update would interrupt", () => {
-  expect(engineUpdateCost(["Queen"])).toContain("1 worker is running a command");
+  expect(engineUpdateCost(["Queen"])).toContain("1 worker shows as working");
   expect(engineUpdateCost(["Queen"])).toContain("Queen");
   expect(engineUpdateCost(["Queen"])).toContain("not resumed");
 
   const many = engineUpdateCost(["A", "B", "C", "D", "E"]);
-  expect(many).toContain("5 workers are running");
+  expect(many).toContain("5 workers show as working");
   expect(many).toContain("A, B, C and 2 more");
 });

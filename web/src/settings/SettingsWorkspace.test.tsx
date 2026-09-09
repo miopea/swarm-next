@@ -161,10 +161,9 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(screen.getByText("Running workers").parentElement).toHaveTextContent("Running workers1");
   expect(screen.getByText("Retained sessions").parentElement).toHaveTextContent("Retained sessions3");
   await waitFor(() => expect(screen.getByLabelText("Worker engine status")).toHaveTextContent("Worker engineUpdate ready · restart requiredRestart required"));
-  expect(screen.getByLabelText("Worker engine status")).toHaveTextContent("briefly stops 1 active worker");
-  // This worker is blocked, not mid-command, so the update costs nothing in
-  // progress and the card says so rather than warning generically.
-  expect(screen.getByLabelText("Worker engine status")).toHaveTextContent("nothing in progress is lost");
+  expect(screen.getByLabelText("Worker engine status")).toHaveTextContent("1 loaded worker");
+  // A blocked or resting label cannot establish that restarting is harmless.
+  expect(screen.getByLabelText("Worker engine status")).toHaveTextContent("not proof that restarting is safe");
   expect(screen.getByLabelText("App and API status")).toHaveTextContent("App and APIRunning build matches the working copyCurrent");
   expect(screen.getByLabelText("App and API status")).toHaveTextContent("checks the working copy every 15 seconds");
   fireEvent.click(screen.getByRole("button", { name: "Prepare worker engine update" }));
@@ -572,13 +571,13 @@ test("names the work a worker engine update would interrupt, before asking", asy
   />);
 
   const engine = await screen.findByLabelText("Worker engine status");
-  await waitFor(() => expect(engine).toHaveTextContent("2 workers are running a command right now: Queen, BudgetBug"));
+  await waitFor(() => expect(engine).toHaveTextContent("2 workers show as working: Queen, BudgetBug"));
   expect(engine).toHaveTextContent("not resumed");
   // And the same cost is restated where the operator commits to it, not only
   // where they first read about it.
   fireEvent.click(screen.getByRole("button", { name: "Prepare worker engine update" }));
   expect(screen.getByRole("group", { name: "Confirm worker engine update" }))
-    .toHaveTextContent("2 workers are running a command right now");
+    .toHaveTextContent("2 workers show as working");
 });
 
 test("status reads belong to visible settings cards and recover after timeout", async () => {

@@ -247,7 +247,7 @@ test("only the updates that take workers away carry a consequence", () => {
     undefined,
     [],
   ).find((update) => update.kind === "worker_engine");
-  expect(engine?.consequence).toContain("stopped");
+  expect(engine?.consequence).toContain("Loaded worker processes stop");
   expect(engine?.action).toBe("apply_worker_engine");
 
   const release = runtimeUpdates(
@@ -357,7 +357,7 @@ test("a prepared protocol migration is offered with the worker engine's prompt",
   expect(status.actionLabel).toBe("Apply the protocol migration");
   expect(status.action).toBe("apply_worker_engine");
   // The same consequence, because it costs the same thing.
-  expect(status.consequence).toContain("Every loaded worker is stopped and brought back");
+  expect(status.consequence).toContain("attempts to return them to their saved conversations");
   expect(status.detail).toContain("3 loaded workers");
   expect(status.detail).toContain("warned maintenance action");
 });

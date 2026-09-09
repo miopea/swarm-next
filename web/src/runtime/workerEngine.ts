@@ -18,11 +18,8 @@ export function workerEngineMatches(health: Health, host: TerminalHostStatus) {
 /**
  * The workers a worker-engine replacement would interrupt mid-command.
  *
- * "Loaded" and "working" are different questions, and only the second one
- * costs the operator anything: replacing the engine while a worker is resting
- * loses nothing, while doing it mid-command kills work in progress. The count
- * of sessions comes from the host, which is what actually gets stopped; which
- * of them are busy comes from the roster, which is what knows.
+ * The roster is an activity observation, not maintenance admission. Resting
+ * cannot rule out provider background work or an accepted pending submission.
  */
 export function workersMidCommand(workers: { name: string; attention_state: string }[]) {
   return workers
@@ -30,13 +27,15 @@ export function workersMidCommand(workers: { name: string; attention_state: stri
     .map((worker) => worker.name);
 }
 
+export const ENGINE_RESTART_CONSEQUENCE = "Loaded worker processes stop. Swarm attempts to return them to their saved conversations; interrupted commands are not resumed automatically and unsent input may be lost.";
+
 /** How the confirmation should describe the cost of updating right now. */
 export function engineUpdateCost(busyNames: string[]): string {
   if (busyNames.length === 0) {
-    return "No worker is running a command right now, so nothing in progress is lost.";
+    return `No worker currently shows as working. This is not proof that restarting is safe. ${ENGINE_RESTART_CONSEQUENCE}`;
   }
   const named = busyNames.length <= 3
     ? busyNames.join(", ")
     : `${busyNames.slice(0, 3).join(", ")} and ${busyNames.length - 3} more`;
-  return `${busyNames.length} worker${busyNames.length === 1 ? " is" : "s are"} running a command right now: ${named}. That work is interrupted and is not resumed.`;
+  return `${busyNames.length} worker${busyNames.length === 1 ? " shows" : "s show"} as working: ${named}. ${ENGINE_RESTART_CONSEQUENCE}`;
 }

@@ -48,6 +48,26 @@ test("dismissing reports it once", () => {
   expect(onDismiss).toHaveBeenCalledTimes(1);
 });
 
+test("release notes contain keyboard focus, dismiss with Escape and restore the opener", () => {
+  const opener = document.createElement("button");
+  document.body.append(opener);
+  opener.focus();
+  const onDismiss = vi.fn();
+  const view = render(<WhatsNewModal releases={[release("1.6.0", "Fictional change")]} onDismiss={onDismiss} />);
+  try {
+    const close = screen.getByRole("button", { name: "Got it" });
+    expect(close).toHaveFocus();
+    opener.focus();
+    expect(close).toHaveFocus();
+    fireEvent.keyDown(close, { key: "Tab" });
+    expect(close).toHaveFocus();
+    fireEvent.keyDown(close, { key: "Escape" });
+    expect(onDismiss).toHaveBeenCalledOnce();
+    view.unmount();
+    expect(opener).toHaveFocus();
+  } finally { view.unmount(); opener.remove(); }
+});
+
 /**
  * Grouped, not interleaved. Someone scanning for what they can now DO should
  * not have to read past a list of repairs to find it.

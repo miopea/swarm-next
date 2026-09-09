@@ -234,8 +234,8 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
   const workerEngineState = !terminalHostLoaded ? "checking" : !terminalHostStatus ? "unavailable" : workerEngineNeedsUpdate ? "restart" : "current";
   const activeWorkerCount = terminalHostStatus?.running_sessions ?? 0;
   // Two different questions, answered by whichever source actually knows. The
-  // host knows how many sessions it will stop; the roster knows which of them
-  // are mid-command, which is the part that costs the operator something.
+  // host knows how many sessions it reports; the roster describes observed
+  // activity. Neither observation grants automatic maintenance admission.
   const busyWorkerNames = workersMidCommand(workers);
   const hasPendingQueenDecision = pendingQueenDecisionCount > 0;
   const queenReviewLabel = hasPendingQueenDecision ? "Queen needs you" : queenAutomationStateLabel(queenAutomation);
@@ -540,7 +540,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
                 <small>No restart or update has been attempted.</small>
                 <button className="secondary-button" type="button" onClick={() => setTerminalHostAttempt((attempt) => attempt + 1)}>Retry worker engine status</button>
               </> : workerEngineNeedsUpdate ? <>
-                <p>Updating this layer briefly stops {activeWorkerCount} active worker{activeWorkerCount === 1 ? "" : "s"}, then brings back the ones that were loaded from their saved conversations.</p>
+                <p>The engine currently reports {activeWorkerCount} loaded worker{activeWorkerCount === 1 ? "" : "s"}. Updating this layer restarts loaded workers.</p>
                 <p className={busyWorkerNames.length > 0 ? "engine-update-cost busy" : "engine-update-cost"} role="status">{engineUpdateCost(busyWorkerNames)}</p>
                 <small>Identities, provider conversations, tasks, ownership, and terminal history remain durable.</small>
               {workerEngineProgress ? (
@@ -579,7 +579,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
                   <p className="engine-same-build">
                     The version numbers differ because this host process was started from{" "}
                     {runtimeVersionIdentity(terminalHostStatus?.host_version)} and has not needed
-                    to restart since. The engine itself is byte-identical to the one in{" "}
+                    to restart since. Its engine source and dependency fingerprint matches{" "}
                     {runtimeVersionIdentity(health?.version)} — same build{" "}
                     <code>{health?.worker_engine_build_id?.slice(0, 12)}</code> — so there is nothing
                     to upgrade. A Hive whose engine DID change restarts it and then reports the new

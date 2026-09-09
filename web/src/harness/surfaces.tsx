@@ -11,6 +11,7 @@ import PerformanceEvidenceFixture from "./PerformanceEvidenceFixture";
 import DecisionAnswerFixture from "./DecisionAnswerFixture";
 import SupportFeedbackFixture from "./SupportFeedbackFixture";
 import TaskPreviewFixture from "./TaskPreviewFixture";
+import RuntimeDialogsFixture from "./RuntimeDialogsFixture";
 
 import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
 import { App } from "../App";
@@ -321,6 +322,12 @@ export const SURFACES: Surface[] = [
         ]}
       />
     ),
+  },
+  {
+    id: "runtime-dialogs",
+    title: "Runtime confirmations and broadcast drafts",
+    why: "Fictional local callbacks only: keyboard containment, cancellation and draft recovery; no worker messages or updates.",
+    render: () => <RuntimeDialogsFixture />,
   },
   {
     id: "whats-new",

@@ -99,6 +99,17 @@ that the incident's exact last-screen contents were recovered.
 
 ## Provider evidence constraint
 
+### Operator-facing restart warnings
+
+The displayed busy-worker census is observational, not maintenance admission.
+An empty census must not claim that no work can be lost. Engine confirmations
+explain that loaded processes stop, conversation return is attempted, interrupted
+commands are not automatically resumed, and unsent input may be lost. A source
+fingerprint match is not a claim of byte-identical packaged binaries. Destructive
+confirmation initially focuses Cancel; a pending operation cannot be dismissed
+through Escape or its backdrop. These UI protections do not implement or relax
+the automatic all-session admission gate above.
+
 ### Explicit-stop serialization prerequisite
 
 An explicitly authorized single-session stop fences new input/control effects

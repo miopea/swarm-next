@@ -1,5 +1,5 @@
 import type { DevelopmentRuntime, Health, SupersededProvider, TerminalHostStatus } from "../api";
-import { workerEngineUpdateRequired } from "./workerEngine";
+import { ENGINE_RESTART_CONSEQUENCE, workerEngineUpdateRequired } from "./workerEngine";
 
 export type RuntimeUpdateKind = "none" | "building" | "failed" | "app" | "worker_engine" | "provider";
 
@@ -82,7 +82,7 @@ function workerEngineUpdate(
       busy: false,
       action: "apply_worker_engine",
       actionLabel: "Apply the protocol migration",
-      consequence: "Every loaded worker is stopped and brought back. Work in a terminal that has not been saved is lost, and each worker reconnects on the new engine.",
+      consequence: ENGINE_RESTART_CONSEQUENCE,
     };
   }
   if (workerEngineUpdateRequired(health, host)) {
@@ -93,7 +93,7 @@ function workerEngineUpdate(
       busy: false,
       action: "apply_worker_engine",
       actionLabel: "Apply worker engine update",
-      consequence: "Every loaded worker is stopped and brought back. Work in a terminal that has not been saved is lost, and each worker reconnects on the new engine.",
+      consequence: ENGINE_RESTART_CONSEQUENCE,
     };
   }
   return undefined;

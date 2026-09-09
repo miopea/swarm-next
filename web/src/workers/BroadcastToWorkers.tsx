@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { useModalFocus } from "../shared/useModalFocus";
+import UnsavedChangesPrompt from "../shared/UnsavedChangesPrompt";
 
 /**
  * One thing said to every running worker, from a modal.
@@ -33,10 +35,8 @@ export default function BroadcastToWorkers({
   const [result, setResult] = useState<{ reached: number; skipped: number }>();
   const [error, setError] = useState<string>();
   const field = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    if (open) field.current?.focus();
-  }, [open]);
+  const [confirmClose, setConfirmClose] = useState(false);
+  const dialog = useModalFocus<HTMLDivElement>(requestClose, open, field);
 
   if (!open) return null;
 
@@ -56,21 +56,30 @@ export default function BroadcastToWorkers({
   }
 
   function close() {
+    if (busy) return;
+    setConfirmClose(false);
     setResult(undefined);
     setError(undefined);
     setBody("");
     onClose();
   }
 
+  function requestClose() {
+    if (busy) return;
+    if (body.length > 0) setConfirmClose(true);
+    else close();
+  }
+
   return (
-    <div className="modal-backdrop" role="presentation" onClick={close}>
+    <div className="dialog-backdrop" role="presentation" onClick={requestClose}>
       <div
-        className="modal broadcast-modal"
+        ref={dialog}
+        tabIndex={-1}
+        className="dialog broadcast-modal"
         role="dialog"
         aria-modal="true"
         aria-label="Tell every worker"
         onClick={(event) => event.stopPropagation()}
-        onKeyDown={(event) => { if (event.key === "Escape") close(); }}
       >
         <h2>Tell every worker</h2>
         <p className="broadcast-explainer">
@@ -85,6 +94,7 @@ export default function BroadcastToWorkers({
           maxLength={4000}
           placeholder="Reloading the engine shortly — please park what you are doing."
           value={body}
+          disabled={busy}
           onChange={(event) => setBody(event.target.value)}
         />
         {/* Never "sent". The count is the whole point: a worker with no live
@@ -98,11 +108,18 @@ export default function BroadcastToWorkers({
         ) : null}
         {error ? <p className="broadcast-error" role="alert">{error}</p> : null}
         <div className="settings-actions">
-          <button type="button" className="secondary-button" onClick={close}>Close</button>
+          <button type="button" className="secondary-button" onClick={requestClose} disabled={busy}>Close</button>
           <button type="button" className="primary-action" onClick={() => void send()} disabled={busy || !body.trim()}>
             {busy ? "Sending…" : "Send to every worker"}
           </button>
         </div>
+        {confirmClose && <UnsavedChangesPrompt
+          label="Discard this broadcast?"
+          description="Your draft will be removed from this screen."
+          discardLabel="Discard message"
+          onKeep={() => setConfirmClose(false)}
+          onDiscard={close}
+        />}
       </div>
     </div>
   );

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useModalFocus } from "../shared/useModalFocus";
 
 import type { ReleaseVersionNotes } from "../api";
 import { anyAwaitingWorkerEngine } from "./whatsNew";
@@ -37,6 +38,7 @@ export default function WhatsNewModal({
   heading?: string;
 }) {
   const [showEarlier, setShowEarlier] = useState(false);
+  const dialog = useModalFocus<HTMLDivElement>(onDismiss, releases.length > 0);
   if (releases.length === 0) return null;
   const awaitingEngine = anyAwaitingWorkerEngine(releases);
   const heading =
@@ -45,6 +47,8 @@ export default function WhatsNewModal({
   return (
     <div className="dialog-backdrop" role="presentation" onClick={onDismiss}>
       <div
+        ref={dialog}
+        tabIndex={-1}
         className="dialog whats-new"
         role="dialog"
         aria-modal="true"
@@ -82,7 +86,8 @@ export default function WhatsNewModal({
         {awaitingEngine && (
           <p className="whats-new-engine-note">
             Some of this is installed but not running yet. The terminal host keeps your workers alive across an
-            update, so it swaps separately — run the worker engine update when your workers are idle.
+            update, so it swaps separately. Review the worker engine restart warning before applying it;
+            a resting terminal is not proof that a restart is safe.
           </p>
         )}
         <div className="dialog-actions">

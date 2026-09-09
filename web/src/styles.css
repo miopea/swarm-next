@@ -2877,7 +2877,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
    rail: the first version put a full-width primary button above the worker
    search and the operator's verdict was "This is a waste of the UI". Rare,
    deliberate actions earn an icon, not permanent vertical space in a list. */
-.broadcast-modal { display: grid; gap: 12px; max-width: 520px; }
+.dialog.broadcast-modal { gap: 12px; width: min(520px, 100%); }
+.dialog.broadcast-modal, .dialog.runtime-confirm { max-height: calc(100vh - 48px); max-height: calc(100dvh - 48px); overflow-y: auto; overscroll-behavior: contain; }
 .broadcast-modal textarea { width: 100%; min-width: 0; resize: vertical; font: inherit; }
 .broadcast-explainer { margin: 0; color: var(--muted); font-size: .78rem; line-height: 1.45; }
 .broadcast-result { margin: 0; color: var(--muted); font-size: .74rem; line-height: 1.45; }

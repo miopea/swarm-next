@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import BroadcastToWorkers from "./BroadcastToWorkers";
@@ -35,4 +35,46 @@ test("does not send an empty broadcast", () => {
   expect(send).toBeDisabled();
   fireEvent.click(send);
   expect(onBroadcast).not.toHaveBeenCalled();
+});
+
+test("closing a draft asks once, Escape keeps it, and only explicit discard clears it", () => {
+  const onClose = vi.fn();
+  const onBroadcast = vi.fn();
+  render(<BroadcastToWorkers open onClose={onClose} onBroadcast={onBroadcast} />);
+  const field = screen.getByRole("textbox");
+  expect(screen.getByRole("dialog")).toHaveClass("dialog", "broadcast-modal");
+  expect(screen.getByRole("presentation")).toHaveClass("dialog-backdrop");
+  expect(field).toHaveFocus();
+  fireEvent.change(field, { target: { value: "Fictional draft" } });
+  fireEvent.keyDown(field, { key: "Escape" });
+  expect(screen.getByRole("alertdialog", { name: "Discard this broadcast?" })).toBeInTheDocument();
+  expect(onClose).not.toHaveBeenCalled();
+  fireEvent.keyDown(screen.getByRole("button", { name: "Keep editing" }), { key: "Escape" });
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  expect(field).toHaveValue("Fictional draft");
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  fireEvent.click(screen.getByRole("button", { name: "Discard message" }));
+  expect(onClose).toHaveBeenCalledOnce();
+  expect(field).toHaveValue("");
+  expect(onBroadcast).not.toHaveBeenCalled();
+});
+
+test("a pending broadcast cannot lose its draft or be submitted twice and failures remain editable", async () => {
+  let reject!: (reason: Error) => void;
+  const onBroadcast = vi.fn(() => new Promise<{ reached: number; skipped: number }>((_resolve, fail) => { reject = fail; }));
+  const onClose = vi.fn();
+  render(<BroadcastToWorkers open onClose={onClose} onBroadcast={onBroadcast} />);
+  const field = screen.getByRole("textbox");
+  fireEvent.change(field, { target: { value: "Fictional draft" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send to every worker" }));
+  expect(field).toBeDisabled();
+  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+  fireEvent.click(screen.getByRole("presentation"));
+  fireEvent.click(screen.getByRole("button", { name: "Sending…" }));
+  expect(onClose).not.toHaveBeenCalled();
+  expect(onBroadcast).toHaveBeenCalledOnce();
+  await act(async () => { reject(new Error("Fictional refusal")); });
+  expect(field).toBeEnabled();
+  expect(field).toHaveValue("Fictional draft");
+  expect(screen.getByRole("alert")).toHaveTextContent("Fictional refusal");
 });

@@ -18,6 +18,26 @@ an old unchecked deployment note is not automatically current missing code.
 
 ## Requirement-by-requirement disposition
 
+### Restart warnings and remaining runtime dialogs
+
+The busy-worker census no longer promises a lossless engine restart when no
+worker appears busy. Settings, update confirmations and release notes distinguish
+observed activity from maintenance-safe admission and explain conversation return
+versus interrupted commands. Automatic all-session admission remains open.
+
+Restart confirmation, release notes and broadcast now use the shared modal focus
+owner. Destructive confirmation starts on Cancel; pending actions cannot be
+dismissed. Broadcast preserves failed-send drafts, prevents editing during a send,
+and asks before discarding a draft. Browser inspection exposed undefined broadcast
+overlay classes; it now uses the existing dialog backdrop and bounded scrolling.
+The fictional runtime-dialogs harness verified nested draft cancellation at
+390x844 and restart/release-note readability at 390x480, with no horizontal
+overflow and no Hive calls or worker messages. Viewport was restored and the
+owned tab closed. This is desktop Edge viewport evidence, not real-phone acceptance.
+All 152 web test files / 1,440 tests and the production TypeScript/Vite build pass.
+The existing large terminal-chunk warning remains; this change does not claim a
+resource-performance improvement or completion of the wider UX acceptance row.
+
 No row labelled partial is a program-completion pass. Links identify the evidence
 or implementation boundary to inspect before changing it again.
 

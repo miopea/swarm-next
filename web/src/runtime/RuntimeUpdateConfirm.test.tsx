@@ -63,3 +63,35 @@ test("cancelling runs nothing", () => {
   expect(onCancel).toHaveBeenCalledOnce();
   expect(onConfirm).not.toHaveBeenCalled();
 });
+
+test("destructive confirmation owns keyboard focus and restores the opener on cancellation", () => {
+  const opener = document.createElement("button");
+  document.body.append(opener);
+  opener.focus();
+  const onConfirm = vi.fn();
+  const onCancel = vi.fn();
+  const view = render(<RuntimeUpdateConfirm update={engine} busy={false} onConfirm={onConfirm} onCancel={onCancel} />);
+  try {
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    const confirm = screen.getByRole("button", { name: "Apply worker engine update" });
+    expect(cancel).toHaveFocus();
+    expect(screen.getByRole("alertdialog")).toHaveAttribute("data-swarm-modal-focus");
+    fireEvent.keyDown(cancel, { key: "Tab", shiftKey: true });
+    expect(confirm).toHaveFocus();
+    fireEvent.keyDown(confirm, { key: "Tab" });
+    expect(cancel).toHaveFocus();
+    fireEvent.keyDown(cancel, { key: "Escape" });
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(onConfirm).not.toHaveBeenCalled();
+    view.unmount();
+    expect(opener).toHaveFocus();
+  } finally { view.unmount(); opener.remove(); }
+});
+
+test("an in-flight update cannot be dismissed by Escape or its backdrop", () => {
+  const onCancel = vi.fn();
+  render(<RuntimeUpdateConfirm update={engine} busy onConfirm={vi.fn()} onCancel={onCancel} />);
+  fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape" });
+  fireEvent.click(screen.getByRole("presentation"));
+  expect(onCancel).not.toHaveBeenCalled();
+});

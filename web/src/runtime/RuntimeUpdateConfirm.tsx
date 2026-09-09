@@ -1,4 +1,6 @@
 import type { RuntimeUpdateSummary } from "./runtimeUpdates";
+import { useRef } from "react";
+import { useModalFocus } from "../shared/useModalFocus";
 
 /**
  * Asks before running a runtime update from the control room.
@@ -17,32 +19,37 @@ export default function RuntimeUpdateConfirm({ update, busy, onConfirm, onCancel
   onCancel: () => void;
 }) {
   const destructive = Boolean(update.consequence);
+  const confirm = useRef<HTMLButtonElement>(null);
+  const cancel = () => { if (!busy) onCancel(); };
+  const dialog = useModalFocus<HTMLDivElement>(cancel, true, destructive ? undefined : confirm);
   return (
-    <div className="dialog-backdrop" role="presentation" onClick={onCancel}>
+    <div className="dialog-backdrop" role="presentation" onClick={cancel}>
       <div
+        ref={dialog}
+        tabIndex={-1}
         className={`dialog runtime-confirm${destructive ? " destructive" : ""}`}
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="runtime-confirm-heading"
-        aria-describedby="runtime-confirm-detail"
+        aria-describedby={destructive ? "runtime-confirm-detail runtime-confirm-consequence" : "runtime-confirm-detail"}
         onClick={(event) => event.stopPropagation()}
       >
         <p className="eyebrow">{destructive ? "This stops running work" : "Runtime update"}</p>
         <h3 id="runtime-confirm-heading">{update.actionLabel}</h3>
         <p id="runtime-confirm-detail">{update.detail}</p>
         {update.consequence ? (
-          <p className="runtime-confirm-consequence" role="alert">{update.consequence}</p>
+          <p id="runtime-confirm-consequence" className="runtime-confirm-consequence" role="alert">{update.consequence}</p>
         ) : null}
         <div className="dialog-actions">
-          <button type="button" className="secondary-button" onClick={onCancel} disabled={busy}>
+          <button type="button" className="secondary-button" onClick={cancel} disabled={busy}>
             Cancel
           </button>
           <button
+            ref={confirm}
             type="button"
             className={destructive ? "destructive-action" : "primary-action"}
             onClick={onConfirm}
             disabled={busy}
-            autoFocus
           >
             {busy ? "Working…" : update.actionLabel}
           </button>
