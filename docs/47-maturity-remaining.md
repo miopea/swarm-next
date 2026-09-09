@@ -2,6 +2,27 @@
 
 ## Current checkpoint — September 8, after Admin intake acceptance
 
+### Verified planned engine return, September 9
+
+Corrected candidate `cf83c980` passed all four CI jobs in run `34310117569`.
+Its App/API deployment preserved all twelve exact worker/session pairs. The
+operator-approved maintenance action subsequently replaced engine PID 1996041
+with PID 2271655, running
+`1.6.0-dev-cf83c980bf17-20260909041327-2251164`; API PID 2252714 stayed running.
+One maintenance request reported twelve stopped sessions. Its immediate response
+reported zero returned workers because the bounded supervisor was still reviving
+them; subsequent metadata verification confirmed all twelve running in their
+exact original provider conversations with recovery state `restored`.
+All twenty-two previously sleeping workers remained asleep, including D365 and
+Swarm Next. No real project terminal transcript was read or typed into.
+
+This closes this planned replacement's conversation-return check, not automatic
+loaded-engine admission. A new one-hour read-only observation started as PID
+2274770 under `/tmp/swarm-cf83-return-soak.kIt7SR`; its result remains pending.
+Do not join it to earlier observations interrupted by operator updates or sleep.
+Presence reports `away` from `screen_locked`, with no saved Night Watch schedule;
+no schedule or manual presence policy was changed. No release was cut.
+
 ### Explicit-stop input/control fence, September 9
 
 Engine stopping previously bypassed the control guard used by input and takeover.
