@@ -1,9 +1,10 @@
 # ADR 0085: Engine-owned maintenance admission
 
 Status: Accepted implementation direction under the approved update-safety scope.
-The engine-library admission core is implemented and tested; native evidence,
-durable return integration, negotiated IPC/package activation and live validation
-remain incomplete. The release gate remains open.
+The engine-library admission core is implemented and tested. Exact durable source
+return records are implemented locally. Native evidence, admission/return receipt
+integration, negotiated IPC/package activation and live validation remain
+incomplete. The release gate remains open.
 
 ## Incident and requirement
 
@@ -84,8 +85,8 @@ eligibility, not a claim of verified Claude behavior. The library has no product
 IPC caller yet. Adding that command requires a protocol bump, so it must land with
 the actual native evidence and durable return workflow, not force a migration for
 an unusable partial interface. Protocol 16 and ordinary package behavior remain
-unchanged. The API's existing worker-only revival intents do not satisfy the
-exact durable session-return obligation required above.
+unchanged. At this first checkpoint the API still had only worker-level revival
+intents; the next checkpoint below adds their exact source identities.
 
 Seven focused tests cover all-guards-before-checking, all-or-none refusal,
 local/remote ownership, in-flight input, input losing to maintenance, poisoned
@@ -95,6 +96,37 @@ never production eligibility. Linux terminal tests passed (141 in the final
 rerun, with the already-passed sustained-output test not repeated and one existing
 profiling test ignored); 27 terminal-host tests and strict all-target clippy pass.
 No live worker was used, stopped or restarted for this checkpoint.
+
+### Exact durable source-return records
+
+Schema 157 adds at most one exact source-session record per existing revival
+promise, within the same 256-worker queue bound. Promise settlement or explicit
+cancellation owns removal through a foreign key; elapsed time and source-session
+history cleanup cannot erase the record. No terminal text or conversation content
+is retained. An old promise is not backfilled from today's active session.
+
+The existing authenticated, drain-required `prepare-return` endpoint now validates
+every engine-reported running session against the active worker binding in one
+transaction. Unknown/unbound, ended, duplicated or oversized sets refuse the whole
+request with a conflict, without stopping sessions or partially recording promises.
+Its no-store response retains `recorded_workers` and adds the exact worker/session
+pairs and their original source-record timestamps. Retries of the same set retain
+those timestamps. Existing explicit engine/provider maintenance recording also
+captures actual active source sessions in the same promise transaction.
+
+This is not an admission receipt and cannot authorize a later stop. The future
+combined admission owner must retain lifecycle ownership from durable recording
+through the engine's protected stop, reconcile final context before replacement,
+and preserve failure/return outcomes. IPC/package integration and provider-native
+settled execution evidence remain required. Existing revival attempt/settlement
+policy is unchanged by this migration; durable reporting after a failed revival
+and API replacement remains a separate acceptance gap.
+
+Verification: all 708 persistence tests pass, including populated-schema migration,
+backup/restore checks and seven exact-return cases. Nine targeted API tests cover
+authenticated preparation, rejection of live unbound sessions, explicit maintenance
+and bounded return behavior. Strict all-target persistence/API clippy passes.
+The schema and API changes have not been deployed to the development Hive.
 
 Explicitly negotiate the new engine capability. An old engine cannot safely
 apply the missing admission mechanism to itself. Its loaded-session automatic

@@ -1924,26 +1924,17 @@ impl TaskStore {
         worker_ids: &[WorkerId],
         now: i64,
     ) -> Result<(), TaskStoreError> {
+        if worker_ids.len() > crate::worker_engine_returns::MAX_RETURN_INTENTS {
+            return Err(TaskStoreError::WorkerReturnPreparationRefused(
+                "worker return request exceeds the bounded queue",
+            ));
+        }
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         for worker_id in worker_ids {
-            transaction.execute(
-                "INSERT INTO worker_revival_intents (worker_id, recorded_at)
-                 VALUES (?1, ?2)
-                 ON CONFLICT(worker_id) DO UPDATE SET recorded_at = excluded.recorded_at",
-                params![worker_id.to_string(), now],
-            )?;
+            crate::worker_engine_returns::record_intent(&transaction, *worker_id, now)?;
         }
-        let pending: i64 =
-            transaction.query_row("SELECT COUNT(*) FROM worker_revival_intents", [], |row| {
-                row.get(0)
-            })?;
-        if pending > 256 {
-            return Err(TaskStoreError::IntegrityFailure(
-                "worker restart queue is full; maintenance must wait before stopping workers"
-                    .into(),
-            ));
-        }
+        crate::worker_engine_returns::check_capacity(&transaction)?;
         transaction.commit()?;
         Ok(())
     }

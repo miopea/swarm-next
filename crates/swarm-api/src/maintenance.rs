@@ -95,18 +95,14 @@ pub(super) async fn prepare_worker_engine_return(
         .into_iter()
         .filter(|session| session.running)
         .map(|session| session.session_id)
-        .collect();
+        .collect::<Vec<_>>();
     let store = task_store(&state)?;
-    let profiles = store
-        .list_worker_profiles()
-        .map_err(|error| task_store_error(&error))?;
-    let workers = loaded_workers(&profiles, &running);
-    store
-        .record_worker_revival_intents(&workers, unix_timestamp())
+    let returns = store
+        .record_worker_engine_return_sessions(&running, unix_timestamp())
         .map_err(|error| task_store_error(&error))?;
     Ok((
         [(axum::http::header::CACHE_CONTROL, "no-store")],
-        Json(serde_json::json!({ "recorded_workers": workers.len() })),
+        Json(serde_json::json!({ "recorded_workers": returns.len(), "return_sessions": returns })),
     )
         .into_response())
 }

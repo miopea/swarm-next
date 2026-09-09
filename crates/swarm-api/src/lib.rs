@@ -9016,6 +9016,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "recovery_assessment_refused",
             error.to_string(),
         ),
+        TaskStoreError::WorkerReturnPreparationRefused(_) => ApiError::new(
+            StatusCode::CONFLICT,
+            "worker_engine_return_set_refused",
+            error.to_string(),
+        ),
         TaskStoreError::Io(_)
         | TaskStoreError::Sql(_)
         | TaskStoreError::LockPoisoned
@@ -16902,24 +16907,28 @@ mod tests {
             if drained {
                 registry.begin_drain().unwrap();
             }
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri("/api/v1/runtime/terminal-host/prepare-return")
-                        .header("authorization", format!("Bearer {token}"))
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
+            let response = post_return_preparation(app.clone(), token).await;
             assert_eq!(response.status(), expected);
+            if expected == StatusCode::OK {
+                let body = response_json(response).await;
+                assert_eq!(body["recorded_workers"], 1);
+                assert_eq!(
+                    body["return_sessions"][0]["worker_id"],
+                    worker.id.to_string()
+                );
+                assert_eq!(
+                    body["return_sessions"][0]["session_id"],
+                    session.id().to_string()
+                );
+                assert_eq!(store.worker_engine_return_sessions().unwrap().len(), 1);
+            }
             assert_eq!(store.worker_revival_pending(worker.id).unwrap(), drained);
             assert!(!store.worker_revival_pending(sleeping.id).unwrap());
             assert!(session.is_running().unwrap());
         }
         assert_eq!(store.worker_revival_intents().unwrap().len(), 1);
+        assert_unbound_return_refused(&registry, &store, app.clone(), workspace).await;
+        assert!(session.is_running().unwrap());
         assert!(
             worker_runtime::revive_worker_process(&state, worker.id, TerminalSize::default())
                 .await
@@ -16939,6 +16948,44 @@ mod tests {
         session.stop().unwrap();
         server_task.abort();
         let _ = server_task.await;
+    }
+
+    async fn post_return_preparation(app: Router, token: &str) -> axum::response::Response {
+        app.oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/runtime/terminal-host/prepare-return")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn assert_unbound_return_refused(
+        registry: &SessionRegistry,
+        store: &TaskStore,
+        app: Router,
+        workspace: PathBuf,
+    ) {
+        registry.cancel_drain().unwrap();
+        let unbound = registry
+            .spawn(
+                &ProviderCommand {
+                    executable: PathBuf::from("/bin/sh"),
+                    arguments: vec!["-c".into(), "cat".into()],
+                    working_directory: workspace,
+                },
+                TerminalSize::default(),
+            )
+            .unwrap();
+        registry.begin_drain().unwrap();
+        let refused = post_return_preparation(app, "secret").await;
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
+        assert!(unbound.is_running().unwrap());
+        assert_eq!(store.worker_engine_return_sessions().unwrap().len(), 1);
+        registry.stop(unbound.id()).unwrap();
     }
 
     #[tokio::test]

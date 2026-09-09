@@ -29,6 +29,8 @@ mod queen_review;
 mod queen_review_focus;
 mod queen_run_history;
 mod review_return_history;
+mod worker_engine_returns;
+pub use worker_engine_returns::WorkerEngineReturnSession;
 mod task_block;
 mod task_decision_links;
 mod task_prerequisites;
@@ -273,7 +275,8 @@ const SUPPORT_OUTBOX_SCHEMA_VERSION: i64 = 153;
 const QUEEN_RUN_HISTORY_SCHEMA_VERSION: i64 = 154;
 const SUPPORT_OUTBOX_ATTACHMENTS_SCHEMA_VERSION: i64 = 155;
 const REVIEW_RETURN_HISTORY_SCHEMA_VERSION: i64 = 156;
-const CURRENT_SCHEMA_VERSION: i64 = REVIEW_RETURN_HISTORY_SCHEMA_VERSION;
+const WORKER_ENGINE_RETURN_SESSIONS_SCHEMA_VERSION: i64 = 157;
+const CURRENT_SCHEMA_VERSION: i64 = WORKER_ENGINE_RETURN_SESSIONS_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -702,6 +705,8 @@ pub enum TaskStoreError {
     InvalidAgentCredentialDigest,
     #[error("worker session is not active")]
     WorkerSessionNotActive,
+    #[error("worker-engine return preparation refused: {0}")]
+    WorkerReturnPreparationRefused(&'static str),
     #[error("provider conversation cannot be assigned after worker history exists")]
     ProviderConversationUnavailable,
     #[error("task order must contain every open task exactly once")]
@@ -3986,6 +3991,9 @@ fn migrate_ops_intake_schema_steps(
     }
     if schema_version < REVIEW_RETURN_HISTORY_SCHEMA_VERSION {
         review_return_history::migrate(transaction)?;
+    }
+    if schema_version < WORKER_ENGINE_RETURN_SESSIONS_SCHEMA_VERSION {
+        worker_engine_returns::migrate(transaction)?;
     }
     Ok(())
 }
@@ -9239,6 +9247,12 @@ mod tests {
             table: "review_return_history",
             artifact: "",
             undo_sql: "DROP TABLE review_return_history",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "worker_engine_return_sessions",
+            artifact: "",
+            undo_sql: "DROP TABLE worker_engine_return_sessions",
             probe_sql: "",
         },
     ];

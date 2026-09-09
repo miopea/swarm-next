@@ -18,6 +18,30 @@ an old unchecked deployment note is not automatically current missing code.
 
 ## Requirement-by-requirement disposition
 
+### Exact source records for engine returns (local, not deployed)
+
+Schema 157 ties each existing bounded return promise to its actual immutable
+source session. The authenticated drain-required preparation endpoint validates
+the complete engine snapshot in one transaction and returns exact worker/session
+pairs; it no longer silently excludes unbound sessions. Missing/ended/duplicate
+identities and capacity or storage failures refuse without a partial promise.
+Same-source retries preserve the original record; a stale snapshot cannot replace
+a newer source. Explicit manual maintenance also records available active sources.
+Legacy promises remain unknown rather than being backfilled from current state.
+
+Focused tests passed for database reopen, retained records after source stop,
+stale-source refusal, whole-request rollback, capacity, explicit cancellation and
+schema-156 upgrade. The actual API fixture passed authentication/drain gates,
+idempotent preparation, exact response identities and refusal of a live unbound
+shell without stopping either fixture session. All 708 persistence tests passed,
+as did nine targeted preparation/maintenance/return API tests and strict all-target
+clippy for persistence/API. A lint-only test-helper extraction was followed by a
+passing rerun of the preparation fixture and clippy. Tests used the isolated
+`/tmp/swarm-maintenance-admission.BsOnHB` source, not the development database.
+Live health remains `ok` on the same 86100b8b App/API build and engine PID 2271655.
+No production migration, engine update, release or BFG Admin communication occurred.
+This checkpoint remains local while push permission is pending.
+
 ### Engine maintenance admission core (not activated)
 
 ADR 0085 now has an engine-library all-session transaction core. It freezes
@@ -200,7 +224,7 @@ or implementation boundary to inspect before changing it again.
 | PRES-01 | Schedule/DST/desktop-return policy and persistence tests exist; live locked desktop observed as Reachable. | Real scheduled/manual Night Watch, mobile non-dismissal and desktop dismissal. Live schedule is unset; do not change overnight policy merely for testing. |
 | REC-01 | Planned engine replacement returned all twelve workers to exact conversations; [91](91-engine-return-dependency-acceptance.md). | Full chosen-conversation switch and missing-context safe/continue/fresh ladder with real provider evidence, plus failure/cancellation journeys. |
 | REC-02 | Isolated corruption containment, backup/restore and package failure drills recorded in [87](87-live-resource-and-restore-checkpoint.md) and [47](47-maturity-remaining.md). | Retain this acceptance; no reason to corrupt or restore the live Hive. |
-| OPS-01 | App/API continuity and one planned engine-return journey verified; resource admission guards exist. ADR 0085 engine-library all-session guard/stop core passes isolated concurrency and failure tests. | Native input/completion/background evidence, durable exact return set, negotiated IPC/package integration and live all-session admission remain unimplemented/unaccepted. Rolling provider/tool freshness and pressure-to-resumption acceptance remain. |
+| OPS-01 | App/API continuity and one planned engine-return journey verified; resource admission guards exist. ADR 0085 engine-library all-session core passes isolated concurrency/failure tests. Local schema-157 exact source-return recording is wired into preparation and explicit maintenance. | Native input/completion/background evidence, combined durable-record/admission receipts, negotiated IPC/package integration, durable failed-return reporting and live all-session admission remain unimplemented/unaccepted. Rolling provider/tool freshness and pressure-to-resumption acceptance remain. |
 | PROV-01 | Opt-in framework, host availability and Night Watch exclusions checked; [48](48-provider-acceptance.md). | Required provider journeys remain distinct from framework acceptance. Unavailable alpha CLIs stay unavailable; only the builder promotes providers. |
 | UX-01/P6 | Approved visual direction retained; focused rendered queue, runtime, support and task-reader checks. | Coherent complete desktop/mobile accessibility, empty/error/offline and shortcut journeys. Optional return briefing still requires its mockup gate. |
 | BFG Admin integration | Actual development-Hive text intake/receipt/reload retention accepted; [86](86-support-ui-acceptance.md). Admin readiness independently confirmed at e6a2167 on September 9. | One Swarm-UI fictional attachment submission and the existing fictional task's completion remain approval-gated below. No Admin worker communication is authorized; no customer reply is authorized by task closure. |
