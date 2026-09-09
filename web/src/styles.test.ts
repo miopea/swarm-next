@@ -8,6 +8,15 @@ declare const process: { cwd(): string };
 
 const stylesheet = readFileSync(`${process.cwd()}/src/styles.css`, "utf8");
 
+test("worker editor guidance wraps without changing compact roster summaries", () => {
+  const summary = stylesheet.match(/\.configured-worker small\s*\{([^}]+)\}/)?.[1];
+  const editor = stylesheet.match(/\.configured-worker \.worker-preference-form small\s*\{([^}]+)\}/)?.[1];
+  expect(summary).toMatch(/white-space:\s*nowrap/);
+  expect(editor).toMatch(/white-space:\s*normal/);
+  expect(editor).toMatch(/overflow:\s*visible/);
+  expect(editor).toMatch(/overflow-wrap:\s*anywhere/);
+});
+
 test("queue task buttons use themed text before hover or focus", () => {
   const rule = stylesheet.match(/\.queue-group li button\s*\{([^}]+)\}/)?.[1];
   expect(rule).toBeDefined();

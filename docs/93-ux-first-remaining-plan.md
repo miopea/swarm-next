@@ -26,6 +26,20 @@ retains readable worker names, bees, and separate edit/reorder controls. CI's
 prior run has completed (web failed on that old assertion); publish this
 corrected batch and verify the app-only deployment next.
 
+Deployment verified: `55e51327`, live
+`1.6.0-dev-55e513276534-20260909221157-3486945`, healthy with no degraded
+services. All 34 worker identity projections (12 running) and engine PID/start
+match exactly before/after; evidence `/tmp/swarm-worker-ux-deploy.4BdrNM`.
+Provider conversation IDs are not exposed by that projection. CI 34410878270 is
+running; do not cancel it by immediately pushing the next increment.
+
+Next queued visible fix: the phone worker editor inherited roster-summary
+ellipsis styling, clipping bee guidance and other small explanatory text.
+Scope wrapping to editor small text only, preserving compact closed rows.
+Edge 390px phone fixture shows the entire bee explanation after the fix;
+61 style/worker tests and production web build pass. Queue for the next coherent
+publication after current CI; continue UI-3/4 everyday journeys meanwhile.
+
 **Latest operator direction, evening:** stop the reload investigation. Prioritize
 visible improvements for ordinary users with one to five workers; incremental
 updates are welcome. Finish the already-running search-layout deployment, then

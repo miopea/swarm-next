@@ -1322,6 +1322,9 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .configured-worker { position: relative; }
 .configured-worker > span:nth-child(2) { display: grid; gap: 2px; min-width: 0; }
 .configured-worker small { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Roster summaries stay compact; editor guidance and safety warnings must be
+   readable in full, including on a phone. */
+.configured-worker .worker-preference-form small { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
 .configured-worker-summary { min-width: 0; }
 .configured-worker-summary .worker-routing-summary { margin-top: 2px; color: var(--muted); }
 .worker-edit-button { min-height: 34px; padding: 5px 10px; }
