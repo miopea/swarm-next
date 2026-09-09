@@ -750,6 +750,32 @@ test("offers a forced worker reload even when the worker engine is current", asy
   expect(onForceWorkerReload).toHaveBeenCalledOnce();
 });
 
+test.each([undefined, 0, 2])("forced reload describes the confirmed count %s without treating unavailable as zero", async (runningSessions) => {
+  const onForceWorkerReload = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).includes("terminal-host")) {
+      if (runningSessions === undefined) throw new Error("Engine unavailable");
+      return ok({ type: "host_status", status: {
+        protocol_version: 10, host_version: "1.6.0", draining: false,
+        running_sessions: runningSessions, retained_sessions: runningSessions,
+      } });
+    }
+    return ok({});
+  }));
+  render(<SettingsWorkspace {...minimalProps()} section="settings-updates" onForceWorkerReload={onForceWorkerReload} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Force worker reload" }));
+  expect(await screen.findByText(runningSessions === undefined
+    ? "Restart all loaded workers now?" : `Restart ${runningSessions} workers now?`)).toBeInTheDocument();
+  if (runningSessions === undefined) {
+    expect(screen.getByText(/running worker count could not be confirmed/)).toBeInTheDocument();
+    expect(screen.queryByText("Restart 0 workers now?")).not.toBeInTheDocument();
+  }
+  expect(screen.getByText(/recovery can need your attention/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+  expect(screen.queryByRole("group", { name: "Confirm forced worker reload" })).not.toBeInTheDocument();
+  expect(onForceWorkerReload).not.toHaveBeenCalled();
+});
+
 /**
  * Two version numbers and a Current badge reads as "you are behind" when the
  * engine has not changed at all. host_version is the version of the release the

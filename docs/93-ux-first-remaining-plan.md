@@ -40,6 +40,20 @@ claim about physical-device keyboard behavior. Focused tests: 11 navigation and
 This increment is local pending commit/deployment verification. Previous search-
 layout CI 34405066863 remains in progress; do not cancel it just to publish notes.
 
+### Clear restart consequences
+
+The full-App Updates fixture showed two running sessions but the unavailable-
+engine confirmation said `Restart 0 workers now?`. The confirmation now explicitly
+says all loaded workers when the count is unknown and warns that running work
+can still be interrupted. Confirmed zero and positive counts remain distinct.
+Recovery wording describes an attempt, not a guarantee of restored conversation.
+The execution path is unchanged. Desktop/phone fixture inspection covers the
+warning and Not now cancellation; no live worker restart was requested.
+SettingsWorkspace now has 28 passing tests, including unknown/zero/two-worker
+counts and cancellation without a callback. TypeScript and web build pass.
+Prior CI 34405066863 has now passed completely; the queued Settings changes can
+be published without cancelling it.
+
 ### September 9 evening checkpoint — local terminal layout correction
 
 The operator is applying a worker-engine update. Do not overlap it with another

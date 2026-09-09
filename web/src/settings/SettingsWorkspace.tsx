@@ -631,8 +631,9 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
                 ) : null}
                 {confirmForceReload ? (
                   <div className="maintenance-confirmation" role="group" aria-label="Confirm forced worker reload">
-                    <strong>Restart {activeWorkerCount} worker{activeWorkerCount === 1 ? "" : "s"} now?</strong>
-                    <span>Every live session ends and reconnects, which is what picks up a changed tool surface. Loaded workers come back from their saved conversations; identities, tasks and history are durable.</span>
+                    <strong>{terminalHostStatus ? `Restart ${activeWorkerCount} worker${activeWorkerCount === 1 ? "" : "s"} now?` : "Restart all loaded workers now?"}</strong>
+                    {!terminalHostStatus && <span>The running worker count could not be confirmed. This can still interrupt workers that are running.</span>}
+                    <span>This interrupts every loaded worker to refresh its available tools. Swarm attempts to restore saved conversations; recovery can need your attention. Worker identities, tasks and history are kept.</span>
                     <div className="settings-actions">
                       <button className="secondary-button" disabled={busy} onClick={() => setConfirmForceReload(false)}>Not now</button>
                       <button className="primary-action" disabled={busy} onClick={() => { setConfirmForceReload(false); void onForceWorkerReload(); }}>Restart every worker</button>
@@ -640,13 +641,8 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
                   </div>
                 ) : (
                   <>
-                    {/* NOT disabled on activeWorkerCount === 0. That count is
-                        terminalHostStatus.running_sessions, which is UNDEFINED
-                        until the host answers and falls to 0 — so disabling on
-                        it treats "I cannot tell yet" as "there is nothing to
-                        restart", which is the same shape as every other
-                        cannot-check-read-as-an-answer defect this Hive has
-                        chased. The confirmation states the count instead. */}
+                    {/* Unknown host status is not zero workers. Keep the explicit
+                        recovery action, with uncertainty stated before approval. */}
                     <button className="secondary-button" disabled={busy} onClick={() => setConfirmForceReload(true)}>Force worker reload</button>
                     <small>Reconnects every worker so a changed agent tool surface reaches them. Needed after an API update that adds or changes a tool, which the engine status above cannot show.</small>
                   </>
