@@ -20,6 +20,14 @@ import { demoDecision, demoTasks, demoWorkers } from "./productFixtures";
 const now = Math.floor(Date.now() / 1000);
 
 export function hiveFixture(path: string): unknown | undefined {
+  if (path === "/api/v1/orchestration/coordinator" && new URLSearchParams(window.location.search).get("startHold") === "1") return {
+    completed_actions: 0, queen_calls_avoided: 0, uncertain_actions: 0, queued_actions: 1,
+    stale_attention_actions: 0, worker_exit_attention_actions: 0, unstarted_attention_actions: 0,
+    last_action_at: null, automatic_start_admission: "deferred_advisory", automatic_start_batch_limit: 1,
+    held: [{ kind: "wake_not_admitted", subject: "wake:fictional-task", worker_name: "Orchard API",
+      reason: "Orchard API is waiting for the machine's memory pressure to ease before it can start.",
+      first_observed_at: now, observations: 1 }],
+  };
   const cpuOnlyPressure = new URLSearchParams(window.location.search).get("machinePressure") === "cpu-only";
   if (path === "/api/v1/runtime/queen-history") return {
     retention_days: 30, max_retained: 4096, retained_count: 0, records: [],

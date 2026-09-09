@@ -1644,7 +1644,7 @@ test("stops showing held work once the coordinator is holding none", async () =>
  * Ordinary held work now belongs to Queues. It must leave both the attention
  * page and its badge, without disappearing from the system's waiting evidence.
  */
-test("ordinary held delivery is queue evidence, not Needs you attention", async () => {
+test.each(["delivery_held_open_prompt", "wake_not_admitted"])("%s remains visible without inflating Needs you attention", async (kind) => {
   const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
@@ -1664,7 +1664,7 @@ test("ordinary held delivery is queue evidence, not Needs you attention", async 
       completed_actions: 0, queen_calls_avoided: 0, uncertain_actions: 0, queued_actions: 0,
       stale_attention_actions: 0, worker_exit_attention_actions: 0, unstarted_attention_actions: 0,
       last_action_at: null, automatic_start_admission: "allowed", automatic_start_batch_limit: 1,
-      held: [{ kind: "delivery_held_open_prompt", subject: "task-brief:t1", worker_name: "Claude Shared Config", reason: "a briefing is waiting", first_observed_at: 1_787_402_241, observations: 4 }],
+      held: [{ kind, subject: "task-brief:t1", worker_name: "Claude Shared Config", reason: "a briefing is waiting", first_observed_at: 1_787_402_241, observations: 4 }],
     }));
     if (url.includes("/api/v1/providers")) return Promise.resolve(ok({ claude_code: true, codex: false }));
     if (url.includes("/api/v1/preferences/presentation/desktop")) return Promise.resolve(ok({ device_class: "desktop", color_theme: "light", terminal_keys_visible: true, configured: true }));
@@ -1678,6 +1678,12 @@ test("ordinary held delivery is queue evidence, not Needs you attention", async 
   await screen.findByRole("heading", { name: "Nothing needs your attention" });
   await waitFor(() => expect(screen.getByRole("button", { name: /^Needs you/ })).toHaveTextContent("0"));
   expect(screen.queryByText(/has work waiting behind a prompt/)).not.toBeInTheDocument();
+  if (kind === "wake_not_admitted") {
+    const runtime = screen.getByRole("region", { name: "Runtime and system status" });
+    expect(within(runtime).getByLabelText("Worker start safeguards")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Work held by system safeguards")).not.toBeInTheDocument();
+    return;
+  }
   fireEvent.click(screen.getByRole("button", { name: /^Queues/ }));
   expect(await screen.findByText("Last observed hold: prompt not ready")).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Claude Shared Config" })).toBeInTheDocument();

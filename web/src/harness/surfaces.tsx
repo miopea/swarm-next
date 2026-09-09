@@ -725,6 +725,13 @@ export const SURFACES: Surface[] = [
       style={{ display: "block", width: 390, height: 844, border: 0 }} />,
   },
   {
+    id: "runtime-start-hold-phone",
+    title: "Phone runtime start safeguard",
+    why: "Fictional automatic start pause stays in runtime status, not in the operator decision count.",
+    render: () => <iframe title="Phone runtime safeguard preview" src="/harness.html?surface=app&screen=decisions&startHold=1"
+      style={{ display: "block", width: 390, height: 844, border: 0 }} />,
+  },
+  {
     id: "tasks",
     title: "Tasks",
     why: "the board, against invented work — the source for the README screenshot",

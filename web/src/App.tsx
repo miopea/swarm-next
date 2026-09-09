@@ -111,7 +111,8 @@ import QueenAutomationAttentionCard from "./orchestration/QueenAutomationAttenti
 import UnansweredEmailAttentionCard from "./tasks/UnansweredEmailAttentionCard";
 import HeldDeliveryAttentionCard from "./orchestration/HeldDeliveryAttentionCard";
 import WorkerReturnAttentionCard from "./workers/WorkerReturnAttentionCard";
-import { isQueuedDeliveryObservation } from "./orchestration/deliveryAttention";
+import { isQueuedDeliveryObservation, isRuntimeStartHold } from "./orchestration/deliveryAttention";
+import WorkerStartNotice from "./runtime/WorkerStartNotice";
 import { passkeysSupported, signInWithPasskey } from "./settings/passkeys";
 import { configureTerminalImageLimit } from "./terminal/TerminalAttachments";
 import { queenAutomationNeedsAttention } from "./orchestration/queenAutomationPresentation";
@@ -1565,7 +1566,8 @@ export function App() {
   // It was in the queue and in neither count, so "Needs you" read 0 with a card
   // plainly on the page. A badge that disagrees with the page teaches the
   // operator to stop believing the badge, which is the one thing it has to do.
-  const actionableHeldDeliveries = heldDeliveries.filter((held) => !isQueuedDeliveryObservation(held));
+  const runtimeStartHolds = heldDeliveries.filter(isRuntimeStartHold);
+  const actionableHeldDeliveries = heldDeliveries.filter((held) => !isQueuedDeliveryObservation(held) && !isRuntimeStartHold(held));
   const queuedDeliveryObservations = heldDeliveries.filter(isQueuedDeliveryObservation);
   const heldDeliveryAttentionCount = actionableHeldDeliveries.length > 0 ? 1 : 0;
   const workerReturnAttentionCount = workers.some((worker) => worker.return_attention) ? 1 : 0;
@@ -2041,6 +2043,7 @@ export function App() {
               shows something most of the day stops being read, which is the
               failure this exists to prevent. */}
           <MachinePressureBadge notice={machinePressure} />
+          <WorkerStartNotice held={runtimeStartHolds} unavailable={coordinatorUnavailable} onDiagnostics={() => { setSettingsQuery(""); openSettings("settings-maintenance"); }} />
           {operatorToken && machineResources.kind === "ready" ? <DailyBackupNotice status={machineResources.resources.daily_backup} onDetails={() => openSettings("settings-maintenance")} /> : null}
           {operatorToken && conversationChecksUnavailable ? (
             <div className="runtime-update-card" role="status">

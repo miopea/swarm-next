@@ -1808,6 +1808,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 /* Each update says what it is, what it will do, and offers to do it. The detail
    used to live in a title attribute, which is nothing at all on a phone. */
 .runtime-update-card { display: grid; width: 100%; min-width: 0; gap: 5px; padding: 8px 9px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel-soft); }
+.runtime-start-notice > summary { min-height: 32px; padding-block: 4px; cursor: pointer; overflow-wrap: anywhere; }
+.runtime-start-notice .runtime-update-detail { overflow-wrap: anywhere; font-size: .75rem; line-height: 1.5; }
 .runtime-update-card.costly { border-color: color-mix(in srgb, var(--bad) 42%, var(--line)); background: var(--bad-soft); }
 .runtime-update-label { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--text); font-size: .72rem; font-weight: 600; }
 .runtime-update-detail { margin: 0; color: var(--muted); font-size: .68rem; line-height: 1.4; }
@@ -2412,6 +2414,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .task-drop-strip { flex-wrap: wrap; }
   .shortcuts-card { grid-column: auto; }
   .terminal-toolbar { min-height: 44px; padding: 7px 12px; flex-wrap: wrap; gap: 8px; }
+  .runtime-start-notice > summary { min-height: 44px; padding-block: 10px; }
+  .runtime-start-notice .runtime-update-run { min-height: 44px; }
   .terminal-toolbar > div { gap: 8px; }
   .terminal-toolbar .terminal-worker-controls:empty { display: none; }
   .terminal-connection-summary > small { flex: 1 1 160px; }

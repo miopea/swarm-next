@@ -15,7 +15,7 @@ is historical where superseded by the verified deployment section.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-eb931114675e-20260909194140-3319797`.
+- App/API: `1.6.0-dev-221e66cdec78-20260909201955-3383452`.
 - Engine: current PID 2947820, started September 9 at 12:37:54 Eastern. The
   earlier continuity checkpoint retained PID 2271655; this later restart's
   initiator has not been established by the current read-only check.
@@ -28,6 +28,18 @@ is historical where superseded by the verified deployment section.
 - No release is authorized. No customer-facing send is authorized by task closure.
 
 ## Requirement-by-requirement disposition
+
+### September 9 terminal controls deployment
+
+`221e66cd` is live; full CI `34400256735` passed. Evidence in
+`/tmp/swarm-ui2-deploy.G5GcQu` confirms identical worker identity projections,
+twelve running session/provider identities and unchanged engine PID/start time.
+The new build is healthy and visible in Edge. The browser does not expose native
+provider conversation IDs through this projection. Controls layout, optional
+storage refusal and draft-state regressions are verified as described in [93](93-ux-first-remaining-plan.md).
+Desktop reload jumping, native mobile/picker acceptance and the direct-worker
+Needs You reconciliation gap remain open; do not infer their completion from
+this presentation batch. No release or engine activation was requested.
 
 ### September 9 UI-first package checkpoint
 

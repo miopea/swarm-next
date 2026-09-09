@@ -175,7 +175,11 @@ and real TerminalView Resume Here preserving an unsent draft. Transport and
 redraw callbacks in these fixtures are fictional; this is not a provider or
 native-device acceptance. These checks do not close the reload-jump, attachment
 picker, actual keyboard/suspension or cross-device geometry requirements below.
-Deployment and current CI must be recorded separately after activation.
+Deployed `221e66cd` as `1.6.0-dev-221e66cdec78-20260909201955-3383452`.
+All 34 worker identities and twelve running session/provider identities match
+before/after; engine PID 2947820 and its start time are unchanged. Health is good
+and Edge loaded the new runtime. Evidence: `/tmp/swarm-ui2-deploy.G5GcQu`.
+Full CI `34400256735` passed all four jobs. No engine update or release occurred.
 
 1. Prioritize the reported desktop reload jump and visible restore latency.
    Reproduce using the actual terminal renderer, recorded geometry/ownership
@@ -204,6 +208,21 @@ unchanged case. Missing native-device checks stay in the release-risk checklist.
 ### UI-3 — Settings, runtime and recovery feel like the same product
 
 Requirements: ATT-02, DIAG-01, DOG-01 presentation, PRES-01, PROV-01, UX-01.
+
+September 9 runtime checkpoint: known `wake_not_admitted` observations are now
+projected into one collapsed runtime safeguard notice rather than a Needs You
+card/count. The resource safety rules and coordinator recovery are unchanged.
+Uncertain wakes and unknown hold kinds remain attention; genuine decisions keep
+their own cards. A failed observation retains and labels the last-known holds;
+authoritative recovery removes the notice without acknowledgement. Reasons are
+deduplicated, and diagnostics opens the existing maintenance section.
+
+Seventy-two focused tests pass, including full-App queue/runtime placement and
+badge consistency, explicit failure/recovery, and unknown-kind preservation.
+TypeScript passes. Edge full-App fictional desktop and 390px phone journeys show
+one decision plus a separate runtime start pause, expandable reasons, and correct
+diagnostics navigation. Current build/deployment evidence remains required for
+this runtime change; this does not close the entire Settings/finish package.
 
 1. Use the runtime area as the compact home for system state. Avoid duplicate
    warnings and conflicting attention counts; disappearance after recovery needs
