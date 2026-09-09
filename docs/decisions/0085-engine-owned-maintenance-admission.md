@@ -99,6 +99,18 @@ that the incident's exact last-screen contents were recovered.
 
 ## Provider evidence constraint
 
+### Explicit-stop serialization prerequisite
+
+An explicitly authorized single-session stop must use the same engine control
+guard as input, resize and ownership acquisition. A successful stop leaves a
+session-local tombstone: subsequent input/control effects are refused, while
+canonical output and final conversation evidence remain readable. Failed stops
+release the guard without claiming success; successful retries do not repeat a
+kill. The stop lock order is control, child, then provider lifecycle; terminal
+output locks are not held during termination. This closes the individual stop
+race, not the all-session admission requirement. It does not turn a Resting
+screen into automatic-stop authority or enable automatic loaded-engine updates.
+
 The Claude hook reference checked September 8 documents `background_tasks` and
 `session_crons` on Stop, but also parallel hook execution and Stop hooks that can
 continue the conversation. A received Stop callback is therefore not by itself

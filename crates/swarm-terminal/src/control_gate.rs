@@ -1,7 +1,14 @@
 //! Engine-owned serialization of authority and terminal effects (ADR 0062).
 //! Effect callbacks must not reenter this gate. No socket/API lifetime owns it.
 
-use std::{convert::Infallible, sync::Mutex, time::Instant};
+use std::{
+    convert::Infallible,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Instant,
+};
 
 use swarm_domain::{
     TerminalControl, TerminalControlError, TerminalControlGrant, TerminalControlIdentity,
@@ -13,12 +20,14 @@ pub(crate) enum ControlGateError<E> {
     Authority(TerminalControlError),
     GenerationRequired,
     Poisoned,
+    Stopped,
     Effect(E),
 }
 
 #[derive(Debug)]
 pub(crate) struct TerminalControlGate {
     control: Mutex<TerminalControl>,
+    stopped: AtomicBool,
     epoch: Instant,
 }
 
@@ -26,12 +35,40 @@ impl Default for TerminalControlGate {
     fn default() -> Self {
         Self {
             control: Mutex::new(TerminalControl::default()),
+            stopped: AtomicBool::new(false),
             epoch: Instant::now(),
         }
     }
 }
 
 impl TerminalControlGate {
+    // Called only while the control mutex is held, including the stop effect.
+    fn require_running<E>(&self) -> Result<(), ControlGateError<E>> {
+        if self.stopped.load(Ordering::Acquire) {
+            return Err(ControlGateError::Stopped);
+        }
+        Ok(())
+    }
+
+    /// Explicitly authorized stop, not automatic-maintenance admission. The
+    /// effect and its terminal tombstone serialize with every input/control path.
+    /// Failed stops leave control available; a successful stop is never repeated.
+    pub(crate) fn stop<E>(
+        &self,
+        effect: impl FnOnce() -> Result<(), E>,
+    ) -> Result<(), ControlGateError<E>> {
+        let _control = self
+            .control
+            .lock()
+            .map_err(|_| ControlGateError::Poisoned)?;
+        if self.stopped.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        effect().map_err(ControlGateError::Effect)?;
+        self.stopped.store(true, Ordering::Release);
+        Ok(())
+    }
+
     fn now(&self) -> u64 {
         u64::try_from(self.epoch.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
@@ -51,7 +88,12 @@ impl TerminalControlGate {
             .lock()
             .map_err(|_| ControlGateError::Poisoned)?;
         let now = self.now();
-        Ok((control.generation(), control.owner(now), now))
+        let owner = if self.stopped.load(Ordering::Acquire) {
+            None
+        } else {
+            control.owner(now)
+        };
+        Ok((control.generation(), owner, now))
     }
 
     pub(crate) fn claim<E>(
@@ -65,6 +107,7 @@ impl TerminalControlGate {
             .lock()
             .map_err(|_| ControlGateError::Poisoned)?;
         let mut proposed = *control;
+        self.require_running()?;
         let now = self.now();
         let grant = match observed_generation {
             Some(generation) => proposed.take_over(identity, generation, now),
@@ -87,6 +130,7 @@ impl TerminalControlGate {
             .lock()
             .map_err(|_| ControlGateError::Poisoned)?;
         let mut proposed = *control;
+        self.require_running()?;
         proposed
             .renew(
                 identity,
@@ -110,6 +154,7 @@ impl TerminalControlGate {
             .control
             .lock()
             .map_err(|_| ControlGateError::Poisoned)?;
+        self.require_running()?;
         control
             .authorize(identity, generation, self.now())
             .map_err(ControlGateError::Authority)?;
@@ -121,9 +166,12 @@ impl TerminalControlGate {
         identity: TerminalControlIdentity,
         generation: u64,
     ) -> Result<TerminalControlGrant, ControlGateError<Infallible>> {
-        self.control
+        let mut control = self
+            .control
             .lock()
-            .map_err(|_| ControlGateError::Poisoned)?
+            .map_err(|_| ControlGateError::Poisoned)?;
+        self.require_running()?;
+        control
             .renew(
                 identity,
                 generation,
@@ -157,6 +205,7 @@ impl TerminalControlGate {
             .control
             .lock()
             .map_err(|_| ControlGateError::Poisoned)?;
+        self.require_running()?;
         if control.generation() != 0 && (!coordination || control.owner(self.now()).is_some()) {
             return Err(ControlGateError::GenerationRequired);
         }
@@ -306,5 +355,115 @@ mod tests {
             Err(ControlGateError::GenerationRequired)
         );
         gate.legacy(true, || effect_while_locked(&gate)).unwrap();
+    }
+
+    #[test]
+    fn stopped_session_rejects_every_effect_and_remains_readable() {
+        let gate = TerminalControlGate::default();
+        let desktop = identity();
+        let grant = gate.claim(desktop, None, || Ok::<_, &str>(())).unwrap();
+        gate.stop(|| effect_while_locked(&gate)).unwrap();
+        assert_eq!(gate.status().unwrap(), (grant.generation, None));
+        assert_eq!(
+            gate.claim(identity(), Some(grant.generation), || Ok::<_, &str>(())),
+            Err(ControlGateError::Stopped)
+        );
+        assert_eq!(
+            gate.input(desktop, grant.generation, || panic!("stopped input")),
+            Err::<(), ControlGateError<()>>(ControlGateError::Stopped)
+        );
+        assert_eq!(
+            gate.resize(desktop, grant.generation, || panic!("stopped resize")),
+            Err::<(), ControlGateError<()>>(ControlGateError::Stopped)
+        );
+        assert_eq!(
+            gate.renew(desktop, grant.generation),
+            Err(ControlGateError::Stopped)
+        );
+        for coordination in [false, true] {
+            assert_eq!(
+                gate.legacy(coordination, || panic!("stopped legacy effect")),
+                Err::<(), ControlGateError<()>>(ControlGateError::Stopped)
+            );
+        }
+        gate.stop(|| panic!("successful stop must not repeat"))
+            .unwrap_or_else(|_: ControlGateError<()>| panic!("idempotent stop"));
+    }
+
+    #[test]
+    fn failed_stop_releases_guard_without_disabling_input() {
+        let gate = TerminalControlGate::default();
+        let desktop = identity();
+        let grant = gate.claim(desktop, None, || Ok::<_, &str>(())).unwrap();
+        assert_eq!(
+            gate.stop(|| Err("kill failed")),
+            Err(ControlGateError::Effect("kill failed"))
+        );
+        gate.input(desktop, grant.generation, || effect_while_locked(&gate))
+            .unwrap();
+        gate.stop(|| effect_while_locked(&gate)).unwrap();
+    }
+
+    #[test]
+    fn accepted_input_finishes_before_concurrent_stop_effect() {
+        use std::sync::{Barrier, mpsc};
+        let gate = TerminalControlGate::default();
+        let entered = Barrier::new(2);
+        let release = Barrier::new(2);
+        let (events, received) = mpsc::channel();
+        std::thread::scope(|scope| {
+            let input = scope.spawn(|| {
+                gate.legacy(false, || {
+                    entered.wait();
+                    release.wait();
+                    events.send("input").unwrap();
+                    Ok::<_, &str>(())
+                })
+            });
+            entered.wait();
+            let stop = scope.spawn(|| {
+                gate.stop(|| {
+                    events.send("stop").unwrap();
+                    Ok::<_, &str>(())
+                })
+            });
+            assert!(matches!(
+                gate.control.try_lock(),
+                Err(TryLockError::WouldBlock)
+            ));
+            release.wait();
+            input.join().unwrap().unwrap();
+            stop.join().unwrap().unwrap();
+        });
+        assert_eq!(received.try_iter().collect::<Vec<_>>(), ["input", "stop"]);
+    }
+
+    #[test]
+    fn input_waiting_behind_stop_is_rejected_without_its_effect() {
+        use std::sync::Barrier;
+        let gate = TerminalControlGate::default();
+        let entered = Barrier::new(2);
+        let release = Barrier::new(2);
+        std::thread::scope(|scope| {
+            let stop = scope.spawn(|| {
+                gate.stop(|| {
+                    entered.wait();
+                    release.wait();
+                    Ok::<_, &str>(())
+                })
+            });
+            entered.wait();
+            let input = scope.spawn(|| gate.legacy(false, || panic!("must not write after stop")));
+            assert!(matches!(
+                gate.control.try_lock(),
+                Err(TryLockError::WouldBlock)
+            ));
+            release.wait();
+            stop.join().unwrap().unwrap();
+            assert_eq!(
+                input.join().unwrap(),
+                Err::<(), ControlGateError<()>>(ControlGateError::Stopped)
+            );
+        });
     }
 }

@@ -2,6 +2,30 @@
 
 ## Current checkpoint — September 8, after Admin intake acceptance
 
+### Explicit-stop input/control fence, September 9
+
+Engine stopping previously bypassed the control guard used by input and takeover.
+A real-PTY regression reproduced a retained stopped session still reporting its
+old control grant. The candidate serializes an explicitly authorized stop with
+those effects and permanently refuses later writes, resize, acquisition and
+renewal after a successful stop. Final output remains readable. Barrier-based
+tests cover input winning before stop, stop winning before input, failed-stop
+recovery and idempotent successful stops. The terminal suite passes 135 tests
+(one explicit profiling test ignored); strict all-target/all-feature terminal
+Clippy passes. All 27 host-adapter tests also pass. Live activation is pending.
+
+This is a prerequisite for ADR 0085, not automatic loaded-engine update admission.
+Provider completion evidence, all-session atomic admission, durable return
+obligations and planned live conversation-return verification remain open. No
+engine restart has been performed for this candidate.
+
+Admin's feedback conversation-ID correction is deployed as `3a0f8bd`; its single
+saved fictional request still has no Swarm task receipt because the Admin browser
+now requires operator sign-in. Preserve that request and its original provenance;
+do not create another fixture, bypass sign-in or send customer messages. This is
+a specific integration acceptance blocker, not a blocker to independent maturity
+work. Swarm's binding is already enabled under the operator's approval.
+
 ### Session-replacement review churn, September 8 late evening
 
 The operator confirmed manually applying the engine update at 21:25 Eastern.

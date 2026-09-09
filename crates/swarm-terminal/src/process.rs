@@ -878,6 +878,14 @@ impl ProcessTerminalSession {
     /// # Errors
     /// Returns process or poisoned-lock failures.
     pub fn stop(&self) -> Result<(), SessionRegistryError> {
+        self.control
+            .stop(|| self.stop_unchecked())
+            .map_err(control_error)?;
+        self.control_changes.send_replace(());
+        Ok(())
+    }
+
+    fn stop_unchecked(&self) -> Result<(), SessionRegistryError> {
         let mut child = lock(&self.child)?;
         lock(&self.startup_failure)?.disarm();
         if let Some(gate) = lock(&self.provider_lifecycle)?.as_mut() {
@@ -1763,6 +1771,9 @@ fn control_error<E: std::fmt::Display>(error: ControlGateError<E>) -> SessionReg
         ControlGateError::Authority(reason) => SessionRegistryError::ControlDenied(reason),
         ControlGateError::GenerationRequired => SessionRegistryError::ControlGenerationRequired,
         ControlGateError::Poisoned => SessionRegistryError::LockPoisoned,
+        ControlGateError::Stopped => SessionRegistryError::Terminal(
+            "terminal session has been stopped; input was not delivered".into(),
+        ),
         ControlGateError::Effect(error) => terminal_error(error),
     }
 }
@@ -1812,6 +1823,48 @@ pub(crate) mod control_tests {
             panic!("fresh snapshot required")
         };
         TerminalSize::new(snapshot.rows, snapshot.columns)
+    }
+
+    #[test]
+    fn retained_stop_revokes_control_but_preserves_final_snapshot() {
+        let (registry, session) = fixture();
+        let desktop = identity();
+        let grant = session
+            .claim_control(desktop, None, TerminalSize::new(24, 100))
+            .unwrap();
+        session.stop_retained().unwrap();
+        assert_eq!(session.control_status().unwrap(), (grant.generation, None));
+        assert!(
+            session
+                .claim_control(
+                    identity(),
+                    Some(grant.generation),
+                    TerminalSize::new(40, 36)
+                )
+                .is_err()
+        );
+        assert!(
+            session
+                .resize_controlled(desktop, grant.generation, TerminalSize::new(40, 36))
+                .is_err()
+        );
+        assert!(
+            registry
+                .write_controlled(
+                    session.id(),
+                    desktop,
+                    grant.generation,
+                    b"must not reach stopped provider"
+                )
+                .is_err()
+        );
+        assert_eq!(
+            registry.recent_write_audit(1).unwrap()[0].result,
+            TerminalWriteResult::Rejected
+        );
+        assert_eq!(size(&session), TerminalSize::new(24, 100));
+        session.stop_retained().unwrap();
+        assert!(session.stop_pending_release.load(Ordering::Acquire));
     }
 
     #[test]
