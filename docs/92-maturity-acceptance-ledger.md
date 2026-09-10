@@ -1,5 +1,27 @@
 # Current maturity acceptance ledger
 
+## September 10 — answer controls and update recovery
+
+Deployed App/API `1.7.0-dev-6ac6c14543de-20260910171052-580861` is healthy.
+Engine PID565859 and its 12:54:56 Eastern start are unchanged across this ordinary
+reload;13 running/retained sessions remain,not draining,0 unreadable. Its engine
+build ID still matches the API. The restored development watcher is active.
+
+Four new regressions failed before the answer-control fix: question headers
+`constructor`, `toString`, and `__proto__` crashed rendering; option `__other__`
+incorrectly opened custom input. Map-backed selections and a non-string internal
+sentinel preserve those literal values. All101 affected tests pass, plus TypeScript
+and the production web build. Edge's fictional free-text journey submitted the
+exact entered text. The form now describes unanswered fields without asserting
+that a worker is currently waiting. This does not close native decision reconciliation.
+
+Edge also verified fictional support review, Close -> Keep editing draft retention,
+and pending submission wording. No central message,email,or diagnostics were sent.
+These checks are not an end-to-end BFG Admin delivery/approved-reply acceptance.
+Owned browser tabs were closed. CI34506586132 has passing web,package,and audit
+jobs;Rust remains in progress at this checkpoint. The preceding revision's Rust
+job failed formatting only;the standard formatter correction is included here.
+
 Checkpoint: September 10, 2026. Scope remains [45](45-daily-driver-maturity-plan.md),
 including BFG Admin integration. This is a routing index over evidence, not a
 replacement specification or a declaration that partially verified rows are done.
