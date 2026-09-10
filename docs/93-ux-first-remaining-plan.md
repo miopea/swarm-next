@@ -4,6 +4,15 @@
 
 ### Latest priority: guided enrollment, then workspace setup
 
+DEPLOYMENT VERIFIED: f0934172 is on main and live on production-dev. Reload
+service completed successfully at19:08:28 Eastern; health reports
+1.7.1-dev-f0934172f55b-20260910230613-832149, statusok and no degraded conditions.
+API PID833844 is active. Engine PID765103/start17:19:01 unchanged before and after;
+no engine restart occurred. Do NOT rerun this update. CI run34540590845 has passed
+fullweb and linux-package jobs; Rust test job still in progress at last check.
+No release was cut. Existing WSL membership has not been touched. Final UI build
+and35 focused tests pass; broader109 App/settings tests and strict API lint passed.
+
 HTTP acceptance now passes in the isolated Linux checkout: a Hive with NO Jira
 configuration sends the signed join to an actual test HTTP Keeper, becomes a
 member, reconciles its catalog and shared Swarm task, and exchanges the directory.
