@@ -156,9 +156,9 @@ export async function changeTaskPrerequisite(operatorToken: string, taskId: stri
   prerequisite_id: string;
   operation: "add" | "remove";
   reason: string;
-}): Promise<Task> {
+}, signal?: AbortSignal): Promise<Task> {
   const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/prerequisites`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input), signal,
   });
   return response.json() as Promise<Task>;
 }

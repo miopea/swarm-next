@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { changeTaskPrerequisite, type Task } from "../api/tasks";
 import { RuntimeRequestError } from "../api/request";
 import { useModalFocus } from "../shared/useModalFocus";
@@ -20,13 +20,23 @@ export default function TaskPrerequisiteDialog({ task, candidates, operatorToken
   const [reason, setReason] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [uncertain, setUncertain] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   const submitting = useRef(false);
+  const request = useRef<AbortController | undefined>(undefined);
+  const deadline = useRef<number | undefined>(undefined);
+  useEffect(() => () => {
+    const pending = request.current;
+    request.current = undefined;
+    submitting.current = false;
+    window.clearTimeout(deadline.current);
+    pending?.abort();
+  }, []);
   const dirty = Boolean(target || reason.trim());
   function requestClose() {
     if (submitting.current) return;
     if (confirmClose) return setConfirmClose(false);
-    if (dirty) return setConfirmClose(true);
+    if (dirty || uncertain) return setConfirmClose(true);
     onClose();
   }
   const dialog = useModalFocus<HTMLElement>(requestClose);
@@ -46,21 +56,42 @@ export default function TaskPrerequisiteDialog({ task, candidates, operatorToken
     event.preventDefault();
     if (!valid || submitting.current || confirmClose) return;
     submitting.current = true;
+    const controller = new AbortController();
+    request.current = controller;
+    const timer = window.setTimeout(() => {
+      if (request.current !== controller) return;
+      request.current = undefined;
+      submitting.current = false;
+      deadline.current = undefined;
+      controller.abort();
+      setSaving(false);
+      setUncertain(true);
+      setError("The change could not be confirmed before the request timed out. Your choices are still here; check the task before retrying.");
+    }, 8_000);
+    deadline.current = timer;
     setSaving(true);
     setError("");
     try {
       const updated = await changeTaskPrerequisite(operatorToken, task.id, {
         prerequisite_id: target, operation, reason: reason.trim(),
-      });
+      }, controller.signal);
+      if (request.current !== controller || controller.signal.aborted) return;
       onChanged(updated);
       onClose();
     } catch (failure) {
+      if (request.current !== controller) return;
+      if (!(failure instanceof RuntimeRequestError && failure.status === 409)) setUncertain(true);
       setError(failure instanceof RuntimeRequestError && failure.status === 409
         ? `Swarm refused this change. ${failure.message}`
         : "The change could not be confirmed. Your choices are still here; check the task before retrying.");
     } finally {
-      submitting.current = false;
-      setSaving(false);
+      window.clearTimeout(timer);
+      if (request.current === controller) {
+        request.current = undefined;
+        deadline.current = undefined;
+        submitting.current = false;
+        setSaving(false);
+      }
     }
   }
   return <ModalPortal><div className="task-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}>
@@ -92,7 +123,7 @@ export default function TaskPrerequisiteDialog({ task, candidates, operatorToken
           {error && <p role="alert" className="task-detail-save-error">{error}</p>}
         </section>
       </form>
-      <footer>{confirmClose ? <UnsavedChangesPrompt label="Unsaved prerequisite change" description="Your current choices will be discarded." onDiscard={onClose} onKeep={() => setConfirmClose(false)} /> : <button form={`${id}-form`} disabled={saving || !valid}>{saving ? "Saving…" : operation === "add" ? "Add prerequisite" : "Remove prerequisite"}</button>}</footer>
+      <footer>{confirmClose ? <UnsavedChangesPrompt label={uncertain ? "Close unconfirmed prerequisite change?" : "Unsaved prerequisite change"} description={uncertain ? "Closing discards only this local draft. The server may already have applied the change; check task history before editing again." : "Your current choices will be discarded."} discardLabel={uncertain ? "Close and check task" : "Discard changes"} onDiscard={onClose} onKeep={() => setConfirmClose(false)} /> : <button form={`${id}-form`} disabled={saving || !valid}>{saving ? "Saving…" : operation === "add" ? "Add prerequisite" : "Remove prerequisite"}</button>}</footer>
     </section>
   </div></ModalPortal>;
 }

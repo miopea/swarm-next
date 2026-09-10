@@ -60,6 +60,14 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   // what lets the WHOLE APP mount here instead of a single card. Everything
   // else keeps answering empty.
   const path = url.split("?")[0];
+  if (new URLSearchParams(window.location.search).get("prerequisiteSave") === "held"
+    && /^\/api\/v1\/tasks\/[^/]+\/prerequisites$/.test(path) && init?.method === "POST") {
+    return new Promise((_resolve, reject) => {
+      const abort = () => reject(new DOMException("Fictional prerequisite wait cancelled", "AbortError"));
+      if (init.signal?.aborted) abort();
+      else init.signal?.addEventListener("abort", abort, { once: true });
+    });
+  }
   const recovery = sessionRecoveryResponse(path);
   if (recovery) return recovery;
   const preview = taskPreviewFixtureResponse(path, init);

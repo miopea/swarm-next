@@ -52,8 +52,9 @@ test("prerequisite changes encode identity and send only the explicit operation 
   const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(task)));
   vi.stubGlobal("fetch", fetch);
   const input = { prerequisite_id: "contract", operation: "remove" as const, reason: "No longer needed" };
-  await expect(changeTaskPrerequisite("operator", task.id, input)).resolves.toEqual(task);
-  expect(fetch).toHaveBeenCalledWith("/api/v1/tasks/task%2Fone/prerequisites", expect.objectContaining({ method: "POST", body: JSON.stringify(input), cache: "no-store" }));
+  const controller = new AbortController();
+  await expect(changeTaskPrerequisite("operator", task.id, input, controller.signal)).resolves.toEqual(task);
+  expect(fetch).toHaveBeenCalledWith("/api/v1/tasks/task%2Fone/prerequisites", expect.objectContaining({ method: "POST", body: JSON.stringify(input), cache: "no-store", signal: controller.signal }));
 });
 
 test("task activity forwards its owner's cancellation signal", async () => {

@@ -1,11 +1,11 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { changeTaskPrerequisite, type Task } from "../api/tasks";
 import { RuntimeRequestError } from "../api/request";
 import TaskPrerequisiteDialog from "./TaskPrerequisiteDialog";
 
 vi.mock("../api/tasks", async (original) => ({ ...await original<typeof import("../api/tasks")>(), changeTaskPrerequisite: vi.fn() }));
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.useRealTimers(); });
 beforeEach(() => { vi.mocked(changeTaskPrerequisite).mockReset(); });
 const task: Task = { id: "consumer", hive_id: "hive", title: "Consumer", state: "blocked", description: "", operator_instruction: "", priority: "normal", workspace: "/demo", assigned_worker_id: null, assigned_session_id: null, position: 0, created_at: 1, updated_at: 1 };
 const upstream: Task = { ...task, id: "contract", title: "Shared contract", state: "ready" };
@@ -36,7 +36,7 @@ test.each(["blocked", "review"] as const)("sends one explicit audited change for
   choose();
   fireEvent.click(screen.getByRole("button", { name: "Add prerequisite" }));
   await waitFor(() => expect(props.onChanged).toHaveBeenCalledWith(updated));
-  expect(changeTaskPrerequisite).toHaveBeenCalledExactlyOnceWith("token", task.id, { prerequisite_id: upstream.id, operation: "add", reason: "Need the agreed contract" });
+  expect(changeTaskPrerequisite).toHaveBeenCalledExactlyOnceWith("token", task.id, { prerequisite_id: upstream.id, operation: "add", reason: "Need the agreed contract" }, expect.any(AbortSignal));
   expect(props.onClose).toHaveBeenCalledOnce();
 });
 test("keeps input after refusal and guards accidental dismissal", async () => {
@@ -60,7 +60,7 @@ test("allows removal of a removed upstream task without changing the source life
   choose();
   fireEvent.click(screen.getByRole("button", { name: "Remove prerequisite" }));
   await waitFor(() => expect(props.onChanged).toHaveBeenCalledWith({ ...source, prerequisites: [] }));
-  expect(changeTaskPrerequisite).toHaveBeenCalledWith("token", task.id, { prerequisite_id: upstream.id, operation: "remove", reason: "Need the agreed contract" });
+  expect(changeTaskPrerequisite).toHaveBeenCalledWith("token", task.id, { prerequisite_id: upstream.id, operation: "remove", reason: "Need the agreed contract" }, expect.any(AbortSignal));
 });
 test("bounds candidate options and excludes self and foreign Hive tasks", () => {
   const candidates = Array.from({ length: 70 }, (_, index) => ({ ...upstream, id: `c${index}`, title: `Contract ${index}` }));
@@ -85,6 +85,32 @@ test("does not dismiss or submit twice while the request is pending", async () =
   await waitFor(() => expect(props.onClose).toHaveBeenCalledOnce());
 });
 
+test("a stalled save releases the editor at its deadline without replay or late success", async () => {
+  vi.useFakeTimers();
+  let finish!: (task: Task) => void;
+  vi.mocked(changeTaskPrerequisite).mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+  const { props } = mount();
+  choose();
+  fireEvent.click(screen.getByRole("button", { name: "Add prerequisite" }));
+  await act(async () => { vi.advanceTimersByTime(8_000); });
+  expect(screen.getByRole("button", { name: "Close" })).toBeEnabled();
+  expect(screen.getByRole("alert")).toHaveTextContent("could not be confirmed");
+  expect(screen.getByLabelText("Why change this link?")).toHaveValue("Need the agreed contract");
+  expect(changeTaskPrerequisite).toHaveBeenCalledOnce();
+  expect(vi.mocked(changeTaskPrerequisite).mock.calls[0][3]?.aborted).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  expect(screen.getByRole("alertdialog", { name: "Close unconfirmed prerequisite change?" })).toHaveTextContent("server may already have applied");
+  fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+  await act(async () => { finish({ ...task, prerequisites: [edge] }); });
+  expect(props.onChanged).not.toHaveBeenCalled();
+  expect(props.onClose).not.toHaveBeenCalled();
+  expect(screen.getByRole("alert")).toHaveTextContent("could not be confirmed");
+  fireEvent.change(screen.getByLabelText("Prerequisite task"), { target: { value: "" } });
+  fireEvent.change(screen.getByLabelText("Why change this link?"), { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  expect(screen.getByRole("alertdialog", { name: "Close unconfirmed prerequisite change?" })).toBeInTheDocument();
+});
+
 test("rechecks task eligibility when live state changes while editing", () => {
   const { props, rerender } = mount();
   choose();
@@ -92,6 +118,20 @@ test("rechecks task eligibility when live state changes while editing", () => {
   expect(screen.getByRole("button", { name: "Add prerequisite" })).toBeDisabled();
   expect(screen.getByLabelText("Why change this link?")).toHaveValue("Need the agreed contract");
   expect(changeTaskPrerequisite).not.toHaveBeenCalled();
+});
+
+test("unmount cancels a save and ignores late callbacks", async () => {
+  let finish!: (task: Task) => void;
+  vi.mocked(changeTaskPrerequisite).mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+  const { props, unmount } = mount();
+  choose();
+  fireEvent.click(screen.getByRole("button", { name: "Add prerequisite" }));
+  const signal = vi.mocked(changeTaskPrerequisite).mock.calls[0][3];
+  unmount();
+  expect(signal?.aborted).toBe(true);
+  await act(async () => finish({ ...task, prerequisites: [edge] }));
+  expect(props.onChanged).not.toHaveBeenCalled();
+  expect(props.onClose).not.toHaveBeenCalled();
 });
 
 test("retains choices without claiming success after an uncertain response", async () => {
