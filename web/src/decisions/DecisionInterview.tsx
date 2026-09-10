@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import type { DecisionQuestion } from "../api";
 
-const OTHER = "__other__";
+const OTHER = Symbol("custom answer");
 
 function optionDescription(question: DecisionQuestion, option: string): string {
   const descriptions = question.option_descriptions;
@@ -39,38 +39,35 @@ export default function DecisionInterview(props: DecisionInterviewProps) {
 }
 
 function InterviewAnswers({ questions, busy, onAnswer }: DecisionInterviewProps) {
-  const [choices, setChoices] = useState<Record<string, string[]>>({});
-  const [other, setOther] = useState<Record<string, string>>({});
+  const [choices, setChoices] = useState<Map<string, (string | typeof OTHER)[]>>(() => new Map());
+  const [other, setOther] = useState<Map<string, string>>(() => new Map());
   const [note, setNote] = useState("");
 
   const answerFor = (question: DecisionQuestion): string[] => {
-    const chosen = choices[question.header] ?? [];
-    const written = (other[question.header] ?? "").trim();
+    const chosen = choices.get(question.header) ?? [];
+    const written = (other.get(question.header) ?? "").trim();
     const resolved = chosen.filter((value) => value !== OTHER);
     if (chosen.includes(OTHER) && written) resolved.push(written);
     return resolved;
   };
   const answers = Object.fromEntries(questions.map((q) => [q.header, answerFor(q)]));
   const unanswered = questions.filter((q) => answers[q.header].length === 0
-    || ((choices[q.header] ?? []).includes(OTHER) && !(other[q.header] ?? "").trim()));
+    || ((choices.get(q.header) ?? []).includes(OTHER) && !(other.get(q.header) ?? "").trim()));
 
-  function choose(question: DecisionQuestion, option: string) {
+  function choose(question: DecisionQuestion, option: string | typeof OTHER) {
     setChoices((current) => {
-      const held = current[question.header] ?? [];
-      if (!question.multi_select) return { ...current, [question.header]: [option] };
-      return {
-        ...current,
-        [question.header]: held.includes(option)
+      const held = current.get(question.header) ?? [];
+      if (!question.multi_select) return new Map(current).set(question.header, [option]);
+      return new Map(current).set(question.header, held.includes(option)
           ? held.filter((value) => value !== option)
-          : [...held, option],
-      };
+          : [...held, option]);
     });
   }
 
   return (
     <div className="decision-interview">
       {questions.map((question) => {
-        const held = choices[question.header] ?? [];
+        const held = choices.get(question.header) ?? [];
         return (
           <fieldset key={question.header} className="decision-question">
             <legend>{question.header}</legend>
@@ -104,10 +101,10 @@ function InterviewAnswers({ questions, busy, onAnswer }: DecisionInterviewProps)
                 <span>Your answer</span>
                 <input
                   required
-                  value={other[question.header] ?? ""}
+                  value={other.get(question.header) ?? ""}
                   maxLength={200}
                   disabled={busy}
-                  onChange={(event) => setOther((current) => ({ ...current, [question.header]: event.target.value }))}
+                  onChange={(event) => setOther((current) => new Map(current).set(question.header, event.target.value))}
                 />
               </label>
             ) : null}
@@ -130,8 +127,7 @@ function InterviewAnswers({ questions, busy, onAnswer }: DecisionInterviewProps)
         >Send answers</button>
         {unanswered.length > 0 ? (
           <small role="status">
-            {unanswered.length} of {questions.length} still to answer: {unanswered.map((q) => q.header).join(", ")}. The worker is
-            waiting on all of them.
+            {unanswered.length} of {questions.length} still to answer: {unanswered.map((q) => q.header).join(", ")}. Answer each question before sending.
           </small>
         ) : null}
       </div>

@@ -5,6 +5,26 @@ import DecisionInterview from "./DecisionInterview";
 
 afterEach(cleanup);
 
+test.each(["constructor", "toString", "__proto__"])("question header %s remains answerable", (header) => {
+  const onAnswer = vi.fn();
+  render(<DecisionInterview questions={[{ header, question: "Which value?", options: ["First", "Second"] }]} busy={false} onAnswer={onAnswer} />);
+  fireEvent.click(screen.getByRole("button", { name: "Something else" }));
+  fireEvent.change(screen.getByLabelText("Your answer"), { target: { value: "Keep my exact choice" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send answers" }));
+  expect(onAnswer).toHaveBeenCalledWith(Object.fromEntries([[header, ["Keep my exact choice"]]]), "");
+});
+
+test("an option named __other__ is not the free-text control", () => {
+  const onAnswer = vi.fn();
+  render(<DecisionInterview questions={[{ header: "Value", question: "Which literal value?", options: ["__other__", "Default"], multi_select: true }]} busy={false} onAnswer={onAnswer} />);
+  fireEvent.click(screen.getByRole("button", { name: "__other__" }));
+  expect(screen.queryByLabelText("Your answer")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Something else" }));
+  fireEvent.change(screen.getByLabelText("Your answer"), { target: { value: "Custom" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send answers" }));
+  expect(onAnswer).toHaveBeenCalledWith({ Value: ["__other__", "Custom"] }, "");
+});
+
 test("descriptions are visible but answers keep their exact option labels", () => {
   const onAnswer = vi.fn();
   const described = [{ ...questions[0], option_descriptions: { "This repo": "No deployment.", "Every repo": "Only after backup." } }];
