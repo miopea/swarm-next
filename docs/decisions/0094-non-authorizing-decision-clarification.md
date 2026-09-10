@@ -39,6 +39,10 @@ returns the saved record, conflicting reuse fails without overwrite or delivery.
   delivery. Claim at most 16 rows, fence by unique claim and exact session,
   recheck decision/round applicability before writing, and preserve engagement,
   unsent input and provider-readiness guards. No new polling loop or engine update.
+- Operator questions wake the existing owned supervisor through a coalescing
+  notification (one pending permit), so receipt does not wait on terminal I/O or
+  the next scheduled pass. Passes remain serial and graceful shutdown stops new
+  admission before joining the current pass; no per-question detached sender.
 - Abandoned dispatch claims become uncertain; never automatically resend an
   ambiguous write. Definitive pre-write deferral returns to queued. Explicit
   reconciliation must name the observed claim and acknowledge duplicate risk.

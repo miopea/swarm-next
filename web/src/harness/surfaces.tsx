@@ -15,6 +15,7 @@ import TaskPreviewFixture from "./TaskPreviewFixture";
 import RuntimeDialogsFixture from "./RuntimeDialogsFixture";
 import TerminalComposerFixture from "./TerminalComposerFixture";
 import DecisionInterviewFixture from "./DecisionInterviewFixture";
+import DecisionClarificationFixture from "./DecisionClarificationFixture";
 import SessionRecoveryFixture from "./SessionRecoveryFixture";
 
 import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
@@ -465,6 +466,18 @@ export const SURFACES: Surface[] = [
     title: "Fictional decision interview",
     why: "Selected, unselected and custom answers in both themes; no Hive mutations",
     render: () => <DecisionInterviewFixture />,
+  },
+  {
+    id: "decision-clarification",
+    title: "Fictional decision clarification",
+    why: "Ask without deciding; failed-send draft recovery and an attributed explanation, without Hive access",
+    render: () => <DecisionClarificationFixture />,
+  },
+  {
+    id: "decision-clarification-phone",
+    title: "Phone clarification",
+    why: "Question and reply controls at a real 390px frame width",
+    render: () => <iframe title="Phone decision clarification" src="/harness.html?surface=decision-clarification" style={{ display: "block", width: 390, height: 844, border: 0 }} />,
   },
   {
     id: "needs-you",

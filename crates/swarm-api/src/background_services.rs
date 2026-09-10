@@ -1,6 +1,9 @@
 //! Owned periodic services: stop admission, finish the current pass, then join.
-use std::{future::Future, time::Duration};
-use tokio::{sync::watch, task::JoinSet};
+use std::{future::Future, sync::Arc, time::Duration};
+use tokio::{
+    sync::{Notify, watch},
+    task::JoinSet,
+};
 
 pub(super) struct BackgroundServices {
     stop: watch::Sender<bool>,
@@ -20,8 +23,21 @@ impl BackgroundServices {
         self.stop.clone()
     }
 
-    pub(super) fn periodic<F, Fut>(&mut self, period: Duration, immediate: bool, mut run: F)
+    pub(super) fn periodic<F, Fut>(&mut self, period: Duration, immediate: bool, run: F)
     where
+        F: FnMut() -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + Send,
+    {
+        self.periodic_with_wakeup(period, immediate, None, run);
+    }
+
+    pub(super) fn periodic_with_wakeup<F, Fut>(
+        &mut self,
+        period: Duration,
+        immediate: bool,
+        wakeup: Option<Arc<Notify>>,
+        mut run: F,
+    ) where
         F: FnMut() -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send,
     {
@@ -43,6 +59,13 @@ impl BackgroundServices {
                 tokio::select! {
                     biased;
                     _ = stop.changed() => break,
+                    () = async {
+                        if let Some(wakeup) = &wakeup {
+                            wakeup.notified().await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    } => {},
                     _ = interval.tick() => {}
                 }
                 if *stop.borrow() {
@@ -229,6 +252,52 @@ mod tests {
         finish.send(()).unwrap();
         shutdown.await.unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn clarification_wakeup_coalesces_without_parallel_passes_or_shutdown_reentry() {
+        let mut services = BackgroundServices::new();
+        let wakeup = Arc::new(Notify::new());
+        let entered = Arc::new(Notify::new());
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = entered.clone();
+        let allowed = gate.clone();
+        let counted = calls.clone();
+        // A request arriving before the task starts must not be lost.
+        wakeup.notify_one();
+        services.periodic_with_wakeup(
+            Duration::from_secs(3600),
+            false,
+            Some(wakeup.clone()),
+            move || {
+                let entered = entered.clone();
+                let gate = gate.clone();
+                let calls = calls.clone();
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    entered.notify_one();
+                    gate.acquire().await.unwrap().forget();
+                }
+            },
+        );
+        tokio::time::timeout(Duration::from_secs(2), observed.notified())
+            .await
+            .unwrap();
+        for _ in 0..100 {
+            wakeup.notify_one();
+        }
+        assert_eq!(counted.load(Ordering::SeqCst), 1);
+        allowed.add_permits(1);
+        tokio::time::timeout(Duration::from_secs(2), observed.notified())
+            .await
+            .unwrap();
+        assert_eq!(counted.load(Ordering::SeqCst), 2);
+        services.stop_signal().send_replace(true);
+        wakeup.notify_one();
+        allowed.add_permits(1);
+        services.shutdown().await;
+        assert_eq!(counted.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

@@ -373,12 +373,17 @@ fn start_background_services(state: &AppState) -> BackgroundServices {
         }
     });
     let supervisor = state.clone();
-    services.periodic(std::time::Duration::from_secs(30), false, move || {
-        let state = supervisor.clone();
-        async move {
-            state.supervise_workers().await;
-        }
-    });
+    services.periodic_with_wakeup(
+        std::time::Duration::from_secs(30),
+        false,
+        Some(state.coordination_wakeup()),
+        move || {
+            let state = supervisor.clone();
+            async move {
+                state.supervise_workers().await;
+            }
+        },
+    );
     // Issues come down as drafts on a slow tick. Slow because nobody files an
     // issue expecting it to appear in a control room within seconds, and a
     // faster poll would spend the API budget for nothing.

@@ -17,7 +17,8 @@ Implementation sequence:
    it. The follow-up isolated Linux run passes all 9 clarification tests, all 4
    previous-schema tests, and the declared-schema-ceiling test. This includes
    migration/reopen and proof that clarification cannot grant command approval.
-   This foundation is NOT exposed through HTTP/MCP or the browser yet.
+   The foundation is now connected to local HTTP/MCP candidate code below,
+   but has not been deployed or integrated into the production inbox.
 2. Exclusive guarded delivery with claim/session fencing, interrupted-claim
    uncertainty, explicit reconciliation, and cancellation on final answer or
    withdrawal. Never reuse the final-answer outbox to disguise a question.
@@ -43,15 +44,47 @@ Isolated Linux verification passes: 16 clarification persistence tests, 4 domain
 tests, 1 application-service test, strict all-target Clippy for those three
 crates, and all 35 existing decision tests. The earlier full domain run and
 corrected migration checks above remain recorded; this is not a new full-suite
-or browser claim. Latest usage check: 21% used / 79% remaining.
+or browser claim. Latest usage check: 22% used / 78% remaining.
 
-Next, complete explicit uncertain-claim reconciliation and connect guarded
-transport to the existing exclusive coordinator. Then expose authenticated
-HTTP/MCP commands and one shared attention/Queues summary before building the
-inline question/reply UI. Do not skip from persistence tests to deployment:
-there is still no browser button, worker-tool reply path or live transport for
-this feature. No real Hive decision, terminal or worker was touched for these
-fictional tests. No BFG Admin communication is needed or authorized.
+The current candidate increment connects guarded transport to the existing
+exclusive coordinator. Interrupted clarification claims are recovered only
+under that owner's lock; rejection/ambiguous writes never silently resend.
+Same-terminal delivery remains serial and different terminals can progress
+independently. The existing supervisor gains a coalescing wake-up signal for
+operator questions rather than a new sender task, queue or polling loop. A
+question returns its durable receipt without waiting for terminal submission.
+
+Operator-only HTTP question/history routes and requester/Queen MCP history/reply
+tools are implemented; tool revision 24 and its served-schema fingerprint agree.
+The fictional HTTP -> worker-tool reply -> HTTP history scenario passes,
+including rejected worker credentials on the operator route, exact retry,
+conflicting retry, unchanged original decision and later explicit resolution.
+Three API clarification tests, the wake-up/coalescing test and tool-discovery
+test pass. All four owned-background-service checks also pass, including the
+fictional real-PTY paste/shutdown/Enter test. Strict all-target API Clippy passes.
+This does not yet prove delivery through a real provider session or prompt a
+real worker.
+
+The standalone question/reply panel and TypeScript clients are also implemented.
+It has no resolution callback; failed sends retain exact text and retry identity.
+Five component tests, all 36 style tests, TypeScript and the production web build
+pass. The final focus-only adjustment passes its five component tests and
+TypeScript again: completion focuses its receipt only when the operator has not
+moved to another decision. Edge verifies the local fictional desktop and 390x844 iframe journeys:
+ask without answering, failed-send recovery with original question intact, Queen
+reply attribution, dark phone layout, and an original final choice while a new
+question is still waiting. These are fixtures, not native Android/iOS acceptance
+or a completed production inbox integration. The existing terminal chunk-size
+warning remains; reload/performance work is not the current priority.
+
+Next, finish explicit uncertain-claim reconciliation and the shared compact
+Needs You/Queues/notification summary, then wire the panel into the actual inbox
+and verify a full isolated demo-worker round trip. Check sleeping-requester
+handling and old worker tool surfaces as part of that integration; do not leave
+questions silently waiting on a worker that cannot receive or answer them.
+Do not deploy this incomplete candidate. No real Hive decision, terminal or
+worker was touched for these fictional tests. No BFG Admin communication is
+needed or authorized.
 
 Isolated Linux verification checkout: `/tmp/swarm-clarification-check.LS0pgn`.
 Tests use fictional databases. The actual Hive remains on 414de057; do not apply

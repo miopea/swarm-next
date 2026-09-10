@@ -2963,3 +2963,15 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .performance-evidence > p {
   font-size: 0.8rem;
 }
+
+.decision-clarification { margin-block: 1rem; padding: 1rem; border: 1px solid var(--line); border-radius: 14px; background: var(--panel-soft); overflow-wrap: anywhere; }
+.decision-clarification form { display: grid; gap: .6rem; }
+.decision-clarification form > p { margin: 0; }
+.decision-clarification textarea { box-sizing: border-box; width: 100%; min-width: 0; font: inherit; font-size: 1rem; resize: vertical; }
+.decision-clarification button, .decision-clarification summary { min-height: 44px; }
+.decision-clarification summary { display: list-item; align-content: center; cursor: pointer; }
+.decision-clarification details { margin-top: .6rem; }
+.decision-clarification ol { margin: .6rem 0 0; padding-left: 1.2rem; }
+.decision-clarification li { padding-block: .5rem; }
+.decision-clarification li + li { border-top: 1px solid var(--line); }
+.clarification-reply { border-left: 3px solid var(--accent); padding-left: .75rem; }

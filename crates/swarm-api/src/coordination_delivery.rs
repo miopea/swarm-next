@@ -294,6 +294,152 @@ pub(super) async fn submit_task_briefs(
     .collect()
 }
 
+/// Same-terminal questions stay serial; independent terminals can make progress.
+/// Applicability is checked after earlier messages finish, not just at claim time.
+pub(super) async fn submit_clarifications(
+    store: &TaskStore,
+    client: &HostClient,
+    claims: Vec<swarm_persistence::ClarificationDispatch>,
+) -> Vec<(
+    swarm_persistence::ClarificationDispatch,
+    Result<TerminalSubmission, swarm_terminal::IpcError>,
+)> {
+    join_all(
+        group_by_terminal(
+            claims,
+            |claim: &swarm_persistence::ClarificationDispatch| claim.session_id,
+        )
+        .into_iter()
+        .map(|group| async move {
+            let mut settled = Vec::with_capacity(group.len());
+            for claim in group {
+                let submission = if store
+                    .clarification_dispatch_is_current(&claim, super::unix_timestamp())
+                    .unwrap_or(false)
+                {
+                    submit_coordination_message(
+                        store,
+                        client,
+                        claim.session_id,
+                        clarification_message(&claim),
+                    )
+                    .await
+                } else {
+                    Ok(TerminalSubmission::Deferred(
+                        DeferralReason::TaskMessageHold,
+                    ))
+                };
+                settled.push((claim, submission));
+            }
+            settled
+        }),
+    )
+    .await
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+fn clarification_message(claim: &swarm_persistence::ClarificationDispatch) -> CoordinationMessage {
+    let question = terminal_safe_text(&claim.clarification.question);
+    CoordinationMessage {
+        cadence: Cadence::Immediate,
+        marker: delivery_marker(claim.claim_id),
+        bytes: format!(
+            "[Swarm clarification delivery {}] The operator asks about pending decision {}. Clarification ID: {}. This is a question, NOT a final answer, approval, or permission to resume work. Read the original decision using swarm_list_decisions if needed. Reply with swarm_reply_clarification using the exact clarification ID; do not resolve the original decision. Operator question: {}\r",
+            claim.claim_id, claim.clarification.decision_id, claim.clarification.id, question,
+        ).into_bytes(),
+    }
+}
+
+#[cfg(test)]
+mod clarification_tests {
+    use super::*;
+    use swarm_domain::{DecisionClarificationId, DecisionRequestKind, DecisionUrgency};
+    use swarm_persistence::{ClarificationDispatch, NewDecisionRequest};
+
+    fn fixture() -> (TaskStore, ClarificationDispatch) {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store.ensure_queen("/fictional/queen").unwrap();
+        store
+            .bind_worker_session(worker.id, WorkerSessionId::new())
+            .unwrap();
+        let decision = store
+            .create_decision_request(&NewDecisionRequest {
+                requesting_worker_id: worker.id,
+                task_id: None,
+                kind: DecisionRequestKind::Input,
+                urgency: DecisionUrgency::Normal,
+                title: "Fictional choice",
+                summary: "Which?",
+                reason: "Need an explanation",
+                risk: "Fixture",
+                evidence: "No commands execute",
+                suggested_action: "Wait",
+                allowed_actions: &["Wait".into()],
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+            })
+            .unwrap();
+        store
+            .ask_decision_clarification(
+                DecisionClarificationId::new(),
+                decision.id,
+                "Why?\r\n\u{1b}[2J",
+                100,
+            )
+            .unwrap();
+        let claim = store.claim_clarification_deliveries(101).unwrap().remove(0);
+        (store, claim)
+    }
+
+    #[test]
+    fn clarification_prompt_is_sanitized_non_authorizing_and_claim_specific() {
+        let (_, claim) = fixture();
+        let message = clarification_message(&claim);
+        assert_eq!(message.cadence, Cadence::Immediate);
+        assert_eq!(message.marker, claim.claim_id.to_string().as_bytes());
+        let text = String::from_utf8(message.bytes).unwrap();
+        assert!(text.contains(&claim.clarification.id.to_string()));
+        assert!(text.contains(&claim.clarification.decision_id.to_string()));
+        assert!(text.contains("NOT a final answer, approval, or permission"));
+        assert!(text.contains("swarm_reply_clarification"));
+        assert!(!text.contains('\u{1b}'));
+        assert_eq!(text.matches('\r').count(), 1);
+        assert!(text.ends_with('\r'));
+    }
+
+    #[tokio::test]
+    async fn clarification_settled_after_claim_never_contacts_terminal() {
+        let (store, claim) = fixture();
+        store
+            .resolve_decision_request(
+                claim.clarification.decision_id,
+                "Wait",
+                "Final choice",
+                "fixture",
+            )
+            .unwrap();
+        let settled = submit_clarifications(
+            &store,
+            &HostClient::new("/unreachable/clarification-fixture.sock"),
+            vec![claim],
+        )
+        .await;
+        assert_eq!(settled.len(), 1);
+        assert!(matches!(settled[0].1, Ok(TerminalSubmission::Deferred(_))));
+        assert!(
+            store
+                .finish_clarification_delivery(
+                    &settled[0].0,
+                    swarm_domain::ClarificationDeliveryOutcome::DeferredBeforeWrite
+                )
+                .unwrap()
+        );
+    }
+}
+
 /// Copies one write's outcome for each delivery that shared it.
 ///
 /// `IpcError` is not `Clone`, and the alternative — reporting only the first

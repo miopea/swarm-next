@@ -1739,6 +1739,44 @@ export async function fetchDecisions(operatorToken: string, signal?: AbortSignal
 /** Which control the operator used, recorded so a disputed answer can be traced. */
 export type DecisionSurface = "inbox_action" | "inbox_dismiss" | "inbox_interview";
 
+export type DecisionClarification = {
+  id: string;
+  decision_id: string;
+  operator_id: string;
+  question: string;
+  asked_at: number;
+  reply: string | null;
+  replied_at: number | null;
+  replying_worker_id: string | null;
+  replying_session_id: string | null;
+  delivery_state: "queued" | "dispatching" | "delivered" | "uncertain" | "cancelled";
+};
+
+export async function fetchDecisionClarifications(
+  operatorToken: string,
+  decisionId: string,
+  signal?: AbortSignal,
+): Promise<DecisionClarification[]> {
+  const response = await authenticatedFetch(operatorToken,
+    `/api/v1/decisions/${encodeURIComponent(decisionId)}/clarifications`, { signal });
+  return response.json() as Promise<DecisionClarification[]>;
+}
+
+/** This records a question, never an operator answer or permission. Reuse id on retry. */
+export async function askDecisionClarification(
+  operatorToken: string,
+  decisionId: string,
+  id: string,
+  question: string,
+): Promise<DecisionClarification> {
+  const response = await authenticatedFetch(operatorToken,
+    `/api/v1/decisions/${encodeURIComponent(decisionId)}/clarifications`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, question }),
+    });
+  return response.json() as Promise<DecisionClarification>;
+}
+
 export async function resolveDecision(
   operatorToken: string,
   decisionId: string,

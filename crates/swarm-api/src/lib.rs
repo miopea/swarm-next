@@ -15,6 +15,7 @@ use coordination_delivery::{
     task_outcome_message,
 };
 mod database_integrity;
+mod decision_clarification;
 mod decisions;
 pub use database_integrity::monitor_database_integrity;
 mod dogfood_evidence;
@@ -242,6 +243,7 @@ pub struct AppState {
     database_probe_limit: Arc<Semaphore>,
     development_reload: Arc<Mutex<()>>,
     coordination_delivery: Arc<Mutex<()>>,
+    coordination_wakeup: Arc<Notify>,
     jira_delivery: Arc<Mutex<()>>,
     email_delivery: Arc<Mutex<()>>,
     worker_errors: Arc<RwLock<HashMap<WorkerId, String>>>,
@@ -378,6 +380,7 @@ impl AppState {
             database_probe_limit: Arc::new(Semaphore::new(1)),
             development_reload: Arc::new(Mutex::new(())),
             coordination_delivery: Arc::new(Mutex::new(())),
+            coordination_wakeup: Arc::new(Notify::new()),
             jira_delivery: Arc::new(Mutex::new(())),
             email_delivery: Arc::new(Mutex::new(())),
             worker_errors: Arc::new(RwLock::new(HashMap::new())),
@@ -1405,6 +1408,13 @@ impl AppState {
         true
     }
 
+    /// The owned supervisor consumes this coalescing signal; it never spawns a
+    /// sender per request or races a second supervisor against an active pass.
+    #[must_use]
+    pub fn coordination_wakeup(&self) -> Arc<Notify> {
+        self.coordination_wakeup.clone()
+    }
+
     /// Delivers durable coordination only to running workers without a live operator lease.
     pub async fn deliver_coordination(&self) {
         let _guard = self.coordination_delivery.lock().await;
@@ -1423,6 +1433,14 @@ impl AppState {
                 return;
             }
         }
+        match store.recover_inflight_clarification_deliveries() {
+            Ok(0) => {}
+            Ok(_) => self.control_room_notify.notify_waiters(),
+            Err(error) => {
+                tracing::warn!(message = %error, "abandoned clarification claims could not be recovered");
+                return;
+            }
+        }
         self.run_deterministic_coordinator(store).await;
         // A review may yield once to notifications, but a continuing stream
         // must not renew Queen's cooldown ahead of it forever. The common
@@ -1438,6 +1456,7 @@ impl AppState {
             self.deliver_queen_automation(store, client).await;
         }
         self.deliver_decision_outcomes(store, client).await;
+        self.deliver_clarifications(store, client).await;
         self.deliver_task_briefs(store, client).await;
         self.deliver_task_outcomes(store, client).await;
         self.deliver_task_messages(store, client).await;
@@ -3957,6 +3976,10 @@ fn api_router(state: AppState) -> Router {
             get(tasks::list_tasks).post(tasks::create_task),
         )
         .route("/api/v1/decisions", get(decisions::list_decisions))
+        .route(
+            "/api/v1/decisions/{decision_id}/clarifications",
+            get(decision_clarification::history).post(decision_clarification::ask),
+        )
         .route(
             "/api/v1/decisions/{decision_id}/resolution",
             patch(decisions::resolve_decision),
@@ -8466,6 +8489,16 @@ fn email_attachment_error(error: email_attachments::EmailAttachmentError) -> Api
 #[allow(clippy::too_many_lines)]
 fn task_store_error(error: &TaskStoreError) -> ApiError {
     match error {
+        TaskStoreError::DecisionClarification(reason) => {
+            use swarm_domain::DecisionClarificationError as Refusal;
+            let status = match reason {
+                Refusal::Unauthorized => StatusCode::FORBIDDEN,
+                Refusal::NotFound => StatusCode::NOT_FOUND,
+                Refusal::InvalidText => StatusCode::UNPROCESSABLE_ENTITY,
+                _ => StatusCode::CONFLICT,
+            };
+            ApiError::new(status, "decision_clarification_refused", reason.to_string())
+        }
         TaskStoreError::TaskDecisionLink(reason) => ApiError::new(
             if *reason == swarm_domain::TaskDecisionLinkError::Unauthorized {
                 StatusCode::FORBIDDEN

@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 23;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 24;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -401,9 +401,9 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 23;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 23. Update this and the revision together.
+/// The served surface as of revision 24. Update this and the revision together.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "1bc000610cca365d70852585919dd52be9c049e6eaee2cb6dc090f4e774bd92a";
+    "974fe1ca0503cd02c552973c30ddf108d7837bc61a268f9c78e7eb1a2c64510e";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -604,6 +604,8 @@ impl ServerHandler for AgentMcp {
             operator_submissions_tool(),
             request_decision_tool(),
             withdraw_decision_tool(),
+            clarification_history_tool(),
+            reply_clarification_tool(),
             message_queen_tool(),
         ];
         if self.may_reload_this_hive() {
@@ -721,6 +723,14 @@ impl ServerHandler for AgentMcp {
             "swarm_record_no_deployment" => self.record_no_deployment(arguments),
             "swarm_withdraw_no_deployment" => self.withdraw_no_deployment(arguments),
             "swarm_withdraw_decision" => self.withdraw_decision(arguments),
+            "swarm_read_clarifications" => parse::<ClarificationHistoryInput>(arguments).and_then(|input| {
+                let history = self.tasks.clarification_history(Some(self.principal), input.decision_id)?;
+                structured(json!({"clarifications": history, "operator_approval": false}))
+            }),
+            "swarm_reply_clarification" => parse::<ReplyClarificationInput>(arguments).and_then(|input| {
+                let saved = self.tasks.reply_agent_clarification(self.principal, input.clarification_id, &input.reply, super::unix_timestamp())?;
+                structured(json!({"clarification": saved, "operator_approval": false, "next_action": "The explanation is saved. The original decision has not been answered or approved by this reply; wait for its operator resolution before acting on any gated work."}))
+            }),
             "swarm_draft_email_reply" => self.draft_email_reply(arguments),
             "swarm_list_workers" => self
                 .tasks
@@ -1226,6 +1236,7 @@ impl ServerHandler for AgentMcp {
                 if request.name.as_ref() != "swarm_list_tasks"
                     && request.name.as_ref() != "swarm_list_workers"
                     && request.name.as_ref() != "swarm_list_decisions"
+                    && request.name.as_ref() != "swarm_read_clarifications"
                     && request.name.as_ref() != "swarm_operator_submissions"
                     && request.name.as_ref() != "swarm_read_task_history"
                     && request.name.as_ref() != "swarm_read_review_evidence"
@@ -3856,6 +3867,37 @@ struct WithdrawDecisionInput {
     reason: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClarificationHistoryInput {
+    decision_id: DecisionRequestId,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReplyClarificationInput {
+    clarification_id: swarm_domain::DecisionClarificationId,
+    reply: String,
+}
+
+fn clarification_history_tool() -> Tool {
+    tool(
+        "swarm_read_clarifications",
+        "Read the bounded operator-question and worker-explanation history for an exact decision ID. Only its requester or Queen may read this exchange. Asking a question is not an operator answer or approval. Read the original request with swarm_list_decisions; reply to an exact outstanding clarification using swarm_reply_clarification.",
+        &json!({"type":"object","properties":{"decision_id":{"type":"string","format":"uuid"}},"required":["decision_id"],"additionalProperties":false}),
+        true,
+    )
+}
+
+fn reply_clarification_tool() -> Tool {
+    tool(
+        "swarm_reply_clarification",
+        "Reply to an exact operator clarification ID with a concise explanation. Only the original requester or Queen can reply. The original decision remains unchanged: this never grants permission, resolves a decision or resumes gated work. Exact repeated text is idempotent; conflicting replacement text is refused. Late replies are history, not a reopened request. Reply text is limited to 4000 UTF-8 bytes.",
+        &json!({"type":"object","properties":{"clarification_id":{"type":"string","format":"uuid"},"reply":{"type":"string","minLength":1,"maxLength":4000}},"required":["clarification_id","reply"],"additionalProperties":false}),
+        false,
+    )
+}
+
 fn withdraw_decision_tool() -> Tool {
     tool(
         "swarm_withdraw_decision",
@@ -5605,6 +5647,8 @@ mod tests {
                 "swarm_operator_submissions",
                 "swarm_request_decision",
                 "swarm_withdraw_decision",
+                "swarm_read_clarifications",
+                "swarm_reply_clarification",
                 "swarm_message_queen"
             ]
         );
@@ -5639,6 +5683,159 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    async fn clarification_http(
+        app: &axum::Router,
+        endpoint: &str,
+        token: Option<&str>,
+        id: swarm_domain::DecisionClarificationId,
+        question: &str,
+    ) -> Response {
+        use tower::ServiceExt as _;
+        let mut request = Request::builder()
+            .method("POST")
+            .uri(endpoint)
+            .header(header::CONTENT_TYPE, "application/json");
+        if let Some(token) = token {
+            request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+        }
+        app.clone()
+            .oneshot(
+                request
+                    .body(Body::from(
+                        json!({"id": id, "question": question}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep the fictional HTTP/MCP exchange and its authority checks in one readable scenario"
+    )]
+    async fn clarification_http_to_worker_reply_preserves_original_decision() {
+        use tower::ServiceExt as _;
+        let (bridge, store, _, worker, _directory) = setup();
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(worker, session).unwrap();
+        let parent = shared_session_decision(&store, worker);
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker).unwrap());
+        let state = crate::AppState::default()
+            .with_terminal_host(
+                crate::HostClient::new("/unreachable/clarification.sock"),
+                "secret",
+            )
+            .with_task_store(store.clone());
+        let wakeup = state.coordination_wakeup();
+        let app = crate::router(state);
+        let endpoint = format!("/api/v1/decisions/{}/clarifications", parent.id);
+        let id = swarm_domain::DecisionClarificationId::new();
+        for token in [None, Some(worker_token.as_str())] {
+            assert_eq!(
+                clarification_http(&app, &endpoint, token, id, "Why?")
+                    .await
+                    .status(),
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        assert!(store.decision_clarifications(parent.id).unwrap().is_empty());
+        for _ in 0..2 {
+            let response = clarification_http(&app, &endpoint, Some("secret"), id, "Why?").await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response_json(response).await;
+            assert_eq!(body["delivery_state"], "queued");
+        }
+        assert_eq!(
+            clarification_http(&app, &endpoint, Some("secret"), id, "Different question")
+                .await
+                .status(),
+            StatusCode::CONFLICT
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(2), wakeup.notified())
+            .await
+            .unwrap();
+        for (name, arguments) in [
+            (
+                "swarm_read_clarifications",
+                json!({"decision_id": parent.id}),
+            ),
+            (
+                "swarm_reply_clarification",
+                json!({"clarification_id": id, "reply": "This is an explanation, not an approval."}),
+            ),
+        ] {
+            let result = response_json(
+                handle(
+                    bridge.clone(),
+                    plain_state(),
+                    mcp_request(
+                        Some(&worker_token),
+                        "tools/call",
+                        &json!({"name": name, "arguments": arguments}),
+                    ),
+                )
+                .await,
+            )
+            .await;
+            assert_ne!(result["result"]["isError"], true, "{result}");
+            assert_eq!(
+                result["result"]["structuredContent"]["operator_approval"], false,
+                "{result}"
+            );
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&endpoint)
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let history = response_json(response).await;
+        assert_eq!(history.as_array().unwrap().len(), 1);
+        assert_eq!(
+            history[0]["reply"],
+            "This is an explanation, not an approval."
+        );
+        assert_eq!(history[0]["replying_session_id"], session.to_string());
+        let unchanged = store.get_decision_request(parent.id).unwrap();
+        assert_eq!(unchanged.state, DecisionRequestState::Pending);
+        assert!(unchanged.resolution_action.is_none());
+        let followup = swarm_domain::DecisionClarificationId::new();
+        assert_eq!(
+            clarification_http(
+                &app,
+                &endpoint,
+                Some("secret"),
+                followup,
+                "One more question?"
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        store
+            .resolve_decision_request(
+                parent.id,
+                &parent.allowed_actions[0],
+                "Now I choose",
+                "fixture",
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .get_decision_clarification(followup)
+                .unwrap()
+                .delivery_state,
+            swarm_domain::ClarificationDeliveryState::Cancelled
+        );
     }
 
     /// A Hive wired to a development checkout, the worker whose workspace IS
