@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-import { fetchNightWatchConfiguration, saveNightWatchConfiguration } from "../api/presence";
+import { useEffect, useId, useRef, useState } from "react";
+import { fetchNightWatchConfiguration, saveNightWatchConfiguration, type NightWatchConfiguration } from "../api/presence";
+import { RuntimeRequestError } from "../api/request";
 
 function time(minutes: number) { return `${Math.floor(minutes / 60).toString().padStart(2, "0")}:${(minutes % 60).toString().padStart(2, "0")}`; }
 function minutes(value: string) {
@@ -11,6 +12,7 @@ function minutes(value: string) {
 export default function NightWatchSettings({ operatorToken }: { operatorToken: string }) {
   const [enabled, setEnabled] = useState(false);
   const [zone, setZone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+  const defaultZone = useRef(zone);
   const [start, setStart] = useState("22:00");
   const [end, setEnd] = useState("07:00");
   const [loading, setLoading] = useState(true);
@@ -18,6 +20,8 @@ export default function NightWatchSettings({ operatorToken }: { operatorToken: s
   const [error, setError] = useState<string>();
   const [saved, setSaved] = useState(false);
   const [reload, setReload] = useState(0);
+  const [persisted, setPersisted] = useState<NightWatchConfiguration | null>(null);
+  const zoneHintId = useId();
   const saveRequest = useRef<AbortController | undefined>(undefined);
 
   useEffect(() => {
@@ -27,10 +31,11 @@ export default function NightWatchSettings({ operatorToken }: { operatorToken: s
     setLoading(true); setSaving(false); setError(undefined); setSaved(false);
     void fetchNightWatchConfiguration(operatorToken, controller.signal).then((config) => {
       if (disposed) return;
+      setPersisted(config);
       if (config) {
         setEnabled(config.enabled); setZone(config.timezone);
         setStart(time(config.start_minute)); setEnd(time(config.end_minute));
-      } else { setEnabled(false); }
+      } else { setEnabled(false); setZone(defaultZone.current); setStart("22:00"); setEnd("07:00"); }
       setLoading(false);
     }).catch(() => {
       if (!disposed) setError("Could not load the Night Watch schedule. Retry before changing it.");
@@ -54,30 +59,44 @@ export default function NightWatchSettings({ operatorToken }: { operatorToken: s
     const deadline = window.setTimeout(() => controller.abort(), 8_000);
     setSaving(true); setSaved(false); setError(undefined);
     try {
-      await saveNightWatchConfiguration(operatorToken, { enabled, timezone: zone.trim(), start_minute: startMinute, end_minute: endMinute }, controller.signal);
-      if (!controller.signal.aborted) setSaved(true);
-    } catch {
-      if (saveRequest.current === controller) setError("The schedule save was not confirmed. Your edits are still here; retry to confirm them.");
+      const confirmed = await saveNightWatchConfiguration(operatorToken, { enabled, timezone: zone.trim(), start_minute: startMinute, end_minute: endMinute }, controller.signal);
+      if (!controller.signal.aborted) {
+        setPersisted(confirmed); setEnabled(confirmed.enabled); setZone(confirmed.timezone);
+        setStart(time(confirmed.start_minute)); setEnd(time(confirmed.end_minute)); setSaved(true);
+      }
+    } catch (failure) {
+      if (saveRequest.current === controller) setError(failure instanceof RuntimeRequestError && failure.status === 400
+        ? "Schedule not saved. Use a region/city time zone such as America/New_York or Europe/London, and different start and end times. Your edits are still here."
+        : "The schedule save was not confirmed. Your edits are still here; retry to confirm them.");
     } finally {
       window.clearTimeout(deadline);
       if (saveRequest.current === controller) { saveRequest.current = undefined; setSaving(false); }
     }
   }
 
+  const edited = persisted
+    ? enabled !== persisted.enabled || zone.trim() !== persisted.timezone || minutes(start) !== persisted.start_minute || minutes(end) !== persisted.end_minute
+    : enabled || zone.trim() !== defaultZone.current || start !== "22:00" || end !== "07:00";
+
   return <div className="night-watch-settings">
     <h4>Night Watch schedule</h4>
     <p>Use local times in the zone below. Returning to Swarm on desktop ends this watch; phone use does not. The next scheduled night can begin normally.</p>
+    {!loading && <p aria-label="Saved Night Watch schedule">{persisted?.enabled
+      ? `Saved schedule: daily ${time(persisted.start_minute)}–${time(persisted.end_minute)}${persisted.end_minute < persisted.start_minute ? " the next day" : ""} · ${persisted.timezone}.`
+      : "No automatic Night Watch is scheduled. You can still choose Night Watch manually."}</p>}
     {loading && !error && <p role="status">Loading schedule…</p>}
     {error && <p role="alert">{error}</p>}
     {loading && error && <button type="button" onClick={() => setReload((value) => value + 1)}>Retry schedule load</button>}
     <fieldset disabled={loading || saving} onChange={() => setSaved(false)}>
       <legend>Daily schedule</legend>
       <label><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />Enable scheduled Night Watch</label>
-      <label>Time zone<input value={zone} maxLength={128} onChange={(event) => setZone(event.target.value)} placeholder="America/New_York" /></label>
+      <label>Time zone<input value={zone} maxLength={128} onChange={(event) => setZone(event.target.value)} placeholder="America/New_York" aria-describedby={zoneHintId} /></label>
+      <small id={zoneHintId}>Use region/city, such as America/New_York or Europe/London. Times follow that zone, including daylight-saving changes.</small>
       <label>Starts<input type="time" value={start} onChange={(event) => setStart(event.target.value)} /></label>
       <label>Ends<input type="time" value={end} onChange={(event) => setEnd(event.target.value)} /></label>
       <button type="button" onClick={() => void save()}>{saving ? "Saving schedule…" : "Save schedule"}</button>
     </fieldset>
+    {!loading && edited && !saving && <p role="status">Unsaved schedule changes.</p>}
     {saved && <p role="status">Schedule saved.</p>}
   </div>;
 }
