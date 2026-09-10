@@ -1517,9 +1517,10 @@ export async function fetchApiaryHiveCandidates(
 
 export async function createApiaryJoinLink(
   operatorToken: string,
+  signal?: AbortSignal,
 ): Promise<ApiaryJoinLinkBundle> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/join-links", {
-    method: "POST",
+    method: "POST", signal,
   });
   return response.json() as Promise<ApiaryJoinLinkBundle>;
 }
@@ -1535,11 +1536,12 @@ export async function fetchApiaryJoinLinks(
 export async function approveApiaryJoinLink(
   operatorToken: string,
   linkId: string,
+  signal?: AbortSignal,
 ): Promise<ApiaryJoinLink> {
   const response = await authenticatedFetch(
     operatorToken,
     `/api/v1/apiary/join-links/${encodeURIComponent(linkId)}/approval`,
-    { method: "POST" },
+    { method: "POST", signal },
   );
   return response.json() as Promise<ApiaryJoinLink>;
 }
@@ -1547,11 +1549,12 @@ export async function approveApiaryJoinLink(
 export async function revokeApiaryJoinLink(
   operatorToken: string,
   linkId: string,
+  signal?: AbortSignal,
 ): Promise<ApiaryJoinLink> {
   const response = await authenticatedFetch(
     operatorToken,
     `/api/v1/apiary/join-links/${encodeURIComponent(linkId)}`,
-    { method: "DELETE" },
+    { method: "DELETE", signal },
   );
   return response.json() as Promise<ApiaryJoinLink>;
 }

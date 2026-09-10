@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
 import {
@@ -6,6 +6,7 @@ import {
   createApiaryJoinLink,
   fetchApiaryJoinLinks,
   revokeApiaryJoinLink,
+  RuntimeRequestError,
   type ApiaryJoinLink,
   type ApiaryKeeperJoinCapability,
 } from "../api";
@@ -28,6 +29,12 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
   const [refreshError, setRefreshError] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const revision = useRef(0);
+  const mutation = useRef<{ controller: AbortController; timer: number; confirmed: boolean } | undefined>(undefined);
+  useEffect(() => () => {
+    const pending = mutation.current;
+    mutation.current = undefined;
+    if (pending) { window.clearTimeout(pending.timer); pending.controller.abort(); }
+  }, [operatorToken]);
   const load = useCallback(async (signal: AbortSignal) => {
     const observedRevision = revision.current;
     try {
@@ -50,8 +57,10 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
   }
 
   async function createLink() {
-    await perform(async () => {
-      const bundle = await createApiaryJoinLink(operatorToken);
+    await perform(async (signal, confirm) => {
+      const bundle = await createApiaryJoinLink(operatorToken, signal);
+      signal.throwIfAborted();
+      confirm();
       retainConfirmed(bundle.link);
       const capability: ApiaryKeeperJoinCapability = {
         link_id: bundle.link.id,
@@ -61,7 +70,9 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
       const link = createApiaryHandoffLink("keeper", capability, bundle.link.keeper_endpoint);
       setGeneratedLink(link);
       await refresh();
+      signal.throwIfAborted();
       const copied = await copyLink(link);
+      signal.throwIfAborted();
       setMessage(copied
         ? "Invitation link copied. Send it privately to the Hive operator; it expires in 24 hours."
         : "Invitation link created. Copy it below and send it privately to the Hive operator.");
@@ -70,10 +81,14 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
 
   async function approve(link: ApiaryJoinLink) {
     if (!link.candidate) return;
-    await perform(async () => {
-      retainConfirmed(await approveApiaryJoinLink(operatorToken, link.id));
+    await perform(async (signal, confirm) => {
+      const approved = await approveApiaryJoinLink(operatorToken, link.id, signal);
+      signal.throwIfAborted();
+      confirm();
+      retainConfirmed(approved);
       setMessage(`${link.candidate?.hive_name} is approved. Her Hive will receive the signed invitation on its next outbound poll.`);
       const [, invitationRefresh] = await Promise.allSettled([refresh(), onInvitationCreated()]);
+      signal.throwIfAborted();
       if (invitationRefresh.status === "rejected") {
         setError("Approval was saved, but the invitation details could not be refreshed. Do not approve the Hive again; check its invitation status.");
       }
@@ -81,25 +96,52 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
   }
 
   async function cancel(link: ApiaryJoinLink) {
-    await perform(async () => {
-      retainConfirmed(await revokeApiaryJoinLink(operatorToken, link.id));
+    await perform(async (signal, confirm) => {
+      const cancelled = await revokeApiaryJoinLink(operatorToken, link.id, signal);
+      signal.throwIfAborted();
+      confirm();
+      retainConfirmed(cancelled);
       setConfirmingCancellation(undefined);
       setGeneratedLink("");
       await refresh();
+      signal.throwIfAborted();
       setMessage("Invitation cancelled. That private link can no longer introduce a Hive.");
     }, "That invitation could not be cancelled.");
   }
 
-  async function perform(action: () => Promise<void>, fallback: string) {
+  async function perform(action: (signal: AbortSignal, confirm: () => void) => Promise<void>, fallback: string) {
+    if (mutation.current || busy) return;
+    const controller = new AbortController();
+    const pending = { controller, timer: 0, confirmed: false };
+    mutation.current = pending;
+    pending.timer = window.setTimeout(() => {
+      if (mutation.current !== pending) return;
+      mutation.current = undefined;
+      controller.abort();
+      setWorking(false);
+      setError(pending.confirmed
+        ? "The invitation change was saved, but a follow-up check or copy did not finish. Check invitation status; do not repeat the change."
+        : "The invitation change was not confirmed before the request timed out. It may have been saved. Check invitation status before trying again.");
+    }, 8_000);
     setWorking(true);
     setError("");
     setMessage("");
     try {
-      await action();
+      await action(controller.signal, () => { pending.confirmed = true; });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : fallback);
+      if (mutation.current === pending) {
+        setError(pending.confirmed
+          ? "The invitation change was saved, but a follow-up step failed. Check invitation status; do not repeat the change."
+          : cause instanceof RuntimeRequestError && cause.status >= 400 && cause.status < 500
+            ? `${fallback} ${cause.message}`
+            : "The invitation change could not be confirmed. It may have been saved. Check invitation status before trying again.");
+      }
     } finally {
-      setWorking(false);
+      window.clearTimeout(pending.timer);
+      if (mutation.current === pending) {
+        mutation.current = undefined;
+        setWorking(false);
+      }
     }
   }
 

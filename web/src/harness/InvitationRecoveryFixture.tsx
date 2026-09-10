@@ -10,7 +10,12 @@ export default function InvitationRecoveryFixture() {
     const previous = window.fetch;
     window.fetch = async (input, init) => {
       if (String(input) !== "/api/v1/apiary/join-links") return previous(input, init);
-      if (init?.method && init.method !== "GET") return new Response("Fixture is read-only", { status: 405 });
+      if (init?.method === "POST") return new Promise<Response>((_resolve, reject) => {
+        const signal = init.signal;
+        if (signal?.aborted) reject(signal.reason);
+        else signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+      if (init?.method && init.method !== "GET") return new Response("Fixture does not change membership", { status: 405 });
       return new Response(JSON.stringify(restored.current ? [] : { message: "Fictional status unavailable" }), {
         status: restored.current ? 200 : 503, headers: { "content-type": "application/json" },
       });
@@ -20,7 +25,7 @@ export default function InvitationRecoveryFixture() {
   }, []);
   return <main className="settings-card">
     <h1>Fictional invitation recovery</h1>
-    <p>No invitation or membership can be created here.</p>
+    <p>No invitation or membership can be created here. Create invitation link simulates a stalled request.</p>
     <button disabled={available} onClick={() => { restored.current = true; setAvailable(true); }}>Restore fictional invitation service</button>
     {ready && <KeeperInvitationManager busy={false} operatorToken="fixture" onInvitationCreated={async () => undefined} />}
   </main>;

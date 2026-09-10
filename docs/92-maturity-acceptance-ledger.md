@@ -1,5 +1,27 @@
 # Current maturity acceptance ledger
 
+## September 10 — bounded invitation mutations
+
+The previously noted indefinite Working state is now addressed locally. The
+manager owns one mutation with an8-second deadline and cancellation on disposal
+or credential change. Signals reach create/approve/revoke fetches. Every awaited
+step checks cancellation before updating UI or initiating subsequent work.
+Timeout releases controls even if an adapter promise never settles; late results
+cannot replace the current state or initiate copying. No mutation is replayed.
+
+Confirmed saves remain distinct from failed follow-up checks/copying. Lost
+responses and deadlines explicitly state the change may have been saved and tell
+the operator to check invitation status before retrying. Definitive4xx refusals
+retain the server explanation. Backend admission/approval rules are unchanged.
+
+Thirty affected tests pass, including lost responses,timeout/unmount late results,
+confirmed-save followed by a hung refresh and the previous stale-read cases.
+TypeScript passes. Production build passed before the final lost-response wording
+and its test were added. Edge's isolated stalled-create fixture showed Working
+disabled,then the unconfirmed warning and enabled controls after the deadline.
+No actual invitation/capability or membership was created. Owned tab closed;
+the no-proxy harness remains the only local preview server. Publication pending.
+
 ## September 10 — confirmed approval versus refresh failure
 
 Invitation approval now states its confirmed result before refreshing secondary
