@@ -765,6 +765,7 @@ impl ServerHandler for AgentMcp {
                         .and_then(|attention| {
                             let queue = self.tasks.queen_queue_snapshot(self.principal)?;
                             let decision_overlaps = self.tasks.queen_pending_decision_overlaps(self.principal)?;
+                            let clarification_attention = self.tasks.queen_clarification_attention(self.principal)?;
                             let (prerequisite_ready, prerequisite_ready_truncated) = self.tasks
                                 .store().tasks_ready_after_prerequisites(crate::unix_timestamp())?;
                             let (blocked_reassessment, blocked_reassessment_truncated) = self.tasks
@@ -785,6 +786,10 @@ impl ServerHandler for AgentMcp {
                                     })).collect::<Vec<_>>(),
                                     "truncated": decision_overlaps.truncated,
                                     "next_action": "These pending requests share explicit task membership; they are candidates for reconciliation, NOT proven duplicates. Read each full request, its worker's evidence, requested command and offered actions. Operator execution, command permission and a scope decision are different outcomes. Withdraw your own obsolete duplicate only when the surviving request preserves the actual unresolved need and scope; coordinate with the requester for other requests. Never answer for the operator, merge command grants, or withdraw a distinct permission merely to reduce the count. Recheck current state before acting. Use swarm_list_decisions for complete requests and any truncated groups."
+                                },
+                                "clarification_attention": {
+                                    "pending": clarification_attention,
+                                    "next_action": "These are unanswered operator questions, not approvals. They include decisions without tasks and shared tasks whose primary owner may not be Queen. Read the exact decision with swarm_read_clarifications and answer with swarm_reply_clarification when you have the evidence; otherwise coordinate with its requester. Account for your own outstanding explanations before reporting nothing waits on Queen. Never infer authorization or retry uncertain terminal delivery from this list. If truncated, use swarm_list_decisions and swarm_read_clarifications for remaining requests."
                                 },
                                 "queue_snapshot": {
                                     "observed_at": crate::unix_timestamp(),
@@ -6175,6 +6180,21 @@ mod tests {
         let attention =
             response_json(handle(bridge.clone(), plain_state(), request(&queen_token)).await).await;
         assert!(attention["result"]["structuredContent"]["attention"].is_array());
+        let clarifications = &attention["result"]["structuredContent"]["clarification_attention"];
+        assert_eq!(clarifications["pending"]["total"], 0);
+        assert_eq!(clarifications["pending"]["truncated"], false);
+        assert!(
+            clarifications["pending"]["requests"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            clarifications["next_action"]
+                .as_str()
+                .unwrap()
+                .contains("not approvals")
+        );
         let overlaps = &attention["result"]["structuredContent"]["pending_decision_overlaps"];
         assert!(overlaps["groups"].as_array().unwrap().is_empty());
         assert_eq!(overlaps["truncated"], false);

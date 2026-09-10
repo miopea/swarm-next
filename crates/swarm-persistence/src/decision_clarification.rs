@@ -11,6 +11,7 @@ use swarm_domain::{
 mod delivery;
 mod reconciliation;
 mod summary;
+pub use summary::ClarificationAttention;
 pub(crate) use summary::summaries_from;
 #[cfg(test)]
 mod tests;

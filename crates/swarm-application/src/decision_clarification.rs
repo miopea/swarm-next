@@ -4,6 +4,17 @@ use swarm_domain::{DecisionClarificationId, DecisionRequestId, WorkerRole};
 use swarm_persistence::DecisionClarification;
 
 impl TaskService {
+    /// Queen sees explanation waits independently of primary task ownership.
+    /// # Errors
+    /// Denies non-Queen callers and propagates unreadable evidence.
+    pub fn queen_clarification_attention(
+        &self,
+        principal: AgentPrincipal,
+    ) -> Result<swarm_persistence::ClarificationAttention, ApplicationError> {
+        crate::require_queen(principal)?;
+        Ok(self.store.clarification_attention()?)
+    }
+
     /// Only an operator-authenticated adapter may reconcile ambiguous delivery.
     /// # Errors
     /// Refuses stale claims, conflicting retries and exhausted recovery capacity.
@@ -140,6 +151,17 @@ mod tests {
         service
             .ask_operator_clarification(id, parent.id, "Why?", 100)
             .unwrap();
+        assert_eq!(
+            service
+                .queen_clarification_attention(AgentPrincipal::from(&queen))
+                .unwrap()
+                .total,
+            1
+        );
+        assert!(matches!(
+            service.queen_clarification_attention(AgentPrincipal::from(&requester)),
+            Err(ApplicationError::NotAuthorized)
+        ));
         let forged = AgentPrincipal {
             role: WorkerRole::Queen,
             ..AgentPrincipal::from(&other)

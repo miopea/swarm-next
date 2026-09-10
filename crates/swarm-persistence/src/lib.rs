@@ -25,7 +25,9 @@ mod attention;
 mod coordinator;
 mod database_integrity;
 mod decision_clarification;
-pub use decision_clarification::{ClarificationDispatch, DecisionClarification};
+pub use decision_clarification::{
+    ClarificationAttention, ClarificationDispatch, DecisionClarification,
+};
 mod queen_recovery;
 mod queen_review;
 mod queen_review_focus;

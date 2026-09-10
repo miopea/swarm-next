@@ -3,7 +3,63 @@ use crate::{TaskStore, TaskStoreError};
 use std::collections::HashMap;
 use swarm_domain::{DecisionClarificationSummary, DecisionRequestId, clarification_next_move};
 
+/// Bounded, content-free attention independent of task assignment or membership.
+#[derive(serde::Serialize)]
+pub struct ClarificationAttention {
+    pub total: usize,
+    pub requests: Vec<swarm_domain::TaskClarificationWait>,
+    pub truncated: bool,
+}
+
 impl TaskStore {
+    /// Read unanswered questions, including decisions with no linked task.
+    /// # Errors
+    /// Unavailable or malformed evidence is an error, never an empty queue.
+    pub fn clarification_attention(&self) -> Result<ClarificationAttention, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT d.id,c.id,d.requesting_worker_id,w.role='queen',c.delivery_state,count(*) OVER ()
+             FROM decision_clarifications c JOIN decision_requests d ON d.id=c.decision_id
+             JOIN local_hive_identity l ON l.hive_id=d.hive_id AND l.singleton=1
+             JOIN worker_profiles w ON w.id=d.requesting_worker_id
+             WHERE d.state='pending' AND c.reply IS NULL AND c.delivery_state!='cancelled'
+             ORDER BY c.asked_at,c.id LIMIT 64",
+        )?;
+        let rows = statement.query_map([], |row| {
+            let parse = |index| row.get::<_, String>(index);
+            Ok((
+                swarm_domain::TaskClarificationWait {
+                    decision_id: parse(0)?
+                        .parse()
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    clarification_id: parse(1)?
+                        .parse()
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    requesting_worker_id: parse(2)?
+                        .parse()
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    requester_is_queen: row.get(3)?,
+                    delivery_state: parse(4)?
+                        .parse()
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                },
+                row.get::<_, usize>(5)?,
+            ))
+        })?;
+        let mut attention = ClarificationAttention {
+            total: 0,
+            requests: Vec::new(),
+            truncated: false,
+        };
+        for row in rows {
+            let (request, total) = row?;
+            attention.total = total;
+            attention.requests.push(request);
+        }
+        attention.truncated = attention.total > attention.requests.len();
+        Ok(attention)
+    }
+
     /// Operator inbox and clarification facts share one database snapshot.
     /// # Errors
     /// Reports unreadable decision or clarification evidence.

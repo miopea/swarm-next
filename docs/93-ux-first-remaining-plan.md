@@ -2,6 +2,20 @@
 
 ### Active package: Needs You clarification, not another reload patch
 
+Queen attention now also includes a bounded explanation-wait projection independent
+of task membership and primary task owner. It includes no-task and mixed-requester
+decisions, actual requester roles, exact question/decision IDs and delivery state;
+64 details plus an exact total and truncation flag, with no question/reply text.
+The Queen-only coordination tool directs her to read/reply to the exact exchange,
+not infer permission. Task assignment and existing ownership counts do not change.
+Two persistence tests, the application authorization regression and the API Queen
+attention test pass. Strict API/application/persistence all-target Clippy passes.
+The first API compile hit a Rust incremental fingerprint panic; the same test
+passed with CARGO_INCREMENTAL=0, without live-service changes or cache deletion.
+This closes the missing compact attention projection, NOT native Queen behavior
+acceptance. The next gate remains sleeping-requester delivery/current-tool readiness,
+then fictional native roundtrip and coherent deployment. No release or BFG contact.
+
 Explicit delivery recovery is now connected locally through the operator-only
 HTTP route and real Inbox panel. The exact observed claim/session fences each
 choice: confirm checked delivery, or retry after acknowledging duplicate risk.

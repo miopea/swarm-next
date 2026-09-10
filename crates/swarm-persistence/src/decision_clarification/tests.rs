@@ -16,6 +16,107 @@ fn notification_receipts(store: &TaskStore) -> i64 {
 }
 
 #[test]
+fn clarification_attention_includes_no_task_and_clears_only_on_reply_or_resolution() {
+    let (store, decision, worker, session) = setup();
+    let id = DecisionClarificationId::new();
+    assert!(store.clarification_attention().unwrap().requests.is_empty());
+    store
+        .ask_decision_clarification(id, decision, "Private question", 100)
+        .unwrap();
+    let attention = store.clarification_attention().unwrap();
+    assert_eq!(attention.total, 1);
+    assert!(!attention.truncated);
+    assert_eq!(attention.requests[0].decision_id, decision);
+    assert_eq!(attention.requests[0].requesting_worker_id, worker);
+    assert!(!attention.requests[0].requester_is_queen);
+    assert!(
+        store
+            .get_decision_request(decision)
+            .unwrap()
+            .task_id
+            .is_none()
+    );
+    let claim = store.claim_clarification_deliveries(101).unwrap().remove(0);
+    store
+        .finish_clarification_delivery(&claim, Outcome::Uncertain)
+        .unwrap();
+    assert_eq!(
+        store.clarification_attention().unwrap().requests[0].delivery_state,
+        ClarificationDeliveryState::Uncertain
+    );
+    store
+        .reply_decision_clarification(id, worker, session, "Explanation", 102)
+        .unwrap();
+    assert_eq!(store.clarification_attention().unwrap().total, 0);
+    assert_eq!(
+        store.get_decision_request(decision).unwrap().state,
+        DecisionRequestState::Pending
+    );
+    store
+        .ask_decision_clarification(
+            DecisionClarificationId::new(),
+            decision,
+            "One more question",
+            103,
+        )
+        .unwrap();
+    assert_eq!(store.clarification_attention().unwrap().total, 1);
+    store
+        .resolve_decision_request(decision, "Wait", "Final choice", "test")
+        .unwrap();
+    assert_eq!(store.clarification_attention().unwrap().total, 0);
+}
+
+#[test]
+fn clarification_attention_counts_beyond_detail_cap_without_private_text() {
+    let (store, _, _, _) = setup();
+    let queen = store.ensure_queen("/fictional/queen").unwrap();
+    for index in 0..65 {
+        let request = store
+            .create_decision_request(&NewDecisionRequest {
+                requesting_worker_id: queen.id,
+                task_id: None,
+                kind: DecisionRequestKind::Input,
+                urgency: DecisionUrgency::Normal,
+                title: &format!("Attention fixture {index}"),
+                summary: "Which?",
+                reason: "Explain first",
+                risk: "Fixture",
+                evidence: "No work executes",
+                suggested_action: "Wait",
+                allowed_actions: &["Wait".into()],
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+            })
+            .unwrap();
+        store
+            .ask_decision_clarification(
+                DecisionClarificationId::new(),
+                request.id,
+                "Private question",
+                100 + index,
+            )
+            .unwrap();
+    }
+    let attention = store.clarification_attention().unwrap();
+    assert_eq!(attention.total, 65);
+    assert_eq!(attention.requests.len(), 64);
+    assert!(attention.truncated);
+    assert!(
+        attention
+            .requests
+            .iter()
+            .all(|request| request.requester_is_queen)
+    );
+    assert!(
+        !serde_json::to_string(&attention)
+            .unwrap()
+            .contains("Private question")
+    );
+}
+
+#[test]
 fn clarification_reconciliation_is_explicit_fenced_and_replay_safe() {
     use swarm_domain::{ClarificationReconciliation, ClarificationReconciliationChoice as Choice};
     let (store, decision, _, _) = setup();
