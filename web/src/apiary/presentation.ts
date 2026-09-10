@@ -5,8 +5,16 @@ export const federationSyncCopy: Record<FederationSyncCondition, readonly [strin
   current: ["Up to date", "This Hive completed its latest Keeper reconciliation."],
   offline: ["Keeper temporarily unavailable", "Owned work remains local; new shared claims wait."],
   authentication_required: ["Membership credentials need attention", "Keeper synchronization is paused until access is restored."],
-  incompatible: ["Runtime update required", "This Hive and its Keeper need compatible federation versions."],
+  incompatible: ["Shared setup needs attention", "The Keeper response could not be accepted. Check connection and version details in Diagnostics; local workers are unaffected."],
 };
+
+export function catalogReadinessLabel(catalog?: FederationCatalogReadiness) {
+  if (!catalog?.acknowledgement) return "Waiting";
+  if (catalog.blockers.includes("catalog_stale")) return "Refresh needed";
+  if (catalog.blockers.includes("policy_revision_changed")) return "Policy changed";
+  if (catalog.blockers.includes("catalog_missing")) return "Waiting";
+  return "Verified";
+}
 
 export function catalogBlockerLabel(blocker: FederationCatalogReadiness["blockers"][number]) {
   return ({

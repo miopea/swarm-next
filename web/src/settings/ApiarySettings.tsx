@@ -29,7 +29,7 @@ import {
   type StewardCapability,
   type Stewardship,
 } from "../api";
-import { federationSyncCopy } from "../apiary/presentation";
+import { catalogReadinessLabel, federationSyncCopy } from "../apiary/presentation";
 import KeeperInvitationManager from "./KeeperInvitationManager";
 import MemberDeparturePanel from "./MemberDeparturePanel";
 import PersonalHiveJoin from "./PersonalHiveJoin";
@@ -452,7 +452,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
                 </span>
               </div>
               <dl>
-                <div><dt>Catalog</dt><dd>{memberCatalog?.acknowledgement ? "Verified" : "Waiting"}</dd></div>
+                <div><dt>Catalog</dt><dd>{catalogReadinessLabel(memberCatalog)}</dd></div>
                 <div><dt>Projects ready</dt><dd>{memberCatalog ? `${memberCatalog.projects.filter((project) => project.binding_id && project.access_verified && project.workflow_mapped).length}/${memberCatalog.projects.length}` : "—"}</dd></div>
                 <div><dt>Jira</dt><dd>{memberCatalog?.jira_connection === "ready" ? "Connected" : "Needs attention"}</dd></div>
                 <div><dt>Retries</dt><dd>{memberSync?.consecutive_failures ?? 0}</dd></div>

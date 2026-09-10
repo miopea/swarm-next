@@ -1,5 +1,27 @@
 # Current maturity acceptance ledger
 
+## September 10 — Apiary onboarding observed on both actual installations
+
+Authenticated Edge tabs at swarm.bfgsolutions.net and localhost:8766 reproduced
+the report: Keeper lists3 Hives (Lead Hive,My Hive,WSL Test Hive); WSL lists only
+Lead Hive and itself. Both use Operator. WSL reports1.7.0 and healthy services,
+but federation condition incompatible,one failure,next_attempt_at null. It shows
+catalog Verified while also reporting catalog_stale. No memberships were changed.
+
+Code evidence: list_apiary_members reads local hives/operators only; the signed
+catalog payload carries projects/policy/identity IDs,not the full member roster.
+rename_local_hive updates the local row and a local runtime event only. Cross-Hive
+identity propagation is therefore real implementation work,not just a redraw.
+The sync loop stops for incompatible/authentication states. Its incompatible
+classification includes conflicts,rejected responses and invalid responses;
+it does not establish a required runtime update. The precise WSL rejection was
+not recovered from the available filtered journal and remains unconfirmed.
+
+Local presentation fix: stale catalog summaries say Refresh needed rather than
+Verified; changed policy is explicit. The generic failure no longer prescribes
+an unproven update.27 affected UI tests and TypeScript passed. This fix is not
+deployed or a resolution of roster,rename,onboarding or WSL transport defects.
+
 ## September 10 — durable distinction for final-checked evidence
 
 Native sources now preserve an optional typed final-result marker. The engine

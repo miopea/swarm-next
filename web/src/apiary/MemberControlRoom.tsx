@@ -38,7 +38,7 @@ import {
   type LocalApiaryTaskExecution,
 } from "../api";
 import BeeMascot from "../brand/BeeMascot";
-import { catalogBlockerLabel, federationSyncCopy } from "./presentation";
+import { catalogBlockerLabel, catalogReadinessLabel, federationSyncCopy } from "./presentation";
 
 type Props = {
   identity: HiveIdentity;
@@ -195,7 +195,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
       {state === "partial" ? <div className="keeper-load-state" role="alert"><span>Some Apiary status could not be refreshed. Local workers and owned work are unchanged.</span><button type="button" onClick={() => void refresh()}>Try again</button></div> : null}
       <dl className="keeper-summary member-summary" aria-label="Member Apiary summary">
         <div><dt>Keeper</dt><dd>{keeper?.hive_name ?? "Waiting"}</dd></div>
-        <div><dt>Catalog</dt><dd>{snapshot.catalog?.acknowledgement ? "Verified" : "Waiting"}</dd></div>
+        <div><dt>Catalog</dt><dd>{catalogReadinessLabel(snapshot.catalog)}</dd></div>
         <div><dt>Projects ready</dt><dd>{projectCount ? `${readyProjects}/${projectCount}` : "0"}</dd></div>
         <div><dt>My Jira claims</dt><dd>{localClaims.length}</dd></div>
         <div><dt>Keeper tasks</dt><dd>{snapshot.tasks.length}</dd></div>
