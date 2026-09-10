@@ -2,6 +2,19 @@
 
 ### Active acceptance checkpoint — ordinary-user UX first
 
+DELIVERED83a88edd: healthy app/API, exact34-record/12-running identity match,
+enginePID3408834/start unchanged, development reload completed successfully.
+Current package83a88edd: display failures no longer invent an update cause or
+claim unobserved worker health; terminal failures use the existing content-free
+diagnostic marker. Three regression tests and production build pass, plus390px
+fictional terminal recovery. Deployment requested; verify health and unchanged
+worker identities before calling it delivered. Prior1e410476 CI34456655548 green.
+Next unmet UI-4 finding: unavailable queue observations have no local retry on
+mobile. Add a read-only retry through the existing bounded polling owner, not a
+Queen run or full terminal refresh. Empty Needs You correctly shows nothing
+requiring attention; missing recovery evidence correctly prevents Queue all-clear.
+Do not repeat passed UI gates or start deep performance work in this UX tranche.
+
 DELIVERED1e410476: healthy app/API, all34 worker records/12 running identities
 preserved, enginePID3408834/start unchanged. See95. CI34456655548 is pending.
 Do not redo update confirmation/cancellation: existing a716dad8 desktop/phone

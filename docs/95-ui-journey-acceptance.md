@@ -211,3 +211,24 @@ the dedicated browser tab is on Settings, not an engaged worker terminal.
 - Queen orchestration, direct-terminal decision reconciliation, safe automatic
   engine admission, chosen-conversation recovery and sustained efficiency remain
   in the original goal and backend handoff. No BFG contact without approval.
+# Display recovery — 83a88edd
+
+Delivered runtime1.6.0-dev-83a88edd9523-20260910090628-163177, healthy/no degraded
+subsystems. Reload service completed successfully. Pre/post-display-workers.json
+in the retained private evidence directory match all34 records/12 running session
+identities. EnginePID3408834/start unchanged. No worker-engine update or release.
+
+- Terminal rendering/import failures no longer assert that an app update caused
+  the failure. Root and terminal recovery explain that browser reload does not
+  restart workers, without claiming their unobserved current health.
+- Terminal boundary records only the existing `react_render` marker. Tests prove
+  the diagnostic record excludes the thrown private/path error text.
+- All three focused regressions failed against the former copy, then passed;
+  production build passed (existing large-chunk advisory remains).
+- Edge fictional harness at390px: recovery copy/action fit; Refresh Swarm restores
+  only the fictional view. This is not a real provider recovery or mobile OS test.
+- Empty-work fixture: Needs You is clear while worker roster remains present.
+  Queues correctly withholds all-clear when recovery evidence is unavailable.
+  Missing local retry is the next UI-4 action, not accepted as complete.
+- App/API deployment requested; continuity/live bundle receipt pending. No release
+  or worker-engine update. Previous1e410476 CI34456655548 completed successfully.
