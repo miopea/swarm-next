@@ -1742,6 +1742,7 @@ export function App() {
   };
   const commandChoices = useMemo<CommandChoice[]>(() => [
     { id: "decisions", label: "Needs you", detail: `${attentionCount} pending`, group: "Go to", run: () => setSurface("decisions") },
+    { id: "queues", label: "Queues", detail: `${queuedTaskCount} waiting · who has the next move`, group: "Go to", run: () => setSurface("queues") },
     { id: "tasks", label: "Tasks", detail: `${openTaskCount} open`, group: "Go to", run: () => setSurface("tasks") },
     { id: "new-task", label: "Create task", detail: "Plan work for a worker", group: "Go to", run: () => { setTaskComposeRequest((current) => current + 1); setSurface("tasks"); } },
     { id: "workers", label: "Workers", detail: `${workers.filter((worker) => worker.running).length} running`, group: "Go to", run: () => setSurface("workers") },
@@ -1782,7 +1783,7 @@ export function App() {
         setSurface("decisions");
       },
     })),
-  ], [openTaskCount, attentionCount, pendingAssistCount, workers, tasks, decisions, activeSessionId, operatorToken, federated, keeper]);
+  ], [openTaskCount, queuedTaskCount, attentionCount, pendingAssistCount, workers, tasks, decisions, activeSessionId, operatorToken, federated, keeper]);
 
   useEffect(() => {
     window.addEventListener("keydown", handleShortcut);

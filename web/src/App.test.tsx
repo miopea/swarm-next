@@ -1147,6 +1147,19 @@ test("waking a task worker assigns the stable worker rather than its new session
   ));
 });
 
+test("quick navigation opens Queues by keyboard with the sidebar waiting count", async () => {
+  vi.stubGlobal("fetch", bootFetch());
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Open quick navigation" }));
+  const count = screen.getByRole("button", { name: /^Queues/ }).textContent?.match(/\d+/)?.[0];
+  const search = screen.getByRole("combobox", { name: "Find work, decisions, or workers" });
+  fireEvent.change(search, { target: { value: "Queues" } });
+  expect(screen.getByRole("option", { name: `Go to Queues ${count} waiting · who has the next move` })).toBeVisible();
+  fireEvent.keyDown(search, { key: "Enter" });
+  expect(await screen.findByRole("heading", { name: "Queues", level: 2 })).toBeVisible();
+  expect(screen.queryByRole("dialog", { name: "Where would you like to go?" })).not.toBeInTheDocument();
+});
+
 function hiveIdentity() {
   return { operator: { id: "operator-1", display_name: "Operator" }, hive: { id: "hive-1", name: "My Hive", operator_id: "operator-1", apiary_id: null } };
 }
