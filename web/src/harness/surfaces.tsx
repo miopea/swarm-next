@@ -548,7 +548,7 @@ export const SURFACES: Surface[] = [
   },
   {
     id: "connections",
-    title: "Connections",
+    title: "Integrations",
     why: "the outside-tools card in all three states — connected, empty, and the read that failed",
     render: () => (
       <div className="harness-machine-states">

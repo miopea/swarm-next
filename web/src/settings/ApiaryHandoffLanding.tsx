@@ -42,7 +42,7 @@ export default function ApiaryHandoffLanding({ children }: Props) {
     setError("");
     try {
       await navigator.clipboard.writeText(link);
-      setMessage("Private link copied. Paste it into Settings → Connections → Your Apiary in your personal Hive.");
+      setMessage("Private link copied. Paste it into Settings → Your Hive → Apiary in your personal Hive.");
     } catch {
       setError("The browser could not copy the link. Copy the complete address from the address bar instead.");
     }

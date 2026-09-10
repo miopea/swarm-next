@@ -33,7 +33,9 @@ test("recognizes every section anchor and rejects unrelated hashes", () => {
 test("an older anchor still opens the section that now holds it", () => {
   expect(readSettingsSection("#settings-crew", "")).toBe("settings-workers");
   expect(readSettingsSection("#settings-queen", "")).toBe("settings-workers");
-  expect(readSettingsSection("#settings-apiary", "")).toBe("settings-connections");
+  // Apiary moved to Your Hive when joining was simplified; an old bookmark must
+  // still land where the card actually is, which is the whole point of this test.
+  expect(readSettingsSection("#settings-apiary", "")).toBe("settings-hive");
   expect(readSettingsSection("#settings-runtime", "")).toBe("settings-updates");
   expect(readSettingsSection("#settings-diagnostics", "")).toBe("settings-maintenance");
   expect(readSettingsSection("#settings-notifications", "")).toBe("settings-hive");
