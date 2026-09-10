@@ -7,6 +7,18 @@ const controller = vi.hoisted(() => ({
   sendInput: vi.fn(() => true),
   stateListener: undefined as ((state: string) => void) | undefined,
   initialState: "connected",
+  // Readable during a render, exactly as the real controller is. TerminalView
+  // uses these so the first frame after a worker switch shows the INCOMING
+  // worker's status rather than the outgoing one's — see the comment there.
+  get currentState() { return controller.initialState; },
+  get currentControl() { return "owned"; },
+  // Counted because TerminalView reads it in EXACTLY ONE PLACE: the render-time
+  // reset that runs when session_id changes. currentState is unusable as the
+  // probe — `useRef(controller.currentState)` evaluates its argument on every
+  // render, so its count rises with or without the fix, and a first attempt at
+  // this test ablated clean because of it.
+  detailReads: 0,
+  get currentStateDetail() { controller.detailReads += 1; return undefined; },
   controlListener: undefined as ((control: string) => void) | undefined,
   subscribeControl: vi.fn((listener: (control: string) => void) => {
     controller.controlListener = listener;
@@ -516,4 +528,38 @@ test("a file picked from the phone that is too large is refused before any uploa
   expect(await screen.findByText(/clip\.mov/)).toBeTruthy();
   expect(screen.getByText(/the limit is/)).toBeTruthy();
   expect(upload).not.toHaveBeenCalled();
+});
+
+/**
+ * ⚠️ SWITCHING WORKERS MUST READ THE INCOMING CONTROLLER DURING THE RENDER.
+ *
+ * App.tsx renders TerminalView with no `key`, so a switch changes
+ * `session.session_id` in place and the component is NOT remounted. Its
+ * useState initialisers do not run again, so status, control and detail carried
+ * the OUTGOING worker's values into the first painted frame. `subscribe` cannot
+ * correct them in time: it runs from an effect, which runs after the paint.
+ * Reported as issue #72, "the screen briefly glitches before settling."
+ *
+ * ⚠️ THIS ASSERTS THE READ, NOT THE PIXELS, AND THAT IS DELIBERATE. A DOM
+ * assertion cannot see the defect at all — `rerender` wraps in `act()`, which
+ * flushes the effect and repairs the state before anything can be queried, so
+ * such a test passes whether or not the bug is present. One was written first
+ * and its ablation did not bite, which is how this one exists.
+ *
+ * The controller is the only thing that knows the incoming state early enough,
+ * so reading it during the switch render IS the fix. Counting that read fails
+ * when the render-time reset is removed.
+ */
+test("switching workers reads the incoming controller state during render", () => {
+  const { rerender } = render(
+    <TerminalView busy={false} operatorToken="t" session={{ session_id: "session-1", running: true }} />,
+  );
+  const before = controller.detailReads;
+  rerender(
+    <TerminalView busy={false} operatorToken="t" session={{ session_id: "session-2", running: true }} />,
+  );
+  expect(
+    controller.detailReads,
+    "a session change must read the incoming controller's state during render, or the first frame paints the previous worker's status",
+  ).toBeGreaterThan(before);
 });
