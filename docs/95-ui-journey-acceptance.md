@@ -35,8 +35,15 @@ also needed a proper typed activity page instead of its generic empty-array
 fallback. Its actual browser close/reopen now renders two fictional events.
 This harness repair is not a production backend defect.
 
-Deploy this coherent correction and record exact worker continuity before calling
-it delivered. Do not rerun the already-green native clarification/backend suite.
+Delivered as 444f7a56. Production-dev reports
+`1.6.0-dev-444f7a565411-20260910065313-92358`, with healthy API and no degraded
+subsystems; the live Edge tab displays that revision. Engine PID3408834 and its
+September9 17:01:49EDT start are unchanged. All34 worker records and12 running
+worker/session identity projections match the immediate pre-update snapshot.
+Evidence is retained in pre-history-workers.json/post-history-workers.json under
+the existing private deployment evidence directory. No release or engine update.
+The fictional harness server was stopped. CI is not yet confirmed complete.
+Do not rerun the already-green native clarification/backend suite.
 
 ## Remaining finish gates
 

@@ -2,6 +2,16 @@
 
 ### Active package: Needs You clarification, not another reload patch
 
+Current delivery checkpoint: history cancellation444f7a56 is pushed and live;
+healthy runtime `1.6.0-dev-444f7a565411-20260910065313-92358`. Exact34-worker,
+12-running identity match and unchanged enginePID3408834/start verified. No
+engine update/release. Local harness stopped. CI still needs its completion
+check. Next: bounded older-history navigation, not another cancellation retest.
+Persistence currently selects newest limit+1 by sequence then reverses; HTTP
+TaskActivityQuery exposes only limit. Additive cursor pagination can reuse that
+ownership, keeping one visible page and Latest/Older controls. Read relevant
+contracts and add failure/recovery tests before implementing; not yet started.
+
 UI-4 continuation: see95 for the current journey matrix. Live prerequisite ->
 exact task -> history passed. A failing-before regression proved reopened history
 could be overwritten by an older response. The existing bounded read owner now
