@@ -240,6 +240,18 @@ impl TaskStore {
         )?;
         tx.execute("INSERT INTO decision_clarifications(id,decision_id,operator_id,question,asked_at,round_index) VALUES(?1,?2,?3,?4,?5,?6)",
             params![id.to_string(),decision.to_string(),operator,question,now,count + 1])?;
+        // Asking is an explicit operator request to the author, not permission
+        // for the task. Reuse the owned, bounded return queue when that author
+        // is asleep. Never replace an existing promise or erase a failed attempt.
+        tx.execute(
+            "INSERT INTO worker_revival_intents(worker_id,recorded_at)
+             SELECT w.id,?2 FROM decision_requests d JOIN worker_profiles w ON w.id=d.requesting_worker_id
+             WHERE d.id=?1 AND w.archived_at IS NULL
+             AND NOT EXISTS(SELECT 1 FROM worker_sessions s WHERE s.worker_id=w.id AND s.ended_at IS NULL)
+             ON CONFLICT(worker_id) DO NOTHING",
+            params![decision.to_string(), now],
+        )?;
+        crate::worker_engine_returns::check_capacity(&tx)?;
         crate::insert_control_room_event(&tx, ControlRoomEventKind::DecisionsChanged)?;
         let saved = get(&tx, id)?.ok_or(Refusal::NotFound)?;
         tx.commit()?;

@@ -16,6 +16,65 @@ fn notification_receipts(store: &TaskStore) -> i64 {
 }
 
 #[test]
+fn clarification_sleeping_author_uses_bounded_return_without_resetting_failure() {
+    for existing_failure in [false, true] {
+        let (store, decision, worker, session) = setup();
+        store
+            .release_missing_worker_sessions(&std::collections::HashSet::new())
+            .unwrap();
+        if existing_failure {
+            store.record_worker_revival_intents(&[worker], 98).unwrap();
+            let attempt = store
+                .claim_worker_revival_attempt(worker, 99)
+                .unwrap()
+                .unwrap();
+            store.fail_worker_revival_attempt(worker, attempt).unwrap();
+        }
+        let id = DecisionClarificationId::new();
+        store
+            .ask_decision_clarification(id, decision, "Why?", 100)
+            .unwrap();
+        assert_eq!(
+            store.worker_revival_pending(worker).unwrap(),
+            !existing_failure
+        );
+        assert_eq!(
+            store.get_decision_request(decision).unwrap().state,
+            DecisionRequestState::Pending
+        );
+        assert!(
+            store
+                .claim_clarification_deliveries(101)
+                .unwrap()
+                .is_empty()
+        );
+        // Explicit stand-down wins; replaying an HTTP receipt is not a new wake.
+        store.cancel_session_revival(session).unwrap();
+        store
+            .ask_decision_clarification(id, decision, "Why?", 102)
+            .unwrap();
+        assert!(!store.worker_revival_pending(worker).unwrap());
+    }
+}
+
+#[test]
+fn clarification_wake_and_question_roll_back_together() {
+    let (store, decision, worker, _) = setup();
+    store
+        .release_missing_worker_sessions(&std::collections::HashSet::new())
+        .unwrap();
+    store.connection().unwrap().execute_batch("CREATE TRIGGER clarification_wake_failure BEFORE INSERT ON control_room_events BEGIN SELECT RAISE(ABORT,'fixture failure'); END;").unwrap();
+    let id = DecisionClarificationId::new();
+    assert!(
+        store
+            .ask_decision_clarification(id, decision, "Why?", 100)
+            .is_err()
+    );
+    assert!(store.decision_clarifications(decision).unwrap().is_empty());
+    assert!(!store.worker_revival_pending(worker).unwrap());
+}
+
+#[test]
 fn clarification_attention_includes_no_task_and_clears_only_on_reply_or_resolution() {
     let (store, decision, worker, session) = setup();
     let id = DecisionClarificationId::new();
@@ -28,6 +87,7 @@ fn clarification_attention_includes_no_task_and_clears_only_on_reply_or_resoluti
     assert!(!attention.truncated);
     assert_eq!(attention.requests[0].decision_id, decision);
     assert_eq!(attention.requests[0].requesting_worker_id, worker);
+    assert!(!store.worker_revival_pending(worker).unwrap());
     assert!(!attention.requests[0].requester_is_queen);
     assert!(
         store

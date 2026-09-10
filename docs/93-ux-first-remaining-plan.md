@@ -2,6 +2,20 @@
 
 ### Active package: Needs You clarification, not another reload patch
 
+Sleeping-author admission is now implemented through the existing bounded worker
+return queue in the same transaction as the operator question. Running authors
+get no return intent. An existing failed/unconfirmed attempt is preserved, not
+reset; explicit stand-down and HTTP replay cannot resurrect a cancelled wake.
+Question/event failure rolls back the wake as well. The existing supervisor owns
+startup, resource/drain/provider guards and failure attention; no separate sender
+or retry loop. All 25 clarification persistence tests and strict persistence
+all-target Clippy pass. Native provider/browser roundtrip is still required.
+Upstream and the clean live clone rechecked at414de057; /health is healthy with
+version1.6.0-dev-414de0575d76-20260909232601-3621464. Root disk has3.4GB free.
+Use CARGO_INCREMENTAL=0 for the isolated Rust checks after the compiler cache ICE.
+Account usage is26% used/74% remaining at this package boundary; no resets used.
+No changes deployed, worker restarts, releases or BFG Admin contact in this slice.
+
 Queen attention now also includes a bounded explanation-wait projection independent
 of task membership and primary task owner. It includes no-task and mixed-requester
 decisions, actual requester roles, exact question/decision IDs and delivery state;

@@ -52,6 +52,13 @@ same reply to re-notify; a distinct reply round remains a new attention cycle.
   notification (one pending permit), so receipt does not wait on terminal I/O or
   the next scheduled pass. Passes remain serial and graceful shutdown stops new
   admission before joining the current pass; no per-question detached sender.
+- Asking a sleeping author also records a wake promise in the same transaction,
+  using the existing 256-worker return queue and its lifecycle-owned four-attempt
+  batch. No new launch loop is added. Current capacity, engine drain, experimental
+  provider and failed/unconfirmed-start guards remain in force. An existing
+  promise or failed attempt is never reset by a question or its replay. This is
+  permission to wake the author to explain, not permission to execute the task.
+  Explicit worker stand-down still cancels the wake; the question remains queued.
 - Abandoned dispatch claims become uncertain; never automatically resend an
   ambiguous write. Definitive pre-write deferral returns to queued. Explicit
   reconciliation must name the observed claim and acknowledge duplicate risk.
