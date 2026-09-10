@@ -374,6 +374,21 @@ pre-migration database backup.
 
 ### Durable intake and acknowledgement ownership
 
+The private persistence boundary now supports explicitly binding a retained
+source ID to a full decision ID. In one transaction it checks the local Hive,
+worker/session identity, active session, pending decision and complete native
+question shape against the decision snapshot, including descriptions and order.
+It never searches for a decision by text. The existing nullable decision link
+pins pending evidence during retention. Same-link retries are no-ops, including
+after the original session ends; a different decision cannot replace that link.
+
+This link is not human authentication, final-consumption confirmation or decision
+resolution. It has no agent-facing route or production capture caller. Only the
+future authenticated application correlation path may use it; semantic guesses
+must not call it. No receipt, delivery or general activity is created. The
+existing confirmed-resolution transaction remains the sole settlement path.
+
+
 The existing API worker-supervisor pass collects at most32 native sources from
 the trusted local terminal engine after reconciling known sessions. It checks
 the actual protocol first; protocol16 and other unrecognized generations receive

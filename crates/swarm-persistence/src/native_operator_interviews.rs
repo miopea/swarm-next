@@ -65,6 +65,83 @@ pub(super) fn migrate(tx: &Transaction<'_>) -> rusqlite::Result<()> {
 }
 
 impl TaskStore {
+    /// Pin a private source to an explicitly supplied decision, never a guessed
+    /// text match. This link does not authenticate authorship, settle a decision,
+    /// create a confirmed receipt, or enqueue worker input.
+    /// # Errors
+    /// Refuses missing, foreign, stale, conflicting or changed-question evidence.
+    pub fn bind_native_interview(
+        &self,
+        source_id: OperatorSubmissionId,
+        decision_id: swarm_domain::DecisionRequestId,
+        worker_id: WorkerId,
+        session_id: swarm_domain::WorkerSessionId,
+    ) -> Result<bool, NativeInterviewStoreError> {
+        let mut connection = self.connection()?;
+        let tx = connection.transaction()?;
+        let row: Option<(String, Option<String>)> = tx
+            .query_row(
+                "SELECT n.payload,n.decision_id FROM native_operator_interviews n
+             JOIN worker_profiles w ON w.id=n.worker_id
+             JOIN local_hive_identity l ON l.hive_id=w.hive_id AND l.singleton=1
+             WHERE n.id=?1 AND n.worker_id=?2 AND n.session_id=?3",
+                params![
+                    source_id.to_string(),
+                    worker_id.to_string(),
+                    session_id.to_string()
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let (payload, linked) = row.ok_or(NativeInterviewStoreError::Invalid)?;
+        if let Some(linked) = linked {
+            return if linked == decision_id.to_string() {
+                Ok(false)
+            } else {
+                Err(NativeInterviewStoreError::Conflict)
+            };
+        }
+        if payload.len() > MAX_NATIVE_INTERVIEW_SOURCE_BYTES {
+            return Err(NativeInterviewStoreError::Invalid);
+        }
+        let source: NativeInterviewEvidence =
+            serde_json::from_str(&payload).map_err(|_| NativeInterviewStoreError::Invalid)?;
+        if !source.is_valid() || source.id != source_id || source.session_id != session_id {
+            return Err(NativeInterviewStoreError::Invalid);
+        }
+        let questions: Option<String> = tx
+            .query_row(
+                "SELECT d.questions FROM decision_requests d
+             JOIN local_hive_identity l ON l.hive_id=d.hive_id AND l.singleton=1
+             WHERE d.id=?1 AND d.state='pending'
+             AND EXISTS(SELECT 1 FROM worker_sessions s
+               WHERE s.session_id=?2 AND s.worker_id=?3 AND s.ended_at IS NULL)",
+                params![
+                    decision_id.to_string(),
+                    session_id.to_string(),
+                    worker_id.to_string()
+                ],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let questions: Vec<swarm_domain::DecisionQuestion> =
+            serde_json::from_str(&questions.ok_or(NativeInterviewStoreError::Invalid)?)
+                .map_err(|_| NativeInterviewStoreError::Invalid)?;
+        let native: Option<Vec<_>> = questions
+            .iter()
+            .map(swarm_domain::NativeInterviewQuestion::from_decision)
+            .collect();
+        if native.as_ref() != Some(&source.questions) {
+            return Err(NativeInterviewStoreError::Invalid);
+        }
+        tx.execute(
+            "UPDATE native_operator_interviews SET decision_id=?2 WHERE id=?1",
+            params![source_id.to_string(), decision_id.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     /// Admit only after the application authenticates the independent engine.
     /// An ended known session may still have retained engine evidence awaiting
     /// API ingestion. Admission does not settle a request or inject an answer.
@@ -290,6 +367,117 @@ mod tests {
             store.record_native_interview(&changed, 102),
             Err(NativeInterviewStoreError::Conflict)
         ));
+    }
+
+    fn decision_question(native: &NativeInterviewQuestion) -> swarm_domain::DecisionQuestion {
+        swarm_domain::DecisionQuestion {
+            header: native.header.clone(),
+            question: native.question.clone(),
+            options: native.options.iter().map(|o| o.label.clone()).collect(),
+            option_descriptions: native
+                .options
+                .iter()
+                .map(|o| (o.label.clone(), o.description.clone()))
+                .collect(),
+            multi_select: native.multi_select,
+        }
+    }
+
+    #[test]
+    fn exact_binding_is_idempotent_and_does_not_resolve_or_deliver() {
+        let store = TaskStore::in_memory().unwrap();
+        let source = fixture(&store);
+        store.record_native_interview(&source, 100).unwrap();
+        let worker = store
+            .native_interview(source.id)
+            .unwrap()
+            .unwrap()
+            .worker_id;
+        let question = decision_question(&source.questions[0]);
+        let create = |question: &swarm_domain::DecisionQuestion| {
+            store
+                .create_decision_request(&crate::NewDecisionRequest {
+                    requesting_worker_id: worker,
+                    task_id: None,
+                    kind: swarm_domain::DecisionRequestKind::Input,
+                    urgency: swarm_domain::DecisionUrgency::Normal,
+                    title: "Fictional jar",
+                    summary: "Choose",
+                    reason: "Test",
+                    risk: "",
+                    evidence: "",
+                    suggested_action: "Choose",
+                    allowed_actions: &[],
+                    questions: std::slice::from_ref(question),
+                    deadline: None,
+                    requested_command: None,
+                })
+                .unwrap()
+                .id
+        };
+        let mut changed = question.clone();
+        changed.option_descriptions.clear();
+        let changed_id = create(&changed);
+        assert!(matches!(
+            store.bind_native_interview(source.id, changed_id, worker, source.session_id),
+            Err(NativeInterviewStoreError::Invalid)
+        ));
+        let decision = create(&question);
+        assert!(matches!(
+            store.bind_native_interview(source.id, decision, worker, WorkerSessionId::new()),
+            Err(NativeInterviewStoreError::Invalid)
+        ));
+        store
+            .connection()
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER refuse_native_binding BEFORE UPDATE ON native_operator_interviews
+             BEGIN SELECT RAISE(ABORT,'fictional failure'); END;",
+            )
+            .unwrap();
+        assert!(
+            store
+                .bind_native_interview(source.id, decision, worker, source.session_id)
+                .is_err()
+        );
+        store
+            .connection()
+            .unwrap()
+            .execute_batch("DROP TRIGGER refuse_native_binding;")
+            .unwrap();
+        assert!(
+            store
+                .bind_native_interview(source.id, decision, worker, source.session_id)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .bind_native_interview(source.id, decision, worker, source.session_id)
+                .unwrap()
+        );
+        assert!(matches!(
+            store.bind_native_interview(source.id, changed_id, worker, source.session_id),
+            Err(NativeInterviewStoreError::Conflict)
+        ));
+        let state: String = store
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT state FROM decision_requests WHERE id=?1",
+                [decision.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "pending");
+        assert!(store.claim_decision_deliveries(102).unwrap().is_empty());
+        // Pending links pin old evidence when admission prunes unreferenced sources.
+        let mut next = source.clone();
+        next.id = OperatorSubmissionId::new();
+        next.tool_use_id = "toolu_second".into();
+        store
+            .record_native_interview(&next, RETENTION + 101)
+            .unwrap();
+        assert!(store.native_interview(source.id).unwrap().is_some());
     }
 
     #[test]

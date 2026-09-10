@@ -1,5 +1,20 @@
 # Current maturity acceptance ledger
 
+## September 10 — private exact-decision source linkage
+
+The persistence boundary can now pin a retained native source to an explicitly
+supplied full decision ID after checking exact question/option descriptions,
+local ownership and the live worker session inside one transaction. A changed
+question or session fails; another decision cannot replace the link. Repeating
+the same link is idempotent. No decision is resolved or worker reply queued.
+
+Eleven native source tests passed in the isolated Linux tree, including a forced
+write failure followed by successful retry, conflict refusal and retaining an
+old source while its linked decision remains pending. No migration is needed:
+the schema160 reserved link is used. No production caller is enabled. Human
+authorship/final consumption and the application-to-resolution lifecycle remain
+open; this is not acceptance of automatic Needs You reconciliation.
+
 ## September 10 — live update identity checked in Edge
 
 A fresh owned tab at swarm.bfgsolutions.net restored the trusted session and

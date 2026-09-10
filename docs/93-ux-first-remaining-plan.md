@@ -24,6 +24,9 @@ Use this section before the historical checkpoints below. Full scope remains45.
   and authenticated input. Three-question final serialization is now observed
   and comparison passes9 tests plus strict Clippy; ambiguous free text remains
   unsupported. This is not human provenance or completed reconciliation.
+  Private exact-decision source pinning now has transactional tests; it does not
+  resolve or authenticate an answer. Next wire authenticated final consumption
+  and exact invocation/decision correlation through existing receipt settlement.
   Hooks remain disabled. No safe-recovery or permission rule may be bypassed.
 - **Separate external gates:** optional return-briefing visual approval;
   real Android/iOS picker,keyboard/suspension/handoff and actual browser zoom.
