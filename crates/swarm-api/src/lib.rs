@@ -17536,8 +17536,11 @@ mod tests {
             SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
         );
         let command = ProviderCommand {
-            executable: PathBuf::from("/bin/sh"),
-            arguments: vec!["-lc".into(), "sleep 5".into()],
+            // Reattachment, not a race against a five-second shell lifetime.
+            // The test stops this owned PTY child below; session Drop also
+            // kills it when an assertion unwinds.
+            executable: PathBuf::from("/bin/cat"),
+            arguments: Vec::new(),
             working_directory: workspace.clone(),
         };
         let session = registry.spawn(&command, TerminalSize::default()).unwrap();

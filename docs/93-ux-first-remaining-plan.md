@@ -2,6 +2,17 @@
 
 ### Active package: Needs You clarification, not another reload patch
 
+Final pre-deployment gate:561 API tests passed (three opt-in tests ignored),
+48 application tests passed,739 persistence tests passed;1512 web tests and the
+current production web build passed. The first broad API run exposed an existing
+five-second fixture lifetime; the corrected reattachment fixture is owned until
+explicit stop and passes in the combined suite. Both isolated native services,
+their browser tab and temporary SSH forward are stopped; evidence is preserved.
+Deploy app/API only. Baseline receipt directory:
+`/tmp/swarm-clarification-deploy.cvm5VI` —34 worker records,12 running; production
+enginePID3408834, startedSeptember9 at17:01:49EDT. Compare exact identities after
+deployment; do not claim conversation continuity from that projection alone.
+
 Native acceptance now passes for both Queen and an ordinary sleeping requester;
 see [94](94-clarification-native-acceptance.md) for exact decision/round/session
 IDs and evidence. Browser question -> guarded native delivery -> actual MCP reply

@@ -1,7 +1,9 @@
 # ADR 0094: Clarification is not an operator decision
 
 Status: Accepted implementation direction under the approved ATT-01/QUEEN-03
-UX maturity scope. End-to-end implementation and acceptance remain open.
+UX maturity scope. Native Queen and sleeping-requester exchanges passed in an
+isolated Hive on September10, 2026 (doc94). Live deployment and real-device
+acceptance remain separately tracked; this does not complete ADR0065 correlation.
 
 ## Decision
 

@@ -80,6 +80,21 @@ fallback. The controller then explicitly chose “Keep waiting” and sent answe
 
 ## Remaining acceptance
 
+Both fictional decisions were independently confirmed resolved with
+`resolution_answers.Sample=["Keep waiting"]`. Both native providers were resting
+without background work before their isolated API/host units were stopped. The
+temporary Windows SSH forward (verified PID32720) was stopped too. The isolated
+database/history remain as evidence; production services were not stopped.
+
+The first combined API gate passed560, ignored3, and failed the existing
+`api_recreation_reattaches_the_durable_queen_without_a_duplicate` fixture because
+its `sleep 5` child expired before the final running assertion. The fixture now
+uses an owned `cat` process stopped explicitly by the test (and killed by session
+Drop on unwind), not a wall-clock lifetime. This is a test-only correction.
+The repeated combined gate passed561 API tests (three opt-in tests ignored),
+all48 application tests and all739 persistence tests. The final web production
+build passed as well; its existing552-KB terminal-chunk warning remains.
+
 - Current native tools work across the tested API replacement. An older client
   retaining a pre-clarification tool list is not proven by this; preserve ADR0053's
   normal provider refresh boundary and do not restart unrelated workers.
