@@ -8,6 +8,8 @@ const directory = path.resolve(process.argv[3] || '.');
 if (!/^\/tmp\/swarm-native-answer-contract\.[A-Za-z0-9]+$/.test(directory)
     || fs.realpathSync(directory) !== directory) throw new Error('Disposable probe directory required');
 const question = 'Which fictional jar?';
+const multi = process.argv[4] === 'multi';
+const questions = multi ? [question, 'Which fictional shelf?', 'Which fictional tag?'] : [question];
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 const observations = path.join(directory, 'observations');
 const save = input => {
@@ -21,15 +23,15 @@ const save = input => {
   }
   throw new Error('Observation count exceeded');
 };
-const validQuestions = input => input?.questions?.length === 1
-  && input.questions[0].question === question
-  && input.questions[0].options?.map(option => option.label).join('|') === 'Amber|Blue';
+const validQuestions = input => input?.questions?.length === questions.length
+  && questions.every((text, index) => input.questions[index].question === text
+    && input.questions[index].options?.map(option => option.label).join('|') === 'Amber|Blue');
 
 if (mode === 'init') {
   fs.mkdirSync(observations, {mode:0o700});
   const script = path.join(directory, 'probe.cjs');
   fs.copyFileSync(__filename, script, fs.constants.COPYFILE_EXCL);
-  const command = action => `${quote(process.execPath)} ${quote(script)} ${action} ${quote(directory)}`;
+  const command = action => `${quote(process.execPath)} ${quote(script)} ${action} ${quote(directory)}${multi ? ' multi' : ''}`;
   const handler = action => ({type:'command',command:command(action),timeout:3});
   const settings = {hooks: {
     PreToolUse:[{matcher:'AskUserQuestion',hooks:[handler('observe'),handler('answer')]}],
@@ -67,11 +69,11 @@ if (mode === 'init') {
       if (input.tool_name !== 'AskUserQuestion' || !validQuestions(input.tool_input)) throw new Error('Unexpected fictional question');
       if (mode === 'answer') {
         process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:'PreToolUse',permissionDecision:'allow',
-          updatedInput:{...input.tool_input,answers:{[question]:'Amber'}}}}));
+          updatedInput:{...input.tool_input,answers:Object.fromEntries(questions.map(text=>[text,'Amber']))}}}));
       } else {
         if (!validQuestions(input.tool_response)) throw new Error('Unknown response shape');
         process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:'PostToolUse',
-          updatedToolOutput:{...input.tool_response,answers:{[question]:'Blue'}}}}));
+          updatedToolOutput:{...input.tool_response,answers:Object.fromEntries(questions.map(text=>[text,'Blue']))}}}));
       }
     }
   });

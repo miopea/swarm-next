@@ -227,6 +227,31 @@ authenticated human input and multi-question final-result correlation remain
 required before activation, followed by API-interruption/no-duplicate-delivery
 acceptance. This comparison is not completion of QUEEN-03 or ATT-01.
 
+### Three-question final batch observation, September 10
+
+A further isolated native Claude Code2.1.267 run in
+`/tmp/swarm-native-answer-contract.yt5S9Yco` asked three fictional questions
+in one invocation. The probe supplied Amber for each; PostToolUse retained
+Amber, while a replacement hook changed each to Blue. PostToolBatch contained
+all three Blue answers in question order, and the native worker reported them.
+The process exited normally; no Hive hook was installed. The reduced callback
+is retained in the terminal fixtures as
+`claude-2.1.267-three-question-final-batch.json`.
+
+This supersedes the single-question-only comparison limit above. Comparison
+checks every answer in declared question order. Multi-answer text containing
+quotes, backslashes or control characters is refused because this unstructured
+serialization cannot establish answer boundaries reliably. Full free-text
+acceptance remains open and requires stronger final-result evidence; refusing
+it is not fulfillment of that requirement.
+
+Nine provider-interview tests and strict terminal-crate Clippy pass, including
+changed answers, reordered questions and exactly matching ambiguous serialized
+text. The comparison test uses a synthetic completion observation; neither that
+nor the actual automated probe proves human authorship. Exact decision binding,
+authentic input correlation and interruption/no-duplicate-delivery acceptance
+still gate activation.
+
 ### Installed-provider reconciliation, 2026-09-04
 
 Read-only checks on the operator's remote host found Claude Code 2.1.260 at

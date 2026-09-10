@@ -51,14 +51,14 @@ impl NativeInterviewObservation {
             && self.questions == presented.questions
     }
 
-    /// Compare an already observed single-question answer with the provider's
+    /// Compare already observed answers with the provider's
     /// final batch result. This is not human provenance or a decision receipt.
     /// A batch alone loses evidence of programmatic input, so it cannot create
-    /// a completed observation. Multi-question serialization remains unverified.
+    /// a completed observation. Ambiguous multi-answer text is unsupported.
     #[must_use]
     pub fn matches_final_batch(&self, bytes: &[u8]) -> bool {
         if self.phase != NativeInterviewPhase::Completed
-            || self.questions.len() != 1
+            || self.questions.is_empty()
             || bytes.len() > crate::MAX_PROVIDER_LIFECYCLE_BYTES
         {
             return false;
@@ -92,12 +92,26 @@ impl NativeInterviewObservation {
         {
             return false;
         }
-        let question = &self.questions[0].question;
-        let Some(answer) = self.answers.get(question) else {
-            return false;
-        };
+        let mut clauses = Vec::with_capacity(self.questions.len());
+        for item in &self.questions {
+            let question = &item.question;
+            let Some(answer) = self.answers.get(question) else {
+                return false;
+            };
+            // Unescaped separators cannot prove how text was distributed
+            // between answers. These cases need a structured final result.
+            if self.questions.len() > 1
+                && answer
+                    .chars()
+                    .any(|value| value == '"' || value == '\\' || value.is_control())
+            {
+                return false;
+            }
+            clauses.push(format!("\"{question}\"=\"{answer}\""));
+        }
+        let joined = clauses.join(", ");
         let expected = format!(
-            "Your questions have been answered: \"{question}\"=\"{answer}\". You can now continue with these answers in mind."
+            "Your questions have been answered: {joined}. You can now continue with these answers in mind."
         );
         call.response.as_str() == Some(expected.as_str())
     }
@@ -323,6 +337,53 @@ mod tests {
         event["hook_event_name"] = json!("PreToolUse");
         event.as_object_mut().unwrap().remove("tool_response");
         assert!(!read(&event).unwrap().matches_final_batch(bytes));
+    }
+
+    #[test]
+    fn three_question_final_batch_preserves_order_and_refuses_ambiguous_text() {
+        let bytes = include_bytes!("../fixtures/claude-2.1.267-three-question-final-batch.json");
+        let batch: Value = serde_json::from_slice(bytes).unwrap();
+        let questions = batch["tool_calls"][0]["tool_input"]["questions"].clone();
+        let mut event = json!({
+            "hook_event_name":"PostToolUse", "session_id":batch["session_id"],
+            "tool_use_id":batch["tool_calls"][0]["tool_use_id"], "tool_name":"AskUserQuestion",
+            "tool_input":{"questions":questions},
+            "tool_response":{"questions":questions, "answers":{
+                "Which fictional jar?":"Blue", "Which fictional shelf?":"Blue",
+                "Which fictional tag?":"Blue"}}
+        });
+        // Synthetic completion isolates comparison, not human authorship.
+        assert!(read(&event).unwrap().matches_final_batch(bytes));
+        event["tool_response"]["answers"]["Which fictional shelf?"] = json!("Amber");
+        assert!(!read(&event).unwrap().matches_final_batch(bytes));
+        event["tool_response"]["answers"]["Which fictional shelf?"] = json!("Blue");
+        let mut reordered = batch.clone();
+        reordered["tool_calls"][0]["tool_input"]["questions"]
+            .as_array_mut()
+            .unwrap()
+            .swap(0, 1);
+        assert!(
+            !read(&event)
+                .unwrap()
+                .matches_final_batch(&serde_json::to_vec(&reordered).unwrap())
+        );
+        for answer in [
+            "Blue\", \"Which fictional shelf?\"=\"Amber",
+            "Blue\nAmber",
+            "Blue\\Amber",
+        ] {
+            event["tool_response"]["answers"]["Which fictional jar?"] = json!(answer);
+            let mut ambiguous = batch.clone();
+            ambiguous["tool_calls"][0]["tool_response"] = json!(format!(
+                "Your questions have been answered: \"Which fictional jar?\"=\"{answer}\", \"Which fictional shelf?\"=\"Blue\", \"Which fictional tag?\"=\"Blue\". You can now continue with these answers in mind."
+            ));
+            assert!(
+                !read(&event)
+                    .unwrap()
+                    .matches_final_batch(&serde_json::to_vec(&ambiguous).unwrap())
+            );
+        }
+        assert!(read_claude_interview(bytes).is_none());
     }
 
     #[test]

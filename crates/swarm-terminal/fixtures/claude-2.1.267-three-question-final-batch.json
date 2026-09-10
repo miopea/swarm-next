@@ -1,0 +1,14 @@
+{
+  "hook_event_name": "PostToolBatch",
+  "session_id": "7ce902d3-279e-4bac-88d8-18cfe8107501",
+  "tool_calls": [{
+    "tool_name": "AskUserQuestion",
+    "tool_use_id": "toolu_01GwgTtzUDXscs2iWuzdcmAg",
+    "tool_input": {"questions": [
+      {"question":"Which fictional jar?","header":"Jar","multiSelect":false,"options":[{"label":"Amber","description":""},{"label":"Blue","description":""}]},
+      {"question":"Which fictional shelf?","header":"Shelf","multiSelect":false,"options":[{"label":"Amber","description":""},{"label":"Blue","description":""}]},
+      {"question":"Which fictional tag?","header":"Tag","multiSelect":false,"options":[{"label":"Amber","description":""},{"label":"Blue","description":""}]}
+    ]},
+    "tool_response": "Your questions have been answered: \"Which fictional jar?\"=\"Blue\", \"Which fictional shelf?\"=\"Blue\", \"Which fictional tag?\"=\"Blue\". You can now continue with these answers in mind."
+  }]
+}

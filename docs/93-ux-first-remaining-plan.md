@@ -21,7 +21,9 @@ Use this section before the historical checkpoints below. Full scope remains45.
   recovery surfaces without creating actual invitations/access grants.
 - **Next substantive open UX behavior:** direct native answers still do not
   reconcile Needs You. ADR0065 requires exact decision identity, final result
-  and authenticated input; a45edb1a is only a single-question comparison.
+  and authenticated input. Three-question final serialization is now observed
+  and comparison passes9 tests plus strict Clippy; ambiguous free text remains
+  unsupported. This is not human provenance or completed reconciliation.
   Hooks remain disabled. No safe-recovery or permission rule may be bypassed.
 - **Separate external gates:** optional return-briefing visual approval;
   real Android/iOS picker,keyboard/suspension/handoff and actual browser zoom.
@@ -38,8 +40,8 @@ Latest checkpoint: App/API6ac6c145 is live; engine30ad01d has the same engine
 fingerprint and13 healthy running/retained sessions. Older staged-migration notes
 below are historical. Settings finish evidence is in94. CI's schema-ceiling
 fixture fix32dc50ee is local pending main-push permission, not a live defect fix.
-Native final-batch comparison passes8 tests and strict Clippy but remains disabled:
-multi-question final results, provenance and exact decision binding are still
+Native final-batch comparison passes9 tests and strict Clippy but remains disabled:
+full free-text final results, provenance and exact decision binding are still
 required. Do not promote this partial result to QUEEN-03/ATT-01 acceptance.
 
 ### Active acceptance checkpoint — ordinary-user UX first

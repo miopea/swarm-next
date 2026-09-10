@@ -1,5 +1,25 @@
 # Current maturity acceptance ledger
 
+## September 10 — native three-question evidence checkpoint
+
+An isolated native Claude Code2.1.267 probe completed three fictional questions
+in one AskUser invocation. Earlier callbacks retained programmatic Amber answers;
+the final batch and native worker reported rewritten Blue for all three. The
+reduced callback fixture and reusable multi-question probe are retained. The
+process exited normally and no live capture hooks were installed.
+
+All nine provider-interview tests and strict terminal-crate Clippy passed in
+the isolated Linux verification tree. Ordered final-answer comparison is covered,
+including refusal of exactly matching but ambiguous multi-answer strings.
+Neither the actual automated probe nor synthetic comparison observations prove
+human authorship. Full free-text support, authentic input correlation, immutable
+decision binding and end-to-end interruption/no-duplicate-delivery remain open.
+
+Read-only live health reports API6ac6c145 and engine30ad01d,13 running/retained
+sessions,0 unreadable,no degraded flags. The operator reports both UI labels as
+30ad01d; that display discrepancy is not yet reproduced or explained. No worker
+restart or deployment was performed in this checkpoint.
+
 ## September 10 — integrated local package checkpoint
 
 Atb45c87c0 the integrated web suite and production build pass. A subsequent diff
