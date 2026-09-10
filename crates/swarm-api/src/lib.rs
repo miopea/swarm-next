@@ -16666,6 +16666,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn task_activity_cursor_is_exclusive_validated_and_authenticated() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("History cursor", "/workspace").unwrap();
+        store
+            .update_task_details(
+                task.id,
+                &swarm_domain::TaskDetailsUpdate {
+                    description: Some("Second event".into()),
+                    ..swarm_domain::TaskDetailsUpdate::default()
+                },
+            )
+            .unwrap();
+        let events = store.list_task_activity(task.id, 10).unwrap().events;
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store),
+        );
+        let url = format!(
+            "/api/v1/tasks/{}/activity?limit=1&before={}",
+            task.id, events[1].sequence
+        );
+        let response = authorized_get(app.clone(), &url).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["events"].as_array().unwrap().len(), 1);
+        assert_eq!(body["events"][0]["sequence"], events[0].sequence);
+        assert_eq!(body["truncated"], false);
+        for cursor in ["0", "-1", "not-a-sequence", "9223372036854775808"] {
+            let response = authorized_get(
+                app.clone(),
+                &format!("/api/v1/tasks/{}/activity?before={cursor}", task.id),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+        let response = app
+            .oneshot(Request::builder().uri(&url).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn task_order_requires_the_complete_open_set() {
         let store = TaskStore::in_memory().unwrap();
         let first = store.create_task("First", "/workspace").unwrap();

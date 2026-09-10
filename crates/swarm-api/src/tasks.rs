@@ -73,6 +73,12 @@ pub(super) struct TaskActivityQuery {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct TaskHistoryQuery {
+    limit: Option<usize>,
+    before: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct ReorderTasksRequest {
     task_ids: Vec<TaskId>,
 }
@@ -127,13 +133,20 @@ pub(super) async fn task_activity(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(task_id): Path<String>,
-    Query(query): Query<TaskActivityQuery>,
+    Query(query): Query<TaskHistoryQuery>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let limit = query.limit.unwrap_or(30);
     validate_activity_limit(limit)?;
+    if query.before.is_some_and(|cursor| cursor <= 0) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_task_activity_cursor",
+            "History cursor must be a positive sequence.",
+        ));
+    }
     let activity = task_store(&state)?
-        .list_task_activity(parse_task_id(&task_id)?, limit)
+        .list_task_activity_before(parse_task_id(&task_id)?, limit, query.before)
         .map_err(|error| task_store_error(&error))?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(activity)).into_response())
 }

@@ -791,10 +791,72 @@ test("loads task history only when the operator opens it", async () => {
   fireEvent.click(screen.getByRole("button", { name: `Actions for ${task.title}` }));
   fireEvent.click(screen.getByRole("menuitem", { name: "Show history" }));
 
-  await waitFor(() => expect(onFetchActivity).toHaveBeenCalledWith(task.id, expect.any(AbortSignal)));
+  await waitFor(() => expect(onFetchActivity).toHaveBeenCalledWith(task.id, expect.any(AbortSignal), undefined));
   expect(screen.getByRole("region", { name: "Task history" })).toHaveTextContent("Task created");
   expect(screen.getByRole("region", { name: "Task history" })).toHaveTextContent("Draft → Ready");
   expect(screen.getByRole("region", { name: "Task history" })).toHaveTextContent("Showing the latest activity.");
+});
+
+test("older history retries its cursor, returns to latest, and reopens at latest", async () => {
+  const page = (sequence: number, note: string, truncated = false): TaskActivityPage => ({
+    events: [{ sequence, task_id: task.id, kind: "details_updated", from_state: null,
+      to_state: null, note, occurred_at: 1_700_000_000, actor_kind: "system", actor_id: null }], truncated,
+  });
+  const onFetchActivity = vi.fn().mockResolvedValueOnce(page(31, "Newest handoff", true))
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValueOnce(page(1, "Original handoff"))
+    .mockResolvedValueOnce(page(32, "New arrival", true))
+    .mockResolvedValueOnce(page(1, "Original handoff"))
+    .mockResolvedValueOnce(page(33, "Latest on reopen"));
+  const { props } = renderBoard({ onFetchActivity });
+  const toggle = (name: string) => {
+    fireEvent.click(screen.getByRole("button", { name: `Actions for ${task.title}` }));
+    fireEvent.click(screen.getByRole("menuitem", { name }));
+  };
+  toggle("Show history");
+  await screen.findByText("Newest handoff");
+  fireEvent.click(screen.getByRole("button", { name: "Older activity" }));
+  await screen.findByText("History is unavailable.");
+  expect(screen.getByRole("button", { name: "Latest activity" })).toBeEnabled();
+  fireEvent.click(within(screen.getByRole("region", { name: "Task history" })).getByRole("button", { name: "Retry" }));
+  await screen.findByText("Original handoff");
+  expect(onFetchActivity).toHaveBeenNthCalledWith(2, task.id, expect.any(AbortSignal), 31);
+  expect(onFetchActivity).toHaveBeenNthCalledWith(3, task.id, expect.any(AbortSignal), 31);
+  expect(screen.queryByText("Newest handoff")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Older activity" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Latest activity" }));
+  await screen.findByText("New arrival");
+  fireEvent.click(screen.getByRole("button", { name: "Older activity" }));
+  await screen.findByText("Original handoff");
+  toggle("Hide history");
+  toggle("Show history");
+  await screen.findByText("Latest on reopen");
+  expect(onFetchActivity).toHaveBeenLastCalledWith(task.id, expect.any(AbortSignal), undefined);
+  expect(props.onUpdate).not.toHaveBeenCalled();
+  expect(props.onTransition).not.toHaveBeenCalled();
+});
+
+test("a late older-history reply cannot replace latest after returning", async () => {
+  const event = { sequence: 31, task_id: task.id, kind: "details_updated" as const,
+    from_state: null, to_state: null, note: "Latest handoff", occurred_at: 1,
+    actor_kind: "system" as const, actor_id: null };
+  let finish!: (page: TaskActivityPage) => void;
+  let olderSignal: AbortSignal | undefined;
+  const onFetchActivity = vi.fn((_id: string, signal?: AbortSignal, before?: number) => {
+    if (before !== undefined) { olderSignal = signal; return new Promise<TaskActivityPage>((resolve) => { finish = resolve; }); }
+    return Promise.resolve({ events: [event], truncated: true });
+  });
+  renderBoard({ onFetchActivity });
+  fireEvent.click(screen.getByRole("button", { name: `Actions for ${task.title}` }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Show history" }));
+  await screen.findByText("Latest handoff");
+  fireEvent.click(screen.getByRole("button", { name: "Older activity" }));
+  await waitFor(() => expect(olderSignal).toBeDefined());
+  fireEvent.click(screen.getByRole("button", { name: "Latest activity" }));
+  await screen.findByText("Latest handoff");
+  expect(olderSignal?.aborted).toBe(true);
+  await act(async () => finish({ events: [{ ...event, sequence: 1, note: "Late old handoff" }], truncated: false }));
+  expect(screen.queryByText("Late old handoff")).not.toBeInTheDocument();
 });
 
 test("reopened history cannot be overwritten by the previous read", async () => {

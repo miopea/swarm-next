@@ -47,9 +47,24 @@ Do not rerun the already-green native clarification/backend suite.
 
 ## Remaining finish gates
 
-- Investigate bounded older-history navigation: the current API/UI exposes a
-  latest-page limit but no cursor, so full history on demand is not yet met for
-  tasks with more than30 events. Preserve bounded reads and persistence ownership.
+### Older task history — candidate verified, deployment pending
+
+ADR0095 adds exclusive-sequence paging to retained task history. The browser
+keeps one30-event page, offers Older activity/Latest activity, and resets to
+latest when reopened. Older-page failure retries the same cursor; returning to
+latest aborts and ignores a late older response. No state/permission/schema change.
+
+Seven isolated Linux task-activity API/persistence tests pass, including cursor
+validation/authentication, ordering with concurrent new events, unknown tasks,
+empty earlier history and existing bounds. Strict library clippy passes.
+148 App/task/API/harness tests and the production web build pass. Browser fixture
+traverses75 events as46–75,16–45,1–15 without accumulating rows. Oldest page has
+only Latest activity; the measured button height is44px. Desktop screenshot
+review passed. Narrow/native paging verification remains explicit, not implied
+by the button-size measurement. Deploy and record live read/worker continuity.
+Previous cancellation package CI34447225894 is now fully green.
+
+- Finish deployment acceptance for bounded older-history navigation above.
 - Complete the remaining linked-task/prerequisite error, cancellation and
   history journeys against the delivered candidate; use fictional mutations.
 - Native attachment picker, iOS, device handoff/suspension and final operator

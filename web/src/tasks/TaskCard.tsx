@@ -39,7 +39,7 @@ export type TaskCardProps = {
   onOpenTask?: (taskId: string) => void;
   prerequisiteCandidates?: Task[];
   onPrerequisiteChanged?: (updated: Task) => void;
-  onFetchActivity: (taskId: string, signal?: AbortSignal) => Promise<TaskActivityPage>;
+  onFetchActivity: (taskId: string, signal?: AbortSignal, before?: number) => Promise<TaskActivityPage>;
   onFetchJiraComments: (taskId: string) => Promise<JiraComment[]>;
   onAddJiraComment: (taskId: string, body: string) => Promise<{ state: string }>;
   onRetryJira: (task: Task) => Promise<void>;
@@ -60,6 +60,7 @@ export default function TaskCard({ task, heldBriefing, jiraLink, emailSources, o
   const [activity, setActivity] = useState<TaskActivityPage>();
   const [historyError, setHistoryError] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyBefore, setHistoryBefore] = useState<number>();
   const [menuPoint, setMenuPoint] = useState<MenuPoint>();
   const [discussionOpen, setDiscussionOpen] = useState(false);
   const [discussionMounted, setDiscussionMounted] = useState(false);
@@ -77,21 +78,29 @@ export default function TaskCard({ task, heldBriefing, jiraLink, emailSources, o
     setHistoryLoading(true);
     setHistoryError(false);
     try {
-      const page = await onFetchActivity(task.id, signal);
+      const page = await onFetchActivity(task.id, signal, historyBefore);
       if (!signal.aborted) setActivity(page);
     } catch {
       if (!signal.aborted || (signal.reason instanceof DOMException && signal.reason.name === "TimeoutError")) setHistoryError(true);
     } finally {
       if (!signal.aborted || (signal.reason instanceof DOMException && signal.reason.name === "TimeoutError")) setHistoryLoading(false);
     }
-  }, [task.id, onFetchActivity]);
+  }, [task.id, onFetchActivity, historyBefore]);
   const refreshActivity = useVisiblePolling(loadActivity, historyOpen, null);
+
+  function showHistoryPage(before?: number) {
+    setActivity(undefined);
+    setHistoryError(false);
+    setHistoryLoading(true);
+    setHistoryBefore(before);
+  }
 
   function toggleHistory() {
     if (historyOpen) {
       setHistoryOpen(false);
       return;
     }
+    showHistoryPage();
     setHistoryOpen(true);
   }
 
@@ -156,7 +165,7 @@ export default function TaskCard({ task, heldBriefing, jiraLink, emailSources, o
         </CursorMenu>
       )}
       {(task.prerequisites?.length ?? 0) > 0 && <div className="task-card-panel"><TaskPrerequisiteList task={task} workerNames={new Map(workers.map((worker) => [worker.id, worker.name]))} onOpenTask={onOpenTask} /></div>}
-      {historyOpen && <TaskActivityPanel activity={activity} loading={historyLoading} failed={historyError} onRetry={() => void refreshActivity()} />}
+      {historyOpen && <TaskActivityPanel activity={activity} loading={historyLoading} failed={historyError} olderPage={historyBefore !== undefined} onOlder={() => showHistoryPage(activity?.events[0]?.sequence)} onLatest={() => showHistoryPage()} onRetry={() => void refreshActivity()} />}
       {/* The wrapper is the grid item, so it carries the full-width span. The
           panels inside declare one too, which does nothing from in here — that
           is how they came to be auto-placed into a named column and drawn on

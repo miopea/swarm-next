@@ -1035,6 +1035,8 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .task-history li { grid-template-columns: 6px minmax(0, 1fr) auto; }
 .task-history-handoff { display: block; margin-top: 3px; color: var(--text); font-size: .71rem; line-height: 1.4; }
 .task-history time { color: var(--quiet); font-size: .67rem; white-space: nowrap; }
+.task-history-navigation { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.task-history-navigation .text-button { min-height: 44px; }
 .jira-discussion { display: grid; grid-column: 1 / -1; margin-top: 11px; padding-top: 11px; gap: 10px; border-top: 1px solid var(--line); }
 .jira-discussion-heading, .jira-discussion form { display: grid; gap: 5px; }
 .jira-discussion-heading small, .jira-discussion li small { color: var(--muted); white-space: pre-wrap; }

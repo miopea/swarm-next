@@ -20,8 +20,24 @@ import type { TaskActivityPage } from "../api";
  */
 const now = Math.floor(Date.now() / 1000);
 
-export function hiveFixture(path: string): unknown | undefined {
+export function hiveFixture(path: string, query = new URLSearchParams()): unknown | undefined {
   const activityTask = /^\/api\/v1\/tasks\/([^/]+)\/activity$/.exec(path);
+  if (activityTask && new URLSearchParams(window.location.search).get("taskHistory") === "paged") {
+    const before = Number(query.get("before") ?? 76);
+    const limit = Math.min(100, Math.max(1, Number(query.get("limit") ?? 30)));
+    const end = Math.min(75, before - 1);
+    const start = Math.max(1, end - limit + 1);
+    return {
+      events: Array.from({ length: Math.max(0, end - start + 1) }, (_, index) => ({
+        sequence: start + index, task_id: decodeURIComponent(activityTask[1]),
+        kind: "details_updated", from_state: null, to_state: null,
+        actor_kind: "worker", actor_id: "demo-worker",
+        note: `Fictional handoff ${start + index}: verified the next step with Petal.`,
+        occurred_at: now - (75 - start - index) * 60,
+      })),
+      truncated: start > 1,
+    } satisfies TaskActivityPage;
+  }
   if (activityTask) return {
     events: [
       { sequence: 1, task_id: decodeURIComponent(activityTask[1]), kind: "created",

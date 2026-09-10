@@ -11,11 +11,14 @@ const stateLabels: Record<TaskState, string> = {
   abandoned: "Abandoned",
 };
 
-export default function TaskActivityPanel({ activity, loading, failed, onRetry }: {
+export default function TaskActivityPanel({ activity, loading, failed, onRetry, olderPage = false, onOlder, onLatest }: {
   activity: TaskActivityPage | undefined;
   loading: boolean;
   failed: boolean;
   onRetry: () => void;
+  olderPage?: boolean;
+  onOlder?: () => void;
+  onLatest?: () => void;
 }) {
   return (
     <section className="task-history" aria-label="Task history" aria-live="polite">
@@ -23,7 +26,7 @@ export default function TaskActivityPanel({ activity, loading, failed, onRetry }
         <p>History is unavailable. <button className="text-button" type="button" onClick={onRetry}>Retry</button></p>
       ) : activity?.events.length ? (
         <>
-          {activity.truncated && <p className="task-history-note">Showing the latest activity.</p>}
+          {(olderPage || activity.truncated) && <p className="task-history-note">{olderPage ? "Earlier activity." : "Showing the latest activity."}</p>}
           <ol>
             {activity.events.map((entry) => (
               <li key={entry.sequence}>
@@ -36,7 +39,11 @@ export default function TaskActivityPanel({ activity, loading, failed, onRetry }
             ))}
           </ol>
         </>
-      ) : <p>No history recorded.</p>}
+      ) : <p>{olderPage ? "No earlier activity remains." : "No history recorded."}</p>}
+      <div className="task-history-navigation" role="group" aria-label="History pages">
+        {!loading && !failed && activity?.truncated && activity.events.length > 0 && onOlder && <button className="text-button" type="button" onClick={onOlder}>Older activity</button>}
+        {olderPage && onLatest && <button className="text-button" type="button" onClick={onLatest}>Latest activity</button>}
+      </div>
     </section>
   );
 }

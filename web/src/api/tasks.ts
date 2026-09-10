@@ -178,10 +178,10 @@ export async function fetchSettledTasks(operatorToken: string): Promise<Task[]> 
   return response.json() as Promise<Task[]>;
 }
 
-export async function fetchTaskActivity(operatorToken: string, taskId: string, limit = 30, signal?: AbortSignal): Promise<TaskActivityPage> {
+export async function fetchTaskActivity(operatorToken: string, taskId: string, limit = 30, signal?: AbortSignal, before?: number): Promise<TaskActivityPage> {
   const response = await authenticatedFetch(
     operatorToken,
-    `/api/v1/tasks/${encodeURIComponent(taskId)}/activity?limit=${encodeURIComponent(String(limit))}`,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/activity?limit=${encodeURIComponent(String(limit))}${before === undefined ? "" : `&before=${encodeURIComponent(String(before))}`}`,
     signal ? { signal } : undefined,
   );
   return response.json() as Promise<TaskActivityPage>;

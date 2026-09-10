@@ -443,9 +443,9 @@ export function App() {
     setSurfaceState(next);
   }, []);
   const [taskFocus, setTaskFocus] = useState<{ id: string; request: number }>();
-  const readTaskActivity = useCallback(async (taskId: string, signal?: AbortSignal) => {
+  const readTaskActivity = useCallback(async (taskId: string, signal?: AbortSignal, before?: number) => {
     if (!operatorToken) throw new Error("Unlock the Hive to read task history.");
-    return fetchTaskActivity(operatorToken, taskId, 30, signal);
+    return fetchTaskActivity(operatorToken, taskId, 30, signal, before);
   }, [operatorToken]);
   const [taskComposeRequest, setTaskComposeRequest] = useState(0);
   const [taskQuery, setTaskQuery] = useState("");

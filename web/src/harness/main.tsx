@@ -66,7 +66,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (preview) return preview;
   const support = supportFixtureResponse(path, init);
   if (support) return support;
-  const served = hiveFixture(path);
+  const served = hiveFixture(path, new URLSearchParams(url.split("?")[1] ?? ""));
   return served === undefined ? json([]) : json(served);
 }) as typeof fetch;
 

@@ -2064,6 +2064,20 @@ impl TaskStore {
         id: TaskId,
         limit: usize,
     ) -> Result<TaskActivityPage, TaskStoreError> {
+        self.list_task_activity_before(id, limit, None)
+    }
+
+    /// Reads one bounded page preceding an exclusive durable sequence cursor.
+    /// New events cannot shift an older page as they would with offset paging.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown task or unreadable history.
+    pub fn list_task_activity_before(
+        &self,
+        id: TaskId,
+        limit: usize,
+        before: Option<i64>,
+    ) -> Result<TaskActivityPage, TaskStoreError> {
         let connection = self.connection()?;
         let exists = connection
             .query_row(
@@ -2082,11 +2096,14 @@ impl TaskStore {
         let mut statement = connection.prepare(
             "SELECT sequence, task_id, kind, from_state, to_state, note, occurred_at,
                     actor_kind, actor_id
-             FROM task_activity WHERE task_id = ?1
+             FROM task_activity WHERE task_id = ?1 AND (?3 IS NULL OR sequence < ?3)
              ORDER BY sequence DESC LIMIT ?2",
         )?;
         let mut activity = statement
-            .query_map(params![id.to_string(), query_limit], task_activity_from_row)?
+            .query_map(
+                params![id.to_string(), query_limit, before],
+                task_activity_from_row,
+            )?
             .collect::<Result<Vec<_>, _>>()?;
         let truncated = activity.len() > limit;
         activity.truncate(limit);
@@ -6783,6 +6800,63 @@ mod tests {
         );
         assert!(matches!(
             store.list_task_activity(TaskId::new(), 30),
+            Err(TaskStoreError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn task_activity_cursor_pages_do_not_shift_when_new_events_arrive() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("Paged history", "/workspace").unwrap();
+        for index in 0..7 {
+            store
+                .update_task_details(
+                    task.id,
+                    &TaskDetailsUpdate {
+                        description: Some(format!("Revision {index}")),
+                        ..TaskDetailsUpdate::default()
+                    },
+                )
+                .unwrap();
+        }
+        let original = store.list_task_activity(task.id, 100).unwrap().events;
+        let latest = store.list_task_activity_before(task.id, 3, None).unwrap();
+        assert!(latest.truncated);
+        assert_eq!(latest.events, original[5..]);
+        store
+            .update_task_details(
+                task.id,
+                &TaskDetailsUpdate {
+                    description: Some("Concurrent new event".into()),
+                    ..TaskDetailsUpdate::default()
+                },
+            )
+            .unwrap();
+        let middle = store
+            .list_task_activity_before(task.id, 3, Some(latest.events[0].sequence))
+            .unwrap();
+        assert!(middle.truncated);
+        assert_eq!(middle.events, original[2..5]);
+        let first = store
+            .list_task_activity_before(task.id, 3, Some(middle.events[0].sequence))
+            .unwrap();
+        assert!(!first.truncated);
+        assert_eq!(first.events, original[..2]);
+        let empty = store
+            .list_task_activity_before(task.id, 3, Some(first.events[0].sequence))
+            .unwrap();
+        assert!(empty.events.is_empty());
+        assert!(!empty.truncated);
+        let unrelated = store.create_task("Other task", "/other").unwrap();
+        assert!(
+            store
+                .list_task_activity_before(unrelated.id, 30, Some(latest.events[0].sequence))
+                .unwrap()
+                .events
+                .is_empty()
+        );
+        assert!(matches!(
+            store.list_task_activity_before(TaskId::new(), 30, Some(1)),
             Err(TaskStoreError::NotFound)
         ));
     }
