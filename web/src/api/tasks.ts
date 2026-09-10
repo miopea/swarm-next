@@ -63,6 +63,14 @@ export type NextMoveOwner = "worker" | "queen" | "operator" | "blocked" | "relea
 
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
 
+export type TaskClarificationWait = {
+  decision_id: string;
+  clarification_id: string;
+  requesting_worker_id: string;
+  requester_is_queen: boolean;
+  delivery_state: "queued" | "dispatching" | "delivered" | "uncertain" | "cancelled";
+};
+
 export type Task = {
   id: string;
   hive_id: string;
@@ -92,6 +100,7 @@ export type Task = {
   workspace: string;
   state: TaskState;
   next_move_owner?: NextMoveOwner;
+  clarification_waits?: TaskClarificationWait[];
   review_request_id?: string | null;
   review_request?: string | null;
   /** Recorded on the current block; not an inferred current dependency. */

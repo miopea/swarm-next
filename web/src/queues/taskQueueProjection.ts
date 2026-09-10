@@ -2,12 +2,24 @@ import type { BlockedEscalation, HeldBriefing, RecoveryQueueItem } from "../api"
 import { isOpenTaskState, prerequisiteSatisfied, type Task } from "../api/tasks";
 import type { Worker } from "../api/workers";
 
+/** Server ownership has already accounted for other pending operator decisions. */
+export function clarificationOwnsTask(task: Task): boolean {
+  return ["ready", "review", "blocked"].includes(task.state)
+    && (task.next_move_owner === "queen" || task.next_move_owner === "worker")
+    && (task.clarification_waits?.length ?? 0) > 0;
+}
+
 /** Presentation only: roster order, then the dispatcher's recorded position/id order. */
 export function groupQueueByWorker(tasks: Task[], workers: Worker[]) {
   const roster = new Map(workers.map(worker => [worker.id, worker]));
   const groups = new Map<string | null, Task[]>();
   for (const task of tasks) {
-    const id = task.assigned_worker_id ?? null;
+    const ids = clarificationOwnsTask(task)
+      ? [...new Set(task.clarification_waits!.map(wait => wait.requesting_worker_id))]
+        .sort((a, b) => (roster.get(a)?.position ?? Number.MAX_SAFE_INTEGER)
+          - (roster.get(b)?.position ?? Number.MAX_SAFE_INTEGER) || a.localeCompare(b))
+      : [];
+    const id = ids.length ? ids.join("|") : task.assigned_worker_id ?? null;
     const group = groups.get(id) ?? [];
     group.push(task);
     groups.set(id, group);
@@ -15,13 +27,14 @@ export function groupQueueByWorker(tasks: Task[], workers: Worker[]) {
   const compareId = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
   return [...groups].map(([workerId, items]) => ({
     workerId,
-    name: workerId == null ? "Unassigned" : roster.get(workerId)?.name ?? `Worker unavailable (${workerId})`,
+    name: workerId == null ? "Unassigned" : workerId.split("|")
+      .map(id => roster.get(id)?.name ?? `Worker unavailable (${id})`).join(" + "),
     tasks: items.sort((a, b) => a.position - b.position || compareId(a.id, b.id)),
   })).sort((a, b) => {
     if (a.workerId == null) return 1;
     if (b.workerId == null) return -1;
-    return (roster.get(a.workerId)?.position ?? Number.MAX_SAFE_INTEGER)
-      - (roster.get(b.workerId)?.position ?? Number.MAX_SAFE_INTEGER)
+    return (roster.get(a.workerId.split("|")[0])?.position ?? Number.MAX_SAFE_INTEGER)
+      - (roster.get(b.workerId.split("|")[0])?.position ?? Number.MAX_SAFE_INTEGER)
       || compareId(a.workerId, b.workerId);
   });
 }
@@ -43,6 +56,7 @@ export function ordinaryActiveWork(task: Task): boolean {
 
 /** Known lifecycle mismatch, not inferred inactivity or permission to wake. */
 export function workerExecutionWait(task: Task, worker: Worker | undefined): string | undefined {
+  if (clarificationOwnsTask(task)) return undefined;
   if ((task.state !== "ready" && task.state !== "active") || task.next_move_owner !== "worker"
     || !worker || task.assigned_worker_id !== worker.id) return undefined;
   if (worker.running === false) return worker.waking_since != null

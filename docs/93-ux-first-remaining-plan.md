@@ -2,6 +2,22 @@
 
 ### Active package: Needs You clarification, not another reload patch
 
+Checkpoint 55de9ad2 commits the inbox and notification work below; still not
+deployed. The next local change adds exact clarification requesters to the shared
+task projection, including linked decisions. An unanswered explanation changes
+attention ownership only when no other linked decision still needs an operator
+answer. Task state, assignment and pending-decision permission gates stay intact.
+Queues groups by the actual explanation requester(s), not the task assignee;
+multiple requesters share one row and a combined roster-ordered heading.
+All-Queen explanations use the Queen section; mixed requesters use Workers with
+every requester named. Queen's handling of mixed-requester explanation waits
+still needs integration verification, not an assumption from these owner counts.
+Five domain tests, 13 shared-decision tests and 54 queue UI tests pass. Strict
+all-target Clippy for domain, persistence and API passes after test-only clone
+cleanup. TypeScript also passes. This queue increment is not yet browser-accepted
+or deployed; preserve the remaining mixed-owner coordinator and native gates.
+No deployment, engine restart, release or BFG Admin contact has occurred.
+
 Current local integration: the real DecisionInbox now renders Ask a question,
 waiting status, replies and original final controls. App and inbox share the
 actionable-decision predicate; waiting questions stay visible but are not counted

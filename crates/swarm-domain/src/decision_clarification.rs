@@ -62,6 +62,35 @@ pub struct DecisionInboxEntry {
     pub clarification: Option<DecisionClarificationSummary>,
 }
 
+/// Exact next movers for explanations; assignment and execution permission do not change.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TaskClarificationWait {
+    pub decision_id: crate::DecisionRequestId,
+    pub clarification_id: DecisionClarificationId,
+    pub requesting_worker_id: WorkerId,
+    pub requester_is_queen: bool,
+    pub delivery_state: ClarificationDeliveryState,
+}
+
+/// Keep any still-actionable decision with the operator. Multiple requesters
+/// remain explicit in the task's waits rather than choosing the task assignee.
+#[must_use]
+pub fn task_clarification_owner(
+    owner: crate::NextMoveOwner,
+    pending_decisions: usize,
+    waits: &[TaskClarificationWait],
+) -> crate::NextMoveOwner {
+    use crate::NextMoveOwner;
+    if owner != NextMoveOwner::Operator || waits.is_empty() || pending_decisions != waits.len() {
+        return owner;
+    }
+    if waits.iter().all(|wait| wait.requester_is_queen) {
+        NextMoveOwner::Queen
+    } else {
+        NextMoveOwner::Worker
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClarificationDeliveryState {
@@ -213,6 +242,54 @@ pub fn validate_clarification_responder(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn task_ownership_preserves_other_decisions_and_multiple_requesters() {
+        use crate::NextMoveOwner as Owner;
+        let queen = TaskClarificationWait {
+            decision_id: crate::DecisionRequestId::new(),
+            clarification_id: DecisionClarificationId::new(),
+            requesting_worker_id: WorkerId::new(),
+            requester_is_queen: true,
+            delivery_state: ClarificationDeliveryState::Uncertain,
+        };
+        let mut worker = queen.clone();
+        worker.decision_id = crate::DecisionRequestId::new();
+        worker.requesting_worker_id = WorkerId::new();
+        worker.requester_is_queen = false;
+        assert_eq!(
+            task_clarification_owner(Owner::Operator, 1, &[]),
+            Owner::Operator
+        );
+        assert_eq!(
+            task_clarification_owner(Owner::Operator, 2, std::slice::from_ref(&queen)),
+            Owner::Operator
+        );
+        assert_eq!(
+            task_clarification_owner(Owner::Operator, 1, std::slice::from_ref(&queen)),
+            Owner::Queen
+        );
+        assert_eq!(
+            task_clarification_owner(Owner::Operator, 1, &[worker.clone()]),
+            Owner::Worker
+        );
+        assert_eq!(
+            task_clarification_owner(Owner::Operator, 2, &[queen.clone(), worker]),
+            Owner::Worker
+        );
+        for owner in [
+            Owner::Nobody,
+            Owner::Release,
+            Owner::Blocked,
+            Owner::Queen,
+            Owner::Worker,
+        ] {
+            assert_eq!(
+                task_clarification_owner(owner, 1, std::slice::from_ref(&queen)),
+                owner
+            );
+        }
+    }
 
     #[test]
     fn clarification_never_turns_into_an_operator_answer() {

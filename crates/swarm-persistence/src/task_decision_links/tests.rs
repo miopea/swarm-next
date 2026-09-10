@@ -51,6 +51,64 @@ fn audit_count(store: &TaskStore, task: TaskId) -> i64 {
 }
 
 #[test]
+fn clarification_ownership_tracks_shared_gates_without_granting_permission() {
+    let store = TaskStore::in_memory().unwrap();
+    let (_, first) = decision(&store);
+    let (_, second) = decision(&store);
+    let tasks = [blocked(&store), blocked(&store)];
+    for task in tasks {
+        link(&store, task, first);
+        link(&store, task, second);
+    }
+    let question = swarm_domain::DecisionClarificationId::new();
+    store
+        .ask_decision_clarification(question, first, "Explain the first gate", 101)
+        .unwrap();
+    for task in tasks {
+        let current = store.get_task(task).unwrap();
+        assert_eq!(current.next_move_owner, NextMoveOwner::Operator);
+        assert_eq!(current.clarification_waits.len(), 1);
+    }
+    store
+        .ask_decision_clarification(
+            swarm_domain::DecisionClarificationId::new(),
+            second,
+            "Explain the other gate",
+            102,
+        )
+        .unwrap();
+    for task in tasks {
+        let current = store.get_task(task).unwrap();
+        assert_eq!(current.next_move_owner, NextMoveOwner::Queen);
+        assert_eq!(current.state, TaskState::Blocked);
+        assert_eq!(current.assigned_worker_id, None);
+        assert_eq!(current.clarification_waits.len(), 2);
+        assert!(
+            current
+                .clarification_waits
+                .iter()
+                .all(|wait| wait.requester_is_queen)
+        );
+    }
+    let queen = store.ensure_queen("/fixture/queen").unwrap();
+    let session = swarm_domain::WorkerSessionId::new();
+    store.bind_worker_session(queen.id, session).unwrap();
+    store
+        .reply_decision_clarification(question, queen.id, session, "Here is the explanation", 103)
+        .unwrap();
+    for task in tasks {
+        let current = store.get_task(task).unwrap();
+        assert_eq!(current.next_move_owner, NextMoveOwner::Operator);
+        assert_eq!(current.state, TaskState::Blocked);
+        assert_eq!(current.clarification_waits.len(), 1);
+    }
+    for id in [first, second] {
+        let current = store.get_decision_request(id).unwrap();
+        assert_eq!(current.state, DecisionRequestState::Pending);
+    }
+}
+
+#[test]
 fn shared_decision_updates_all_linked_evidence_without_task_transitions() {
     let store = TaskStore::in_memory().unwrap();
     let (_, gate) = decision(&store);

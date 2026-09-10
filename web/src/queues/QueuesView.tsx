@@ -5,7 +5,7 @@ import { projectReviewQueue } from "./reviewQueueProjection";
 import DeliveryWaitList from "./DeliveryWaitList";
 import TaskPrerequisiteList from "./TaskPrerequisiteList";
 import { prerequisiteSatisfied, type NextMoveOwner, type Task } from "../api/tasks";
-import { groupQueueByWorker, projectTaskQueues, workerAwaitingAnswer, workerExecutionWait } from "./taskQueueProjection";
+import { clarificationOwnsTask, groupQueueByWorker, projectTaskQueues, workerAwaitingAnswer, workerExecutionWait } from "./taskQueueProjection";
 import type { Worker } from "../api/workers";
 
 const RECOVERY_LABELS: Record<RecoveryQueueItem["state"], string> = {
@@ -114,6 +114,7 @@ function ageLabel(hours: number): string {
 /** Display recorded lifecycle facts, not inferred provider activity. */
 function taskProgress(task: Task, now: number): string {
   if (task.next_move_owner === "operator") return "Waiting for your decision";
+  if (clarificationOwnsTask(task)) return "Waiting for an explanation · original decision still pending";
   if (task.state === "ready" || task.state === "active") {
     if (task.dispatch_state === "uncertain") return "Briefing delivery unconfirmed · Queen must reconcile before retrying";
     if (task.dispatch_state === "queued" || task.dispatch_state === "dispatching") return "Briefing awaiting confirmed delivery";
@@ -289,6 +290,12 @@ export default function QueuesView({
                     {task.state === "blocked" && waits.has(task.id) && <span className="queue-task-meta">Blocked for {ageLabel(Math.max(0, Math.floor(waits.get(task.id)!.blocked_for_seconds / 3600)))}</span>}
                   </button>
                   {executionWait && <p className="queue-task-meta">{executionWait}</p>}
+                  {(task.clarification_waits ?? []).map(wait => <p className="queue-task-meta" key={wait.clarification_id}>
+                    {workerNames.get(wait.requesting_worker_id) ?? "Worker unavailable"}: {wait.delivery_state === "uncertain"
+                      ? "question delivery unconfirmed · needs reconciliation before retry"
+                      : wait.delivery_state === "delivered" ? "question delivered · reply pending"
+                      : "question awaiting delivery"}
+                  </p>)}
                   {checks.has(task.id) && <div className="queue-task-meta">
                     <QueueEvidence label="Recovery observation" text={checks.get(task.id)!.reason} />
                     {checks.get(task.id)!.delivery && <QueueEvidence label="Latest recovery delivery" summaryText={checks.get(task.id)!.delivery!.state} text={`${checks.get(task.id)!.delivery!.state} · message ${checks.get(task.id)!.delivery!.message_id}`} />}

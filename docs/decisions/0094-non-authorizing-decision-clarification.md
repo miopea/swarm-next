@@ -62,6 +62,13 @@ same reply to re-notify; a distinct reply round remains a new attention cycle.
   You keeps the exchange accessible under Waiting for a reply, outside the count
   of actionable operator decisions. Queues uses the same authoritative summary.
   A reply returns attention to the operator without replacing the original request.
+- Task projections retain every waiting clarification's exact requester and
+  delivery state, including shared decision links. A different pending decision
+  still needing an operator answer preserves operator ownership. When all pending
+  decisions await explanations, all-Queen requesters use Queen ownership;
+  mixed or repository requesters use Worker ownership with every requester named.
+  This changes attention only, never assignment or pending-decision execution
+  gates. Mixed-owner Queen orchestration must be verified before acceptance.
 - Inbox lists carry a compact summary; one expanded decision loads its bounded
   exchange history. Do not add a poll per card or copy message text into telemetry.
 

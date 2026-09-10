@@ -26,6 +26,23 @@ const task = (id: string, extra: Partial<Task> = {}): Task => ({
 const held = (task_id: string): HeldBriefing => ({ task_id, title: task_id, worker_id: "w", worker_name: "Petal", queued_at: 1, reason: "waiting_its_turn", blocked_by: "Other task" });
 const blocked = (task_id: string): BlockedEscalation => ({ task_id, title: task_id, worker_name: "Petal", workspace: "/w", blocked_for_seconds: 100 });
 
+test("clarification groups name the actual requesters once without changing assignment", () => {
+  const workers = [{ id: "queen", name: "Queen", position: 0 }, { id: "bee", name: "Petal", position: 1 }] as Worker[];
+  const waits: NonNullable<Task["clarification_waits"]> = [
+    { decision_id: "d", clarification_id: "c", requesting_worker_id: "bee", requester_is_queen: false, delivery_state: "queued" },
+    { decision_id: "e", clarification_id: "f", requesting_worker_id: "queen", requester_is_queen: true, delivery_state: "uncertain" },
+  ];
+  const current = task("explain", { state: "blocked", assigned_worker_id: "someone-else", clarification_waits: waits });
+  const groups = groupQueueByWorker([current], workers);
+  expect(groups).toHaveLength(1);
+  expect(groups[0].name).toBe("Queen + Petal");
+  expect(groups[0].tasks).toEqual([current]);
+  expect(current.assigned_worker_id).toBe("someone-else");
+  expect(projectTaskQueues([current], [], [], workers).taskCount).toBe(1);
+  const otherDecision = { ...current, next_move_owner: "operator" as const };
+  expect(groupQueueByWorker([otherDecision], workers)[0].workerId).toBe("someone-else");
+});
+
 test("recovery counts are exact-session, revision-fenced and do not mutate execution ownership", () => {
   const current = task("recover", { state: "active", dispatch_state: "delivered", assigned_worker_id: "w", assigned_session_id: "s" });
   const check: RecoveryQueueItem = { attention_id: "a", task_id: current.id, worker_id: "w", session_id: "s", task_revision: 1, observed_at: 1, reason: "Resting", state: "verify_worker_response", delivery: null, last_assessment: null };

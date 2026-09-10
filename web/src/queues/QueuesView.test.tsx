@@ -5,6 +5,20 @@ import type { Task } from "../api/tasks";
 import type { QueenAutomationStatus, RecoveryQueueItem } from "../api";
 import type { Worker } from "../api/workers";
 
+test("clarification names the requester and delivery problem without claiming permission", () => {
+  const current = task({ state: "blocked", next_move_owner: "worker", assigned_worker_id: "other",
+    clarification_waits: [{ decision_id: "decision", clarification_id: "question", requesting_worker_id: "petal", requester_is_queen: false, delivery_state: "uncertain" }] });
+  const props = { tasks: [current], workers: [{ id: "petal", name: "Petal", position: 0 } as Worker], onOpenTask: vi.fn() };
+  const { rerender } = render(<QueuesView {...props} />);
+  expect(screen.getByRole("heading", { name: "Waiting on a worker 1" })).toBeVisible();
+  expect(screen.getByRole("region", { name: "Petal" })).toBeVisible();
+  expect(screen.getByText("Waiting for an explanation · original decision still pending")).toBeVisible();
+  expect(screen.getByText(/Petal: question delivery unconfirmed/)).toBeVisible();
+  rerender(<QueuesView {...props} tasks={[{ ...current, next_move_owner: "operator" }]} />);
+  expect(screen.getByRole("heading", { name: "Waiting on you 1" })).toBeVisible();
+  expect(screen.getByText("Waiting for your decision")).toBeVisible();
+});
+
 test.each([
   ["needs_queen_check", "Queen checks unfinished work"],
   ["awaiting_delivery", "Queen's recovery message is waiting for delivery"],

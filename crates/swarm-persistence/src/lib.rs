@@ -1915,7 +1915,19 @@ impl TaskStore {
                     FROM task_prerequisites p LEFT JOIN tasks prerequisite ON prerequisite.id = p.prerequisite_id
                     WHERE p.task_id = t.id),
                    CASE WHEN t.state = 'blocked' THEN t.blocked_until END,
-                   coalesce(t.state = 'blocked' AND t.blocked_until > unixepoch(), 0)
+                   coalesce(t.state = 'blocked' AND t.blocked_until > unixepoch(), 0),
+                   (SELECT json_group_array(json_object(
+                       'decision_id', dr.id, 'clarification_id', c.id,
+                       'requesting_worker_id', dr.requesting_worker_id,
+                       'requester_is_queen', json(CASE WHEN w.role='queen' THEN 'true' ELSE 'false' END),
+                       'delivery_state', c.delivery_state))
+                    FROM decision_requests dr JOIN decision_clarifications c ON c.decision_id=dr.id
+                    JOIN worker_profiles w ON w.id=dr.requesting_worker_id
+                    WHERE dr.id IN (SELECT decision_id FROM task_decision_membership WHERE task_id=t.id)
+                      AND dr.state='pending' AND c.reply IS NULL AND c.delivery_state!='cancelled'),
+                   (SELECT count(*) FROM decision_requests dr
+                    WHERE dr.id IN (SELECT decision_id FROM task_decision_membership WHERE task_id=t.id)
+                      AND dr.state='pending')
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
@@ -6029,6 +6041,18 @@ fn validate_description(description: &str) -> Result<(), TaskStoreError> {
 )]
 fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     let prerequisites = task_prerequisites::from_projection(row, 24)?;
+    let mut clarification_waits: Vec<swarm_domain::TaskClarificationWait> =
+        serde_json::from_str(&row.get::<_, String>(27)?).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                27,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?;
+    if clarification_waits.len() > swarm_domain::MAX_HIVE_CLARIFICATIONS {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    clarification_waits.sort_by_cached_key(|wait| wait.decision_id.to_string());
     let id: String = row.get(0)?;
     let hive_id: String = row.get(1)?;
     let priority: String = row.get(4)?;
@@ -6114,17 +6138,22 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         review_request: row.get(22)?,
         blocked_note: row.get(23)?,
         blocked_until: row.get(25)?,
-        next_move_owner: swarm_domain::NextMoveOwner::derive(
-            TaskState::from_str(&state).unwrap_or(TaskState::Draft),
-            has_assignee,
-            row.get(19)?,
-            row.get(20)?,
-        )
-        .after_review_prerequisites(
-            TaskState::from_str(&state).unwrap_or(TaskState::Draft),
-            &prerequisites,
-        )
-        .after_blocker_evidence(row.get(20)?, &prerequisites, row.get(26)?),
+        next_move_owner: swarm_domain::task_clarification_owner(
+            swarm_domain::NextMoveOwner::derive(
+                TaskState::from_str(&state).unwrap_or(TaskState::Draft),
+                has_assignee,
+                row.get(19)?,
+                row.get(20)?,
+            )
+            .after_review_prerequisites(
+                TaskState::from_str(&state).unwrap_or(TaskState::Draft),
+                &prerequisites,
+            )
+            .after_blocker_evidence(row.get(20)?, &prerequisites, row.get(26)?),
+            row.get(28)?,
+            &clarification_waits,
+        ),
+        clarification_waits,
         prerequisites,
         outcome_delivery_state: outcome_delivery_state
             .map(|value| TaskOutcomeDeliveryState::from_str(&value))

@@ -606,6 +606,9 @@ pub struct Task {
     /// with the state and assignment it is derived from.
     #[serde(default = "default_next_move_owner")]
     pub next_move_owner: NextMoveOwner,
+    /// Unanswered explanations on pending decisions. These never authorize work.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clarification_waits: Vec<crate::TaskClarificationWait>,
     /// Exact current unanswered review request, not inferred terminal activity.
     #[serde(default)]
     pub review_request_id: Option<String>,
