@@ -12,6 +12,59 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.7.1
+
+Apiary onboarding you can finish without rejoining, plus two dark-mode and
+terminal fixes reported from the field.
+
+**Before upgrading:** nothing. The installer takes a verified database backup
+before it migrates anything, and checks that backup can still be opened by the
+release it would roll back to. This release migrates schema 159 to 164.
+
+**Workers are not stopped.** The worker-engine protocol is unchanged at 17, so
+this installs as an ordinary update and running terminals keep their sessions.
+
+### New features
+- **Edit your Hive's shared profile after joining.** Changing the name or email
+  other Hives see no longer means leaving and rejoining an Apiary.
+- **The member list says how fresh it is.** A roster shows when its snapshot was
+  issued, warns when the list may be incomplete or could not be checked, and
+  flags a snapshot past its verification window — instead of presenting an old
+  or partial list as a verified current one. It is a saved snapshot, not live
+  presence, and says so.
+- **Retry Apiary synchronization in place.** A member Hive stopped in an
+  incompatible state can request a retry that keeps its membership, credentials
+  and failure history. Nobody has to remove and rejoin to recover.
+- **Signed member directories.** Public profiles are revisioned and signed, and
+  directory exchange is bounded and verified between Hives.
+
+### Fixes
+- Dark mode: controls that set a background but no colour drew near-black text,
+  which is why queue items were hard to read until you hovered them. Reported as
+  issue #71 and fixed at the root — the theme now declares its colour scheme, so
+  every unstyled control follows it rather than the browser's light default.
+- Switching workers no longer paints the previous worker's connection status for
+  a frame before settling. Reported as issue #72.
+- Temporary Keeper failures stay retryable instead of reading as an incompatible
+  version, and a stale catalog is distinguished from verified readiness.
+- Invitation status reads are bounded, confirmed results are retained, and a
+  saved Hive approval is distinguished from a refresh failure.
+
+### Known limitations
+⚠️ **The Apiary onboarding work in this release has not been validated against
+live Hives.** `docs/95-apiary-onboarding-validation-handoff.md` lists six checks
+— an in-place upgrade of a Keeper plus two member Hives, recovery of a stopped
+member, browser acceptance of the joining flow, and offline/reconnect behaviour
+— and only the persistence half of the first has automated coverage. The
+in-place database upgrade is tested: a Hive predating these schemas keeps its
+membership, Hive and operator identity, and private work. Roster convergence
+between real Hives, and the joining screens themselves, have not been observed.
+
+If you run an Apiary, take this release on a Hive you can afford to check by
+hand before relying on it. Membership is never deleted by the upgrade, and the
+installer's pre-migration backup is verified against the release it would roll
+back to.
+
 ## 1.7.0
 
 Support, clarifications, and a Queen that keeps moving. These highlights

@@ -480,7 +480,10 @@ mod in_place_upgrade_tests {
         let upgraded = TaskStore::open(&path).unwrap();
 
         let identity = upgraded.local_hive_identity().unwrap();
-        assert_eq!(identity.hive.id, hive_id, "the Hive id must survive the upgrade");
+        assert_eq!(
+            identity.hive.id, hive_id,
+            "the Hive id must survive the upgrade"
+        );
         assert_eq!(
             identity.operator.id, operator_id,
             "the operator id must survive the upgrade",
