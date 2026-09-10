@@ -1053,6 +1053,7 @@ export type DecisionRequest = {
     waiting_clarification_id: string | null;
     delivery_state: DecisionClarification["delivery_state"] | null;
     latest_reply_at: number | null;
+    latest_reply_id?: string | null;
     next_move: "operator" | "requester" | "none";
   } | null;
   id: string;

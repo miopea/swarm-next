@@ -2,7 +2,63 @@
 
 ### Active package: Needs You clarification, not another reload patch
 
-Latest continuation: the compact clarification summary now reaches the real
+Current local integration: the real DecisionInbox now renders Ask a question,
+waiting status, replies and original final controls. App and inbox share the
+actionable-decision predicate; waiting questions stay visible but are not counted
+as operator actions. History has one owned/cancellable 15-second read and at most
+eight cached conversations of at most 32 rounds; only the inspected conversation
+refreshes when its summary changes. No per-card polling. Failed sends preserve
+exact text/ID, and a local send receipt cannot hide a later reply indefinitely.
+All 1508 web tests (156 files), TypeScript and production build passed. The
+existing 552-KB terminal chunk warning remains. Edge testing of the actual Inbox
+component in fictional local state verified 1 -> 0 -> 1 actionable count,
+Queen reply attribution, dark 390x844 layout with scrollWidth=clientWidth=390,
+failed-send exact draft recovery/retry and free-form final answer while waiting.
+Temporary viewport was reset. This is not native Android/iOS or Hive delivery
+acceptance. New Edge binding is edgeNow (browser 6); the old browser 4 is gone.
+
+Server notification integration now passes its functional checks: shared next-move projection
+suppresses operator pushes while waiting, and a new reply-round subject key
+preserves the original decision FK without deduplicating away later replies.
+Schema 159 is still UNDEPLOYED; its candidate now includes explicit round_index
+so random browser IDs and same-second timestamps cannot misorder history/replies.
+All 18 clarification tests, 10 notification tests and four previous-schema
+checks pass in the isolated Linux checkout. Clarification reply receipts survive
+queue acknowledgement, are unique per round/device, and cascade away with either
+owner (at most4096 rounds *8 subscriptions). The tests cover two reply cycles
+between sweeps with equal timestamps and deliberately reverse-sorting IDs.
+Strict persistence all-target Clippy and the HTTP-to-worker-reply integration
+test passed after the test helper cleanup. API all-target Clippy also passed.
+Ordinary non-clarification notification completion also deletes its queue row;
+the new receipt mechanism is scoped to clarification, not a claim that all
+notification sources now have durable sent receipts. Retain that broader check
+for the remaining maturity handoff rather than expanding this package.
+Queues ownership, explicit uncertain reconciliation, sleeping-requester/current
+tool-surface handling and native demo-worker round trip are still required.
+
+### Timestamped resource observation requested during this work
+
+2026-09-09 22:45 Eastern (2026-09-10 02:45 UTC): operator reported Swarm at 6-8%
+in Edge Task Manager with fan noise, already improving. A 2.10-second Windows
+process sample from 02:45:03.577Z to 02:45:05.679Z on 22 logical processors found
+Edge total 0.37% whole-machine CPU (~8.14% of one logical CPU), largest Edge PID
+10712 at 0.34% whole-machine CPU / 519.5 MB working set. This is all Edge, not a
+verified Swarm tab attribution. Node sampled 0%. The full web suite had completed
+at about 22:42:34 Eastern (started 22:41:38, duration55.64s); do not attribute the
+later sample to still-running tests. Server snapshot at02:45:46Z: uptime7d9h08m,
+load1.52/2.28/3.50, memory19468MiB available of32042MiB, swap729MiB used. ps reported
+swarm-api PID3624356 lifetime-average CPU13.2% /RSS118928KiB and terminal-host
+PID3408834 CPU5.1% /RSS337580KiB; those ps percentages are NOT an interval sample.
+No cause or performance fix is established by this brief observation. No restart
+or deployment was made. Continue the selected UX package, not a profiling detour.
+
+Operator screenshot at22:49 Eastern (02:49 UTC) supplies app-specific Edge Task
+Manager attribution: App:(1)Swarm CPU5.9%, memory342388K, network249KB/s, PID29400.
+This is a separate measurement from the earlier all-Edge sample; do not assign
+the earlier top PID10712 to Swarm. Source: operator attachment
+codex-clipboard-b3ac8dee-33c8-4c38-b812-970a09fe8e42.png. No root cause inferred.
+
+Prior committed checkpoint53f3fd6: the compact clarification summary reaches the real
 operator inbox HTTP response. A single SQLite read transaction combines the
 existing bounded/scoped decision projection with a text-free batch summary over
 the bounded clarification table. It reports round count, outstanding round and
@@ -11,7 +67,7 @@ decision fields remain flattened and unchanged; asking/replying does not resolve
 permission. TypeScript accepts the additive response contract. All 17 isolated
 Linux clarification persistence tests and the HTTP/MCP reply-to-inbox test pass,
 including uncertain delivery, late replies and original pending state. This is
-still local candidate work, not deployed, and not yet used by rendered counts.
+local candidate work, not deployed, and at that checkpoint not yet used by rendered counts.
 
 Continue directly with the actual Inbox panel and bounded history cache, shared
 actionable counts/Queues, and notification reply cycles. Notification delivery
@@ -22,7 +78,7 @@ and return after reply, including a question/reply between coordinator passes.
 Do not remove pending-decision execution gates to change presentation ownership.
 Explicit uncertain-delivery reconciliation, sleeping-requester/old-tool-surface
 handling and the native demo-worker round trip remain required before deployment.
-Latest account usage: 23% used / 77% remaining. No BFG Admin messages or releases.
+Latest verified account usage: 24% used / 76% remaining. No BFG Admin messages or releases.
 
 The next user-facing closure is the operator's inability to ask about an unclear
 decision without giving a final answer. ADR 0094 defines the approved distinction.

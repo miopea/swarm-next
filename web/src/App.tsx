@@ -19,6 +19,8 @@ import {
   fetchReleaseNotes,
   type DevelopmentRuntime,
   answerDecision,
+  askDecisionClarification,
+  fetchDecisionClarifications,
   resolveDecision,
   claimWorker,
   fetchEmailTasksAwaitingReply,
@@ -119,6 +121,7 @@ import { configureTerminalImageLimit } from "./terminal/TerminalAttachments";
 import { queenAutomationNeedsAttention } from "./orchestration/queenAutomationPresentation";
 import { foreignEngagement, workerAttention, workerSwitcherDetail } from "./workers/workerAttention";
 import DecisionInbox from "./decisions/DecisionInbox";
+import { needsOperatorDecision } from "./decisions/decisionAttention";
 import DogfoodFeedbackDialog from "./feedback/FeedbackDialog";
 import ShellModal from "./terminal/ShellModal";
 import ExperimentalHandoffDialog from "./workers/ExperimentalHandoffDialog";
@@ -1558,7 +1561,7 @@ export function App() {
   // coordinator observations. The queue page uses this same projection.
   const queuedTaskCount = useMemo(() => projectTaskQueues(tasks, heldBriefings, blockedEscalations, workers, recoveryQueue?.items).taskCount,
     [tasks, heldBriefings, blockedEscalations, workers, recoveryQueue]);
-  const pendingDecisionCount = decisions.filter((decision) => decision.state === "pending").length;
+  const pendingDecisionCount = decisions.filter(needsOperatorDecision).length;
   const pendingAssistCount = stewardAssists?.incoming?.filter((request) => request.state === "pending").length ?? 0;
   const queenWorkerId = workers.find((worker) => worker.role === "queen")?.id;
   const pendingQueenDecisionCount = decisions.filter((decision) => decision.state === "pending" && decision.requesting_worker_id === queenWorkerId).length;
@@ -2470,6 +2473,8 @@ export function App() {
               onFetchActivity={readRecentActivity}
               onResolve={resolveInboxDecision}
               onAnswer={answerInboxDecision}
+              onFetchClarifications={(decisionId, signal) => fetchDecisionClarifications(operatorToken, decisionId, signal)}
+              onAskClarification={(decision, id, question) => askDecisionClarification(operatorToken, decision.id, id, question)}
             />
           </div>
         ) : surface === "queues" ? (

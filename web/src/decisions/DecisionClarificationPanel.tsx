@@ -10,6 +10,8 @@ type Props = {
   roundCount?: number;
   workerNames: ReadonlyMap<string, string>;
   loading?: boolean;
+  loaded?: boolean;
+  replyAvailable?: boolean;
   loadError?: string;
   onReload: () => void;
   onAsk: (id: string, question: string) => Promise<DecisionClarification>;
@@ -17,7 +19,7 @@ type Props = {
 
 /** No answer/resolve callback: an explanation cannot accidentally become approval. */
 export default function DecisionClarificationPanel({
-  requester, pending, waiting, history, roundCount = history.length, workerNames, loading = false, loadError, onReload, onAsk,
+  requester, pending, waiting, history, roundCount = history.length, workerNames, loading = false, loaded = true, replyAvailable = false, loadError, onReload, onAsk,
 }: Props) {
   const labelId = useId();
   const [editing, setEditing] = useState(false);
@@ -53,6 +55,13 @@ export default function DecisionClarificationPanel({
     focusReceipt.current = false;
   }, [sentId]);
 
+  // The local receipt bridges only the event refresh, not the lifetime of a
+  // question. Once durable state acknowledges it, a later reply must be able
+  // to return attention even if its cached history has been evicted.
+  useEffect(() => {
+    if (sentId && (waiting || history.some(round => round.id === sentId))) setSentId(undefined);
+  }, [sentId, waiting, history]);
+
   async function send(event: FormEvent) {
     event.preventDefault();
     if (!pending || awaitingReply || inFlight.current || !draft.trim() || bytes > 4000) return;
@@ -82,6 +91,7 @@ export default function DecisionClarificationPanel({
 
   return <section ref={region} className="decision-clarification" aria-label="Questions about this decision">
     {pending && awaitingReply && <p ref={receiptStatus} role="status" tabIndex={-1}>Waiting for {requester} to reply. You can still make your decision below.</p>}
+    {replyAvailable && !loaded && <p>A reply is ready. <button type="button" disabled={loading} onClick={onReload}>{loading ? "Loading reply…" : "Read reply"}</button></p>}
     {latest?.reply && <div className="clarification-reply">
       <p className="eyebrow">{latestReplyName} replied{pending ? "" : " · saved in history"}</p>
       <LongText text={latest.reply} label="the explanation" foldAbove={450} />
@@ -105,7 +115,8 @@ export default function DecisionClarificationPanel({
       <summary>Questions &amp; replies{roundCount ? ` (${roundCount})` : ""}</summary>
       {loading && <p role="status">Loading the conversation…</p>}
       {loadError && <div role="alert"><p>{loadError}</p><button type="button" onClick={onReload}>Try again</button></div>}
-      {!loading && !loadError && !history.length && <p>No questions yet.</p>}
+      {!loading && !loadError && !loaded && <p>Open this conversation to read the questions and replies. <button type="button" onClick={onReload}>Load conversation</button></p>}
+      {!loading && !loadError && loaded && !history.length && <p>No questions yet.</p>}
       <ol>{history.map((round) => <li key={round.id}>
         <p className="eyebrow">You asked</p>
         <LongText text={round.question} label="your question" foldAbove={450} />

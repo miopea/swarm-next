@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import type { DecisionClarification } from "../api";
+import type { DecisionClarification, DecisionRequest, Worker } from "../api";
 import { applyColorTheme, type ColorTheme } from "../brand/theme";
-import DecisionClarificationPanel from "../decisions/DecisionClarificationPanel";
+import DecisionInbox from "../decisions/DecisionInbox";
 
 /** Local fictional state only. No transport, worker, or operator request is touched. */
 export default function DecisionClarificationFixture() {
@@ -15,6 +15,22 @@ export default function DecisionClarificationFixture() {
     setFinalChoice(value);
     setHistory((rounds) => rounds.map((round) => round.reply === null ? { ...round, delivery_state: "cancelled" } : round));
   }
+  const latestReplyAt = history.reduce<number | null>((latest, round) => round.replied_at === null ? latest : Math.max(latest ?? 0, round.replied_at), null);
+  const outstanding = history.find(round => round.reply === null && round.delivery_state !== "cancelled");
+  const decision: DecisionRequest = {
+    id: "fictional-decision", hive_id: "fictional-hive", requesting_worker_id: "petal", task_id: null,
+    kind: "input", urgency: "normal", title: "Should the export wait for its missing source?",
+    summary: "Petal recommends pausing this export until the source is available.",
+    reason: "The source has not arrived.", risk: "Partial results could be mistaken for the complete export.",
+    evidence: "Fictional export fixture only.", suggested_action: "Wait for the source",
+    allowed_actions: ["Wait for the source", "Use partial results"], deadline: null,
+    state: finalChoice ? "resolved" : "pending", resolution_action: finalChoice || null,
+    resolution_note: "", resolved_by_operator_id: finalChoice ? "fictional-operator" : null,
+    created_at: 1, updated_at: 1, resolved_at: finalChoice ? 2 : null, delivery_state: null,
+    clarification: history.length ? { round_count: history.length,
+      waiting_clarification_id: outstanding?.id ?? null, delivery_state: outstanding?.delivery_state ?? null,
+      latest_reply_at: latestReplyAt, next_move: finalChoice ? "none" : waiting ? "requester" : "operator" } : null,
+  };
   return <main className="attention-workspace">
     <h1>Fictional Needs You clarification</h1>
     <p>No Hive request or worker message is sent.</p>
@@ -26,22 +42,17 @@ export default function DecisionClarificationFixture() {
         replied_at: Math.floor(Date.now() / 1000), replying_worker_id: "queen", replying_session_id: "fictional-queen-session", delivery_state: "delivered",
       } : round))}>Simulate Queen reply</button>
     </details>
-    <article className="decision-card">
-      <p className="eyebrow">Petal · Fictional orchard</p>
-      <h2>Should the export wait for its missing source?</h2>
-      <p>Petal recommends pausing this export until the source is available.</p>
-      <DecisionClarificationPanel requester="Petal" pending={!finalChoice} waiting={waiting} history={history}
-        workerNames={new Map([["queen", "Queen"], ["petal", "Petal"]])} onReload={() => {}}
-        onAsk={async (id, question) => {
+    <DecisionInbox decisions={[decision]} tasks={[]} busy={false}
+      workers={[{ id: "petal", name: "Petal", workspace: "/fictional/orchard" }, { id: "queen", name: "Queen", workspace: "/fictional/queen" }] as Worker[]}
+      onResolve={async (_decision, action) => choose(action)}
+      onAnswer={async (_decision, answers) => choose(answers.Answer.join("; "))}
+      onFetchClarifications={async () => history}
+      onAskClarification={async (_decision, id, question) => {
           if (failNext) { setFailNext(false); throw new Error("The fictional connection failed. Your question is still here; try again."); }
           const saved: DecisionClarification = { id, question, decision_id: "fictional-decision", operator_id: "fictional-operator", asked_at: Math.floor(Date.now() / 1000), reply: null, replied_at: null, replying_worker_id: null, replying_session_id: null, delivery_state: "queued" };
           setHistory((rounds) => [...rounds, saved]);
           return saved;
         }} />
-      {!finalChoice ? <div className="decision-actions">
-        <button type="button" onClick={() => choose("Wait for the source")}>Wait for the source</button>
-        <button type="button" onClick={() => choose("Use partial results")}>Use partial results</button>
-      </div> : <p role="status">Fictional final answer: {finalChoice}</p>}
-    </article>
+    {finalChoice && <p role="status">Fictional final answer: {finalChoice}</p>}
   </main>;
 }

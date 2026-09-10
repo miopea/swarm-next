@@ -3,6 +3,126 @@ use crate::NewDecisionRequest;
 use swarm_domain::{ClarificationDeliveryOutcome as Outcome, PresenceDeviceId};
 use swarm_domain::{DecisionRequestKind, DecisionUrgency, ProviderKind};
 
+fn notification_receipts(store: &TaskStore) -> i64 {
+    store
+        .connection()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM decision_clarification_notification_receipts",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+#[test]
+fn clarification_notifications_quiet_while_waiting_and_return_once_per_reply() {
+    use swarm_domain::{NotificationPolicy, PresenceDeviceClass, PresenceMode};
+    let (store, decision, worker, session) = setup();
+    let now = store.get_decision_request(decision).unwrap().created_at + 20;
+    let device = PresenceDeviceId::new();
+    store
+        .save_notification_subscription(
+            &crate::notifications::PushSubscriptionInput {
+                device_id: device,
+                device_class: PresenceDeviceClass::Mobile,
+                endpoint: "https://fcm.googleapis.com/fcm/send/fictional-clarification".into(),
+                p256dh: vec![7; 65],
+                auth: vec![9; 16],
+            },
+            now,
+        )
+        .unwrap();
+    store
+        .set_notification_policy(NotificationPolicy::AllDecisions, now)
+        .unwrap();
+    store
+        .set_manual_presence(Some(PresenceMode::Reachable), now)
+        .unwrap();
+    store.sweep_attention_notifications(now).unwrap();
+    let initial = store.claim_notification_deliveries(now).unwrap();
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0].decision_id, Some(decision));
+    store
+        .complete_notification_delivery(initial[0].delivery_id, device)
+        .unwrap();
+
+    // Browser-supplied UUIDs need not sort in admission order.
+    let first: DecisionClarificationId = "ffffffff-ffff-4fff-bfff-ffffffffffff".parse().unwrap();
+    store
+        .ask_decision_clarification(first, decision, "Please explain.", now + 1)
+        .unwrap();
+    assert_eq!(store.sweep_attention_notifications(now + 2).unwrap(), 0);
+    assert!(
+        store
+            .claim_notification_deliveries(now + 2)
+            .unwrap()
+            .is_empty()
+    );
+    store
+        .reply_decision_clarification(first, worker, session, "Explanation one.", now + 3)
+        .unwrap();
+    assert_eq!(store.sweep_attention_notifications(now + 4).unwrap(), 1);
+    let returned = store.claim_notification_deliveries(now + 4).unwrap();
+    assert_eq!(returned.len(), 1);
+    assert_eq!(
+        returned[0].decision_id,
+        Some(decision),
+        "reply cycle preserves the original decision link"
+    );
+    store
+        .complete_notification_delivery(returned[0].delivery_id, device)
+        .unwrap();
+    assert_eq!(store.sweep_attention_notifications(now + 5).unwrap(), 0);
+
+    // No sweep between question and reply: the old delivered subject must not
+    // suppress a distinct reply cycle. Even equal reply timestamps are safe.
+    let second: DecisionClarificationId = "00000000-0000-4000-8000-000000000001".parse().unwrap();
+    store
+        .ask_decision_clarification(second, decision, "And the alternative?", now + 3)
+        .unwrap();
+    store
+        .reply_decision_clarification(second, worker, session, "Explanation two.", now + 3)
+        .unwrap();
+    assert_eq!(
+        store
+            .decision_clarifications(decision)
+            .unwrap()
+            .iter()
+            .map(|round| round.id)
+            .collect::<Vec<_>>(),
+        vec![first, second]
+    );
+    assert_eq!(store.sweep_attention_notifications(now + 6).unwrap(), 1);
+    let returned = store.claim_notification_deliveries(now + 6).unwrap();
+    assert_eq!(returned.len(), 1);
+    assert_eq!(returned[0].decision_id, Some(decision));
+    store
+        .complete_notification_delivery(returned[0].delivery_id, device)
+        .unwrap();
+    store
+        .reply_decision_clarification(second, worker, session, "Explanation two.", now + 7)
+        .unwrap();
+    assert_eq!(store.sweep_attention_notifications(now + 7).unwrap(), 0);
+    store
+        .resolve_decision_request(decision, "Wait", "Final choice", "test")
+        .unwrap();
+    assert_eq!(store.sweep_attention_notifications(now + 8).unwrap(), 0);
+    assert!(
+        store
+            .claim_notification_deliveries(now + 8)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(notification_receipts(&store), 2);
+    store.remove_notification_subscription(device).unwrap();
+    assert_eq!(
+        notification_receipts(&store),
+        0,
+        "removing a subscription prunes its receipts"
+    );
+}
+
 #[test]
 fn clarification_summary_tracks_next_mover_without_resolving_permission() {
     use swarm_domain::ClarificationNextMove;
@@ -669,8 +789,8 @@ fn clarification_global_capacity_and_closed_history_retention_are_explicit() {
     // Seed a full store to exercise global admission independently of the
     // per-decision bound. All payloads remain fictional and inside SQLite tests.
     store.connection().unwrap().execute_batch("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<4095)
-        INSERT INTO decision_clarifications(id,decision_id,operator_id,question,asked_at,reply,replied_at,replying_worker_id,replying_session_id,delivery_state)
-        SELECT printf('%036d',n.x),c.decision_id,c.operator_id,c.question,c.asked_at,c.reply,c.replied_at,c.replying_worker_id,c.replying_session_id,c.delivery_state
+        INSERT INTO decision_clarifications(id,decision_id,operator_id,question,asked_at,reply,replied_at,replying_worker_id,replying_session_id,delivery_state,round_index)
+        SELECT printf('%036d',n.x),c.decision_id,c.operator_id,c.question,c.asked_at,c.reply,c.replied_at,c.replying_worker_id,c.replying_session_id,c.delivery_state,n.x+1
         FROM n CROSS JOIN (SELECT * FROM decision_clarifications LIMIT 1) c;").unwrap();
     assert!(matches!(
         store.ask_decision_clarification(

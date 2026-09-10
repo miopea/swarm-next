@@ -505,9 +505,19 @@ impl TaskStore {
     ) -> Result<bool, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
+        // A completed queue row is removed below. Preserve the exact reply's
+        // receipt so the sweep cannot recreate it. Foreign keys bound this to
+        // 4096 retained rounds * 8 subscriptions and prune on either deletion.
+        transaction.execute(
+            "INSERT OR IGNORE INTO decision_clarification_notification_receipts(clarification_id,subscription_id)
+             SELECT c.id,n.subscription_id FROM notification_deliveries n
+             JOIN decision_clarifications c ON n.subject_key='decision:'||c.decision_id||':clarification:'||c.id
+             WHERE n.id=?1 AND n.subscription_id=?2 AND n.state='dispatching'",
+            params![delivery_id,subscription_id.to_string()],
+        )?;
         let removed = transaction.execute(
-            "DELETE FROM notification_deliveries WHERE id = ?1 AND state = 'dispatching'",
-            [delivery_id],
+            "DELETE FROM notification_deliveries WHERE id = ?1 AND subscription_id=?2 AND state = 'dispatching'",
+            params![delivery_id,subscription_id.to_string()],
         )?;
         if removed == 1 {
             transaction.execute(
@@ -672,8 +682,10 @@ pub(super) fn enqueue_pending_notifications(
                  kind, state, attempts, available_at, created_at
              )
              SELECT operator_id, device_id, ?2, ?3, ?4, ?5, 'queued', 0, ?6, ?6
-             FROM notification_subscriptions
-             WHERE operator_id = ?1
+             FROM notification_subscriptions s
+             WHERE operator_id = ?1 AND NOT EXISTS (
+                 SELECT 1 FROM decision_clarification_notification_receipts r
+                 WHERE r.clarification_id=?8 AND r.subscription_id=s.device_id)
              ORDER BY updated_at DESC
              LIMIT ?7",
             params![
@@ -684,6 +696,7 @@ pub(super) fn enqueue_pending_notifications(
                 subject.kind,
                 now,
                 available,
+                subject.clarification_id(),
             ],
         )?;
         available -= i64::try_from(inserted).unwrap_or(0);

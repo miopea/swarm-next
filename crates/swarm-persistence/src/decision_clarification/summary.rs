@@ -47,14 +47,17 @@ impl TaskStore {
     }
 }
 
-fn summaries_from(
+pub(crate) fn summaries_from(
     connection: &rusqlite::Connection,
 ) -> Result<HashMap<DecisionRequestId, DecisionClarificationSummary>, TaskStoreError> {
     let mut statement = connection.prepare(
             "SELECT c.decision_id, d.state, count(*),
              max(CASE WHEN c.reply IS NULL AND c.delivery_state!='cancelled' THEN c.id END),
              max(CASE WHEN c.reply IS NULL AND c.delivery_state!='cancelled' THEN c.delivery_state END),
-             max(c.replied_at)
+             max(c.replied_at),
+             (SELECT r.id FROM decision_clarifications r
+              WHERE r.decision_id=c.decision_id AND r.reply IS NOT NULL
+              ORDER BY r.round_index DESC LIMIT 1)
              FROM decision_clarifications c
              JOIN decision_requests d ON d.id=c.decision_id
              JOIN local_hive_identity l ON l.hive_id=d.hive_id AND l.singleton=1
@@ -86,6 +89,11 @@ fn summaries_from(
                 waiting_clarification_id: waiting,
                 delivery_state: delivery,
                 latest_reply_at: row.get(5)?,
+                latest_reply_id: row
+                    .get::<_, Option<String>>(6)?
+                    .map(|id| id.parse())
+                    .transpose()
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?,
                 next_move: clarification_next_move(parent, waiting.is_some()),
             },
         ))

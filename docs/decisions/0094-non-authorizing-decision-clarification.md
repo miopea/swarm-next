@@ -22,6 +22,15 @@ worker cannot impersonate either. Record the actual replying worker/session.
 Question and reply retries use immutable IDs and exact text. Identical replay
 returns the saved record, conflicting reuse fails without overwrite or delivery.
 
+Each decision has an explicit, unique admission-order round index. History and
+latest-reply identity follow that durable order, not timestamps, random browser
+UUID ordering or physical database row order. A reply attention cycle uses the
+exact round ID while retaining the original decision as its source link.
+Successful clarification notifications retain one receipt per round/subscription,
+bounded by 4,096 retained rounds times eight subscriptions. Foreign-key deletion
+prunes these receipts with either owner. Queue acknowledgement cannot cause the
+same reply to re-notify; a distinct reply round remains a new attention cycle.
+
 ## Ownership, bounds and recovery
 
 - Domain rules own admissibility and next-move meaning. The application owns

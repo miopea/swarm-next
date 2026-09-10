@@ -33,6 +33,16 @@ pub(crate) struct NeedsYouSubject {
 }
 
 impl NeedsYouSubject {
+    pub(crate) fn clarification_id(&self) -> Option<&str> {
+        (self.kind == "decision")
+            .then(|| {
+                self.subject_key
+                    .split_once(":clarification:")
+                    .map(|(_, round)| round)
+            })
+            .flatten()
+    }
+
     /// The decision this names, for the FK that keeps a delivery cascading away
     /// when its decision is deleted.
     ///
@@ -44,6 +54,11 @@ impl NeedsYouSubject {
         (self.kind == "decision")
             .then(|| self.subject_key.strip_prefix("decision:"))
             .flatten()
+            .map(|identity| {
+                identity
+                    .split_once(":clarification:")
+                    .map_or(identity, |(decision, _)| decision)
+            })
     }
 }
 
@@ -72,6 +87,7 @@ pub(crate) fn needs_you_subjects(
 fn pending_decisions(
     transaction: &Transaction<'_>,
 ) -> Result<Vec<NeedsYouSubject>, TaskStoreError> {
+    let clarifications = crate::decision_clarification::summaries_from(transaction)?;
     let mut statement = transaction.prepare(
         "SELECT id, created_at, urgency FROM decision_requests
          WHERE state = 'pending' AND hive_id = (
@@ -79,15 +95,39 @@ fn pending_decisions(
          )",
     )?;
     let rows = statement.query_map([], |row| {
-        let id: String = row.get(0)?;
-        Ok(NeedsYouSubject {
-            kind: "decision",
-            subject_key: format!("decision:{id}"),
-            created_at: row.get(1)?,
-            urgency: row.get(2)?,
-        })
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+        ))
     })?;
-    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    let mut subjects = Vec::new();
+    for row in rows {
+        let (id, created_at, urgency) = row?;
+        let decision_id: swarm_domain::DecisionRequestId =
+            id.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
+        let summary = clarifications.get(&decision_id);
+        if summary
+            .is_some_and(|value| value.next_move == swarm_domain::ClarificationNextMove::Requester)
+        {
+            continue;
+        }
+        // A reply is a new attention cycle even if the previous push was sent
+        // and the entire question/reply happened between coordinator passes.
+        let subject_key = summary.and_then(|value| value.latest_reply_id).map_or_else(
+            || format!("decision:{id}"),
+            |reply| format!("decision:{id}:clarification:{reply}"),
+        );
+        subjects.push(NeedsYouSubject {
+            kind: "decision",
+            subject_key,
+            created_at: summary
+                .and_then(|value| value.latest_reply_at)
+                .map_or(created_at, |reply_at| created_at.max(reply_at)),
+            urgency,
+        });
+    }
+    Ok(subjects)
 }
 
 fn pending_assists(transaction: &Transaction<'_>) -> Result<Vec<NeedsYouSubject>, TaskStoreError> {

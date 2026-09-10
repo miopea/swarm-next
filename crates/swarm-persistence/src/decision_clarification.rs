@@ -10,6 +10,7 @@ use swarm_domain::{
 
 mod delivery;
 mod summary;
+pub(crate) use summary::summaries_from;
 #[cfg(test)]
 mod tests;
 pub use delivery::ClarificationDispatch;
@@ -29,6 +30,7 @@ pub(super) fn migrate(tx: &Transaction<'_>) -> rusqlite::Result<()> {
     tx.execute_batch("CREATE TABLE IF NOT EXISTS decision_clarifications (
         id TEXT PRIMARY KEY CHECK(length(id)=36),
         decision_id TEXT NOT NULL REFERENCES decision_requests(id),
+        round_index INTEGER NOT NULL CHECK(round_index > 0),
         operator_id TEXT NOT NULL,
         question TEXT NOT NULL CHECK(length(CAST(question AS BLOB)) BETWEEN 1 AND 4000),
         asked_at INTEGER NOT NULL CHECK(asked_at>=0),
@@ -45,8 +47,14 @@ pub(super) fn migrate(tx: &Transaction<'_>) -> rusqlite::Result<()> {
         CHECK((claim_id IS NULL AND delivery_session_id IS NULL) OR (claim_id IS NOT NULL AND delivery_session_id IS NOT NULL))
     );
     CREATE INDEX IF NOT EXISTS decision_clarifications_parent ON decision_clarifications(decision_id,asked_at,id);
+    CREATE UNIQUE INDEX IF NOT EXISTS decision_clarifications_round ON decision_clarifications(decision_id,round_index);
     CREATE UNIQUE INDEX IF NOT EXISTS decision_clarifications_unanswered ON decision_clarifications(decision_id) WHERE reply IS NULL AND delivery_state!='cancelled';
-    CREATE INDEX IF NOT EXISTS decision_clarifications_delivery ON decision_clarifications(delivery_state,asked_at,id);")?;
+    CREATE INDEX IF NOT EXISTS decision_clarifications_delivery ON decision_clarifications(delivery_state,asked_at,id);
+    CREATE TABLE IF NOT EXISTS decision_clarification_notification_receipts (
+        clarification_id TEXT NOT NULL REFERENCES decision_clarifications(id) ON DELETE CASCADE,
+        subscription_id TEXT NOT NULL REFERENCES notification_subscriptions(device_id) ON DELETE CASCADE,
+        PRIMARY KEY(clarification_id,subscription_id)
+    ) WITHOUT ROWID;")?;
     tx.pragma_update(
         None,
         "user_version",
@@ -145,7 +153,7 @@ impl TaskStore {
         self.get_decision_request(decision)?;
         let connection = self.connection()?;
         let mut query = connection.prepare(&format!(
-            "{SELECT} WHERE c.decision_id=?1 ORDER BY c.asked_at,c.id LIMIT 32"
+            "{SELECT} WHERE c.decision_id=?1 ORDER BY c.round_index LIMIT 32"
         ))?;
         Ok(query
             .query_map([decision.to_string()], from_row)?
@@ -207,8 +215,8 @@ impl TaskStore {
             count,
             total,
         )?;
-        tx.execute("INSERT INTO decision_clarifications(id,decision_id,operator_id,question,asked_at) VALUES(?1,?2,?3,?4,?5)",
-            params![id.to_string(),decision.to_string(),operator,question,now])?;
+        tx.execute("INSERT INTO decision_clarifications(id,decision_id,operator_id,question,asked_at,round_index) VALUES(?1,?2,?3,?4,?5,?6)",
+            params![id.to_string(),decision.to_string(),operator,question,now,count + 1])?;
         crate::insert_control_room_event(&tx, ControlRoomEventKind::DecisionsChanged)?;
         let saved = get(&tx, id)?.ok_or(Refusal::NotFound)?;
         tx.commit()?;

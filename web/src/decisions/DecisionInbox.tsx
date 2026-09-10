@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
-import type { DecisionRequest, DecisionSurface, Task, TaskActivityPage, Worker } from "../api";
+import type { DecisionClarification, DecisionRequest, DecisionSurface, Task, TaskActivityPage, Worker } from "../api";
+import DecisionClarificationPanel from "./DecisionClarificationPanel";
+import { useDecisionClarifications, type ReadClarifications } from "./useDecisionClarifications";
+import { needsOperatorDecision, waitingForClarification } from "./decisionAttention";
 import BeeMascot from "../brand/BeeMascot";
 import DecisionInterview from "./DecisionInterview";
 import LongText from "./LongText";
@@ -44,10 +47,13 @@ type Props = {
   onFetchActivity?: (signal: AbortSignal) => Promise<TaskActivityPage>;
   onResolve: (decision: DecisionRequest, action: string, note: string, surface: DecisionSurface) => Promise<void>;
   onAnswer?: (decision: DecisionRequest, answers: Record<string, string[]>, note: string) => Promise<void>;
+  onFetchClarifications?: ReadClarifications;
+  onAskClarification?: (decision: DecisionRequest, id: string, question: string) => Promise<DecisionClarification>;
 };
 
-export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, additionalPendingCount = 0, attentionCards, coordinatorUnavailable = false, trailingCards, onOpenTask, onFetchActivity, onResolve, onAnswer }: Props) {
+export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, additionalPendingCount = 0, attentionCards, coordinatorUnavailable = false, trailingCards, onOpenTask, onFetchActivity, onResolve, onAnswer, onFetchClarifications, onAskClarification }: Props) {
   const [view, setView] = useState<"attention" | "activity">("attention");
+  const clarifications = useDecisionClarifications(decisions, view === "attention" ? onFetchClarifications : undefined);
   const tabId = useId();
   const attentionTab = useRef<HTMLButtonElement>(null);
   const activityTab = useRef<HTMLButtonElement>(null);
@@ -101,7 +107,8 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
       decision.state === "pending" ? positions.get(decision.id)! : Number.MAX_SAFE_INTEGER;
     return [...shown].sort((first, second) => place(first) - place(second));
   }, [decisions, showResolved]);
-  const pending = decisions.filter((decision) => decision.state === "pending").length;
+  const pending = decisions.filter(needsOperatorDecision).length;
+  const waitingReplies = decisions.filter(waitingForClarification).length;
   const pendingTotal = pending + additionalPendingCount;
 
   useEffect(() => {
@@ -215,6 +222,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
       <div id={`${tabId}-panel`} role="tabpanel" aria-labelledby={`${tabId}-${view}`}>
       {view === "activity" ? <WorkActivity activity={activity} tasks={tasks} workers={workers} loading={activityLoading} failed={activityFailed} onRetry={() => void loadActivity()} onOpenTask={onOpenTask} /> : <>
       <div className="decision-inbox-intro">
+        {waitingReplies > 0 && <p className="muted">{waitingReplies} {waitingReplies === 1 ? "conversation is" : "conversations are"} waiting for a reply, not an answer from you. Your decision options remain available.</p>}
         <label className="decision-history-toggle">
           <input type="checkbox" checked={showResolved} onChange={(event) => setShowResolved(event.target.checked)} />
           Show history
@@ -269,7 +277,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                       <h4>{decision.title}</h4>
                     </div>
                   </div>
-                  <span className={`decision-urgency ${decision.state === "pending" ? decision.urgency : "settled"}`}>{decision.state === "withdrawn" ? "Withdrawn" : decision.state === "resolved" ? "Answered" : decision.urgency === "time_sensitive" ? "Time-sensitive" : "When ready"}</span>
+                  <span className={`decision-urgency ${decision.state === "pending" ? decision.urgency : "settled"}`}>{decision.state === "withdrawn" ? "Withdrawn" : decision.state === "resolved" ? "Answered" : waitingForClarification(decision) ? "Waiting for reply" : decision.urgency === "time_sensitive" ? "Time-sensitive" : "When ready"}</span>
                 </header>
                 {/* What is being decided comes first and stays short. The
                     reason, risk and evidence are the argument behind it — on
@@ -280,6 +288,21 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                 {decision.risk && <dl className="decision-context">
                   <div className="decision-risk"><dt>Risk</dt><dd><LongText text={decision.risk} label="the risk" foldAbove={300} /></dd></div>
                 </dl>}
+                {onFetchClarifications && onAskClarification && <DecisionClarificationPanel
+                  requester={requester}
+                  pending={decision.state === "pending"}
+                  waiting={waitingForClarification(decision)}
+                  roundCount={decision.clarification?.round_count ?? 0}
+                  replyAvailable={decision.clarification?.next_move === "operator" && decision.clarification.latest_reply_at !== null}
+                  workerNames={workerNames}
+                  {...clarifications.forDecision(decision)}
+                  onReload={() => clarifications.reload(decision.id)}
+                  onAsk={async (id, question) => {
+                    const saved = await onAskClarification(decision, id, question);
+                    clarifications.reload(decision.id);
+                    return saved;
+                  }}
+                />}
                 {decision.state === "pending" && decision.questions?.length ? (
                   <div className="decision-resolution">
                     {/* An interview offers no buttons: the asker did not know

@@ -50,6 +50,7 @@ pub struct DecisionClarificationSummary {
     pub waiting_clarification_id: Option<DecisionClarificationId>,
     pub delivery_state: Option<ClarificationDeliveryState>,
     pub latest_reply_at: Option<i64>,
+    pub latest_reply_id: Option<DecisionClarificationId>,
     pub next_move: ClarificationNextMove,
 }
 

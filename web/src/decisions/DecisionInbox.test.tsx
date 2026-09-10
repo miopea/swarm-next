@@ -71,6 +71,44 @@ const uncertain = { ...resolved, id: "decision-5", title: "Uncertain release", d
 const task = { id: "task-1", title: "Stabilize reloads" } as Task;
 const worker = { id: "worker-1", name: "Petal" } as Worker;
 
+test("clarification waits outside actionable count, returns with a reply, and never chooses an answer", async () => {
+  const onResolve = vi.fn().mockResolvedValue(undefined);
+  const saved = { id: "round-1", decision_id: pending.id, operator_id: "operator",
+    question: "Why this route?", asked_at: 10, reply: null, replied_at: null,
+    replying_worker_id: null, replying_session_id: null, delivery_state: "queued" } as import("../api").DecisionClarification;
+  const read = vi.fn().mockResolvedValue([saved]);
+  const ask = vi.fn().mockResolvedValue(saved);
+  const props = { workers: [worker], tasks: [task], busy: false, onResolve,
+    onFetchClarifications: read, onAskClarification: ask };
+  const { rerender } = render(<DecisionInbox {...props} decisions={[pending]} />);
+  expect(read).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Ask a question" }));
+  fireEvent.change(screen.getByLabelText("What would you like clarified?"), { target: { value: saved.question } });
+  fireEvent.click(screen.getByRole("button", { name: "Send question" }));
+  await waitFor(() => expect(ask).toHaveBeenCalledTimes(1));
+  expect(ask.mock.calls[0][0].id).toBe(pending.id);
+  expect(ask.mock.calls[0][2]).toBe(saved.question);
+  const waiting: DecisionRequest = { ...pending, clarification: { round_count: 1,
+    waiting_clarification_id: saved.id, delivery_state: "queued", latest_reply_at: null, next_move: "requester" } };
+  rerender(<DecisionInbox {...props} decisions={[waiting]} />);
+  expect(screen.getByRole("tab", { name: "Needs you 0" })).toBeInTheDocument();
+  expect(screen.getByText(/waiting for a reply, not an answer from you/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /Durable path/ })).toBeEnabled();
+  expect(onResolve).not.toHaveBeenCalled();
+  const replied = { ...saved, reply: "It avoids a second migration.", replied_at: 11,
+    replying_worker_id: "worker-1", replying_session_id: "session" };
+  read.mockResolvedValue([replied]);
+  rerender(<DecisionInbox {...props} decisions={[{ ...waiting, clarification: {
+    ...waiting.clarification!, waiting_clarification_id: null, delivery_state: null,
+    latest_reply_at: 11, next_move: "operator" } }]} />);
+  expect(screen.getByRole("tab", { name: "Needs you 1" })).toBeInTheDocument();
+  expect((await screen.findAllByText(replied.reply))[0]).toBeVisible();
+  expect(screen.getByRole("button", { name: "Ask a question" })).toBeInTheDocument();
+  expect(onResolve).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: /Durable path/ }));
+  await waitFor(() => expect(onResolve).toHaveBeenCalledTimes(1));
+});
+
 test.each([
   "Enable FEAST_SIGNUP_ENABLED on staging now",
   "use feature_flag=false until the check passes",
