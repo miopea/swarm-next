@@ -48,6 +48,13 @@ const originalFetch = globalThis.fetch;
 const json = (body: unknown) =>
   new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 
+// Explicit fictional clipboard failure; never used by the shipped application.
+if (new URLSearchParams(location.search).get("clipboard") === "unavailable") {
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+    writeText: async () => { throw new Error("Fictional clipboard refusal"); },
+  } });
+}
+
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   // /health is not under /api, and letting it fall through to the dev server
@@ -60,6 +67,10 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   // what lets the WHOLE APP mount here instead of a single card. Everything
   // else keeps answering empty.
   const path = url.split("?")[0];
+  if (path === "/api/v1/feedback/reports" && new URLSearchParams(location.search).get("savedReports") === "sample") {
+    return json([{ id: "fictional-saved-report", expectation: "Keep the selected worker visible.", observation: "Fictional terminal redraw report", created_at: 1789027200,
+      diagnostic_bundle: JSON.stringify({ fictional: true, captured_version: "fixture-original-build", note: "Original saved evidence, not regenerated metrics." }, null, 2), attachment_name: null }]);
+  }
   if (new URLSearchParams(window.location.search).get("prerequisiteSave") === "held"
     && /^\/api\/v1\/tasks\/[^/]+\/prerequisites$/.test(path) && init?.method === "POST") {
     return new Promise((_resolve, reject) => {

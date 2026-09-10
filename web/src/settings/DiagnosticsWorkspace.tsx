@@ -61,6 +61,8 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
   const [savedReports, setSavedReports] = useState<DogfoodReport[]>();
   const [savedReportsUnavailable, setSavedReportsUnavailable] = useState(false);
   const [copiedReportId, setCopiedReportId] = useState<string>();
+  const [previewReportId, setPreviewReportId] = useState<string>();
+  const [copyFailureReportId, setCopyFailureReportId] = useState<string>();
   const { download: downloadScreenshot, downloadingReportId, failure: screenshotFailure } = useScreenshotDownload(operatorToken);
   const [showEveryCheck, setShowEveryCheck] = useState(false);
 
@@ -133,12 +135,15 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
   }
 
   async function copySavedReport(report: DogfoodReport) {
+    setCopyFailureReportId(undefined);
     try {
       if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
       await navigator.clipboard.writeText(report.diagnostic_bundle);
       setCopiedReportId(report.id);
     } catch {
       setCopiedReportId(undefined);
+      setCopyFailureReportId(report.id);
+      setPreviewReportId(report.id);
     }
   }
 
@@ -309,9 +314,12 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
                   <div><dt>Screenshot</dt><dd>{report.attachment_name ? "Attached privately" : "None"}</dd></div>
                 </dl>
                 <div className="saved-feedback-actions">
+                  <button type="button" className="secondary-button" aria-expanded={previewReportId === report.id} onClick={() => setPreviewReportId((current) => current === report.id ? undefined : report.id)}>{previewReportId === report.id ? "Hide saved preview" : "Preview saved report"}</button>
                   <button type="button" className="secondary-button" onClick={() => void copySavedReport(report)}>{copiedReportId === report.id ? "Copied report" : "Copy report for developer"}</button>
                   {report.attachment_name ? <button type="button" className="secondary-button" disabled={downloadingReportId !== undefined} onClick={() => void downloadScreenshot(report)}>{downloadingReportId === report.id ? "Downloading…" : "Download screenshot"}</button> : null}
                 </div>
+                {copyFailureReportId === report.id ? <p role="status" className="saved-feedback-error">Clipboard access is unavailable for this saved report. Select the saved preview and copy it manually, or try copying again.</p> : null}
+                {previewReportId === report.id ? <pre className="diagnostic-preview" aria-label="Saved diagnostic report">{report.diagnostic_bundle}</pre> : null}
                 {screenshotFailure?.reportId === report.id ? <p role="status" className="saved-feedback-error">{screenshotFailure.message}</p> : null}
               </details>
             ))}

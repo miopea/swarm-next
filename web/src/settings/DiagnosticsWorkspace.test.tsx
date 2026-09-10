@@ -304,6 +304,41 @@ test.each([
   if (offset !== undefined && offset !== 0) expect(screen.getByText(/^Last sample ·/)).toBeInTheDocument();
 });
 
+test("saved report copy failure exposes the exact saved bundle and recovers on retry", async () => {
+  const bundle = '{"fixture":"saved evidence, not current diagnostics"}';
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("feedback/reports")
+    ? new Response(JSON.stringify([{ id: "fictional-report", expectation: "Expected result", observation: "Fictional report", diagnostic_bundle: bundle, attachment_name: null, created_at: 1 }]))
+    : new Response("unavailable", { status: 503 })));
+  const writeText = vi.fn().mockRejectedValueOnce(new Error("denied")).mockResolvedValueOnce(undefined);
+  vi.stubGlobal("navigator", { ...navigator, onLine: true, clipboard: { writeText } });
+  render(<DiagnosticsWorkspace feedbackRevision={0} operatorToken="fixture" health={undefined} hiveIdentity={undefined} liveFeedState="connected" recentEvents={[]} sessions={[]} workers={[]} jiraReadiness={undefined} jiraUnavailable={true} />);
+  fireEvent.click(await screen.findByText("Fictional report", { selector: "summary span" }));
+  fireEvent.click(screen.getByRole("button", { name: "Copy report for developer" }));
+  expect(await screen.findByText(/Clipboard access is unavailable for this saved report/)).toBeVisible();
+  expect(screen.getByLabelText("Saved diagnostic report").textContent).toBe(bundle);
+  expect(writeText).toHaveBeenLastCalledWith(bundle);
+  fireEvent.click(screen.getByRole("button", { name: "Copy report for developer" }));
+  await screen.findByRole("button", { name: "Copied report" });
+  expect(screen.queryByText(/Clipboard access is unavailable for this saved report/)).not.toBeInTheDocument();
+  expect(writeText).toHaveBeenCalledTimes(2);
+});
+
+test("saved report preview is optional and copies nothing", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("feedback/reports")
+    ? new Response(JSON.stringify([{ id: "preview-report", expectation: "", observation: "Preview this report", diagnostic_bundle: "Exact retained evidence", attachment_name: null, created_at: 1 }]))
+    : new Response("unavailable", { status: 503 })));
+  const writeText = vi.fn();
+  vi.stubGlobal("navigator", { ...navigator, onLine: true, clipboard: { writeText } });
+  render(<DiagnosticsWorkspace feedbackRevision={0} operatorToken="fixture" health={undefined} hiveIdentity={undefined} liveFeedState="connected" recentEvents={[]} sessions={[]} workers={[]} jiraReadiness={undefined} jiraUnavailable={true} />);
+  fireEvent.click(await screen.findByText("Preview this report", { selector: "summary span" }));
+  expect(screen.queryByLabelText("Saved diagnostic report")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Preview saved report" }));
+  expect(screen.getByLabelText("Saved diagnostic report")).toHaveTextContent("Exact retained evidence");
+  fireEvent.click(screen.getByRole("button", { name: "Hide saved preview" }));
+  expect(screen.queryByLabelText("Saved diagnostic report")).not.toBeInTheDocument();
+  expect(writeText).not.toHaveBeenCalled();
+});
+
 test("maintenance recovery details distinguish a missing reply from a confirmed start failure", () => {
   render(<DiagnosticsWorkspace {...diagnosticsProps} health={undefined} workers={[
     { ...demoWorkers[0], id: "lost", name: "Clover", running: false, return_attention: "unconfirmed", runtime_error: "Startup reply was lost." },
