@@ -15,7 +15,7 @@ is historical where superseded by the verified deployment section.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-80c7d1c4c654-20260910075801-131543`.
+- App/API: `1.6.0-dev-fd0385d26bf8-20260910093249-176487`.
 - Engine: last verified PID 3408834, started September 9 at 17:01:49 Eastern,
   after the operator's manually applied update. Subsequent app-only deployments
   preserved that engine and its running worker identity projections.
@@ -23,8 +23,9 @@ is historical where superseded by the verified deployment section.
   running session/provider identities. The worker-list projection did not expose
   conversation IDs, so this does not independently prove conversation continuity.
   Swarm Next and D365 remained asleep.
-- Latest full CI `34414805240` for the dialog boundary fix passed, as did
-  `34412315650` for the worker editor focus correction.
+- Confirmed full CI `34458764563` for display recovery83a88edd passed all four
+  jobs. Later queue-retry/navigation CI remains separate and unconfirmed here.
+  Subsequent UX receipts and the consolidated remaining milestone map are in95/96.
 - No release is authorized. No customer-facing send is authorized by task closure.
 
 ## Requirement-by-requirement disposition

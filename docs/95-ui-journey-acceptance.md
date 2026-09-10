@@ -3,6 +3,25 @@
 Scope remains45/93. This matrix distinguishes delivered behavior, isolated proof
 and remaining requirements; it is not whole-program completion.
 
+## Quick navigation includes Queues — fd0385d2
+
+Delivered runtime1.6.0-dev-fd0385d26bf8-20260910093249-176487 is healthy, no degraded
+subsystems. Reload completed successfully. Pre/post-quick-queues-workers.json in
+the retained private evidence directory match all34 records/12 running identities;
+enginePID3408834/start unchanged. Edge used Reload this tab. No release/engine
+update. Current CI completion remains unconfirmed.
+
+Rendered fixture search for Queues returned No matching result despite Queues
+being a primary destination. The new App regression failed on the missing option.
+The palette now uses the existing queuedTaskCount and opens the existing page.
+No extra queue calculation, task change or worker action is added.
+
+All83 App/palette/modal-focus tests and production build pass. In Edge, searching
+Queues shows the same4 waiting as navigation; Enter opens Queues. Reopening and
+Escape returns focus to Open quick navigation. At320px there is no horizontal
+overflow; Close measures44px and the result74.3px. Search, Enter and close remain
+available without a mouse. Fixture server stopped; live deployment pending.
+
 ## Queue observation recovery — 2d7b1cd7
 
 Delivered runtime1.6.0-dev-2d7b1cd7c2b5-20260910091951-170000 is healthy with no

@@ -2,6 +2,18 @@
 
 ### Active acceptance checkpoint — ordinary-user UX first
 
+Delivered fd0385d2 fixes the rendered missing Queues command;83 tests/build and
+desktop keyboard/320px acceptance pass. Live Queues command shows55 waiting,
+matching the sidebar; health and all34 records/12 running identities preserved.
+Next concrete finding: commandChoices maps every decision into Attention with
+only reason text, so historical requests look like current questions. Live search
+for Queues showed three Attention results while Needs You counted2 pending.
+Inspect exact decision states and distinguish/filter historical results; preserve
+searchability deliberately and do not mutate or answer decisions to fix the view.
+The consolidated user-facing milestone map is in96. Next close explicit remaining
+UI-4 reduced-motion/contrast/zoom browser gates, without repeating native phone
+questions or deep performance work. Full45 scope remains active.
+
 Current package2d7b1cd7 closes the missing queue-observation retry: one bounded
 GET through the existing owner, no dispatch/restart or task changes.124 targeted
 App/Queues/read-owner tests and build pass.390/320px browser checks retain the

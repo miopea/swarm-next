@@ -2,9 +2,20 @@
 
 September 10, 2026. This is a handoff over the approved scope in45, not a new
 definition of completion. No release is authorized. Detailed receipts remain
-in92,94 and95. Last verified app/API:80c7d1c4; live worker engine was preserved.
-Responsive prerequisite-footer correction d69e9b16 is being deployed; see95 for
-its failing-before layout evidence and the subsequent live receipt.
+in92,94 and95. Verified app/API:fd0385d2; all34 records/12 running session identities
+and enginePID3408834/start were preserved. See95 for acceptance and continuity.
+
+## Current user-facing milestone map
+
+| Package | Delivered and verified | Still outside that evidence |
+| --- | --- | --- |
+| Needs You and linked work | Compact choices/custom answer; clarification round trip; exact Queue-to-decision and prerequisite-to-task navigation | Direct terminal answers reconciling the original request; native clarification use |
+| Terminal controls | Draft retention, explicit ownership/reconnect notices, bounded controls and retry fixtures; operator accepted Android AskUser questions2/3 | Real camera/gallery, suspension/handoff, aged performance and reload geometry |
+| Settings and runtime | Search/navigation; saved-vs-draft Night Watch; quiet safeguards; distinct diagnostic evidence; saved preview/copy refusal; update confirmation/cancel; fictional support retry | Physical scheduled presence; engine automatic admission; paired central support acceptance |
+| Integrated UI recovery | Modal focus/draft protection; prerequisite timeout and narrow footer; bounded history; saved-session retry; honest display failures; queue-observation retry | Full reduced-motion/contrast/zoom acceptance; current-build ordinary workday/overnight acceptance |
+
+This map consolidates retained receipts, not blanket closure of UI-1 through UI-4.
+It avoids asking the operator to repeat already accepted unchanged phone checks.
 
 ## What is ready to try
 
