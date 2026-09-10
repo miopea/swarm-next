@@ -1,5 +1,31 @@
 # Remaining maturity work — UX/UI first
 
+## Operator priority override — Apiary onboarding, September 10
+
+Pause native-answer integration; no runtime edits for its audit tranche have
+started. Real member onboarding exposed a higher-priority user-facing gap:
+invite generation, paste, Keeper approval, readiness, member confirmation and
+Keeper finalization feel fragmented. Consolidate the journey and its outcome in
+Apiary, preserving required consent/security checks rather than deleting them.
+Automate readiness checks where safe and show one next action and its owner.
+
+Explicit requested outcomes:
+- A default My Hive becomes <firstname>'s Hive at join; preserve custom names.
+- Show the actual person's name and email, not the generic Operator label.
+- Propagate subsequent Hive renames (Vicky's rename remained local).
+- Show all authorized Apiary member identities consistently; do not expose
+  other Hives' private work, credentials or terminals through the roster.
+- Investigate WSL's Runtime update required and catalog_stale signals against
+  actual member/Keeper versions and responses. Screenshots alone do not prove
+  which component requires an update or that WSL is the cause.
+- Distinguish membership success from shared-work readiness, with a clear final
+  joined state. Move low-level counters/details out of the primary journey.
+
+Verify Keeper/member flows with fictional identities and an isolated member;
+do not modify real memberships, Vicky's identity, or the WSL instance without
+first identifying the authoritative target. Preserve the existing user-approved
+native exact-link boundary for later. Main publication approval is separate.
+
 ## Active handoff — September 10, 14:15 Eastern
 
 Use this section before the historical checkpoints below. Full scope remains45.
