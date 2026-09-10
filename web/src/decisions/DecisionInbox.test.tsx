@@ -4,7 +4,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import type { DecisionRequest, Task, Worker } from "../api";
 import DecisionInbox from "./DecisionInbox";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 test("keeps its accessible name on Activity without repeating the page introduction", async () => {
   render(<DecisionInbox decisions={[]} workers={[]} tasks={[]} busy={false} onResolve={vi.fn()} />);
@@ -303,7 +303,8 @@ test("opens the task that gave a decision its context", () => {
   expect(onOpenTask).toHaveBeenCalledWith(task.id);
 });
 
-test("reveals and focuses a resolved decision selected through global navigation", async () => {
+test.each([false, true])("reveals and focuses a resolved decision with reduced motion=%s", async (reduce) => {
+  vi.stubGlobal("matchMedia", vi.fn().mockImplementation((query: string) => ({ matches: query === "(prefers-reduced-motion: reduce)" && reduce, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
   const scrollIntoView = vi.fn();
   Element.prototype.scrollIntoView = scrollIntoView;
   render(
@@ -321,7 +322,7 @@ test("reveals and focuses a resolved decision selected through global navigation
   const card = await screen.findByRole("article", { name: "" });
   await waitFor(() => expect(card).toHaveFocus());
   expect(screen.getByRole("checkbox", { name: "Show history" })).toBeChecked();
-  expect(scrollIntoView).toHaveBeenCalled();
+  expect(scrollIntoView).toHaveBeenCalledWith({ behavior: reduce ? "instant" : "smooth", block: "center" });
 });
 
 test.each(["resolved", "withdrawn"] as const)("search navigation opens %s history without answer controls", async (state) => {

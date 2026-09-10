@@ -106,7 +106,8 @@ test("opens and focuses task creation when requested from global navigation", as
   expect(screen.getByRole("button", { name: "Close task form" })).toHaveAttribute("aria-expanded", "true");
 });
 
-test("reveals and focuses a completed task selected through global navigation", async () => {
+test.each([false, true])("reveals and focuses a completed task with reduced motion=%s", async (reduce) => {
+  vi.stubGlobal("matchMedia", vi.fn().mockImplementation((query: string) => ({ matches: query === "(prefers-reduced-motion: reduce)" && reduce, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
   const completed = { ...task, state: "completed" as const, closed_on_evidence: true };
   const scrollIntoView = vi.fn();
   Element.prototype.scrollIntoView = scrollIntoView;
@@ -115,7 +116,7 @@ test("reveals and focuses a completed task selected through global navigation", 
   const card = screen.getByRole("article", { name: completed.title });
   await waitFor(() => expect(card).toHaveFocus());
   expect(card.closest("details")).toHaveAttribute("open");
-  expect(scrollIntoView).toHaveBeenCalled();
+  expect(scrollIntoView).toHaveBeenCalledWith({ behavior: reduce ? "instant" : "smooth", block: "center" });
 });
 
 test("an unverified task needs no reveal, because it is not behind a fold", async () => {

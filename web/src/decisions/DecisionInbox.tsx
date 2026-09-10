@@ -171,7 +171,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
       const card = document.querySelector<HTMLElement>(`[data-decision-id="${CSS.escape(focusDecisionId)}"]`);
       if (!card) return;
       pendingNavigation.current = false;
-      card?.scrollIntoView({ behavior: "smooth", block: "center" });
+      card?.scrollIntoView({ behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "center" });
       card?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);

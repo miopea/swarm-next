@@ -380,7 +380,7 @@ export default function TaskBoard({
     if (focusedTaskCompleted) setCompletedOpen(true);
     const frame = requestAnimationFrame(() => {
       const card = document.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(focusTaskId)}"]`);
-      card?.scrollIntoView({ behavior: "smooth", block: "center" });
+      card?.scrollIntoView({ behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "center" });
       card?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
