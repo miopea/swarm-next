@@ -9843,6 +9843,16 @@ mod tests {
         );
         assert_eq!(status["reload_available"], false);
 
+        std::fs::write(
+            &status_path,
+            "state=failed\nstep=protocol-change\ndetail=Engine migration required\n",
+        )
+        .unwrap();
+        let failed = authorized_get(app.clone(), "/api/v1/runtime/development").await;
+        let failed = response_json(failed).await;
+        assert_eq!(failed["failure_reason"], "protocol-change");
+        assert_eq!(failed["failure_detail"], "Engine migration required");
+
         let requested = app
             .clone()
             .oneshot(

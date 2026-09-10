@@ -2,6 +2,19 @@
 
 ### Active acceptance checkpoint — ordinary-user UX first
 
+Explicit migration staging is now local commit `5de86971`: `prepare-protocol`
+validates/installs one pending package under the lifecycle lock without touching
+services, engine input or active links. A manual hold prevents timer activation
+even with no loaded sessions. Different pending packages refuse; exact retries
+are safe; stale managed maintenance requests cannot activate the candidate.
+The complete isolated packaging lifecycle suite passes, including these cases
+and lifecycle lock contention. Log:
+`/tmp/swarm-native-answer-check.6fkv8E/protocol-preparation-lifecycle.log`.
+No live preparation or deployment occurred. Next wire the development build
+request and UI to preparation, bind maintenance consent to the exact prepared
+version before stopping workers, then verify explicit application/return. This
+is not yet an operator-usable prepare-and-apply workflow; do not claim OPS-01.
+
 September 10 development-update incident: the live checkout `0e35d90b` requires
 protocol17 while the running host remains16. The App/API is healthy at
 `1.6.0-dev-dba2868be982-20260910095752-189394`; host PID242380 still has its

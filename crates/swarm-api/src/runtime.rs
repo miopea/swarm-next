@@ -344,7 +344,7 @@ pub(super) async fn development(
             worker_engine_update_required: engine_update.0,
             running_worker_sessions: engine_update.1,
             protocol_migration_required: protocol_migration_required(&state).await,
-            failure_reason: development_status_field(&state, "reason="),
+            failure_reason: development_status_field(&state, "step="),
             failure_detail: development_status_field(&state, "detail="),
         }),
     )
