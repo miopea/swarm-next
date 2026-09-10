@@ -9410,6 +9410,14 @@ mod tests {
             undo_sql: "DROP TABLE native_operator_interviews",
             probe_sql: "",
         },
+        SchemaStep {
+            table: "decision_requests",
+            artifact: "option_descriptions_reader_fence",
+            // Schema 161 changes reader compatibility, not database shape.
+            // Rewinding it must preserve the native-source table from 160.
+            undo_sql: "SELECT 1",
+            probe_sql: "SELECT user_version >= 161 FROM pragma_user_version",
+        },
     ];
 
     /// The step that introduced a named artifact, rather than whichever is newest.

@@ -196,6 +196,41 @@ mod tests {
         WorkerSessionId,
     };
 
+    #[test]
+    fn reader_fence_upgrade_preserves_populated_native_sources() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("schema-160.sqlite3");
+        let source = {
+            let store = TaskStore::open(&path).unwrap();
+            let source = fixture(&store);
+            store.record_native_interview(&source, 100).unwrap();
+            store
+                .connection()
+                .unwrap()
+                .pragma_update(None, "user_version", 160)
+                .unwrap();
+            source
+        };
+        let migrated = TaskStore::open(&path).unwrap();
+        assert_eq!(
+            migrated
+                .native_interview(source.id)
+                .unwrap()
+                .unwrap()
+                .source,
+            source
+        );
+        assert_eq!(
+            migrated
+                .connection()
+                .unwrap()
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            crate::CURRENT_SCHEMA_VERSION
+        );
+        migrated.verify_integrity().unwrap();
+    }
+
     fn fixture(store: &TaskStore) -> NativeInterviewEvidence {
         let worker = store.ensure_queen("/fictional").unwrap();
         let session_id = WorkerSessionId::new();
