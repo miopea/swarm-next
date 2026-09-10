@@ -2,6 +2,23 @@
 
 ### Active acceptance checkpoint — ordinary-user UX first
 
+Direct-answer integration is now the sole next package; do not repeat the web
+checkpoint below. Verified live dba2868b healthy, engine PID3408834/startSep9
+17:01:49EDT unchanged. The fictional Contract transcript has exact three-question
+native answers. Added the bounded native interview observation parser described
+in ADR0065; full Linux terminal library148 passed, one opt-in profiler ignored.
+Final annotation/unknown-result guards passed all6 parser tests and strict
+terminal all-target clippy. Nonempty annotations remain unsupported, not dropped.
+This is NOT installed hook capture, authenticated authorship, decision settlement,
+or closure of QUEEN-03/ATT-01. No deployment or engine update in this slice.
+Continue with engine-owned invocation/input provenance and exact decision binding,
+then persistence/service integration and a fictional complete lifecycle. Do not
+wire a native result directly to a confirmed operator receipt, drop option
+descriptions to force a match, or substitute worker prose/timestamps for evidence.
+Isolated Linux source:/tmp/swarm-native-answer-check.6fkv8E; reused existing
+target:/tmp/swarm-attachment-check.EBT6ei/target. Keep that cache bounded; disk3.2GB
+free at entry. User-account usage37% consumed; no resets used or available.
+
 UI-first browser implementation checkpoint: full current web suite passed1540
 tests/158 files at ed51204c; deployed dba2868b CI34463462108 is green. Ordinary
 presentation/recovery increments are ready for operator dogfooding, not full45

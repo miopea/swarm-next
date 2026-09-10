@@ -7,6 +7,7 @@ mod maintenance;
 mod process;
 mod provider;
 mod provider_activity;
+mod provider_interview;
 mod provider_lifecycle;
 mod provider_lifecycle_gate;
 mod resources;
@@ -45,6 +46,10 @@ pub use provider::{
 };
 pub use provider_activity::{
     ProviderActivity, background_work_running, classify_provider_activity,
+};
+pub use provider_interview::{
+    NativeInterviewObservation, NativeInterviewOption, NativeInterviewPhase,
+    NativeInterviewQuestion, read_claude_interview,
 };
 pub use provider_lifecycle::{
     MAX_PROVIDER_LIFECYCLE_BYTES, ProviderSessionStartObservation, read_claude_resume_end,

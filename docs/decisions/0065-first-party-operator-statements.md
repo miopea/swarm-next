@@ -102,6 +102,41 @@ yet. Transport authentication, engine-owned operator-input correlation, provider
 consumption evidence, and decision identity mapping must precede receipt creation.
 Do not wire `UserPromptSubmit` directly to confirmed operator statements.
 
+### Native interview observation contract, September 10
+
+The isolated fictional Contract worker's retained native result confirms the
+`questions` plus question-text-keyed `answers` shape for a three-question
+AskUser interview. This is transcript evidence, not a captured live hook callback
+or proof of terminal-writer identity. The current provider hook reference exposes
+the invocation ID and tool-specific input/result on PreToolUse/PostToolUse.
+
+`read_claude_interview` now parses those bounded main-session observations.
+Requested and completed phases remain distinct: PreToolUse does not prove that
+the question was displayed. Matching compares conversation, invocation ID and the
+entire supported question shape, including option order, descriptions and
+multi-select behavior. Unknown question/option features are unsupported rather
+than discarded. Responses require every question exactly once; duplicate answer
+keys, partial/extra answers, changed questions, failed/child events and nonempty
+programmatic input answers are refused. Free text and joined multi-select text
+stay exact; parsing does not infer which options were selected.
+
+Transport stays capped at 64 KiB, each answer at 16 KiB, descriptions at 4 KiB,
+invocation IDs at 128 ASCII bytes, and question count/text/labels at existing
+domain bounds. Debug output contains no questions, answers, paths or invocation
+ID. Observations are neither serializable receipts nor operator-authenticated
+evidence. No hook is installed and no engine protocol or running worker changes
+in this parser slice.
+
+Next integration must authenticate the live process capability, order native
+invocation boundaries against engine-owned input provenance, reject automation,
+interrupted/uncertain input and replaced sessions, then bind an exact immutable
+decision/question identity before confirmed receipt admission. Option descriptions
+cannot be dropped to force a match against the narrower decision schema. A
+successful tool result alone is insufficient: another hook may answer a tool.
+Keep unsupported/ambiguous cases pending and do not invent a receipt from prose.
+Only the complete fictional operator-to-worker-to-Queen test, including no second
+delivery and API interruption, can close this milestone.
+
 ### Installed-provider reconciliation, 2026-09-04
 
 Read-only checks on the operator's remote host found Claude Code 2.1.260 at
