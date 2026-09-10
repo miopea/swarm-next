@@ -137,6 +137,38 @@ Keep unsupported/ambiguous cases pending and do not invent a receipt from prose.
 Only the complete fictional operator-to-worker-to-Queen test, including no second
 delivery and API interruption, can close this milestone.
 
+### Observed programmatic answer and output replacement, September 10
+
+A disposable native Claude Code 2.1.267 PTY exercised one fictional AskUser
+invocation with explicit isolated hooks and no Hive settings changes. PreToolUse
+supplied `Amber` through updated input. The observed PostToolUse callback retained
+`Amber` in both input and response. A separate PostToolUse hook replaced the
+result with `Blue`; the native UI displayed Blue and the model reported Blue.
+Neither answer was human-authored. The reduced original callback is retained in
+`crates/swarm-terminal/fixtures/claude-2.1.267-programmatic-interview.json`.
+The existing parser refuses it because the input already contains answers.
+
+This is a measured counterexample to treating PostToolUse as final consumption,
+not evidence that normal human answers can yet be reconciled. Preserve the
+distinction between tool completion, authenticated operator authorship and the
+final result delivered to the worker. Installing capture hooks before that final
+result is correlated would leave the integration incomplete even with durable
+storage and a matching decision ID.
+
+The callback probe also observed PostToolBatch with a `tool_calls` field. Its
+original bounded recorder retained field names but not that field's contents;
+no final-batch schema or consumption parser is accepted from this run. The probe
+now records that field for a future explicit test. Two earlier headless attempts
+advertised no tools and produced no callbacks; their model-written descriptions
+are not execution evidence. Do not repeat those attempts or replace native PTYs
+with headless workers. The bounded test process has exited.
+
+Evidence directory: `/tmp/swarm-native-answer-contract.ssxOS0`. The reusable
+probe is `scripts/dogfood/native-answer-contract-probe.cjs`; it deliberately
+automates/replaces fictional answers and must never be installed in Hive settings.
+Next: verify final-result correlation and full immutable decision binding, then
+exercise genuine operator input plus API interruption and no duplicate delivery.
+
 ### Installed-provider reconciliation, 2026-09-04
 
 Read-only checks on the operator's remote host found Claude Code 2.1.260 at

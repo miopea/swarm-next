@@ -1,0 +1,30 @@
+{
+  "hook_event_name": "PostToolUse",
+  "session_id": "e11f11cc-37aa-44e6-96d8-55ae6ab7d1b0",
+  "tool_use_id": "toolu_01QMqHGS4nttPEE9D6NJS4kc",
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+    "questions": [{
+      "question": "Which fictional jar?",
+      "header": "Jar",
+      "options": [
+        {"label": "Amber", "description": "Keep the amber jar closed."},
+        {"label": "Blue", "description": "Keep the blue jar closed."}
+      ],
+      "multiSelect": false
+    }],
+    "answers": {"Which fictional jar?": "Amber"}
+  },
+  "tool_response": {
+    "questions": [{
+      "question": "Which fictional jar?",
+      "header": "Jar",
+      "options": [
+        {"label": "Amber", "description": "Keep the amber jar closed."},
+        {"label": "Blue", "description": "Keep the blue jar closed."}
+      ],
+      "multiSelect": false
+    }],
+    "answers": {"Which fictional jar?": "Amber"}
+  }
+}

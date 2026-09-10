@@ -247,6 +247,38 @@ mod tests {
     }
 
     #[test]
+    fn installed_provider_programmatic_callback_cannot_become_operator_evidence() {
+        // Actual reduced callback from the disposable Claude 2.1.267 PTY probe.
+        // PreToolUse supplied Amber; PostToolUse rewrote the model result to Blue.
+        // This observer still saw Amber. Neither result was a human answer.
+        let bytes = include_bytes!("../fixtures/claude-2.1.267-programmatic-interview.json");
+        let callback: Value = serde_json::from_slice(bytes).unwrap();
+        assert_eq!(
+            callback["tool_input"]["answers"]["Which fictional jar?"],
+            "Amber"
+        );
+        assert_eq!(
+            callback["tool_response"]["answers"]["Which fictional jar?"],
+            "Amber"
+        );
+        assert!(read_claude_interview(bytes).is_none());
+
+        // Reconstruct only the observed pre-hook invocation; it is a request,
+        // not an answer. Removing the programmatic marker from a completion
+        // would discard provenance rather than prove operator authorship.
+        let mut requested = callback;
+        requested["hook_event_name"] = json!("PreToolUse");
+        requested.as_object_mut().unwrap().remove("tool_response");
+        requested["tool_input"]
+            .as_object_mut()
+            .unwrap()
+            .remove("answers");
+        let observation = read(&requested).unwrap();
+        assert_eq!(observation.phase, NativeInterviewPhase::Requested);
+        assert!(observation.answers().is_empty());
+    }
+
+    #[test]
     fn missing_extra_or_ambiguous_answers_do_not_complete_an_interview() {
         let mut event = payload(true);
         event["tool_response"]["answers"]

@@ -2,6 +2,21 @@
 
 ### Active acceptance checkpoint — ordinary-user UX first
 
+Native Claude 2.1.267 contract probe now demonstrates that a PostToolUse observer
+can retain a different answer from the final result received by the worker:
+programmatic Amber became Blue through another hook. The current parser rejects
+the observed programmatic callback correctly; preserve that actual fixture as a
+regression. This is not genuine human-answer acceptance. PostToolBatch fired with
+`tool_calls`, but its contents were not captured in the first probe; no final
+consumption parser is verified yet. Details and evidence location are in ADR0065.
+Do not enable automatic Needs You closure from the early callback. Next integration
+must correlate final received output, authenticated input and full decision identity.
+The disposable native process exited; no additional provider run is necessary to
+establish the early-callback limitation. Release1.7.0 remains untouched.
+All seven focused native-interview parser tests and strict terminal all-target,
+all-feature clippy passed; probe JavaScript syntax and Git whitespace checks pass.
+Logs: `/tmp/swarm-native-answer-check.6fkv8E/native-contract-{tests,clippy}.log`.
+
 Durable intake is now wired into the existing supervisor after session binding.
 The application returns acknowledgement identities only for committed or exact
 duplicate sources; the API never acknowledges rejected/unsaved entries. One

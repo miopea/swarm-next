@@ -32,6 +32,14 @@ is historical where superseded by the verified deployment section.
 
 ### QUEEN-03 / ATT-01 native answer capture — foundation verified, integration open
 
+An isolated native Claude2.1.267 adversarial callback is now retained as a
+regression: programmatic input and the early completion result said Amber while
+a later hook supplied Blue to the model. The parser correctly refuses that
+programmatic callback. All seven focused parser tests and strict terminal clippy
+pass. This proves an exclusion, not operator-to-Queen acceptance; final-result
+correlation and exact decision binding remain open (ADR0065/93). No provider
+capture installation, decision resolution or deployment occurred in this check.
+
 The private engine path now binds native invocation callbacks to live capabilities,
 conversation-selection revisions and generation-checked operator input. Prepare/admit
 round trips refuse delayed admission after intervening input. Bounded completed
