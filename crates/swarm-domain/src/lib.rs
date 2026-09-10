@@ -980,7 +980,7 @@ mod tests {
     }
 
     #[test]
-    fn imported_invitation_readiness_requires_local_jira_policy_and_project_evidence() {
+    fn imported_invitation_membership_requires_policy_not_optional_jira() {
         let operator_id = OperatorId::new();
         let hive = Hive::personal("Daisy", operator_id);
         let invitation = FederationJoinInvitation {
@@ -1018,15 +1018,24 @@ mod tests {
             vec![project.clone()],
             50,
         );
-        assert_eq!(
-            blocked.blockers,
-            vec![
-                ApiaryJoinBlocker::IntegrationNotReady,
-                ApiaryJoinBlocker::ProjectAccessNotReady,
-                ApiaryJoinBlocker::PolicyNotAccepted,
-            ]
-        );
+        assert_eq!(blocked.blockers, vec![ApiaryJoinBlocker::PolicyNotAccepted]);
         assert!(!blocked.can_submit());
+
+        let without_jira = FederationJoinReadiness::evaluate(
+            &hive,
+            &FederationJoinInvitation {
+                state: FederationJoinInvitationState::PolicyAccepted,
+                ..invitation.clone()
+            },
+            JiraConnectionState::NotConnected,
+            vec![project.clone()],
+            50,
+        );
+        assert!(without_jira.can_submit());
+        assert_eq!(
+            without_jira.submission_schema_version(),
+            FEDERATION_PROJECT_SCOPED_JOIN_SCHEMA_VERSION
+        );
 
         let ready = FederationJoinReadiness::evaluate(
             &hive,
@@ -1044,6 +1053,10 @@ mod tests {
             50,
         );
         assert!(ready.can_submit());
+        assert_eq!(
+            ready.submission_schema_version(),
+            FEDERATION_MEMBERSHIP_SCHEMA_VERSION
+        );
         let retry_ready = FederationJoinReadiness::evaluate(
             &hive,
             &FederationJoinInvitation {

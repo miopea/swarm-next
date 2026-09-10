@@ -11,17 +11,17 @@ use swarm_domain::{
     ApiaryJoinLinkId, ApiaryJoinLinkPoll, ApiaryJoinLinkState, ApiaryKeeperLink,
     FEDERATION_CATALOG_SCHEMA_VERSION, FEDERATION_CONNECTION_CARD_SCHEMA_VERSION,
     FEDERATION_DEPARTURE_SCHEMA_VERSION, FEDERATION_INVITATION_SCHEMA_VERSION,
-    FEDERATION_MEMBERSHIP_SCHEMA_VERSION, FEDERATION_PROTOCOL_VERSION,
-    FederationCatalogAcknowledgement, FederationCatalogSnapshot, FederationCatalogSnapshotPayload,
-    FederationClaimId, FederationClaimState, FederationDepartureReadiness,
-    FederationDepartureReceipt, FederationDepartureReceiptId, FederationDepartureReceiptPayload,
-    FederationJoinAcceptance, FederationJoinInvitation, FederationJoinInvitationState,
-    FederationJoinReadiness, FederationJoinSubmission, FederationJoinSubmissionPayload,
-    FederationMembershipReceipt, FederationMembershipReceiptId, FederationMembershipReceiptPayload,
-    FederationNodeId, FederationProjectManifestEntry, FederationProjectReadiness,
-    FederationSharedClaim, FederationSyncCondition, FederationSyncHealth, HiveConnectionCard,
-    HiveConnectionCardPayload, HiveId, JiraProjectBindingId, OperatorId, SharedWorkBackend,
-    federation_retry_delay_seconds,
+    FEDERATION_MEMBERSHIP_SCHEMA_VERSION, FEDERATION_PROJECT_SCOPED_JOIN_SCHEMA_VERSION,
+    FEDERATION_PROTOCOL_VERSION, FederationCatalogAcknowledgement, FederationCatalogSnapshot,
+    FederationCatalogSnapshotPayload, FederationClaimId, FederationClaimState,
+    FederationDepartureReadiness, FederationDepartureReceipt, FederationDepartureReceiptId,
+    FederationDepartureReceiptPayload, FederationJoinAcceptance, FederationJoinInvitation,
+    FederationJoinInvitationState, FederationJoinReadiness, FederationJoinSubmission,
+    FederationJoinSubmissionPayload, FederationMembershipReceipt, FederationMembershipReceiptId,
+    FederationMembershipReceiptPayload, FederationNodeId, FederationProjectManifestEntry,
+    FederationProjectReadiness, FederationSharedClaim, FederationSyncCondition,
+    FederationSyncHealth, HiveConnectionCard, HiveConnectionCardPayload, HiveId,
+    JiraProjectBindingId, OperatorId, SharedWorkBackend, federation_retry_delay_seconds,
 };
 use url::Url;
 
@@ -1908,7 +1908,7 @@ impl TaskStore {
             return Err(TaskStoreError::ApiaryJoinNotReady);
         }
         let payload = FederationJoinSubmissionPayload {
-            schema_version: FEDERATION_MEMBERSHIP_SCHEMA_VERSION,
+            schema_version: readiness.submission_schema_version(),
             protocol_version: FEDERATION_PROTOCOL_VERSION,
             invitation_id,
             apiary_id: parse_domain_id(&stored.0)?,
@@ -3167,8 +3167,10 @@ fn verify_join_submission(
     now: i64,
 ) -> Result<(), TaskStoreError> {
     let payload = &submission.payload;
-    if payload.schema_version != FEDERATION_MEMBERSHIP_SCHEMA_VERSION
-        || payload.protocol_version != FEDERATION_PROTOCOL_VERSION
+    if !matches!(
+        payload.schema_version,
+        FEDERATION_MEMBERSHIP_SCHEMA_VERSION | FEDERATION_PROJECT_SCOPED_JOIN_SCHEMA_VERSION
+    ) || payload.protocol_version != FEDERATION_PROTOCOL_VERSION
         || payload.required_policy_revision == 0
         || payload.submitted_at < 0
         || payload.submitted_at > now.saturating_add(MAX_CLOCK_SKEW_SECONDS)
@@ -5541,6 +5543,16 @@ mod tests {
 
     #[test]
     fn independent_hive_submission_is_consumed_once_with_a_signed_retry_stable_receipt() {
+        assert_independent_hive_join(swarm_domain::JiraConnectionState::Ready);
+    }
+
+    #[test]
+    fn no_jira_hive_joins_with_membership_only_assertion_and_retry_stable_receipt() {
+        assert_independent_hive_join(swarm_domain::JiraConnectionState::NotConnected);
+    }
+
+    #[allow(clippy::too_many_lines)] // One independent-Hive join, retry and receipt lifecycle.
+    fn assert_independent_hive_join(jira_connection: swarm_domain::JiraConnectionState) {
         let now = 20_000;
         let invited = TaskStore::in_memory().unwrap();
         let invited_identity = invited.local_hive_identity().unwrap();
@@ -5567,14 +5579,27 @@ mod tests {
         invited
             .accept_federation_join_policy(invitation.invitation_id, 1, now + 2)
             .unwrap();
-        let readiness = FederationJoinReadiness {
-            jira_connection: swarm_domain::JiraConnectionState::Ready,
-            projects: Vec::new(),
-            blockers: Vec::new(),
-        };
+        let readiness = FederationJoinReadiness::evaluate(
+            &invited_identity.hive,
+            &FederationJoinInvitation {
+                state: FederationJoinInvitationState::PolicyAccepted,
+                ..invitation.clone()
+            },
+            jira_connection,
+            Vec::new(),
+            now + 3,
+        );
         let submission = invited
             .prepare_federation_join_submission(invitation.invitation_id, &readiness, now + 3)
             .unwrap();
+        assert_eq!(
+            submission.payload.schema_version,
+            if jira_connection == swarm_domain::JiraConnectionState::Ready {
+                FEDERATION_MEMBERSHIP_SCHEMA_VERSION
+            } else {
+                FEDERATION_PROJECT_SCOPED_JOIN_SCHEMA_VERSION
+            }
+        );
         assert_eq!(
             submission,
             invited
@@ -5641,7 +5666,54 @@ mod tests {
         );
         assert_member_acknowledges_catalog(&invited, &keeper, &accepted, apiary.id, now + 7);
 
+        assert_member_receives_swarm_work(&keeper, &invited, &accepted, now + 10);
+
         assert_tampered_submission_is_rejected(&keeper, submission, now + 6);
+    }
+
+    fn assert_member_receives_swarm_work(
+        keeper: &TaskStore,
+        member: &TaskStore,
+        acceptance: &FederationJoinAcceptance,
+        now: i64,
+    ) {
+        let task = keeper
+            .create_apiary_task_for_hive(
+                "Fictional onboarding check",
+                "No Jira dependency",
+                swarm_domain::TaskPriority::Normal,
+                Some(acceptance.receipt.payload.member_hive_id),
+                now,
+            )
+            .unwrap();
+        let page = keeper
+            .federation_task_page(&acceptance.node_credential, 0, now + 1)
+            .unwrap();
+        member.apply_federation_task_page(&page, now + 1).unwrap();
+        member.apply_federation_task_page(&page, now + 2).unwrap();
+        let tasks = member.list_local_apiary_tasks().unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].id, task.id);
+        let queued = member
+            .queue_federation_task_transition(task.id, swarm_domain::TaskState::Active, now + 3)
+            .unwrap();
+        let receipt = keeper
+            .apply_federation_task_command(&acceptance.node_credential, &queued.command, now + 4)
+            .unwrap();
+        assert_eq!(
+            receipt.outcome,
+            swarm_domain::FederationTaskCommandOutcome::Applied
+        );
+        assert_eq!(
+            keeper
+                .apply_federation_task_command(
+                    &acceptance.node_credential,
+                    &queued.command,
+                    now + 5
+                )
+                .unwrap(),
+            receipt
+        );
     }
 
     #[test]

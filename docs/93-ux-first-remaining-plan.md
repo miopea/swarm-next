@@ -4,6 +4,17 @@
 
 ### Latest priority: guided enrollment, then workspace setup
 
+Latest verification: no-Jira membership assertion now passes the independent
+two-store lifecycle including signed receipt, identical retries, Keeper-assigned
+Swarm task projection, duplicate-page replay and idempotent member progress.
+All39 federation persistence tests pass; strict domain/persistence Clippy passes
+after formatting. All162 domain tests passed before redundant partial-project
+assertions were removed (no runtime change in that cleanup). No HTTP/live
+two-process no-Jira acceptance yet. Schema2 is unpublished and must not be
+downgraded on rejection by an older Keeper. Internal existing backend tags are
+retained to preserve existing Jira work; new public copy describes Swarm shared
+tasks with optional Jira rather than promising a completed backend conversion.
+
 SUPERSEDING operator decisions: membership needs NO Jira or Jira project;
 Swarm shared tasks are baseline and Jira is optional. Joining accepts Apiary-wide
 Keeper management, retaining local tasks. Apiary tab owns setup, management and

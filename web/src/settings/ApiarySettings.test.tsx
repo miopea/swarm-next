@@ -161,7 +161,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-test("founds only a reviewed Jira-backed Apiary and refreshes Hive identity", async () => {
+test("creates a reviewed Apiary with optional Jira and refreshes Hive identity", async () => {
   const onHiveIdentityChange = vi.fn();
   const federated = keeperIdentity();
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -181,15 +181,15 @@ test("founds only a reviewed Jira-backed Apiary and refreshes Hive identity", as
 
   render(<ApiarySettings busy={false} hiveIdentity={personalIdentity()} operatorToken="secret" onHiveIdentityChange={onHiveIdentityChange} />);
 
-  expect(screen.getByText("Jira-backed").parentElement).toHaveTextContent("Available now");
-  expect(screen.getByText("Native Swarm").parentElement).toHaveAttribute("aria-disabled", "true");
+  expect(screen.getByText("Swarm shared work").parentElement).toHaveTextContent("included");
+  expect(screen.getByText("Jira is optional")).toBeInTheDocument();
   const review = screen.getByRole("button", { name: "Review Apiary setup" });
   expect(review).toBeDisabled();
   fireEvent.change(screen.getByLabelText("Apiary name"), { target: { value: "  Wildflower Garden  " } });
   expect(review).toBeEnabled();
   fireEvent.click(review);
-  expect(screen.getByRole("group", { name: "Confirm Apiary setup" })).toHaveTextContent("backend cannot be converted later");
-  fireEvent.click(screen.getByRole("button", { name: "Found Jira-backed Apiary" }));
+  expect(screen.getByRole("group", { name: "Confirm Apiary setup" })).toHaveTextContent("Members keep local tasks and workers");
+  fireEvent.click(screen.getByRole("button", { name: "Create Apiary" }));
 
   await vi.waitFor(() => expect(onHiveIdentityChange).toHaveBeenCalledWith(federated));
   expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/v1/hive")).toBe(false);

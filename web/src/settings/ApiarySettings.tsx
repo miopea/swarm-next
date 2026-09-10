@@ -324,7 +324,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       applyApiaryContext(nextContext);
       setConfirmCreate(false);
       const createdName = nextContext.mode === "federated" ? nextContext.apiary.name : name.trim();
-      setMessage(`${createdName} is now a Jira-backed Apiary.`);
+      setMessage(`${createdName} is now an Apiary.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The Apiary could not be created.");
     } finally {
@@ -446,25 +446,25 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       ) : null}
       {personal ? (
         <>
-          <p>Your personal Hive remains fully independent. Form an Apiary only when separate one-operator Hives should share Jira work and coordination.</p>
+          <p>Bring independent Hives together for shared Swarm tasks and Keeper coordination. Jira can be connected later if your team uses it.</p>
           <PersonalHiveJoin busy={busy || working} operatorToken={operatorToken} onMessage={setMessage} onError={setError} onJoined={refreshIdentity} />
           <label className="field-stack" htmlFor="apiary-name">
             <span>Apiary name</span>
             <input id="apiary-name" value={name} maxLength={120} placeholder="Wildflower Garden" onChange={(event) => { setName(event.target.value); setConfirmCreate(false); }} />
           </label>
           <div className="apiary-backend-choice" aria-label="Shared work backend">
-            <div className="selected"><strong>Jira-backed</strong><small>Available now · Jira remains canonical across every Hive.</small></div>
-            <div aria-disabled="true"><strong>Native Swarm</strong><small>Later · requires distributed claims, offline queues, and reconciliation.</small></div>
+            <div className="selected"><strong>Swarm shared work</strong><small>Shared tasks and Keeper coordination are included.</small></div>
+            <div><strong>Jira is optional</strong><small>Each Hive connects only the Jira projects it needs.</small></div>
           </div>
           {!confirmCreate ? (
             <button className="primary-action" disabled={busy || working || !name.trim()} onClick={() => setConfirmCreate(true)}>Review Apiary setup</button>
           ) : (
             <div className="apiary-confirmation" role="group" aria-label="Confirm Apiary setup">
-              <strong>Use Jira as the permanent shared-work backend?</strong>
-              <span>All active Hives will need their own Jira connection and access to every promoted project. The backend cannot be converted later.</span>
+              <strong>Create an Apiary managed by this Hive?</strong>
+              <span>This Hive becomes Keeper. Members keep local tasks and workers while Keeper manages shared work. Jira is optional; Jira work still follows each member's project permissions.</span>
               <div className="settings-actions">
                 <button className="secondary-button" disabled={working} onClick={() => setConfirmCreate(false)}>Go back</button>
-                <button className="primary-action" disabled={working} onClick={() => void foundApiary()}>{working ? "Creating…" : "Found Jira-backed Apiary"}</button>
+                <button className="primary-action" disabled={working} onClick={() => void foundApiary()}>{working ? "Creating…" : "Create Apiary"}</button>
               </div>
             </div>
           )}

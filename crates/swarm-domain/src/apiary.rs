@@ -42,6 +42,9 @@ pub struct HiveIdentity {
 pub const FEDERATION_CONNECTION_CARD_SCHEMA_VERSION: u16 = 1;
 pub const FEDERATION_INVITATION_SCHEMA_VERSION: u16 = 1;
 pub const FEDERATION_MEMBERSHIP_SCHEMA_VERSION: u16 = 1;
+/// A membership-only join assertion. Jira readiness is separate from joining.
+/// Membership receipts retain their existing independent schema.
+pub const FEDERATION_PROJECT_SCOPED_JOIN_SCHEMA_VERSION: u16 = 2;
 pub const FEDERATION_DEPARTURE_SCHEMA_VERSION: u16 = 1;
 pub const FEDERATION_CATALOG_SCHEMA_VERSION: u16 = 1;
 pub const FEDERATION_TASK_FEED_SCHEMA_VERSION: u16 = 1;
@@ -1522,12 +1525,8 @@ impl FederationJoinReadiness {
         if invitation.expires_at <= now {
             blockers.push(ApiaryJoinBlocker::InvitationExpired);
         }
-        if jira_connection != JiraConnectionState::Ready {
-            blockers.push(ApiaryJoinBlocker::IntegrationNotReady);
-        }
-        if projects.iter().any(|project| !project.is_ready()) {
-            blockers.push(ApiaryJoinBlocker::ProjectAccessNotReady);
-        }
+        // Membership enables Swarm shared work. Optional Jira participation is
+        // admitted separately for each project using the member's credentials.
         if !matches!(
             invitation.state,
             FederationJoinInvitationState::PolicyAccepted
@@ -1545,6 +1544,19 @@ impl FederationJoinReadiness {
     #[must_use]
     pub fn can_submit(&self) -> bool {
         self.blockers.is_empty()
+    }
+
+    /// Preserve old all-project assertions only when they are actually true.
+    /// Older Keepers reject schema2 rather than assuming every project is ready.
+    #[must_use]
+    pub fn submission_schema_version(&self) -> u16 {
+        if self.jira_connection != JiraConnectionState::Ready
+            || self.projects.iter().any(|project| !project.is_ready())
+        {
+            FEDERATION_PROJECT_SCOPED_JOIN_SCHEMA_VERSION
+        } else {
+            FEDERATION_MEMBERSHIP_SCHEMA_VERSION
+        }
     }
 }
 
