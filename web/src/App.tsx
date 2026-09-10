@@ -665,7 +665,7 @@ export function App() {
       }
     }
   }, [operatorToken, heldDeliveryRefresh]);
-  useVisiblePolling(refreshHeldDeliveries, Boolean(operatorToken), HELD_DELIVERY_POLL_MS);
+  const retryQueueDetails = useVisiblePolling(refreshHeldDeliveries, Boolean(operatorToken), HELD_DELIVERY_POLL_MS);
 
   useEffect(() => {
     if (!operatorToken) return;
@@ -2489,6 +2489,7 @@ export function App() {
         ) : surface === "queues" ? (
           <Suspense fallback={<WorkspaceLoading label="queues" />}>
             <QueuesView
+              onRetryDetails={() => { void retryQueueDetails(); }}
               reviewQueue={reviewQueue}
               onOpenWorker={(sessionId) => {
                 if (workers.some((worker) => worker.running && worker.active_session_id === sessionId)) openWorker(sessionId);

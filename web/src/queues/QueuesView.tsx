@@ -157,6 +157,7 @@ export default function QueuesView({
   workers,
   onOpenTask,
   onOpenWorker,
+  onRetryDetails,
   heldBriefings: sourceBriefings = [],
   blockedWaits: sourceBlockedWaits = [],
   heldDeliveries = [],
@@ -171,6 +172,8 @@ export default function QueuesView({
   onOpenTask: (taskId: string) => void;
   /** Inspect an existing exact session; never start a worker from this action. */
   onOpenWorker?: (sessionId: string) => void;
+  /** Refresh observations only; never dispatch work or restart a worker. */
+  onRetryDetails?: () => void;
   /**
    * Briefings Swarm is holding until their worker is free.
    *
@@ -223,6 +226,8 @@ export default function QueuesView({
   const visibleTaskIds = new Set(waitingTasks.map((task) => task.id));
   const extraBriefings = heldBriefings.filter((briefing) => !visibleTaskIds.has(briefing.task_id));
   const queenWait = queenAutomation && ["queued", "running"].includes(queenAutomation.state) ? queenAutomation.waiting_reason : null;
+  const retryDetails = onRetryDetails && (coordinatorUnavailable || !recovery)
+    ? <button className="queue-details-retry" type="button" onClick={onRetryDetails}>Retry queue details</button> : null;
 
   if (total === 0 && extraWaits.length === 0 && activeWork.length === 0) {
     return (
@@ -230,6 +235,7 @@ export default function QueuesView({
         {coordinatorUnavailable && <p role="status">Coordination status could not refresh. Showing last known work; it may have changed.</p>}
         {recovery?.truncated && <p role="status">Recovery details are partial; more checks may be waiting for Queen.</p>}
         {!recovery && <p role="status">Worker recovery details are unavailable; this view cannot confirm that every worker is progressing.</p>}
+        {retryDetails}
         {queenWait && <p className="queue-meaning">{queenWait}</p>}
         {!queenWait && !coordinatorUnavailable && recovery && !recovery.truncated && heldBriefings.length === 0 && heldDeliveries.length === 0 && <p className="queues-empty">Nothing is waiting on anyone.</p>}
         <DeliveryWaitList held={heldDeliveries} />
@@ -243,6 +249,7 @@ export default function QueuesView({
       {coordinatorUnavailable && <p role="status">Coordination status could not refresh. Showing last known work; it may have changed.</p>}
       {recovery?.truncated && <p role="status">Recovery details are partial; more checks may be waiting for Queen.</p>}
       {!recovery && <p role="status">Worker recovery details are unavailable; this view cannot confirm that every worker is progressing.</p>}
+      {retryDetails}
       {queenWait && <p className="queue-meaning">{queenWait}</p>}
       {groups.length > 0 && <nav className="queue-owner-index" aria-label="Jump to queue owner">
         {groups.map(group => <a key={group.owner} href={`#${queueId}-${group.owner}`} data-owner={group.owner}>

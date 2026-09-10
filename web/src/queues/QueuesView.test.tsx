@@ -52,6 +52,21 @@ test.each([
   expect(screen.getByText(/Marked active/)).toBeVisible();
 });
 
+test.each([false, true])("queue details retry is read-only with existing tasks=%s", (hasTasks) => {
+  const onRetryDetails = vi.fn();
+  const onOpenTask = vi.fn();
+  const tasks = hasTasks ? [task({})] : [];
+  const props = { tasks, workers: [], onOpenTask, onRetryDetails };
+  const { rerender } = render(<QueuesView {...props} />);
+  fireEvent.click(screen.getByRole("button", { name: "Retry queue details" }));
+  expect(onRetryDetails).toHaveBeenCalledTimes(1);
+  expect(onOpenTask).not.toHaveBeenCalled();
+  rerender(<QueuesView {...props} coordinatorUnavailable recovery={{ items: [], truncated: false }} />);
+  expect(screen.getByRole("button", { name: "Retry queue details" })).toBeVisible();
+  rerender(<QueuesView {...props} recovery={{ items: [], truncated: false }} />);
+  expect(screen.queryByRole("button", { name: "Retry queue details" })).not.toBeInTheDocument();
+});
+
 test("missing or partial recovery evidence cannot declare the fleet clear", () => {
   const props = { tasks: [], workers: [], onOpenTask: vi.fn() };
   const { rerender } = render(<QueuesView {...props} />);

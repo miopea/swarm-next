@@ -1924,7 +1924,16 @@ test("a queued briefing is shown but does not inflate the Needs you count", asyn
   expect(screen.getByRole("button", { name: /^Needs you/ })).toHaveTextContent("0");
 
   coordinatorState = "empty";
-  await refresh();
+  fireEvent.click(screen.getAllByRole("button", { name: /Queues/ })[0]);
+  const requestsBeforeRetry = fetch.mock.calls.length;
+  fireEvent.click(await screen.findByRole("button", { name: "Retry queue details" }));
+  expect(await screen.findByText("Nothing is waiting on anyone.")).toBeInTheDocument();
+  const retryRequests = fetch.mock.calls.slice(requestsBeforeRetry);
+  expect(retryRequests).toHaveLength(1);
+  expect(String(retryRequests[0][0])).toContain("/api/v1/orchestration/coordinator");
+  expect(retryRequests[0][1]?.method ?? "GET").toBe("GET");
+  expect(screen.queryByRole("button", { name: "Retry queue details" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /^Needs you/ }));
   expect(await screen.findByText("Nothing needs your attention")).toBeInTheDocument();
   expect(screen.queryByText(/Coordination status could not refresh/)).not.toBeInTheDocument();
   fireEvent.click(screen.getAllByRole("button", { name: /Queues/ })[0]);
