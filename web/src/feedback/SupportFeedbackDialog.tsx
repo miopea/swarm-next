@@ -6,6 +6,7 @@ import { RuntimeRequestError } from "../api/request";
 import UnsavedChangesPrompt from "../shared/UnsavedChangesPrompt";
 import { clearPendingSupport, loadPendingSupport, savePendingSupport, prepareSupportRetry, clearSupportRetry } from "./supportDraft";
 import { prepareSupportFiles, savePendingSupportFiles, loadPendingSupportFiles, clearPendingSupportFiles } from "./supportFiles";
+import { fetchPublicHiveProfile } from "../api";
 
 type Props = { operatorToken: string; status: SupportStatus; onClose: () => void; onSaved?: () => void };
 const labels: Record<SupportDelivery["delivery"]["state"], string> = {
@@ -33,6 +34,8 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
   });
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
+  const contactEdited = useRef({ name: false, email: false });
+  const [savedContact, setSavedContact] = useState(false);
   const [kind, setKind] = useState<SupportSubmission["kind"]>("bug_report");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
@@ -50,9 +53,25 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
   const [removing, setRemoving] = useState<string>();
   const [visibleCount, setVisibleCount] = useState(10);
   const inFlight = useRef(false);
-  const dirty = !saved && Boolean(email || name || subject || body || review || files.length);
+  const dirty = !saved && Boolean(contactEdited.current.email || contactEdited.current.name || subject || body || review || files.length);
   function close() { if (dirty && !attempted) setDiscard(true); else onClose(); }
   const modal = useModalFocus<HTMLElement>(close);
+
+  useEffect(() => {
+    // Read only: opening feedback must not publish identity or alter a retained
+    // report. A slow response must not overwrite contact details already edited.
+    const controller = new AbortController();
+    const deadline = window.setTimeout(() => controller.abort(), 5_000);
+    void fetchPublicHiveProfile(operatorToken, controller.signal).then(({ profile }) => {
+      if (controller.signal.aborted) return;
+      const savedName = profile.operator_display_name === "Operator" ? "" : profile.operator_display_name;
+      if (!contactEdited.current.name) setName(savedName);
+      if (!contactEdited.current.email) setEmail(profile.contact_email ?? "");
+      setSavedContact(Boolean(savedName || profile.contact_email));
+    }).catch(() => { /* Unavailable identity never blocks writing a support message. */ })
+      .finally(() => window.clearTimeout(deadline));
+    return () => { controller.abort(); window.clearTimeout(deadline); };
+  }, [operatorToken]);
 
   useEffect(() => {
     if (typeof indexedDB === "undefined") return;
@@ -168,8 +187,9 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
         submission_key: crypto.randomUUID(), kind, email, name: name || null, subject, body,
       }); }}>
         <div className="feedback-fields">
-          <label>Email<input type="email" required maxLength={320} value={email} onChange={(event) => setEmail(event.target.value)} /></label>
-          <label>Name (optional)<input maxLength={200} value={name} onChange={(event) => setName(event.target.value)} /></label>
+          <label>Email<input type="email" required autoComplete="email" maxLength={320} value={email} onChange={(event) => { contactEdited.current.email = true; setEmail(event.target.value); }} /></label>
+          <label>Name (optional)<input autoComplete="name" maxLength={200} value={name} onChange={(event) => { contactEdited.current.name = true; setName(event.target.value); }} /></label>
+          {savedContact && <small>Filled from your saved Hive profile. Changes here apply only to this message.</small>}
           <label>Type<select value={kind} onChange={(event) => setKind(event.target.value as SupportSubmission["kind"])}>
             <option value="bug_report">Bug report</option><option value="feature_request">Feature request</option><option value="feedback">Feedback</option>
           </select></label>
