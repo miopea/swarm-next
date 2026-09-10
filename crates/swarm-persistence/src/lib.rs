@@ -290,7 +290,8 @@ const NATIVE_OPERATOR_INTERVIEWS_SCHEMA_VERSION: i64 = 160;
 const DECISION_OPTION_DESCRIPTIONS_SCHEMA_VERSION: i64 = 161;
 const PUBLIC_HIVE_PROFILE_SCHEMA_VERSION: i64 = 162;
 const FEDERATION_PUBLIC_PROFILES_SCHEMA_VERSION: i64 = 163;
-const CURRENT_SCHEMA_VERSION: i64 = FEDERATION_PUBLIC_PROFILES_SCHEMA_VERSION;
+const APIARY_DIRECTORY_SCHEMA_VERSION: i64 = 164;
+const CURRENT_SCHEMA_VERSION: i64 = APIARY_DIRECTORY_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4075,6 +4076,9 @@ fn migrate_ops_intake_schema_steps(
     }
     if schema_version < FEDERATION_PUBLIC_PROFILES_SCHEMA_VERSION {
         apiary_directory::migrate_shared_profiles(transaction)?;
+    }
+    if schema_version < APIARY_DIRECTORY_SCHEMA_VERSION {
+        apiary_directory::migrate_directory(transaction)?;
     }
     Ok(())
 }
@@ -9446,6 +9450,12 @@ mod tests {
             table: "federation_public_profiles",
             artifact: "",
             undo_sql: "DROP TABLE federation_public_profiles",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "local_apiary_directory",
+            artifact: "",
+            undo_sql: "DROP TABLE local_apiary_directory; DROP TABLE apiary_directory_revisions",
             probe_sql: "",
         },
     ];

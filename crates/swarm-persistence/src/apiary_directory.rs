@@ -64,6 +64,114 @@ pub(crate) fn advance_local_profile_revision(
     Ok(())
 }
 
+pub(crate) fn migrate_directory(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS apiary_directory_revisions (
+        apiary_id TEXT PRIMARY KEY REFERENCES apiaries(id),
+        revision INTEGER NOT NULL CHECK (revision > 0),
+        entries_json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS local_apiary_directory (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        apiary_id TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision > 0),
+        payload_json TEXT NOT NULL
+    );",
+    )?;
+    transaction.pragma_update(None, "user_version", super::APIARY_DIRECTORY_SCHEMA_VERSION)?;
+    Ok(())
+}
+
+pub(crate) fn directory_entries(
+    connection: &Connection,
+    keeper: swarm_domain::PublicHiveIdentity,
+    apiary_id: swarm_domain::ApiaryId,
+) -> Result<Vec<swarm_domain::ApiaryDirectoryEntry>, TaskStoreError> {
+    let local = read_profile(connection)?;
+    let mut entries = vec![swarm_domain::ApiaryDirectoryEntry {
+        identity: keeper,
+        profile: local.profile,
+        profile_revision: local.revision,
+        role: swarm_domain::LocalApiaryRole::Keeper,
+    }];
+    let mut statement = connection.prepare("SELECT m.member_node_id, m.member_hive_id, m.member_operator_id,
+        h.name, o.display_name, p.payload_json FROM apiary_federation_memberships m
+        JOIN hives h ON h.id = m.member_hive_id AND h.apiary_id = m.apiary_id
+        JOIN operators o ON o.id = m.member_operator_id
+        LEFT JOIN federation_public_profiles p ON p.apiary_id = m.apiary_id AND p.node_id = m.member_node_id
+        WHERE m.apiary_id = ?1 AND m.state = 'active' ORDER BY m.member_node_id LIMIT 257")?;
+    let rows = statement.query_map([apiary_id.to_string()], |row| {
+        Ok((
+            swarm_domain::PublicHiveIdentity {
+                node_id: super::parse_domain_id(&row.get::<_, String>(0)?)?,
+                hive_id: super::parse_domain_id(&row.get::<_, String>(1)?)?,
+                operator_id: super::parse_domain_id(&row.get::<_, String>(2)?)?,
+            },
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, Option<String>>(5)?,
+        ))
+    })?;
+    for row in rows {
+        let (identity, hive_name, operator_display_name, saved) = row?;
+        let (profile, profile_revision) = if let Some(saved) = saved {
+            let update: swarm_domain::FederationProfileUpdatePayload = serde_json::from_str(&saved)
+                .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+            if !update.matches_member(apiary_id, identity) {
+                return Err(TaskStoreError::InvalidHiveIdentity);
+            }
+            (update.profile, update.revision)
+        } else {
+            (
+                PublicHiveProfile {
+                    hive_name,
+                    operator_display_name,
+                    contact_email: None,
+                },
+                1,
+            )
+        };
+        entries.push(swarm_domain::ApiaryDirectoryEntry {
+            identity,
+            profile,
+            profile_revision,
+            role: swarm_domain::LocalApiaryRole::Member,
+        });
+        if entries.len() > swarm_domain::MAX_APIARY_DIRECTORY_ENTRIES {
+            return Err(TaskStoreError::InvalidHiveIdentity);
+        }
+    }
+    Ok(entries)
+}
+
+pub(crate) fn directory_revision(
+    connection: &Connection,
+    apiary_id: swarm_domain::ApiaryId,
+    entries: &[swarm_domain::ApiaryDirectoryEntry],
+) -> Result<u64, TaskStoreError> {
+    let serialized = serde_json::to_string(entries)
+        .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+    let prior = connection
+        .query_row(
+            "SELECT revision, entries_json FROM apiary_directory_revisions WHERE apiary_id = ?1",
+            [apiary_id.to_string()],
+            |row| Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    let revision = match prior {
+        Some((revision, saved)) if saved == serialized => return Ok(revision),
+        Some((revision, _)) => revision
+            .checked_add(1)
+            .filter(|next| i64::try_from(*next).is_ok())
+            .ok_or(TaskStoreError::InvalidHiveIdentity)?,
+        None => 1,
+    };
+    connection.execute("INSERT INTO apiary_directory_revisions (apiary_id, revision, entries_json) VALUES (?1, ?2, ?3)
+        ON CONFLICT(apiary_id) DO UPDATE SET revision = excluded.revision, entries_json = excluded.entries_json",
+        params![apiary_id.to_string(), revision, serialized])?;
+    Ok(revision)
+}
+
 fn read_profile(connection: &Connection) -> Result<LocalPublicHiveProfile, TaskStoreError> {
     connection
         .query_row(

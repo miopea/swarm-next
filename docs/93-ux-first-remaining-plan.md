@@ -2,6 +2,14 @@
 
 ## Operator priority override — Apiary onboarding, September 10
 
+Latest directory slice: signed Keeper directory plus separately stored member
+projection now implemented, schema164. Independent three-Hive convergence,
+rename, stale/tamper/conflict/rollback and departure preservation tests pass,
+as do four migration regressions. Next wire application services, HTTP exchange,
+the existing bounded member sync cycle, and member roster display. Missing new
+endpoints on an older Keeper must not stop its existing project/task sync.
+Then profile preview/edit/default-name join UI and real browser acceptance.
+
 Latest signed-profile slice: Keeper acceptance and member signing now implemented
 and verified with independent database tests, rollback/tamper/stale checks, four
 upgrade regressions and strict persistence Clippy. Schema163 stores bounded latest

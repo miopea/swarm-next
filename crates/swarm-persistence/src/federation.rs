@@ -106,6 +106,156 @@ struct DepartureMemberContext {
 }
 
 impl TaskStore {
+    /// Issues a complete signed public roster for one authenticated member.
+    ///
+    /// # Errors
+    /// Rejects invalid membership, bounds, identities or persistence failures.
+    pub fn signed_federation_directory(
+        &self,
+        credential: &str,
+        now: i64,
+    ) -> Result<swarm_domain::FederationDirectorySnapshot, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationCredential);
+        }
+        let credential: [u8; 32] = Base64UrlUnpadded::decode_vec(credential)
+            .map_err(|_| TaskStoreError::InvalidFederationCredential)?
+            .try_into()
+            .map_err(|_| TaskStoreError::InvalidFederationCredential)?;
+        let identity = self.local_hive_identity()?;
+        let node = self.local_federation_identity(now)?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let member = authenticate_member_credential(&transaction, &identity, &credential, now)?;
+        let keeper = swarm_domain::PublicHiveIdentity {
+            node_id: node.node_id,
+            hive_id: identity.hive.id,
+            operator_id: identity.operator.id,
+        };
+        let recipient = swarm_domain::PublicHiveIdentity {
+            node_id: member.node,
+            hive_id: member.hive,
+            operator_id: member.operator,
+        };
+        let entries =
+            super::apiary_directory::directory_entries(&transaction, keeper, member.apiary)?;
+        let revision =
+            super::apiary_directory::directory_revision(&transaction, member.apiary, &entries)?;
+        let payload = swarm_domain::FederationDirectoryPayload {
+            schema_version: swarm_domain::FEDERATION_DIRECTORY_SCHEMA_VERSION,
+            apiary_id: member.apiary,
+            keeper,
+            recipient,
+            revision,
+            entries,
+            issued_at: now,
+            expires_at: now
+                .checked_add(swarm_domain::MAX_DIRECTORY_SNAPSHOT_LIFETIME_SECONDS)
+                .ok_or(TaskStoreError::InvalidHiveIdentity)?,
+        };
+        if !payload.matches_scope(member.apiary, keeper, recipient, now) {
+            return Err(TaskStoreError::InvalidHiveIdentity);
+        }
+        let signature = node
+            .signing_key
+            .sign(&canonical_directory_payload(&payload)?);
+        transaction.commit()?;
+        Ok(swarm_domain::FederationDirectorySnapshot {
+            payload,
+            signature: Base64UrlUnpadded::encode_string(&signature.to_bytes()),
+        })
+    }
+
+    /// Saves a verified full roster projection without editing private identity
+    /// or membership. Older or conflicting same-revision snapshots fail closed.
+    ///
+    /// # Errors
+    /// Rejects wrong/expired membership, tampering, replay or storage failure.
+    pub fn apply_federation_directory(
+        &self,
+        snapshot: &swarm_domain::FederationDirectorySnapshot,
+        now: i64,
+    ) -> Result<bool, TaskStoreError> {
+        self.require_local_federation_member()?;
+        let identity = self.local_hive_identity()?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let (receipt, key): (String, String) = transaction.query_row(
+            "SELECT m.receipt_json, i.keeper_public_key FROM local_federation_membership m
+             JOIN apiary_join_invitations i ON i.id = m.invitation_id
+             WHERE m.singleton = 1 AND m.state = 'active' AND m.credential_expires_at > ?1",
+            [now],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let receipt: FederationMembershipReceipt = serde_json::from_str(&receipt)
+            .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+        if receipt.payload.member_hive_id != identity.hive.id
+            || receipt.payload.member_operator_id != identity.operator.id
+            || identity.hive.apiary_id != Some(receipt.payload.apiary_id)
+        {
+            return Err(TaskStoreError::InvalidFederationCredential);
+        }
+        verify_federation_membership_receipt(&receipt, &key, now)?;
+        verify_federation_directory(snapshot, &key, &receipt, now)?;
+        let prior: Option<String> = transaction
+            .query_row(
+                "SELECT payload_json FROM local_apiary_directory WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let mut changed = true;
+        if let Some(prior) = prior {
+            let prior: swarm_domain::FederationDirectoryPayload = serde_json::from_str(&prior)
+                .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+            if prior.apiary_id != snapshot.payload.apiary_id
+                || prior.revision > snapshot.payload.revision
+                || (prior.revision == snapshot.payload.revision
+                    && prior.entries != snapshot.payload.entries)
+            {
+                return Err(TaskStoreError::InvalidHiveIdentity);
+            }
+            changed = prior.revision != snapshot.payload.revision;
+            if !changed && prior.issued_at >= snapshot.payload.issued_at {
+                return Ok(false);
+            }
+        }
+        let serialized = serde_json::to_string(&snapshot.payload)
+            .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+        transaction.execute("INSERT INTO local_apiary_directory (singleton, apiary_id, revision, payload_json) VALUES (1, ?1, ?2, ?3)
+            ON CONFLICT(singleton) DO UPDATE SET apiary_id = excluded.apiary_id, revision = excluded.revision, payload_json = excluded.payload_json",
+            params![snapshot.payload.apiary_id.to_string(), snapshot.payload.revision, serialized])?;
+        if changed {
+            crate::insert_control_room_event(
+                &transaction,
+                swarm_domain::ControlRoomEventKind::RuntimeChanged,
+            )?;
+        }
+        transaction.commit()?;
+        Ok(changed)
+    }
+
+    /// Returns the last verified directory, including freshness timestamps.
+    /// It is a display projection, never membership/permission authority.
+    ///
+    /// # Errors
+    /// Rejects non-members and corrupt/unavailable stored projection data.
+    pub fn local_federation_directory(
+        &self,
+    ) -> Result<Option<swarm_domain::FederationDirectoryPayload>, TaskStoreError> {
+        self.require_local_federation_member()?;
+        let identity = self.local_hive_identity()?;
+        let serialized: Option<String> = self.connection()?.query_row(
+            "SELECT payload_json FROM local_apiary_directory WHERE singleton = 1 AND apiary_id = ?1",
+            [identity.hive.apiary_id.map(|id| id.to_string())], |row| row.get(0)).optional()?;
+        serialized
+            .map(|serialized| {
+                serde_json::from_str(&serialized)
+                    .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))
+            })
+            .transpose()
+    }
+
     /// Signs the current local public profile for its active Apiary membership.
     /// The key stays private; the payload grants no membership or authority.
     ///
@@ -2223,6 +2373,7 @@ impl TaskStore {
             "local_apiary_task_sync",
             "local_federation_catalog",
             "local_federation_sync",
+            "local_apiary_directory",
         ] {
             transaction.execute(&format!("DELETE FROM {table}"), [])?;
         }
@@ -2551,6 +2702,54 @@ fn canonical_public_profile_payload(
             .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?,
     );
     Ok(canonical)
+}
+
+fn canonical_directory_payload(
+    payload: &swarm_domain::FederationDirectoryPayload,
+) -> Result<Vec<u8>, TaskStoreError> {
+    let mut canonical = b"swarm/apiary/directory/v1\0".to_vec();
+    canonical.extend(
+        serde_json::to_vec(payload)
+            .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?,
+    );
+    Ok(canonical)
+}
+
+fn verify_federation_directory(
+    snapshot: &swarm_domain::FederationDirectorySnapshot,
+    key: &str,
+    receipt: &FederationMembershipReceipt,
+    now: i64,
+) -> Result<(), TaskStoreError> {
+    let receipt = &receipt.payload;
+    let keeper = swarm_domain::PublicHiveIdentity {
+        node_id: receipt.keeper_node_id,
+        hive_id: receipt.keeper_hive_id,
+        operator_id: receipt.keeper_operator_id,
+    };
+    let recipient = swarm_domain::PublicHiveIdentity {
+        node_id: receipt.member_node_id,
+        hive_id: receipt.member_hive_id,
+        operator_id: receipt.member_operator_id,
+    };
+    if !snapshot
+        .payload
+        .matches_scope(receipt.apiary_id, keeper, recipient, now)
+    {
+        return Err(TaskStoreError::InvalidFederationCredential);
+    }
+    let key: [u8; 32] = Base64UrlUnpadded::decode_vec(key)
+        .map_err(|_| TaskStoreError::InvalidFederationCredential)?
+        .try_into()
+        .map_err(|_| TaskStoreError::InvalidFederationCredential)?;
+    let signature: [u8; 64] = Base64UrlUnpadded::decode_vec(&snapshot.signature)
+        .map_err(|_| TaskStoreError::InvalidFederationCredential)?
+        .try_into()
+        .map_err(|_| TaskStoreError::InvalidFederationCredential)?;
+    let canonical = canonical_directory_payload(&snapshot.payload)?;
+    VerifyingKey::from_bytes(&key)
+        .and_then(|key| key.verify(&canonical, &Signature::from_bytes(&signature)))
+        .map_err(|_| TaskStoreError::InvalidFederationCredential)
 }
 
 /// Verifies a profile update against an already authenticated, pinned member.
@@ -5823,6 +6022,180 @@ mod tests {
             )
             .unwrap();
         (keeper, member)
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // One complete three-Hive convergence and departure journey.
+    fn signed_directory_converges_across_two_members_and_preserves_local_work() {
+        let now = 120_000;
+        let (keeper, first) = joined_member(now);
+        let second = TaskStore::in_memory().unwrap();
+        let acceptance = register_remote_member(&keeper, &second, now + 7);
+        second
+            .apply_federation_join_acceptance(
+                acceptance.receipt.payload.invitation_id,
+                &acceptance,
+                now + 12,
+            )
+            .unwrap();
+        let first_credential = first
+            .federation_member_connection()
+            .unwrap()
+            .node_credential;
+        let second_credential = second
+            .federation_member_connection()
+            .unwrap()
+            .node_credential;
+        let old = keeper
+            .signed_federation_directory(&first_credential, now + 20)
+            .unwrap();
+        let other = keeper
+            .signed_federation_directory(&second_credential, now + 20)
+            .unwrap();
+        assert_eq!(old.payload.entries.len(), 3);
+        assert_eq!(old.payload.entries, other.payload.entries);
+        assert_eq!(old.payload.revision, other.payload.revision);
+        assert!(first.apply_federation_directory(&old, now + 20).unwrap());
+        assert!(second.apply_federation_directory(&other, now + 20).unwrap());
+        assert!(second.apply_federation_directory(&old, now + 20).is_err());
+        let private_task = first
+            .create_task("Private work stays here", "/private")
+            .unwrap();
+        first.rename_local_hive("Clover House", now + 21).unwrap();
+        let replay = keeper
+            .signed_federation_directory(&first_credential, now + 22)
+            .unwrap();
+        assert!(!first.apply_federation_directory(&replay, now + 22).unwrap());
+        assert_eq!(
+            first.local_hive_identity().unwrap().hive.name,
+            "Clover House"
+        );
+        let update = first.signed_local_profile_update(now + 23).unwrap();
+        keeper
+            .accept_federation_public_profile(&first_credential, &update, now + 23)
+            .unwrap();
+        let next = keeper
+            .signed_federation_directory(&first_credential, now + 24)
+            .unwrap();
+        let other_next = keeper
+            .signed_federation_directory(&second_credential, now + 24)
+            .unwrap();
+        assert!(next.payload.revision > old.payload.revision);
+        assert!(first.apply_federation_directory(&next, now + 24).unwrap());
+        assert!(
+            second
+                .apply_federation_directory(&other_next, now + 24)
+                .unwrap()
+        );
+        assert_eq!(
+            first.local_federation_directory().unwrap().unwrap().entries,
+            second
+                .local_federation_directory()
+                .unwrap()
+                .unwrap()
+                .entries
+        );
+        assert!(
+            second
+                .local_federation_directory()
+                .unwrap()
+                .unwrap()
+                .entries
+                .iter()
+                .any(|entry| entry.profile.hive_name == "Clover House")
+        );
+        assert!(first.apply_federation_directory(&old, now + 25).is_err());
+        let mut tampered = next.clone();
+        tampered.payload.entries[0].profile.hive_name = "Forged".into();
+        assert!(
+            first
+                .apply_federation_directory(&tampered, now + 25)
+                .is_err()
+        );
+        assert_eq!(
+            first.get_task(private_task.id).unwrap().title,
+            "Private work stays here"
+        );
+        first.begin_federation_departure(now + 30).unwrap();
+        let receipt = keeper
+            .depart_federation_member(&first_credential, now + 31)
+            .unwrap();
+        first
+            .apply_federation_departure(&receipt, now + 32)
+            .unwrap();
+        let after_departure = keeper
+            .signed_federation_directory(&second_credential, now + 33)
+            .unwrap();
+        assert_eq!(after_departure.payload.entries.len(), 2);
+        assert!(
+            second
+                .apply_federation_directory(&after_departure, now + 33)
+                .unwrap()
+        );
+        assert!(first.local_federation_directory().is_err());
+        assert_eq!(
+            first.get_task(private_task.id).unwrap().title,
+            "Private work stays here"
+        );
+    }
+
+    #[test]
+    fn directory_projection_failure_rolls_back_and_same_revision_conflict_is_rejected() {
+        let now = 150_000;
+        let (keeper, member) = joined_member(now);
+        let credential = member
+            .federation_member_connection()
+            .unwrap()
+            .node_credential;
+        let snapshot = keeper
+            .signed_federation_directory(&credential, now + 10)
+            .unwrap();
+        member
+            .connection()
+            .unwrap()
+            .execute_batch(
+                "CREATE TEMP TRIGGER refuse_directory_event BEFORE INSERT ON control_room_events
+            BEGIN SELECT RAISE(ABORT, 'injected event failure'); END;",
+            )
+            .unwrap();
+        assert!(
+            member
+                .apply_federation_directory(&snapshot, now + 10)
+                .is_err()
+        );
+        assert!(member.local_federation_directory().unwrap().is_none());
+        member
+            .connection()
+            .unwrap()
+            .execute_batch("DROP TRIGGER refuse_directory_event")
+            .unwrap();
+        assert!(
+            member
+                .apply_federation_directory(&snapshot, now + 10)
+                .unwrap()
+        );
+        let mut conflict = snapshot.clone();
+        conflict.payload.entries[0].profile.hive_name = "Changed without new revision".into();
+        let key = keeper.local_federation_identity(now + 11).unwrap();
+        conflict.signature = Base64UrlUnpadded::encode_string(
+            &key.signing_key
+                .sign(&canonical_directory_payload(&conflict.payload).unwrap())
+                .to_bytes(),
+        );
+        assert!(
+            member
+                .apply_federation_directory(&conflict, now + 11)
+                .is_err()
+        );
+        assert_eq!(
+            member.local_federation_directory().unwrap().unwrap(),
+            snapshot.payload
+        );
+        assert!(
+            member
+                .apply_federation_directory(&snapshot, now + 400)
+                .is_err()
+        );
     }
 
     #[test]

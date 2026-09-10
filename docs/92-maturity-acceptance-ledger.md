@@ -1,5 +1,22 @@
 # Current maturity acceptance ledger
 
+## September 10 — Signed directory converges across independent members
+
+Keeper can issue a complete recipient-bound signed public directory with stable
+content revisions. Members verify the pinned Keeper and exact receipt scope, then
+save a separate display projection atomically. Replay, same-revision conflict,
+expiry and tampering fail closed. Local profile edits are never overwritten by
+Keeper echoes. Departure clears the local projection and disappears from the
+remaining member's next directory, without deleting private work. Schema164 owns
+directory revisions and the member projection.
+
+Independent Keeper plus two-member test proves roster equality, rename
+propagation, stable unchanged revision and departure. Failure injection proves
+projection rollback; a validly signed conflicting revision is rejected. Seven
+directory-filtered tests (including four existing profile tests and one unrelated
+matching test) and four migration regressions pass. This is persistence-level
+evidence, not a live multi-Hive browser pass. Normal HTTP/sync/UI wiring remains.
+
 ## September 10 — Signed member profiles reach Keeper persistence
 
 Added domain-separated signed local profile updates and verification against the
