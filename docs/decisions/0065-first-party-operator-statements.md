@@ -15,6 +15,15 @@ answer without the exact question and option identity.
 
 ## Decision
 
+September10 operator clarification: Queen may establish the exact applicability
+link from a verified native answer to a pending decision using both full IDs and
+the complete identical question/options snapshot, with a durable audit record.
+Ambiguous applicability remains open. This grants no authority to manufacture
+human provenance, substitute a worker's claim, infer permissions from wording,
+or overwrite a resolved decision. It removes per-link operator confirmation only
+within that exact verified boundary. Audit, authorization and resolution must
+be implemented and tested before the agent-facing action is activated.
+
 Add a separate, bounded first-party statement record through the application
 service and persistence boundaries. Do not turn diagnostics or the terminal write
 audit into a keystroke recorder. Queen and workers may read a verified statement;

@@ -7,17 +7,17 @@ provider invocation ID and question snapshot, but no Swarm decision ID. Final
 result verification and private exact-ID source binding are now implemented
 locally; the application has no approved invocation-to-decision assignment path.
 
-Operator direction requested: may Queen explicitly link a verified terminal
-answer to a pending Needs You decision, using both full immutable IDs and an
-exact full question/options match, with ambiguous applicability left open?
-Recommendation is an audited link, not semantic matching or a worker-authored
-operator claim. Human-origin and final-result verification remain prerequisites;
-linking cannot grant new permission or bypass existing resolution validation.
-Alternative: require the operator to confirm each link. No answer is inferred.
+Resolved by the operator: Queen may explicitly link a verified terminal answer
+to a pending Needs You decision using both full immutable IDs and an exact full
+question/options match, with an audit record. Ambiguous applicability stays open.
+This is not semantic matching or a worker-authored operator claim. Human-origin
+and final-result verification remain prerequisites; linking cannot grant new
+permission or bypass existing resolution validation. Per-link operator approval
+is not required inside this exact approved boundary.
 
 This question concerns who may establish applicability, not whether stored
 source text itself proves human authorship. Do not activate reconciliation while
-either that provenance requirement or this correlation decision remains open.
+the provenance, audit and end-to-end resolution implementation remains incomplete.
 
 ## Pending narrow maturity proposals — September 9, 2026
 
