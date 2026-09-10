@@ -41,6 +41,12 @@ test("clarification groups name the actual requesters once without changing assi
   expect(projectTaskQueues([current], [], [], workers).taskCount).toBe(1);
   const otherDecision = { ...current, next_move_owner: "operator" as const };
   expect(groupQueueByWorker([otherDecision], workers)[0].workerId).toBe("someone-else");
+  const active = { ...current, state: "active" as const, dispatch_state: "delivered" as const };
+  const activeProjection = projectTaskQueues([active], [], [], workers);
+  expect(activeProjection.waitingTasks).toEqual([active]);
+  expect(activeProjection.activeTasks).toEqual([]);
+  expect(activeProjection.taskCount).toBe(1);
+  expect(projectTaskQueues([{ ...active, clarification_waits: [] }], [], [], workers).activeTasks).toHaveLength(1);
 });
 
 test("recovery counts are exact-session, revision-fenced and do not mutate execution ownership", () => {

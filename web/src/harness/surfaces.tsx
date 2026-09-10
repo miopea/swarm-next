@@ -642,6 +642,21 @@ export const SURFACES: Surface[] = [
     render: () => <iframe title="Phone prerequisite editor" src="/harness.html?surface=prerequisite-editor" style={{ display: "block", width: 390, height: 844, border: 0 }} />,
   },
   {
+    id: "queues-clarification",
+    title: "Clarification queue ownership",
+    why: "Fictional shared-requester and active-task explanation waits; no live Hive",
+    render: () => <QueuesView workers={demoWorkers} onOpenTask={() => undefined}
+      recovery={{ items: [], truncated: false }} tasks={[
+        { ...demoTasks[0], id: "explain-shared", title: "Explain the rollout choices", state: "blocked", next_move_owner: "worker", clarification_waits: [
+          { decision_id: "question-a", clarification_id: "round-a", requesting_worker_id: demoWorkers[0].id, requester_is_queen: true, delivery_state: "delivered" },
+          { decision_id: "question-b", clarification_id: "round-b", requesting_worker_id: demoWorkers[1].id, requester_is_queen: false, delivery_state: "uncertain" },
+        ] },
+        { ...demoTasks[1], id: "explain-active", title: "Continue the export while clarifying its scope", state: "active", next_move_owner: "worker", dispatch_state: "delivered", clarification_waits: [
+          { decision_id: "question-c", clarification_id: "round-c", requesting_worker_id: demoWorkers[0].id, requester_is_queen: true, delivery_state: "queued" },
+        ] },
+      ]} />,
+  },
+  {
     id: "queues-worker-answer",
     title: "Worker answer wait",
     why: "Invented exact-session attention signal, not a fabricated task blocker or operator decision",

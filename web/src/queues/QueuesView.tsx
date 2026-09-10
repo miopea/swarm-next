@@ -115,6 +115,9 @@ function ageLabel(hours: number): string {
 function taskProgress(task: Task, now: number): string {
   if (task.next_move_owner === "operator") return "Waiting for your decision";
   if (clarificationOwnsTask(task)) return "Waiting for an explanation · original decision still pending";
+  if (task.state === "active" && (task.clarification_waits?.length ?? 0) > 0) {
+    return "Task active · explanation pending";
+  }
   if (task.state === "ready" || task.state === "active") {
     if (task.dispatch_state === "uncertain") return "Briefing delivery unconfirmed · Queen must reconcile before retrying";
     if (task.dispatch_state === "queued" || task.dispatch_state === "dispatching") return "Briefing awaiting confirmed delivery";

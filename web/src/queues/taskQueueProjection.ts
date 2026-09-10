@@ -41,6 +41,7 @@ export function groupQueueByWorker(tasks: Task[], workers: Worker[]) {
 
 /** Worker attention can reflect a pending answer or a provider prompt. */
 export function workerAwaitingAnswer(task: Task, worker: Worker | undefined): boolean {
+  if (clarificationOwnsTask(task)) return false;
   return (task.state === "ready" || task.state === "active")
     && task.assigned_session_id != null && worker?.running === true
     && task.assigned_worker_id === worker.id
@@ -50,6 +51,7 @@ export function workerAwaitingAnswer(task: Task, worker: Worker | undefined): bo
 
 export function ordinaryActiveWork(task: Task): boolean {
   return task.state === "active" && task.next_move_owner === "worker"
+    && (task.clarification_waits?.length ?? 0) === 0
     && (task.prerequisites ?? []).every(prerequisiteSatisfied)
     && (task.dispatch_state == null || task.dispatch_state === "delivered");
 }

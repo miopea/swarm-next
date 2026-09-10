@@ -17,6 +17,9 @@ test("clarification names the requester and delivery problem without claiming pe
   rerender(<QueuesView {...props} tasks={[{ ...current, next_move_owner: "operator" }]} />);
   expect(screen.getByRole("heading", { name: "Waiting on you 1" })).toBeVisible();
   expect(screen.getByText("Waiting for your decision")).toBeVisible();
+  rerender(<QueuesView {...props} tasks={[{ ...current, state: "active", dispatch_state: "delivered" }]} />);
+  expect(screen.getByText("Task active · explanation pending")).toBeVisible();
+  expect(screen.getByText(/Petal: question delivery unconfirmed/)).toBeVisible();
 });
 
 test.each([

@@ -2,8 +2,8 @@
 
 ### Active package: Needs You clarification, not another reload patch
 
-Checkpoint 55de9ad2 commits the inbox and notification work below; still not
-deployed. The next local change adds exact clarification requesters to the shared
+Checkpoint a17de76e commits the first queue projection increment after 55de9ad2's
+inbox/notification work; both remain undeployed. The queue change adds exact clarification requesters to the shared
 task projection, including linked decisions. An unanswered explanation changes
 attention ownership only when no other linked decision still needs an operator
 answer. Task state, assignment and pending-decision permission gates stay intact.
@@ -16,6 +16,15 @@ Five domain tests, 13 shared-decision tests and 54 queue UI tests pass. Strict
 all-target Clippy for domain, persistence and API passes after test-only clone
 cleanup. TypeScript also passes. This queue increment is not yet browser-accepted
 or deployed; preserve the remaining mixed-owner coordinator and native gates.
+Active tasks with an outstanding clarification now remain in the waiting view:
+the executing worker keeps task ownership, while each explanation names its own
+requester. After the reply, ordinary active work is minimized again. Assignee
+prompt hints are suppressed when the current queue move is a clarification from
+another requester. The 54 queue tests pass with these regressions. A separate
+Edge tab at localhost:5211/harness.html?surface=queues-clarification verifies the
+actual component with fictional shared/active waits at desktop and 390x844;
+scrollWidth equals 390 and text wraps without clipping. Viewport reset afterward.
+This is layout evidence, not native phone or live Hive delivery acceptance.
 No deployment, engine restart, release or BFG Admin contact has occurred.
 
 Current local integration: the real DecisionInbox now renders Ask a question,
@@ -94,7 +103,7 @@ and return after reply, including a question/reply between coordinator passes.
 Do not remove pending-decision execution gates to change presentation ownership.
 Explicit uncertain-delivery reconciliation, sleeping-requester/old-tool-surface
 handling and the native demo-worker round trip remain required before deployment.
-Latest verified account usage: 24% used / 76% remaining. No BFG Admin messages or releases.
+Latest verified account usage: 25% used / 75% remaining. No BFG Admin messages or releases.
 
 The next user-facing closure is the operator's inability to ask about an unclear
 decision without giving a final answer. ADR 0094 defines the approved distinction.
