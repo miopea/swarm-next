@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useRef, useState } from "react";
+import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
 import {
   approveApiaryJoinLink,
@@ -25,33 +26,33 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [refreshError, setRefreshError] = useState(false);
-
-  const refresh = useCallback(async () => {
-    setLinks(await fetchApiaryJoinLinks(operatorToken));
-    setRefreshError(false);
-  }, [operatorToken]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const current = await fetchApiaryJoinLinks(operatorToken);
-        if (!cancelled) {
-          setLinks(current);
-          setRefreshError(false);
-        }
-      } catch {
-        if (!cancelled) setRefreshError(true);
+  const [loaded, setLoaded] = useState(false);
+  const revision = useRef(0);
+  const load = useCallback(async (signal: AbortSignal) => {
+    const observedRevision = revision.current;
+    try {
+      const current = await fetchApiaryJoinLinks(operatorToken, signal);
+      if (!signal.aborted && observedRevision === revision.current) {
+        setLinks(current);
+        setLoaded(true);
+        setRefreshError(false);
       }
-    };
-    void load();
-    const timer = window.setInterval(() => void load(), 5_000);
-    return () => { cancelled = true; window.clearInterval(timer); };
+    } catch {
+      if (observedRevision === revision.current && (!signal.aborted || signal.reason?.name === "TimeoutError")) setRefreshError(true);
+    }
   }, [operatorToken]);
+  const refresh = useVisiblePolling(load, true, 5_000);
+
+  function retainConfirmed(link: ApiaryJoinLink) {
+    revision.current += 1;
+    setLinks((current) => [...current.filter((item) => item.id !== link.id), link]);
+    setLoaded(true);
+  }
 
   async function createLink() {
     await perform(async () => {
       const bundle = await createApiaryJoinLink(operatorToken);
+      retainConfirmed(bundle.link);
       const capability: ApiaryKeeperJoinCapability = {
         link_id: bundle.link.id,
         keeper_endpoint: bundle.link.keeper_endpoint,
@@ -70,7 +71,7 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
   async function approve(link: ApiaryJoinLink) {
     if (!link.candidate) return;
     await perform(async () => {
-      await approveApiaryJoinLink(operatorToken, link.id);
+      retainConfirmed(await approveApiaryJoinLink(operatorToken, link.id));
       await Promise.all([refresh(), onInvitationCreated()]);
       setMessage(`${link.candidate?.hive_name} is approved. Her Hive will receive the signed invitation on its next outbound poll.`);
     }, "That Hive could not be approved.");
@@ -78,7 +79,7 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
 
   async function cancel(link: ApiaryJoinLink) {
     await perform(async () => {
-      await revokeApiaryJoinLink(operatorToken, link.id);
+      retainConfirmed(await revokeApiaryJoinLink(operatorToken, link.id));
       setConfirmingCancellation(undefined);
       setGeneratedLink("");
       await refresh();
@@ -158,9 +159,9 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
             </li>
           ))}
         </ul>
-      ) : <p className="empty-copy">No active invitation links. Create one when another Hive is ready to join.</p>}
+      ) : <p className="empty-copy">{loaded ? "No active invitation links. Create one when another Hive is ready to join." : refreshError ? "Invitation status is unavailable." : "Checking invitation status…"}</p>}
       {message ? <p className="form-message" role="status">{message}</p> : null}
-      {refreshError ? <div className="form-error apiary-refresh-error" role="alert"><span>Invitation status could not be refreshed. No membership changed.</span><button className="secondary-button" type="button" disabled={working} onClick={() => void refresh().catch(() => setRefreshError(true))}>Check invitation status again</button></div> : null}
+      {refreshError ? <div className="form-error apiary-refresh-error" role="alert"><span>Invitation status could not be refreshed. {loaded ? "Showing the last confirmed information. " : ""}Checking status does not change membership.</span><button className="secondary-button" type="button" disabled={working} onClick={() => void refresh()}>Check invitation status again</button></div> : null}
       {error ? <p className="form-error" role="alert">{error}</p> : null}
     </div>
   );

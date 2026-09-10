@@ -1526,8 +1526,9 @@ export async function createApiaryJoinLink(
 
 export async function fetchApiaryJoinLinks(
   operatorToken: string,
+  signal?: AbortSignal,
 ): Promise<ApiaryJoinLink[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/join-links");
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/join-links", { signal });
   return response.json() as Promise<ApiaryJoinLink[]>;
 }
 

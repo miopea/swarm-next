@@ -1,5 +1,28 @@
 # Current maturity acceptance ledger
 
+## September 10 — invitation observation ownership
+
+Keeper invitation reads now use the existing visible-page polling owner: one
+in-flight read,8-second abort deadline,hidden/unmounted cancellation and no hidden
+polls. The API adapter passes the cancellation signal. Confirmed mutation results
+are retained immediately and fence earlier reads, so stale empty results cannot
+erase a newly created invitation. A follow-up read failure no longer converts a
+confirmed create/cancel into failure. Mutation transport itself is unchanged.
+
+Initial unavailable status no longer claims there are no invitation links.
+Failures retain last confirmed information and offer a read-only retry; fresh
+success quietly clears them.31 focused invitation/settings/polling tests pass,
+including timeout,hidden/disposed ownership,stale read versus creation and failed
+refresh after successful creation. TypeScript and production build pass before
+the final copy refinement and additional regression.
+
+Edge's isolated invitation-recovery fixture showed unavailable status and retry.
+After Restore fictional invitation service, the next automatic read cleared the
+warning before the attempted manual retry; therefore manual retry is unit-tested,
+not claimed browser-tested in this run. At390px DOM measurement shows no horizontal
+overflow. Viewport reset and owned tab closed. No real link,grant or membership
+was created or changed. Local only, pending publication approval.
+
 ## September 10 — Apiary guidance and full web regression
 
 The full local web suite passed1555 tests across158 files after64922011.
