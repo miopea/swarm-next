@@ -995,7 +995,15 @@ if "$package" prepare-protocol "$test_root/bundle-8.0.0"; then
   echo "a different preparation replaced the pending migration" >&2; exit 1
 fi
 [ "$(cat "$SWARM_STATE_ROOT/protocol-migration.pending")" = "$(cat "$SWARM_STATE_ROOT/protocol-migration.manual")" ]
-rm "$SWARM_STATE_ROOT/protocol-migration.pending" "$SWARM_STATE_ROOT/protocol-migration.manual"
+# A previously completed host migration settles both markers, not a dangling
+# manual hold that would make subsequent maintenance appear corrupt.
+ln -sfn "$(cat "$SWARM_STATE_ROOT/protocol-migration.pending")" "$SWARM_INSTALL_ROOT/host-current"
+"$package" complete-protocol-migration
+[ ! -e "$SWARM_STATE_ROOT/protocol-migration.pending" ]
+[ ! -e "$SWARM_STATE_ROOT/protocol-migration.manual" ]
+[ "$(wc -l < "$HOME/systemctl.log")" -eq "$prepared_services" ]
+[ "$(wc -l < "$HOME/swarmctl.log")" -eq "$prepared_commands" ]
+ln -sfn "$prepared_host" "$SWARM_INSTALL_ROOT/host-current"
 
 # Explicit migrate-protocol refuses a MID-TURN worker, and says so.
 printf '1\n' > "$HOME/running-sessions"

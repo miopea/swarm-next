@@ -2055,7 +2055,7 @@ complete_protocol_migration() {
   host_release=$(release_from_link "$install_root/host-current")
   [ -n "$host_release" ] || die "no terminal host release is installed"
   if [ "$(cat "$host_release/PROTOCOL")" = "$(cat "$pending/PROTOCOL")" ]; then
-    rm -f "$state_root/protocol-migration.pending"
+    rm -f "$state_root/protocol-migration.pending" "$state_root/protocol-migration.manual"
     printf 'Protocol migration is no longer needed; the host already speaks %s\n' "$(cat "$pending/PROTOCOL")"
     return
   fi

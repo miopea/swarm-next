@@ -2,6 +2,28 @@
 
 ### Active acceptance checkpoint — ordinary-user UX first
 
+September 10 current checkpoint (supersedes the historical incident notes below):
+main and the Linux checkout are `30ad01dc55be`. The authorized transient service
+`swarm-authorized-preparation-30ad01dc` completed with exit 0 and development
+status `deferred`. Candidate
+`1.7.0-dev-30ad01dc55be-20260910164740-555599` is staged under the managed releases
+root; pending and manual-hold markers both name it. Both active links remain on
+`1.6.0-dev-dba2868be982-20260910095752-189394`; health is OK and engine PID242380
+is unchanged. This is preparation, not deployment or worker-return acceptance.
+Explicit permission to apply the warned worker-interrupting migration was asked.
+The old installed watcher remains failed; do not reset it against its old helper.
+
+Exact prepared-version consent now passes API refusal tests and strict API
+Clippy. Post-merge UI verification passed123 tests plus TypeScript. Edge's
+fictional preparation journey verified Cancel leaves the action untouched and
+confirmation reaches deferred, not installed;390px visual proof is retained in
+`artifacts/protocol-preparation/phone-confirmation.png`. No native-device claim.
+A follow-up isolated lifecycle regression passes for clearing both pending and
+manual markers when the host already speaks the prepared protocol. This cleanup
+is not in the immutable staged candidate and must not mutate that candidate.
+
+### Historical implementation checkpoints
+
 The explicit preparation journey is now wired locally: a separate authenticated
 `POST /api/v1/runtime/development/prepare` records `operation=prepare-protocol`.
 The existing service consumes that operation and invokes preparation after a
