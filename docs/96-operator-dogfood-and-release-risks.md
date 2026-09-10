@@ -2,7 +2,7 @@
 
 September 10, 2026. This is a handoff over the approved scope in45, not a new
 definition of completion. No release is authorized. Detailed receipts remain
-in92,94 and95. Verified app/API:fd0385d2; all34 records/12 running session identities
+in92,94 and95. Verified app/API:dba2868b; all34 records/12 running session identities
 and enginePID3408834/start were preserved. See95 for acceptance and continuity.
 
 ## Current user-facing milestone map
@@ -12,7 +12,7 @@ and enginePID3408834/start were preserved. See95 for acceptance and continuity.
 | Needs You and linked work | Compact choices/custom answer; clarification round trip; exact Queue-to-decision and prerequisite-to-task navigation | Direct terminal answers reconciling the original request; native clarification use |
 | Terminal controls | Draft retention, explicit ownership/reconnect notices, bounded controls and retry fixtures; operator accepted Android AskUser questions2/3 | Real camera/gallery, suspension/handoff, aged performance and reload geometry |
 | Settings and runtime | Search/navigation; saved-vs-draft Night Watch; quiet safeguards; distinct diagnostic evidence; saved preview/copy refusal; update confirmation/cancel; fictional support retry | Physical scheduled presence; engine automatic admission; paired central support acceptance |
-| Integrated UI recovery | Modal focus/draft protection; prerequisite timeout and narrow footer; bounded history; saved-session retry; honest display failures; queue-observation retry | Full reduced-motion/contrast/zoom acceptance; current-build ordinary workday/overnight acceptance |
+| Integrated UI recovery | Modal focus/draft protection; prerequisite timeout and narrow footer; bounded history; saved-session retry; honest display failures; queue-observation retry; reduced-motion navigation; sampled dark contrast/320px reflow; full1540-test web checkpoint | Actual browser zoom; native OS/device checks; current-build ordinary workday/overnight acceptance |
 
 This map consolidates retained receipts, not blanket closure of UI-1 through UI-4.
 It avoids asking the operator to repeat already accepted unchanged phone checks.
@@ -64,6 +64,10 @@ state. Do not test against a real customer approval merely to tick a box.
    alone. Testing through desktop automation can itself produce return activity.
 
 These checks do not ask the operator to approve all remaining maturity work.
+When convenient, add one desktop check at200-percent browser zoom: navigate
+Needs You, Queues and task details, ensuring text/actions remain reachable. Return
+to your normal zoom afterward. The browser tool shortcut did not actually zoom;
+320px responsive emulation is not a substitute for this result.
 Native-device results should be attached to the exact build and journey, not
 treated as a blanket mobile signoff. No urgent interruption is needed overnight.
 

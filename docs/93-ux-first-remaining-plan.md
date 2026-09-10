@@ -2,6 +2,19 @@
 
 ### Active acceptance checkpoint — ordinary-user UX first
 
+UI-first browser implementation checkpoint: full current web suite passed1540
+tests/158 files at ed51204c; deployed dba2868b CI34463462108 is green. Ordinary
+presentation/recovery increments are ready for operator dogfooding, not full45
+completion. Do not continue polishing already-passed tiny UI cases.
+Actual browser zoom remains manual: supported CUA Control+plus did not change
+viewport1438x959, DPR1.5 or visual scale1; this is not zoom acceptance. Narrow
+reflow has separate320px evidence. Do not spend another loop trying substitutes.
+Next highest user-facing gap: QUEEN-03/ATT-01 direct worker answers leaving stale
+Needs You. Inspect authenticated operator-submission/native hook provenance and
+exact decision linkage before implementing; worker prose alone remains insufficient.
+This is source-state recovery for an existing UI pain, not a return to broad CPU
+profiling or unrelated engine updates. No BFG worker contact or release authorized.
+
 Dark-theme/reflow checkpoint: fixture presentation preferences were empty, so a
 dark button label could coexist with light CSS. The harness now owns valid per-
 device preferences and PUT updates, with explicit theme=dark seeding. Verified

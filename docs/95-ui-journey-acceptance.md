@@ -3,6 +3,19 @@
 Scope remains45/93. This matrix distinguishes delivered behavior, isolated proof
 and remaining requirements; it is not whole-program completion.
 
+## Integrated UI checkpoint — ed51204c
+
+Full web suite:1540 tests across158 files, all passing,51.23s. This checkpoint
+includes all recent UI implementation and the valid-theme fixture correction.
+No full-suite repeats are needed until another integrated change warrants one.
+Deployed product dba2868b CI34463462108 is green; ed51204c adds only fixture/docs.
+
+Native zoom gate was attempted once through documented CUA Control+plus on the
+local fixture. Before and after settled observation: viewport1438x959,DPR1.5,
+outerWidth1706,visual scale1. The shortcut did not change zoom, so no zoom result
+is claimed. Do not substitute CDP viewport or pinch scale for actual browser zoom.
+Actual zoom joins the explicit manual checks; other verified reflow stands.
+
 ## Dark-theme and narrow reflow checkpoint
 
 The full-App harness returned an empty presentation-preferences response; root
