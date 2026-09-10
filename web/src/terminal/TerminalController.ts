@@ -184,6 +184,21 @@ export class TerminalController {
 
   get attached(): boolean { return this.#attached; }
 
+  /**
+   * The state a subscriber would be told RIGHT NOW, readable during a render.
+   *
+   * `subscribe` already emits this synchronously, but it is called from an
+   * effect — which runs after the paint. Switching workers reuses the
+   * TerminalView instance (App.tsx renders it with no `key`), so its useState
+   * values survive the switch and the first frame of the incoming worker showed
+   * the OUTGOING one's status. These let that frame be correct instead.
+   */
+  get currentState(): TerminalConnectionState { return this.#state; }
+
+  get currentStateDetail(): string | undefined { return this.#stateDetail; }
+
+  get currentControl(): TerminalControlView { return this.#connection.controlView ?? "owned"; }
+
   /** Told when the operator asks to search this terminal. */
   #updateRendering(): void {
     this.#surface.setRenderingActive?.(this.#attached && this.#visible);

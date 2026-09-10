@@ -12,6 +12,73 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.7.0
+
+Support, clarifications, and a Queen that keeps moving. These highlights
+consolidate 164 commits since 1.6.0; they are the changes you will notice, not
+the full list.
+
+**Before upgrading:** nothing. The installer takes a verified database backup
+before it migrates anything, and checks that backup can still be opened by the
+release it would roll back to. This release migrates schema 150 to 159 and
+changes the worker-engine protocol from 16 to 17.
+
+**Every worker session ends during this install.** A protocol change is the one
+upgrade that cannot preserve running terminals: the API and the worker engine
+are swapped together. Swarm announces it, drains the host, migrates, and brings
+workers back — accepting the release from the control room is enough, and no
+separate command is needed. Plan a window rather than taking it mid-task.
+
+### New features
+- **Ask the operator a follow-up question.** A worker holding a decision can now
+  raise a clarification against it, with its own inbox and reply, without that
+  request granting any authority the original decision did not.
+- **Report a problem with files attached.** Support submissions accept file
+  uploads, survive an interrupted send, and can be reviewed, retried once, or
+  removed locally — and file intake is gated separately from Hive updates, so a
+  broken upload path cannot block an install.
+- **Browse task history in pages.** Retained history is readable in bounded
+  pages rather than all at once.
+- **Saved diagnostics preview before you send them,** and a clipboard that
+  refuses now says why instead of failing silently.
+- **Queen keeps moving through review.** A claimed review focus survives retries
+  and API recovery, rotates on a stable bounded policy, and no longer stalls on
+  removed cursors or an unchanged task order.
+- **Workers come back to the session they left.** Maintenance returns retain the
+  exact source session, and an all-session maintenance admission is prepared
+  atomically. (after the worker engine update)
+
+### Fixes
+- Queue task titles are readable in dark mode again.
+- Queues is reachable from quick navigation; decision history is no longer
+  confused with current attention; linked-item navigation respects reduced
+  motion.
+- Queues offers read-only recovery when observations are unavailable, and keeps
+  active explanation waits visible instead of hiding them.
+- Everyday Settings are easier to find on desktop and phone; the worker editor
+  keeps focus after save and cancel, stays readable on phones, and explains
+  itself when there are no repository suggestions to offer.
+- Blocking dialogs stay above workspace navigation; mobile destinations appear
+  after runtime navigation; terminal search stays above a stable-width output.
+- Swarm states uncertainty before restarting workers rather than implying it
+  knows, labels stale diagnostic samples as last known, and shows admission
+  holds honestly instead of inventing a prompt or wake action.
+- Saved sessions recover without a misleading unlock prompt, abandoned passkey
+  challenges are bounded and explain recovery, and unsaved support drafts are
+  distinguished from retained retries.
+- Blocked-task review evidence survives worker session replacement; an explicit
+  stop cancels blocked terminal writes safely and serialises against terminal
+  control effects.
+- Memory and CPU accounting separate process anonymous memory from live cgroup
+  figures, diagnostic capacity is kept separate from pressure assessment, and
+  API allocator retention is reduced without changing worker policy.
+
+### Known limitations
+A Hive still on v0.9.0 cannot take a protocol change through the control room —
+that vintage defers the migration using its own installer before the new release
+gets control, so it needs a manual `swarm-package migrate-protocol`. Every
+version from 1.0 onward installs this normally.
+
 ## 1.6.0
 
 A more comfortable daily-driver Hive: clearer decisions, better terminal

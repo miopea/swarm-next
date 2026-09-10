@@ -36,15 +36,43 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
       () => new TerminalConnection({ sessionId: session.session_id, operatorToken }),
     );
   }, [operatorToken, session.session_id]);
-  const [connectionState, setConnectionState] = useState<TerminalConnectionState>("connecting");
-  const [control, setControl] = useState<TerminalControlView>("checking");
-  const connectionStateRef = useRef<TerminalConnectionState>("connecting");
+  const [connectionState, setConnectionState] = useState<TerminalConnectionState>(
+    () => controller.currentState,
+  );
+  const [control, setControl] = useState<TerminalControlView>(() => controller.currentControl);
+  const connectionStateRef = useRef<TerminalConnectionState>(controller.currentState);
   const attachmentGeneration = useRef(0);
   const uploadRequest = useRef<AbortController | undefined>(undefined);
   const uploadDeadline = useRef<number | undefined>(undefined);
   const waitingAttachment = useRef(false);
   const [selectedFile, setSelectedFile] = useState<File>();
   const [detail, setDetail] = useState<string>();
+
+  // ⚠️ SWITCHING WORKERS DOES NOT REMOUNT THIS COMPONENT. App.tsx renders it
+  // with no `key`, so `session.session_id` changes in place and the useState
+  // initialisers above do not run again. Their values — status, control and the
+  // detail line — belonged to the OUTGOING worker, and `subscribe` cannot
+  // correct them in time because it is called from an effect, which runs after
+  // the paint. The first frame of the incoming worker showed the previous
+  // worker's status.
+  //
+  // Adjusting state during render is React's documented answer to a prop the
+  // state derives from, and it is right here for a specific reason: the
+  // controller ALREADY knows the answer. `subscribe` emits `#state`
+  // synchronously, so reading the same field a moment earlier is not a guess at
+  // what the effect will say — it is the same value, in time to be painted.
+  //
+  // This does NOT address the terminal grid reflowing after attach, which is a
+  // separate and deliberately asynchronous refit. See the task note on
+  // 01a082d2 for why that one is not worth trading away.
+  const [renderedSession, setRenderedSession] = useState(session.session_id);
+  if (renderedSession !== session.session_id) {
+    setRenderedSession(session.session_id);
+    setConnectionState(controller.currentState);
+    setControl(controller.currentControl);
+    setDetail(controller.currentStateDetail);
+    connectionStateRef.current = controller.currentState;
+  }
   const [attachmentState, setAttachmentState] = useState<
     "idle" | "uploading" | "waiting" | "ready" | "error"
   >("idle");
