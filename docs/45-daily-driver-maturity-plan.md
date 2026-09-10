@@ -31,7 +31,12 @@ Integrated tests verify saving without join calls and preserved success after
 refresh failure (27 focused profile/settings tests pass). Real-browser validation
 and cross-Hive delivery remain open; local save is not a synchronization claim.
 
-Next: verify profile preview visually and finish directory freshness UI, then
+Directory freshness UI is now implemented in Member and Settings: incomplete or
+unreadable status is explicit, saved snapshots are dated, expired snapshots warn,
+and refresh failure preserves the prior snapshot. Thirty focused roster/settings
+tests pass. Visual/live synchronization checks are still required.
+
+Next: verify profile preview and directory status visually, then
 verify Keeper and two members end to end. Announce release readiness only after
 those gates close. Preserve the unrelated untracked native-signal probe. Source
 transfer to the isolated server test checkout is approved. The operator has now

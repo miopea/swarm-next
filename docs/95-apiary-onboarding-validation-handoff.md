@@ -43,8 +43,11 @@ full persistence run. Review migration compatibility before activating a binary.
    and does not submit an invitation or join. Integrated UI tests cover saving
    and post-save refresh failure; real Keeper/member browser checks remain open.
    Do not ask existing users to rejoin to set their profile.
-4. Finish directory freshness/unavailability UI: an old or incomplete roster must
-   not be presented as a verified complete current list.
+4. Verify directory freshness/unavailability UI on Member and Settings screens:
+   missing/unreadable directory status warns that the list may be incomplete;
+   a saved snapshot shows its issue time and an expired-window warning when
+   observed expired. Refresh retains the last snapshot on failure, and retry
+   refreshes both status and the roster. This does not claim live presence.
 5. Browser-check the fictional `join-apiary` harness on narrow and desktop layouts,
    then a new fictional third member through invitation, approval and joining.
    Confirm the outcome is understandable without extra finalization clicks.

@@ -1285,6 +1285,18 @@ export async function renameApiary(
   return response.json() as Promise<LocalApiaryContext>;
 }
 
+export type ApiaryDirectory = { revision: number; issued_at: number; expires_at: number };
+
+export async function fetchApiaryDirectory(operatorToken: string, signal?: AbortSignal): Promise<ApiaryDirectory | null> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/directory", { signal });
+  const directory = await response.json() as ApiaryDirectory | null;
+  if (directory !== null && (!Number.isSafeInteger(directory.revision) || directory.revision < 1
+    || !Number.isFinite(directory.issued_at) || !Number.isFinite(directory.expires_at))) {
+    throw new Error("Directory status was not readable.");
+  }
+  return directory;
+}
+
 export async function fetchApiaryMembers(operatorToken: string): Promise<ApiaryMember[]> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/members");
   return response.json() as Promise<ApiaryMember[]>;

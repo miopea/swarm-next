@@ -33,6 +33,7 @@ import {
 import { catalogReadinessLabel, federationSyncCopy } from "../apiary/presentation";
 import KeeperInvitationManager from "./KeeperInvitationManager";
 import MemberDeparturePanel from "./MemberDeparturePanel";
+import MemberDirectoryStatus from "../apiary/MemberDirectoryStatus";
 import PersonalHiveJoin from "./PersonalHiveJoin";
 
 type Props = {
@@ -494,6 +495,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
           ) : null}
           <div className="apiary-members">
             <div><strong>Hives in this Apiary</strong><small>Registered membership, not live presence. Each Hive remains independently operated.</small></div>
+            {member ? <MemberDirectoryStatus operatorToken={operatorToken} members={members} onRefresh={() => setMemberRosterAttempt((value) => value + 1)} /> : null}
             {members.length > 0 ? (
               <ul aria-label="Apiary Hives">
                 {members.map((member) => (
