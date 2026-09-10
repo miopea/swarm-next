@@ -70,6 +70,11 @@ impl ConversationSelection {
     pub const fn current(&self) -> ProviderConversationSelection {
         self.current
     }
+
+    #[must_use]
+    pub const fn resume_pending(&self) -> bool {
+        self.resume_pending
+    }
 }
 
 #[cfg(test)]

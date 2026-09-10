@@ -526,6 +526,44 @@ fn dispatch_blocking(
     request: HostRequest,
 ) -> HostResponse {
     let result = match request {
+        HostRequest::PrepareNativeInterview {
+            session_id,
+            capability,
+            payload,
+        } => registry
+            .prepare_native_interview(session_id, &capability.0, payload.0.as_bytes())
+            .map_err(|_| "native interview preparation unavailable".to_owned())
+            .and_then(|ticket| {
+                ticket
+                    .map(|ticket| HostResponse::NativeInterviewPrepared { ticket })
+                    .ok_or_else(|| "native interview preparation refused".to_owned())
+            }),
+        HostRequest::ProviderInterview {
+            session_id,
+            capability,
+            payload,
+            ticket,
+        } => (if let Some(ticket) = ticket {
+            registry.begin_native_interview(session_id, &capability.0, ticket, payload.0.as_bytes())
+        } else {
+            registry.observe_native_interview(session_id, &capability.0, payload.0.as_bytes())
+        })
+        .map_err(|_| "native interview capture unavailable".to_owned())
+        .and_then(|accepted| {
+            if accepted {
+                Ok(HostResponse::Acknowledged)
+            } else {
+                Err("native interview capture refused".to_owned())
+            }
+        }),
+        HostRequest::ReadNativeInterviews => registry
+            .native_interview_evidence()
+            .map(|entries| HostResponse::NativeInterviews { entries })
+            .map_err(|_| "native interview evidence unavailable".to_owned()),
+        HostRequest::AcknowledgeNativeInterview { id } => registry
+            .acknowledge_native_interview(id)
+            .map(|()| HostResponse::Acknowledged)
+            .map_err(|_| "native interview acknowledgement unavailable".to_owned()),
         HostRequest::FenceProviderSelection { session_id } => registry
             .get(session_id)
             .and_then(|session| session.fence_provider_selection())

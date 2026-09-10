@@ -1,7 +1,7 @@
 //! Native question/result observations, never operator-authenticated receipts.
 use std::collections::BTreeMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use swarm_domain::{
     MAX_DECISION_QUESTION_HEADER_BYTES, MAX_DECISION_QUESTION_OPTION_BYTES,
     MAX_DECISION_QUESTION_OPTIONS, MAX_DECISION_QUESTION_TEXT_BYTES, MAX_DECISION_QUESTIONS,
@@ -13,7 +13,7 @@ const MAX_TOOL_USE_ID_BYTES: usize = 128;
 
 // Reject unrepresented question/option fields: previews and future provider
 // behavior must not silently disappear from an exact-question comparison.
-#[derive(Clone, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct NativeInterviewOption {
     pub label: String,
@@ -21,7 +21,7 @@ pub struct NativeInterviewOption {
     pub description: String,
 }
 
-#[derive(Clone, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct NativeInterviewQuestion {
     pub question: String,

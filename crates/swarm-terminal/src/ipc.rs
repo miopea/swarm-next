@@ -31,8 +31,14 @@ use crate::{
 // Protocol 14 fences interactive selection against explicit operator choices.
 // Protocol 15 retains stopped-session evidence until the API persists it.
 // Protocol 16 owns an idempotent Continue-to-Fresh successor in the engine.
-pub const PROTOCOL_VERSION: u16 = 16;
+// Protocol 17 adds private, retained native-interview evidence and acknowledgement.
+pub const PROTOCOL_VERSION: u16 = 17;
 pub const TERMINAL_CONTROL_PROTOCOL_VERSION: u16 = 11;
+
+#[must_use]
+pub fn supports_continuation_recovery(protocol: u16) -> bool {
+    (16..=PROTOCOL_VERSION).contains(&protocol)
+}
 pub const MAX_CONTROL_INPUT_BYTES: usize = 64 * 1024;
 pub const MAX_REQUEST_BYTES: u64 = 256 * 1024;
 pub const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
@@ -41,6 +47,16 @@ pub const MAX_WRITE_AUDIT_PAGE: u16 = 1_000;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ProviderLifecycleCapability(pub [u8; 32]);
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct NativeInterviewPayload(pub String);
+
+impl std::fmt::Debug for NativeInterviewPayload {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("NativeInterviewPayload([redacted])")
+    }
+}
 
 impl std::fmt::Debug for ProviderLifecycleCapability {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -296,6 +312,22 @@ pub enum HostRequest {
         session_id: WorkerSessionId,
         attempt: swarm_domain::ConversationRecoveryAttempt,
     },
+    ProviderInterview {
+        session_id: WorkerSessionId,
+        capability: ProviderLifecycleCapability,
+        payload: NativeInterviewPayload,
+        #[serde(default)]
+        ticket: Option<swarm_domain::OperatorSubmissionId>,
+    },
+    ReadNativeInterviews,
+    AcknowledgeNativeInterview {
+        id: swarm_domain::OperatorSubmissionId,
+    },
+    PrepareNativeInterview {
+        session_id: WorkerSessionId,
+        capability: ProviderLifecycleCapability,
+        payload: NativeInterviewPayload,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -427,6 +459,12 @@ impl TerminalHostStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostResponse {
+    NativeInterviewPrepared {
+        ticket: swarm_domain::OperatorSubmissionId,
+    },
+    NativeInterviews {
+        entries: Vec<crate::NativeInterviewEvidence>,
+    },
     ProviderSelectionFenced {
         session_id: WorkerSessionId,
         revision: u64,
@@ -637,6 +675,10 @@ mod tests {
             "provider_resume_end",
             "fence_provider_selection",
             "recover_continuation",
+            "provider_interview",
+            "read_native_interviews",
+            "acknowledge_native_interview",
+            "prepare_native_interview",
         ];
         let error = serde_json::from_value::<HostRequest>(serde_json::json!({
             "type": "a_request_that_does_not_exist"
@@ -658,8 +700,8 @@ mod tests {
              anyone -- bump it, then update this list."
         );
         assert_eq!(
-            PROTOCOL_VERSION, 16,
-            "the pinned surface above belongs to protocol 16; if you changed \
+            PROTOCOL_VERSION, 17,
+            "the pinned surface above belongs to protocol 17; if you changed \
              the requests, this number moves with them"
         );
     }
@@ -768,7 +810,33 @@ mod tests {
             variants,
             ["status", "claim", "renew", "release", "input", "resize"]
         );
-        assert_eq!(PROTOCOL_VERSION, 16);
+        assert_eq!(PROTOCOL_VERSION, 17);
+    }
+
+    #[test]
+    fn interview_protocol_preserves_the_existing_continuation_recovery_floor() {
+        for version in 0..16 {
+            assert!(!supports_continuation_recovery(version));
+        }
+        assert!(supports_continuation_recovery(16));
+        assert!(supports_continuation_recovery(PROTOCOL_VERSION));
+        assert!(!supports_continuation_recovery(PROTOCOL_VERSION + 1));
+    }
+
+    #[test]
+    fn native_interview_callback_round_trips_without_debug_content_or_capability() {
+        let request = HostRequest::ProviderInterview {
+            session_id: WorkerSessionId::new(),
+            capability: ProviderLifecycleCapability([173; 32]),
+            payload: NativeInterviewPayload("private question and answer".into()),
+            ticket: None,
+        };
+        let bytes = serde_json::to_vec(&request).unwrap();
+        let received: HostRequest = serde_json::from_slice(&bytes).unwrap();
+        let debug = format!("{received:?}");
+        assert!(!debug.contains("private question"));
+        assert!(!debug.contains("[173,"));
+        assert_eq!(serde_json::to_vec(&received).unwrap(), bytes);
     }
 
     #[test]

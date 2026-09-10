@@ -207,6 +207,41 @@ distinction between first-party evidence and an agent's relay.
 
 ## Ownership, bounds, and recovery gates
 
+### Engine capture admission, September 10
+
+The private protocol17 capture path authenticates the existing process capability,
+live session and current selected conversation. A prepare/admit round trip orders
+the requested native invocation against the engine's actual PTY write audit lock.
+The helper must receive an opaque preparation ticket before admission. Input
+between preparation and admission invalidates that preparation; a delayed callback
+cannot claim input already received while its helper timed out. Exact retries do
+not reset contamination. Conversation-selection revisions fence resume away and
+back to the same conversation. Unsupported authenticated callbacks invalidate the
+pending window, without replaying input or changing the provider conversation.
+
+Only generation-checked operator writes qualify. Legacy actor labels, automation,
+rejected or uncertain writes, interrupts, changed questions and input after the
+last submit refuse evidence. The collector retains native questions and answers,
+device identities and sequence boundaries, not keystroke text. It does not itself
+prove exact decision identity or rule out every provider-side programmatic answer.
+
+The engine owns at most32 prepared/pending observations and32 completed entries;
+source payloads use the parser's64KiB bound. Admission failure does not block or
+misreport an otherwise successful terminal write. Completed entries survive API
+replacement and session stop until exact-ID acknowledgement, but not engine exit;
+durable admission and acknowledgement remain application integration work. No
+source content appears in ordinary terminal summaries, audit entries or Debug.
+
+The helper shares one3-second deadline across stdin, protocol preflight, preparation
+and admission, with no automatic replay. Unknown protocols receive only Ping.
+Existing continuation recovery remains supported with a running protocol16 engine;
+new capture requires17. The terminal host owns this compatibility floor until the
+rolling-update support window for16 is explicitly retired.
+
+This path is not installed in provider settings yet. Do not enable hooks or claim
+Needs You reconciliation until authenticated durable consumption, exact question
+binding and the complete fictional failure/recovery lifecycle are verified.
+
 The application service owns authentication and correlation orchestration; domain
 rules own admissibility and transitions; persistence owns atomic resolution,
 uniqueness, retention, and migration. The independent engine continues to own PTY

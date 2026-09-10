@@ -4,6 +4,7 @@ mod history;
 mod ipc;
 mod journal;
 mod maintenance;
+mod native_interview_capture;
 mod process;
 mod provider;
 mod provider_activity;
@@ -24,9 +25,10 @@ pub use history::{
 pub use ipc::HostClient;
 pub use ipc::{
     HostRequest, HostResponse, HostSessionSummary, IpcError, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES,
-    MAX_WRITE_AUDIT_PAGE, PROTOCOL_VERSION, ProviderLifecycleCapability, TerminalHostStatus,
-    TerminalInputKind, TerminalTakeoverLease, TerminalWriteActor, TerminalWriteAuditEntry,
-    TerminalWriteProvenance, TerminalWriteResult, default_terminal_socket_path,
+    MAX_WRITE_AUDIT_PAGE, NativeInterviewPayload, PROTOCOL_VERSION, ProviderLifecycleCapability,
+    TerminalHostStatus, TerminalInputKind, TerminalTakeoverLease, TerminalWriteActor,
+    TerminalWriteAuditEntry, TerminalWriteProvenance, TerminalWriteResult,
+    default_terminal_socket_path, supports_continuation_recovery,
 };
 pub use ipc::{
     MAX_CONTROL_INPUT_BYTES, TERMINAL_CONTROL_PROTOCOL_VERSION, TerminalControlCommand,
@@ -34,6 +36,7 @@ pub use ipc::{
 };
 pub use journal::{JournalLimits, SequencedFrame};
 pub use maintenance::{MaintenanceOutcome, MaintenanceRefusal};
+pub use native_interview_capture::NativeInterviewEvidence;
 pub use process::{
     ContinuationRecoveryOutcome, FreshRecoveryLaunch, MAX_TERMINAL_CELLS, MAX_TERMINAL_COLUMNS,
     MAX_TERMINAL_ROWS, MIN_TERMINAL_COLUMNS, MIN_TERMINAL_ROWS, ProcessTerminalSession,

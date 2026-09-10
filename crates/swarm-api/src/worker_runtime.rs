@@ -1183,7 +1183,7 @@ async fn advance_failed_continuations(
     // protocol negotiation, launch and refresh. Expiry defers, never proves loss.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
     let operation = async {
-        if !matches!(request_host(state, HostRequest::Ping).await?, HostResponse::Pong { protocol_version } if protocol_version == swarm_terminal::PROTOCOL_VERSION)
+        if !matches!(request_host(state, HostRequest::Ping).await?, HostResponse::Pong { protocol_version } if swarm_terminal::supports_continuation_recovery(protocol_version))
         {
             return Err(ApiError::new(
                 StatusCode::CONFLICT,

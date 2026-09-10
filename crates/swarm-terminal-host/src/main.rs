@@ -13,6 +13,11 @@ mod provider_session_start;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if env::args().nth(1).as_deref() == Some("provider-interview") {
+        return provider_session_start::run_interview()
+            .await
+            .map_err(Into::into);
+    }
     if env::args().nth(1).as_deref() == Some("provider-session-start") {
         return provider_session_start::run(false).await.map_err(Into::into);
     }

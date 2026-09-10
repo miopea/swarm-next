@@ -2,6 +2,30 @@
 
 ### Active acceptance checkpoint — ordinary-user UX first
 
+Native capture foundation now has a private protocol17 prepare/admit handshake,
+engine-ordered generation-checked input, exact conversation revision fencing and
+bounded read/ack evidence. Linux full terminal165 passed/1 opt-in profiler ignored,
+host library27 and host command11 passed; strict terminal/host all-target clippy
+passed. These include delayed admission after operator input, stale generation,
+legacy actor forgery, automation/uncertainty, duplicate callbacks, resume boundaries,
+dead processes, API-reader replacement and successful-input/capture-failure isolation.
+Source verification ran in /tmp/swarm-native-answer-check.6fkv8E using the existing
+bounded test cache. No hooks installed, engine update, live deployment or release.
+API cargo check passed. Protocol16 retains native continuation recovery and the
+helper's existing startup/resume callbacks; only native capture requires17.
+The final helper compatibility change passed all7 provider-session-start tests
+(including real socket exchanges against16 and17) and strict all-target clippy.
+
+Next: durable native-source admission and exact immutable decision/question binding,
+including full option descriptions (never discard them to force a match). Connect
+the existing consumed-answer resolution transaction only after authenticating the
+native source and checking the complete fictional lifecycle. Missing, ambiguous or
+provider-programmatic evidence stays unconfirmed. Engine retained evidence is not
+yet a durable statement or Needs You closure. Do not restart the completed UI sweep.
+The developer-release candidate remains deployed dba2868b, excluding this unfinished
+integration; publishing still needs explicit operator authorization. Usage38% used
+at this checkpoint, no resets consumed.
+
 Direct-answer integration is now the sole next package; do not repeat the web
 checkpoint below. Verified live dba2868b healthy, engine PID3408834/startSep9
 17:01:49EDT unchanged. The fictional Contract transcript has exact three-question

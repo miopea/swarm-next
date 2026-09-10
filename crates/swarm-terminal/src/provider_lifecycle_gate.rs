@@ -137,6 +137,23 @@ impl ProviderLifecycleGate {
         self.capability.fill(0);
     }
 
+    /// Authenticates one provider incarnation, never a durable worker token.
+    #[must_use]
+    pub fn authenticates(&self, session: WorkerSessionId, capability: &[u8; 32]) -> bool {
+        !self.revoked && session == self.session && matches_capability(&self.capability, capability)
+    }
+
+    #[must_use]
+    pub fn is_current_conversation(
+        &self,
+        conversation: swarm_domain::ProviderConversationId,
+    ) -> bool {
+        !self.revoked
+            && self.selection.as_ref().is_some_and(|selection| {
+                !selection.resume_pending() && selection.current().conversation == conversation
+            })
+    }
+
     #[must_use]
     pub const fn observation(&self) -> Option<ProviderSessionStartObservation> {
         self.observation

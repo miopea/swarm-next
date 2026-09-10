@@ -986,6 +986,7 @@ pub struct SessionRegistry {
     history: Option<Arc<HistoryStore>>,
     write_audit: Mutex<VecDeque<TerminalWriteAuditEntry>>,
     next_write_audit_sequence: Mutex<u64>,
+    native_interviews: Mutex<crate::native_interview_capture::NativeInterviewCapture>,
     draining: AtomicBool,
 }
 
@@ -1030,6 +1031,9 @@ impl SessionRegistry {
             history,
             write_audit: Mutex::new(VecDeque::new()),
             next_write_audit_sequence: Mutex::new(1),
+            native_interviews: Mutex::new(
+                crate::native_interview_capture::NativeInterviewCapture::default(),
+            ),
             draining: AtomicBool::new(false),
         })
     }
@@ -1277,7 +1281,11 @@ impl SessionRegistry {
             .remove(&id)
             .ok_or(SessionRegistryError::SessionNotFound)?;
         lock(&self.takeovers)?.remove(&id);
-        session.stop()
+        let result = session.stop();
+        if let Ok(mut capture) = self.native_interviews.lock() {
+            capture.invalidate_pending(id);
+        }
+        result
     }
 
     /// Installs or idempotently confirms one exact, unexpired takeover lease.
@@ -1324,6 +1332,7 @@ impl SessionRegistry {
         self.audit_write(
             session_id,
             TerminalWriteProvenance::steward(lease_id, bytes),
+            false,
             bytes,
             || {
                 self.require_takeover(session_id, lease_id, revision)?;
@@ -1348,6 +1357,7 @@ impl SessionRegistry {
         self.audit_write(
             session_id,
             TerminalWriteProvenance::operator(None, bytes),
+            false,
             bytes,
             || {
                 self.require_takeover(session_id, lease_id, revision)?;
@@ -1385,7 +1395,7 @@ impl SessionRegistry {
         bytes: &[u8],
         provenance: TerminalWriteProvenance,
     ) -> Result<(), SessionRegistryError> {
-        self.audit_write(session_id, provenance, bytes, || {
+        self.audit_write(session_id, provenance, false, bytes, || {
             let now = unix_timestamp();
             let mut takeovers = lock(&self.takeovers)?;
             if takeovers
@@ -1450,6 +1460,7 @@ impl SessionRegistry {
         self.audit_write(
             session_id,
             TerminalWriteProvenance::operator(Some(identity.device), bytes),
+            true,
             bytes,
             || {
                 let mut takeovers = lock(&self.takeovers)?;
@@ -1498,6 +1509,7 @@ impl SessionRegistry {
         &self,
         session_id: WorkerSessionId,
         provenance: TerminalWriteProvenance,
+        controlled: bool,
         bytes: &[u8],
         write: impl FnOnce() -> Result<(), SessionRegistryError>,
     ) -> Result<(), SessionRegistryError> {
@@ -1506,7 +1518,7 @@ impl SessionRegistry {
         prune_write_audit(&mut audit, now);
         let result = write();
         let mut sequence = lock(&self.next_write_audit_sequence)?;
-        audit.push_back(TerminalWriteAuditEntry {
+        let entry = TerminalWriteAuditEntry {
             sequence: *sequence,
             session_id,
             actor: provenance.actor,
@@ -1518,12 +1530,139 @@ impl SessionRegistry {
                 TerminalWriteResult::Rejected
             },
             occurred_at: now,
-        });
+        };
+        // Capture failure must never report an already-written input as unsent.
+        // A poisoned capture owner also refuses callbacks/reads, so skipped
+        // provenance cannot later be promoted into evidence.
+        if let Ok(mut capture) = self.native_interviews.lock() {
+            capture.record_write(&entry, controlled);
+        }
+        audit.push_back(entry);
         *sequence = sequence.saturating_add(1);
         while audit.len() > MAX_WRITE_AUDIT_ENTRIES {
             audit.pop_front();
         }
         result
+    }
+
+    /// Accepts bounded native observations only from the live provider capability.
+    /// Its ordering lock is shared with actual PTY effects, not inferred timestamps.
+    /// # Errors
+    /// Returns unavailable on registry/process/lock failures without source content.
+    pub fn observe_native_interview(
+        &self,
+        session_id: WorkerSessionId,
+        capability: &[u8; 32],
+        payload: &[u8],
+    ) -> Result<bool, SessionRegistryError> {
+        self.with_native_interview(
+            session_id,
+            capability,
+            payload,
+            |capture, revision, observation| {
+                observation.phase == crate::NativeInterviewPhase::Completed
+                    && capture.observe_at_revision(session_id, revision, observation)
+            },
+        )
+    }
+
+    /// Prepares a bounded ticket which must return to the helper before admission.
+    /// # Errors
+    /// Returns unavailable on process, registry or lock failures.
+    pub fn prepare_native_interview(
+        &self,
+        session_id: WorkerSessionId,
+        capability: &[u8; 32],
+        payload: &[u8],
+    ) -> Result<Option<swarm_domain::OperatorSubmissionId>, SessionRegistryError> {
+        self.with_native_interview(
+            session_id,
+            capability,
+            payload,
+            |capture, revision, observation| capture.prepare(session_id, revision, observation),
+        )
+    }
+
+    /// Admits only the exact preparation, with no input received in the gap.
+    /// # Errors
+    /// Returns unavailable on process, registry or lock failures.
+    pub fn begin_native_interview(
+        &self,
+        session_id: WorkerSessionId,
+        capability: &[u8; 32],
+        ticket: swarm_domain::OperatorSubmissionId,
+        payload: &[u8],
+    ) -> Result<bool, SessionRegistryError> {
+        self.with_native_interview(
+            session_id,
+            capability,
+            payload,
+            |capture, revision, observation| {
+                capture.begin_prepared(session_id, revision, ticket, observation)
+            },
+        )
+    }
+
+    fn with_native_interview<T: Default>(
+        &self,
+        session_id: WorkerSessionId,
+        capability: &[u8; 32],
+        payload: &[u8],
+        apply: impl FnOnce(
+            &mut crate::native_interview_capture::NativeInterviewCapture,
+            u64,
+            crate::NativeInterviewObservation,
+        ) -> T,
+    ) -> Result<T, SessionRegistryError> {
+        let observation = crate::read_claude_interview(payload);
+        let _ordered = lock(&self.write_audit)?;
+        let session = self.get(session_id)?;
+        let mut child = lock(&session.child)?;
+        let mut gate = lock(&session.provider_lifecycle)?;
+        let Some(gate) = gate.as_mut() else {
+            return Ok(T::default());
+        };
+        if !gate.authenticates(session_id, capability) {
+            return Ok(T::default());
+        }
+        if child.try_wait().map_err(terminal_error)?.is_some() {
+            gate.revoke();
+            lock(&self.native_interviews)?.invalidate_pending(session_id);
+            return Ok(T::default());
+        }
+        let mut capture = lock(&self.native_interviews)?;
+        let Some(observation) = observation else {
+            capture.invalidate_pending(session_id);
+            return Ok(T::default());
+        };
+        if !gate.is_current_conversation(observation.conversation) {
+            capture.invalidate_pending(session_id);
+            return Ok(T::default());
+        }
+        let Some(selection) = gate.selection() else {
+            return Ok(T::default());
+        };
+        Ok(apply(&mut capture, selection.revision, observation))
+    }
+
+    /// Read-only private evidence survives API replacement until exact acknowledgement.
+    /// # Errors
+    /// A poisoned owner is unavailable, never an empty successful read.
+    pub fn native_interview_evidence(
+        &self,
+    ) -> Result<Vec<crate::NativeInterviewEvidence>, SessionRegistryError> {
+        Ok(lock(&self.native_interviews)?.retained())
+    }
+
+    /// Call only after durable admission or an explicitly recorded rejection.
+    /// # Errors
+    /// Returns an error if the evidence owner is unavailable.
+    pub fn acknowledge_native_interview(
+        &self,
+        id: swarm_domain::OperatorSubmissionId,
+    ) -> Result<(), SessionRegistryError> {
+        lock(&self.native_interviews)?.acknowledge(id);
+        Ok(())
     }
 
     fn require_takeover(
@@ -1880,6 +2019,10 @@ fn control_error<E: std::fmt::Display>(error: ControlGateError<E>) -> SessionReg
 fn terminal_error(error: impl std::fmt::Display) -> SessionRegistryError {
     SessionRegistryError::Terminal(error.to_string())
 }
+
+#[cfg(all(test, any(unix, windows)))]
+#[path = "native_interview_process_tests.rs"]
+mod native_interview_tests;
 
 #[cfg(all(test, any(unix, windows)))]
 pub(crate) mod control_tests {

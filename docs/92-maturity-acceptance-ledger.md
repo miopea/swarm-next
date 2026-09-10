@@ -30,6 +30,19 @@ is historical where superseded by the verified deployment section.
 
 ## Requirement-by-requirement disposition
 
+### QUEEN-03 / ATT-01 native answer capture — foundation verified, integration open
+
+The private engine path now binds native invocation callbacks to live capabilities,
+conversation-selection revisions and generation-checked operator input. Prepare/admit
+round trips refuse delayed admission after intervening input. Bounded completed
+evidence survives API-reader replacement until exact acknowledgement, not engine
+exit. Full Linux terminal165 + host27 + command11 tests and strict terminal/host
+clippy pass, with one unrelated opt-in profiler skipped. See ADR0065 and93.
+No hook is installed and no native evidence is yet persisted or used to resolve
+Needs You. Direct-answer reconciliation remains open; parser/engine tests are not
+the required complete operator-to-worker-to-Queen acceptance. No live engine restart
+or release occurred in this package.
+
 ### UI-4 prerequisite-edit recovery — delivered
 
 80c7d1c4 fixes a reproduced indefinitely locked Saving dialog. Client wait now
