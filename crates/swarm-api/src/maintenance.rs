@@ -717,9 +717,10 @@ async fn maintain_worker_engine_locked(
         format!(
             "requested_at={}\ntarget_version={}\n",
             unix_timestamp(),
-            pending
-                .as_ref()
-                .map_or_else(|| build_version().to_owned(), |(_, version)| version.clone())
+            pending.as_ref().map_or_else(
+                || build_version().to_owned(),
+                |(_, version)| version.clone()
+            )
         ),
     )
     .map_err(|error| {
