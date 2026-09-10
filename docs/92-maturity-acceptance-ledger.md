@@ -1,5 +1,16 @@
 # Current maturity acceptance ledger
 
+## September 10 — 1.7.1 deployed; resume the remaining UX work
+
+The operator confirms deployment. WSL health independently reports 1.7.1 and
+production reports healthy `29fd3f6e`, which contains candidate `604405a1`.
+Both revisions' CI runs passed all four jobs. Main is now `24e2315d`.
+Apiary HTTP exchange, profile editing/joining and explicit recovery are shipped;
+the historical entries below saying wiring is still pending are superseded.
+This does not invent live three-Hive browser acceptance: that remains unverified
+because the Edge tool runtime fails before connection. See document95 for limits.
+Next: direct-answer/Needs You reconciliation under ADR0065, not release polish.
+
 ## September 10 — Signed directory converges across independent members
 
 Keeper can issue a complete recipient-bound signed public directory with stable

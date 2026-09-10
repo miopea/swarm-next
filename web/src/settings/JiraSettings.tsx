@@ -26,6 +26,9 @@ type Props = {
   onRetryReadiness?: () => void;
   onNavigate?: (url: string) => void;
   onReadinessChanged?: () => void;
+  /** Signed Keeper catalog suggestions; never treated as Jira access evidence. */
+  suggestedProjects?: JiraProject[];
+  setupId?: string;
 };
 
 /// Where an Atlassian account creates the token this asks for. Linked rather
@@ -44,7 +47,7 @@ const taskStates: { value: TaskState; label: string }[] = [
   { value: "completed", label: "Done" },
 ];
 
-export default function JiraSettings({ operatorToken, readiness, unavailable, onRetryReadiness, onReadinessChanged, onNavigate = (url) => window.location.assign(url) }: Props) {
+export default function JiraSettings({ operatorToken, readiness, unavailable, onRetryReadiness, onReadinessChanged, suggestedProjects, setupId = "settings-integrations", onNavigate = (url) => window.location.assign(url) }: Props) {
   const [siteUrl, setSiteUrl] = useState("");
   const [accountEmail, setAccountEmail] = useState("");
   const [apiToken, setApiToken] = useState("");
@@ -150,6 +153,7 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
       setStatuses([]);
       setMapping({});
       setQuery("");
+      onReadinessChanged?.();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "The Jira project could not be connected.");
     } finally {
@@ -218,8 +222,8 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
   }
 
   return (
-    <section id="settings-integrations" className="settings-card integration-settings" aria-labelledby="integration-heading">
-      <div><p className="eyebrow">Integrations</p><h3 id="integration-heading">Bring Jira into your Hive</h3></div>
+    <section id={setupId} className="settings-card integration-settings" aria-labelledby={`${setupId}-heading`}>
+      <div><p className="eyebrow">Integrations</p><h3 id={`${setupId}-heading`}>{suggestedProjects ? "Set up Jira for this Apiary" : "Bring Jira into your Hive"}</h3></div>
       <p>Connect Jira projects to this Hive as shared ticket pools. Queen and the operator can then route each issue to the right repository worker.</p>
       <div className="integration-status" role="status">
         <span className={`presence ${readiness?.connection === "ready" ? "online" : unavailable || readiness?.connection === "credentials_invalid" || readiness?.connection === "permission_denied" ? "offline" : "waiting"}`} />
@@ -345,6 +349,12 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
 
       {readiness?.connection === "ready" ? (
         <div className="jira-project-setup">
+          {suggestedProjects && !selectedProject ? <div className="jira-project-results" aria-label="Projects supplied by Keeper">
+            <p>Your Keeper supplied these projects. Choose one to verify with your own Jira account; the invitation does not grant access.</p>
+            {suggestedProjects.filter((project) => !bindings.some((binding) => binding.project_id === project.id && binding.access_verified && binding.workflow_mapped)).map((project) => (
+              <button key={project.id} className="secondary-button" type="button" disabled={busy || bindingsState !== "ready"} onClick={() => void chooseProject(project)}><strong>{project.key}</strong><span>{project.name}</span></button>
+            ))}
+          </div> : null}
           <label>
             <span>Find a Jira project</span>
             <input

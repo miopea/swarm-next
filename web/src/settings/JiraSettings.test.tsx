@@ -56,6 +56,34 @@ test("a connected project says when its mapping has fallen behind, and changes n
   expect(screen.queryByText(/new shared claims wait/)).not.toBeInTheDocument();
 });
 
+test("Keeper suggestions verify access before offering mapping and preserve denied projects for retry", async () => {
+  let denied = true;
+  const writes: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (init?.method && init.method !== "GET") writes.push(url);
+    if (url.endsWith("/projects/10002/statuses")) return denied
+      ? new Response(JSON.stringify({ message: "Access denied" }), { status: 403 })
+      : ok([{ id: "1", name: "To Do", category_key: "new", recommended_task_state: "ready" }]);
+    return ok([]);
+  }));
+  render(<JiraSettings operatorToken="fictional" unavailable={false}
+    readiness={{ configured: true, accepts_api_token: false, connection: "ready", account_name: "Bea" }}
+    suggestedProjects={[{ id: "10002", key: "IT", name: "Information Technology" }]}
+    setupId="apiary-jira-setup" />);
+  const suggestion = screen.getByRole("button", { name: "IT Information Technology" });
+  await waitFor(() => expect(suggestion).toBeEnabled());
+  expect(writes).toEqual([]);
+  fireEvent.click(suggestion);
+  await screen.findByText(/Access denied/);
+  expect(screen.queryByRole("button", { name: "Connect project" })).not.toBeInTheDocument();
+  expect(writes).toEqual([]);
+  denied = false;
+  fireEvent.click(screen.getByRole("button", { name: "IT Information Technology" }));
+  expect(await screen.findByRole("button", { name: "Connect project" })).toBeEnabled();
+  expect(writes).toEqual([]);
+});
+
 test("network unavailability explains the claim hold without implying owned work stopped", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => ok([])));
   render(<JiraSettings operatorToken="operator-token" readiness={{ configured: true, accepts_api_token: false, connection: "network_unavailable", account_name: null }} unavailable={false} />);

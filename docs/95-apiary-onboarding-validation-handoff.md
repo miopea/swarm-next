@@ -3,6 +3,41 @@
 This is a validation build, **not release acceptance**. The operator approved
 pushing it for another worker to validate. Do not cut a release from this document.
 
+## Live gate checkpoint — September 10, approximately 16:49 Eastern
+
+- Candidate `604405a1` includes explicit stopped-sync retry. CI run 34528619897
+  completed successfully: web, Linux packaging, Rust security audit, full Rust
+  workspace checks/tests, and the release-mode terminal resize gate. Rust job
+  duration was 16m26s. Confirmed from the completed GitHub run on September 10.
+- Earlier Apiary build `25bafd52` passed full CI run 34526969593.
+- Production-dev health is okay, but serves `1.7.0-dev-6ac6c14543de`; its checkout
+  is `25bafd52`. Checkout revision alone is not activation evidence.
+- WSL localhost:8766 is healthy but reports release `1.7.0`, not this candidate.
+- Edge testing still fails before connecting (kernel assets path unavailable).
+- Asked the operator whether the other worker owns both in-place deployments
+  and live validation, to avoid concurrent deployment. No live update, membership
+  removal, credential replacement, or worker restart was performed in this check.
+
+Subsequent read-only check: production now serves
+`1.7.0-dev-29fd3f6e05a8-20260910205639-738544`, healthy with no degraded entries.
+Remote git ancestry confirms `604405a1` is included in `29fd3f6e`; subsequent
+commits are release-gate tests and 1.7.1 notes/formatting. WSL still reports 1.7.0.
+This proves production activation of the candidate, not directory convergence or
+WSL upgrade acceptance. Deployment was performed outside this task's actions.
+
+Reviewed the subsequent upgrade test in `18427fc7`/`29fd3f6e`: it constructs a
+populated **Keeper** database, removes schema 162-164 tables, rewinds to 161, then
+reopens and asserts Hive/operator IDs, Apiary association/name, private task and
+new profile row. It does not construct an active remote member or assert node
+keys/credentials. Treat this as additional Keeper persistence coverage, not proof
+of the full existing-member credential or live multi-Hive gate. Latest-main CI
+run 34529126794 has now completed successfully for `29fd3f6e` (all four jobs,
+Rust 16m5s); `604405a1` CI is also confirmed successful. Both CI watch processes
+completed with exit code zero. No test jobs remain running for this gate.
+
+Validate the candidate on both sides after WSL activation; no additional feature
+scope is being opened.
+
 ## Implemented
 
 - Clearer invitation delivery/retry and preserved confirmed join success.

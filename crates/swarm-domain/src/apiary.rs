@@ -1206,7 +1206,10 @@ impl FederationCatalogReadiness {
         if jira_connection != JiraConnectionState::Ready {
             blockers.push(FederationCatalogBlocker::IntegrationNotReady);
         }
-        if projects.iter().any(|project| !project.is_ready()) {
+        // A newly promoted departmental project must not invalidate the projects
+        // this member can already use. This is catalog status, not authorization
+        // to claim a project or a relaxation of the signed join preflight.
+        if !projects.is_empty() && !projects.iter().any(FederationProjectReadiness::is_ready) {
             blockers.push(FederationCatalogBlocker::ProjectAccessNotReady);
         }
         Self {
@@ -1222,6 +1225,9 @@ impl FederationCatalogReadiness {
         self.blockers.is_empty()
     }
 }
+
+#[cfg(test)]
+mod catalog_readiness_tests;
 
 /// A one-time handoff bundle. The secret is shown only in this response and is
 /// never recoverable from Keeper storage. The Keeper card lets the invited

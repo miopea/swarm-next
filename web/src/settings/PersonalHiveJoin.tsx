@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import JoinPublicProfile, { type JoinPublicProfileHandle } from "./JoinPublicProfile";
+import ApiaryJiraSetup from "./ApiaryJiraSetup";
 
 import {
   acceptFederationJoinPolicy,
@@ -44,6 +45,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
   const [confirmingDismissal, setConfirmingDismissal] = useState<string>();
   const [savedStateUnavailable, setSavedStateUnavailable] = useState(false);
   const [keeperPollingUnavailable, setKeeperPollingUnavailable] = useState(false);
+  const [jiraSetupOpen, setJiraSetupOpen] = useState(false);
 
   const refreshSavedState = useCallback(async () => {
     const [links, invitations] = await Promise.allSettled([
@@ -287,6 +289,13 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
           <ApiaryFileFallback summary="Use an invitation file" ariaLabel="Choose Apiary invitation" disabled={busy || working} label="Choose invitation file" detail="or drop the Keeper's .json invitation here" onFile={(file) => void previewInvitationFile(file)} />
         </details>
         {invitationPreview ? <InvitationPreview bundle={invitationPreview} working={working} onCancel={() => setInvitationPreview(undefined)} onTrust={() => void trustKeeperAndImport()} /> : null}
+        {joinInvitations.length > 0 ? <div className="settings-actions">
+          <button className="secondary-button" type="button" aria-expanded={jiraSetupOpen} aria-controls="apiary-inline-jira" disabled={busy || working} onClick={() => setJiraSetupOpen((open) => !open)}>{jiraSetupOpen ? "Hide Jira setup" : "Set up Jira here"}</button>
+          <button className="secondary-button" type="button" disabled={busy || working} onClick={() => void refreshSavedState()}>Refresh setup status</button>
+        </div> : null}
+        {jiraSetupOpen ? <div id="apiary-inline-jira"><ApiaryJiraSetup operatorToken={operatorToken}
+          projects={[...new Map(joinInvitations.flatMap((invitation) => invitation.promoted_projects).map((project) => [project.project_id, { id: project.project_id, key: project.project_key, name: project.project_name }])).values()]}
+          onChanged={() => void refreshSavedState()} /></div> : null}
         {joinInvitations.length > 0 ? (
           <ul className="apiary-join-list" aria-label="Saved Apiary invitations">
             {joinInvitations.map((invitation) => (

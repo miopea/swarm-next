@@ -1,5 +1,14 @@
 # Swarm daily-driver maturity: scope and delivery plan
 
+## Current sequencing — 1.7.1 deployed, September 10
+
+The operator confirms deployment and instructs continued work. The release hold
+below is historical, not a reason to stop or repeat candidate CI. Document93's
+current execution checkpoint governs: resume exact native-answer/Needs You
+reconciliation, then remaining ordinary-user UX acceptance. Preserve the open
+live Apiary browser-evidence gap separately; do not expand the released scope.
+No new release is authorized by this continuation.
+
 ## Immediate priority — September 10 Apiary onboarding
 
 Release-candidate scope is frozen following the operator's concern about a moving

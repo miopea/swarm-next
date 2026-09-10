@@ -1,5 +1,162 @@
 # Remaining maturity work — UX/UI first
 
+## Current execution checkpoint — September 10, after 1.7.1 deployment
+
+### Latest priority: guided enrollment, then workspace setup
+
+Inline setup implementation is now present: PersonalHiveJoin opens Jira setup
+in place, supplies exact project IDs from imported invitations as suggestions,
+and refreshes server readiness after a successful connection/mapping change.
+The existing Jira adapter still verifies the selected project. Suggestions
+perform no automatic writes, do not establish permission, and do not accept
+policy or submit membership.39 focused UI tests and TypeScript pass. Browser
+visual acceptance remains OPEN: the Chrome skill's required execution tool
+fails before browser connection with "failed to write kernel assets ... os
+error3". No alternate browser automation was substituted. This is not evidence
+of a sign-in issue; do not ask the user to unlock a nonexistent tab.
+
+First implementation slice: member catalog status now preserves readiness when
+at least one project remains eligible; inaccessible additions remain visible in
+the per-project results. Missing/stale catalogs, changed policy and disconnected
+Jira still block readiness. Empty catalogs retain existing coordination behavior.
+Three new regression tests and all162 domain tests pass in the isolated Linux
+checkout; strict domain Clippy passes. This is NOT a changed signed join gate,
+automatic project configuration, assignment eligibility distribution, or a
+completed onboarding flow. Do not deploy or claim the larger enrollment scope
+complete based on this slice. Next: versioned enrollment/setup contract and
+project configuration reconciliation, then the consolidated setup UI.
+
+The operator explicitly redirects the next work to lower-friction Apiary
+enrollment: Keeper supplies shared settings, projects and policies after the
+Hive connects; members complete only their own authentication and necessary
+local setup. Follow ADR0097. Preserve personal credentials and per-project
+permissions. Do not treat setting distribution as permission or blanket policy
+acceptance. Workspace creation remains queued behind this work.
+
+Identity46624e29 is now verified live: health reports
+1.7.1-dev-46624e29920a-20260910220635-789364, no degraded conditions; the
+independent worker engine remained PID765103 with the same start time. Native
+settlement commit56589cd1 remains private on codex/native-answer-storage,
+excluded from main and this app-only activation.
+
+### Approved project-scoped participation — IT added to the Apiary
+
+The operator approves joining with at least one eligible shared Jira project,
+not access to every department's projects, and accepts project-aware assignment
+complexity. They have now added IT; some existing members may lack access.
+Do not grant Jira access, remove IT, or require members to leave/rejoin.
+
+Verified code: FederationJoinReadiness::evaluate rejects any unready invitation
+project. FederationCatalogReadiness::evaluate likewise reports a global blocker
+for any unready project; acknowledged_federation_project_readiness enumerates the
+whole catalog. The catalog-readiness application method is used by the status
+HTTP endpoint. This establishes a misleading global readiness result, NOT proof
+that every assignment or existing worker actually stops. Actual team impact and
+claim/assignment paths remain to be checked; do not report a confirmed outage.
+
+Required coordinated change: joining accepts at least one eligible project;
+catalog updates preserve unaffected participation; only project-eligible Hives
+can receive/claim its work; losing one project's access pauses only that scope;
+projects with no eligible Hive expose an actionable ownership gap. Membership
+and private work survive all of these changes in place. Test two departmental
+members with overlapping/disjoint access, adding IT after joining, revoked
+access, no eligible recipient, stale evidence and recovery. Include mixed-version
+signed-contract compatibility and clear per-project UI, not just changing any
+to all in one join predicate. No runtime change has been made for this yet.
+
+The operator subsequently approved the requested source transfer: "Do whatever
+you need to do." The five files were transferred to the existing isolated Linux
+checkout and validated. That permission blocker is cleared; do not ask again.
+Identity commit46624e29 is pushed to main and its normal development app/API
+build is running on bgsdev. The independent engine is still PID765103, started
+17:19 Eastern. Verify served46624e29 before claiming activation. Native schema165
+is deliberately excluded from this app-only update. The full scope stays open.
+
+Published feedback commit `e6d1f39a` has passed all four CI jobs;
+run34533407331 is completed/success. No further CI polling is needed. The
+old read-only watch was session31546; do not restart it. This CI run does NOT include any of
+the subsequent identity-import or native-settlement Rust changes.
+
+### Next operator-reported UX defect — workspace selection, after current work
+
+The operator explicitly queues this AFTER the identity/native-answer work now
+in progress; do not interrupt that sequence to fix a new small item.
+
+Screenshots show adding a sleeping Claude worker with a `~/projects/rcg/...`
+repository path and the outside-discovered-folders override selected. The API
+returns422: "enter an absolute path inside a configured workspace root" despite
+the directory existing in the shown Linux shell. No repositories were discovered.
+The error appears both in a page banner and as a narrow grid item, moving the
+name/provider/repository controls into a broken layout. User also cannot find a
+way to configure workspace roots or search for a project while adding workers.
+
+Required outcome: understandable host-specific workspace-root setup and project
+search/selection, working explicit path override within the approved filesystem
+safety policy, and a stable inline error associated with the repository field.
+Preserve entered values on rejection. Show which machine resolves the path.
+Verify tilde expansion versus absolute-path validation, configured roots,
+discovery, override payload and server enforcement before claiming a cause.
+An existing directory alone does not prove root-policy admission, and the
+screenshots do not prove the UI and shell point to the same host. Do not weaken
+symlink/filesystem-root protections to make the override pass.
+
+Acceptance: discover/select an existing repo, paste its supported path, explicitly
+use a valid outside-discovery folder, reject nonexistent/unsafe paths clearly,
+and check desktop/mobile layout after a422. No workspace settings or workers
+were changed while recording this report. Original screenshots are in the
+September10 user message (clipboard f7aeddb9 and7c717a55).
+
+Latest operator addition: use connected Jira OR Microsoft name/email before
+asking for identity. Preserve a saved operator edit, ask only for unavailable
+details, and reuse the saved identity when submitting feedback. Apiary sharing
+still has a reviewable profile; no rejoin is required. Jira currently exposes an
+account name in readiness, while Microsoft exposes both name/address; complete
+the account-to-saved-profile path rather than inferring an email from a name.
+This is approved remaining UX scope, not a reason to reopen release1.7.1.
+
+Identity execution: `e6d1f39a` is pushed to main and reuses saved contact details
+in feedback (19 focused tests total including five identity checks; TypeScript
+passed). Published46624e29 fills the join/shared profile from Jira or
+Microsoft with explicit selection for differing accounts, saved-choice and edit
+protection, and bounded requests.33 focused profile/Apiary tests and TypeScript
+pass. All13 Jira adapter tests and strict API/persistence Clippy also pass.
+See identity-reuse-checkpoint. No native hooks enabled and no schema165
+deployment occurred. Live identity browser acceptance remains open.
+
+Current uncommitted native slice: schema165 audit plus atomic reuse of existing
+statement admission/settlement, and tests for rollback, duplicate recovery,
+reopen, mismatched evidence and migration.15 native-source tests,9 existing
+statement tests, strict API/persistence Clippy and the final two settlement
+regressions pass. Isolated tree: `/tmp/swarm-native-answer-check.6fkv8E`.
+This private settlement boundary is not installed provider capture or a Queen
+tool. Keep it off main until its activation/compatibility gates are ready.
+Windows and checked WSL locations have no Rust toolchain. No hooks enabled.
+Keep the untracked `scripts/dogfood/native-signal-probe.cjs` untouched.
+
+The operator confirms deployment is complete and explicitly says to keep working.
+This checkpoint supersedes the historical in-flight and release-hold notes below.
+Main is `24e2315d` (1.7.1). Apiary profile/directory exchange, joined-profile
+editing, combined joining, and explicit stopped-sync retry are implemented and
+published. Candidate `604405a1` and later `29fd3f6e` both passed all four CI jobs.
+WSL health reports 1.7.1; production health reports healthy `29fd3f6e` development
+code containing the candidate. Do not reopen that release or add Apiary polish.
+
+Independent live multi-Hive visual acceptance remains unverified by this agent;
+health and the operator's deployment confirmation are not substitutes for it.
+The Edge testing runtime fails before connecting; preserve this browser gate
+without repeatedly asking the operator to unlock a tab or rerunning passed CI.
+
+Next substantive outcome: a verified direct worker answer clears the exact
+matching Needs You decision without duplicate input. Follow ADR0065: authenticated
+native capture, complete question/options match, full immutable IDs, audited
+Queen correlation and existing atomic receipt settlement. Ambiguous/unverified
+sources stay open. Hooks remain disabled until the complete failure/recovery
+lifecycle is proven. Do not claim storage or final-batch comparison completes it.
+Then return to the remaining ordinary-user UX acceptance items below. No BFG
+Admin communication, release cutting, or unrelated performance investigation.
+
+Historical checkpoints follow; their next-step statements are not current orders.
+
 ## Operator priority override — Apiary onboarding, September 10
 
 Latest directory slice: signed Keeper directory plus separately stored member
