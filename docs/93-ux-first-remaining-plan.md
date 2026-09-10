@@ -4,6 +4,14 @@
 
 ### Latest priority: guided enrollment, then workspace setup
 
+HTTP acceptance now passes in the isolated Linux checkout: a Hive with NO Jira
+configuration sends the signed join to an actual test HTTP Keeper, becomes a
+member, reconciles its catalog and shared Swarm task, and exchanges the directory.
+This test creates no Jira mock/server for the no-Jira case. No customer data or
+live membership was changed. Existing WSL Hive is intentionally preserved for
+upgrade testing; a separate fresh Hive is still needed for clean live onboarding.
+Production remains unchanged. Browser acceptance remains open.
+
 Latest verification: no-Jira membership assertion now passes the independent
 two-store lifecycle including signed receipt, identical retries, Keeper-assigned
 Swarm task projection, duplicate-page replay and idempotent member progress.

@@ -304,16 +304,16 @@ test("gives a Keeper a first-class Apiary control-room surface", async () => {
   expect(apiary).toHaveAttribute("aria-current", "page");
   expect(screen.getByText("Registration, not live presence")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Manage Apiary" }));
-  expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
-  expect(window.location.hash).toBe("#settings-connections");
-  expect(within(await screen.findByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: "Connections" })).toHaveAttribute("aria-current", "location");
+  expect(await screen.findByRole("button", { name: "Back to Apiary overview" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Settings" })).not.toBeInTheDocument();
+  expect(apiary).toHaveAttribute("aria-current", "page");
 
   cleanup();
   window.sessionStorage.clear();
   render(<App />);
-  expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
-  expect(within(await screen.findByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: "Connections" })).toHaveAttribute("aria-current", "location");
-  expect(window.location.hash).toBe("#settings-connections");
+  fireEvent.click(await screen.findByRole("button", { name: "Apiary" }));
+  expect(await screen.findByRole("heading", { name: "Grand Garden" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Manage Apiary" })).toBeInTheDocument();
 });
 
 test("gives a Member Hive a first-class Apiary membership surface", async () => {

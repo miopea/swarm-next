@@ -82,7 +82,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
           refreshed = true;
           if (result.invitation_received) {
             setJoinInvitations(await fetchFederationJoinInvitations(operatorToken));
-            onMessage(`Invitation from ${result.link.apiary_name} received. Review its policy and Jira readiness below.`);
+            onMessage(`Invitation from ${result.link.apiary_name} received. Review its policy below; Jira setup is optional.`);
           }
         } catch {
           unavailable = true;
@@ -228,7 +228,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
       await profileRef.current.save();
       await joinFederationApiary(operatorToken, invitation.invitation_id);
       setJoinedApiary(invitation.apiary_name);
-      onMessage(`This Hive joined ${invitation.apiary_name}. Jira continues syncing directly; Swarm coordination now polls the Keeper.`);
+      onMessage(`This Hive joined ${invitation.apiary_name}. Open Apiary for shared work and any remaining setup.`);
       try {
         await onJoined();
       } catch {
@@ -253,11 +253,11 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
         <ol className="apiary-exchange-guide" aria-label="How this Hive joins an Apiary">
           <ApiaryExchangeStep number="1" title="Hand the link to this Hive" detail="Open the private link and choose this personal Hive, or paste the complete link below." />
           <ApiaryExchangeStep number="2" title="Wait for her approval" detail="This Hive introduces only its signed identity and keeps polling outward." />
-          <ApiaryExchangeStep number="3" title="Review and join" detail="After approval, check policy and Jira readiness before joining explicitly." />
+          <ApiaryExchangeStep number="3" title="Review and join" detail="Accept the Apiary policy, then continue on the Apiary page. Jira is optional." />
         </ol>
         <ApiaryLinkEntry label="Keeper invitation link" value={keeperLink} action={working ? "Connecting…" : "Connect to Keeper"} disabled={busy || working} onChange={setKeeperLink} onAction={() => void connectToKeeper()} />
         <div className="apiary-transport-boundary" role="note">
-          <span><strong>Jira work</strong><small>This Hive continues polling Jira directly as you.</small></span>
+          <span><strong>Optional Jira work</strong><small>If connected, this Hive reads Jira directly as you.</small></span>
           <span><strong>Swarm work</strong><small>This Hive polls the Keeper for shared Apiary tasks and coordination.</small></span>
         </div>
       </div> : null}
@@ -279,7 +279,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
       <div className="apiary-join-card">
         <div>
           <strong>Review before joining</strong>
-          <small>After Keeper approval, her signed invitation appears here automatically. Policy acceptance, Jira readiness, and final membership remain explicit.</small>
+          <small>After Keeper approval, the invitation appears here automatically. Review and accept the shared policy to join; configure optional integrations afterward.</small>
         </div>
         <details className="apiary-manual-fallback">
           <summary>Advanced: import a legacy invitation</summary>
@@ -353,7 +353,7 @@ function InvitationReadiness({ invitation, working, onAccept, onJoin }: { invita
         <span className={ready || readyToAcceptAndJoin ? "readiness-ready" : "readiness-blocked"}>{invitation.readiness_compatibility_fallback ? "Runtime update in progress" : ready ? "Ready to join" : readyToAcceptAndJoin ? "Ready for your approval" : `${invitation.readiness.blockers.length} readiness ${invitation.readiness.blockers.length === 1 ? "step" : "steps"} left`}</span>
       </div>
       <div className="apiary-policy-acknowledgement">
-        <span><strong>Policy revision {invitation.required_policy_revision}</strong><small>Jira-backed shared work · {invitation.promoted_projects.length} signed {invitation.promoted_projects.length === 1 ? "project" : "projects"} · Keeper identity pinned</small></span>
+        <span><strong>Policy revision {invitation.required_policy_revision}</strong><small>Swarm shared work · {invitation.promoted_projects.length} optional Jira {invitation.promoted_projects.length === 1 ? "project" : "projects"} · Keeper identity pinned</small></span>
         {invitation.readiness_compatibility_fallback ? <button className="secondary-button" disabled>Waiting for runtime</button>
           : invitation.state === "submitted" ? <button className="primary-action" disabled={working} onClick={onJoin}>{working ? "Joining…" : "Retry joining"}</button>
           : invitation.state === "keeper_pinned" ? <button className={readyToAcceptAndJoin ? "primary-action" : "secondary-button"} disabled={working} onClick={() => onAccept(readyToAcceptAndJoin)}>{working ? "Accepting…" : readyToAcceptAndJoin ? "Accept policy and join" : `Acknowledge revision ${invitation.required_policy_revision}`}</button>
@@ -367,7 +367,8 @@ function InvitationReadiness({ invitation, working, onAccept, onJoin }: { invita
           return <li key={project.project.project_id}><span><strong>{project.project.project_key}</strong><small>{project.project.project_name}</small></span><span className={projectReady ? "readiness-ready" : "readiness-blocked"}>{status}</span></li>;
         })}
       </ul>
-      {invitation.readiness.jira_connection !== "ready" ? <p className="readiness-blocked">Connect Jira on this Hive before it can join.</p> : null}
+      {invitation.readiness.blockers.some((blocker) => blocker === "integration_not_ready" || blocker === "project_access_not_ready") ? <p className="readiness-blocked">This runtime still requires Jira setup before joining. Update it to join without Jira; your invitation remains saved.</p>
+        : invitation.readiness.jira_connection !== "ready" ? <p>Jira is optional. You can connect it later from your Apiary setup checklist.</p> : null}
       <small>{invitation.state === "submitted" ? "The signed request is durable and retry-stable. Retry after a temporary Keeper outage." : "Joining sends one signed request to the Keeper; Jira credentials and private Hive data stay local."}</small>
     </li>
   );

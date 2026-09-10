@@ -11704,10 +11704,17 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::too_many_lines)]
     async fn invited_hive_joins_through_one_outbound_signed_request() {
-        let jira_address = start_ready_jira_test_server().await;
+        assert_outbound_hive_join(true).await;
+    }
 
+    #[tokio::test]
+    async fn no_jira_member_joins_and_reconciles_swarm_tasks_over_http() {
+        assert_outbound_hive_join(false).await;
+    }
+
+    #[allow(clippy::too_many_lines)] // Complete independent HTTP join and reconciliation lifecycle.
+    async fn assert_outbound_hive_join(with_jira: bool) {
         let now = unix_timestamp();
         let invited = TaskStore::in_memory().unwrap();
         let invited_card = invited.issue_hive_connection_card(now, 3_600).unwrap();
@@ -11745,13 +11752,19 @@ mod tests {
             .unwrap();
         let state = AppState::default()
             .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
-            .with_task_store(invited.clone())
-            .with_jira_configuration(
-                &format!("http://{jira_address}"),
-                "operator@example.test",
-                "api-token",
-            )
-            .unwrap();
+            .with_task_store(invited.clone());
+        let state = if with_jira {
+            let jira_address = start_ready_jira_test_server().await;
+            state
+                .with_jira_configuration(
+                    &format!("http://{jira_address}"),
+                    "operator@example.test",
+                    "api-token",
+                )
+                .unwrap()
+        } else {
+            state
+        };
         let app = router(state.clone());
         let uri = format!(
             "/api/v1/apiary/join-invitations/{}/submission",
