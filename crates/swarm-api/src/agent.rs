@@ -5758,6 +5758,48 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(2), wakeup.notified())
             .await
             .unwrap();
+        let claim = store
+            .claim_clarification_deliveries(crate::unix_timestamp())
+            .unwrap()
+            .remove(0);
+        store
+            .finish_clarification_delivery(
+                &claim,
+                swarm_domain::ClarificationDeliveryOutcome::Uncertain,
+            )
+            .unwrap();
+        let reconciliation = json!({
+            "clarification_id": id, "decision_id": parent.id, "claim_id": claim.claim_id,
+            "session_id": claim.session_id, "choice": "confirm_delivered",
+            "acknowledged_duplicate_risk": false,
+        });
+        for (token, expected) in [
+            (None, StatusCode::UNAUTHORIZED),
+            (Some(worker_token.as_str()), StatusCode::UNAUTHORIZED),
+            (Some("secret"), StatusCode::OK),
+        ] {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri(format!("{endpoint}/reconciliation"))
+                .header(header::CONTENT_TYPE, "application/json");
+            if let Some(token) = token {
+                request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+            }
+            let response = app
+                .clone()
+                .oneshot(
+                    request
+                        .body(Body::from(reconciliation.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+        assert_eq!(
+            store.get_decision_request(parent.id).unwrap().state,
+            swarm_domain::DecisionRequestState::Pending
+        );
         for (name, arguments) in [
             (
                 "swarm_read_clarifications",

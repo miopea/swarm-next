@@ -2,6 +2,28 @@
 
 ### Active package: Needs You clarification, not another reload patch
 
+Explicit delivery recovery is now connected locally through the operator-only
+HTTP route and real Inbox panel. The exact observed claim/session fences each
+choice: confirm checked delivery, or retry after acknowledging duplicate risk.
+Eight immutable audit records per question cap recovery at32,768 Hive-wide;
+question retention cascades them. Replaying an old choice cannot requeue a newer
+claim; conflicting choices, stale sessions and resolved parents are refused.
+An audit-insert failure rolls back the retry state. History exposes claim/session
+identities, not credentials. No automatic resend loop or task approval is added.
+Strict domain/persistence/API all-target Clippy passed. The HTTP/MCP integration
+test verifies worker and absent credentials are rejected on recovery, while the
+operator confirmation leaves the decision pending. All20 clarification tests and
+four previous-schema tests passed; the added rollback test then passed with the
+three focused recovery tests and strict persistence lint. Fifty-four targeted
+Inbox/panel/recovery tests, TypeScript and production build passed; the final
+question-before-controls layout also passes the seven panel/recovery tests.
+In Edge, a fictional question -> uncertain delivery -> explicit consent -> retry
+returned to waiting without changing final-answer choices. Dark390x844 rendered
+without horizontal overflow; viewport reset. This is not native worker delivery
+acceptance and is still UNDEPLOYED. Schema159 remains unreleased.
+Next: mixed-requester Queen attention, sleeping/current-tool-surface readiness,
+then the native demo round trip and coherent deployment. Do not cut a release.
+
 Checkpoint a17de76e commits the first queue projection increment after 55de9ad2's
 inbox/notification work; both remain undeployed. The queue change adds exact clarification requesters to the shared
 task projection, including linked decisions. An unanswered explanation changes

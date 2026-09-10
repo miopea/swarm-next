@@ -3977,6 +3977,10 @@ fn api_router(state: AppState) -> Router {
         )
         .route("/api/v1/decisions", get(decisions::list_decisions))
         .route(
+            "/api/v1/decisions/{decision_id}/clarifications/reconciliation",
+            post(decision_clarification::reconcile),
+        )
+        .route(
             "/api/v1/decisions/{decision_id}/clarifications",
             get(decision_clarification::history).post(decision_clarification::ask),
         )

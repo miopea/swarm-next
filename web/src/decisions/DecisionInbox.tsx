@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type Keyboard
 
 import type { DecisionClarification, DecisionRequest, DecisionSurface, Task, TaskActivityPage, Worker } from "../api";
 import DecisionClarificationPanel from "./DecisionClarificationPanel";
+import type { ReconcileClarification } from "./ClarificationRecovery";
 import { useDecisionClarifications, type ReadClarifications } from "./useDecisionClarifications";
 import { needsOperatorDecision, waitingForClarification } from "./decisionAttention";
 import BeeMascot from "../brand/BeeMascot";
@@ -48,10 +49,11 @@ type Props = {
   onResolve: (decision: DecisionRequest, action: string, note: string, surface: DecisionSurface) => Promise<void>;
   onAnswer?: (decision: DecisionRequest, answers: Record<string, string[]>, note: string) => Promise<void>;
   onFetchClarifications?: ReadClarifications;
+  onReconcileClarification?: ReconcileClarification;
   onAskClarification?: (decision: DecisionRequest, id: string, question: string) => Promise<DecisionClarification>;
 };
 
-export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, additionalPendingCount = 0, attentionCards, coordinatorUnavailable = false, trailingCards, onOpenTask, onFetchActivity, onResolve, onAnswer, onFetchClarifications, onAskClarification }: Props) {
+export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, additionalPendingCount = 0, attentionCards, coordinatorUnavailable = false, trailingCards, onOpenTask, onFetchActivity, onResolve, onAnswer, onFetchClarifications, onAskClarification, onReconcileClarification }: Props) {
   const [view, setView] = useState<"attention" | "activity">("attention");
   const clarifications = useDecisionClarifications(decisions, view === "attention" ? onFetchClarifications : undefined);
   const tabId = useId();
@@ -297,6 +299,11 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                   workerNames={workerNames}
                   {...clarifications.forDecision(decision)}
                   onReload={() => clarifications.reload(decision.id)}
+                  onReconcile={onReconcileClarification ? async request => {
+                    const saved = await onReconcileClarification(request);
+                    clarifications.reload(decision.id);
+                    return saved;
+                  } : undefined}
                   onAsk={async (id, question) => {
                     const saved = await onAskClarification(decision, id, question);
                     clarifications.reload(decision.id);

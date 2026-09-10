@@ -4,6 +4,17 @@ use swarm_domain::{DecisionClarificationId, DecisionRequestId, WorkerRole};
 use swarm_persistence::DecisionClarification;
 
 impl TaskService {
+    /// Only an operator-authenticated adapter may reconcile ambiguous delivery.
+    /// # Errors
+    /// Refuses stale claims, conflicting retries and exhausted recovery capacity.
+    pub fn reconcile_operator_clarification(
+        &self,
+        request: &swarm_domain::ClarificationReconciliation,
+        now: i64,
+    ) -> Result<DecisionClarification, ApplicationError> {
+        Ok(self.store.reconcile_operator_clarification(request, now)?)
+    }
+
     /// Compact operator inbox; adapters must authenticate the operator first.
     /// # Errors
     /// Propagates persistence failures without inventing an empty inbox.

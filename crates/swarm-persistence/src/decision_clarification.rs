@@ -9,6 +9,7 @@ use swarm_domain::{
 };
 
 mod delivery;
+mod reconciliation;
 mod summary;
 pub(crate) use summary::summaries_from;
 #[cfg(test)]
@@ -54,6 +55,15 @@ pub(super) fn migrate(tx: &Transaction<'_>) -> rusqlite::Result<()> {
         clarification_id TEXT NOT NULL REFERENCES decision_clarifications(id) ON DELETE CASCADE,
         subscription_id TEXT NOT NULL REFERENCES notification_subscriptions(device_id) ON DELETE CASCADE,
         PRIMARY KEY(clarification_id,subscription_id)
+    ) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS decision_clarification_reconciliations (
+        clarification_id TEXT NOT NULL REFERENCES decision_clarifications(id) ON DELETE CASCADE,
+        claim_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        choice TEXT NOT NULL CHECK(choice IN ('confirm_delivered','retry')),
+        operator_id TEXT NOT NULL,
+        recorded_at INTEGER NOT NULL CHECK(recorded_at >= 0),
+        PRIMARY KEY(clarification_id,claim_id)
     ) WITHOUT ROWID;")?;
     tx.pragma_update(
         None,
@@ -75,9 +85,11 @@ pub struct DecisionClarification {
     pub replying_worker_id: Option<WorkerId>,
     pub replying_session_id: Option<WorkerSessionId>,
     pub delivery_state: ClarificationDeliveryState,
+    pub delivery_claim_id: Option<uuid::Uuid>,
+    pub delivery_session_id: Option<WorkerSessionId>,
 }
 
-const SELECT: &str = "SELECT c.id,c.decision_id,c.operator_id,c.question,c.asked_at,c.reply,c.replied_at,c.replying_worker_id,c.replying_session_id,c.delivery_state
+const SELECT: &str = "SELECT c.id,c.decision_id,c.operator_id,c.question,c.asked_at,c.reply,c.replied_at,c.replying_worker_id,c.replying_session_id,c.delivery_state,c.claim_id,c.delivery_session_id
     FROM decision_clarifications c JOIN decision_requests d ON d.id=c.decision_id
     JOIN local_hive_identity l ON l.hive_id=d.hive_id AND l.singleton=1";
 
@@ -109,6 +121,16 @@ fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionClarification> 
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
         delivery_state: parse(9)?
             .parse()
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        delivery_claim_id: row
+            .get::<_, Option<String>>(10)?
+            .map(|id| id.parse())
+            .transpose()
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        delivery_session_id: row
+            .get::<_, Option<String>>(11)?
+            .map(|id| id.parse())
+            .transpose()
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
     })
 }

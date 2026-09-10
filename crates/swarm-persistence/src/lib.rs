@@ -9305,7 +9305,7 @@ mod tests {
         SchemaStep {
             table: "decision_clarifications",
             artifact: "",
-            undo_sql: "DROP TABLE decision_clarification_notification_receipts; DROP TABLE decision_clarifications",
+            undo_sql: "DROP TABLE decision_clarification_reconciliations; DROP TABLE decision_clarification_notification_receipts; DROP TABLE decision_clarifications",
             probe_sql: "",
         },
     ];

@@ -20,6 +20,7 @@ import {
   type DevelopmentRuntime,
   answerDecision,
   askDecisionClarification,
+  reconcileDecisionClarification,
   fetchDecisionClarifications,
   resolveDecision,
   claimWorker,
@@ -2475,6 +2476,7 @@ export function App() {
               onAnswer={answerInboxDecision}
               onFetchClarifications={(decisionId, signal) => fetchDecisionClarifications(operatorToken, decisionId, signal)}
               onAskClarification={(decision, id, question) => askDecisionClarification(operatorToken, decision.id, id, question)}
+              onReconcileClarification={request => reconcileDecisionClarification(operatorToken, request)}
             />
           </div>
         ) : surface === "queues" ? (

@@ -37,6 +37,9 @@ export default function DecisionClarificationFixture() {
     <details><summary>Fixture controls</summary>
       <button type="button" onClick={() => setTheme(theme === "light" ? "dark" : "light")}>Switch to {theme === "light" ? "dark" : "light"} theme</button>
       <label><input type="checkbox" checked={failNext} onChange={(event) => setFailNext(event.target.checked)} />Fail the next question send</label>
+      <button type="button" disabled={!waiting || Boolean(finalChoice)} onClick={() => setHistory(rounds => rounds.map(round => round.reply === null ? {
+        ...round, delivery_state: "uncertain", delivery_claim_id: crypto.randomUUID(), delivery_session_id: "fictional-session",
+      } : round))}>Simulate unconfirmed delivery</button>
       <button type="button" disabled={!waiting || Boolean(finalChoice)} onClick={() => setHistory((rounds) => rounds.map((round) => round.reply === null ? {
         ...round, reply: "Petal checked the export path. Pausing the export avoids incomplete results; it does not pause the rest of your workers. I recommend waiting for the missing source, then retrying this export.",
         replied_at: Math.floor(Date.now() / 1000), replying_worker_id: "queen", replying_session_id: "fictional-queen-session", delivery_state: "delivered",
@@ -47,6 +50,13 @@ export default function DecisionClarificationFixture() {
       onResolve={async (_decision, action) => choose(action)}
       onAnswer={async (_decision, answers) => choose(answers.Answer.join("; "))}
       onFetchClarifications={async () => history}
+      onReconcileClarification={async request => {
+        const previous = history.find(round => round.id === request.clarification_id);
+        if (!previous || previous.delivery_claim_id !== request.claim_id || previous.delivery_session_id !== request.session_id) throw new Error("The fictional delivery changed. Refresh first.");
+        const saved: DecisionClarification = { ...previous, delivery_state: request.choice === "retry" ? "queued" : "delivered" };
+        setHistory(rounds => rounds.map(round => round.id === saved.id ? saved : round));
+        return saved;
+      }}
       onAskClarification={async (_decision, id, question) => {
           if (failNext) { setFailNext(false); throw new Error("The fictional connection failed. Your question is still here; try again."); }
           const saved: DecisionClarification = { id, question, decision_id: "fictional-decision", operator_id: "fictional-operator", asked_at: Math.floor(Date.now() / 1000), reply: null, replied_at: null, replying_worker_id: null, replying_session_id: null, delivery_state: "queued" };

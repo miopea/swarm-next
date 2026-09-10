@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import type { DecisionClarification } from "../api";
 import LongText from "./LongText";
+import ClarificationRecovery, { type ReconcileClarification } from "./ClarificationRecovery";
 
 type Props = {
   requester: string;
@@ -15,11 +16,12 @@ type Props = {
   loadError?: string;
   onReload: () => void;
   onAsk: (id: string, question: string) => Promise<DecisionClarification>;
+  onReconcile?: ReconcileClarification;
 };
 
 /** No answer/resolve callback: an explanation cannot accidentally become approval. */
 export default function DecisionClarificationPanel({
-  requester, pending, waiting, history, roundCount = history.length, workerNames, loading = false, loaded = true, replyAvailable = false, loadError, onReload, onAsk,
+  requester, pending, waiting, history, roundCount = history.length, workerNames, loading = false, loaded = true, replyAvailable = false, loadError, onReload, onAsk, onReconcile,
 }: Props) {
   const labelId = useId();
   const [editing, setEditing] = useState(false);
@@ -120,6 +122,8 @@ export default function DecisionClarificationPanel({
       <ol>{history.map((round) => <li key={round.id}>
         <p className="eyebrow">You asked</p>
         <LongText text={round.question} label="your question" foldAbove={450} />
+        {pending && !round.reply && round.delivery_state === "uncertain" && round.delivery_claim_id && round.delivery_session_id && onReconcile &&
+          <ClarificationRecovery key={round.delivery_claim_id} round={round} onReconcile={onReconcile} onReload={onReload} />}
         {round.reply ? <><p className="eyebrow">{workerNames.get(round.replying_worker_id ?? "") ?? "Worker"} replied</p><LongText text={round.reply} label="this reply" foldAbove={450} /></>
           : <p className="muted">{round.delivery_state === "cancelled" ? "No reply needed." : round.delivery_state === "uncertain" ? "Delivery is unconfirmed. Check the worker before sending again." : "Waiting for a reply."}</p>}
       </li>)}</ol>

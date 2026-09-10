@@ -20,6 +20,28 @@ pub(super) struct AskClarificationRequest {
     question: String,
 }
 
+pub(super) async fn reconcile(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(decision): Path<String>,
+    Json(request): Json<swarm_domain::ClarificationReconciliation>,
+) -> Result<Response, ApiError> {
+    crate::auth::authorize_operator_credential(&state, &headers)?;
+    if parse_decision_id(&decision)? != request.decision_id {
+        return Err(ApiError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "decision_mismatch",
+            "Recovery must name the decision being viewed",
+        ));
+    }
+    let saved = task_service(&state)?
+        .reconcile_operator_clarification(&request, unix_timestamp())
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    state.coordination_wakeup.notify_one();
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(saved)).into_response())
+}
+
 pub(super) async fn history(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

@@ -55,6 +55,13 @@ same reply to re-notify; a distinct reply round remains a new attention cycle.
 - Abandoned dispatch claims become uncertain; never automatically resend an
   ambiguous write. Definitive pre-write deferral returns to queued. Explicit
   reconciliation must name the observed claim and acknowledge duplicate risk.
+- Operator recovery records either a checked delivery confirmation or an
+  acknowledged retry for the exact claim/session. It is operator-authenticated,
+  never a worker-token route or automatic loop. The immutable choice is audited
+  with the operator identity and timestamp; an identical delayed replay cannot
+  requeue a newer attempt. Cap recovery records at eight per question (32,768
+  Hive-wide under the existing retention bound), cascading with the question.
+  Exhaustion preserves uncertainty and the original final-answer controls.
 - Final resolution/withdrawal or an exact reply cancels an unclaimed question.
   Bytes already in flight cannot be recalled: retain the claim's evidence and
   mark late replies historical, never reopen a settled decision.

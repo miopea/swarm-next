@@ -1759,7 +1759,30 @@ export type DecisionClarification = {
   replying_worker_id: string | null;
   replying_session_id: string | null;
   delivery_state: "queued" | "dispatching" | "delivered" | "uncertain" | "cancelled";
+  delivery_claim_id?: string | null;
+  delivery_session_id?: string | null;
 };
+
+export type ClarificationReconciliation = {
+  clarification_id: string;
+  decision_id: string;
+  claim_id: string;
+  session_id: string;
+  choice: "confirm_delivered" | "retry";
+  acknowledged_duplicate_risk: boolean;
+};
+
+/** An explicit operator observation of one exact ambiguous delivery attempt. */
+export async function reconcileDecisionClarification(
+  operatorToken: string,
+  request: ClarificationReconciliation,
+): Promise<DecisionClarification> {
+  const response = await authenticatedFetch(operatorToken,
+    `/api/v1/decisions/${encodeURIComponent(request.decision_id)}/clarifications/reconciliation`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
+    });
+  return response.json() as Promise<DecisionClarification>;
+}
 
 export async function fetchDecisionClarifications(
   operatorToken: string,

@@ -16,6 +16,179 @@ fn notification_receipts(store: &TaskStore) -> i64 {
 }
 
 #[test]
+fn clarification_reconciliation_is_explicit_fenced_and_replay_safe() {
+    use swarm_domain::{ClarificationReconciliation, ClarificationReconciliationChoice as Choice};
+    let (store, decision, _, _) = setup();
+    let id = DecisionClarificationId::new();
+    store
+        .ask_decision_clarification(id, decision, "Explain the scope", 100)
+        .unwrap();
+    let first = store.claim_clarification_deliveries(101).unwrap().remove(0);
+    store
+        .finish_clarification_delivery(&first, Outcome::Uncertain)
+        .unwrap();
+    let mut request = ClarificationReconciliation {
+        clarification_id: id,
+        decision_id: decision,
+        claim_id: first.claim_id,
+        session_id: first.session_id,
+        choice: Choice::Retry,
+        acknowledged_duplicate_risk: false,
+    };
+    assert!(
+        store
+            .reconcile_operator_clarification(&request, 102)
+            .is_err()
+    );
+    request.acknowledged_duplicate_risk = true;
+    let mut stale = request.clone();
+    stale.claim_id = uuid::Uuid::now_v7();
+    assert!(store.reconcile_operator_clarification(&stale, 102).is_err());
+    stale = request.clone();
+    stale.session_id = WorkerSessionId::new();
+    assert!(store.reconcile_operator_clarification(&stale, 102).is_err());
+    let saved = store
+        .reconcile_operator_clarification(&request, 103)
+        .unwrap();
+    assert_eq!(saved.delivery_state, ClarificationDeliveryState::Queued);
+    assert!(
+        store
+            .reconcile_operator_clarification(&request, 104)
+            .unwrap()
+            == saved
+    );
+    let second = store.claim_clarification_deliveries(105).unwrap().remove(0);
+    assert_ne!(first.claim_id, second.claim_id);
+    store
+        .finish_clarification_delivery(&second, Outcome::Uncertain)
+        .unwrap();
+    // A delayed replay acknowledges its old choice without requeuing a newer write.
+    assert_eq!(
+        store
+            .reconcile_operator_clarification(&request, 106)
+            .unwrap()
+            .delivery_state,
+        ClarificationDeliveryState::Uncertain
+    );
+    let confirm = ClarificationReconciliation {
+        claim_id: second.claim_id,
+        session_id: second.session_id,
+        choice: Choice::ConfirmDelivered,
+        ..request.clone()
+    };
+    assert_eq!(
+        store
+            .reconcile_operator_clarification(&confirm, 107)
+            .unwrap()
+            .delivery_state,
+        ClarificationDeliveryState::Delivered
+    );
+    request.choice = Choice::ConfirmDelivered;
+    assert!(
+        store
+            .reconcile_operator_clarification(&request, 108)
+            .is_err()
+    );
+    assert!(
+        store
+            .claim_clarification_deliveries(109)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store.get_decision_request(decision).unwrap().state,
+        DecisionRequestState::Pending
+    );
+}
+
+#[test]
+fn clarification_reconciliation_is_bounded_and_refuses_settled_parents() {
+    use swarm_domain::{ClarificationReconciliation, ClarificationReconciliationChoice};
+    let (store, decision, _, _) = setup();
+    let id = DecisionClarificationId::new();
+    store
+        .ask_decision_clarification(id, decision, "Explain the scope", 100)
+        .unwrap();
+    for index in 0..=swarm_domain::MAX_CLARIFICATION_RECONCILIATIONS {
+        let now = 101 + i64::try_from(index).unwrap();
+        let claim = store.claim_clarification_deliveries(now).unwrap().remove(0);
+        store
+            .finish_clarification_delivery(&claim, Outcome::Uncertain)
+            .unwrap();
+        let request = ClarificationReconciliation {
+            clarification_id: id,
+            decision_id: decision,
+            claim_id: claim.claim_id,
+            session_id: claim.session_id,
+            choice: ClarificationReconciliationChoice::Retry,
+            acknowledged_duplicate_risk: true,
+        };
+        let result = store.reconcile_operator_clarification(&request, now);
+        if index == swarm_domain::MAX_CLARIFICATION_RECONCILIATIONS {
+            assert!(matches!(
+                result,
+                Err(TaskStoreError::DecisionClarification(Refusal::Capacity))
+            ));
+            store
+                .resolve_decision_request(decision, "Wait", "", "inbox")
+                .unwrap();
+            assert!(matches!(
+                store.reconcile_operator_clarification(&request, now),
+                Err(TaskStoreError::DecisionClarification(
+                    Refusal::DecisionNotPending
+                ))
+            ));
+        } else {
+            assert!(result.is_ok());
+        }
+    }
+}
+
+#[test]
+fn clarification_reconciliation_audit_failure_rolls_back_retry() {
+    let (store, decision, _, _) = setup();
+    let id = DecisionClarificationId::new();
+    store
+        .ask_decision_clarification(id, decision, "Explain the scope", 100)
+        .unwrap();
+    let claim = store.claim_clarification_deliveries(101).unwrap().remove(0);
+    store
+        .finish_clarification_delivery(&claim, Outcome::Uncertain)
+        .unwrap();
+    let request = swarm_domain::ClarificationReconciliation {
+        clarification_id: id,
+        decision_id: decision,
+        claim_id: claim.claim_id,
+        session_id: claim.session_id,
+        choice: swarm_domain::ClarificationReconciliationChoice::Retry,
+        acknowledged_duplicate_risk: true,
+    };
+    // A bad audit timestamp fails after the update; neither may commit alone.
+    assert!(
+        store
+            .reconcile_operator_clarification(&request, -1)
+            .is_err()
+    );
+    assert_eq!(
+        store.decision_clarifications(decision).unwrap()[0].delivery_state,
+        ClarificationDeliveryState::Uncertain
+    );
+    assert!(
+        store
+            .claim_clarification_deliveries(102)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .reconcile_operator_clarification(&request, 103)
+            .unwrap()
+            .delivery_state,
+        ClarificationDeliveryState::Queued
+    );
+}
+
+#[test]
 fn clarification_notifications_quiet_while_waiting_and_return_once_per_reply() {
     use swarm_domain::{NotificationPolicy, PresenceDeviceClass, PresenceMode};
     let (store, decision, worker, session) = setup();

@@ -7,6 +7,56 @@ use uuid::Uuid;
 pub const MAX_CLARIFICATION_TEXT_BYTES: usize = 4_000;
 pub const MAX_DECISION_CLARIFICATIONS: usize = 32;
 pub const MAX_HIVE_CLARIFICATIONS: usize = 4_096;
+pub const MAX_CLARIFICATION_RECONCILIATIONS: usize = 8;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClarificationReconciliationChoice {
+    ConfirmDelivered,
+    Retry,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClarificationReconciliation {
+    pub clarification_id: DecisionClarificationId,
+    pub decision_id: crate::DecisionRequestId,
+    pub claim_id: Uuid,
+    pub session_id: crate::WorkerSessionId,
+    pub choice: ClarificationReconciliationChoice,
+    pub acknowledged_duplicate_risk: bool,
+}
+
+/// An explicit operator observation may settle or retry an ambiguous write.
+/// # Errors
+/// Refuses non-current uncertainty, settled decisions, exhausted audit capacity,
+/// or retries without acknowledgement that the worker may receive a duplicate.
+pub fn validate_clarification_reconciliation(
+    parent: DecisionRequestState,
+    delivery: ClarificationDeliveryState,
+    has_reply: bool,
+    previous_count: usize,
+    request: &ClarificationReconciliation,
+) -> Result<ClarificationDeliveryState, DecisionClarificationError> {
+    if parent != DecisionRequestState::Pending {
+        return Err(DecisionClarificationError::DecisionNotPending);
+    }
+    if has_reply || delivery != ClarificationDeliveryState::Uncertain {
+        return Err(DecisionClarificationError::Conflict);
+    }
+    if previous_count >= MAX_CLARIFICATION_RECONCILIATIONS {
+        return Err(DecisionClarificationError::Capacity);
+    }
+    match request.choice {
+        ClarificationReconciliationChoice::ConfirmDelivered => {
+            Ok(ClarificationDeliveryState::Delivered)
+        }
+        ClarificationReconciliationChoice::Retry if request.acknowledged_duplicate_risk => {
+            Ok(ClarificationDeliveryState::Queued)
+        }
+        ClarificationReconciliationChoice::Retry => Err(DecisionClarificationError::Conflict),
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
