@@ -4,6 +4,13 @@
 
 ### Latest priority: guided enrollment, then workspace setup
 
+Keeper-management extension is now requested for scoping (doc98). Its default
+authority question is pending in doc09. Do not silently expand member authority
+or let persistent-connection work displace approved enrollment. Current concrete
+enrollment work is committed locally at012c18e8; production build passed, but
+browser visual acceptance and the larger settings/enrollment contract remain
+open. Nothing from012c18e8 has been deployed.
+
 Inline setup implementation is now present: PersonalHiveJoin opens Jira setup
 in place, supplies exact project IDs from imported invitations as suggestions,
 and refreshes server readiness after a successful connection/mapping change.

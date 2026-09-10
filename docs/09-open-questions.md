@@ -1,5 +1,15 @@
 # Open product questions
 
+## Keeper management authority — September 10, 2026
+
+The operator requested scoping broader Keeper control over member Hives and
+possibly a persistent, more timely connection. See doc98. Pending question:
+should joining include consent to shared configuration and work coordination,
+while private Hive settings and terminal control remain outside that default?
+Recommendation: yes, with explicit scope and audited application; no answer yet.
+Do not infer unrestricted remote management or treat transport as authorization.
+Approved lower-friction enrollment continues independently.
+
 ## Native answer correlation — September 10, 2026
 
 The native AskUser callbacks observed in isolated Claude sessions carry a
