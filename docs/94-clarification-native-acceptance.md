@@ -98,8 +98,33 @@ build passed as well; its existing552-KB terminal-chunk warning remains.
 - Current native tools work across the tested API replacement. An older client
   retaining a pre-clarification tool list is not proven by this; preserve ADR0053's
   normal provider refresh boundary and do not restart unrelated workers.
-- Live development deployment and final live browser check remain outstanding.
+- Live development deployment and browser check passed; see the receipt below.
 - Uncertain-delivery UI and failure fencing have component/persistence/API proof;
   this native happy-path scenario does not manufacture a real lost delivery.
 - Direct terminal/AskUser answer correlation remains ADR0065 work, not solved by
   the new clarification exchange. The complete maturity goal remains open.
+
+## Live development deployment receipt
+
+Published and deployed `f05f7f217a7c43bf4b82105d8c4574a0e95223c3` through the
+existing app/API-only development reload. Activation completed September 10 at
+01:47:31 Eastern. Health reports
+`1.6.0-dev-f05f7f217a7c-20260910054522-50600`, healthy with no degraded entries.
+The pre-migration backup is
+`~/.local/state/swarm/backups/pre-v158-reload-f05f7f217a7c-20260910T054522Z.sqlite3`
+(45,543,424 bytes). No release was cut.
+
+Private receipt directory `/tmp/swarm-clarification-deploy.cvm5VI` contains the
+immediate pre/post worker snapshots: all34 records and all12 running provider/
+session identities match exactly. Engine PID3408834 and its September9 17:01:49
+Eastern start remain unchanged. The health engine-build fingerprint describes
+the new candidate; the UI explicitly shows an unapplied engine update. That
+update was not applied. These projections do not prove provider conversation IDs.
+
+The separate Edge tab at `https://swarm.bfgsolutions.net` loaded the new UI using
+its existing session. Both real pending decisions retain their choices and now
+offer Ask a question. Opening and collapsing the empty clarification editor did
+not submit anything or resolve either decision. No live operator answer was sent.
+390x844 reported scrollWidth390; viewport restored. Physical-device acceptance
+remains separate. CI34442276338 passed all four jobs: web, linux-package,
+rust-audit and Rust workspace/all-features verification.

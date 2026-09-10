@@ -437,6 +437,9 @@ export function App() {
   const setSurface = useCallback((next: Surface) => {
     // Explicit navigation wins even while the opening preference is in flight.
     openedAtLaunch.current = false;
+    // Reveal the destination on phones, including another section of Settings.
+    // Inline runtime disclosures and retries do not navigate and stay open.
+    setShowMobileRuntime(false);
     setSurfaceState(next);
   }, []);
   const [taskFocus, setTaskFocus] = useState<{ id: string; request: number }>();

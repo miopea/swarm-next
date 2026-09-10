@@ -1595,7 +1595,12 @@ test("diagnostics is a single labeled control in the runtime area", async () => 
     .getByRole("button", { name: "Open diagnostics" })).toBe(diagnostics);
   expect(diagnostics).toHaveTextContent("Diagnostics");
   await waitFor(() => expect(resourceReads).toBe(1));
+  const system = screen.getByRole("button", { name: "System" });
+  fireEvent.click(system);
+  expect(system).toHaveAttribute("aria-expanded", "true");
   fireEvent.click(diagnostics);
+  expect(system).toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByRole("region", { name: "Runtime and system status" })).not.toHaveClass("mobile-open");
   expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
   await screen.findByRole("heading", { name: "Know which layer needs attention" });
   const diagnosticHeading = screen.getByRole("heading", { name: "Know which layer needs attention" });
@@ -1606,9 +1611,16 @@ test("diagnostics is a single labeled control in the runtime area", async () => 
   await waitFor(() => expect(resourceReads).toBe(3)); // No second read inside Diagnostics.
   fireEvent.change(screen.getByRole("searchbox", { name: "Find a setting" }), { target: { value: "backup" } });
   expect(screen.queryByRole("heading", { name: "Know which layer needs attention" })).not.toBeInTheDocument();
+  fireEvent.click(system);
+  expect(system).toHaveAttribute("aria-expanded", "true");
   fireEvent.click(diagnostics);
+  expect(system).toHaveAttribute("aria-expanded", "false");
   expect(screen.getByRole("searchbox", { name: "Find a setting" })).toHaveValue("");
   await screen.findByRole("heading", { name: "Know which layer needs attention" });
+  fireEvent.click(system);
+  fireEvent.click(within(screen.getByRole("navigation", { name: "Primary" })).getByRole("button", { name: /^Queues/ }));
+  expect(system).toHaveAttribute("aria-expanded", "false");
+  expect(await screen.findByRole("heading", { name: "Queues", level: 2 })).toBeInTheDocument();
 });
 
 test("a detached window keeps the controls belonging to what it shows", async () => {

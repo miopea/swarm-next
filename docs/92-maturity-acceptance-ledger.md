@@ -1,6 +1,6 @@
 # Current maturity acceptance ledger
 
-Checkpoint: September 9, 2026. Scope remains [45](45-daily-driver-maturity-plan.md),
+Checkpoint: September 10, 2026. Scope remains [45](45-daily-driver-maturity-plan.md),
 including BFG Admin integration. This is a routing index over evidence, not a
 replacement specification or a declaration that partially verified rows are done.
 Historical implementation notes in [47](47-maturity-remaining.md) remain evidence;
@@ -15,7 +15,7 @@ is historical where superseded by the verified deployment section.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-414de0575d76-20260909232601-3621464`.
+- App/API: `1.6.0-dev-f05f7f217a7c-20260910054522-50600`.
 - Engine: last verified PID 3408834, started September 9 at 17:01:49 Eastern,
   after the operator's manually applied update. Subsequent app-only deployments
   preserved that engine and its running worker identity projections.
@@ -28,6 +28,23 @@ is historical where superseded by the verified deployment section.
 - No release is authorized. No customer-facing send is authorized by task closure.
 
 ## Requirement-by-requirement disposition
+
+### UI-1 question-before-decision milestone
+
+Non-authorizing clarification is deployed. Queen and a sleeping ordinary author
+both completed actual browser question -> native MCP reply -> explicit final
+answer journeys in an isolated Hive. Waiting questions remain visible without
+counting as operator answers; replies return attention. Existing final choices
+and Say something else remain separate. Delivery uncertainty has explicit,
+bounded operator recovery rather than automatic duplicate sends.
+
+Evidence and boundaries: [94](94-clarification-native-acceptance.md). Full local
+gates passed561 API (3 ignored),48 application,739 persistence and1512 web tests,
+plus production web build. Live deployment preserved34 records and12 exact
+running identities, with enginePID/start unchanged. Live editor opens without
+answering either real request. CI34442276338 passed all four jobs.
+Direct-terminal answer correlation, older-provider tool-list
+refresh and physical-device checks are not closed by this milestone.
 
 ### UI-3/UI-4 ordinary-user checkpoint
 

@@ -2,6 +2,20 @@
 
 ### Active package: Needs You clarification, not another reload patch
 
+September10 deployment checkpoint: the clarification vertical slice is live at
+`1.6.0-dev-f05f7f217a7c-20260910054522-50600`. Both native requester journeys,
+failure/recovery gates, full backend/web tests and live editor checks passed.
+All34 worker records and12 running session/provider identities were preserved;
+enginePID3408834/start unchanged. The pending engine update was NOT applied.
+See94 for exact receipts and remaining device/tool-refresh boundaries. This
+supersedes the historical undeployed checkpoints below. CI34442276338 passed all
+four jobs. Next: UI-3/UI-4 Settings and whole-product journey consistency.
+Live390px testing found System stays expanded after navigating to Diagnostics,
+consuming most of the screen. The navigation owner now collapses it; inline
+details/retries remain open. Verify and deploy this bounded UI follow-through.
+Do not restart broad backend tests,
+reopen reload-only performance work, contact BFG Admin or cut a release.
+
 Final pre-deployment gate:561 API tests passed (three opt-in tests ignored),
 48 application tests passed,739 persistence tests passed;1512 web tests and the
 current production web build passed. The first broad API run exposed an existing
