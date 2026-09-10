@@ -5,6 +5,32 @@ import type { HiveIdentity } from "../api";
 import ApiarySettings from "./ApiarySettings";
 import { clearStagedApiaryHandoff, createApiaryHandoffLink, stageApiaryHandoff } from "./apiaryHandoff";
 
+test.each([false, true])("joined Hive saves profile in place; refresh fails=%s", async (refreshFails) => {
+  const writes: string[] = [];
+  const onHiveIdentityChange = vi.fn();
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (init?.method === "PUT") {
+      writes.push(url);
+      expect(JSON.parse(String(init.body))).toEqual({ hive_name: "My Hive", operator_display_name: "Cora Bee", contact_email: "cora@example.test" });
+      return ok({ revision: 2, profile: JSON.parse(String(init.body)) });
+    }
+    if (url === "/api/v1/hive/public-profile") return ok({ revision: 1, profile: { hive_name: "My Hive", operator_display_name: "Operator", contact_email: null } });
+    if (url === "/api/v1/hive") return refreshFails ? new Response("Unavailable", { status: 503 }) : ok(keeperIdentity());
+    return ok([]);
+  }));
+  render(<ApiarySettings busy={false} hiveIdentity={keeperIdentity()} operatorToken="secret" onHiveIdentityChange={onHiveIdentityChange} />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit shared profile" }));
+  fireEvent.change(await screen.findByLabelText("Your name"), { target: { value: "Cora Bee" } });
+  fireEvent.change(screen.getByLabelText("Contact email (optional)"), { target: { value: "cora@example.test" } });
+  expect(screen.getByLabelText("Shared profile preview")).toHaveTextContent("My Hive");
+  fireEvent.click(screen.getByRole("button", { name: "Save shared profile" }));
+  expect(await screen.findByText(/Profile saved on this Hive/)).toBeInTheDocument();
+  expect(writes).toEqual(["/api/v1/hive/public-profile"]);
+  if (refreshFails) expect(await screen.findByText(/Your profile was saved, but this view could not refresh/)).toBeInTheDocument();
+  else expect(onHiveIdentityChange).toHaveBeenCalledWith(keeperIdentity());
+});
+
 test("connects outward to a Keeper without requiring an inbound member URL", async () => {
   const capability = {
     link_id: "link-1",

@@ -1,11 +1,11 @@
 import { useEffect, useImperativeHandle, useState, type Ref } from "react";
-import { fetchPublicHiveProfile, saveJoinPublicProfile, type PublicHiveProfile } from "../api";
+import { fetchPublicHiveProfile, saveJoinPublicProfile, savePublicHiveProfile, type PublicHiveProfile } from "../api";
 
 export type JoinPublicProfileHandle = { save: () => Promise<void> };
 
 /** This preview does not publish anything. The enclosing join action saves it. */
-export default function JoinPublicProfile({ operatorToken, disabled, ref }: {
-  operatorToken: string; disabled: boolean; ref: Ref<JoinPublicProfileHandle>;
+export default function JoinPublicProfile({ operatorToken, disabled, ref, joining = true }: {
+  operatorToken: string; disabled: boolean; ref: Ref<JoinPublicProfileHandle>; joining?: boolean;
 }) {
   const [profile, setProfile] = useState<PublicHiveProfile>();
   const [failed, setFailed] = useState(false);
@@ -21,19 +21,19 @@ export default function JoinPublicProfile({ operatorToken, disabled, ref }: {
   }, [operatorToken, attempt]);
 
   useImperativeHandle(ref, () => ({ save: async () => {
-    if (!profile) throw new Error("Your shared profile has not loaded. Retry it before joining.");
+    if (!profile) throw new Error("Your shared profile has not loaded. Retry it before continuing.");
     if (!profile.operator_display_name.trim() || profile.operator_display_name.trim() === "Operator") {
       throw new Error("Enter your name so the Apiary can recognize you.");
     }
-    const saved = await saveJoinPublicProfile(operatorToken, {
+    const saved = await (joining ? saveJoinPublicProfile : savePublicHiveProfile)(operatorToken, {
       hive_name: profile.hive_name.trim(), operator_display_name: profile.operator_display_name.trim(),
       contact_email: profile.contact_email?.trim() || null,
     });
     setProfile(saved.profile);
-  } }), [operatorToken, profile]);
+  } }), [operatorToken, profile, joining]);
 
   const firstName = profile?.operator_display_name.trim().split(/\s+/)[0];
-  const proposedName = profile?.hive_name.trim() === "My Hive" && firstName && firstName !== "Operator"
+  const proposedName = joining && profile?.hive_name.trim() === "My Hive" && firstName && firstName !== "Operator"
     ? `${firstName}'s Hive` : profile?.hive_name;
   return <section className="apiary-join-card" aria-label="Your shared Apiary profile">
     <div><strong>How the Apiary will see you</strong><small>Your name, Hive name, and optional contact email are shared with its members. Private work and credentials stay here.</small></div>
@@ -45,7 +45,7 @@ export default function JoinPublicProfile({ operatorToken, disabled, ref }: {
           <label>Contact email (optional)<input type="email" autoComplete="email" value={profile.contact_email ?? ""} maxLength={254} onChange={(event) => setProfile({ ...profile, contact_email: event.target.value })} /></label>
         </fieldset>
         <p aria-label="Shared profile preview"><strong>{proposedName}</strong> · {profile.operator_display_name === "Operator" ? "Your name" : profile.operator_display_name}{profile.contact_email ? ` · ${profile.contact_email}` : " · No contact email"}</p>
-        <small>Saved when you connect or join. Only the default “My Hive” becomes your first name’s Hive; a custom name stays unchanged. Email is contact information, not a verified login.</small>
+        <small>{joining ? "Saved when you connect or join. Only the default “My Hive” becomes your first name’s Hive; a custom name stays unchanged." : "Save updates this Hive first; the Apiary receives the changes through its normal synchronization. Membership and private work do not change."} Email is contact information, not a verified login.</small>
       </>}
   </section>;
 }

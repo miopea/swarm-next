@@ -26,7 +26,10 @@ error twice. Do not claim browser acceptance from component tests.
 Existing Hives must recover **in place**. No fix may require removing/rejoining
 members, regenerating invitations, or replacing stable identities/credentials.
 Validate upgrades of existing memberships, not only fresh joins. Missing public
-names/emails must be editable for already joined Hives too; that UI remains open.
+names/emails are now editable through “Edit shared profile” for joined Hives.
+Integrated tests verify saving without join calls and preserved success after
+refresh failure (27 focused profile/settings tests pass). Real-browser validation
+and cross-Hive delivery remain open; local save is not a synchronization claim.
 
 Next: verify profile preview visually and finish directory freshness UI, then
 verify Keeper and two members end to end. Announce release readiness only after

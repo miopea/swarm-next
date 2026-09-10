@@ -38,9 +38,11 @@ full persistence run. Review migration compatibility before activating a binary.
 2. Existing members already stopped in an incompatible state may still require
    safe sync recovery. Verify that path; do not assume the HTTP classification fix
    automatically resets a previously stored stopped state. Never delete membership.
-3. Finish and verify editing name/email for already joined Hives. Currently the
-   new full profile editor is in the joining flow; existing Hive-name editing
-   remains available. Do not ask existing users to rejoin to set their profile.
+3. Verify the new “Edit shared profile” control for already joined Hives. It uses
+   the ordinary local profile endpoint, does not rename defaults automatically,
+   and does not submit an invitation or join. Integrated UI tests cover saving
+   and post-save refresh failure; real Keeper/member browser checks remain open.
+   Do not ask existing users to rejoin to set their profile.
 4. Finish directory freshness/unavailability UI: an old or incomplete roster must
    not be presented as a verified complete current list.
 5. Browser-check the fictional `join-apiary` harness on narrow and desktop layouts,

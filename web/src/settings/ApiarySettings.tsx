@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import JoinPublicProfile, { type JoinPublicProfileHandle } from "./JoinPublicProfile";
 
 import {
   collapseApiary,
@@ -47,6 +48,8 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [name, setName] = useState("");
   const [confirmCreate, setConfirmCreate] = useState(false);
   const [editingIdentity, setEditingIdentity] = useState(false);
+  const [editingProfile, setEditingProfile] = useState(false);
+  const profileRef = useRef<JoinPublicProfileHandle>(null);
   const [hiveName, setHiveName] = useState(hiveIdentity?.hive.name ?? "");
   const [apiaryName, setApiaryName] = useState(context?.mode === "federated" ? context.apiary.name : "");
   const [confirmCollapse, setConfirmCollapse] = useState(false);
@@ -169,6 +172,27 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   async function refreshIdentity() {
     const identity = await fetchHive(operatorToken);
     onHiveIdentityChange(identity);
+  }
+
+  async function saveSharedProfile() {
+    if (!profileRef.current) return;
+    setWorking(true);
+    setError("");
+    setMessage("");
+    try {
+      await profileRef.current.save();
+      setMessage("Profile saved on this Hive. Sharing updates during Apiary synchronization; you do not need to rejoin.");
+      try {
+        await refreshIdentity();
+        setMemberRosterAttempt((value) => value + 1);
+      } catch {
+        setError("Your profile was saved, but this view could not refresh. Refresh the page; no need to save again.");
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Your profile could not be saved. Your edits are still here.");
+    } finally {
+      setWorking(false);
+    }
   }
 
   function applyApiaryContext(nextContext: LocalApiaryContext) {
@@ -370,8 +394,13 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
               <span><small>{context.local_role === "keeper" ? "Keeper of" : "Member of"}</small><strong>{context.apiary.name}</strong></span>
             ) : <span><small>Mode</small><strong>Personal Hive</strong></span>}
             {context?.mode === "federated" ? <span className="apiary-backend-badge">{context.apiary.shared_work_backend === "jira" ? "Jira-backed" : "Native"}</span> : null}
-            <button className="secondary-button" disabled={working} onClick={() => setEditingIdentity((current) => !current)}>{editingIdentity ? "Close names" : "Edit names"}</button>
+            <button className="secondary-button" disabled={working} onClick={() => { setEditingProfile(false); setEditingIdentity((current) => !current); }}>{editingIdentity ? "Close names" : "Edit names"}</button>
+            {!personal ? <button className="secondary-button" disabled={working} onClick={() => { setEditingIdentity(false); setEditingProfile((current) => !current); }}>{editingProfile ? "Close profile" : "Edit shared profile"}</button> : null}
           </div>
+          {editingProfile ? <div>
+            <JoinPublicProfile ref={profileRef} operatorToken={operatorToken} disabled={busy || working} joining={false} />
+            <button className="primary-action" disabled={busy || working} onClick={() => void saveSharedProfile()}>{working ? "Saving…" : "Save shared profile"}</button>
+          </div> : null}
           {editingIdentity ? (
             <div className="apiary-identity-editor" role="group" aria-label="Hive and Apiary names">
               <label className="field-stack" htmlFor="local-hive-name">
