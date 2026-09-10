@@ -19,11 +19,22 @@ pub(super) async fn get_session(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    Ok((
+    let mut response = (
         [(header::CACHE_CONTROL, "no-store")],
         StatusCode::NO_CONTENT,
     )
-        .into_response())
+        .into_response();
+    // Trusted local browsers already have access (including POST session).
+    // Give their normal restore handshake the same browser credential, so
+    // first-party commands need not weaken their stricter credential check.
+    // Relayed/public requests still require their existing credential above.
+    if is_trusted_loopback(&headers) && state.operator_token().is_some() {
+        response.headers_mut().insert(
+            header::SET_COOKIE,
+            browser_session_cookie(&state, &headers)?,
+        );
+    }
+    Ok(response)
 }
 
 pub(super) async fn create_session(
@@ -459,6 +470,51 @@ mod loopback_tests {
             );
         }
         headers
+    }
+
+    #[tokio::test]
+    async fn trusted_local_restore_issues_cookie_without_admitting_relayed_requests() {
+        let state = std::sync::Arc::new(crate::AppState::default().with_terminal_host(
+            swarm_terminal::HostClient::new("/unused/socket"),
+            "operator-test-secret",
+        ));
+        let response = super::get_session(
+            axum::extract::State(state.clone()),
+            headers(&[
+                ("host", "localhost:8874"),
+                ("origin", "http://localhost:8874"),
+            ]),
+        )
+        .await
+        .unwrap();
+        let cookie = response.headers()[axum::http::header::SET_COOKIE]
+            .to_str()
+            .unwrap();
+        assert!(cookie.contains("HttpOnly"));
+        assert!(
+            super::authorize_operator_credential(
+                &state,
+                &headers(&[("cookie", cookie.split(';').next().unwrap())])
+            )
+            .is_ok()
+        );
+        for invalid in [
+            headers(&[
+                ("host", "localhost:8874"),
+                ("x-forwarded-host", "public.example"),
+            ]),
+            headers(&[
+                ("host", "localhost:8874"),
+                ("origin", "https://untrusted.example"),
+            ]),
+            headers(&[("host", "public.example")]),
+        ] {
+            assert!(
+                super::get_session(axum::extract::State(state.clone()), invalid)
+                    .await
+                    .is_err()
+            );
+        }
     }
 
     #[test]

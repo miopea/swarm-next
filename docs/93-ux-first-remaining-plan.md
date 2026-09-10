@@ -2,6 +2,21 @@
 
 ### Active package: Needs You clarification, not another reload patch
 
+Native acceptance now passes for both Queen and an ordinary sleeping requester;
+see [94](94-clarification-native-acceptance.md) for exact decision/round/session
+IDs and evidence. Browser question -> guarded native delivery -> actual MCP reply
+-> browser attention -> explicit final answer was exercised, not simulated.
+The sleeping author woke without a manual start and replied in14 seconds.
+The ordinary Queen reply took6 seconds and survived browser reload. Dark390px
+layout and keyboard final answers passed; this is not real-phone acceptance.
+Native testing found and corrected a trusted-local session handoff defect: the
+existing local restore now issues the existing browser cookie, while the stricter
+first-party command still rejects bare local/worker-token requests. All34 matching
+auth tests, strict API Clippy and the full1512-test web suite passed. Production
+still414de057. Next: commit this correction/evidence, final candidate check, deploy
+coherently and verify the live Hive. No release. Preserve older-provider tool-list
+refresh limitations per ADR0053 rather than restarting unrelated workers.
+
 Sleeping-author admission is now implemented through the existing bounded worker
 return queue in the same transaction as the operator question. Running authors
 get no return intent. An existing failed/unconfirmed attempt is preserved, not
