@@ -2,6 +2,15 @@
 
 ### Active acceptance checkpoint — ordinary-user UX first
 
+Delivered b20e2e22 preserves searchable decisions but distinguishes Attention,
+Waiting for reply and Decision history.132 focused tests/build pass;390px fixture
+and answered-history focus verified. Healthy app/API; all34 records/12 running
+identities and enginePID3408834/start unchanged. See95 for deployment receipt.
+Next UI-4 gate: reduced-motion navigation, contrast and zoom. Inspect explicit JS
+scrollIntoView({behavior:"smooth"}) against reduced-motion preferences; CSS alone
+does not prove that imperative navigation respects the preference. Do not reopen
+passed search/history checks. Full45 scope and native-device gates remain intact.
+
 Delivered fd0385d2 fixes the rendered missing Queues command;83 tests/build and
 desktop keyboard/320px acceptance pass. Live Queues command shows55 waiting,
 matching the sidebar; health and all34 records/12 running identities preserved.

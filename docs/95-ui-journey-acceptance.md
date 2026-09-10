@@ -3,6 +3,26 @@
 Scope remains45/93. This matrix distinguishes delivered behavior, isolated proof
 and remaining requirements; it is not whole-program completion.
 
+## Decision search state — b20e2e22
+
+Delivered runtime1.6.0-dev-b20e2e2294eb-20260910094656-183627 is healthy, no degraded
+subsystems. Reload completed successfully. Pre/post-decision-search-workers.json
+in /tmp/swarm-clarification-deploy.cvm5VI match all34 records/12 running identities;
+enginePID3408834/start unchanged. No release or worker-engine update. CI34462450125
+remains unconfirmed. Prior queue-retry CI34459969300 is green.
+
+Search previously called every decision Attention and omitted state. The inbox
+already supports focused history navigation; it did not need a second history
+implementation. Search now preserves every result, identifies Answered/Withdrawn
+as Decision history, and uses the existing clarification predicate to distinguish
+Waiting for reply from Needs your answer. Original reason remains searchable.
+
+All132 App/palette/presentation/inbox tests and build pass. New tests cover all
+states and history focus with no answer controls or decision send. Edge390px
+fictional fixture shows all four labels and fits; selecting answered history
+checks Show history and focuses exactly fixture-answered. No real approval was
+answered, withdrawn or changed. Fixture server stopped; deployment pending.
+
 ## Quick navigation includes Queues — fd0385d2
 
 Delivered runtime1.6.0-dev-fd0385d26bf8-20260910093249-176487 is healthy, no degraded
