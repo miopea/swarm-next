@@ -15,7 +15,7 @@ is historical where superseded by the verified deployment section.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-cb915ab171d6-20260910073144-117366`.
+- App/API: `1.6.0-dev-80c7d1c4c654-20260910075801-131543`.
 - Engine: last verified PID 3408834, started September 9 at 17:01:49 Eastern,
   after the operator's manually applied update. Subsequent app-only deployments
   preserved that engine and its running worker identity projections.
@@ -28,6 +28,18 @@ is historical where superseded by the verified deployment section.
 - No release is authorized. No customer-facing send is authorized by task closure.
 
 ## Requirement-by-requirement disposition
+
+### UI-4 prerequisite-edit recovery — delivered
+
+80c7d1c4 fixes a reproduced indefinitely locked Saving dialog. Client wait now
+has an owned8-second deadline and unmount cancellation; late responses cannot
+invoke stale update/close callbacks. Uncertainty preserves choices, never replays
+automatically and warns that closing the draft does not roll back server state.
+88 focused tests passed; after test typing correction, final12 prerequisite tests
+and production build pass. Fictional browser held-save -> timeout -> Keep editing
+-> explicit close passes. No real task changed. Exact34-record/12-running identity
+comparison and enginePID/start preserved. See95; CI34452563704 remains pending.
+Prior Night Watch CI34450368822 is green. This is not Queen-loop completion.
 
 ### UI-3 Night Watch configuration clarity — delivered
 

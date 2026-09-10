@@ -47,6 +47,35 @@ Do not rerun the already-green native clarification/backend suite.
 
 ## Remaining finish gates
 
+### Prerequisite editor recovery — 80c7d1c4
+
+A failing-before test proved a never-settled save left Close disabled past its
+deadline. Saves now have a component-owned AbortController and eight-second
+deadline, with cancellation on unmount and identity fences on late callbacks.
+Timeout releases the form even if the request promise does not settle; it never
+automatically replays the mutation or calls the update/close callback afterward.
+Definitive409 refusal remains distinct from uncertainty. Closing after uncertainty
+warns that only the local draft is discarded and the server may have applied the
+change; the warning remains even if fields are subsequently cleared.
+
+All88 focused API/task/prerequisite/focus tests passed. Two test-only selector
+typing errors were then corrected; the final12 prerequisite tests and production
+build pass. The full-app held-response fixture reproduced Saving, timed out to
+retained choices, kept them through Keep editing and closed through the explicit
+unconfirmed-change action. Desktop screenshot reviewed; no actual task mutation.
+This changes browser request ownership only, not prerequisite/domain rules.
+Night Watch CI34450368822 is fully green. After the integrated changes, one full
+web gate passed all1,525 tests in157 files (32.18s). This includes the changed
+request, history and schedule paths; it is not native-device or server-soak proof.
+
+Delivered: runtime1.6.0-dev-80c7d1c4c654-20260910075801-131543 is healthy with
+no degraded subsystems. The immediate pre/post-prerequisite-workers.json receipts
+in /tmp/swarm-clarification-deploy.cvm5VI match all34 records and12 running
+session/provider identities; enginePID3408834/start unchanged. The dedicated
+Edge tab used its update action to load the delivered bundle. No live prerequisite
+mutation, release or engine update occurred. Fixture server stopped. CI34452563704
+is pending; narrow/native recovery layout remains an explicit device gate.
+
 ### Night Watch saved-versus-draft clarity — cb915ab1
 
 The form previously treated a definitive invalid-schedule400 rejection as an

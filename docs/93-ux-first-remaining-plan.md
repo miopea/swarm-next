@@ -2,6 +2,24 @@
 
 ### Active acceptance checkpoint — ordinary-user UX first
 
+Integrated web gate at80c7d1c4: all1,525 tests in157 files pass. Production build
+passes; live health/worker continuity and browser bundle match are verified.
+Account usage32% consumed/68% remaining; no resets available or used. Do not
+repeat this unchanged full web suite in the next turn. Update the UI acceptance
+matrix from real current evidence and select the next remaining gate in45/93.
+
+LATEST: prerequisite recovery80c7d1c4 is delivered and healthy. The failing-before
+locked-dialog regression now passes; finite client wait, unmount/late-response
+fences and honest unconfirmed-close semantics are browser-verified in a fictional
+Hive.88 focused tests, final12 tests/build pass;34 workers/12 running identities
+and enginePID3408834/start preserved. See92/95. CI34452563704 is pending; all prior
+product CIs throughcb915ab1 are green. No fixture server remains; dedicated live
+tab is Settings with the new browser bundle. No real task mutation or release.
+Next: complete the integrated UI-4 acceptance matrix/checklist in95/96 and inspect
+remaining ordinary-user gaps against actual requirements, not another replay of
+these passed tests. Optional While you were away remains a mockup approval gate,
+not permission to install a modal. Device/provider/backend gates remain open.
+
 Next verified code gap: TaskPrerequisiteDialog.submit awaits an unbounded
 changeTaskPrerequisite request while requestClose refuses closing and all controls
 remain disabled. Inspect/add the API cancellation signal and owned finite save
