@@ -3858,6 +3858,10 @@ fn api_router(state: AppState) -> Router {
             post(maintenance::request_development_reload),
         )
         .route(
+            "/api/v1/runtime/development/prepare",
+            post(maintenance::request_development_preparation),
+        )
+        .route(
             "/api/v1/runtime/terminal-host/maintenance",
             post(maintenance::maintain_worker_engine),
         )
@@ -9891,6 +9895,43 @@ mod tests {
             response_json(duplicate).await["code"],
             "development_reload_in_progress"
         );
+    }
+
+    #[tokio::test]
+    async fn development_preparation_is_authenticated_explicit_and_deduplicated() {
+        let directory = tempfile::tempdir().unwrap();
+        let request_path = directory.path().join("development-reload.request");
+        let status_path = directory.path().join("development-reload.status");
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_development_reload_paths(request_path.clone(), status_path),
+        );
+        let request = |authorized| {
+            let builder = Request::builder()
+                .method("POST")
+                .uri("/api/v1/runtime/development/prepare");
+            let builder = if authorized {
+                builder.header(header::AUTHORIZATION, "Bearer secret")
+            } else {
+                builder
+            };
+            builder.body(Body::empty()).unwrap()
+        };
+        let denied = app.clone().oneshot(request(false)).await.unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        assert!(!request_path.exists());
+        let accepted = app.clone().oneshot(request(true)).await.unwrap();
+        assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+        let recorded = std::fs::read_to_string(&request_path).unwrap();
+        assert!(
+            recorded
+                .lines()
+                .any(|line| line == "operation=prepare-protocol")
+        );
+        let duplicate = app.oneshot(request(true)).await.unwrap();
+        assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+        assert_eq!(std::fs::read_to_string(request_path).unwrap(), recorded);
     }
 
     #[test]

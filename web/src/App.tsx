@@ -1393,7 +1393,7 @@ export function App() {
     }
   }
 
-  async function reloadDevelopmentBuild() {
+  async function reloadDevelopmentBuild(prepareProtocol = false) {
     if (!operatorToken || loadState.kind !== "ready") return;
     const previousVersion = loadState.health.version;
     developmentBuildWatch.current?.abort();
@@ -1410,7 +1410,7 @@ export function App() {
     // is seconds long and already recovers on its own.
     try {
       await perform(
-        async () => requestRuntimeHandoff(() => requestDevelopmentReload(operatorToken)),
+        async () => requestRuntimeHandoff(() => requestDevelopmentReload(operatorToken, prepareProtocol)),
         "Starting development build…",
         true,
       );
@@ -2590,6 +2590,7 @@ export function App() {
               onRestartProviders={restartProviders} onForceWorkerReload={forceWorkerReload}
               onUpdateWorkerEngine={maintainWorkerEngine}
               onReloadDevelopment={reloadDevelopmentBuild}
+              onPrepareDevelopment={() => reloadDevelopmentBuild(true)}
               onHiveIdentityChange={setHiveIdentity}
             />
           </Suspense>

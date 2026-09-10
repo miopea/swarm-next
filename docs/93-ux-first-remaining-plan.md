@@ -2,6 +2,21 @@
 
 ### Active acceptance checkpoint — ordinary-user UX first
 
+The explicit preparation journey is now wired locally: a separate authenticated
+`POST /api/v1/runtime/development/prepare` records `operation=prepare-protocol`.
+The existing service consumes that operation and invokes preparation after a
+successful source-stable build; absent operation remains an ordinary reload.
+Settings offers separate staging confirmation without granting activation.
+The full packaging lifecycle test covers request -> build -> deferred preparation
+with no service/engine calls; endpoint authentication/deduplication and original
+reload compatibility pass. All54 Settings/update tests, TypeScript, production
+web build and strict API all-target/all-feature clippy pass. Evidence is in
+`/tmp/swarm-native-answer-check.6fkv8E/development-{preparation*,reload-compat.log}`.
+Actual browser acceptance, exact-version apply consent and worker return remain
+open. The operator authorized triggering the update once the fix is installed;
+no live update has been triggered yet. The live watcher remained failed at the
+12:05 check, with the11:52 request queued and no build process; old app healthy.
+
 Explicit migration staging is now local commit `5de86971`: `prepare-protocol`
 validates/installs one pending package under the lifecycle lock without touching
 services, engine input or active links. A manual hold prevents timer activation

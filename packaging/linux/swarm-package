@@ -1129,7 +1129,13 @@ reload_development() {
   # Consume this request before preflight can refuse it. PathExists otherwise
   # immediately retriggers the same rejected request until systemd rate-limits
   # the watcher. A refusal is terminal for this request, not an automatic retry.
+  dev_operation=$(sed -n 's/^operation=//p' "$state_root/development-reload.request" 2>/dev/null || true)
   rm -f "$state_root/development-reload.request"
+  case "$dev_operation" in
+    ""|reload) dev_operation=reload;;
+    prepare-protocol) :;;
+    *) die "unsupported development operation; request consumed without building";;
+  esac
   # REFUSED BEFORE THE BUILD, NOT AFTER IT.
   #
   # A reload ends in `update`, and update refuses a protocol change by design.
@@ -1149,7 +1155,8 @@ reload_development() {
     "$dev_checkout/crates/swarm-terminal/src/ipc.rs" 2>/dev/null | tr -d '\r')
   dev_host_release=$(release_from_link "$install_root/host-current")
   if [ -n "$dev_protocol" ] && [ -n "$dev_host_release" ] && [ -f "$dev_host_release/PROTOCOL" ] \
-    && [ "$(cat "$dev_host_release/PROTOCOL")" != "$dev_protocol" ]; then
+    && [ "$(cat "$dev_host_release/PROTOCOL")" != "$dev_protocol" ] \
+    && [ "$dev_operation" != "prepare-protocol" ]; then
     fail_status=$dev_status_path
     fail_stamp="revision=$(git -C "$dev_checkout" rev-parse --short=12 HEAD 2>/dev/null)"
     fail_step=protocol-change
@@ -1217,7 +1224,9 @@ Nothing was installed. Reload again once the checkout has stopped moving."
   # Names this as a reload so the installer keeps live terminals rather than
   # swapping the engine under them — see the protocol branch in
   # install_or_update. A release install passes nothing and performs it.
-  if ! SWARM_RELOAD_DEVELOPMENT=1 "$bundle_path/swarm-package" update "$bundle_path" 2>"$dev_log"; then
+  dev_install_action=update
+  [ "$dev_operation" != "prepare-protocol" ] || dev_install_action=prepare-protocol
+  if ! SWARM_RELOAD_DEVELOPMENT=1 "$bundle_path/swarm-package" "$dev_install_action" "$bundle_path" 2>"$dev_log"; then
     fail_detail=$(last_error "$dev_log")
     cat "$dev_log" >&2 || true
     die "the development build compiled but could not be installed"

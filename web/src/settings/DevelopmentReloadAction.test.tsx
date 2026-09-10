@@ -5,6 +5,24 @@ import DevelopmentReloadAction from "./DevelopmentReloadAction";
 
 afterEach(cleanup);
 
+test("preparation has separate consent and never calls ordinary reload", () => {
+  const reload = vi.fn();
+  const prepare = vi.fn().mockResolvedValue(undefined);
+  render(<DevelopmentReloadAction busy={false} onReload={reload} onPrepare={prepare} runtime={{
+    enabled: true, version: "1.7.0", state: "failed", reload_available: true,
+    source_revision: "abcdef012345", deployed_source_revision: "76543210fedc",
+    source_dirty: false, deployed_source_published: true, protocol_migration_required: true,
+  }} />);
+  fireEvent.click(screen.getByRole("button", { name: "Prepare engine migration" }));
+  expect(screen.getByRole("group", { name: "Confirm migration preparation" })).toHaveTextContent("This does not approve applying the migration");
+  fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+  expect(prepare).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Prepare engine migration" }));
+  fireEvent.click(screen.getByRole("button", { name: "Build and prepare" }));
+  expect(prepare).toHaveBeenCalledOnce();
+  expect(reload).not.toHaveBeenCalled();
+});
+
 test("protocol refusal explains the missing engine package and does not offer a doomed retry", () => {
   const reload = vi.fn();
   const runtime: import("../api").DevelopmentRuntime = {

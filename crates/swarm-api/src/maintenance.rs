@@ -384,6 +384,15 @@ pub(super) async fn request_development_reload(
     Ok(StatusCode::ACCEPTED.into_response())
 }
 
+pub(super) async fn request_development_preparation(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    start_development_operation(&state, None, true).await?;
+    Ok(StatusCode::ACCEPTED.into_response())
+}
+
 /// What was asked for, so a caller can tell whether the build that comes back
 /// is the one it asked for.
 pub(crate) struct StartedDevelopmentReload {
@@ -443,6 +452,14 @@ fn backup_timestamp() -> String {
 pub(crate) async fn start_development_reload(
     state: &Arc<AppState>,
     requested_by: Option<&str>,
+) -> Result<StartedDevelopmentReload, ApiError> {
+    start_development_operation(state, requested_by, false).await
+}
+
+async fn start_development_operation(
+    state: &Arc<AppState>,
+    requested_by: Option<&str>,
+    prepare_protocol: bool,
 ) -> Result<StartedDevelopmentReload, ApiError> {
     let _guard = state.development_reload.lock().await;
     let source = runtime::development_source_status(state);
@@ -522,9 +539,14 @@ pub(crate) async fn start_development_reload(
     std::fs::write(
         request_path.as_ref(),
         format!(
-            "requested_at={}\nsource_version={}\n",
+            "requested_at={}\nsource_version={}\noperation={}\n",
             unix_timestamp(),
-            build_version()
+            build_version(),
+            if prepare_protocol {
+                "prepare-protocol"
+            } else {
+                "reload"
+            }
         ),
     )
     .map_err(|error| {

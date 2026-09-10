@@ -8,9 +8,10 @@ type Props = {
   reachable?: boolean;
   healthVersion?: string;
   onReload: () => Promise<void>;
+  onPrepare?: () => Promise<void>;
 };
 
-export default function DevelopmentReloadAction({ busy, runtime, reachable = true, healthVersion, onReload }: Props) {
+export default function DevelopmentReloadAction({ busy, runtime, reachable = true, healthVersion, onReload, onPrepare }: Props) {
   const [confirming, setConfirming] = useState(false);
   if (!runtime?.enabled) return null;
   // Activating a build restarts the API, so this card loses contact in the
@@ -151,6 +152,24 @@ export default function DevelopmentReloadAction({ busy, runtime, reachable = tru
       </article>
     );
   }
+  if (onPrepare && runtime.reload_available && runtime.protocol_migration_required === true
+    && ["idle", "ready", "failed"].includes(runtime.state)) return (
+    <article className="runtime-subsystem-card runtime-subsystem-restart development-reload-action" aria-label="App and API status" role="status">
+      <header><div><span className="runtime-component-name">App and API</span><strong>Prepare worker engine migration</strong></div><span className="runtime-status-badge safe">Workers stay online</span></header>
+      <p>This checkout changes the terminal-host protocol. Prepare revision {workingRevision} without replacing revision {runningRevision} or stopping workers.</p>
+      <small>Preparation builds and stages the package only. Applying it later is a separate maintenance action that stops every worker and attempts conversation recovery.</small>
+      {!confirming ? <button className="secondary-button" disabled={busy} onClick={() => setConfirming(true)}>Prepare engine migration</button> : (
+        <div className="maintenance-confirmation" role="group" aria-label="Confirm migration preparation">
+          <strong>Build and stage this migration?</strong>
+          <span>No services restart. This does not approve applying the migration, even if workers become idle.</span>
+          <div className="settings-actions">
+            <button className="secondary-button" disabled={busy} onClick={() => setConfirming(false)}>Not now</button>
+            <button className="primary-action" disabled={busy} onClick={() => { setConfirming(false); void onPrepare(); }}>Build and prepare</button>
+          </div>
+        </div>
+      )}
+    </article>
+  );
   if (runtime.state === "failed" && runtime.protocol_migration_required === true) return (
     <article className="runtime-subsystem-card runtime-subsystem-restart development-reload-action" aria-label="App and API status" role="alert">
       <header><div><span className="runtime-component-name">App and API</span><strong>Worker engine migration required</strong></div><span className="runtime-status-badge restart">Current app preserved</span></header>

@@ -89,11 +89,12 @@ type Props = {
   onUpdateWorkerEngine: () => Promise<void>;
   onForceWorkerReload: () => Promise<void>;
   onReloadDevelopment: () => Promise<void>;
+  onPrepareDevelopment?: () => Promise<void>;
   onHiveIdentityChange: (identity: HiveIdentity) => void;
 };
 
 export default function SettingsWorkspace({ section, query = "", busy, workerEngineProgress, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, publicAddress, onPublicAddressChange, presence, startSurface, onStartSurfaceChange, onLock, providers, providerCapabilitiesUnavailable = false, lockDetectionState, notificationSettings, queenPolicy, pendingQueenDecisionCount = 0, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onOpenQueenDecisions, onOpenTasks, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker,
-  onChooseWorkerMark, onRemoveWorker, onReorderWorkers, onRestartProviders, onUpdateWorkerEngine, onForceWorkerReload, onReloadDevelopment, onHiveIdentityChange, sharedMachineResources, dogfoodCollection }: Props) {
+  onChooseWorkerMark, onRemoveWorker, onReorderWorkers, onRestartProviders, onUpdateWorkerEngine, onForceWorkerReload, onReloadDevelopment, onPrepareDevelopment, onHiveIdentityChange, sharedMachineResources, dogfoodCollection }: Props) {
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
   const [terminalHostLoaded, setTerminalHostLoaded] = useState(false);
@@ -649,7 +650,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
                 )}
               </div>
             </article>
-            <DevelopmentReloadAction busy={busy} runtime={developmentRuntime} reachable={developmentReachable} healthVersion={health?.version} onReload={onReloadDevelopment} />
+            <DevelopmentReloadAction busy={busy} runtime={developmentRuntime} reachable={developmentReachable} healthVersion={health?.version} onReload={onReloadDevelopment} onPrepare={onPrepareDevelopment} />
             <ReleaseUpdateAction busy={busy} operatorToken={operatorToken} />
             <ProviderReleaseAction superseded={providers?.superseded ?? []} busy={busy} onRestart={onRestartProviders} />
           </div>

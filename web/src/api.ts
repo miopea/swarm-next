@@ -2025,8 +2025,8 @@ export async function fetchDevelopmentRuntime(operatorToken: string, signal?: Ab
   return response.json() as Promise<DevelopmentRuntime>;
 }
 
-export async function requestDevelopmentReload(operatorToken: string): Promise<void> {
-  await authenticatedFetch(operatorToken, "/api/v1/runtime/development/reload", { method: "POST" });
+export async function requestDevelopmentReload(operatorToken: string, prepareProtocol = false): Promise<void> {
+  await authenticatedFetch(operatorToken, `/api/v1/runtime/development/${prepareProtocol ? "prepare" : "reload"}`, { method: "POST" });
 }
 
 /**

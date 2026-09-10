@@ -435,6 +435,30 @@ esac
   || { echo "protocol refusal changed a service" >&2; exit 1; }
 grep -q '^step=protocol-change$' "$SWARM_STATE_ROOT/development-reload.status" \
   || { echo "the status did not record why the reload was refused" >&2; exit 1; }
+# An explicit preparation request builds and stages through the same service,
+# but does not activate a package or contact a running worker engine.
+export SWARM_TEST_PREPARE_BUNDLE="$test_root/bundle-4.0.0"
+cat > "$dev_checkout/packaging/linux/build-development-release.sh" <<'EOF'
+#!/bin/sh
+set -eu
+cp -R "$SWARM_TEST_PREPARE_BUNDLE" "$1/prepared"
+printf '%s\n' "$1/prepared"
+EOF
+chmod +x "$dev_checkout/packaging/linux/build-development-release.sh"
+printf 'operation=prepare-protocol\n' > "$SWARM_STATE_ROOT/development-reload.request"
+prepare_reload_services=$(wc -l < "$HOME/systemctl.log")
+prepare_reload_commands=$(wc -l < "$HOME/swarmctl.log")
+prepare_reload_current=$(readlink "$SWARM_INSTALL_ROOT/current")
+"$package" reload-development
+grep -q '^state=deferred$' "$SWARM_STATE_ROOT/development-reload.status"
+[ -f "$SWARM_STATE_ROOT/protocol-migration.manual" ]
+[ "$(readlink "$SWARM_INSTALL_ROOT/current")" = "$prepare_reload_current" ]
+[ "$(wc -l < "$HOME/systemctl.log")" -eq "$prepare_reload_services" ]
+[ "$(wc -l < "$HOME/swarmctl.log")" -eq "$prepare_reload_commands" ]
+[ ! -e "$SWARM_STATE_ROOT/development-reload.request" ]
+rm "$SWARM_STATE_ROOT/protocol-migration.pending" "$SWARM_STATE_ROOT/protocol-migration.manual"
+unset SWARM_TEST_PREPARE_BUNDLE
+
 # Back to a checkout whose protocol agrees, so the rest of this file is unaffected.
 printf 'pub const PROTOCOL_VERSION: u16 = 5;\n' > "$dev_checkout/crates/swarm-terminal/src/ipc.rs"
 cat > "$dev_checkout/packaging/linux/build-development-release.sh" <<'EOF'
