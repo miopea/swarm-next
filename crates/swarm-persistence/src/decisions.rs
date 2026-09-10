@@ -543,6 +543,7 @@ impl TaskStore {
                 return Err(TaskStoreError::DecisionAlreadyResolved);
             }
         } else {
+            crate::decision_clarification::cancel_queued(&transaction, id)?;
             insert_control_room_event(&transaction, ControlRoomEventKind::DecisionsChanged)?;
             insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         }
@@ -763,6 +764,7 @@ impl TaskStore {
                 [id.to_string()],
             )?;
         }
+        crate::decision_clarification::cancel_queued(&transaction, id)?;
         transaction.execute(
             "INSERT INTO decision_deliveries (decision_id, worker_id, state)
              SELECT id, requesting_worker_id, 'queued' FROM decision_requests WHERE id = ?1",
@@ -1033,6 +1035,7 @@ pub(super) fn write_answer_resolution(
     if updated != 1 {
         return Err(TaskStoreError::DecisionAlreadyResolved);
     }
+    crate::decision_clarification::cancel_queued(transaction, id)?;
     transaction.execute(
         "INSERT INTO decision_deliveries (decision_id, worker_id, state, session_id, delivered_at)
          SELECT id, requesting_worker_id,

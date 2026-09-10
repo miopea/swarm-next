@@ -1,5 +1,64 @@
 # Remaining maturity work — UX/UI first
 
+### Active package: Needs You clarification, not another reload patch
+
+The next user-facing closure is the operator's inability to ask about an unclear
+decision without giving a final answer. ADR 0094 defines the approved distinction.
+Do not detour into Apiary polish, engine profiling or BFG Admin coordination while
+this path is being connected. This is the bounded backend exception already
+allowed for the selected UI-1 journey below.
+
+Implementation sequence:
+
+1. Domain admission/next-move rules and transactional exact-ID question/reply
+   history. Current local schema 159 adds a bounded exchange. All 150 domain
+   tests passed. The full persistence run had 720 passes and one migration
+   fixture failure; adding schema 159 to the recorded migration steps corrected
+   it. The follow-up isolated Linux run passes all 9 clarification tests, all 4
+   previous-schema tests, and the declared-schema-ceiling test. This includes
+   migration/reopen and proof that clarification cannot grant command approval.
+   This foundation is NOT exposed through HTTP/MCP or the browser yet.
+2. Exclusive guarded delivery with claim/session fencing, interrupted-claim
+   uncertainty, explicit reconciliation, and cancellation on final answer or
+   withdrawal. Never reuse the final-answer outbox to disguise a question.
+3. Authenticated operator question and requester/Queen reply APIs/MCP, compact
+   inbox summary and bounded per-decision history. Shared next-move projection
+   must move pending clarification out of actionable operator counts without
+   hiding the original decision or its final-answer controls.
+4. Inline Ask a question, failed-send draft recovery, Waiting for a reply and
+   returned explanation. Verify fictional round trip, desktop/phone, refresh,
+   repeated/conflicting sends and parent resolution races; only then deploy.
+
+Current checkpoint (not a user-facing closure): schema/domain/history and the
+shared application commands are implemented locally. Delivery persistence now
+claims at most 16 local-Hive questions, checks exact claim/session/requester and
+engagement before submission, and fences acknowledgements against stale claims.
+Interrupted writes become uncertain without automatic resend. Original button,
+free-text and withdrawal paths cancel queued questions in the same transaction;
+in-flight claims retain transport evidence. An exact reply retry from the same
+worker after restart preserves its original reply source and cannot answer the
+next question. Authentication rejects stale sessions and fabricated Queen roles.
+
+Isolated Linux verification passes: 16 clarification persistence tests, 4 domain
+tests, 1 application-service test, strict all-target Clippy for those three
+crates, and all 35 existing decision tests. The earlier full domain run and
+corrected migration checks above remain recorded; this is not a new full-suite
+or browser claim. Latest usage check: 21% used / 79% remaining.
+
+Next, complete explicit uncertain-claim reconciliation and connect guarded
+transport to the existing exclusive coordinator. Then expose authenticated
+HTTP/MCP commands and one shared attention/Queues summary before building the
+inline question/reply UI. Do not skip from persistence tests to deployment:
+there is still no browser button, worker-tool reply path or live transport for
+this feature. No real Hive decision, terminal or worker was touched for these
+fictional tests. No BFG Admin communication is needed or authorized.
+
+Isolated Linux verification checkout: `/tmp/swarm-clarification-check.LS0pgn`.
+Tests use fictional databases. The actual Hive remains on 414de057; do not apply
+an unfinished schema to it merely to call this work deployed. Existing user
+workers and all real decisions remain untouched. Direct terminal/AskUser answer
+reconciliation is still the separate ADR 0065 gate, not solved by clarification.
+
 ### UI-4: saved-session connection recovery
 
 The ordinary-user first/repeat-entry audit found that a failed session or initial
@@ -23,7 +82,7 @@ the app without a token field.
 Deployed `414de057` as `1.6.0-dev-414de0575d76-20260909232601-3621464`.
 Health is good with no degraded services. Engine PID/start and all 34 worker
 identity projections, including 12 running, are identical before and after in
-`/tmp/swarm-session-recovery-deploy.E3bxLd`. CI 34416874473 is in progress;
+`/tmp/swarm-session-recovery-deploy.E3bxLd`. CI 34416874473 passed completely;
 prior dialog CI 34414805240 passed. This does not close native-device,
 clarification or engine gates. Next UX finish work: integrated Apiary/navigation
 and non-authorizing decision clarification, not reload profiling or BFG messaging.

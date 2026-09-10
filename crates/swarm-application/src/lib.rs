@@ -30,6 +30,7 @@ use swarm_domain::{
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
 
+mod decision_clarification;
 mod ops_tickets;
 mod queen_review;
 mod queue_snapshot;

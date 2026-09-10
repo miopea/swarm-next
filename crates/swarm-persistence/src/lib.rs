@@ -24,6 +24,8 @@ mod apiary;
 mod attention;
 mod coordinator;
 mod database_integrity;
+mod decision_clarification;
+pub use decision_clarification::{ClarificationDispatch, DecisionClarification};
 mod queen_recovery;
 mod queen_review;
 mod queen_review_focus;
@@ -277,7 +279,8 @@ const SUPPORT_OUTBOX_ATTACHMENTS_SCHEMA_VERSION: i64 = 155;
 const REVIEW_RETURN_HISTORY_SCHEMA_VERSION: i64 = 156;
 const WORKER_ENGINE_RETURN_SESSIONS_SCHEMA_VERSION: i64 = 157;
 const WORKER_REVIVAL_ATTEMPTS_SCHEMA_VERSION: i64 = 158;
-const CURRENT_SCHEMA_VERSION: i64 = WORKER_REVIVAL_ATTEMPTS_SCHEMA_VERSION;
+const DECISION_CLARIFICATION_SCHEMA_VERSION: i64 = 159;
+const CURRENT_SCHEMA_VERSION: i64 = DECISION_CLARIFICATION_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -495,6 +498,8 @@ pub enum TaskStoreError {
     TaskPrerequisite(#[from] swarm_domain::TaskPrerequisiteError),
     #[error(transparent)]
     TaskDecisionLink(#[from] swarm_domain::TaskDecisionLinkError),
+    #[error(transparent)]
+    DecisionClarification(#[from] swarm_domain::DecisionClarificationError),
     #[error("completed work requires concise verification evidence")]
     CompletionEvidenceRequired,
     #[error(
@@ -3998,6 +4003,9 @@ fn migrate_ops_intake_schema_steps(
     }
     if schema_version < WORKER_REVIVAL_ATTEMPTS_SCHEMA_VERSION {
         worker_engine_returns::migrate_attempts(transaction)?;
+    }
+    if schema_version < DECISION_CLARIFICATION_SCHEMA_VERSION {
+        decision_clarification::migrate(transaction)?;
     }
     Ok(())
 }
@@ -9263,6 +9271,12 @@ mod tests {
             table: "worker_revival_attempts",
             artifact: "",
             undo_sql: "DROP TABLE worker_revival_attempts",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "decision_clarifications",
+            artifact: "",
+            undo_sql: "DROP TABLE decision_clarifications",
             probe_sql: "",
         },
     ];
