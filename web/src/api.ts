@@ -477,6 +477,7 @@ export type DevelopmentRuntime = {
    * it if nothing says it is pending.
    */
   protocol_migration_required?: boolean | null;
+  prepared_migration_version?: string | null;
   /** Which step failed: "build", "install", "protocol-change", or absent. */
   failure_reason?: string | null;
   /** The failing step's own last words, one bounded line. */
@@ -2011,11 +2012,11 @@ export async function uploadDogfoodScreenshot(operatorToken: string, image: File
   return ((await response.json()) as { name: string }).name;
 }
 
-export async function updateWorkerEngine(operatorToken: string): Promise<WorkerEngineMaintenanceResult> {
+export async function updateWorkerEngine(operatorToken: string, preparedVersion?: string): Promise<WorkerEngineMaintenanceResult> {
   const response = await authenticatedFetch(
     operatorToken,
     "/api/v1/runtime/terminal-host/maintenance",
-    { method: "POST" },
+    { method: "POST", headers: preparedVersion ? { "X-Swarm-Prepared-Version": preparedVersion } : undefined },
   );
   return response.json() as Promise<WorkerEngineMaintenanceResult>;
 }

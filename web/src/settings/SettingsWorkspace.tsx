@@ -86,7 +86,7 @@ type Props = {
   onRemoveWorker: (workerId: string) => Promise<void>;
   onReorderWorkers: (workerIds: string[]) => Promise<void>;
   onRestartProviders: () => Promise<void>;
-  onUpdateWorkerEngine: () => Promise<void>;
+  onUpdateWorkerEngine: (preparedVersion?: string) => Promise<void>;
   onForceWorkerReload: () => Promise<void>;
   onReloadDevelopment: () => Promise<void>;
   onPrepareDevelopment?: () => Promise<void>;
@@ -128,6 +128,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
   const [queenAutomationError, setQueenAutomationError] = useState<string>();
   const [coordinatorStatus, setCoordinatorStatus] = useState<CoordinatorStatus>();
   const [confirmMaintenance, setConfirmMaintenance] = useState(false);
+  const [maintenanceTarget, setMaintenanceTarget] = useState<string>();
   const [confirmForceReload, setConfirmForceReload] = useState(false);
   /**
    * Whether live sessions can call what this build serves.
@@ -213,7 +214,8 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
       setBackupState("error");
     }
   }
-  const workerEngineNeedsUpdate = workerEngineUpdateRequired(health, terminalHostStatus);
+  const preparedMigrationVersion = developmentRuntime?.prepared_migration_version ?? undefined;
+  const workerEngineNeedsUpdate = workerEngineUpdateRequired(health, terminalHostStatus) || Boolean(preparedMigrationVersion);
   /**
    * The App/API version and the host's version differ, and the ENGINE between
    * them is byte-identical — so there is nothing to apply.
@@ -514,7 +516,8 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
                 "Installed 1.3.0" beside "Running 1.2.1" and then spend three
                 paragraphs explaining that nothing was wrong. */}
             <article className={`runtime-subsystem-card runtime-subsystem-${workerEngineState}`} aria-label="Worker engine status">
-              <header><div><span className="runtime-component-name">Worker engine</span><strong>{workerEngineLabel(health, terminalHostStatus, terminalHostLoaded)}</strong></div><span className={`runtime-status-badge ${workerEngineState}`}>{workerEngineState === "restart" ? "Restart required" : workerEngineState === "unavailable" ? "Unavailable" : workerEngineState === "checking" ? "Checking" : "Current"}</span></header>
+              <header><div><span className="runtime-component-name">Worker engine</span><strong>{preparedMigrationVersion ? "Migration prepared" : workerEngineLabel(health, terminalHostStatus, terminalHostLoaded)}</strong></div><span className={`runtime-status-badge ${workerEngineState}`}>{workerEngineState === "restart" ? "Restart required" : workerEngineState === "unavailable" ? "Unavailable" : workerEngineState === "checking" ? "Checking" : "Current"}</span></header>
+              {preparedMigrationVersion ? <p>Prepared build: <strong>{preparedMigrationVersion}</strong>. It has not been applied.</p> : null}
               {/* RUNNING, NOT INSTALLED, and the difference is not pedantry.
                   host_version is what the host PROCESS reports, and it can
                   differ from what host-current points at: a reload moves the
@@ -550,15 +553,17 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
                   <div><strong>Updating worker engine…</strong><span>{workerEngineProgress}</span></div>
                 </div>
               ) : !confirmMaintenance ? (
-                <button className="secondary-button" disabled={busy} onClick={() => setConfirmMaintenance(true)}>Prepare worker engine update</button>
+                <button className="secondary-button" disabled={busy} onClick={() => { setMaintenanceTarget(preparedMigrationVersion); setConfirmMaintenance(true); }}>Prepare worker engine update</button>
               ) : (
                 <div className="maintenance-confirmation" role="group" aria-label="Confirm worker engine update">
                   <strong>Restart {activeWorkerCount} active worker{activeWorkerCount === 1 ? "" : "s"} now?</strong>
+                  {maintenanceTarget ? <span>Apply prepared build {maintenanceTarget}.</span> : null}
+                  {maintenanceTarget !== preparedMigrationVersion ? <span role="alert">The prepared build changed. Cancel and review the current build before applying it.</span> : null}
                   <span>{engineUpdateCost(busyWorkerNames)}</span>
                   <span>Claude/Codex processes will close. Worker identities, tasks, and known conversation IDs remain durable.</span>
                   <div className="settings-actions">
                     <button className="secondary-button" disabled={busy} onClick={() => setConfirmMaintenance(false)}>Not now</button>
-                    <button className="primary-action" disabled={busy} onClick={() => { setConfirmMaintenance(false); void onUpdateWorkerEngine(); }}>Stop workers and update</button>
+                    <button className="primary-action" disabled={busy || maintenanceTarget !== preparedMigrationVersion} onClick={() => { setConfirmMaintenance(false); void onUpdateWorkerEngine(maintenanceTarget); }}>Stop workers and update</button>
                   </div>
                 </div>
               )}</> : <>

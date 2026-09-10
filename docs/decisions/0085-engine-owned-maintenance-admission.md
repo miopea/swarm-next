@@ -76,10 +76,12 @@ consumed without activation. Successful activation removes both markers. These
 files carry no authority to stop a worker; the existing explicit maintenance
 confirmation and durable return path remain required.
 
-This command is not yet wired into the development build request or exposed as
-a working UI action. That integration must advertise preparation separately from
-activation, bind consent to the prepared version before stopping workers, and
-exercise failure/recovery plus final conversation return. Older installed APIs
+The authenticated development preparation request and UI now distinguish staging
+from activation. Engine confirmation captures the prepared version; missing or
+changed consent refuses before engine contact. Bounded invalid marker reads also
+refuse. Isolated API and UI tests cover these guards, and the preparation dialog
+has been inspected at a 390-pixel browser viewport. Live activation and final
+conversation return remain unverified for this change. Older installed APIs
 write the running version in maintenance requests; they cannot activate a new
 manually prepared candidate through that request. Do not weaken exact-target
 checking to make an older UI appear compatible. This does not enable automatic

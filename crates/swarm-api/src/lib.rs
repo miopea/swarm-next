@@ -9934,6 +9934,69 @@ mod tests {
         assert_eq!(std::fs::read_to_string(request_path).unwrap(), recorded);
     }
 
+    #[tokio::test]
+    async fn prepared_migration_requires_exact_consent_before_engine_contact() {
+        let directory = tempfile::tempdir().unwrap();
+        let candidate = directory.path().join("candidate");
+        std::fs::create_dir(&candidate).unwrap();
+        std::fs::write(candidate.join("VERSION"), "1.7.0-candidate\n").unwrap();
+        std::fs::write(candidate.join("PROTOCOL"), "17\n").unwrap();
+        std::fs::write(
+            directory.path().join("protocol-migration.pending"),
+            candidate.to_str().unwrap(),
+        )
+        .unwrap();
+        let maintenance_request = directory.path().join("maintenance.request");
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_release_paths(
+                    directory.path().to_owned(),
+                    directory.path().join("release.request"),
+                )
+                .with_maintenance_request_path(maintenance_request.clone()),
+        );
+        let runtime =
+            response_json(authorized_get(app.clone(), "/api/v1/runtime/development").await).await;
+        assert_eq!(runtime["prepared_migration_version"], "1.7.0-candidate");
+        for expected in [None, Some("older-build")] {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/api/v1/runtime/terminal-host/maintenance")
+                .header(header::AUTHORIZATION, "Bearer secret");
+            if let Some(version) = expected {
+                request = request.header("x-swarm-prepared-version", version);
+            }
+            let result = app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(result.status(), StatusCode::CONFLICT);
+            assert_eq!(
+                response_json(result).await["code"],
+                "prepared_migration_changed"
+            );
+            assert!(!maintenance_request.exists());
+        }
+        // Corrupt metadata is uncertainty, not permission to perform a normal update.
+        std::fs::write(candidate.join("VERSION"), "x".repeat(129)).unwrap();
+        let result = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/runtime/terminal-host/maintenance")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header("x-swarm-prepared-version", "1.7.0-candidate")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!maintenance_request.exists());
+    }
+
     #[test]
     fn development_versions_expose_the_source_revision() {
         assert_eq!(

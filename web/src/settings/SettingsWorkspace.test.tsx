@@ -649,6 +649,31 @@ test("Queen status bounds a stalled sibling request after the other read fails",
   view.unmount();
 });
 
+test("prepared migration is visible with matching engines and stale consent cannot apply it", async () => {
+  let prepared = "1.7.0-candidate";
+  const apply = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("runtime/development")) return ok({ enabled: true, version: "0.1.0", state: "deferred", reload_available: true, prepared_migration_version: prepared });
+    if (url.includes("terminal-host")) return ok({ type: "host_status", status: { protocol_version: 16, host_version: "0.1.0", draining: false, running_sessions: 2, retained_sessions: 2 } });
+    return ok({});
+  }));
+  const props = minimalProps();
+  const view = render(<SettingsWorkspace {...props} section="settings-updates" onUpdateWorkerEngine={apply} />);
+  expect(await screen.findByText("Migration prepared")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Prepare worker engine update" }));
+  expect(screen.getByRole("group", { name: "Confirm worker engine update" })).toHaveTextContent(prepared);
+  prepared = "1.7.0-replacement";
+  view.rerender(<SettingsWorkspace {...props} health={{ status: "ok", version: "0.1.0-refreshed" }} section="settings-updates" onUpdateWorkerEngine={apply} />);
+  expect(await screen.findByText(/The prepared build changed/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Stop workers and update" })).toBeDisabled();
+  expect(apply).not.toHaveBeenCalled();
+  fireEvent.click(within(screen.getByRole("group", { name: "Confirm worker engine update" })).getByRole("button", { name: "Not now" }));
+  fireEvent.click(screen.getByRole("button", { name: "Prepare worker engine update" }));
+  fireEvent.click(screen.getByRole("button", { name: "Stop workers and update" }));
+  expect(apply).toHaveBeenCalledWith("1.7.0-replacement");
+});
+
 function minimalProps() {
   return {
     // Tests that exercise a specific card pass the section that now holds it.

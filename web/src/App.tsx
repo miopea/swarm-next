@@ -1351,13 +1351,13 @@ export function App() {
     }, "Restarting workers on the installed provider release…");
   }
 
-  async function maintainWorkerEngine() {
+  async function maintainWorkerEngine(preparedVersion?: string) {
     if (!operatorToken) return;
     const previousSessionIds = sessions.map((session) => session.session_id);
     setWorkerEngineProgress("Stopping active workers and preserving their conversations…");
     try {
       await perform(async () => {
-        await requestRuntimeHandoff(() => updateWorkerEngine(operatorToken).then(() => undefined));
+        await requestRuntimeHandoff(() => updateWorkerEngine(operatorToken, preparedVersion).then(() => undefined));
         setBusyLabel("Checking the updated worker engine…");
         setWorkerEngineProgress("The engine is restarting. Swarm is checking its version and reconnecting your crew…");
         let ready = false;

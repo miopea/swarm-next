@@ -146,6 +146,7 @@ struct DevelopmentRuntimeResponse {
     /// cannot install. None means the host could not be asked, or there is no
     /// development checkout to compare against.
     protocol_migration_required: Option<bool>,
+    prepared_migration_version: Option<String>,
     /// Which step failed: `build`, `install`, `protocol-change`, or absent.
     ///
     /// Every failure used to reach the operator as "the working copy did not
@@ -344,6 +345,10 @@ pub(super) async fn development(
             worker_engine_update_required: engine_update.0,
             running_worker_sessions: engine_update.1,
             protocol_migration_required: protocol_migration_required(&state).await,
+            prepared_migration_version: crate::maintenance::prepared_protocol_target(&state)
+                .ok()
+                .flatten()
+                .map(|(_, version)| version),
             failure_reason: development_status_field(&state, "step="),
             failure_detail: development_status_field(&state, "detail="),
         }),

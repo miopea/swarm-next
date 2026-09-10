@@ -32,7 +32,18 @@ pub(super) async fn maintain_worker_engine(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let guard = state.worker_lifecycle.lock().await;
-    let result = maintain_worker_engine_locked(&state).await;
+    let pending = prepared_protocol_target(&state)?;
+    let expected = headers
+        .get("x-swarm-prepared-version")
+        .and_then(|value| value.to_str().ok());
+    if pending.as_ref().map(|(_, version)| version.as_str()) != expected {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "prepared_migration_changed",
+            "refresh worker engine maintenance and confirm the exact prepared build; no workers were stopped",
+        ));
+    }
+    let result = maintain_worker_engine_locked(&state, pending).await;
     if let Ok(maintenance) = &result
         && maintenance.previous_version != maintenance.current_version
     {
@@ -577,24 +588,70 @@ async fn start_development_operation(
 /// Read from the release's own PROTOCOL rather than remembered, because the
 /// marker outlives the process that wrote it.
 pub(crate) fn pending_protocol_migration(state: &AppState) -> Option<u16> {
-    let marker = state
-        .release_state_root
-        .as_ref()?
-        .join("protocol-migration.pending");
-    let release = std::fs::read_to_string(marker).ok()?;
-    let release = std::path::Path::new(release.trim());
-    // The shell validates this path before acting on it; here it is only read
-    // to decide what to wait for, so a bad value costs a missing number and
-    // not an install.
-    std::fs::read_to_string(release.join("PROTOCOL"))
-        .ok()?
-        .trim()
-        .parse()
+    prepared_protocol_target(state)
         .ok()
+        .flatten()
+        .map(|(protocol, _)| protocol)
+}
+
+pub(crate) fn prepared_protocol_target(
+    state: &AppState,
+) -> Result<Option<(u16, String)>, ApiError> {
+    use std::io::Read;
+    let unavailable = || {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "prepared_migration_unavailable",
+            "the prepared migration could not be verified; no workers were stopped",
+        )
+    };
+    let Some(root) = state.release_state_root.as_ref() else {
+        return Ok(None);
+    };
+    let marker = root.join("protocol-migration.pending");
+    if !marker.try_exists().map_err(|_| unavailable())? {
+        if root
+            .join("protocol-migration.manual")
+            .try_exists()
+            .map_err(|_| unavailable())?
+        {
+            return Err(unavailable());
+        }
+        return Ok(None);
+    }
+    let read = |path: &std::path::Path, limit: u64| -> Result<String, ApiError> {
+        let mut value = String::new();
+        std::fs::File::open(path)
+            .map_err(|_| unavailable())?
+            .take(limit + 1)
+            .read_to_string(&mut value)
+            .map_err(|_| unavailable())?;
+        if value.len() as u64 > limit {
+            return Err(unavailable());
+        }
+        Ok(value.trim().to_owned())
+    };
+    let path = PathBuf::from(read(&marker, 4096)?);
+    if !path.is_absolute() {
+        return Err(unavailable());
+    }
+    let protocol = read(&path.join("PROTOCOL"), 8)?
+        .parse::<u16>()
+        .map_err(|_| unavailable())?;
+    let version = read(&path.join("VERSION"), 128)?;
+    if version.is_empty()
+        || !version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b".-_".contains(&byte))
+    {
+        return Err(unavailable());
+    }
+    Ok(Some((protocol, version)))
 }
 
 async fn maintain_worker_engine_locked(
     state: &AppState,
+    pending: Option<(u16, String)>,
 ) -> Result<WorkerEngineMaintenanceResponse, ApiError> {
     let request_path = state.maintenance_request_path.as_ref().ok_or_else(|| {
         ApiError::new(
@@ -610,7 +667,7 @@ async fn maintain_worker_engine_locked(
     // most wants it: a prepared migration leaves BOTH symlinks on the old
     // release, so the engine build ids match and the engine check reports
     // nothing to do, while the Hive sits waiting for its workers to go idle.
-    let pending_protocol = pending_protocol_migration(state);
+    let pending_protocol = pending.as_ref().map(|(protocol, _)| *protocol);
     let awaiting_protocol =
         pending_protocol.is_some_and(|wanted| wanted != previous.protocol_version);
     if !worker_engine_update_required(&previous) && !awaiting_protocol {
@@ -660,7 +717,9 @@ async fn maintain_worker_engine_locked(
         format!(
             "requested_at={}\ntarget_version={}\n",
             unix_timestamp(),
-            build_version()
+            pending
+                .as_ref()
+                .map_or_else(|| build_version().to_owned(), |(_, version)| version.clone())
         ),
     )
     .map_err(|error| {
