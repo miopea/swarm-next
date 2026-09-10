@@ -2,6 +2,17 @@
 
 Status: **M0 draft recommendation**
 
+## September 10 Apiary maturity update
+
+ADR0097 supersedes the older Jira-required enrollment direction: Swarm shared
+tasks are baseline and Jira is optional. Membership-only signed joins and
+shared-task reconciliation pass isolated HTTP acceptance without Jira. Apiary
+management now stays on the Apiary page; Settings starts enrollment and links
+existing members back there. Member setup shows optional integration steps.
+Keeper settings distribution, complete managed-authority controls and live
+browser acceptance remain unfinished; do not mark the overall Apiary capability
+complete. Existing Jira source-of-truth and credential boundaries remain intact.
+
 This inventory is intentionally organized around outcomes rather than legacy
 modules. Decisions are provisional until reviewed with the primary operator.
 

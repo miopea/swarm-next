@@ -67,7 +67,7 @@ test("connects outward to a Keeper without requiring an inbound member URL", asy
 
   expect(await screen.findByRole("status")).toHaveTextContent(/introduced itself.*Waiting for the Keeper/i);
   expect(screen.getByRole("list", { name: "Pending Keeper invitations" })).toHaveTextContent("Waiting for Keeper approval");
-  expect(screen.getByRole("note")).toHaveTextContent("This Hive continues polling Jira directly as you");
+  expect(screen.getByRole("note")).toHaveTextContent("If connected, this Hive reads Jira directly as you");
   expect(screen.getByRole("note")).toHaveTextContent("polls the Keeper for shared Apiary tasks");
 });
 
@@ -561,7 +561,7 @@ test("joins a ready Apiary through the member-initiated Keeper connection", asyn
   fireEvent.click(await screen.findByRole("button", { name: "Join Apiary" }));
 
   expect(await screen.findByRole("status")).toHaveTextContent("joined Wildflower Garden");
-  expect(screen.getByRole("status")).toHaveTextContent("Jira continues syncing directly");
+  expect(screen.getByRole("status")).toHaveTextContent("Open Apiary for shared work and any remaining setup");
   expect(onHiveIdentityChange).toHaveBeenCalledWith(memberIdentity());
 });
 
