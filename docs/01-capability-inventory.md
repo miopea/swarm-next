@@ -9,6 +9,10 @@ tasks are baseline and Jira is optional. Membership-only signed joins and
 shared-task reconciliation pass isolated HTTP acceptance without Jira. Apiary
 management now stays on the Apiary page; Settings starts enrollment and links
 existing members back there. Member setup shows optional integration steps.
+The final submit-once / Keeper-approves enrollment flow is not yet implemented:
+the current flow still asks the member to accept after approval. Revision-bound
+pre-submission consent rules are tested, but durable automatic completion and
+the simplified UI remain required under ADR0097.
 Keeper settings distribution, complete managed-authority controls and live
 browser acceptance remain unfinished; do not mark the overall Apiary capability
 complete. Existing Jira source-of-truth and credential boundaries remain intact.

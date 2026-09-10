@@ -2,6 +2,33 @@
 
 Status: **Accepted product direction; implementation pending**
 
+## Final enrollment interaction: submit once, Keeper approves
+
+The operator explicitly requires three steps: Keeper generates a link; the
+member pastes it, sees the management implications, and submits; Keeper approves
+and membership completes automatically. There is no post-approval member
+acceptance, readiness approval, or Keeper finalization. Jira is not a gate.
+
+Before submission the member must see authenticated Keeper identity and the
+exact management-policy revision. Submission durably records consent bound to
+the link, Apiary, Keeper node, local node/Hive/operator, and policy revision.
+The approved invitation must match that consent before its existing signed
+join can proceed. A changed policy needs renewed consent; transport retries
+must never manufacture it. Existing legacy invitations without that recorded
+consent retain explicit acceptance rather than being silently auto-accepted.
+
+The application owns bounded enrollment reconciliation, including while the
+browser is closed. Persist each phase before its next external effect; retain
+the signed submission and receipt for idempotent recovery. Closing the page,
+restarting the API, or losing a response must not require another approval or
+create duplicate membership. Cancellation must stop automatic progression.
+Completion opens Apiary, where optional setup is shown separately.
+
+Acceptance requires independent-Hive tests of the exact three-step flow,
+browser-closed completion, restart and response-loss recovery, policy/identity
+substitution, cancellation, expiry, and existing-member upgrade without rejoin.
+The deployed post-approval acceptance flow does not meet this requirement.
+
 ## Superseding operator decision: Swarm first, Jira optional
 
 The operator clarified that joining accepts Apiary-wide Keeper management while

@@ -4,6 +4,33 @@
 
 ### Latest priority: guided enrollment, then workspace setup
 
+CURRENT NEXT ACTION — final three-step enrollment (supersedes historical notes
+below): Keeper generates link; member reviews terms and submits once; Keeper
+approval completes membership automatically. No post-approval member click.
+ADR0097 now records this exact acceptance requirement. The deployed flow still
+requires post-approval acceptance and is NOT complete.
+
+The domain consent guard now compares the exact link, Apiary, Keeper node,
+member node/Hive/operator and policy revision, and rejects expired consent.
+All 165 domain tests (including three new consent tests) and strict domain
+Clippy pass in the isolated Linux checkout. This is not yet wired to persistence
+or runtime and is not deployed.
+Next: authenticated pre-submission policy disclosure, durable consent and
+enrollment phases, application-owned bounded reconciliation, then the UI.
+Prove closed-browser completion, restart/lost-response retry, cancellation,
+changed policy/identity and existing-member upgrade before claiming done.
+Do not replace these requirements with frontend auto-clicking or polling.
+
+Current source inspection confirmed: PersonalHiveJoin polls in a browser effect;
+poll_saved_apiary_keeper_link imports the approved invitation and removes the
+saved link, but does not accept policy or join. This is the actual missing
+transition, not merely misleading UI copy. Preserve legacy explicit acceptance
+for links without recorded prior consent. CI34540590845 remains in progress
+on the latest live check; no failure or completion is asserted.
+
+Entries below include historical checkpoints; the latest checkpoint and verified
+deployment evidence supersede older "uncommitted" and "not deployed" statements.
+
 DEPLOYMENT VERIFIED: f0934172 is on main and live on production-dev. Reload
 service completed successfully at19:08:28 Eastern; health reports
 1.7.1-dev-f0934172f55b-20260910230613-832149, statusok and no degraded conditions.

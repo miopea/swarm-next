@@ -19,6 +19,9 @@ use crate::{
     TaskState, WorkerId,
 };
 
+mod enrollment;
+pub use enrollment::*;
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Operator {
     pub id: OperatorId,
