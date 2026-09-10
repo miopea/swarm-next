@@ -200,8 +200,8 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
       {/* What everything below is relative to. Six gigabytes of workers means
           something different on a machine with thirty-two than on one with
           eight, and every row underneath was being read without that. */}
-      <p className={`diagnostic-machine ${resourceClass(machine?.pressure)}`} role="status">
-        {runtime.resources && !sampleFresh ? "Last sample · " : ""}{machineHeadline(machine)}
+      <p className="diagnostic-machine" role="status">
+        {runtime.resources && !sampleFresh ? "Last sample · " : ""}{machineCapacity(machine)}
       </p>
       {/* Fourteen rows of equal weight under a heading promising to say which
           layer needs attention did not answer it. What is wrong leads; what is
@@ -425,22 +425,17 @@ export function jiraStatusLabel(readiness: JiraReadiness | undefined, unavailabl
 }
 
 /**
- * What this machine is, and how it is coping.
+ * What this machine can hold. PerformanceEvidence owns the overall assessment.
  *
  * Stated once at the top because every memory figure below is only meaningful
- * against it. The verdict comes from the kernel's own pressure reporting rather
- * than from a byte count, which is what made ten healthy workers read as
- * Critical on a machine that was not stalling at all.
+ * against it. Do not repeat the machine aggregate as an all-clear: the assessment
+ * also includes CPU-wait and individual process evidence, which can disagree
+ * with that aggregate on an older runtime. Each check retains its own verdict.
  */
-function machineHeadline(machine: MachineResources | undefined): string {
+function machineCapacity(machine: MachineResources | undefined): string {
   if (!machine || machine.memory_total_bytes == null) return "Machine capacity unavailable";
   const cpus = machine.logical_cpus ? `${machine.logical_cpus} CPU${machine.logical_cpus === 1 ? "" : "s"}` : "unknown CPUs";
-  const verdict = machine.pressure === "critical"
-    ? "under resource pressure"
-    : machine.pressure === "advisory"
-      ? "resource pressure observed"
-      : machine.pressure === "normal" ? "no resource pressure reported" : "resource pressure unavailable";
-  return `${formatBytes(machine.memory_total_bytes)} of memory · ${cpus} · ${verdict}`;
+  return `${formatBytes(machine.memory_total_bytes)} of memory · ${cpus}`;
 }
 
 /**

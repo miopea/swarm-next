@@ -15,7 +15,7 @@ is historical where superseded by the verified deployment section.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-f05f7f217a7c-20260910054522-50600`.
+- App/API: `1.6.0-dev-fd35ca3e7f17-20260910060616-63692`.
 - Engine: last verified PID 3408834, started September 9 at 17:01:49 Eastern,
   after the operator's manually applied update. Subsequent app-only deployments
   preserved that engine and its running worker identity projections.
@@ -28,6 +28,29 @@ is historical where superseded by the verified deployment section.
 - No release is authorized. No customer-facing send is authorized by task closure.
 
 ## Requirement-by-requirement disposition
+
+### UI-3/UI-4 mobile runtime navigation follow-through
+
+Live Edge390x844 reproduced an expanded System tray retaining most of the screen
+after Diagnostics navigation, including within Settings. Explicit navigation now
+collapses the tray through the existing navigation owner. Inline details/retries
+do not navigate and remain open. All71 App tests and the production build pass;
+the full-app fictional phone journey and deployed live journey both pass. This
+is a presentation change, not a service/worker/attention-state mutation.
+
+`fd35ca3e` is deployed; `/tmp/swarm-clarification-deploy.cvm5VI/pre-ui-workers.json`
+and `post-ui-workers.json` prove34 records and12 exact running session/provider
+identities unchanged, plus enginePID3408834/start unchanged. The phone viewport
+was restored and the local fixture server stopped. CI34443735026 is a separate
+pending gate. Live Apiary -> Manage Apiary correctly opens Connections; narrow
+Apiary ownership/empty states and diagnostic preview were inspected without
+creating invitations, altering configuration or sending reports.
+
+Next UI-3 finding: during the live diagnostic journey, the machine summary said
+no current pressure while the assessment said fresh samples report pressure.
+Inspect their sample/time ownership before claiming consistency; the screenshot
+is an observation, not evidence of a server performance defect. Do not detour
+into reload profiling or BFG communication.
 
 ### UI-1 question-before-decision milestone
 

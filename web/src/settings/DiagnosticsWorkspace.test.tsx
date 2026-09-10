@@ -191,7 +191,7 @@ test("saved report reads time out, retry once, and cancel on departure", async (
  * the page said how big the machine was. Six gigabytes means something very
  * different on 32 than on 8, and every row was being read without that.
  */
-test("states the machine's size and verdict above the rows it makes sense of", async () => {
+test("states machine capacity without a competing pressure verdict", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     if (String(input).includes("runtime/resources")) {
       return new Response(JSON.stringify({
@@ -216,9 +216,8 @@ test("states the machine's size and verdict above the rows it makes sense of", a
   const headline = await screen.findByText(/of memory ·/);
   expect(headline).toHaveTextContent("32.0 GiB of memory");
   expect(headline).toHaveTextContent("8 CPUs");
-  expect(headline).toHaveTextContent("no resource pressure reported");
-  // A machine that is not stalling must not have its layers called critical.
-  expect(headline.className).toContain("normal");
+  expect(headline).not.toHaveTextContent(/pressure/);
+  expect(headline).not.toHaveClass("normal", "advisory", "critical");
 });
 
 test("answers the heading before showing the evidence for it", async () => {
@@ -337,6 +336,8 @@ test.each(["reported", "missing"] as const)("CPU-only contention does not accuse
   render(<DiagnosticsWorkspace feedbackRevision={0} operatorToken="fixture" health={undefined} hiveIdentity={undefined} liveFeedState="connected" recentEvents={[]} sessions={[]} workers={[]} jiraReadiness={undefined} jiraUnavailable={true} />);
   const headline = await screen.findByText(/of memory ·/);
   expect(headline).not.toHaveTextContent("under memory pressure");
+  expect(headline).not.toHaveTextContent(/pressure/);
+  expect(screen.getByRole("heading", { name: "Server pressure observed" })).toBeInTheDocument();
   expect(screen.getByText("Compute load")).toBeInTheDocument();
   expect(screen.queryByText("Machine memory")).not.toBeInTheDocument();
   expect(screen.queryByText("Memory stall")).not.toBeInTheDocument();

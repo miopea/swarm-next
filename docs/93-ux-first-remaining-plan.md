@@ -2,6 +2,21 @@
 
 ### Active package: Needs You clarification, not another reload patch
 
+Current checkpoint after closure: clarification is live with full CI green.
+Mobile runtime navigation follow-through `fd35ca3e` is also live at
+`1.6.0-dev-fd35ca3e7f17-20260910060616-63692`, with71 App tests, build, fictional
+and live390px browser acceptance. Engine and34/12 worker identities preserved.
+CI34443735026 is pending. Local harness stopped, viewport restored; no release.
+Diagnostic follow-through is now locally verified: the capacity line no longer
+repeats the machine aggregate as an all-clear; the existing assessment owns the
+summary across CPU and process evidence. Detailed verdicts and thresholds are
+unchanged. All31 diagnostic/report/assessment tests, production build and a
+fictional390px CPU-pressure browser journey pass. Publish/deploy this change,
+record its live receipt, then continue UI-4 linked task/queue navigation journeys.
+Do not start broad performance work or rerun
+the already-passed native clarification/backend gates. Account29% used/71%
+remaining at this boundary. See92 for exact receipt and observed inconsistency.
+
 September10 deployment checkpoint: the clarification vertical slice is live at
 `1.6.0-dev-f05f7f217a7c-20260910054522-50600`. Both native requester journeys,
 failure/recovery gates, full backend/web tests and live editor checks passed.

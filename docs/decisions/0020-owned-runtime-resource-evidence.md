@@ -55,6 +55,13 @@ No worker is stopped, no new sampler is introduced, and CPU admission thresholds
 are unchanged. The headline names resource pressure; each row carries its own
 evidence rather than inheriting the worst machine color.
 
+September10 presentation follow-through: capacity is stated separately without
+a second aggregate pressure verdict. The existing Performance evidence assessment
+owns the summary across fresh machine, CPU-wait and process measurements. This
+avoids a machine aggregate all-clear competing with CPU/process pressure from the
+same sample. Detailed checks retain their own evidence and classifications; no
+admission policy, measurement threshold or polling owner changes.
+
 This repairs live evidence from an eight-CPU Hive: CPU wait and load were high
 while memory use was about 43 percent and memory PSI effectively zero, yet memory
 rows and the worker footprint were marked pressured. Both UI and API regressions
