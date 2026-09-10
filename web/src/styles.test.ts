@@ -8,6 +8,14 @@ declare const process: { cwd(): string };
 
 const stylesheet = readFileSync(`${process.cwd()}/src/styles.css`, "utf8");
 
+test("prerequisite editor reserves its third row for the full close confirmation", () => {
+  // Unlike TaskDetailDialog, this dialog has no summary row: header, form,
+  // footer. A four-row template places the footer in the shrinking scroll row,
+  // making its multi-line confirmation overlap the form at phone widths.
+  const rule = stylesheet.match(/\.task-prerequisite-dialog\s*\{([^}]+)\}/)?.[1];
+  expect(rule).toMatch(/grid-template-rows:\s*auto minmax\(0, 1fr\) auto/);
+});
+
 test("worker editor guidance wraps without changing compact roster summaries", () => {
   const summary = stylesheet.match(/\.configured-worker small\s*\{([^}]+)\}/)?.[1];
   const editor = stylesheet.match(/\.configured-worker \.worker-preference-form small\s*\{([^}]+)\}/)?.[1];
