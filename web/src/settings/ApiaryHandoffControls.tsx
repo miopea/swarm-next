@@ -31,10 +31,10 @@ export function ApiaryGeneratedLink({ link, onCopy }: { link: string; onCopy: (l
       <button className="secondary-button" onClick={() => void onCopy(link)}>Copy again</button>
       <ol className="apiary-generated-link-steps" aria-label="How the personal Hive uses this invitation">
         <ApiaryExchangeStep number="1" title="She opens the link" detail="A private handoff page asks where she normally opens her personal Hive." />
-        <ApiaryExchangeStep number="2" title="Her Hive connects outward" detail="The link opens Settings → Apiary and prefills Connect to Keeper. No inbound access to her computer is needed." />
+        <ApiaryExchangeStep number="2" title="Her Hive connects outward" detail="The link opens Settings → Connections → Your Apiary and prefills Connect to Keeper. No inbound access to her computer is needed." />
         <ApiaryExchangeStep number="3" title="You approve the exact Hive" detail="Her verified Hive appears here for approval. She then reviews policy and Jira readiness before joining." />
       </ol>
-      <small className="apiary-generated-link-fallback">If opening the link cannot reach her personal Hive, she can paste the complete link into Settings → Apiary → Join a Keeper&apos;s Apiary.</small>
+      <small className="apiary-generated-link-fallback">If opening the link cannot reach her personal Hive, she can paste the complete link into Settings → Connections → Your Apiary → Join a Keeper&apos;s Apiary.</small>
     </div>
   );
 }

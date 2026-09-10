@@ -407,8 +407,10 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
             Apiary at a time, so an invitation to another cannot be accepted while this one holds.
           </p>
           <p className="privacy-note">
-            To join a different Apiary, leave this one first. Leaving is below, and it keeps every
-            worker, repository and task on this Hive.
+            {keeper
+              ? "As Keeper, first review Return to a personal Hive below. Other Hives and remaining federation work must be cleared before this Hive can join a different Apiary."
+              : "To join a different Apiary, leave this one first using Leave this Apiary below."}
+            {" "}Your workers, repositories and local tasks stay on this Hive.
           </p>
         </div>
       ) : null}

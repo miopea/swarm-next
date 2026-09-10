@@ -1,5 +1,22 @@
 # Current maturity acceptance ledger
 
+## September 10 — Apiary guidance and full web regression
+
+The full local web suite passed1555 tests across158 files after64922011.
+Live6ac6c145 Edge inspection verified Keeper overview -> Manage Apiary navigation,
+registration-versus-presence wording, shared ownership summaries and disabled
+return-to-personal controls with three registered Hives. No invitation, access
+grant, departure or configuration mutation was performed.
+
+That review found misleading Keeper guidance promising a simple departure, and
+invitation instructions pointing to the retired Settings -> Apiary location.
+Local copy now distinguishes Keeper return prerequisites from Member departure
+and consistently names Settings -> Connections -> Your Apiary. All27 affected
+Apiary/invitation/departure tests and TypeScript pass. The full1555-test result
+precedes this copy-only change; it is not a claim of a subsequent full-suite run.
+Owned live review tab closed. End-to-end multi-Hive invitation/security/recovery
+acceptance is not established by this read-only UI review and remains separate.
+
 ## September 10 — task details entry point
 
 Live Edge review on6ac6c145 found task titles were plain headings: opening details
