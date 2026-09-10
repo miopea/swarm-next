@@ -1655,6 +1655,31 @@ impl ApiaryService {
         self.store.rename_local_hive(name, now).map_err(Into::into)
     }
 
+    /// Reads the local owner's shareable labels, not membership authority.
+    ///
+    /// # Errors
+    /// Returns unavailable or invalid local storage errors.
+    pub fn local_public_profile(
+        &self,
+    ) -> Result<swarm_persistence::LocalPublicHiveProfile, ApplicationError> {
+        self.store.local_public_hive_profile().map_err(Into::into)
+    }
+
+    /// Saves operator-provided public labels without inferring identity from
+    /// private integrations or changing access to the Hive.
+    ///
+    /// # Errors
+    /// Rejects invalid fields, time, or persistence failures.
+    pub fn save_local_public_profile(
+        &self,
+        profile: &swarm_domain::PublicHiveProfile,
+        now: i64,
+    ) -> Result<swarm_persistence::LocalPublicHiveProfile, ApplicationError> {
+        self.store
+            .save_local_public_hive_profile(profile, now)
+            .map_err(Into::into)
+    }
+
     /// Renames the current Apiary public label. Only its Keeper can do this;
     /// backend, policy, membership, projects, and signed identity remain fixed.
     ///

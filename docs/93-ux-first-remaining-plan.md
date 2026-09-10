@@ -2,6 +2,32 @@
 
 ## Operator priority override — Apiary onboarding, September 10
 
+In-flight directory domain implementation: new apiary_directory.rs plus module
+export. Public profile, exact scoped member update, bounded full directory,
+Keeper uniqueness, identity collision checks and default join naming are present.
+The operator explicitly approved source transfer to the isolated bgsdev test
+directory after the execution-review refusal. That validation gate is cleared.
+Five domain tests and strict domain/persistence Clippy now pass. A migration
+return-type mismatch was corrected during compilation.
+Local persistence now adds schema162 local_public_hive_profile, revisioned public
+profile read/save, and revision advancement in existing rename_local_hive. It
+includes tests for idempotence, invalid-input atomicity and exhausted-revision
+rollback, plus the recent-schema test step. Three profile tests pass. Broader
+upgrade checks found migration replay needed idempotent table creation and seed
+insertion; fixed with an explicit saved-profile-preservation regression. Full
+persistence suite passed757 tests in506.99 seconds in the isolated checkout.
+Local public-profile read/save is now exposed through ApiaryService and an
+operator-authenticated no-store /api/v1/hive/public-profile endpoint. Its
+authentication/identity-preservation test and strict API checks passed.
+Directory projection, signed exchange endpoint and UI are not wired yet. Keep
+this as in-flight foundation, not a delivered roster-sync feature.
+Schema162 has not touched a live database. Before deployment, validate migrations
+and engine/database reader compatibility; do not treat it as an App-only update.
+Local review also made the profile reader's connection guard explicit. Standard
+Windows Cargo/Rust executable paths are absent as well as PATH/checked WSL.
+Finish validating this foundation before extending signature and transport
+integration. Main push/deployment remains separately pending.
+
 Latest execution: combined joining is committed cb17759c, with27 focused tests,
 TypeScript and fictional Edge interaction verified. Temporary Keeper HTTP408/429
 and5xx recovery classification is verified by11 transport tests, bounded-health

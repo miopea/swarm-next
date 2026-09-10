@@ -21,6 +21,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 mod apiary;
+mod apiary_directory;
+pub use apiary_directory::LocalPublicHiveProfile;
 mod attention;
 mod coordinator;
 mod database_integrity;
@@ -286,7 +288,8 @@ const WORKER_REVIVAL_ATTEMPTS_SCHEMA_VERSION: i64 = 158;
 const DECISION_CLARIFICATION_SCHEMA_VERSION: i64 = 159;
 const NATIVE_OPERATOR_INTERVIEWS_SCHEMA_VERSION: i64 = 160;
 const DECISION_OPTION_DESCRIPTIONS_SCHEMA_VERSION: i64 = 161;
-const CURRENT_SCHEMA_VERSION: i64 = DECISION_OPTION_DESCRIPTIONS_SCHEMA_VERSION;
+const PUBLIC_HIVE_PROFILE_SCHEMA_VERSION: i64 = 162;
+const CURRENT_SCHEMA_VERSION: i64 = PUBLIC_HIVE_PROFILE_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -1055,6 +1058,14 @@ impl TaskStore {
         let identity = self.local_hive_identity()?;
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
+        let prior_name: String = transaction.query_row(
+            "SELECT name FROM hives WHERE id = ?1",
+            [identity.hive.id.to_string()],
+            |row| row.get(0),
+        )?;
+        if prior_name != name {
+            apiary_directory::advance_local_profile_revision(&transaction)?;
+        }
         if transaction.execute(
             "UPDATE hives SET name = ?1, updated_at = ?2
              WHERE id = ?3 AND operator_id = ?4",
@@ -4057,6 +4068,9 @@ fn migrate_ops_intake_schema_steps(
             "user_version",
             DECISION_OPTION_DESCRIPTIONS_SCHEMA_VERSION,
         )?;
+    }
+    if schema_version < PUBLIC_HIVE_PROFILE_SCHEMA_VERSION {
+        apiary_directory::migrate(transaction)?;
     }
     Ok(())
 }
@@ -9417,6 +9431,12 @@ mod tests {
             // Rewinding it must preserve the native-source table from 160.
             undo_sql: "SELECT 1",
             probe_sql: "SELECT user_version >= 161 FROM pragma_user_version",
+        },
+        SchemaStep {
+            table: "local_public_hive_profile",
+            artifact: "",
+            undo_sql: "DROP TABLE local_public_hive_profile",
+            probe_sql: "",
         },
     ];
 

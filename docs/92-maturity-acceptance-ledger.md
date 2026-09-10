@@ -1,5 +1,25 @@
 # Current maturity acceptance ledger
 
+## September 10 — Public profile foundation validated, not deployed
+
+After explicit operator approval for source transfer, isolated Linux validation
+completed: five directory-domain tests, all757 persistence tests, one authenticated
+profile endpoint test, strict domain/persistence/API Clippy. Compilation found and
+corrected a migration return type; upgrade testing found and corrected migration
+replay behavior, with a regression preserving saved profile/revision.
+
+Schema162 adds a singleton local contact-email/profile-revision record. Profile
+edits and existing Hive renames advance one revision atomically; identity IDs,
+membership and execution authority are unchanged. Operator-authenticated no-store
+GET/PUT /api/v1/hive/public-profile exposes the local fields through ApiaryService.
+Names and contact information are not verified authentication claims.
+
+The directory domain carries exact identity scope, bounded entries, single Keeper,
+revision and expiry checks, plus explicit default-name behavior for joining.
+These structural checks are NOT signature verification or completed federation.
+Signed exchange, projection storage, shared roster convergence, join/profile UI
+and live acceptance remain open. No live migration, deployment or restart occurred.
+
 ## September 10 — Temporary Keeper failures no longer imply incompatibility
 
 Confirmed code defect: HTTP408/429 and5xx were RemoteRejected, which the

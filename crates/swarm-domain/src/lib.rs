@@ -3,6 +3,7 @@ use std::{fmt, str::FromStr};
 use uuid::Uuid;
 
 mod apiary;
+mod apiary_directory;
 mod control_room;
 mod conversation_recovery;
 mod conversation_selection;
@@ -32,6 +33,7 @@ mod version;
 mod workers;
 
 pub use apiary::*;
+pub use apiary_directory::*;
 pub use control_room::*;
 pub use conversation_recovery::*;
 pub use conversation_selection::*;

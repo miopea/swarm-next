@@ -3531,6 +3531,10 @@ fn api_router(state: AppState) -> Router {
         )
         .route("/api/v1/hive", get(local_hive).put(rename_local_hive))
         .route(
+            "/api/v1/hive/public-profile",
+            get(local_public_profile).put(save_local_public_profile),
+        )
+        .route(
             "/api/v1/apiary",
             post(create_apiary).put(rename_local_apiary),
         )
@@ -4379,6 +4383,30 @@ async fn local_hive(
         }),
     )
         .into_response())
+}
+
+async fn local_public_profile(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let profile = apiary_service(&state)?
+        .local_public_profile()
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(profile)).into_response())
+}
+
+async fn save_local_public_profile(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(profile): Json<swarm_domain::PublicHiveProfile>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let saved = apiary_service(&state)?
+        .save_local_public_profile(&profile, unix_timestamp())
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(saved)).into_response())
 }
 
 async fn rename_local_hive(
@@ -10625,6 +10653,57 @@ mod tests {
         let status = store.coordinator_status().unwrap();
         assert_eq!(status.uncertain_actions, 1);
         assert_eq!(status.queued_actions, 0);
+    }
+
+    #[tokio::test]
+    async fn local_public_profile_is_authenticated_and_does_not_join() {
+        let store = TaskStore::in_memory().unwrap();
+        let original = store.local_hive_identity().unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone()),
+        );
+        let body = r#"{"hive_name":"Clover House","operator_display_name":"Bea","contact_email":"bea@example.test"}"#;
+        for method in ["GET", "PUT"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri("/api/v1/hive/public-profile")
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/hive/public-profile")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let saved = response_json(response).await;
+        assert_eq!(saved["profile"]["contact_email"], "bea@example.test");
+        assert_eq!(saved["revision"], 2);
+        let read = authorized_get(app, "/api/v1/hive/public-profile").await;
+        assert_eq!(response_json(read).await, saved);
+        let current = store.local_hive_identity().unwrap();
+        assert_eq!(current.hive.id, original.hive.id);
+        assert_eq!(current.operator.id, original.operator.id);
+        assert_eq!(current.hive.apiary_id, None);
     }
 
     #[tokio::test]
