@@ -2,13 +2,13 @@
 
 ## Keeper management authority — September 10, 2026
 
-The operator requested scoping broader Keeper control over member Hives and
-possibly a persistent, more timely connection. See doc98. Pending question:
-should joining include consent to shared configuration and work coordination,
-while private Hive settings and terminal control remain outside that default?
-Recommendation: yes, with explicit scope and audited application; no answer yet.
-Do not infer unrestricted remote management or treat transport as authorization.
-Approved lower-friction enrollment continues independently.
+Resolved: the operator approved joining as consent to Apiary-wide Keeper
+management while retaining the local task system. Swarm shared tasks form the
+baseline; Jira is optional and no Jira project is required. See doc98 and the
+superseding decision in ADR0097. Individual machine/terminal capabilities and
+persistent transport still need explicit design; do not infer arbitrary remote
+commands or treat transport as authorization. The Apiary tab must show current
+capabilities, missing setup/actions, optional enhancements and Keeper-owned waits.
 
 ## Native answer correlation — September 10, 2026
 

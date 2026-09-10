@@ -4,6 +4,22 @@
 
 ### Latest priority: guided enrollment, then workspace setup
 
+SUPERSEDING operator decisions: membership needs NO Jira or Jira project;
+Swarm shared tasks are baseline and Jira is optional. Joining accepts Apiary-wide
+Keeper management, retaining local tasks. Apiary tab owns setup, management and
+next steps; Settings starts create/invite/join and links existing members back
+to Apiary. Specialized setup such as Jira belongs on its own page, not duplicated
+inside Apiary. Inline Jira placement in012c18e8 is superseded and no longer used.
+
+Current uncommitted work: optional-Jira domain readiness and signed schema2 join
+acceptance (all162 domain tests and existing schema1 independent join test pass;
+new schema2 two-Hive lifecycle proof and strict lint still REQUIRED). MemberSetup
+card and ApiaryWorkspace management navigation are implemented locally;30 UI
+tests and TypeScript pass. Additional workspace navigation tests are being run.
+Do not claim deployed or full no-Jira shared-task acceptance yet. Browser remains
+blocked before kernel startup. Existing server is still the earlier identity
+build unless independently verified otherwise. Full goal remains open.
+
 Keeper-management extension is now requested for scoping (doc98). Its default
 authority question is pending in doc09. Do not silently expand member authority
 or let persistent-connection work displace approved enrollment. Current concrete

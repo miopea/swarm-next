@@ -91,10 +91,11 @@ type Props = {
   onReloadDevelopment: () => Promise<void>;
   onPrepareDevelopment?: () => Promise<void>;
   onHiveIdentityChange: (identity: HiveIdentity) => void;
+  onOpenApiary?: () => void;
 };
 
 export default function SettingsWorkspace({ section, query = "", busy, workerEngineProgress, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, publicAddress, onPublicAddressChange, presence, startSurface, onStartSurfaceChange, onLock, providers, providerCapabilitiesUnavailable = false, lockDetectionState, notificationSettings, queenPolicy, pendingQueenDecisionCount = 0, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onOpenQueenDecisions, onOpenTasks, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker,
-  onChooseWorkerMark, onRemoveWorker, onReorderWorkers, onRestartProviders, onUpdateWorkerEngine, onForceWorkerReload, onReloadDevelopment, onPrepareDevelopment, onHiveIdentityChange, sharedMachineResources, dogfoodCollection }: Props) {
+  onChooseWorkerMark, onRemoveWorker, onReorderWorkers, onRestartProviders, onUpdateWorkerEngine, onForceWorkerReload, onReloadDevelopment, onPrepareDevelopment, onHiveIdentityChange, onOpenApiary, sharedMachineResources, dogfoodCollection }: Props) {
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
   const [terminalHostLoaded, setTerminalHostLoaded] = useState(false);
@@ -497,7 +498,9 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
       </section>}
 
       {shows("settings-apiary") && (
-    <ApiarySettings busy={busy} hiveIdentity={hiveIdentity} operatorToken={operatorToken} onHiveIdentityChange={onHiveIdentityChange} />
+    hiveIdentity?.apiary_context?.mode === "federated" && onOpenApiary
+      ? <section id="settings-apiary" className="settings-card"><h3>Your Apiary</h3><p>Manage members, shared projects and Apiary settings from the Apiary page.</p><button className="primary-action" onClick={onOpenApiary}>Open Apiary</button></section>
+      : <ApiarySettings busy={busy} hiveIdentity={hiveIdentity} operatorToken={operatorToken} onHiveIdentityChange={onHiveIdentityChange} />
       )}
 
       {shows("settings-runtime") && (

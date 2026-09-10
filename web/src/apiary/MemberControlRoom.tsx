@@ -39,6 +39,7 @@ import {
 } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 import MemberDirectoryStatus from "./MemberDirectoryStatus";
+import MemberSetup from "./MemberSetup";
 import { catalogBlockerLabel, catalogReadinessLabel, federationSyncCopy } from "./presentation";
 
 type Props = {
@@ -203,6 +204,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
         <div><dt>Pending changes</dt><dd>{snapshot.outboxStatus?.queued_count ?? 0}</dd></div>
       </dl>
       <div className="keeper-dashboard-grid" aria-busy={state === "loading"}>
+        <MemberSetup catalog={snapshot.catalog} sync={snapshot.sync} onManage={onManage} onRefresh={() => void refresh()} />
         {stewardAssists.incoming.some((request) => request.state === "pending") ? <article className="keeper-panel steward-assist-inbox">
           <header><div><p className="eyebrow">Steward assistance</p><h4>A trusted Steward offered help</h4></div><small>Visible queue · never injected into a terminal</small></header>
           <ul aria-label="Pending Steward assistance requests">{stewardAssists.incoming.filter((request) => request.state === "pending").map((request) => <li key={request.id}>

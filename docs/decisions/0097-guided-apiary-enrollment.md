@@ -2,6 +2,28 @@
 
 Status: **Accepted product direction; implementation pending**
 
+## Superseding operator decision: Swarm first, Jira optional
+
+The operator clarified that joining accepts Apiary-wide Keeper management while
+retaining the Hive's local task system. Swarm shared tasks are the baseline;
+Jira is optional and neither a Jira connection nor one project is required for
+membership. This supersedes the at-least-one-project enrollment discussion below
+and ADR0010's Jira-only baseline. Existing Jira assignments retain Jira as their
+source of truth; this does not authorize rewriting or converting existing work.
+
+The Apiary tab is the member setup home: show what works now, missing setup with
+direct actions and benefits, and things waiting on Keeper. Jira is an optional
+enhancement, not a membership failure. Resolved setup prompts disappear.
+Managed settings show Keeper ownership. Private credentials remain local;
+machine/terminal capabilities still require explicit deterministic boundaries,
+not an unrestricted remote-command channel implied by management consent.
+
+Membership-only submissions use the unpublished schema2 described below even
+when no Jira connection exists. Keep the older assertion only when its original
+Jira readiness conditions hold. Older-runtime rejection must preserve invitation
+and local work. Do not label basic shared work usable until its independent
+task-feed and assignment paths pass no-Jira end-to-end tests.
+
 ## Context
 
 The operator approved reducing Apiary joining friction on September 10, 2026.
@@ -56,6 +78,19 @@ consent show the exact revision and scope; receiving a policy is not accepting
 new authority. No recurring acceptance for an unchanged revision.
 
 ## Delivery and validation
+
+### Join compatibility boundary
+
+Project-scoped join assertions use submission schema2, with the existing signed
+identity/policy/catalog fields and receipt format unchanged. All-project-ready
+members may continue issuing schema1 assertions because the older assertion
+remains true. New Keepers accept both; older Keepers reject schema2 before
+consuming the invitation. Never silently retry a schema2 assertion as schema1.
+The stored signed submission stays byte-stable across retries. This is not a
+per-project access grant; project execution/claim checks remain independent.
+The federation application owns schema1 compatibility until the supported
+minimum member version implements project-scoped joining; removal requires
+explicit migration of retained pending submissions, not their deletion.
 
 1. Trace the existing signed enrollment, catalog reconciliation, Jira binding,
    and assignment contracts before changing membership gates.

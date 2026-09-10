@@ -175,8 +175,7 @@ const TerminalView = lazy(loadTerminalView);
 const QueuesView = lazy(() => import("./queues/QueuesView"));
 const TaskBoard = lazy(() => import("./tasks/TaskBoard"));
 const SettingsWorkspace = lazy(() => import("./settings/SettingsWorkspace"));
-const KeeperControlRoom = lazy(() => import("./apiary/KeeperControlRoom"));
-const MemberControlRoom = lazy(() => import("./apiary/MemberControlRoom"));
+const ApiaryWorkspace = lazy(() => import("./apiary/ApiaryWorkspace"));
 /**
  * How often held work is re-read.
  *
@@ -1734,7 +1733,6 @@ export function App() {
     setSettingsSection(section);
     setSurface("settings");
   };
-  const openApiarySettings = () => openSettings("settings-connections");
   const openQueenForAttention = () => {
     const queen = workers.find((worker) => worker.role === "queen");
     if (!queen) return openSettings("settings-workers");
@@ -2527,16 +2525,13 @@ export function App() {
           <Suspense fallback={<WorkspaceLoading label="task board" />}>
             <TaskBoard tasks={boardTasks} heldBriefings={heldBriefings} onPrerequisiteChanged={replaceTask} onCompletedPanelOpen={() => { if (operatorToken) loadSettledTasks(operatorToken); }} jiraTaskLinks={jiraTaskLinks} operatorToken={operatorToken} hiveIdentity={hiveIdentity} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} query={taskQuery} filter={taskFilter} source={taskSource} sort={taskSort} project={taskProject} worker={taskWorker} projects={taskProjects} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSourceChange={(value) => { setTaskSource(value); if (value === "email" || value === "local") setTaskProject("all"); }} onSortChange={setTaskSort} onProjectChange={setTaskProject} onWorkerChange={setTaskWorkerFilter} onJiraSync={() => void syncJiraBoard()} onCreate={addTask} onUpdate={editTask} onRemove={removeTaskFromHive} onRestore={restoreTaskToHive} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); void refreshControlRoom(); }} onFetchActivity={readTaskActivity} onFetchJiraComments={(taskId) => fetchJiraComments(operatorToken, taskId)} onAddJiraComment={(taskId, body) => addJiraComment(operatorToken, taskId, body)} onRetryJira={retryTaskJira} onJiraImported={refreshControlRoom} onEmailImported={refreshControlRoom} onReorder={reorderOpenTasks} />
           </Suspense>
-        ) : surface === "apiary" && keeper && hiveIdentity ? (
+        ) : surface === "apiary" && hiveIdentity ? (
           <Suspense fallback={<WorkspaceLoading label="Apiary" />}>
-            <KeeperControlRoom identity={hiveIdentity} operatorToken={operatorToken} onManage={openApiarySettings} onOpenTasks={() => { setTaskComposeRequest((current) => current + 1); setSurface("tasks"); }} />
-          </Suspense>
-        ) : surface === "apiary" && federated && hiveIdentity ? (
-          <Suspense fallback={<WorkspaceLoading label="Apiary" />}>
-            <MemberControlRoom
+            <ApiaryWorkspace
               identity={hiveIdentity}
               operatorToken={operatorToken}
-              onManage={openApiarySettings}
+              busy={busy}
+              onIdentityChange={setHiveIdentity}
               onOpenTasks={() => setSurface("tasks")}
             />
           </Suspense>
@@ -2591,7 +2586,8 @@ export function App() {
               onUpdateWorkerEngine={maintainWorkerEngine}
               onReloadDevelopment={reloadDevelopmentBuild}
               onPrepareDevelopment={() => reloadDevelopmentBuild(true)}
-              onHiveIdentityChange={setHiveIdentity}
+              onHiveIdentityChange={(next) => { setHiveIdentity(next); if (!federated && next.apiary_context?.mode === "federated") setSurface("apiary"); }}
+              onOpenApiary={() => setSurface("apiary")}
             />
           </Suspense>
         ) : activeSession ? (

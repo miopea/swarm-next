@@ -1,6 +1,6 @@
 # Keeper management and timely Hive coordination
 
-Status: **Scoping requested; default authority awaiting operator decision**
+Status: **Keeper management direction approved; capability details in design**
 
 ## Requested outcome
 
@@ -19,10 +19,12 @@ ADR0097 enrollment work. It is not approval for unrestricted remote control.
 | Visibility | Shared readiness, connection freshness, pending changes and acknowledgements | Private transcripts, tokens, private tasks or repository contents |
 | Terminal intervention | Existing explicitly scoped takeover paths only | Membership itself granting terminal control |
 
-The operator has been asked whether membership should include consent to shared
-configuration and coordination, while private settings and terminal control
-remain excluded. No answer has arrived yet. Do not implement this proposed
-default as accepted authority. Existing explicit grants remain authoritative.
+The operator approved joining as consent to Apiary-wide Keeper management,
+while retaining the local task system. Swarm shared tasks are the minimum setup;
+Jira is optional, including no Jira projects at all. The table above remains a
+capability-design proposal, not an unlimited shell/terminal authority grant.
+Existing explicit grants remain authoritative until capability changes are
+specified, implemented, audited and tested.
 Subsequent questions should address concrete operations rather than an undefined
 "manage everything" switch, one question at a time with a recommendation.
 
