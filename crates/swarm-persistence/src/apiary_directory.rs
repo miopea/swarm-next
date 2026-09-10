@@ -1,7 +1,8 @@
 //! Local public profile ownership. Federation projection lives separately from
 //! private Hive identity and must never grant membership or execution authority.
 
-use rusqlite::{Connection, Transaction, params};
+use base64ct::{Base64UrlUnpadded, Encoding};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use swarm_domain::{ControlRoomEventKind, PublicHiveProfile};
 
@@ -27,6 +28,24 @@ pub(crate) fn migrate(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
         None,
         "user_version",
         super::PUBLIC_HIVE_PROFILE_SCHEMA_VERSION,
+    )?;
+    Ok(())
+}
+
+pub(crate) fn migrate_shared_profiles(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS federation_public_profiles (
+        apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+        node_id TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision > 0),
+        payload_json TEXT NOT NULL,
+        PRIMARY KEY (apiary_id, node_id)
+    );",
+    )?;
+    transaction.pragma_update(
+        None,
+        "user_version",
+        super::FEDERATION_PUBLIC_PROFILES_SCHEMA_VERSION,
     )?;
     Ok(())
 }
@@ -69,6 +88,93 @@ fn read_profile(connection: &Connection) -> Result<LocalPublicHiveProfile, TaskS
 }
 
 impl TaskStore {
+    /// Accepts only an active member's pinned-key-signed public labels. Revision
+    /// and label changes commit atomically. Identical retries do not emit events.
+    ///
+    /// # Errors
+    /// Rejects invalid credentials/signatures, wrong scope, stale/conflicting
+    /// revisions, capacity overflow, or unavailable persistence.
+    pub fn accept_federation_public_profile(
+        &self,
+        credential: &str,
+        update: &swarm_domain::FederationProfileUpdate,
+        now: i64,
+    ) -> Result<bool, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationCredential);
+        }
+        let credential: [u8; 32] = Base64UrlUnpadded::decode_vec(credential)
+            .map_err(|_| TaskStoreError::InvalidFederationCredential)?
+            .try_into()
+            .map_err(|_| TaskStoreError::InvalidFederationCredential)?;
+        let identity = self.local_hive_identity()?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let member = super::federation::authenticate_member_credential(
+            &transaction,
+            &identity,
+            &credential,
+            now,
+        )?;
+        let key: String = transaction.query_row(
+            "SELECT public_key FROM apiary_hive_candidates WHERE apiary_id = ?1 AND node_id = ?2 AND hive_id = ?3 AND operator_id = ?4",
+            params![member.apiary.to_string(), member.node.to_string(), member.hive.to_string(), member.operator.to_string()],
+            |row| row.get(0),
+        )?;
+        super::verify_federation_profile_update(
+            update,
+            member.apiary,
+            swarm_domain::PublicHiveIdentity {
+                node_id: member.node,
+                hive_id: member.hive,
+                operator_id: member.operator,
+            },
+            &key,
+        )?;
+        let payload = serde_json::to_string(&update.payload)
+            .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+        let prior = transaction.query_row(
+            "SELECT revision, payload_json FROM federation_public_profiles WHERE apiary_id = ?1 AND node_id = ?2",
+            params![member.apiary.to_string(), member.node.to_string()],
+            |row| Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?)),
+        ).optional()?;
+        if let Some((revision, saved)) = prior {
+            if revision == update.payload.revision && saved == payload {
+                return Ok(false);
+            }
+            if revision >= update.payload.revision {
+                return Err(TaskStoreError::InvalidHiveIdentity);
+            }
+        } else {
+            let count: usize = transaction.query_row(
+                "SELECT count(*) FROM federation_public_profiles WHERE apiary_id = ?1",
+                [member.apiary.to_string()],
+                |row| row.get(0),
+            )?;
+            if count >= swarm_domain::MAX_APIARY_DIRECTORY_ENTRIES {
+                return Err(TaskStoreError::InvalidHiveIdentity);
+            }
+        }
+        transaction.execute("INSERT INTO federation_public_profiles (apiary_id, node_id, revision, payload_json) VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(apiary_id, node_id) DO UPDATE SET revision = excluded.revision, payload_json = excluded.payload_json",
+            params![member.apiary.to_string(), member.node.to_string(), update.payload.revision, payload])?;
+        if transaction.execute("UPDATE hives SET name = ?1, updated_at = ?2 WHERE id = ?3 AND operator_id = ?4 AND apiary_id = ?5",
+            params![update.payload.profile.hive_name, now, member.hive.to_string(), member.operator.to_string(), member.apiary.to_string()])? != 1 {
+            return Err(TaskStoreError::InvalidHiveIdentity);
+        }
+        transaction.execute(
+            "UPDATE operators SET display_name = ?1, updated_at = ?2 WHERE id = ?3",
+            params![
+                update.payload.profile.operator_display_name,
+                now,
+                member.operator.to_string()
+            ],
+        )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::RuntimeChanged)?;
+        transaction.commit()?;
+        Ok(true)
+    }
+
     /// Returns the local owner's public labels and monotonic revision, not
     /// authentication or inferred data from another integration.
     ///

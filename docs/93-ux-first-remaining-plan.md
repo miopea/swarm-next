@@ -2,6 +2,20 @@
 
 ## Operator priority override — Apiary onboarding, September 10
 
+Latest signed-profile slice: Keeper acceptance and member signing now implemented
+and verified with independent database tests, rollback/tamper/stale checks, four
+upgrade regressions and strict persistence Clippy. Schema163 stores bounded latest
+received profiles. Signed directory feed/projection and HTTP exchange are NEXT;
+local-profile foundation alone is not a delivered cross-Hive directory. No deploy.
+
+Operator requests continuous work and a release-readiness signal before inviting
+another developer. Do not cut a release. The next Apiary release gate is a
+verified end-to-end Keeper plus two-member join, profile/default-name preview,
+complete roster convergence, subsequent rename propagation, and failure/recovery
+on mixed installed versions. Local profile endpoints or signing tests alone do
+not satisfy this gate. Notify the operator when these user-facing outcomes are
+ready for another real developer's onboarding.
+
 In-flight directory domain implementation: new apiary_directory.rs plus module
 export. Public profile, exact scoped member update, bounded full directory,
 Keeper uniqueness, identity collision checks and default join naming are present.

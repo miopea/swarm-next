@@ -80,7 +80,7 @@ pub use federation::{
     MIN_CONNECTION_CARD_LIFETIME_SECONDS, MIN_FEDERATION_INVITATION_LIFETIME_SECONDS,
     verify_apiary_invitation_envelope, verify_federation_catalog_snapshot,
     verify_federation_departure_receipt, verify_federation_membership_receipt,
-    verify_hive_connection_card,
+    verify_federation_profile_update, verify_hive_connection_card,
 };
 pub use federation_handoff_reconciliation::{
     FederationHandoffIntent, FederationHandoffIntentPhase, MAX_FEDERATION_HANDOFF_BATCH,
@@ -289,7 +289,8 @@ const DECISION_CLARIFICATION_SCHEMA_VERSION: i64 = 159;
 const NATIVE_OPERATOR_INTERVIEWS_SCHEMA_VERSION: i64 = 160;
 const DECISION_OPTION_DESCRIPTIONS_SCHEMA_VERSION: i64 = 161;
 const PUBLIC_HIVE_PROFILE_SCHEMA_VERSION: i64 = 162;
-const CURRENT_SCHEMA_VERSION: i64 = PUBLIC_HIVE_PROFILE_SCHEMA_VERSION;
+const FEDERATION_PUBLIC_PROFILES_SCHEMA_VERSION: i64 = 163;
+const CURRENT_SCHEMA_VERSION: i64 = FEDERATION_PUBLIC_PROFILES_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4071,6 +4072,9 @@ fn migrate_ops_intake_schema_steps(
     }
     if schema_version < PUBLIC_HIVE_PROFILE_SCHEMA_VERSION {
         apiary_directory::migrate(transaction)?;
+    }
+    if schema_version < FEDERATION_PUBLIC_PROFILES_SCHEMA_VERSION {
+        apiary_directory::migrate_shared_profiles(transaction)?;
     }
     Ok(())
 }
@@ -9436,6 +9440,12 @@ mod tests {
             table: "local_public_hive_profile",
             artifact: "",
             undo_sql: "DROP TABLE local_public_hive_profile",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "federation_public_profiles",
+            artifact: "",
+            undo_sql: "DROP TABLE federation_public_profiles",
             probe_sql: "",
         },
     ];

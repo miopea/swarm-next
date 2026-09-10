@@ -106,6 +106,48 @@ struct DepartureMemberContext {
 }
 
 impl TaskStore {
+    /// Signs the current local public profile for its active Apiary membership.
+    /// The key stays private; the payload grants no membership or authority.
+    ///
+    /// # Errors
+    /// Rejects non-members, invalid profiles or unavailable identity storage.
+    pub fn signed_local_profile_update(
+        &self,
+        now: i64,
+    ) -> Result<swarm_domain::FederationProfileUpdate, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidHiveIdentity);
+        }
+        self.require_local_federation_member()?;
+        let identity = self.local_hive_identity()?;
+        let local_node = self.local_federation_identity(now)?;
+        let profile = self.local_public_hive_profile()?;
+        let payload = swarm_domain::FederationProfileUpdatePayload {
+            schema_version: swarm_domain::FEDERATION_DIRECTORY_SCHEMA_VERSION,
+            apiary_id: identity
+                .hive
+                .apiary_id
+                .ok_or(TaskStoreError::InvalidApiary)?,
+            identity: swarm_domain::PublicHiveIdentity {
+                node_id: local_node.node_id,
+                hive_id: identity.hive.id,
+                operator_id: identity.operator.id,
+            },
+            revision: profile.revision,
+            profile: profile.profile,
+        };
+        if !payload.matches_member(payload.apiary_id, payload.identity) {
+            return Err(TaskStoreError::InvalidHiveIdentity);
+        }
+        let signature = local_node
+            .signing_key
+            .sign(&canonical_public_profile_payload(&payload)?);
+        Ok(swarm_domain::FederationProfileUpdate {
+            payload,
+            signature: Base64UrlUnpadded::encode_string(&signature.to_bytes()),
+        })
+    }
+
     /// Returns the joined Member's host-private outbound Keeper connection.
     /// This is adapter material and must never enter browser or agent reads.
     ///
@@ -2498,6 +2540,46 @@ fn canonical_departure_receipt_payload(
     payload: &FederationDepartureReceiptPayload,
 ) -> Result<Vec<u8>, TaskStoreError> {
     serde_json::to_vec(payload).map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))
+}
+
+fn canonical_public_profile_payload(
+    payload: &swarm_domain::FederationProfileUpdatePayload,
+) -> Result<Vec<u8>, TaskStoreError> {
+    let mut canonical = b"swarm/apiary/public-profile/v1\0".to_vec();
+    canonical.extend(
+        serde_json::to_vec(payload)
+            .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?,
+    );
+    Ok(canonical)
+}
+
+/// Verifies a profile update against an already authenticated, pinned member.
+/// Callers must independently validate active credentials and monotonic revision
+/// inside their write transaction; a valid signature never grants membership.
+///
+/// # Errors
+/// Rejects wrong scope, malformed or changed content, and invalid signatures.
+pub fn verify_federation_profile_update(
+    update: &swarm_domain::FederationProfileUpdate,
+    apiary_id: ApiaryId,
+    member: swarm_domain::PublicHiveIdentity,
+    pinned_public_key: &str,
+) -> Result<(), TaskStoreError> {
+    if !update.payload.matches_member(apiary_id, member) {
+        return Err(TaskStoreError::InvalidFederationCredential);
+    }
+    let key: [u8; 32] = Base64UrlUnpadded::decode_vec(pinned_public_key)
+        .map_err(|_| TaskStoreError::InvalidFederationCredential)?
+        .try_into()
+        .map_err(|_| TaskStoreError::InvalidFederationCredential)?;
+    let signature: [u8; 64] = Base64UrlUnpadded::decode_vec(&update.signature)
+        .map_err(|_| TaskStoreError::InvalidFederationCredential)?
+        .try_into()
+        .map_err(|_| TaskStoreError::InvalidFederationCredential)?;
+    let canonical = canonical_public_profile_payload(&update.payload)?;
+    VerifyingKey::from_bytes(&key)
+        .and_then(|key| key.verify(&canonical, &Signature::from_bytes(&signature)))
+        .map_err(|_| TaskStoreError::InvalidFederationCredential)
 }
 
 fn canonical_catalog_snapshot_payload(
@@ -5976,6 +6058,149 @@ mod tests {
                 .stewardship,
             None
         );
+    }
+
+    #[test]
+    fn keeper_public_profile_acceptance_is_authenticated_monotonic_and_atomic() {
+        let now = 80_000;
+        let (keeper, member) = joined_member(now);
+        let credential = member
+            .federation_member_connection()
+            .unwrap()
+            .node_credential;
+        let first = member.signed_local_profile_update(now).unwrap();
+        assert!(
+            keeper
+                .accept_federation_public_profile(&credential, &first, now)
+                .unwrap()
+        );
+        assert!(
+            !keeper
+                .accept_federation_public_profile(&credential, &first, now)
+                .unwrap()
+        );
+        member.rename_local_hive("Evening Clover", now + 1).unwrap();
+        let next = member.signed_local_profile_update(now + 1).unwrap();
+        {
+            let connection = keeper.connection().unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TEMP TRIGGER refuse_profile_event BEFORE INSERT ON control_room_events
+                BEGIN SELECT RAISE(ABORT, 'injected event failure'); END;",
+                )
+                .unwrap();
+        }
+        assert!(
+            keeper
+                .accept_federation_public_profile(&credential, &next, now + 1)
+                .is_err()
+        );
+        assert!(
+            !keeper
+                .list_apiary_members()
+                .unwrap()
+                .iter()
+                .any(|item| item.hive_name == "Evening Clover")
+        );
+        keeper
+            .connection()
+            .unwrap()
+            .execute_batch("DROP TRIGGER refuse_profile_event")
+            .unwrap();
+        assert!(
+            keeper
+                .accept_federation_public_profile(&credential, &next, now + 2)
+                .unwrap()
+        );
+        assert!(
+            keeper
+                .list_apiary_members()
+                .unwrap()
+                .iter()
+                .any(|item| item.hive_name == "Evening Clover")
+        );
+        assert!(
+            keeper
+                .accept_federation_public_profile(&credential, &first, now + 3)
+                .is_err()
+        );
+        assert!(
+            keeper
+                .accept_federation_public_profile("not-a-credential", &next, now + 3)
+                .is_err()
+        );
+        assert!(
+            keeper
+                .accept_federation_public_profile(&credential, &next, now + 31 * 24 * 60 * 60)
+                .is_err()
+        );
+        let mut changed = next.clone();
+        changed.payload.profile.hive_name = "Forged".into();
+        assert!(
+            keeper
+                .accept_federation_public_profile(&credential, &changed, now + 3)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn public_profile_signature_binds_identity_revision_and_every_label() {
+        let now = 80_000;
+        let (_keeper, member) = joined_member(now);
+        let update = member.signed_local_profile_update(now).unwrap();
+        let card = member.issue_hive_connection_card(now, 3_600).unwrap();
+        let verify = |candidate: &swarm_domain::FederationProfileUpdate| {
+            verify_federation_profile_update(
+                candidate,
+                update.payload.apiary_id,
+                update.payload.identity,
+                &card.payload.public_key,
+            )
+        };
+        assert!(verify(&update).is_ok());
+        for field in 0..4 {
+            let mut altered = update.clone();
+            match field {
+                0 => altered.payload.profile.hive_name = "Other Hive".into(),
+                1 => altered.payload.profile.operator_display_name = "Other person".into(),
+                2 => altered.payload.profile.contact_email = Some("other@example.test".into()),
+                _ => altered.payload.revision += 1,
+            }
+            assert!(verify(&altered).is_err());
+        }
+        assert!(
+            verify_federation_profile_update(
+                &update,
+                ApiaryId::new(),
+                update.payload.identity,
+                &card.payload.public_key
+            )
+            .is_err()
+        );
+        let mut wrong_member = update.payload.identity;
+        wrong_member.hive_id = HiveId::new();
+        assert!(
+            verify_federation_profile_update(
+                &update,
+                update.payload.apiary_id,
+                wrong_member,
+                &card.payload.public_key
+            )
+            .is_err()
+        );
+        assert!(
+            verify_federation_profile_update(
+                &update,
+                update.payload.apiary_id,
+                update.payload.identity,
+                &Base64UrlUnpadded::encode_string(&[0; 32])
+            )
+            .is_err()
+        );
+        member.rename_local_hive("Evening Clover", now + 1).unwrap();
+        let renamed = member.signed_local_profile_update(now + 1).unwrap();
+        assert_eq!(renamed.payload.revision, update.payload.revision + 1);
+        assert!(verify(&renamed).is_ok());
     }
 
     #[test]

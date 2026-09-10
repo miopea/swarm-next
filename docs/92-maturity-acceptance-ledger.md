@@ -1,5 +1,20 @@
 # Current maturity acceptance ledger
 
+## September 10 — Signed member profiles reach Keeper persistence
+
+Added domain-separated signed local profile updates and verification against the
+exact pinned member identity/key. Keeper acceptance authenticates the active node
+credential inside the transaction, checks revision monotonicity, stores one latest
+profile per member (bounded256), and updates only public name labels. Identical
+retries are no-ops. Schema163 owns the received profile records.
+
+Independent fictional Keeper/member tests prove rename acceptance, valid retry,
+stale/forged/wrong-key/scope rejection, expired/invalid credential rejection and
+rollback when event insertion fails. Two new signature/acceptance tests, existing
+profile tests, four previous-schema regressions and strict persistence Clippy pass.
+This package does not add the remote endpoint, signed directory feed, recipient
+projection or UI. No running instance was updated; no live membership changed.
+
 ## September 10 — Public profile foundation validated, not deployed
 
 After explicit operator approval for source transfer, isolated Linux validation
