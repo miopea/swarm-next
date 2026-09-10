@@ -948,6 +948,31 @@ fi
 # case below therefore also asserts WHY it refused.
 migration_bundle="$test_root/bundle-4.0.0"
 
+# Preparation never drains, stops, activates or automatically applies, even
+# when the host has no loaded sessions. Exact retry preserves the same package.
+prepared_current=$(readlink "$SWARM_INSTALL_ROOT/current")
+prepared_host=$(readlink "$SWARM_INSTALL_ROOT/host-current")
+prepared_services=$(wc -l < "$HOME/systemctl.log")
+prepared_commands=$(wc -l < "$HOME/swarmctl.log")
+printf '0\n' > "$HOME/running-sessions"
+"$package" prepare-protocol "$migration_bundle"
+"$package" prepare-protocol "$migration_bundle"
+"$package" complete-protocol-migration-if-idle
+printf 'requested_at=1\ntarget_version=older-build\n' > "$SWARM_STATE_ROOT/worker-engine-maintenance.request"
+"$package" reconcile-host-requested
+[ ! -e "$SWARM_STATE_ROOT/worker-engine-maintenance.request" ]
+[ "$(readlink "$SWARM_INSTALL_ROOT/current")" = "$prepared_current" ]
+[ "$(readlink "$SWARM_INSTALL_ROOT/host-current")" = "$prepared_host" ]
+[ "$(wc -l < "$HOME/systemctl.log")" -eq "$prepared_services" ]
+[ "$(wc -l < "$HOME/swarmctl.log")" -eq "$prepared_commands" ]
+[ -f "$SWARM_STATE_ROOT/protocol-migration.manual" ]
+[ -f "$SWARM_STATE_ROOT/protocol-migration.pending" ]
+if "$package" prepare-protocol "$test_root/bundle-8.0.0"; then
+  echo "a different preparation replaced the pending migration" >&2; exit 1
+fi
+[ "$(cat "$SWARM_STATE_ROOT/protocol-migration.pending")" = "$(cat "$SWARM_STATE_ROOT/protocol-migration.manual")" ]
+rm "$SWARM_STATE_ROOT/protocol-migration.pending" "$SWARM_STATE_ROOT/protocol-migration.manual"
+
 # Explicit migrate-protocol refuses a MID-TURN worker, and says so.
 printf '1\n' > "$HOME/running-sessions"
 printf '1\n' > "$HOME/busy-sessions"
@@ -1245,7 +1270,7 @@ locked_current=$(readlink "$SWARM_INSTALL_ROOT/current")
 locked_host=$(readlink "$SWARM_INSTALL_ROOT/host-current")
 : > "$HOME/systemctl.log"
 : > "$HOME/swarmctl.log"
-for locked_action in update rollback reconcile-host migrate-protocol complete-protocol-migration restore restore-offline uninstall enable-development disable-development; do
+for locked_action in update rollback reconcile-host prepare-protocol migrate-protocol complete-protocol-migration restore restore-offline uninstall enable-development disable-development; do
   if flock "$SWARM_STATE_ROOT/.package-lifecycle.lock" "$package" "$locked_action" "$test_root/bundle-2.0.0" > "$HOME/lock-result" 2>&1; then
     echo "$locked_action ignored the lifecycle owner" >&2; exit 1
   fi

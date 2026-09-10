@@ -1825,6 +1825,15 @@ reconcile_host_requested() {
   # atomic step -- reconciling the host first would move host-current under it.
   if pending_protocol_release >/dev/null 2>&1; then
     if [ -f "$request_path" ]; then
+      if [ -f "$state_root/protocol-migration.manual" ]; then
+        requested_target=$(sed -n 's/^target_version=//p' "$request_path")
+        prepared_target=$(pending_protocol_release)
+        if [ "$requested_target" != "$(cat "$prepared_target/VERSION")" ]; then
+          rm -f "$request_path"
+          printf 'Maintenance request did not name the prepared migration; request consumed without activation.\n'
+          return
+        fi
+      fi
       # The card's force path stops the sessions itself, then writes this file.
       complete_protocol_migration
       rm -f "$request_path"
@@ -1910,7 +1919,7 @@ activate_protocol_migration() {
     rollback_host_release=
     update_rollback=
     fail_step=
-    rm -f "$state_root/protocol-migration.pending"
+    rm -f "$state_root/protocol-migration.pending" "$state_root/protocol-migration.manual"
     prune_superseded_releases
     printf 'Swarm protocol migrated to %s and is healthy at %s\n' "$(basename "$new_release")" "$health_url"
     return
@@ -1933,6 +1942,27 @@ pending_protocol_release() {
   esac
   [ -d "$pending" ] && [ -f "$pending/PROTOCOL" ] || { rm -f "$pending_file"; return 1; }
   printf '%s' "$pending"
+}
+
+prepare_protocol() {
+  validate_bundle
+  validate_config
+  [ ! -e "$state_root/worker-engine-maintenance.request" ] \
+    || die "an earlier engine maintenance request is pending; resolve it before preparing a migration"
+  host_release=$(release_from_link "$install_root/host-current")
+  [ -n "$host_release" ] || die "no terminal host release is installed"
+  [ "$(cat "$host_release/PROTOCOL")" != "$protocol" ] || die "protocol is unchanged; use update and reconcile-host"
+  if prepared_existing=$(pending_protocol_release); then
+    [ "$(cat "$prepared_existing/VERSION")" = "$version" ] \
+      || die "another protocol migration is already prepared; resolve it before preparing a different build"
+  fi
+  new_release=$(install_release)
+  # A preparation is not consent to activate, including when no workers are
+  # loaded. Write the manual hold first so interruption cannot expose an
+  # automatically actionable pending package. The lifecycle lock owns both.
+  printf '%s\n' "$new_release" > "$state_root/protocol-migration.manual"
+  printf '%s\n' "$new_release" > "$state_root/protocol-migration.pending"
+  printf 'Protocol migration to %s is prepared. No services or release links changed. Explicit worker engine maintenance is required to apply it.\n' "$version"
 }
 
 migrate_protocol() {
@@ -2009,6 +2039,10 @@ migrate_protocol() {
 complete_protocol_migration() {
   complete_mode=${1:-required}
   pending=$(pending_protocol_release) || { printf 'No protocol migration is pending\n'; return; }
+  if [ "$complete_mode" = "if-idle" ] && [ -f "$state_root/protocol-migration.manual" ]; then
+    printf 'Prepared protocol migration awaits explicit worker engine maintenance; no services or release links changed.\n'
+    return
+  fi
   host_release=$(release_from_link "$install_root/host-current")
   [ -n "$host_release" ] || die "no terminal host release is installed"
   if [ "$(cat "$host_release/PROTOCOL")" = "$(cat "$pending/PROTOCOL")" ]; then
@@ -2072,7 +2106,7 @@ uninstall_product() {
 
 validate_roots
 case "$action" in
-  install|update|rollback|reconcile-host|reconcile-host-if-idle|reconcile-host-requested|migrate-protocol|migrate-protocol-if-idle|complete-protocol-migration|complete-protocol-migration-if-idle|enable-development|disable-development|uninstall|restore|restore-offline)
+  install|update|rollback|reconcile-host|reconcile-host-if-idle|reconcile-host-requested|prepare-protocol|migrate-protocol|migrate-protocol-if-idle|complete-protocol-migration|complete-protocol-migration-if-idle|enable-development|disable-development|uninstall|restore|restore-offline)
     lock_package_lifecycle;;
 esac
 case "$action" in
@@ -2085,6 +2119,7 @@ case "$action" in
   reconcile-host-if-idle) reconcile_host if-idle;;
   reconcile-host-requested) reconcile_host_requested;;
   migrate-protocol) migrate_protocol;;
+  prepare-protocol) prepare_protocol;;
   migrate-protocol-if-idle) migrate_protocol if-idle;;
   complete-protocol-migration) complete_protocol_migration;;
   complete-protocol-migration-if-idle) complete_protocol_migration if-idle;;

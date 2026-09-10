@@ -61,6 +61,30 @@ resuming the intended conversation.
 
 ## Compatibility and package ownership
 
+### Explicit package preparation
+
+The package lifecycle owner may stage a validated protocol-changing package via
+`prepare-protocol RELEASE_DIR` without draining sessions, contacting the engine,
+changing active links, or starting/stopping services. One pending package is
+owned by the existing lifecycle lock. A different pending version refuses rather
+than replacing a preparation; exact retries preserve the candidate.
+
+Preparation writes a manual-activation hold before the pending-package marker.
+Automatic completion refuses that hold even with zero loaded workers. Managed
+explicit maintenance must name the exact prepared version; an older request is
+consumed without activation. Successful activation removes both markers. These
+files carry no authority to stop a worker; the existing explicit maintenance
+confirmation and durable return path remain required.
+
+This command is not yet wired into the development build request or exposed as
+a working UI action. That integration must advertise preparation separately from
+activation, bind consent to the prepared version before stopping workers, and
+exercise failure/recovery plus final conversation return. Older installed APIs
+write the running version in maintenance requests; they cannot activate a new
+manually prepared candidate through that request. Do not weaken exact-target
+checking to make an older UI appear compatible. This does not enable automatic
+maintenance admission or close OPS-01.
+
 ### September 9 implementation checkpoint
 
 The engine library now freezes remote takeover authority, registry membership
