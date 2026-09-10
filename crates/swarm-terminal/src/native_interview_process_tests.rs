@@ -21,7 +21,20 @@ fn observe(
         };
         registry.begin_native_interview(session, capability, ticket, payload)
     } else {
-        registry.observe_native_interview(session, capability, payload)
+        let accepted = registry.observe_native_interview(session, capability, payload)?;
+        if accepted && registry.native_interview_evidence()?.is_empty() {
+            let observation = crate::read_claude_interview(payload).unwrap();
+            let questions = observation.questions();
+            let batch = serde_json::to_vec(&json!({"hook_event_name":"PostToolBatch",
+                "session_id":observation.conversation, "tool_calls":[{
+                "tool_name":"AskUserQuestion", "tool_use_id":observation.tool_use_id,
+                "tool_input":{"questions":questions},
+                "tool_response":"Your questions have been answered: \"Which fictional jar?\"=\"Amber\". You can now continue with these answers in mind."
+            }]})).unwrap();
+            registry.observe_native_interview(session, capability, &batch)
+        } else {
+            Ok(accepted)
+        }
     }
 }
 
@@ -52,6 +65,46 @@ fn delayed_admission_cannot_claim_input_that_preceded_the_helper_round_trip() {
             .unwrap()
     );
     assert!(registry.native_interview_evidence().unwrap().is_empty());
+}
+
+#[test]
+fn provisional_result_requires_an_authenticated_final_callback() {
+    let (registry, session, conversation, grant) = fixture();
+    assert!(
+        observe(
+            &registry,
+            session.id(),
+            &CAPABILITY,
+            &payload(conversation, false)
+        )
+        .unwrap()
+    );
+    registry
+        .write_controlled(session.id(), grant.identity, grant.generation, b"\r")
+        .unwrap();
+    assert!(
+        registry
+            .observe_native_interview(session.id(), &CAPABILITY, &payload(conversation, true))
+            .unwrap()
+    );
+    assert!(registry.native_interview_evidence().unwrap().is_empty());
+    let observation = crate::read_claude_interview(&payload(conversation, true)).unwrap();
+    let batch = serde_json::to_vec(&json!({"hook_event_name":"PostToolBatch", "session_id":conversation,
+        "tool_calls":[{"tool_name":"AskUserQuestion", "tool_use_id":"toolu_fixture",
+        "tool_input":{"questions":observation.questions()},
+        "tool_response":"Your questions have been answered: \"Which fictional jar?\"=\"Amber\". You can now continue with these answers in mind."}]})).unwrap();
+    assert!(
+        !registry
+            .observe_native_interview(session.id(), &[99; 32], &batch)
+            .unwrap()
+    );
+    assert!(registry.native_interview_evidence().unwrap().is_empty());
+    assert!(
+        registry
+            .observe_native_interview(session.id(), &CAPABILITY, &batch)
+            .unwrap()
+    );
+    assert_eq!(registry.native_interview_evidence().unwrap().len(), 1);
 }
 
 fn fixture() -> (

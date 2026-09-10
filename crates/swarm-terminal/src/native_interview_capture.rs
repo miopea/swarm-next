@@ -33,12 +33,14 @@ struct Prepared {
 }
 
 /// The registry owns this under the same ordering lock as its PTY write audit.
-/// At most 32 prepared/pending plus 32 completed bounded observations (under 4 MiB of
-/// encoded source payload) exist. No background timer or keystroke text store.
+/// At most 32 prepared/pending/provisional entries plus 32 final sources exist.
+/// Each source uses the domain payload bound; provisional entries additionally
+/// retain one bounded parsed observation. No timer or keystroke text store.
 #[derive(Default)]
 pub(super) struct NativeInterviewCapture {
     prepared: HashMap<WorkerSessionId, Prepared>,
     pending: HashMap<WorkerSessionId, Pending>,
+    awaiting_final: HashMap<WorkerSessionId, (NativeInterviewEvidence, NativeInterviewObservation)>,
     ready: VecDeque<NativeInterviewEvidence>,
 }
 
@@ -48,6 +50,7 @@ impl std::fmt::Debug for NativeInterviewCapture {
             .debug_struct("NativeInterviewCapture")
             .field("pending_count", &self.pending.len())
             .field("prepared_count", &self.prepared.len())
+            .field("awaiting_final_count", &self.awaiting_final.len())
             .field("retained_count", &self.ready.len())
             .finish()
     }
@@ -80,7 +83,8 @@ impl NativeInterviewCapture {
         }
         if self.ready.len() == MAX_READY
             || (!self.prepared.contains_key(&session)
-                && self.prepared.len() + self.pending.len() >= MAX_PENDING)
+                && self.prepared.len() + self.pending.len() + self.awaiting_final.len()
+                    >= MAX_PENDING)
         {
             return None;
         }
@@ -144,6 +148,12 @@ impl NativeInterviewCapture {
         selection_revision: u64,
         observation: NativeInterviewObservation,
     ) -> bool {
+        if let Some((source, earlier)) = self.awaiting_final.get(&session_id) {
+            if observation.phase == NativeInterviewPhase::Completed {
+                return source.selection_revision == selection_revision && earlier == &observation;
+            }
+            self.awaiting_final.remove(&session_id);
+        }
         if let Some(existing) = self.ready.iter().find(|entry| {
             entry.session_id == session_id
                 && entry.conversation == observation.conversation
@@ -165,7 +175,8 @@ impl NativeInterviewCapture {
                 }
                 if self.ready.len() == MAX_READY
                     || (!self.pending.contains_key(&session_id)
-                        && self.pending.len() == MAX_PENDING)
+                        && self.prepared.len() + self.pending.len() + self.awaiting_final.len()
+                            >= MAX_PENDING)
                 {
                     return false;
                 }
@@ -223,7 +234,7 @@ impl NativeInterviewCapture {
         {
             return false;
         }
-        self.ready.push_back(NativeInterviewEvidence {
+        let source = NativeInterviewEvidence {
             id: OperatorSubmissionId::new(),
             session_id,
             conversation: observation.conversation,
@@ -234,7 +245,25 @@ impl NativeInterviewCapture {
             submit_sequence,
             questions: observation.questions().to_vec(),
             answers: observation.answers().clone(),
-        });
+        };
+        self.awaiting_final
+            .insert(session_id, (source, observation.clone()));
+        true
+    }
+
+    /// Final provider output may differ from `PostToolUse`. Only an exact final
+    /// match releases the provisional result to durable intake. Never replays input.
+    pub fn finalize(&mut self, session: WorkerSessionId, revision: u64, payload: &[u8]) -> bool {
+        let Some((source, observation)) = self.awaiting_final.remove(&session) else {
+            return false;
+        };
+        if source.selection_revision != revision
+            || self.ready.len() == MAX_READY
+            || !observation.matches_final_batch(payload)
+        {
+            return false;
+        }
+        self.ready.push_back(source);
         true
     }
 
@@ -244,12 +273,20 @@ impl NativeInterviewCapture {
         session_id: WorkerSessionId,
         observation: NativeInterviewObservation,
     ) -> bool {
-        self.observe_at_revision(session_id, 1, observation)
+        let final_batch = tests::final_batch(&observation);
+        let completed = observation.phase == NativeInterviewPhase::Completed;
+        let accepted = self.observe_at_revision(session_id, 1, observation);
+        if accepted && completed && self.awaiting_final.contains_key(&session_id) {
+            self.finalize(session_id, 1, &final_batch)
+        } else {
+            accepted
+        }
     }
 
     /// `controlled` is supplied only by the registry's successful v4 input path,
     /// never from wire provenance or an agent-provided actor label.
     pub fn record_write(&mut self, entry: &TerminalWriteAuditEntry, controlled: bool) {
+        self.awaiting_final.remove(&entry.session_id);
         if let Some(prepared) = self.prepared.get_mut(&entry.session_id) {
             prepared.input_changed = true;
         }
@@ -292,6 +329,7 @@ impl NativeInterviewCapture {
     }
 
     pub fn invalidate_pending(&mut self, session: WorkerSessionId) {
+        self.awaiting_final.remove(&session);
         self.prepared.remove(&session);
         self.pending.remove(&session);
     }
@@ -310,6 +348,55 @@ mod tests {
     use super::*;
     use crate::read_claude_interview;
     use serde_json::json;
+
+    pub(super) fn final_batch(observation: &NativeInterviewObservation) -> Vec<u8> {
+        let clauses = observation
+            .questions()
+            .iter()
+            .map(|q| {
+                format!(
+                    "\"{}\"=\"{}\"",
+                    q.question,
+                    observation
+                        .answers()
+                        .get(&q.question)
+                        .map_or("", String::as_str)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        serde_json::to_vec(&json!({"hook_event_name":"PostToolBatch", "session_id":observation.conversation,
+            "tool_calls":[{"tool_name":"AskUserQuestion", "tool_use_id":observation.tool_use_id,
+            "tool_input":{"questions":observation.questions()},
+            "tool_response":format!("Your questions have been answered: {clauses}. You can now continue with these answers in mind.")}]})).unwrap()
+    }
+
+    #[test]
+    fn earlier_result_is_not_retained_until_final_output_matches() {
+        for mode in 0..4 {
+            let mut capture = NativeInterviewCapture::default();
+            let session = WorkerSessionId::new();
+            capture.observe_at_revision(session, 1, observation(false, "toolu_one"));
+            capture.record_write(&input(session, 1), true);
+            let completed = observation(true, "toolu_one");
+            let mut batch = final_batch(&completed);
+            assert!(capture.observe_at_revision(session, 1, completed));
+            assert!(capture.retained().is_empty());
+            match mode {
+                1 => {
+                    batch = String::from_utf8(batch)
+                        .unwrap()
+                        .replace("Amber", "Blue")
+                        .into_bytes();
+                }
+                2 => capture.record_write(&input(session, 2), true),
+                3 => capture.invalidate_pending(session),
+                _ => {}
+            }
+            assert_eq!(capture.finalize(session, 1, &batch), mode == 0);
+            assert_eq!(capture.retained().len(), usize::from(mode == 0));
+        }
+    }
 
     fn observation(completed: bool, id: &str) -> NativeInterviewObservation {
         let questions = json!([{"question":"Which fictional jar?","header":"Jar",

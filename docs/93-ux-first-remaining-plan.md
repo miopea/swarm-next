@@ -24,6 +24,9 @@ Use this section before the historical checkpoints below. Full scope remains45.
   and authenticated input. Three-question final serialization is now observed
   and comparison passes9 tests plus strict Clippy; ambiguous free text remains
   unsupported. This is not human provenance or completed reconciliation.
+  Local engine capture now waits for authenticated matching final output before
+  intake (170 terminal tests pass;1 ignored). Older stored evidence/engines do
+  not gain this proof. No hooks or engine changes have been deployed.
   Private exact-decision source pinning now has transactional tests; it does not
   resolve or authenticate an answer. Next wire authenticated final consumption
   and exact invocation/decision correlation through existing receipt settlement.

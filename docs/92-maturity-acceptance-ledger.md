@@ -1,5 +1,24 @@
 # Current maturity acceptance ledger
 
+## September 10 — final callback gates native capture locally
+
+PostToolUse no longer releases a source to intake in the new implementation.
+It remains provisional until a matching final batch arrives through the live
+process capability and selected conversation. Changed final answers, intervening
+input and invalidation refuse capture. The provisional set shares the existing
+32 pending-slot bound; finalized sources retain their separate32-slot bound.
+
+The full isolated terminal suite passed:170 tests,0 failures,1 ignored. Strict
+Clippy passed. Regressions include no retained source after the earlier callback,
+changed final output, intervening input, invalidation and wrong final-callback
+capability followed by the authentic callback. Existing process tests now supply
+an explicit fictional final batch, rather than treating PostToolUse as final.
+
+No live hooks, engine replacement or deployment occurred. Previously stored
+sources and older protocol17 engines are not retroactively final-confirmed.
+Authentic human proof, full free-text support, exact application correlation and
+the complete no-duplicate-delivery lifecycle remain activation gates.
+
 ## September 10 — private exact-decision source linkage
 
 The persistence boundary can now pin a retained native source to an explicitly

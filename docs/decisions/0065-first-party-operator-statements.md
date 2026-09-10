@@ -355,6 +355,22 @@ rolling-update support window for16 is explicitly retired.
 
 ### Durable native source boundary, September 10
 
+The newer capture implementation holds PostToolUse results provisionally until
+an authenticated PostToolBatch callback matches the exact invocation, current
+conversation selection and complete final answer. Prepared, pending and
+provisional entries share a32-slot limit; final sources retain the existing
+32-slot limit. Any intervening input or invalidation discards provisional
+evidence without affecting the PTY. Changed or unsupported final output cannot
+enter durable intake through this implementation. No timer establishes completion.
+
+This uses the existing bounded ProviderInterview transport; the helper's
+PreToolUse handshake remains separate. Hooks are still disabled. Older engines
+and previously stored source records do not gain final-consumption proof from
+this change: activation must establish the exact capture implementation and
+authentic human input before issuing confirmed receipts. Protocol17 alone is
+not proof that a retained source passed the new final-result gate.
+
+
 Schema 160 stores the engine's complete native question/result evidence privately,
 including option descriptions, invocation and conversation identities, selection
 revision, device identities and ordered write boundaries. Shared domain validation

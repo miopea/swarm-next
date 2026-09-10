@@ -126,6 +126,20 @@ struct FinalBatch {
     agent_id: Option<serde::de::IgnoredAny>,
 }
 
+pub(crate) fn final_batch_conversation(bytes: &[u8]) -> Option<ProviderConversationId> {
+    if bytes.len() > crate::MAX_PROVIDER_LIFECYCLE_BYTES {
+        return None;
+    }
+    let batch: FinalBatch = serde_json::from_slice(bytes).ok()?;
+    if batch.hook_event_name != "PostToolBatch"
+        || batch.agent_id.is_some()
+        || batch.tool_calls.len() > swarm_domain::MAX_NATIVE_INTERVIEW_BATCH
+    {
+        return None;
+    }
+    batch.session_id.parse().ok()
+}
+
 #[derive(Deserialize)]
 struct FinalBatchCall {
     #[serde(rename = "tool_use_id")]

@@ -1555,6 +1555,32 @@ impl SessionRegistry {
         capability: &[u8; 32],
         payload: &[u8],
     ) -> Result<bool, SessionRegistryError> {
+        if let Some(conversation) = crate::provider_interview::final_batch_conversation(payload) {
+            let _ordered = lock(&self.write_audit)?;
+            let session = self.get(session_id)?;
+            let mut child = lock(&session.child)?;
+            let mut gate = lock(&session.provider_lifecycle)?;
+            let Some(gate) = gate.as_mut() else {
+                return Ok(false);
+            };
+            if !gate.authenticates(session_id, capability) {
+                return Ok(false);
+            }
+            let mut capture = lock(&self.native_interviews)?;
+            if child.try_wait().map_err(terminal_error)?.is_some() {
+                gate.revoke();
+                capture.invalidate_pending(session_id);
+                return Ok(false);
+            }
+            if !gate.is_current_conversation(conversation) {
+                capture.invalidate_pending(session_id);
+                return Ok(false);
+            }
+            let Some(selection) = gate.selection() else {
+                return Ok(false);
+            };
+            return Ok(capture.finalize(session_id, selection.revision, payload));
+        }
         self.with_native_interview(
             session_id,
             capability,
