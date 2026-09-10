@@ -2,6 +2,21 @@
 
 ### Active acceptance checkpoint — ordinary-user UX first
 
+Operator applied the staged migration September10 at12:54 Eastern. Health and
+both active links now confirm `1.7.0-dev-30ad01dc55be-20260910164740-555599`.
+Engine PID565859 reports protocol17,13 running/retained sessions,not draining,
+and0 unreadable sessions. Edge's live roster also shows13 active workers.
+This proves runtime activation and running count, not exact prior-conversation
+identity: four existing conversation-history-unconfirmed notices remain visible.
+The legacy activation left its manual marker after removing pending; its exact
+candidate matched both active links before that obsolete marker was removed.
+The corrected installed helper is now active; reset-failed/start restored only
+the development build watcher, with no second app/worker restart. Local follow-up
+cleanup commit `b152b739` remains outside the staged/deployed candidate.
+Live Settings displays the saved22:00–07:00 America/New_York schedule; it was not
+edited. Fictional Needs You free-text submission preserved the exact typed answer.
+The full program remains open, including direct-answer decision reconciliation.
+
 September 10 current checkpoint (supersedes the historical incident notes below):
 main and the Linux checkout are `30ad01dc55be`. The authorized transient service
 `swarm-authorized-preparation-30ad01dc` completed with exit 0 and development
