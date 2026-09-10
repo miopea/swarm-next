@@ -1,35 +1,14 @@
 //! Native question/result observations, never operator-authenticated receipts.
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use swarm_domain::{
-    MAX_DECISION_QUESTION_HEADER_BYTES, MAX_DECISION_QUESTION_OPTION_BYTES,
-    MAX_DECISION_QUESTION_OPTIONS, MAX_DECISION_QUESTION_TEXT_BYTES, MAX_DECISION_QUESTIONS,
-    MAX_OPERATOR_ANSWER_BYTES, ProviderConversationId,
+    MAX_DECISION_QUESTIONS, MAX_OPERATOR_ANSWER_BYTES, ProviderConversationId,
+    valid_native_interview_questions,
 };
+pub use swarm_domain::{NativeInterviewOption, NativeInterviewQuestion};
 
-const MAX_OPTION_DESCRIPTION_BYTES: usize = 4096;
 const MAX_TOOL_USE_ID_BYTES: usize = 128;
-
-// Reject unrepresented question/option fields: previews and future provider
-// behavior must not silently disappear from an exact-question comparison.
-#[derive(Clone, Deserialize, Serialize, Eq, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct NativeInterviewOption {
-    pub label: String,
-    #[serde(default)]
-    pub description: String,
-}
-
-#[derive(Clone, Deserialize, Serialize, Eq, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct NativeInterviewQuestion {
-    pub question: String,
-    pub header: String,
-    pub options: Vec<NativeInterviewOption>,
-    #[serde(default, rename = "multiSelect")]
-    pub multi_select: bool,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeInterviewPhase {
@@ -156,7 +135,7 @@ pub fn read_claude_interview(input: &[u8]) -> Option<NativeInterviewObservation>
             .all(|b| b.is_ascii_alphanumeric() || b == b'_')
         || !hook.tool_input.answers.is_empty()
         || !hook.tool_input.annotations.is_empty()
-        || !valid_questions(&hook.tool_input.questions)
+        || !valid_native_interview_questions(&hook.tool_input.questions)
     {
         return None;
     }
@@ -191,30 +170,6 @@ pub fn read_claude_interview(input: &[u8]) -> Option<NativeInterviewObservation>
         questions: hook.tool_input.questions,
         answers,
     })
-}
-
-fn valid_questions(questions: &[NativeInterviewQuestion]) -> bool {
-    !questions.is_empty()
-        && questions.len() <= MAX_DECISION_QUESTIONS
-        && questions.iter().enumerate().all(|(index, question)| {
-            bounded(&question.header, MAX_DECISION_QUESTION_HEADER_BYTES)
-                && bounded(&question.question, MAX_DECISION_QUESTION_TEXT_BYTES)
-                && (2..=MAX_DECISION_QUESTION_OPTIONS).contains(&question.options.len())
-                && !questions[..index].iter().any(|previous| {
-                    previous.header == question.header || previous.question == question.question
-                })
-                && question.options.iter().enumerate().all(|(index, option)| {
-                    bounded(&option.label, MAX_DECISION_QUESTION_OPTION_BYTES)
-                        && option.description.len() <= MAX_OPTION_DESCRIPTION_BYTES
-                        && !question.options[..index]
-                            .iter()
-                            .any(|previous| previous.label == option.label)
-                })
-        })
-}
-
-fn bounded(text: &str, maximum: usize) -> bool {
-    !text.trim().is_empty() && text.len() <= maximum
 }
 
 #[cfg(test)]

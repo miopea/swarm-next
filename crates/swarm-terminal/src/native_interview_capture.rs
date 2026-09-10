@@ -1,46 +1,18 @@
 //! Engine-owned ordering of native invocations and generation-checked input.
 use std::collections::{HashMap, VecDeque};
 
-use serde::{Deserialize, Serialize};
-use swarm_domain::{
-    OperatorSubmissionId, PresenceDeviceId, ProviderConversationId, WorkerSessionId,
-};
+use swarm_domain::{OperatorSubmissionId, PresenceDeviceId, WorkerSessionId};
 
 use crate::{
-    NativeInterviewObservation, NativeInterviewPhase, NativeInterviewQuestion, TerminalInputKind,
-    TerminalWriteActor, TerminalWriteAuditEntry, TerminalWriteResult,
+    NativeInterviewObservation, NativeInterviewPhase, TerminalInputKind, TerminalWriteActor,
+    TerminalWriteAuditEntry, TerminalWriteResult,
 };
 
 const MAX_PENDING: usize = 32;
 const MAX_READY: usize = 32;
 const MAX_DEVICES: usize = 4;
 
-/// Private IPC evidence, not an agent-writable operator receipt. The API must
-/// authenticate its engine transport and separately bind an exact decision.
-/// Source content must not enter ordinary session summaries or diagnostics.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct NativeInterviewEvidence {
-    pub id: OperatorSubmissionId,
-    pub session_id: WorkerSessionId,
-    pub conversation: ProviderConversationId,
-    pub selection_revision: u64,
-    pub tool_use_id: String,
-    pub devices: Vec<PresenceDeviceId>,
-    pub first_write_sequence: u64,
-    pub submit_sequence: u64,
-    pub questions: Vec<NativeInterviewQuestion>,
-    pub answers: std::collections::BTreeMap<String, String>,
-}
-
-impl std::fmt::Debug for NativeInterviewEvidence {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("NativeInterviewEvidence")
-            .field("id", &self.id)
-            .field("session_id", &self.session_id)
-            .finish_non_exhaustive()
-    }
-}
+pub use swarm_domain::NativeInterviewEvidence;
 
 struct Pending {
     admission_ticket: Option<OperatorSubmissionId>,

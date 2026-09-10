@@ -38,8 +38,20 @@ round trips refuse delayed admission after intervening input. Bounded completed
 evidence survives API-reader replacement until exact acknowledgement, not engine
 exit. Full Linux terminal165 + host27 + command11 tests and strict terminal/host
 clippy pass, with one unrelated opt-in profiler skipped. See ADR0065 and93.
-No hook is installed and no native evidence is yet persisted or used to resolve
-Needs You. Direct-answer reconciliation remains open; parser/engine tests are not
+Schema160 now implements bounded private native-source persistence, including
+exact questions/descriptions, restart-safe ID retries, capacity refusal and
+pending-decision retention. This is not yet connected to the engine's read/ack
+path and does not establish human authorship or exact decision binding. No hook
+is installed and no live native evidence is used to resolve Needs You.
+Validation:151 domain tests passed; initial persistence724 passed/24 migration
+failures exposed the missing schema-version update. After correction,99 selected
+storage/migration/restart tests passed, including every failed test and all nine
+native-source tests. Full terminal165 passed/one opt-in profiler ignored; strict
+domain/persistence/terminal lint, API/host consumer compilation and formatting pass.
+Evidence logs remain in `/tmp/swarm-native-answer-check.6fkv8E/`:
+`native-storage-tests.log`, `native-storage-migrations.log`,
+`native-storage-terminal.log`, `native-storage-consumers.log`.
+Direct-answer reconciliation remains open; parser/engine/storage tests are not
 the required complete operator-to-worker-to-Queen acceptance. No live engine restart
 or release occurred in this package.
 

@@ -116,6 +116,7 @@ pub use migration::{
 mod conversation_recovery;
 mod dogfood_evidence;
 mod message_delivery;
+mod native_operator_interviews;
 mod operator_statements;
 mod operator_submissions;
 mod review_answers;
@@ -123,6 +124,7 @@ pub use message_delivery::{
     ClaimedTaskMessage, TASK_MESSAGE_BATCH_LIMIT, TASK_MESSAGE_QUEUE_LIMIT,
     TaskMessageAttentionPage, TaskMessageResult,
 };
+pub use native_operator_interviews::{NativeInterviewStoreError, StoredNativeInterview};
 pub use operator_statements::{OperatorStatementError, VerifiedOperatorStatement};
 pub use operator_submissions::{AuthoredOperatorSubmission, OperatorSubmissionIndexEntry};
 pub use review_answers::ReturnedReviewRequest;
@@ -282,7 +284,8 @@ const REVIEW_RETURN_HISTORY_SCHEMA_VERSION: i64 = 156;
 const WORKER_ENGINE_RETURN_SESSIONS_SCHEMA_VERSION: i64 = 157;
 const WORKER_REVIVAL_ATTEMPTS_SCHEMA_VERSION: i64 = 158;
 const DECISION_CLARIFICATION_SCHEMA_VERSION: i64 = 159;
-const CURRENT_SCHEMA_VERSION: i64 = DECISION_CLARIFICATION_SCHEMA_VERSION;
+const NATIVE_OPERATOR_INTERVIEWS_SCHEMA_VERSION: i64 = 160;
+const CURRENT_SCHEMA_VERSION: i64 = NATIVE_OPERATOR_INTERVIEWS_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4037,6 +4040,9 @@ fn migrate_ops_intake_schema_steps(
     }
     if schema_version < DECISION_CLARIFICATION_SCHEMA_VERSION {
         decision_clarification::migrate(transaction)?;
+    }
+    if schema_version < NATIVE_OPERATOR_INTERVIEWS_SCHEMA_VERSION {
+        native_operator_interviews::migrate(transaction)?;
     }
     Ok(())
 }
@@ -9382,6 +9388,12 @@ mod tests {
             table: "decision_clarifications",
             artifact: "",
             undo_sql: "DROP TABLE decision_clarification_reconciliations; DROP TABLE decision_clarification_notification_receipts; DROP TABLE decision_clarifications",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "native_operator_interviews",
+            artifact: "",
+            undo_sql: "DROP TABLE native_operator_interviews",
             probe_sql: "",
         },
     ];

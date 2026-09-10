@@ -238,6 +238,25 @@ Existing continuation recovery remains supported with a running protocol16 engin
 new capture requires17. The terminal host owns this compatibility floor until the
 rolling-update support window for16 is explicitly retired.
 
+### Durable native source boundary, September 10
+
+Schema 160 stores the engine's complete native question/result evidence privately,
+including option descriptions, invocation and conversation identities, selection
+revision, device identities and ordered write boundaries. Shared domain validation
+rejects incomplete or unsupported source shapes. Storage admission verifies the
+known local worker/session binding, including ended sessions with late retained
+engine evidence. It does not authenticate provider-side human authorship, resolve
+decisions, emit general activity or deliver another answer.
+
+Admission is bounded to 4,096 records, 16 MiB total serialized UTF-8 payload and
+128 KiB per source. Exact source-ID retries are idempotent; conflicting source or
+invocation identities fail. Admission-time 90-day retention removes unreferenced
+or closed-decision sources, never pending-decision references. The nullable link
+is reserved for the forthcoming exact binding transaction, not agent assignment.
+Exhaustion or failed persistence must leave the engine source unacknowledged;
+ordinary terminal input remains independent. Downgrade requires a compatible
+pre-migration database backup.
+
 This path is not installed in provider settings yet. Do not enable hooks or claim
 Needs You reconciliation until authenticated durable consumption, exact question
 binding and the complete fictional failure/recovery lifecycle are verified.

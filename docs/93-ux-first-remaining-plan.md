@@ -2,6 +2,36 @@
 
 ### Active acceptance checkpoint — ordinary-user UX first
 
+September 10 release handoff: operator approved preparing 1.7.0, not publication
+or deployment. Built and signed candidate `9ae7a0e3` is based on verified UX
+`dba2868b`, excluding the unfinished native capture/storage work. Handoff is at
+`/home/bschleifer/releases/swarm/1.7.0-candidate-9ae7a0e3/README.md`; independent
+signature/checksum and isolated packaged-runtime smoke passed. Eight curated
+highlights and sixteen fixes have desktop/phone component previews. Another
+worker is to verify install/upgrade and publish/deploy under operator direction.
+Do not mutate that immutable candidate when continuing this integration.
+
+Native-source storage now has schema160 and shared domain question validation.
+Nine focused tests pass for exact preservation/idempotency, conflicting evidence,
+invalid/partial input, ended-session ingestion, migration/restart, save failure,
+row/UTF-8 byte limits, expiry, pending-decision pinning and private corruption
+reporting. The first full run passed151 domain and724 persistence tests but found
+24 migration failures: the new migration omitted its schema-version update.
+That defect is corrected; all99 selected storage/upgrade/restart/migration tests
+now pass, covering every previously failed test. Strict all-target
+domain/persistence/terminal clippy passed. Full terminal regression passed165 with
+one opt-in profiler ignored; API/terminal-host consumer checks and formatting pass.
+The first full persistence failure log is retained alongside the targeted corrected
+run; a second all748-test green run is not claimed. All nine native-source tests
+are included in the99 passing correction checks.
+the Linux validation tree is `/tmp/swarm-native-answer-check.6fkv8E`, now with its
+own stripped-debug cache (1.0 GiB observed, 8.2 GiB root space free). The older
+attachment debug cache was explicitly removed during release preparation; do not
+assume it is still warm. No live schema migration or provider hook installation.
+Next is authenticated durable admission/acknowledgement and exact immutable
+decision binding, preserving descriptions and ruling out programmatic answers.
+Account usage39% consumed at this checkpoint; no resets used or available.
+
 Native capture foundation now has a private protocol17 prepare/admit handshake,
 engine-ordered generation-checked input, exact conversation revision fencing and
 bounded read/ack evidence. Linux full terminal165 passed/1 opt-in profiler ignored,
