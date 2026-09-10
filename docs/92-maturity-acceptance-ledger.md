@@ -1,5 +1,20 @@
 # Current maturity acceptance ledger
 
+## September 10 — integrated local package checkpoint
+
+Atb45c87c0 the integrated web suite and production build pass. A subsequent diff
+audit restored the original real-fetch invitation retry regression in
+KeeperInvitationManager.transport.test.tsx alongside the expanded mocked
+lifecycle suite. All11 invitation tests and TypeScript pass after restoration.
+The transport regression additionally checks the AbortSignal reaches fetch and
+the explicit retry performs exactly two reads without a mutation.
+
+Read-only live verification still shows App/API6ac6c145,engine30ad01d with equal
+engine fingerprints,13 running/retained sessions,0 unreadable and no degraded
+flags. No update/restart occurred. Main publication and CI rerun remain pending
+approval; this local UI checkpoint is neither live deployment nor full maturity
+acceptance.93 now has a concise active handoff before its historical checkpoints.
+
 ## September 10 — bounded invitation mutations
 
 The previously noted indefinite Working state is now addressed locally. The

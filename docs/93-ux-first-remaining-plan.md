@@ -1,5 +1,39 @@
 # Remaining maturity work — UX/UI first
 
+## Active handoff — September 10, 14:15 Eastern
+
+Use this section before the historical checkpoints below. Full scope remains45.
+
+- **Local package ready for publication review:** task-title keyboard/click access;
+  accurate Apiary navigation/departure guidance; bounded invitation reads and
+  mutation waits; truthful confirmed-versus-uncertain recovery. Commits64922011
+  throughb45c87c0. Full web tests and production build passed atb45c87c0; an
+  additional restored real-fetch regression and TypeScript pass afterward.
+- **Publication requires the unanswered explicit approval:** do not retry the
+  previously refused main push or deploy around it. Last fetch found no incoming
+  main commits. Main/live App/API6ac6c145; live engine30ad01d,protocol17,
+ 13 running/retained,0 unreadable,no degraded flags. Do not restart the engine
+  just to make version labels match.
+- **CI correction ready locally:**32dc50ee fixes the schema-ceiling fixture,
+  not an observed live data-loss bug. Rerun CI after approved publication.
+- **Do not spend another tranche polishing invitation copy or repeating these
+  passed fixtures.** After publication, verify the live title and invitation
+  recovery surfaces without creating actual invitations/access grants.
+- **Next substantive open UX behavior:** direct native answers still do not
+  reconcile Needs You. ADR0065 requires exact decision identity, final result
+  and authenticated input; a45edb1a is only a single-question comparison.
+  Hooks remain disabled. No safe-recovery or permission rule may be bypassed.
+- **Separate external gates:** optional return-briefing visual approval;
+  real Android/iOS picker,keyboard/suspension/handoff and actual browser zoom.
+  Preserve existing successful Android AskUser/task-editor acceptance.
+- **Backend scope remains open:** automatic engine admission,chosen-conversation
+  recovery,Queen release/recovery loop,sustained performance,metrics and the
+  linked Admin attachment/reply lifecycle. No BFG Admin communication without
+  fresh approval. No release.
+
+The broader goal is not complete. Ledger92 and journey matrix95 hold evidence;
+older pending/deployed/version paragraphs below are historical,not current state.
+
 Latest checkpoint: App/API6ac6c145 is live; engine30ad01d has the same engine
 fingerprint and13 healthy running/retained sessions. Older staged-migration notes
 below are historical. Settings finish evidence is in94. CI's schema-ceiling
