@@ -38,6 +38,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
   const [keeperLink, setKeeperLink] = useState(() => peekStagedApiaryHandoff("keeper") ?? "");
   const [invitationLink, setInvitationLink] = useState("");
   const [working, setWorking] = useState(false);
+  const [joinedApiary, setJoinedApiary] = useState<string>();
   const [confirmingDismissal, setConfirmingDismissal] = useState<string>();
   const [savedStateUnavailable, setSavedStateUnavailable] = useState(false);
   const [keeperPollingUnavailable, setKeeperPollingUnavailable] = useState(false);
@@ -188,11 +189,24 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
     }
   }
 
-  async function acceptPolicy(invitation: FederationJoinInvitationOverview) {
+  async function acceptPolicy(invitation: FederationJoinInvitationOverview, joinAfterAcceptance = false) {
     setWorking(true);
     clearFeedback();
     try {
-      await acceptFederationJoinPolicy(operatorToken, invitation.invitation_id, invitation.required_policy_revision);
+      const accepted = await acceptFederationJoinPolicy(operatorToken, invitation.invitation_id, invitation.required_policy_revision);
+      if (joinAfterAcceptance) {
+        setJoinInvitations((current) => current.map((item) => item.invitation_id === invitation.invitation_id ? accepted : item));
+        if (accepted.invitation_id === invitation.invitation_id
+          && accepted.required_policy_revision === invitation.required_policy_revision
+          && accepted.state === "policy_accepted"
+          && !accepted.readiness_compatibility_fallback
+          && accepted.readiness.blockers.length === 0) {
+          await joinApiary(accepted);
+        } else {
+          onMessage("Policy accepted. Readiness changed; review the remaining setup steps before joining.");
+        }
+        return;
+      }
       setJoinInvitations(await fetchFederationJoinInvitations(operatorToken));
       onMessage(`Policy revision ${invitation.required_policy_revision} accepted locally. This Hive has not joined ${invitation.apiary_name} yet.`);
     } catch (cause) {
@@ -207,8 +221,13 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
     clearFeedback();
     try {
       await joinFederationApiary(operatorToken, invitation.invitation_id);
-      await onJoined();
+      setJoinedApiary(invitation.apiary_name);
       onMessage(`This Hive joined ${invitation.apiary_name}. Jira continues syncing directly; Swarm coordination now polls the Keeper.`);
+      try {
+        await onJoined();
+      } catch {
+        onError("You joined successfully, but this view could not refresh. Refresh the page; do not join again.");
+      }
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : "This Hive could not join the Apiary.");
     } finally {
@@ -216,9 +235,13 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
     }
   }
 
+  if (joinedApiary) {
+    return <section className="personal-hive-join" aria-label="Joined Apiary"><strong>Joined {joinedApiary}</strong><p>Your membership is saved. Refresh the page if the Apiary view has not opened. You do not need to join again.</p></section>;
+  }
+
   return (
     <div className="personal-hive-join">
-      <div className="apiary-exchange-intro">
+      {joinInvitations.length === 0 ? <div className="apiary-exchange-intro">
         <span><strong>Join a Keeper&apos;s Apiary</strong><small>The private link is handed to this personal Hive. Opening it now guides you here without joining through the Keeper&apos;s browser.</small></span>
         <ol className="apiary-exchange-guide" aria-label="How this Hive joins an Apiary">
           <ApiaryExchangeStep number="1" title="Hand the link to this Hive" detail="Open the private link and choose this personal Hive, or paste the complete link below." />
@@ -230,7 +253,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
           <span><strong>Jira work</strong><small>This Hive continues polling Jira directly as you.</small></span>
           <span><strong>Swarm work</strong><small>This Hive polls the Keeper for shared Apiary tasks and coordination.</small></span>
         </div>
-      </div>
+      </div> : null}
       {savedStateUnavailable ? <div className="form-error apiary-refresh-error" role="alert"><span>Saved Keeper invitations could not be fully refreshed. Last-known links remain unchanged.</span><button className="secondary-button" type="button" disabled={working} onClick={() => void refreshSavedState()}>Retry saved invitations</button></div> : null}
       {keeperPollingUnavailable ? <div className="form-error apiary-refresh-error" role="status"><span>The Keeper was not reachable on the last check. This Hive keeps the invitation safely and retries every five seconds.</span></div> : null}
       {keeperLinks.length > 0 ? (
@@ -260,7 +283,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
         {joinInvitations.length > 0 ? (
           <ul className="apiary-join-list" aria-label="Saved Apiary invitations">
             {joinInvitations.map((invitation) => (
-              <InvitationReadiness key={invitation.invitation_id} invitation={invitation} working={working} onAccept={() => void acceptPolicy(invitation)} onJoin={() => void joinApiary(invitation)} />
+              <InvitationReadiness key={invitation.invitation_id} invitation={invitation} working={busy || working} onAccept={(joinAfterAcceptance) => void acceptPolicy(invitation, joinAfterAcceptance)} onJoin={() => void joinApiary(invitation)} />
             ))}
           </ul>
         ) : <p className="empty-copy">No Apiary invitation is saved on this Hive.</p>}
@@ -308,19 +331,21 @@ function InvitationPreview({ bundle, working, onCancel, onTrust }: { bundle: Api
   );
 }
 
-function InvitationReadiness({ invitation, working, onAccept, onJoin }: { invitation: FederationJoinInvitationOverview; working: boolean; onAccept: () => void; onJoin: () => void }) {
+function InvitationReadiness({ invitation, working, onAccept, onJoin }: { invitation: FederationJoinInvitationOverview; working: boolean; onAccept: (joinAfterAcceptance: boolean) => void; onJoin: () => void }) {
   const ready = invitation.readiness.blockers.length === 0;
+  const readyToAcceptAndJoin = !invitation.readiness_compatibility_fallback
+    && invitation.readiness.blockers.every((blocker) => blocker === "policy_not_accepted");
   return (
     <li>
       <div className="apiary-join-summary">
         <span><strong>{invitation.apiary_name}</strong><small>{invitation.keeper_hive_name} · {invitation.keeper_operator_display_name}</small></span>
-        <span className={ready ? "readiness-ready" : "readiness-blocked"}>{invitation.readiness_compatibility_fallback ? "Runtime update in progress" : ready ? "Ready to contact Keeper" : `${invitation.readiness.blockers.length} readiness ${invitation.readiness.blockers.length === 1 ? "step" : "steps"} left`}</span>
+        <span className={ready || readyToAcceptAndJoin ? "readiness-ready" : "readiness-blocked"}>{invitation.readiness_compatibility_fallback ? "Runtime update in progress" : ready ? "Ready to join" : readyToAcceptAndJoin ? "Ready for your approval" : `${invitation.readiness.blockers.length} readiness ${invitation.readiness.blockers.length === 1 ? "step" : "steps"} left`}</span>
       </div>
       <div className="apiary-policy-acknowledgement">
         <span><strong>Policy revision {invitation.required_policy_revision}</strong><small>Jira-backed shared work · {invitation.promoted_projects.length} signed {invitation.promoted_projects.length === 1 ? "project" : "projects"} · Keeper identity pinned</small></span>
         {invitation.readiness_compatibility_fallback ? <button className="secondary-button" disabled>Waiting for runtime</button>
           : invitation.state === "submitted" ? <button className="primary-action" disabled={working} onClick={onJoin}>{working ? "Joining…" : "Retry joining"}</button>
-          : invitation.state === "keeper_pinned" ? <button className="secondary-button" disabled={working} onClick={onAccept}>Acknowledge revision {invitation.required_policy_revision}</button>
+          : invitation.state === "keeper_pinned" ? <button className={readyToAcceptAndJoin ? "primary-action" : "secondary-button"} disabled={working} onClick={() => onAccept(readyToAcceptAndJoin)}>{working ? "Accepting…" : readyToAcceptAndJoin ? "Accept policy and join" : `Acknowledge revision ${invitation.required_policy_revision}`}</button>
           : ready ? <button className="primary-action" disabled={working} onClick={onJoin}>{working ? "Joining…" : "Join Apiary"}</button>
           : <span className="readiness-ready">Acknowledged</span>}
       </div>

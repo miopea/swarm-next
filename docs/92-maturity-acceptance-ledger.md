@@ -1,5 +1,22 @@
 # Current maturity acceptance ledger
 
+## September 10 — Explicit combined join and truthful completion
+
+Operator approved onboarding simplification. A Keeper-approved invitation with
+no outstanding blocker except policy consent now offers Accept policy and join.
+The returned server readiness is rechecked after acceptance; changed readiness
+stops submission. Other setup blockers retain the separate acknowledgement.
+Completed link-entry instructions are hidden once a saved invitation is present.
+Confirmed membership is retained when the subsequent UI refresh fails; no second
+join is offered. A failed submission retains accepted policy and a join retry.
+
+Verification: 27 focused onboarding tests pass and TypeScript passes. Edge's
+isolated no-proxy harness rendered the approved invitation, the combined action,
+and confirmed joined state despite a fictional post-join refresh failure.
+Screenshot inspected. No actual memberships changed and nothing deployed.
+Roster/rename propagation, real identity/email, default naming and the WSL
+federation rejection remain open; this is not completion of Apiary maturity.
+
 ## September 10 — Apiary onboarding observed on both actual installations
 
 Authenticated Edge tabs at swarm.bfgsolutions.net and localhost:8766 reproduced

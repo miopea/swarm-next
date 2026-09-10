@@ -2,6 +2,12 @@
 
 ## Operator priority override — Apiary onboarding, September 10
 
+Operator subsequently approved broad onboarding improvements, explicitly including
+the proposed Accept policy and join action. Preserve Keeper approval and server
+readiness validation; acceptance alone must not join if readiness changes.
+This supersedes the earlier pending product approval for the combined button.
+Publication permission remains separate from this product-direction approval.
+
 Pause native-answer integration; no runtime edits for its audit tranche have
 started. Real member onboarding exposed a higher-priority user-facing gap:
 invite generation, paste, Keeper approval, readiness, member confirmation and

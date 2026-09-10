@@ -9,6 +9,82 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+test.each(["ready", "readiness changed", "acceptance failed", "submission failed"])("explicit accept and join: %s", async (outcome) => {
+  const invitation = {
+    invitation_id: "invite-1", apiary_name: "Clover Garden", keeper_hive_name: "Lead Hive",
+    keeper_operator_display_name: "Bea", required_policy_revision: 3, promoted_projects: [],
+    state: "keeper_pinned", readiness: { jira_connection: "ready", projects: [], blockers: ["policy_not_accepted"] },
+  };
+  const actions: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/policy-acceptance") && init?.method === "POST") {
+      actions.push("accept");
+      expect(JSON.parse(String(init.body))).toEqual({ policy_revision: 3 });
+      if (outcome === "acceptance failed") return new Response("acceptance unavailable", { status: 503 });
+      return new Response(JSON.stringify({ ...invitation, state: "policy_accepted", readiness: {
+        ...invitation.readiness, blockers: outcome === "readiness changed" ? ["project_access_not_ready"] : [],
+      } }), { status: 200 });
+    }
+    if (url.endsWith("/submission") && init?.method === "POST") {
+      actions.push("join");
+      return outcome === "submission failed"
+        ? new Response("Keeper unavailable", { status: 503 })
+        : new Response(JSON.stringify({ kind: "federated" }), { status: 200 });
+    }
+    return new Response(JSON.stringify(url.endsWith("/join-invitations") ? [invitation] : []), { status: 200 });
+  }));
+  const onError = vi.fn();
+  const onMessage = vi.fn();
+  const onJoined = vi.fn().mockResolvedValue(undefined);
+  render(<PersonalHiveJoin busy={false} operatorToken="fictional" onError={onError} onMessage={onMessage} onJoined={onJoined} />);
+  const button = await screen.findByRole("button", { name: "Accept policy and join" });
+  expect(actions).toEqual([]);
+  fireEvent.click(button);
+  if (outcome === "ready") {
+    expect(await screen.findByText("Joined Clover Garden")).toBeInTheDocument();
+    expect(actions).toEqual(["accept", "join"]);
+    expect(onJoined).toHaveBeenCalledOnce();
+  } else {
+    if (outcome === "readiness changed") {
+      await waitFor(() => expect(onMessage).toHaveBeenCalledWith(expect.stringContaining("Readiness changed")));
+    } else {
+      await waitFor(() => expect(onError.mock.calls.some(([message]) => Boolean(message))).toBe(true));
+    }
+    expect(actions).toEqual(outcome === "submission failed" ? ["accept", "join"] : ["accept"]);
+    expect(onJoined).not.toHaveBeenCalled();
+    expect(screen.queryByText("Joined Clover Garden")).not.toBeInTheDocument();
+    if (outcome === "submission failed") expect(screen.getByRole("button", { name: "Join Apiary" })).toBeEnabled();
+  }
+});
+
+test("confirmed join remains successful when refreshing the membership view fails", async () => {
+  const invitation = {
+    invitation_id: "invite-1", apiary_name: "Clover Garden", keeper_hive_name: "Lead Hive",
+    keeper_operator_display_name: "Bea", required_policy_revision: 3, promoted_projects: [],
+    state: "policy_accepted", readiness: { jira_connection: "ready", projects: [], blockers: [] },
+  };
+  let submissions = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/submission") && init?.method === "POST") {
+      submissions += 1;
+      return new Response(JSON.stringify({ kind: "federated" }), { status: 200 });
+    }
+    return new Response(JSON.stringify(url.endsWith("/join-invitations") ? [invitation] : []), { status: 200 });
+  }));
+  const onError = vi.fn();
+  const onMessage = vi.fn();
+  render(<PersonalHiveJoin busy={false} operatorToken="fictional" onError={onError} onMessage={onMessage}
+    onJoined={vi.fn().mockRejectedValue(new Error("refresh unavailable"))} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Join Apiary" }));
+  expect(await screen.findByText("Joined Clover Garden")).toBeInTheDocument();
+  await waitFor(() => expect(onError).toHaveBeenCalledWith(expect.stringContaining("You joined successfully")));
+  expect(onMessage).toHaveBeenCalledWith(expect.stringContaining("joined Clover Garden"));
+  expect(screen.queryByRole("button", { name: "Join Apiary" })).not.toBeInTheDocument();
+  expect(submissions).toBe(1);
+});
+
 test("does not describe unavailable saved invitations as empty and retries them", async () => {
   let unavailable = true;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {

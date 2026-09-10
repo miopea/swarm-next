@@ -19,6 +19,7 @@ import DecisionClarificationFixture from "./DecisionClarificationFixture";
 import SessionRecoveryFixture from "./SessionRecoveryFixture";
 import RenderRecoveryFixture from "./RenderRecoveryFixture";
 import InvitationRecoveryFixture from "./InvitationRecoveryFixture";
+import JoinApiaryFixture from "./JoinApiaryFixture";
 
 import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
 import { App } from "../App";
@@ -229,6 +230,7 @@ const FILED = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
 
 export const SURFACES: Surface[] = [
   { id: "invitation-recovery", title: "Invitation status recovery", why: "Read-only fictional status failure and explicit recovery.", render: () => <InvitationRecoveryFixture /> },
+  { id: "join-apiary", title: "Accept policy and join", why: "Fictional approved invitation and confirmed membership recovery.", render: () => <JoinApiaryFixture /> },
   { id: "render-recovery", title: "Display failure recovery", why: "Fictional rendering failure without a Hive, update or worker restart.", render: () => <RenderRecoveryFixture /> },
   {
     id: "task-previews",
