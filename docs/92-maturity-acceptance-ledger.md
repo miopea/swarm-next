@@ -40,8 +40,12 @@ exit. Full Linux terminal165 + host27 + command11 tests and strict terminal/host
 clippy pass, with one unrelated opt-in profiler skipped. See ADR0065 and93.
 Schema160 now implements bounded private native-source persistence, including
 exact questions/descriptions, restart-safe ID retries, capacity refusal and
-pending-decision retention. This is not yet connected to the engine's read/ack
-path and does not establish human authorship or exact decision binding. No hook
+pending-decision retention. The existing supervisor now connects the engine read
+to application-owned durable admission and only then acknowledges saved IDs.
+Seven new application/API tests and eight affected supervisor/shutdown regressions
+pass; strict application/API all-target clippy passes. This remains local work,
+with main publication awaiting the operator's approval after the execution gate
+refused it. Intake does not establish human authorship or exact decision binding. No hook
 is installed and no live native evidence is used to resolve Needs You.
 Validation:151 domain tests passed; initial persistence724 passed/24 migration
 failures exposed the missing schema-version update. After correction,99 selected

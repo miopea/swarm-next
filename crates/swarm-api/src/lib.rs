@@ -33,6 +33,7 @@ mod mcp_oauth;
 mod message_delivery_tests;
 mod microsoft_oauth;
 mod migration;
+mod native_operator_sources;
 mod notifications;
 mod orchestration;
 mod outlook;
@@ -236,6 +237,7 @@ pub struct AppState {
     ops_integrations_path: Option<Arc<PathBuf>>,
     ops_mcp_limit: Arc<Semaphore>,
     worker_lifecycle: Arc<Mutex<()>>,
+    native_source_admission: Arc<Semaphore>,
     review_settlement_cursor: Arc<Mutex<Option<swarm_domain::TaskId>>>,
     worker_description_improvement_limit: Arc<Semaphore>,
     conversation_scan_limit: Arc<Semaphore>,
@@ -371,6 +373,7 @@ impl AppState {
             ops_integrations_path: None,
             ops_mcp_limit: Arc::new(Semaphore::new(2)),
             worker_lifecycle: Arc::new(Mutex::new(())),
+            native_source_admission: Arc::new(Semaphore::new(1)),
             review_settlement_cursor: Arc::new(Mutex::new(None)),
             worker_description_improvement_limit: Arc::new(Semaphore::new(
                 MAX_WORKER_DESCRIPTION_IMPROVEMENTS,
@@ -1192,6 +1195,7 @@ impl AppState {
                 return;
             }
         };
+        native_operator_sources::collect(self).await;
         let Ok(profiles) = task_store(self).and_then(|store| {
             store
                 .list_worker_profiles()

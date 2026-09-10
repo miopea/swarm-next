@@ -2,6 +2,25 @@
 
 ### Active acceptance checkpoint — ordinary-user UX first
 
+Durable intake is now wired into the existing supervisor after session binding.
+The application returns acknowledgement identities only for committed or exact
+duplicate sources; the API never acknowledges rejected/unsaved entries. One
+shared permit and a three-second pass budget bound collection and its blocking
+save job. Protocol16 receives only Ping. No new polling loop, terminal input,
+decision resolution or provider hook installation is introduced.
+Seven new application/API tests pass for save-before-acknowledge, lost reply and
+API replacement, invalid siblings, oversized batches, unsupported protocol and
+bounded concurrent/hung reads. Eight targeted supervisor/recovery/real-PTY shutdown
+tests pass; strict application/API all-target clippy and formatting pass.
+Logs: `/tmp/swarm-native-answer-check.6fkv8E/native-intake-{clippy,tests,supervisor}.log`.
+Native-source persistence is local commit `7a6d963c` on
+`codex/native-answer-storage`; pushing main was refused by the execution gate.
+The operator has been asked for approval; do not retry main or deploy around that
+gate. Continue local integration meanwhile. Exact decision identity, native
+authorship/programmatic-answer exclusion, actual hook installation and the full
+fictional operator-to-worker-to-Queen lifecycle remain open. Needs You has not
+been claimed fixed by these intake tests.
+
 September 10 release handoff: operator approved preparing 1.7.0, not publication
 or deployment. Built and signed candidate `9ae7a0e3` is based on verified UX
 `dba2868b`, excluding the unfinished native capture/storage work. Handoff is at
@@ -28,8 +47,9 @@ the Linux validation tree is `/tmp/swarm-native-answer-check.6fkv8E`, now with i
 own stripped-debug cache (1.0 GiB observed, 8.2 GiB root space free). The older
 attachment debug cache was explicitly removed during release preparation; do not
 assume it is still warm. No live schema migration or provider hook installation.
-Next is authenticated durable admission/acknowledgement and exact immutable
-decision binding, preserving descriptions and ruling out programmatic answers.
+Durable admission/acknowledgement is implemented in the intake checkpoint above.
+Next is exact immutable decision binding and native authorship verification,
+preserving descriptions and ruling out programmatic answers.
 Account usage39% consumed at this checkpoint; no resets used or available.
 
 Native capture foundation now has a private protocol17 prepare/admit handshake,

@@ -31,6 +31,8 @@ use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
 
 mod decision_clarification;
+mod native_operator_sources;
+pub use native_operator_sources::{NativeSourceAdmission, NativeSourceReceipt};
 mod ops_tickets;
 mod queen_review;
 mod queue_snapshot;

@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 
 const MAX_OPTION_DESCRIPTION_BYTES: usize = 4096;
 pub const MAX_NATIVE_INTERVIEW_SOURCE_BYTES: usize = 128 * 1024;
+pub const MAX_NATIVE_INTERVIEW_BATCH: usize = 32;
 
 // Reject unrepresented question/option fields: previews and future provider
 // behavior must not silently disappear from an exact-question comparison.

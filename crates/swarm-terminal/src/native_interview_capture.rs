@@ -9,7 +9,7 @@ use crate::{
 };
 
 const MAX_PENDING: usize = 32;
-const MAX_READY: usize = 32;
+const MAX_READY: usize = swarm_domain::MAX_NATIVE_INTERVIEW_BATCH;
 const MAX_DEVICES: usize = 4;
 
 pub use swarm_domain::NativeInterviewEvidence;

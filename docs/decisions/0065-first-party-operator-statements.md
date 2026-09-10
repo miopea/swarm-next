@@ -257,6 +257,27 @@ Exhaustion or failed persistence must leave the engine source unacknowledged;
 ordinary terminal input remains independent. Downgrade requires a compatible
 pre-migration database backup.
 
+### Durable intake and acknowledgement ownership
+
+The existing API worker-supervisor pass collects at most32 native sources from
+the trusted local terminal engine after reconciling known sessions. It checks
+the actual protocol first; protocol16 and other unrecognized generations receive
+only Ping, never capture commands. No additional polling service is introduced.
+The application service admits each source independently and returns opaque
+storage receipts only after a committed insert or exact retained-ID retry.
+Only those receipts may cause an engine acknowledgement. Invalid/conflicting
+sources cannot gain receipts or prevent valid siblings from being saved.
+
+One shared admission permit covers the pass, including a blocking database job.
+If cancellation outlives that job, the job retains the permit until completion,
+preventing abandoned work from accumulating. The network/pass deadline is three
+seconds; timing does not establish whether storage or acknowledgement happened.
+Database failure stops that batch. Lost acknowledgements are unconfirmed rather
+than proof the engine retained or removed anything; the durable source survives
+either outcome. A replacement API safely retries the same source identity.
+No question text, answer, capability or raw transport error enters warnings.
+Ordinary terminal input and existing decision delivery remain separate.
+
 This path is not installed in provider settings yet. Do not enable hooks or claim
 Needs You reconciliation until authenticated durable consumption, exact question
 binding and the complete fictional failure/recovery lifecycle are verified.
