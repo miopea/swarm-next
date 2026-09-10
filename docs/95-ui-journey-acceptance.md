@@ -3,6 +3,29 @@
 Scope remains45/93. This matrix distinguishes delivered behavior, isolated proof
 and remaining requirements; it is not whole-program completion.
 
+## Dark-theme and narrow reflow checkpoint
+
+The full-App harness returned an empty presentation-preferences response; root
+data-theme became undefined while the toggle offered Switch to light theme.
+That was a fixture defect, not evidence of a live dark-theme failure. Harness
+GET/PUT now retain typed per-device preferences for the page, with theme=dark
+seeding. Actual root data-theme=dark and computed colors were verified before
+accepting the following evidence. Production build passes; no production code
+changed, and no app/API/engine deployment is needed for this fixture-only tranche.
+
+Edge1280x800 dark Needs You: readable question, recommendation and alternatives.
+Sampled computed-color ratios: muted panel8.27:1, primary panel13.65:1,
+secondary question action8.09:1, recommendation9.24:1. Samples are not whole-app
+contrast certification. At320x740, custom-answer input is220px wide, Send this
+instead44px tall, and page scrollWidth320. Fictional text was cleared, never sent.
+Queues also has scrollWidth320; owner grouping remains readable. Dark task editor
+is320x740 with visible header/actions and scrollable body; closed without edits.
+Settings Night Watch search remains dark and fits320px, with readable controls.
+
+These are desktop and narrow CSS-viewport observations, not actual browser zoom,
+native Android/iOS keyboard or suspension acceptance. No live appearance settings,
+operator decisions, task states or provider input were changed.
+
 ## Reduced-motion linked navigation — dba2868b
 
 Delivered runtime1.6.0-dev-dba2868be982-20260910095752-189394, healthy with no

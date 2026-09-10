@@ -2,6 +2,17 @@
 
 ### Active acceptance checkpoint — ordinary-user UX first
 
+Dark-theme/reflow checkpoint: fixture presentation preferences were empty, so a
+dark button label could coexist with light CSS. The harness now owns valid per-
+device preferences and PUT updates, with explicit theme=dark seeding. Verified
+actual root theme/colors before accepting screenshots. Dark Needs You, Queues,
+custom answer, task editor and Settings search fit320px. See95 for sampled ratios.
+This tranche changes only fixture/evidence; production remains dba2868b, so no
+app/API or engine update is necessary. Native browser zoom is not claimed from
+viewport emulation. Next close the remaining zoom/reflow gate using a supported
+browser zoom action, or explicitly retain that gate if the browser cannot expose
+it. Then consolidate UI-3/4 disposition without reopening passed journeys.
+
 Delivered dba2868b: linked task/decision navigation respects reduced motion instead
 of always requesting smooth scroll.116 focused tests/build pass; Edge emulated
 reduce preference verified both exact-item focus journeys. Healthy app/API and

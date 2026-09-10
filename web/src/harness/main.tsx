@@ -8,6 +8,7 @@ import { SURFACES } from "./surfaces";
 import { supportFixtureResponse } from "./SupportFeedbackFixture";
 import { taskPreviewFixtureResponse } from "./TaskPreviewFixture";
 import { sessionRecoveryResponse } from "./SessionRecoveryFixture";
+import type { PresentationPreferences } from "../api";
 
 /**
  * A place to LOOK at the interface, with no Hive and no credential.
@@ -45,6 +46,7 @@ import { sessionRecoveryResponse } from "./SessionRecoveryFixture";
  * needs comes from its fixture props, not from here.
  */
 const originalFetch = globalThis.fetch;
+const presentationFixtures = new Map<string, PresentationPreferences>();
 const json = (body: unknown) =>
   new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 
@@ -67,6 +69,17 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   // what lets the WHOLE APP mount here instead of a single card. Everything
   // else keeps answering empty.
   const path = url.split("?")[0];
+  const presentationDevice = /^\/api\/v1\/preferences\/presentation\/(desktop|mobile)$/.exec(path)?.[1] as "desktop" | "mobile" | undefined;
+  if (presentationDevice) {
+    const current = presentationFixtures.get(presentationDevice) ?? {
+      device_class: presentationDevice, configured: true, terminal_keys_visible: true,
+      color_theme: new URLSearchParams(location.search).get("theme") === "dark" ? "dark" : "light",
+    };
+    const next = init?.method === "PUT" && typeof init.body === "string"
+      ? { ...current, ...JSON.parse(init.body), configured: true } : current;
+    presentationFixtures.set(presentationDevice, next);
+    return json(next);
+  }
   if (path === "/api/v1/feedback/reports" && new URLSearchParams(location.search).get("savedReports") === "sample") {
     return json([{ id: "fictional-saved-report", expectation: "Keep the selected worker visible.", observation: "Fictional terminal redraw report", created_at: 1789027200,
       diagnostic_bundle: JSON.stringify({ fictional: true, captured_version: "fixture-original-build", note: "Original saved evidence, not regenerated metrics." }, null, 2), attachment_name: null }]);
