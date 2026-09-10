@@ -759,6 +759,22 @@ test("opens the assigned running worker directly from her task", () => {
   expect(onOpenWorker).toHaveBeenCalledWith("session-1");
 });
 
+test("opens task details from a focusable title without changing work", () => {
+  const { props } = renderBoard();
+  const title = within(screen.getByRole("heading", { name: task.title })).getByRole("button", { name: task.title });
+  expect(title.tabIndex).toBe(0);
+  title.focus();
+  fireEvent.click(title);
+  const dialog = screen.getByRole("dialog", { name: "Review and edit task" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(title).toHaveFocus();
+  expect(props.onUpdate).not.toHaveBeenCalled();
+  expect(props.onTransition).not.toHaveBeenCalled();
+  expect(props.onAssign).not.toHaveBeenCalled();
+  expect(props.onStartWorker).not.toHaveBeenCalled();
+});
+
 test("edits task details and retains a failed form for retry", async () => {
   const onUpdate = vi.fn().mockRejectedValue(new Error("offline"));
   renderBoard({ onUpdate });

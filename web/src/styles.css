@@ -1006,6 +1006,9 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 /* Quieter than the state and priority beside it. Age is context for those two,
    not a third thing competing with them for attention. */
 .task-age { color: var(--text-muted); font-size: .68rem; font-variant-numeric: tabular-nums; }
+.task-title-button { display: block; width: 100%; min-height: 44px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: inherit; font: inherit; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.task-title-button:hover { background: transparent; color: var(--accent-strong); text-decoration: underline; text-underline-offset: 3px; }
+.task-title-button:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 3px; }
 .priority-low { color: var(--quiet); }
 .priority-normal { color: var(--good); }
 .priority-high { color: var(--warn); background: var(--warn-soft); }

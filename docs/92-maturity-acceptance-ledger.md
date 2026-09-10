@@ -1,5 +1,24 @@
 # Current maturity acceptance ledger
 
+## September 10 — task details entry point
+
+Live Edge review on6ac6c145 found task titles were plain headings: opening details
+required Edit or an undiscoverable double-click. TaskCard now exposes a native
+button in each heading, opening the same existing dialog without transitioning,
+assigning or waking work. Existing Edit and double-click paths remain available.
+
+The regression failed before implementation and all67 TaskBoard tests now pass.
+Type checking and the production web build pass. In the isolated no-proxy harness,
+Edge verified Enter -> details -> Close -> focus returns to the title. At390px,
+single-click opening/cancellation also passed; all six fixture title targets were
+44px tall and the document had no horizontal overflow. Desktop and phone-width
+rendering were visually inspected. This is not Android/iOS device acceptance.
+Temporary viewport override was reset and owned browser tabs closed.
+
+Live filter recovery also passed: an unmatched search exposed Show all open work,
+which cleared the filter. No task edits or workflow transitions were made in the
+live Hive. The title fix is local pending publication approval, not deployed.
+
 ## September 10 — latest verification checkpoint
 
 Live health confirms App/API6ac6c145 and engine30ad01d with equal engine build
