@@ -1,4 +1,5 @@
 import { demoDecision, demoTasks, demoWorkers } from "./productFixtures";
+import type { TaskActivityPage } from "../api";
 
 /**
  * Enough of a Hive for the real App to mount against.
@@ -20,6 +21,18 @@ import { demoDecision, demoTasks, demoWorkers } from "./productFixtures";
 const now = Math.floor(Date.now() / 1000);
 
 export function hiveFixture(path: string): unknown | undefined {
+  const activityTask = /^\/api\/v1\/tasks\/([^/]+)\/activity$/.exec(path);
+  if (activityTask) return {
+    events: [
+      { sequence: 1, task_id: decodeURIComponent(activityTask[1]), kind: "created",
+        from_state: null, to_state: "draft", actor_kind: "operator", actor_id: null,
+        note: "Fictional task created for UI verification.", occurred_at: now - 120 },
+      { sequence: 2, task_id: decodeURIComponent(activityTask[1]), kind: "details_updated",
+        from_state: null, to_state: null, actor_kind: "worker", actor_id: "demo-worker",
+        note: "Fictional handoff recorded. No live task was changed.", occurred_at: now - 60 },
+    ],
+    truncated: false,
+  } satisfies TaskActivityPage;
   if (path === "/api/v1/orchestration/coordinator" && new URLSearchParams(window.location.search).get("startHold") === "1") return {
     completed_actions: 0, queen_calls_avoided: 0, uncertain_actions: 0, queued_actions: 1,
     stale_attention_actions: 0, worker_exit_attention_actions: 0, unstarted_attention_actions: 0,

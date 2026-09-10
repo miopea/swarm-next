@@ -1,4 +1,5 @@
-import { useState, type DragEvent } from "react";
+import { useCallback, useState, type DragEvent } from "react";
+import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
 import {
   type EmailTaskSource,
@@ -38,7 +39,7 @@ export type TaskCardProps = {
   onOpenTask?: (taskId: string) => void;
   prerequisiteCandidates?: Task[];
   onPrerequisiteChanged?: (updated: Task) => void;
-  onFetchActivity: (taskId: string) => Promise<TaskActivityPage>;
+  onFetchActivity: (taskId: string, signal?: AbortSignal) => Promise<TaskActivityPage>;
   onFetchJiraComments: (taskId: string) => Promise<JiraComment[]>;
   onAddJiraComment: (taskId: string, body: string) => Promise<{ state: string }>;
   onRetryJira: (task: Task) => Promise<void>;
@@ -72,17 +73,19 @@ export default function TaskCard({ task, heldBriefing, jiraLink, emailSources, o
     action();
   }
 
-  async function loadActivity() {
+  const loadActivity = useCallback(async (signal: AbortSignal) => {
     setHistoryLoading(true);
     setHistoryError(false);
     try {
-      setActivity(await onFetchActivity(task.id));
+      const page = await onFetchActivity(task.id, signal);
+      if (!signal.aborted) setActivity(page);
     } catch {
-      setHistoryError(true);
+      if (!signal.aborted || (signal.reason instanceof DOMException && signal.reason.name === "TimeoutError")) setHistoryError(true);
     } finally {
-      setHistoryLoading(false);
+      if (!signal.aborted || (signal.reason instanceof DOMException && signal.reason.name === "TimeoutError")) setHistoryLoading(false);
     }
-  }
+  }, [task.id, onFetchActivity]);
+  const refreshActivity = useVisiblePolling(loadActivity, historyOpen, null);
 
   function toggleHistory() {
     if (historyOpen) {
@@ -90,7 +93,6 @@ export default function TaskCard({ task, heldBriefing, jiraLink, emailSources, o
       return;
     }
     setHistoryOpen(true);
-    void loadActivity();
   }
 
   function toggleDiscussion() {
@@ -154,7 +156,7 @@ export default function TaskCard({ task, heldBriefing, jiraLink, emailSources, o
         </CursorMenu>
       )}
       {(task.prerequisites?.length ?? 0) > 0 && <div className="task-card-panel"><TaskPrerequisiteList task={task} workerNames={new Map(workers.map((worker) => [worker.id, worker.name]))} onOpenTask={onOpenTask} /></div>}
-      {historyOpen && <TaskActivityPanel activity={activity} loading={historyLoading} failed={historyError} onRetry={() => void loadActivity()} />}
+      {historyOpen && <TaskActivityPanel activity={activity} loading={historyLoading} failed={historyError} onRetry={() => void refreshActivity()} />}
       {/* The wrapper is the grid item, so it carries the full-width span. The
           panels inside declare one too, which does nothing from in here — that
           is how they came to be auto-placed into a named column and drawn on

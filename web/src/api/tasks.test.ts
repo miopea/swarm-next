@@ -56,6 +56,14 @@ test("prerequisite changes encode identity and send only the explicit operation 
   expect(fetch).toHaveBeenCalledWith("/api/v1/tasks/task%2Fone/prerequisites", expect.objectContaining({ method: "POST", body: JSON.stringify(input), cache: "no-store" }));
 });
 
+test("task activity forwards its owner's cancellation signal", async () => {
+  const controller = new AbortController();
+  const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(activity)));
+  vi.stubGlobal("fetch", fetch);
+  await fetchTaskActivity("operator", "task/one", 30, controller.signal);
+  expect(fetch).toHaveBeenCalledWith("/api/v1/tasks/task%2Fone/activity?limit=30", expect.objectContaining({ signal: controller.signal }));
+});
+
 test("recent activity forwards its owner's cancellation signal", async () => {
   const controller = new AbortController();
   const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(activity)));

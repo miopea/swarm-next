@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
-import type { HiveIdentity, Task, Worker } from "../api";
+import type { HiveIdentity, Task, TaskActivityPage, Worker } from "../api";
 import TaskBoard from "./TaskBoard";
 
 afterEach(() => {
@@ -791,10 +791,66 @@ test("loads task history only when the operator opens it", async () => {
   fireEvent.click(screen.getByRole("button", { name: `Actions for ${task.title}` }));
   fireEvent.click(screen.getByRole("menuitem", { name: "Show history" }));
 
-  await waitFor(() => expect(onFetchActivity).toHaveBeenCalledWith(task.id));
+  await waitFor(() => expect(onFetchActivity).toHaveBeenCalledWith(task.id, expect.any(AbortSignal)));
   expect(screen.getByRole("region", { name: "Task history" })).toHaveTextContent("Task created");
   expect(screen.getByRole("region", { name: "Task history" })).toHaveTextContent("Draft → Ready");
   expect(screen.getByRole("region", { name: "Task history" })).toHaveTextContent("Showing the latest activity.");
+});
+
+test("reopened history cannot be overwritten by the previous read", async () => {
+  const reads: { signal?: AbortSignal; resolve: (page: TaskActivityPage) => void }[] = [];
+  const onFetchActivity = vi.fn((_id: string, signal?: AbortSignal) => new Promise<TaskActivityPage>((resolve) => reads.push({ signal, resolve })));
+  renderBoard({ onFetchActivity });
+  const toggle = (name: string) => {
+    fireEvent.click(screen.getByRole("button", { name: `Actions for ${task.title}` }));
+    fireEvent.click(screen.getByRole("menuitem", { name }));
+  };
+  toggle("Show history");
+  await waitFor(() => expect(reads).toHaveLength(1));
+  toggle("Hide history");
+  toggle("Show history");
+  await waitFor(() => expect(reads).toHaveLength(2));
+  const page = (note: string): TaskActivityPage => ({ events: [{ sequence: 1,
+    task_id: task.id, kind: "details_updated", from_state: null, to_state: null,
+    note, occurred_at: 1_700_000_000, actor_kind: "system", actor_id: null }], truncated: false });
+  await act(async () => reads[1].resolve(page("Current handoff")));
+  expect(screen.getByRole("region", { name: "Task history" })).toHaveTextContent("Current handoff");
+  await act(async () => reads[0].resolve(page("Obsolete handoff")));
+  expect(screen.getByRole("region", { name: "Task history" })).toHaveTextContent("Current handoff");
+  expect(screen.getByRole("region", { name: "Task history" })).not.toHaveTextContent("Obsolete handoff");
+  expect(reads[0].signal?.aborted).toBe(true);
+  cleanup();
+  expect(reads[1].signal?.aborted).toBe(false); // The successful request already finished.
+});
+
+test("failed history remains retryable without changing the task", async () => {
+  const onFetchActivity = vi.fn().mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValueOnce({ events: [], truncated: false });
+  const { props } = renderBoard({ onFetchActivity });
+  fireEvent.click(screen.getByRole("button", { name: `Actions for ${task.title}` }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Show history" }));
+  await screen.findByText("History is unavailable.");
+  fireEvent.click(within(screen.getByRole("region", { name: "Task history" })).getByRole("button", { name: "Retry" }));
+  await screen.findByText("No history recorded.");
+  expect(onFetchActivity).toHaveBeenCalledTimes(2);
+  expect(props.onUpdate).not.toHaveBeenCalled();
+  expect(props.onTransition).not.toHaveBeenCalled();
+});
+
+test("leaving the task board cancels an unfinished history read", async () => {
+  let signal: AbortSignal | undefined;
+  let finish!: (page: TaskActivityPage) => void;
+  const onFetchActivity = vi.fn((_id: string, ownerSignal?: AbortSignal) => {
+    signal = ownerSignal;
+    return new Promise<TaskActivityPage>((resolve) => { finish = resolve; });
+  });
+  const { unmount } = renderBoard({ onFetchActivity });
+  fireEvent.click(screen.getByRole("button", { name: `Actions for ${task.title}` }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Show history" }));
+  await waitFor(() => expect(onFetchActivity).toHaveBeenCalledTimes(1));
+  unmount();
+  expect(signal?.aborted).toBe(true);
+  await act(async () => finish({ events: [], truncated: false }));
 });
 
 test("moves open tasks with keyboard-accessible ordering controls", () => {

@@ -2,6 +2,17 @@
 
 ### Active package: Needs You clarification, not another reload patch
 
+UI-4 continuation: see95 for the current journey matrix. Live prerequisite ->
+exact task -> history passed. A failing-before regression proved reopened history
+could be overwritten by an older response. The existing bounded read owner now
+cancels hidden/unmounted history and fences late responses, with a stable App
+callback and API cancellation propagation.146 focused tests passed; final typed
+fixtures,69 task/API tests and production build pass. Fictional browser history
+close/reopen passes. Commit/deploy this coherent change, verify live and preserve
+worker identities. Next inspect bounded older-history access: latest30-only is
+not full history on demand. Do not detour into performance or BFG communication.
+All prior clarification/mobile/diagnostic CI runs are now fully green.
+
 LATEST: the clarification milestone and two bounded UI follow-throughs are
 committed/pushed/deployed through `b01aef1d`. Live runtime:
 `1.6.0-dev-b01aef1d1c9b-20260910061835-74026`. All three deployments preserved
