@@ -113,6 +113,51 @@ mod description_tests {
         );
         assert!(NativeInterviewQuestion::from_decision(&question).is_none());
     }
+
+    #[test]
+    fn rendered_snapshots_reject_changed_conditions_and_preserve_plain_legacy_questions() {
+        let mut unsupported = serde_json::to_value(question()).unwrap();
+        unsupported["unrepresented_condition"] = serde_json::json!("Only after backup");
+        assert!(serde_json::from_value::<crate::DecisionQuestion>(unsupported).is_err());
+        let mut questions = vec![question()];
+        assert!(crate::displayed_decision_questions_match(&questions, None));
+        questions[0]
+            .option_descriptions
+            .insert("Narrow".into(), "No deployment.".into());
+        assert!(!crate::displayed_decision_questions_match(&questions, None));
+        assert!(crate::displayed_decision_questions_match(
+            &questions,
+            Some(&questions)
+        ));
+        assert!(!crate::displayed_decision_questions_match(
+            &questions,
+            Some(&[])
+        ));
+        for change in 0..6 {
+            let mut stale = questions.clone();
+            match change {
+                0 => stale[0].option_descriptions.clear(),
+                1 => {
+                    stale[0]
+                        .option_descriptions
+                        .insert("Narrow".into(), "Deploy now.".into());
+                }
+                2 => stale[0].question = "Different?".into(),
+                3 => stale[0].header = "Other".into(),
+                4 => stale[0].options.reverse(),
+                _ => stale[0].multi_select = true,
+            }
+            assert!(!crate::displayed_decision_questions_match(
+                &questions,
+                Some(&stale)
+            ));
+        }
+        questions[0].options = vec!["Same".into(), "Same".into()];
+        assert!(!crate::displayed_decision_questions_match(
+            &questions,
+            Some(&questions)
+        ));
+    }
 }
 
 /// Private IPC evidence, not an agent-writable operator receipt. The API must

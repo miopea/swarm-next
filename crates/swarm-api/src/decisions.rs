@@ -23,6 +23,10 @@ pub(super) struct ResolveDecisionRequest {
     /// answer rather than a ruling.
     #[serde(default)]
     answers: std::collections::BTreeMap<String, Vec<String>>,
+    /// Exact rendered question snapshot. Missing is legacy, not confirmation
+    /// that this client displayed option descriptions.
+    #[serde(default)]
+    questions: Option<Vec<swarm_domain::DecisionQuestion>>,
     #[serde(default)]
     note: String,
     /// Which control the operator used, so a disputed resolution can be traced
@@ -63,11 +67,12 @@ pub(super) async fn resolve_decision(
             &request.surface,
         )
     } else {
-        service.answer_operator_decision(
+        service.answer_operator_decision_from_snapshot(
             decision_id,
             &request.answers,
             &request.note,
             &request.surface,
+            request.questions.as_deref(),
         )
     }
     .map_err(application_error)?;

@@ -38,9 +38,14 @@ protects against older database readers; MCP surface25 advertises the field.
 Domain153, affected persistence54, tool-contract1, UI63, TypeScript, production
 web build and strict affected-crate clippy passed. Desktop/390px Edge fictional
 views were checked, not native-device acceptance. This package remains local and
-not deployment-ready: the HTTP answer path still needs an exact rendered-question
-snapshot check to reject older browsers that did not show the descriptions.
-Immutable decision binding and final native-result verification also remain open.
+awaiting final-font browser verification. The HTTP answer path now requires an
+exact rendered-question snapshot for described questions, checked inside the
+resolution transaction. Domain154, affected persistence54, two HTTP route tests,
+two focused client/full-App tests, strict affected-crate clippy and web build pass.
+Changed/missing snapshots leave requests pending; an exact retry succeeds. Plain
+legacy questions remain compatible. Immutable decision binding, final native-result
+verification and actual provider capture installation still remain open. Main
+publication remains approval-gated; no live deployment or worker restart occurred.
 
 An isolated native Claude2.1.267 adversarial callback is now retained as a
 regression: programmatic input and the early completion result said Amber while

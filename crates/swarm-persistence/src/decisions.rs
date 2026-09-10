@@ -609,6 +609,22 @@ impl TaskStore {
         note: &str,
         surface: &str,
     ) -> Result<DecisionRequest, TaskStoreError> {
+        self.answer_decision_request_from_snapshot(id, answers, note, surface, None)
+    }
+
+    /// Checks the rendered questions inside the answer transaction. A stale or
+    /// absent rich-question snapshot cannot resolve, queue a reply, or wake work.
+    ///
+    /// # Errors
+    /// Rejects stale snapshots, invalid answers, resolved requests and storage failures.
+    pub fn answer_decision_request_from_snapshot(
+        &self,
+        id: DecisionRequestId,
+        answers: &BTreeMap<String, Vec<String>>,
+        note: &str,
+        surface: &str,
+        displayed: Option<&[DecisionQuestion]>,
+    ) -> Result<DecisionRequest, TaskStoreError> {
         if note.len() > MAX_RESOLUTION_NOTE_BYTES || surface.len() > MAX_RESOLUTION_SURFACE_BYTES {
             return Err(TaskStoreError::InvalidDecisionResolution);
         }
@@ -629,6 +645,14 @@ impl TaskStore {
         }
         let declared: Vec<DecisionQuestion> = serde_json::from_str(&declared)
             .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+        if !valid_decision_questions(&declared) {
+            return Err(TaskStoreError::IntegrityFailure(
+                "stored decision question shape is invalid".into(),
+            ));
+        }
+        if !swarm_domain::displayed_decision_questions_match(&declared, displayed) {
+            return Err(TaskStoreError::DecisionQuestionSnapshotMismatch);
+        }
         if declared.is_empty() {
             // A record with no questions is a ruling, and its buttons are the
             // asker's guesses. When none of them is the operator's answer, the
@@ -2340,8 +2364,34 @@ mod tests {
         let restored = store.get_decision_request(created.id).unwrap();
         assert_eq!(restored.questions, questions);
         let answers = BTreeMap::from([("Scope".into(), vec!["Narrow".into()])]);
+        assert!(matches!(
+            store.answer_decision_request(created.id, &answers, "", "inbox_interview"),
+            Err(TaskStoreError::DecisionQuestionSnapshotMismatch)
+        ));
+        let mut stale = questions.clone();
+        stale[0].option_descriptions.clear();
+        assert!(matches!(
+            store.answer_decision_request_from_snapshot(
+                created.id,
+                &answers,
+                "",
+                "inbox_interview",
+                Some(&stale)
+            ),
+            Err(TaskStoreError::DecisionQuestionSnapshotMismatch)
+        ));
+        let pending = store.get_decision_request(created.id).unwrap();
+        assert_eq!(pending.state, DecisionRequestState::Pending);
+        assert!(pending.resolution_answers.is_empty());
+        assert!(pending.delivery_state.is_none());
         let resolved = store
-            .answer_decision_request(created.id, &answers, "", "inbox_interview")
+            .answer_decision_request_from_snapshot(
+                created.id,
+                &answers,
+                "",
+                "inbox_interview",
+                Some(&questions),
+            )
             .unwrap();
         assert_eq!(resolved.questions, questions);
         questions[0]

@@ -470,6 +470,10 @@ pub enum TaskStoreError {
         "an interview asks at most 4 questions, each with 2 to 4 unique options and a unique header, and offers no actions"
     )]
     InvalidDecisionQuestions,
+    #[error(
+        "refresh this request and review its current questions before answering; your answer was not sent"
+    )]
+    DecisionQuestionSnapshotMismatch,
     #[error("an interview is answered by answering every question it asks")]
     IncompleteDecisionAnswers,
     #[error("dismissing an interview needs a reason the asking worker can act on")]

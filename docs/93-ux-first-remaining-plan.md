@@ -20,14 +20,22 @@ Strict domain/persistence/API all-target, all-feature clippy now passes after
 replacing the four ambiguous default constructors. Linux logs are
 `/tmp/swarm-native-answer-check.6fkv8E/description-{domain,persistence,surface-verified,clippy-final}.log`.
 
-Do not deploy this package yet: an older already-open browser can still submit
-labels without having displayed the new descriptions. Next add an exact rendered
-question snapshot to the answer command and enforce it in the application/store
-before resolving a described question. Preserve ordinary legacy questions; do not
-accept a capability flag as proof of an exact question. Then finish immutable
-decision-ID binding and final native-result confirmation. These are explicit
-integration gates, not waived by schema161 or the rendering tests. The frozen
-1.7.0 candidate is unaffected. Main publication remains approval-gated.
+The stale-browser gate is now implemented: the browser sends its rendered question
+snapshot, and the domain comparison runs inside the answer transaction. Missing
+rich-question snapshots or changed context return409 without resolution or reply;
+unsupported question fields are rejected rather than discarded. The full-App and
+client tests verify snapshot submission and no automatic retry. Plain legacy
+questions remain supported. Domain154, affected persistence54 and two HTTP route
+tests pass; the strict unknown-field refinement was rechecked with all154 domain
+tests and the described-answer HTTP test. Strict all-target domain/persistence/
+application/API clippy, TypeScript and the production web build pass. Logs:
+`/tmp/swarm-native-answer-check.6fkv8E/snapshot-*.log`.
+
+Next finish immutable decision-ID binding and final native-result confirmation;
+provider capture remains disabled until the complete fictional lifecycle passes.
+Final-font Edge verification is still pending reconnection, and main publication
+remains approval-gated. No deployment or worker interruption; the frozen1.7.0
+candidate is unaffected. Account usage42% consumed at this checkpoint.
 
 Native Claude 2.1.267 contract probe now demonstrates that a PostToolUse observer
 can retain a different answer from the final result received by the worker:

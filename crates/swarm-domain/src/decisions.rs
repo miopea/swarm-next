@@ -192,6 +192,7 @@ impl std::error::Error for ParseDecisionRequestStateError {}
 /// collapse the question into guesses before the operator has said anything.
 /// A record carrying questions asks instead of guessing.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DecisionQuestion {
     /// Short label, and the key the answer is recorded under.
     pub header: String,
@@ -258,4 +259,21 @@ pub fn valid_decision_questions(questions: &[DecisionQuestion]) -> bool {
                     && options.insert(option.as_str())
             })
     })
+}
+
+/// A rendered snapshot binds an answer to the exact question, not merely its
+/// option labels. Legacy clients may answer only questions without explanatory
+/// conditions. This is content correlation, not operator authentication.
+#[must_use]
+pub fn displayed_decision_questions_match(
+    current: &[DecisionQuestion],
+    displayed: Option<&[DecisionQuestion]>,
+) -> bool {
+    valid_decision_questions(current)
+        && match displayed {
+            Some(displayed) => displayed == current,
+            None => current
+                .iter()
+                .all(|question| question.option_descriptions.values().all(String::is_empty)),
+        }
 }

@@ -1143,7 +1143,7 @@ export function App() {
   async function answerInboxDecision(decision: DecisionRequest, answers: Record<string, string[]>, note: string) {
     if (!operatorToken) return;
     await perform(async () => {
-      const updated = await answerDecision(operatorToken, decision.id, answers, note);
+      const updated = await answerDecision(operatorToken, decision.id, answers, note, "inbox_interview", decision.questions);
       setDecisions((current) => current.map((item) => item.id === updated.id ? updated : item));
     }, "Sending your answers…", true);
   }

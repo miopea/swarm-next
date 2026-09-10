@@ -104,6 +104,34 @@ test("refreshes the runtime evidence after returning without reloading the app",
   }
 });
 
+test("Needs You sends its rendered question snapshot and does not retry a stale answer", async () => {
+  const base = bootFetch();
+  const questions = [{ header: "Scope", question: "Which fictional scope?", options: ["Narrow", "Broad"], option_descriptions: { Narrow: "No deployment." } }];
+  const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/preferences/start-surface")) return Promise.resolve(ok({ start_surface: "decisions" }));
+    if (url === "/api/v1/decisions") return Promise.resolve(ok([{
+      id: "described-decision", hive_id: "h", requesting_worker_id: "queen", task_id: null,
+      kind: "input", urgency: "normal", title: "Fictional scope", summary: "Choose the scope", reason: "", risk: "", evidence: "",
+      suggested_action: "Narrow", allowed_actions: [], questions, state: "pending", deadline: null,
+      resolution_action: null, resolution_note: "", resolved_by_operator_id: null, created_at: 1, updated_at: 1, resolved_at: null, delivery_state: null,
+    }]));
+    if (url === "/api/v1/decisions/described-decision/resolution" && init?.method === "PATCH") return Promise.resolve(new Response(
+      JSON.stringify({ error: "decision_question_snapshot_mismatch", message: "Review the current request" }), { status: 409 },
+    ));
+    return base(input);
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Narrow No deployment." }));
+  fireEvent.click(screen.getByRole("button", { name: "Send answers" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Send answers" })).toBeEnabled());
+  const sent = fetch.mock.calls.filter(([url, init]) => String(url).endsWith("/described-decision/resolution") && init?.method === "PATCH");
+  expect(sent).toHaveLength(1);
+  expect(JSON.parse(String(sent[0][1]?.body))).toEqual({ answers: { Scope: ["Narrow"] }, questions, note: "", surface: "inbox_interview" });
+  expect(screen.getByRole("heading", { name: "Fictional scope" })).toBeInTheDocument();
+});
+
 test("routes database recovery to attention without creating a stored decision and clears after recovery", async () => {
   let recovery = true;
   let visibility: DocumentVisibilityState = "visible";

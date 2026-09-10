@@ -156,6 +156,22 @@ the form's answers/notes, while equivalent map ordering preserves a draft. Answe
 payloads retain the option label or operator's custom text, not a concatenation
 of the label and its explanation. Automatic native reconciliation remains gated.
 
+The operator answer command now accepts the exact `questions` snapshot displayed
+by the client. Application orchestration passes it to persistence, which invokes
+the domain comparison inside the resolution transaction. Missing snapshots on
+described questions, changed descriptions/labels/wording/order/mode, and unsupported
+question fields cannot close a request or enqueue its reply. A mismatch returns
+an explicit409 asking the operator to refresh/review; it does not automatically
+replay input or wake the worker. Malformed stored questions remain an integrity
+failure rather than being mislabeled as stale browser data.
+
+The application decision boundary owns compatibility for omitted snapshots: only
+questions with no nonempty option descriptions retain that legacy behavior. Remove
+this omission branch when the minimum supported browser contract requires rendered
+questions. New browsers always send their snapshot, including descriptions. This
+is exact content correlation within authenticated operator resolution, not proof
+of physical reading, provider consumption, or native terminal authorship.
+
 A disposable native Claude Code 2.1.267 PTY exercised one fictional AskUser
 invocation with explicit isolated hooks and no Hive settings changes. PreToolUse
 supplied `Amber` through updated input. The observed PostToolUse callback retained

@@ -1,6 +1,7 @@
 import { expect, test, vi } from "vitest";
 
 import {
+  answerDecision,
   assignTask,
   fetchBrowserEvidence,
   recordBrowserEvidence,
@@ -14,6 +15,19 @@ import {
   renameHive,
   RuntimeRequestError,
 } from "./api";
+
+test("interview answers carry the exact rendered snapshot without automatic retry", async () => {
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(
+    JSON.stringify({ error: "decision_question_snapshot_mismatch", message: "Review the current request" }),
+    { status: 409 },
+  ));
+  const questions = [{ header: "Scope", question: "Which scope?", options: ["Narrow", "Broad"], option_descriptions: { Narrow: " No deployment. " } }];
+  try {
+    await expect(answerDecision("operator", "decision-id", { Scope: ["Narrow"] }, "", "inbox_interview", questions)).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({ answers: { Scope: ["Narrow"] }, note: "", surface: "inbox_interview", questions });
+  } finally { fetch.mockRestore(); }
+});
 
 test("browser evidence uses authenticated cancellable requests without adding retry samples", async () => {
   const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("{}", { status: 200 }));

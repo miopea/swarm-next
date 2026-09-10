@@ -8579,6 +8579,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "invalid_decision_questions",
             error.to_string(),
         ),
+        TaskStoreError::DecisionQuestionSnapshotMismatch => ApiError::new(
+            StatusCode::CONFLICT,
+            "decision_question_snapshot_mismatch",
+            error.to_string(),
+        ),
         TaskStoreError::IncompleteDecisionAnswers => ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             "incomplete_decision_answers",
@@ -15958,6 +15963,95 @@ mod tests {
         assert_eq!(dismissed["state"], "resolved");
         assert_eq!(dismissed["resolution_action"], "dismissed");
         assert_eq!(dismissed["resolution_note"], "No longer relevant");
+    }
+
+    #[tokio::test]
+    async fn described_decision_answers_require_the_rendered_snapshot_before_delivery() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/fictional/queen").unwrap();
+        let questions: Vec<swarm_domain::DecisionQuestion> =
+            serde_json::from_value(serde_json::json!([{
+                "header":"Scope", "question":"Which fictional scope?", "options":["Narrow","Broad"],
+                "option_descriptions":{"Narrow":"No deployment."}
+            }]))
+            .unwrap();
+        let decision = store
+            .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                requesting_worker_id: queen.id,
+                task_id: None,
+                kind: swarm_domain::DecisionRequestKind::Input,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "Fictional scope",
+                summary: "Choose the fictional scope.",
+                reason: "Contract test",
+                risk: "No real work",
+                evidence: "Fictional",
+                suggested_action: "Narrow",
+                allowed_actions: &[],
+                questions: &questions,
+                deadline: None,
+                requested_command: None,
+            })
+            .unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone()),
+        );
+        let request = |body: serde_json::Value| {
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/decisions/{}/resolution", decision.id))
+                .header("authorization", "Bearer secret")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        let answers = serde_json::json!({"Scope":["Narrow"]});
+        let mut stale = questions.clone();
+        stale[0].option_descriptions.clear();
+        for body in [
+            serde_json::json!({"answers":answers}),
+            serde_json::json!({"answers":answers,"questions":stale}),
+        ] {
+            let response = app.clone().oneshot(request(body)).await.unwrap();
+            assert_eq!(response.status(), StatusCode::CONFLICT);
+            assert!(
+                response_json(response)
+                    .await
+                    .to_string()
+                    .contains("decision_question_snapshot_mismatch")
+            );
+            let pending = store.get_decision_request(decision.id).unwrap();
+            assert_eq!(pending.state, swarm_domain::DecisionRequestState::Pending);
+            assert!(pending.resolution_answers.is_empty());
+            assert!(pending.delivery_state.is_none());
+        }
+        let mut unsupported = serde_json::to_value(&questions).unwrap();
+        unsupported[0]["unrepresented_condition"] = serde_json::json!("Only after backup");
+        let response = app
+            .clone()
+            .oneshot(request(serde_json::json!({
+                "answers":answers,"questions":unsupported
+            })))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            store.get_decision_request(decision.id).unwrap().state,
+            swarm_domain::DecisionRequestState::Pending
+        );
+        let response = app
+            .oneshot(request(serde_json::json!({
+                "answers":answers,"questions":questions,"surface":"inbox_interview"
+            })))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let resolved = store.get_decision_request(decision.id).unwrap();
+        assert_eq!(resolved.state, swarm_domain::DecisionRequestState::Resolved);
+        assert_eq!(resolved.resolution_answers["Scope"], ["Narrow"]);
+        assert_eq!(resolved.questions, questions);
     }
 
     fn decision_echo_command(workspace: PathBuf) -> ProviderCommand {

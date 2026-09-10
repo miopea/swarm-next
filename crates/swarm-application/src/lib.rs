@@ -2777,6 +2777,23 @@ impl TaskService {
     /// Resolves one pending decision as the authenticated local operator.
     ///
     /// # Errors
+    /// Rejects stale rendered questions before any resolution or reply is saved.
+    pub fn answer_operator_decision_from_snapshot(
+        &self,
+        id: DecisionRequestId,
+        answers: &std::collections::BTreeMap<String, Vec<String>>,
+        note: &str,
+        surface: &str,
+        displayed: Option<&[swarm_domain::DecisionQuestion]>,
+    ) -> Result<DecisionRequest, ApplicationError> {
+        self.store
+            .answer_decision_request_from_snapshot(id, answers, note, surface, displayed)
+            .map_err(Into::into)
+    }
+
+    /// Resolves one pending decision as the authenticated local operator.
+    ///
+    /// # Errors
     /// Propagates invalid identity, state, action, integrity, or persistence failures.
     pub fn resolve_operator_decision(
         &self,

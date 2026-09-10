@@ -1832,11 +1832,12 @@ export async function answerDecision(
   answers: Record<string, string[]>,
   note = "",
   surface: DecisionSurface | "" = "inbox_interview",
+  questions?: DecisionQuestion[],
 ): Promise<DecisionRequest> {
   const response = await authenticatedFetch(
     operatorToken,
     `/api/v1/decisions/${encodeURIComponent(decisionId)}/resolution`,
-    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ answers, note, surface }) },
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ answers, note, surface, questions }) },
   );
   return response.json() as Promise<DecisionRequest>;
 }
