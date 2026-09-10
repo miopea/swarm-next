@@ -3,6 +3,32 @@
 Scope remains45/93. This matrix distinguishes delivered behavior, isolated proof
 and remaining requirements; it is not whole-program completion.
 
+## Queue observation recovery — 2d7b1cd7
+
+Delivered runtime1.6.0-dev-2d7b1cd7c2b5-20260910091951-170000 is healthy with no
+degraded subsystems; development reload completed successfully. Pre/post-queue-
+retry-workers.json in /tmp/swarm-clarification-deploy.cvm5VI match all34 worker
+records and12 running session identities. EnginePID3408834/start unchanged.
+No release or worker-engine update. Edge used Reload this tab after observing
+the newer runtime; fixture server stopped. CI completion is still unconfirmed.
+
+When observations are unavailable, Retry queue details uses the existing bounded
+read owner. It neither dispatches Queen nor starts/restarts a worker. Existing
+tasks remain visible until fresh evidence arrives; partial observations alone do
+not offer an ineffective retry or claim all-clear.
+
+All124 App/Queues/read-owner tests pass. The integration test recovers from a
+failed read with exactly one coordinator GET, clears the warning and removes the
+retry action. Both populated/empty Queue branches are covered. Existing owner
+tests cover in-flight deduplication, deadline cancellation and later recovery.
+Production build passes with the existing chunk-size advisory.
+
+Edge390/320px fictional empty-work fixture: retry remains available when the
+response still lacks recovery evidence; no false all-clear. The button measured
+44px after correcting its initial38.7px height. Page scrollWidth equals viewport
+width at both sizes. This is responsive proof, not native OS/offline proof.
+Fixture server stopped. Deployment/continuity receipt pending below.
+
 ## Support and diagnostic preview — 1e410476
 
 Delivered runtime1.6.0-dev-1e41047644a9-20260910084326-153185 is healthy with no

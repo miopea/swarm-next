@@ -2,18 +2,20 @@
 
 ### Active acceptance checkpoint — ordinary-user UX first
 
-DELIVERED83a88edd: healthy app/API, exact34-record/12-running identity match,
-enginePID3408834/start unchanged, development reload completed successfully.
-Current package83a88edd: display failures no longer invent an update cause or
-claim unobserved worker health; terminal failures use the existing content-free
-diagnostic marker. Three regression tests and production build pass, plus390px
-fictional terminal recovery. Deployment requested; verify health and unchanged
-worker identities before calling it delivered. Prior1e410476 CI34456655548 green.
-Next unmet UI-4 finding: unavailable queue observations have no local retry on
-mobile. Add a read-only retry through the existing bounded polling owner, not a
-Queen run or full terminal refresh. Empty Needs You correctly shows nothing
-requiring attention; missing recovery evidence correctly prevents Queue all-clear.
-Do not repeat passed UI gates or start deep performance work in this UX tranche.
+Current package2d7b1cd7 closes the missing queue-observation retry: one bounded
+GET through the existing owner, no dispatch/restart or task changes.124 targeted
+App/Queues/read-owner tests and build pass.390/320px browser checks retain the
+unavailable warning after retry; the44px button fits without horizontal overflow.
+Delivered healthy runtime2d7b1cd7: all34 records/12 running identities unchanged,
+enginePID3408834/start unchanged. See95 for deployment receipt.
+Prior83a88edd display-recovery deployment retained all34 records/12 running
+identities and enginePID3408834/start. CI34458764563 needs its completion check.
+Next: reconcile the UI-1 through UI-4 acceptance matrix against retained receipts
+and close any remaining ordinary-user browser journey, rather than repeating
+passed checks. Keep native Android/iOS and optional briefing approval separate.
+Deep performance and orchestration remain in45 but are not this UI-first tranche.
+
+### Historical package checkpoints (newer receipts above supersede pending notes)
 
 DELIVERED1e410476: healthy app/API, all34 worker records/12 running identities
 preserved, enginePID3408834/start unchanged. See95. CI34456655548 is pending.
