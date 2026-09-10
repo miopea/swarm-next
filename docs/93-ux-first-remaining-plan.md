@@ -30,6 +30,11 @@ Use this section before the historical checkpoints below. Full scope remains45.
   Private exact-decision source pinning now has transactional tests; it does not
   resolve or authenticate an answer. Next wire authenticated final consumption
   and exact invocation/decision correlation through existing receipt settlement.
+  Queen's authority to establish that exact-ID link is now explicitly asked in
+  open-questions09; do not infer approval or substitute a text search. Durable
+  final-result metadata0607305c keeps older sources unchecked. Publication
+  approval also remains unanswered. Continue independent user-facing work while
+  those decisions are pending; neither blocks the entire maturity program.
   Hooks remain disabled. No safe-recovery or permission rule may be bypassed.
 - **Separate external gates:** optional return-briefing visual approval;
   real Android/iOS picker,keyboard/suspension/handoff and actual browser zoom.

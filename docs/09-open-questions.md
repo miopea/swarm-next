@@ -1,5 +1,24 @@
 # Open product questions
 
+## Native answer correlation — September 10, 2026
+
+The native AskUser callbacks observed in isolated Claude sessions carry a
+provider invocation ID and question snapshot, but no Swarm decision ID. Final
+result verification and private exact-ID source binding are now implemented
+locally; the application has no approved invocation-to-decision assignment path.
+
+Operator direction requested: may Queen explicitly link a verified terminal
+answer to a pending Needs You decision, using both full immutable IDs and an
+exact full question/options match, with ambiguous applicability left open?
+Recommendation is an audited link, not semantic matching or a worker-authored
+operator claim. Human-origin and final-result verification remain prerequisites;
+linking cannot grant new permission or bypass existing resolution validation.
+Alternative: require the operator to confirm each link. No answer is inferred.
+
+This question concerns who may establish applicability, not whether stored
+source text itself proves human authorship. Do not activate reconciliation while
+either that provenance requirement or this correlation decision remains open.
+
 ## Pending narrow maturity proposals — September 9, 2026
 
 These do not reopen the approved interview. Responses have been requested in the
