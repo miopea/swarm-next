@@ -3,7 +3,8 @@
 use crate::{TaskStore, TaskStoreError};
 use rusqlite::{OptionalExtension, Transaction, params};
 use swarm_domain::{
-    ApiaryEnrollment, ApiaryEnrollmentConsent, ApiaryEnrollmentPhase, ApiaryJoinLinkId,
+    ApiaryEnrollment, ApiaryEnrollmentConsent, ApiaryEnrollmentPhase, ApiaryInvitationEnvelope,
+    ApiaryInvitationId, ApiaryJoinLinkId,
 };
 
 const MAX_ENROLLMENTS: i64 = 32;
@@ -23,6 +24,75 @@ pub(crate) fn migrate(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
 }
 
 impl TaskStore {
+    /// Reuses consent only for the verified invitation delivered by this link.
+    /// Policy acceptance and journal advancement commit together; cancellation
+    /// and a stale reconciliation attempt cannot both win.
+    ///
+    /// # Errors
+    /// Rejects missing consent, mismatched link credentials/identity/policy,
+    /// expired invitations, cancelled work, and unavailable persistence.
+    pub fn prepare_consented_apiary_join(
+        &self,
+        link_id: ApiaryJoinLinkId,
+        invitation_id: ApiaryInvitationId,
+        now: i64,
+    ) -> Result<ApiaryEnrollment, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let tx = connection.transaction()?;
+        let stored: String = tx
+            .query_row(
+                "SELECT record_json FROM apiary_enrollments WHERE link_id = ?1",
+                [link_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::ApiaryJoinNotReady)?;
+        let mut record = decode(&stored)?;
+        if !matches!(
+            record.phase,
+            ApiaryEnrollmentPhase::AwaitingApproval | ApiaryEnrollmentPhase::Joining
+        ) {
+            return Err(TaskStoreError::ApiaryJoinNotReady);
+        }
+        // Import already checked the signature. Compare its immutable envelope
+        // and private bootstrap binding rather than accepting an arbitrary ID.
+        let (envelope, state): (String, String) = tx
+            .query_row(
+                "SELECT i.envelope_json, i.state FROM apiary_join_invitations i
+             JOIN local_apiary_keeper_links l ON l.link_id = ?1
+             WHERE i.id = ?2 AND i.one_time_secret = l.one_time_secret
+               AND i.keeper_endpoint = l.keeper_endpoint
+               AND EXISTS (SELECT 1 FROM hives h
+                   WHERE h.id = i.invited_hive_id AND h.apiary_id IS NULL)",
+                params![link_id.to_string(), invitation_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::ApiaryJoinNotReady)?;
+        let envelope: ApiaryInvitationEnvelope = serde_json::from_str(&envelope)
+            .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+        record
+            .consent
+            .validate_invitation(link_id, &envelope.payload, now)
+            .map_err(|_| TaskStoreError::ApiaryJoinNotReady)?;
+        if state == "keeper_pinned" {
+            tx.execute(
+                "UPDATE apiary_join_invitations
+                SET state = 'policy_accepted', policy_accepted_at = ?2 WHERE id = ?1",
+                params![invitation_id.to_string(), record.consent.accepted_at],
+            )?;
+        } else if !matches!(state.as_str(), "policy_accepted" | "submitted") {
+            return Err(TaskStoreError::ApiaryJoinNotReady);
+        }
+        record.phase = ApiaryEnrollmentPhase::Joining;
+        tx.execute(
+            "UPDATE apiary_enrollments SET record_json = ?2 WHERE link_id = ?1",
+            params![link_id.to_string(), encode(&record)?],
+        )?;
+        tx.commit()?;
+        Ok(record)
+    }
+
     /// Records authenticated local consent before any enrollment side effect.
     /// The application must verify the disclosed Keeper offer before calling.
     /// Identical retries retain the original phase; consent cannot be replaced.

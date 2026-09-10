@@ -10,6 +10,25 @@ approval completes membership automatically. No post-approval member click.
 ADR0097 now records this exact acceptance requirement. The deployed flow still
 requires post-approval acceptance and is NOT complete.
 
+LATEST ENROLLMENT WIRING: Keeper link creation now returns a signed, versioned
+pre-submission disclosure (Keeper card, Apiary/link/endpoint, exact policy,
+management-terms version and expiry). Keeper UI retains that offer in the link.
+Application begin_consented_enrollment verifies it before saving capability
+and immutable consent; prepare_consented_join atomically applies that consent
+to the imported invitation and advances the journal. The private bearer and
+endpoint must match the saved link. Cancellation, identity/policy substitution,
+and a failed journal update cannot leave policy silently accepted.
+
+Validation:9 persistence enrollment tests,2 application tests using independent
+Hives,17 existing invitation UI tests, TypeScript, and strict domain/persistence/
+application Clippy pass. These do NOT prove automatic background joining yet.
+NEXT: add authenticated submit endpoint using begin_consented_enrollment; wire
+bounded application-owned reconciliation through signed submission/receipt;
+retain journal/link until completion (old API removes link on import); then
+replace member UI with pre-submit disclosure and automatic completion status.
+Legacy links without an offer must remain explicit, not silently consented.
+No new enrollment code is deployed or pushed; no workers restarted.
+
 Durable enrollment work now adds a bounded 32-record member journal with
 immutable consent, explicit phases and compare-and-swap advancement. Targeted
 tests prove reopen recovery, idempotent retries, cancellation against stale

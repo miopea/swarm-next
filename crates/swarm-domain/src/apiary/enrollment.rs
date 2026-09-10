@@ -8,6 +8,28 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 
+/// Signed disclosure delivered in the Keeper link before member submission.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApiaryEnrollmentOfferPayload {
+    pub schema_version: u16,
+    pub link_id: ApiaryJoinLinkId,
+    pub apiary_id: ApiaryId,
+    pub apiary_name: String,
+    pub keeper_endpoint: String,
+    pub keeper: super::HiveConnectionCard,
+    pub policy_revision: u64,
+    /// Version of the product's displayed Keeper-management consent text.
+    pub management_terms_version: u16,
+    pub issued_at: i64,
+    pub expires_at: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApiaryEnrollmentOffer {
+    pub payload: ApiaryEnrollmentOfferPayload,
+    pub signature: String,
+}
+
 /// Persisted only after the operator submits the disclosed joining terms.
 /// It contains no bearer secret, private key, or integration credential.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

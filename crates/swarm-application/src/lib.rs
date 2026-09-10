@@ -31,6 +31,8 @@ use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
 
 mod decision_clarification;
+#[cfg(test)]
+mod enrollment_tests;
 mod native_operator_sources;
 pub use native_operator_sources::{NativeSourceAdmission, NativeSourceReceipt};
 mod ops_tickets;
@@ -1475,6 +1477,73 @@ impl ApiaryService {
     ) -> Result<ApiaryKeeperLink, ApplicationError> {
         self.store
             .save_local_apiary_keeper_link(link_id, keeper_endpoint, secret, now)
+            .map_err(Into::into)
+    }
+
+    /// Records the operator's submission of the verified Keeper disclosure.
+    /// Nothing is sent remotely until both capability and consent are durable.
+    ///
+    /// # Errors
+    /// Rejects altered offers, conflicting saved capabilities, expired terms,
+    /// identity changes, or unavailable storage.
+    pub fn begin_consented_enrollment(
+        &self,
+        offer: &swarm_domain::ApiaryEnrollmentOffer,
+        secret: &str,
+        now: i64,
+    ) -> Result<swarm_domain::ApiaryEnrollment, ApplicationError> {
+        swarm_persistence::verify_apiary_enrollment_offer(offer, now)?;
+        let payload = &offer.payload;
+        let local = self.connection_card(now)?;
+        let existing = self
+            .store
+            .apiary_enrollments()?
+            .into_iter()
+            .find(|record| record.consent.link_id == payload.link_id);
+        let consent = swarm_domain::ApiaryEnrollmentConsent {
+            link_id: payload.link_id,
+            apiary_id: payload.apiary_id,
+            keeper_node_id: payload.keeper.payload.node_id,
+            member_node_id: local.payload.node_id,
+            member_hive_id: local.payload.hive_id,
+            member_operator_id: local.payload.operator_id,
+            policy_revision: payload.policy_revision,
+            accepted_at: existing
+                .as_ref()
+                .map_or(now, |record| record.consent.accepted_at),
+            expires_at: payload.expires_at,
+        };
+        match self
+            .store
+            .local_apiary_keeper_link_credential(payload.link_id)
+        {
+            Ok((endpoint, saved_secret)) => {
+                if endpoint != payload.keeper_endpoint || saved_secret != secret {
+                    return Err(TaskStoreError::InvalidApiaryJoinLink.into());
+                }
+            }
+            Err(TaskStoreError::ApiaryJoinLinkNotFound) => {
+                self.save_keeper_link(payload.link_id, &payload.keeper_endpoint, secret, now)?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+        self.store
+            .save_apiary_enrollment(&consent, now)
+            .map_err(Into::into)
+    }
+
+    /// Advances the imported approval using only the consent already recorded.
+    ///
+    /// # Errors
+    /// Rejects cancelled, changed, expired, or unrelated enrollment material.
+    pub fn prepare_consented_join(
+        &self,
+        link_id: ApiaryJoinLinkId,
+        invitation_id: ApiaryInvitationId,
+        now: i64,
+    ) -> Result<swarm_domain::ApiaryEnrollment, ApplicationError> {
+        self.store
+            .prepare_consented_apiary_join(link_id, invitation_id, now)
             .map_err(Into::into)
     }
 

@@ -1022,6 +1022,7 @@ impl TaskStore {
             return Err(TaskStoreError::InvalidApiaryJoinLink);
         }
         let identity = self.local_hive_identity()?;
+        let local_node = self.local_federation_identity(now)?;
         let apiary_id = identity
             .hive
             .apiary_id
@@ -1064,6 +1065,21 @@ impl TaskStore {
                 expires_at,
             ],
         )?;
+        let offer_payload = swarm_domain::ApiaryEnrollmentOfferPayload {
+            schema_version: 1,
+            link_id: id,
+            apiary_id,
+            apiary_name: context.apiary_name.clone(),
+            keeper_endpoint: endpoint.clone(),
+            keeper: connection_card_for(&identity, &local_node, now, lifetime_seconds)?,
+            policy_revision: context.policy_revision,
+            management_terms_version: 1,
+            issued_at: now,
+            expires_at,
+        };
+        let offer_signature = local_node
+            .signing_key
+            .sign(&enrollment_offer_bytes(&offer_payload)?);
         transaction.commit()?;
         Ok(ApiaryJoinLinkBundle {
             link: ApiaryJoinLink {
@@ -1077,6 +1093,10 @@ impl TaskStore {
                 expires_at,
             },
             one_time_secret,
+            enrollment_offer: Some(swarm_domain::ApiaryEnrollmentOffer {
+                payload: offer_payload,
+                signature: Base64UrlUnpadded::encode_string(&offer_signature.to_bytes()),
+            }),
         })
     }
 
@@ -3901,6 +3921,55 @@ pub fn verify_hive_connection_card(
     VerifyingKey::from_bytes(&public_key)
         .and_then(|key| key.verify(&canonical, &Signature::from_bytes(&signature)))
         .map_err(|_| TaskStoreError::InvalidFederationConnectionCard)
+}
+
+fn enrollment_offer_bytes(
+    payload: &swarm_domain::ApiaryEnrollmentOfferPayload,
+) -> Result<Vec<u8>, TaskStoreError> {
+    let mut bytes = b"swarm-apiary-enrollment-offer-v1\0".to_vec();
+    bytes.extend(
+        serde_json::to_vec(payload)
+            .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?,
+    );
+    Ok(bytes)
+}
+
+/// Verifies the exact pre-submission disclosure; this grants no membership.
+///
+/// # Errors
+/// Rejects tampering, unsupported terms, expiry, or invalid Keeper identity.
+pub fn verify_apiary_enrollment_offer(
+    offer: &swarm_domain::ApiaryEnrollmentOffer,
+    now: i64,
+) -> Result<(), TaskStoreError> {
+    let payload = &offer.payload;
+    verify_hive_connection_card(&payload.keeper, now)?;
+    validate_invitation_endpoint(&payload.keeper_endpoint)?;
+    if payload.schema_version != 1
+        || payload.management_terms_version != 1
+        || payload.policy_revision == 0
+        || payload.apiary_name.trim().is_empty()
+        || payload.issued_at < 0
+        || payload.issued_at > now
+        || payload.expires_at <= now
+        || payload.expires_at <= payload.issued_at
+        || payload.expires_at > payload.keeper.payload.expires_at
+        || payload.issued_at < payload.keeper.payload.issued_at
+    {
+        return Err(TaskStoreError::InvalidApiaryJoinLink);
+    }
+    let public_key: [u8; 32] = Base64UrlUnpadded::decode_vec(&payload.keeper.payload.public_key)
+        .map_err(|_| TaskStoreError::InvalidApiaryJoinLink)?
+        .try_into()
+        .map_err(|_| TaskStoreError::InvalidApiaryJoinLink)?;
+    let signature: [u8; 64] = Base64UrlUnpadded::decode_vec(&offer.signature)
+        .map_err(|_| TaskStoreError::InvalidApiaryJoinLink)?
+        .try_into()
+        .map_err(|_| TaskStoreError::InvalidApiaryJoinLink)?;
+    let bytes = enrollment_offer_bytes(payload)?;
+    VerifyingKey::from_bytes(&public_key)
+        .and_then(|key| key.verify(&bytes, &Signature::from_bytes(&signature)))
+        .map_err(|_| TaskStoreError::InvalidApiaryJoinLink)
 }
 
 fn canonical_payload(payload: &HiveConnectionCardPayload) -> Result<Vec<u8>, TaskStoreError> {

@@ -24,6 +24,13 @@ restarting the API, or losing a response must not require another approval or
 create duplicate membership. Cancellation must stop automatic progression.
 Completion opens Apiary, where optional setup is shown separately.
 
+New Keeper links carry a signed disclosure using a domain-separated signature
+and schema1/management-terms1, independent of the later invitation schema.
+The offer binds the exact link, Apiary, endpoint, Keeper connection card, policy
+revision and expiry. Older links without it cannot opt into automatic acceptance.
+Federation application owns this legacy fallback until supported invitations
+have all expired or upgraded; never infer consent when migrating old links.
+
 The member journal is bounded to 32 saved enrollments. It records immutable
 consent and compare-and-swap phases: awaiting approval, joining, complete,
 cancelled, or attention. Cancellation wins against a stale pre-join attempt.

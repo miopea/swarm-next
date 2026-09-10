@@ -960,6 +960,22 @@ export type ApiaryJoinLink = {
 export type ApiaryJoinLinkBundle = {
   link: ApiaryJoinLink;
   one_time_secret: string;
+  enrollment_offer?: ApiaryEnrollmentOffer;
+};
+export type ApiaryEnrollmentOffer = {
+  payload: {
+    schema_version: number;
+    link_id: string;
+    apiary_id: string;
+    apiary_name: string;
+    keeper_endpoint: string;
+    keeper: HiveConnectionCard;
+    policy_revision: number;
+    management_terms_version: number;
+    issued_at: number;
+    expires_at: number;
+  };
+  signature: string;
 };
 export type ApiaryKeeperLink = {
   link_id: string;
@@ -974,6 +990,7 @@ export type ApiaryKeeperJoinCapability = {
   link_id: string;
   keeper_endpoint: string;
   secret: string;
+  enrollment_offer?: ApiaryEnrollmentOffer;
 };
 export type ApiaryKeeperLinkPoll = {
   link: ApiaryJoinLink;

@@ -147,6 +147,8 @@ pub struct ApiaryJoinLink {
 pub struct ApiaryJoinLinkBundle {
     pub link: ApiaryJoinLink,
     pub one_time_secret: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enrollment_offer: Option<ApiaryEnrollmentOffer>,
 }
 
 /// The member-visible result of one outbound Keeper poll. Invitation material

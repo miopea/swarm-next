@@ -66,6 +66,7 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
         link_id: bundle.link.id,
         keeper_endpoint: bundle.link.keeper_endpoint,
         secret: bundle.one_time_secret,
+        ...(bundle.enrollment_offer ? { enrollment_offer: bundle.enrollment_offer } : {}),
       };
       const link = createApiaryHandoffLink("keeper", capability, bundle.link.keeper_endpoint);
       setGeneratedLink(link);

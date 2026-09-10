@@ -79,9 +79,10 @@ mod support_outbox_attachments;
 pub use federation::{
     MAX_CONNECTION_CARD_LIFETIME_SECONDS, MAX_FEDERATION_INVITATION_LIFETIME_SECONDS,
     MIN_CONNECTION_CARD_LIFETIME_SECONDS, MIN_FEDERATION_INVITATION_LIFETIME_SECONDS,
-    verify_apiary_invitation_envelope, verify_federation_catalog_snapshot,
-    verify_federation_departure_receipt, verify_federation_membership_receipt,
-    verify_federation_profile_update, verify_hive_connection_card,
+    verify_apiary_enrollment_offer, verify_apiary_invitation_envelope,
+    verify_federation_catalog_snapshot, verify_federation_departure_receipt,
+    verify_federation_membership_receipt, verify_federation_profile_update,
+    verify_hive_connection_card,
 };
 pub use federation_handoff_reconciliation::{
     FederationHandoffIntent, FederationHandoffIntentPhase, MAX_FEDERATION_HANDOFF_BATCH,
