@@ -23,11 +23,17 @@ passes and verifies stable IDs and no implicit membership. Visual acceptance is
 still missing: Edge tooling failed before connecting with a kernel-assets path
 error twice. Do not claim browser acceptance from component tests.
 
+Existing Hives must recover **in place**. No fix may require removing/rejoining
+members, regenerating invitations, or replacing stable identities/credentials.
+Validate upgrades of existing memberships, not only fresh joins. Missing public
+names/emails must be editable for already joined Hives too; that UI remains open.
+
 Next: verify profile preview visually and finish directory freshness UI, then
 verify Keeper and two members end to end. Announce release readiness only after
 those gates close. Preserve the unrelated untracked native-signal probe. Source
-transfer to the isolated server test checkout is approved; main push/deployment
-has a separate outstanding execution approval and must not be inferred from it.
+transfer to the isolated server test checkout is approved. The operator has now
+explicitly approved pushing verified changes for another worker to validate.
+Do not describe that handoff as release-ready or cut a release.
 
 ## Active execution contract — September 9, 2026
 

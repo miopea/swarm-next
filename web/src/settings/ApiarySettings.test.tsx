@@ -14,6 +14,7 @@ test("connects outward to a Keeper without requiring an inbound member URL", asy
   let saved = false;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url === "/api/v1/hive/public-profile" || url === "/api/v1/hive/join-profile") return ok({ revision: 1, profile: { hive_name: "Clover Hive", operator_display_name: "Cora", contact_email: null } });
     if (url === "/api/v1/apiary/keeper-links" && init?.method === "POST") {
       expect(JSON.parse(String(init.body))).toEqual(capability);
       saved = true;
@@ -35,6 +36,7 @@ test("connects outward to a Keeper without requiring an inbound member URL", asy
   fireEvent.change(screen.getByLabelText("Keeper invitation link"), {
     target: { value: createApiaryHandoffLink("keeper", capability, capability.keeper_endpoint) },
   });
+  await screen.findByLabelText("Your name");
   fireEvent.click(screen.getByRole("button", { name: "Connect to Keeper" }));
 
   expect(await screen.findByRole("status")).toHaveTextContent(/introduced itself.*Waiting for the Keeper/i);
@@ -519,6 +521,7 @@ test("joins a ready Apiary through the member-initiated Keeper connection", asyn
   };
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url === "/api/v1/hive/public-profile" || url === "/api/v1/hive/join-profile") return ok({ revision: 1, profile: { hive_name: "Clover Hive", operator_display_name: "Cora", contact_email: null } });
     if (url === "/api/v1/apiary/join-invitations/invite-1/submission") {
       expect(init?.method).toBe("POST");
       return ok(memberIdentity().apiary_context, 201);
