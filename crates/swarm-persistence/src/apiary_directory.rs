@@ -417,3 +417,96 @@ mod tests {
         assert_eq!(store.local_public_hive_profile().unwrap(), original);
     }
 }
+
+/// CHECKLIST ITEM 1, as far as a single process can carry it.
+///
+/// docs/95-apiary-onboarding-validation-handoff.md requires: "Upgrade an
+/// existing Keeper plus two existing member Hives. Preserve their membership,
+/// node/Hive/operator IDs, keys, credentials and private work."
+///
+/// ⚠️ THIS COVERS THE PERSISTENCE HALF AND NOT THE THREE-HIVE HTTP HALF. It
+/// proves a database written before schemas 162-164 existed still carries its
+/// apiary, its identity and its private work after the new binary opens it. It
+/// does NOT prove roster convergence or that a rename reaches other Hives —
+/// those need three live Hives and are still owed.
+///
+/// The shape is the one `upgrade_does_not_invent_historical_returns` uses:
+/// drop what the new migrations added and rewind `user_version`, so reopening
+/// runs the real migration path against a populated database rather than an
+/// empty one. An empty-database migration test is the check that passes while
+/// the field breaks.
+#[cfg(test)]
+mod in_place_upgrade_tests {
+    use crate::TaskStore;
+    use swarm_domain::SharedWorkBackend;
+
+    #[test]
+    fn a_hive_that_predates_the_directory_schemas_keeps_its_apiary_identity_and_work() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("hive.db");
+
+        let (apiary_id, hive_id, operator_id, task_id) = {
+            let store = TaskStore::open(&path).unwrap();
+            let context = store
+                .create_apiary_for_local_hive("Wildflower Garden", SharedWorkBackend::Jira, 10)
+                .unwrap();
+            let swarm_domain::LocalApiaryContext::Federated { apiary, .. } = context else {
+                panic!("expected a federated Hive");
+            };
+            let identity = store.local_hive_identity().unwrap();
+            // Private work, which the checklist names explicitly and which a
+            // migration touching membership tables could plausibly disturb.
+            let task = store
+                .create_task("A private local task", "/workspace/petal")
+                .unwrap();
+
+            // Rewind to before the profile/directory schemas existed. Reopening
+            // then runs 162, 163 and 164 over a database that already has an
+            // apiary in it — which is the upgrade a real member Hive performs.
+            store
+                .connection()
+                .unwrap()
+                .execute_batch(
+                    "DROP TABLE IF EXISTS local_apiary_directory;
+                     DROP TABLE IF EXISTS apiary_directory_revisions;
+                     DROP TABLE IF EXISTS federation_public_profiles;
+                     DROP TABLE IF EXISTS local_public_hive_profile;
+                     PRAGMA user_version = 161;",
+                )
+                .unwrap();
+            (apiary.id, identity.hive.id, identity.operator.id, task.id)
+        };
+
+        let upgraded = TaskStore::open(&path).unwrap();
+
+        let identity = upgraded.local_hive_identity().unwrap();
+        assert_eq!(identity.hive.id, hive_id, "the Hive id must survive the upgrade");
+        assert_eq!(
+            identity.operator.id, operator_id,
+            "the operator id must survive the upgrade",
+        );
+        assert_eq!(
+            identity.hive.apiary_id,
+            Some(apiary_id),
+            "membership must survive the upgrade — the checklist says never delete membership",
+        );
+        assert_eq!(
+            upgraded.get_apiary(apiary_id).unwrap().name,
+            "Wildflower Garden",
+            "the apiary itself must still be readable after migrating",
+        );
+        assert_eq!(
+            upgraded.get_task(task_id).unwrap().title,
+            "A private local task",
+            "private work must survive an apiary schema upgrade",
+        );
+        // And the new surface is actually present rather than merely not broken.
+        // Revision 1 is the baseline a fresh profile carries — the assertion
+        // originally said 0, which was my expectation rather than the code's.
+        assert_eq!(
+            upgraded.local_public_hive_profile().unwrap().revision,
+            1,
+            "an upgraded Hive gets a default profile row, not a missing table",
+        );
+    }
+}

@@ -17772,13 +17772,26 @@ mod tests {
     #[tokio::test]
     async fn owed_return_batch_is_bounded_and_a_failure_does_not_block_later_workers() {
         let runtime = TempDir::new().unwrap();
-        let workspace = env::temp_dir().canonicalize().unwrap();
+        let allowed = env::temp_dir().canonicalize().unwrap();
         let registry = Arc::new(
-            SessionRegistry::new(JournalLimits::new(4096, 64), 8, [workspace.clone()]).unwrap(),
+            SessionRegistry::new(JournalLimits::new(4096, 64), 8, [allowed.clone()]).unwrap(),
         );
         let socket = runtime.path().join("batch.sock");
-        // No provider executable: every admitted start fails without launching
-        // real work, allowing the batch and failure boundaries to be observed.
+        // ⚠️ THE WORKSPACE DOES NOT EXIST, AND THAT IS WHAT MAKES EVERY START
+        // FAIL. This test needs admitted starts to fail without launching real
+        // work, so the batch and failure boundaries can be observed.
+        //
+        // It used to rely on "no provider executable", which is true on CI and
+        // FALSE on every machine with Claude installed — including every
+        // developer's. There the starts succeeded, `worker_errors` stayed empty,
+        // and the assertion below read 0 instead of 4. It blocked three
+        // consecutive releases while saying nothing about shipped behaviour: a
+        // check whose premise was a property of the host rather than of the
+        // code under test.
+        //
+        // A workspace that cannot be resolved fails the same way everywhere,
+        // with or without a provider binary on PATH.
+        let workspace = runtime.path().join("no-such-workspace");
         let server = HostServer::bind_with_identity(
             &socket,
             registry,
