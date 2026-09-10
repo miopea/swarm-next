@@ -38,7 +38,7 @@ pub(super) async fn list_decisions(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let decisions = task_service(&state)?
-        .list_visible_decisions(None)
+        .operator_decision_inbox()
         .map_err(application_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(decisions)).into_response())
 }

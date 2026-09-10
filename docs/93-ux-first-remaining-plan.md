@@ -2,6 +2,28 @@
 
 ### Active package: Needs You clarification, not another reload patch
 
+Latest continuation: the compact clarification summary now reaches the real
+operator inbox HTTP response. A single SQLite read transaction combines the
+existing bounded/scoped decision projection with a text-free batch summary over
+the bounded clarification table. It reports round count, outstanding round and
+delivery state, latest reply time, and the domain-owned next mover. Original
+decision fields remain flattened and unchanged; asking/replying does not resolve
+permission. TypeScript accepts the additive response contract. All 17 isolated
+Linux clarification persistence tests and the HTTP/MCP reply-to-inbox test pass,
+including uncertain delivery, late replies and original pending state. This is
+still local candidate work, not deployed, and not yet used by rendered counts.
+
+Continue directly with the actual Inbox panel and bounded history cache, shared
+actionable counts/Queues, and notification reply cycles. Notification delivery
+currently deduplicates by decision subject identity: changing only its timestamp
+is insufficient if an earlier push is already recorded. Preserve the original
+decision FK while representing a new reply cycle; test suppression while waiting
+and return after reply, including a question/reply between coordinator passes.
+Do not remove pending-decision execution gates to change presentation ownership.
+Explicit uncertain-delivery reconciliation, sleeping-requester/old-tool-surface
+handling and the native demo-worker round trip remain required before deployment.
+Latest account usage: 23% used / 77% remaining. No BFG Admin messages or releases.
+
 The next user-facing closure is the operator's inability to ask about an unclear
 decision without giving a final answer. ADR 0094 defines the approved distinction.
 Do not detour into Apiary polish, engine profiling or BFG Admin coordination while

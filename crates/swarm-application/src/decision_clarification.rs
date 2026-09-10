@@ -4,6 +4,15 @@ use swarm_domain::{DecisionClarificationId, DecisionRequestId, WorkerRole};
 use swarm_persistence::DecisionClarification;
 
 impl TaskService {
+    /// Compact operator inbox; adapters must authenticate the operator first.
+    /// # Errors
+    /// Propagates persistence failures without inventing an empty inbox.
+    pub fn operator_decision_inbox(
+        &self,
+    ) -> Result<Vec<swarm_domain::DecisionInboxEntry>, ApplicationError> {
+        Ok(self.store.decision_inbox()?)
+    }
+
     /// Called only after authenticating an operator credential, never a worker token.
     /// # Errors
     /// Rejects settled decisions, conflicting retries and exhausted bounds.

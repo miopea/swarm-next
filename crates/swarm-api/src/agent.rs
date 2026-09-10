@@ -5805,6 +5805,30 @@ mod tests {
             "This is an explanation, not an approval."
         );
         assert_eq!(history[0]["replying_session_id"], session.to_string());
+        let inbox_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/decisions")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(inbox_response.status(), StatusCode::OK);
+        let inbox = response_json(inbox_response).await;
+        let entry = inbox
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == parent.id.to_string())
+            .unwrap();
+        assert_eq!(entry["state"], "pending");
+        assert_eq!(entry["clarification"]["next_move"], "operator");
+        assert_eq!(entry["clarification"]["round_count"], 1);
+        assert!(entry["clarification"]["latest_reply_at"].is_number());
+        assert!(entry["clarification"].get("reply").is_none());
         let unchanged = store.get_decision_request(parent.id).unwrap();
         assert_eq!(unchanged.state, DecisionRequestState::Pending);
         assert!(unchanged.resolution_action.is_none());

@@ -1047,6 +1047,14 @@ export type DecisionQuestion = {
 };
 
 export type DecisionRequest = {
+  /** Compact server-owned facts; history text is fetched only on demand. */
+  clarification?: {
+    round_count: number;
+    waiting_clarification_id: string | null;
+    delivery_state: DecisionClarification["delivery_state"] | null;
+    latest_reply_at: number | null;
+    next_move: "operator" | "requester" | "none";
+  } | null;
   id: string;
   hive_id: string;
   requesting_worker_id: string;

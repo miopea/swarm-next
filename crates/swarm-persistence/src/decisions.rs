@@ -1140,7 +1140,7 @@ fn decision_inbox_scope() -> String {
     )
 }
 
-fn decision_inbox_sql() -> String {
+pub(super) fn decision_inbox_sql() -> String {
     // LIMIT on the final projection alone does not bound correlated discharge
     // work while SQLite sorts history. Materialize the same scoped inbox first;
     // derive evidence only for those rows, then explicitly retain their order.
@@ -1229,7 +1229,7 @@ const DECISION_COLUMNS: &str =
                             FROM task_decision_links WHERE decision_id=d.id
                             ORDER BY task_id LIMIT 33))";
 
-fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionRequest> {
+pub(super) fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionRequest> {
     let linked_tasks: Vec<swarm_domain::TaskDecisionLink> =
         serde_json::from_str(&row.get::<_, String>(30)?)
             .map_err(|_| rusqlite::Error::InvalidQuery)?;

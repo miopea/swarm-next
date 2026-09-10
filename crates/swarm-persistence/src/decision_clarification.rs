@@ -9,6 +9,7 @@ use swarm_domain::{
 };
 
 mod delivery;
+mod summary;
 #[cfg(test)]
 mod tests;
 pub use delivery::ClarificationDispatch;

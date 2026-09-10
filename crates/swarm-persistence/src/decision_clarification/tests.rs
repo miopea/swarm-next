@@ -4,6 +4,84 @@ use swarm_domain::{ClarificationDeliveryOutcome as Outcome, PresenceDeviceId};
 use swarm_domain::{DecisionRequestKind, DecisionUrgency, ProviderKind};
 
 #[test]
+fn clarification_summary_tracks_next_mover_without_resolving_permission() {
+    use swarm_domain::ClarificationNextMove;
+    let (store, decision, worker, session) = setup();
+    assert!(store.decision_clarification_summaries().unwrap().is_empty());
+    let first = DecisionClarificationId::new();
+    store
+        .ask_decision_clarification(first, decision, "Why?", 100)
+        .unwrap();
+    let read = || {
+        store
+            .decision_clarification_summaries()
+            .unwrap()
+            .remove(&decision)
+            .unwrap()
+    };
+    let waiting = read();
+    assert_eq!(waiting.round_count, 1);
+    assert_eq!(waiting.waiting_clarification_id, Some(first));
+    assert_eq!(
+        waiting.delivery_state,
+        Some(ClarificationDeliveryState::Queued)
+    );
+    assert_eq!(waiting.next_move, ClarificationNextMove::Requester);
+    assert_eq!(waiting.latest_reply_at, None);
+    let inbox = store.decision_inbox().unwrap();
+    let entry = inbox
+        .iter()
+        .find(|entry| entry.decision.id == decision)
+        .unwrap();
+    assert_eq!(entry.clarification.as_ref(), Some(&waiting));
+    assert_eq!(entry.decision.state, DecisionRequestState::Pending);
+    let json = serde_json::to_value(entry).unwrap();
+    assert_eq!(json["id"], decision.to_string());
+    assert_eq!(json["clarification"]["next_move"], "requester");
+    assert!(json["clarification"].get("question").is_none());
+    store
+        .reply_decision_clarification(first, worker, session, "Because of the dependency.", 101)
+        .unwrap();
+    let answered = read();
+    assert_eq!(answered.next_move, ClarificationNextMove::Operator);
+    assert_eq!(answered.waiting_clarification_id, None);
+    assert_eq!(answered.delivery_state, None);
+    assert_eq!(answered.latest_reply_at, Some(101));
+    assert_eq!(
+        store.get_decision_request(decision).unwrap().state,
+        DecisionRequestState::Pending
+    );
+    let second = DecisionClarificationId::new();
+    store
+        .ask_decision_clarification(second, decision, "Which dependency?", 102)
+        .unwrap();
+    let claim = store.claim_clarification_deliveries(103).unwrap().remove(0);
+    store
+        .finish_clarification_delivery(&claim, Outcome::Uncertain)
+        .unwrap();
+    let uncertain = read();
+    assert_eq!(uncertain.round_count, 2);
+    assert_eq!(uncertain.waiting_clarification_id, Some(second));
+    assert_eq!(uncertain.next_move, ClarificationNextMove::Requester);
+    assert_eq!(
+        uncertain.delivery_state,
+        Some(ClarificationDeliveryState::Uncertain)
+    );
+    assert_eq!(uncertain.latest_reply_at, Some(101));
+    store
+        .resolve_decision_request(decision, "Wait", "Final choice", "test")
+        .unwrap();
+    assert_eq!(read().next_move, ClarificationNextMove::None);
+    store
+        .reply_decision_clarification(second, worker, session, "Historical reply.", 104)
+        .unwrap();
+    let historical = read();
+    assert_eq!(historical.next_move, ClarificationNextMove::None);
+    assert_eq!(historical.latest_reply_at, Some(104));
+    assert_eq!(historical.waiting_clarification_id, None);
+}
+
+#[test]
 fn clarification_claims_are_fenced_and_interrupted_writes_never_auto_retry() {
     let (store, decision, _, session) = setup();
     let id = DecisionClarificationId::new();

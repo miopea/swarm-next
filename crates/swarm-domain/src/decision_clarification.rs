@@ -43,6 +43,24 @@ pub enum ClarificationNextMove {
     None,
 }
 
+/// Compact inbox facts; private question/reply text is loaded only on demand.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DecisionClarificationSummary {
+    pub round_count: usize,
+    pub waiting_clarification_id: Option<DecisionClarificationId>,
+    pub delivery_state: Option<ClarificationDeliveryState>,
+    pub latest_reply_at: Option<i64>,
+    pub next_move: ClarificationNextMove,
+}
+
+/// A decision and its compact explanation state from the same read snapshot.
+#[derive(Clone, Serialize)]
+pub struct DecisionInboxEntry {
+    #[serde(flatten)]
+    pub decision: crate::DecisionRequest,
+    pub clarification: Option<DecisionClarificationSummary>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClarificationDeliveryState {
