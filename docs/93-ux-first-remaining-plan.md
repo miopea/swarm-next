@@ -2,6 +2,19 @@
 
 ### Active package: Needs You clarification, not another reload patch
 
+LATEST September10 03:25EDT: bounded older/latest task historycb7d4206 is live,
+healthy, verified in Edge and authenticated live cursor reads. Exact34-worker/
+12-running projections and enginePID3408834/start preserved. See92/95; desktop
+history journey is delivered, narrow/native paging remains explicit. CI34449170913
+is running; cancellationCI34447225894 is green. Account usage31% used/69% left.
+No fixture servers or Rust tests remain running; no release/engine update.
+Next bounded package: finish UI-3 presence/Night Watch Settings journey using
+fictional configuration changes only. Dedicated live tab is on Settings. Existing
+NightWatchSettings has load protection, save timeout/retry and three tests; inspect
+actual rendered hierarchy, schedule/manual/autonomy explanation and remaining
+failure/focus behavior before changing it. Do not change the live schedule or
+repeat the delivered history/clarification gates. No BFG Admin communication.
+
 Current delivery checkpoint: history cancellation444f7a56 is pushed and live;
 healthy runtime `1.6.0-dev-444f7a565411-20260910065313-92358`. Exact34-worker,
 12-running identity match and unchanged enginePID3408834/start verified. No

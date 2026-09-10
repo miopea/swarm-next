@@ -47,7 +47,7 @@ Do not rerun the already-green native clarification/backend suite.
 
 ## Remaining finish gates
 
-### Older task history — candidate verified, deployment pending
+### Older task history — delivered cb7d4206
 
 ADR0095 adds exclusive-sequence paging to retained task history. The browser
 keeps one30-event page, offers Older activity/Latest activity, and resets to
@@ -64,7 +64,16 @@ review passed. Narrow/native paging verification remains explicit, not implied
 by the button-size measurement. Deploy and record live read/worker continuity.
 Previous cancellation package CI34447225894 is now fully green.
 
-- Finish deployment acceptance for bounded older-history navigation above.
+Live acceptance: runtime1.6.0-dev-cb7d420626f1-20260910071717-108659 is healthy.
+Edge loaded the matching bundle through its update notice. A6 shows all26 retained
+events without paging controls; authenticated live reads with limit5/before return
+two disjoint, strictly ordered pages. No real task was edited. All34 worker records
+and12 running identities match immediate pre/post snapshots; enginePID3408834
+and start unchanged. CI34449170913 remains pending. Fixture server stopped;
+the dedicated browser tab is on Settings, not an engaged worker terminal.
+
+- Narrow/native history navigation remains a visual gate; deployed desktop and
+  live endpoint acceptance above are complete.
 - Complete the remaining linked-task/prerequisite error, cancellation and
   history journeys against the delivered candidate; use fictional mutations.
 - Native attachment picker, iOS, device handoff/suspension and final operator

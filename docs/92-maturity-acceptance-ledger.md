@@ -15,7 +15,7 @@ is historical where superseded by the verified deployment section.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-b01aef1d1c9b-20260910061835-74026`.
+- App/API: `1.6.0-dev-cb7d420626f1-20260910071717-108659`.
 - Engine: last verified PID 3408834, started September 9 at 17:01:49 Eastern,
   after the operator's manually applied update. Subsequent app-only deployments
   preserved that engine and its running worker identity projections.
@@ -28,6 +28,26 @@ is historical where superseded by the verified deployment section.
 - No release is authorized. No customer-facing send is authorized by task closure.
 
 ## Requirement-by-requirement disposition
+
+### UI-4 retained task history — delivered
+
+Cancellation444f7a56 and bounded older/latest navigationcb7d4206 are live. The
+browser retains one30-event page, resets to latest on reopen, retries older-page
+failures at the same cursor, and rejects late cancelled responses. ADR0095 and
+[95](95-ui-journey-acceptance.md) record the contract and complete evidence.
+148 focused web tests, production build, seven Linux history tests and strict
+Rust library lint pass. Fictional desktop browser traversed75 records as30/30/15
+and returned to latest. Live A6 history renders26 records with no unnecessary
+paging controls; live authenticated five-record cursor reads are disjoint and
+strictly earlier. No real tasks/decisions changed. Narrow/native paging remains
+an explicit visual gate; desktop target measurement is not phone acceptance.
+
+All34 worker records and12 running session/provider identity projections match
+before/after in pre-history-pages-workers.json/post-history-pages-workers.json
+under /tmp/swarm-clarification-deploy.cvm5VI. EnginePID3408834/start unchanged;
+no release or engine update. CI34447225894 for cancellation is green; navigation
+CI34449170913 is still running. Prior clarification/mobile/diagnostic CIs are all
+green, superseding their historical pending notes below.
 
 ### UI-3 diagnostic assessment consistency — delivered
 
