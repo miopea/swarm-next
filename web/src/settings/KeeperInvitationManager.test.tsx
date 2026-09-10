@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import KeeperInvitationManager from "./KeeperInvitationManager";
-import { createApiaryJoinLink, fetchApiaryJoinLinks } from "../api";
+import { approveApiaryJoinLink, createApiaryJoinLink, fetchApiaryJoinLinks } from "../api";
 
 vi.mock("../api", () => ({
   fetchApiaryJoinLinks: vi.fn(),
@@ -13,6 +13,26 @@ vi.mock("../api", () => ({
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.resetAllMocks(); });
 const mount = () => render(<KeeperInvitationManager busy={false} operatorToken="fixture" onInvitationCreated={async () => undefined} />);
 const flush = async () => { await act(async () => { await Promise.resolve(); }); };
+
+test("does not misreport a saved approval when refreshing invitation details fails", async () => {
+  const link = { id: "link-1", apiary_id: "apiary-1", apiary_name: "Fictional Garden",
+    keeper_endpoint: "https://keeper.example.test", state: "awaiting_approval" as const,
+    candidate: { apiary_id: "apiary-1", card_issued_at: 1, card_expires_at: 86401,
+      pinned_by_operator_id: "operator-1", pinned_at: 1, last_verified_at: 1,
+      node_id: "node-2", hive_id: "hive-2", hive_name: "Clover",
+      operator_id: "operator-2", operator_display_name: "Cora", public_key: "fictional" },
+    issued_at: 1, expires_at: 86401 };
+  vi.mocked(fetchApiaryJoinLinks).mockResolvedValueOnce([link]).mockResolvedValue([{ ...link, state: "approved" }]);
+  vi.mocked(approveApiaryJoinLink).mockResolvedValue({ ...link, state: "approved" });
+  render(<KeeperInvitationManager busy={false} operatorToken="fixture" onInvitationCreated={async () => { throw new Error("offline"); }} />);
+  await flush();
+  fireEvent.click(screen.getByRole("button", { name: "Approve Hive" }));
+  await flush();
+  expect(screen.getByRole("status")).toHaveTextContent("Clover is approved");
+  expect(screen.getByRole("alert")).toHaveTextContent("Approval was saved");
+  expect(screen.queryByRole("button", { name: "Approve Hive" })).not.toBeInTheDocument();
+  expect(approveApiaryJoinLink).toHaveBeenCalledExactlyOnceWith("fixture", "link-1");
+});
 
 test("does not claim an empty invitation list before a successful read", async () => {
   vi.mocked(fetchApiaryJoinLinks).mockRejectedValue(new Error("offline"));

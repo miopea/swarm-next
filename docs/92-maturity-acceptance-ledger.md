@@ -1,5 +1,20 @@
 # Current maturity acceptance ledger
 
+## September 10 — confirmed approval versus refresh failure
+
+Invitation approval now states its confirmed result before refreshing secondary
+details. A failed parent invitation refresh explicitly says approval was saved
+and not to approve again, rather than reporting the overall approval as failed.
+The fictional regression verifies the approved list state, truthful message and
+exactly one approval command.26 affected tests and TypeScript pass. No real
+approval was issued. This does not close the separate unbounded mutation-response
+wait in KeeperInvitationManager; that remaining recovery gap needs cancellation,
+unknown-outcome handling and late-result tests before being called complete.
+
+Publication checkpoint: fetch found no incoming main commits; main remains6ac6c145.
+Recent local CI-fixture/native-comparison and UX packages remain unpublished
+pending explicit main-push approval after the earlier execution refusal.
+
 ## September 10 — invitation observation ownership
 
 Keeper invitation reads now use the existing visible-page polling owner: one

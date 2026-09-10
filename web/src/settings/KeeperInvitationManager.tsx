@@ -72,8 +72,11 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
     if (!link.candidate) return;
     await perform(async () => {
       retainConfirmed(await approveApiaryJoinLink(operatorToken, link.id));
-      await Promise.all([refresh(), onInvitationCreated()]);
       setMessage(`${link.candidate?.hive_name} is approved. Her Hive will receive the signed invitation on its next outbound poll.`);
+      const [, invitationRefresh] = await Promise.allSettled([refresh(), onInvitationCreated()]);
+      if (invitationRefresh.status === "rejected") {
+        setError("Approval was saved, but the invitation details could not be refreshed. Do not approve the Hive again; check its invitation status.");
+      }
     }, "That Hive could not be approved.");
   }
 
