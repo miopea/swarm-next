@@ -73,6 +73,7 @@ pub(crate) struct JiraReadiness {
     pub accepts_api_token: bool,
     pub connection: JiraConnectionState,
     pub account_name: Option<String>,
+    pub account_address: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -173,6 +174,8 @@ pub(crate) struct JiraAccount {
     pub account_id: String,
     #[serde(rename = "displayName")]
     pub display_name: Option<String>,
+    #[serde(rename = "emailAddress")]
+    pub email_address: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -376,6 +379,7 @@ impl JiraReadinessProbe {
                 accepts_api_token: self.accepts_api_token(),
                 connection: JiraConnectionState::NotConnected,
                 account_name: None,
+                account_address: None,
             };
         }
         let access = match self.access().await {
@@ -386,6 +390,7 @@ impl JiraReadinessProbe {
                     accepts_api_token: self.accepts_api_token(),
                     connection: JiraConnectionState::NotConnected,
                     account_name: None,
+                    account_address: None,
                 };
             }
             Err(JiraAdapterError::CredentialsInvalid) => {
@@ -394,6 +399,7 @@ impl JiraReadinessProbe {
                     accepts_api_token: self.accepts_api_token(),
                     connection: JiraConnectionState::CredentialsInvalid,
                     account_name: None,
+                    account_address: None,
                 };
             }
             Err(JiraAdapterError::PermissionDenied) => {
@@ -402,6 +408,7 @@ impl JiraReadinessProbe {
                     accepts_api_token: self.accepts_api_token(),
                     connection: JiraConnectionState::PermissionDenied,
                     account_name: None,
+                    account_address: None,
                 };
             }
             Err(_) => return unavailable(self.accepts_api_token()),
@@ -429,6 +436,7 @@ impl JiraReadinessProbe {
                     accepts_api_token: self.accepts_api_token(),
                     connection: JiraConnectionState::CredentialsInvalid,
                     account_name: None,
+                    account_address: None,
                 };
             }
             StatusCode::FORBIDDEN => {
@@ -437,6 +445,7 @@ impl JiraReadinessProbe {
                     accepts_api_token: self.accepts_api_token(),
                     connection: JiraConnectionState::PermissionDenied,
                     account_name: None,
+                    account_address: None,
                 };
             }
             status if status.is_success() => {}
@@ -445,16 +454,27 @@ impl JiraReadinessProbe {
 
         // Project discovery is the capability Swarm requires. Profile access is
         // cosmetic and older otherwise-valid grants may not include read:jira-user.
-        let account_name = account(&access)
-            .await
-            .ok()
-            .and_then(|account| account.display_name)
+        let profile = account(&access).await.ok();
+        let account_name = profile
+            .as_ref()
+            .and_then(|account| account.display_name.clone())
             .filter(|name| !name.trim().is_empty());
+        // Jira may hide email on OAuth profiles. A successfully authenticated
+        // API-token connection already has the owner's login email; never use a
+        // token, account ID or guessed address as contact identity.
+        let account_address = profile
+            .and_then(|account| account.email_address)
+            .filter(|email| !email.trim().is_empty())
+            .or_else(|| match &access.authorization {
+                JiraAuthorization::Basic { email, .. } => Some(email.to_string()),
+                JiraAuthorization::Bearer(_) => None,
+            });
         JiraReadiness {
             configured: true,
             accepts_api_token: self.accepts_api_token(),
             connection: JiraConnectionState::Ready,
             account_name,
+            account_address,
         }
     }
 
@@ -1472,6 +1492,7 @@ fn unavailable(accepts_api_token: bool) -> JiraReadiness {
         accepts_api_token,
         connection: JiraConnectionState::NetworkUnavailable,
         account_name: None,
+        account_address: None,
     }
 }
 
@@ -1509,6 +1530,38 @@ mod tests {
         .unwrap()
         .readiness()
         .await
+    }
+
+    #[tokio::test]
+    async fn connected_identity_reuses_login_email_only_after_successful_authentication() {
+        let connected = probe(AxumStatus::OK, AxumStatus::OK).await;
+        assert_eq!(connected.account_name.as_deref(), Some("Bea"));
+        assert_eq!(
+            connected.account_address.as_deref(),
+            Some("operator@example.test")
+        );
+        let restricted = probe(AxumStatus::OK, AxumStatus::FORBIDDEN).await;
+        assert!(restricted.account_name.is_none());
+        assert_eq!(
+            restricted.account_address.as_deref(),
+            Some("operator@example.test")
+        );
+        let rejected = probe(AxumStatus::UNAUTHORIZED, AxumStatus::OK).await;
+        assert!(rejected.account_address.is_none());
+    }
+
+    #[test]
+    fn profile_email_is_optional_when_jira_privacy_hides_it() {
+        let visible: JiraAccount = serde_json::from_value(json!({
+            "accountId": "fictional", "displayName": "Bea", "emailAddress": "bea@example.test"
+        }))
+        .unwrap();
+        assert_eq!(visible.email_address.as_deref(), Some("bea@example.test"));
+        let hidden: JiraAccount = serde_json::from_value(json!({
+            "accountId": "fictional", "displayName": "Bea"
+        }))
+        .unwrap();
+        assert!(hidden.email_address.is_none());
     }
 
     #[tokio::test]

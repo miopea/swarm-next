@@ -31,6 +31,14 @@ shared profile. Existing installations can supply missing information explicitly
 Only the untouched default My Hive is renamed to <firstname>'s Hive during the
 explicit join workflow; custom names remain unchanged.
 
+September10 operator clarification: use available name/email from a connected
+Jira or Microsoft account to fill missing profile details, preserving saved edits.
+Different connected identities require a choice rather than mixing fields.
+Suggestions do not publish; the existing explicit profile save/join remains the
+boundary. Missing or privacy-hidden fields remain manually editable. Feedback
+reuses the saved profile, while per-message contact edits do not silently change
+shared identity. This grants no Jira access, membership or execution authority.
+
 Keeper issues a signed, complete directory snapshot bound to the requesting
 member node and Apiary, with a monotonic directory revision, expiry, and at most
 256 entries within the existing 1 MiB transport limit. Oversized directories

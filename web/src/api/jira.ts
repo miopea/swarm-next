@@ -13,6 +13,8 @@ export type JiraReadiness = {
   accepts_api_token: boolean;
   connection: JiraConnectionState;
   account_name: string | null;
+  /** Older servers and privacy-restricted OAuth accounts may omit this. */
+  account_address?: string | null;
 };
 export type JiraProject = { id: string; key: string; name: string };
 export type JiraProjectStatus = { id: string; name: string; category_key: string; recommended_task_state: TaskState };

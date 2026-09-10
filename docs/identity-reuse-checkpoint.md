@@ -17,8 +17,26 @@ proved retained-report preservation (all five identity tests pass). TypeScript
 checking passed. No actual report was sent. Live Edge visual acceptance remains
 open because the testing runtime fails before connecting. Not deployed here.
 
-Still required: integration account-to-saved-profile orchestration. Microsoft
-readiness includes name/address; Jira readiness currently exposes account_name
-but no email. Do not mark the full identity request complete from feedback reuse.
-Avoid choosing silently between conflicting connected identities, and preserve
-saved operator choices. Keep private integration credentials out of this path.
+Published feedback commit `e6d1f39a` subsequently passed all four CI jobs in
+run34533407331. This covers the saved-profile feedback change, not the uncommitted
+integration-import or native-answer server code. Deployment remains unverified.
+
+Next local slice now implemented but not published: the profile form immediately
+shows saved details, then reads Jira/Microsoft readiness only when information is
+missing. A single unambiguous account supplies missing fields; distinct accounts
+offer an explicit choice. Saved complete profiles avoid the extra requests. Late
+responses cannot overwrite edits. Lookup deadlines/unmount cancellation are
+bounded; unavailable integrations leave manual entry usable. Joining saves the
+reviewed profile through the existing endpoint and existing default Hive naming.
+
+The Jira adapter now includes its available profile email, or the authenticated
+API-token login email after successful readiness. OAuth-hidden email remains
+missing, never guessed. The operator approved isolated source transfer. All13
+Jira adapter tests, including the two new identity regressions, and strict
+API/persistence Clippy pass in `/tmp/swarm-native-answer-check.6fkv8E`.
+No integration credential enters the UI. This identity slice changes neither
+the database schema nor the worker-engine protocol.
+
+The profile UI passes33 focused onboarding tests and TypeScript checking. Full
+Jira/Microsoft integration acceptance still requires the live browser journey;
+do not substitute these automated checks for that acceptance.
