@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import JoinPublicProfile, { type JoinPublicProfileHandle } from "./JoinPublicProfile";
 
 import {
   acceptFederationJoinPolicy,
@@ -32,6 +33,7 @@ type Props = {
 };
 
 export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessage, onJoined }: Props) {
+  const profileRef = useRef<JoinPublicProfileHandle>(null);
   const [keeperLinks, setKeeperLinks] = useState<ApiaryKeeperLink[]>([]);
   const [joinInvitations, setJoinInvitations] = useState<FederationJoinInvitationOverview[]>([]);
   const [invitationPreview, setInvitationPreview] = useState<ApiaryInvitationBundle>();
@@ -112,6 +114,8 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
       if (!capability.link_id || !capability.keeper_endpoint || !capability.secret) {
         throw new Error("That link is not a Keeper invitation.");
       }
+      if (!profileRef.current) throw new Error("Your profile is not ready yet.");
+      await profileRef.current.save();
       const result = await saveApiaryKeeperLink(operatorToken, capability);
       clearStagedApiaryHandoff("keeper");
       setKeeperLink("");
@@ -220,6 +224,8 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
     setWorking(true);
     clearFeedback();
     try {
+      if (!profileRef.current) throw new Error("Your profile is not ready yet.");
+      await profileRef.current.save();
       await joinFederationApiary(operatorToken, invitation.invitation_id);
       setJoinedApiary(invitation.apiary_name);
       onMessage(`This Hive joined ${invitation.apiary_name}. Jira continues syncing directly; Swarm coordination now polls the Keeper.`);
@@ -241,6 +247,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
 
   return (
     <div className="personal-hive-join">
+      <JoinPublicProfile ref={profileRef} operatorToken={operatorToken} disabled={busy || working} />
       {joinInvitations.length === 0 ? <div className="apiary-exchange-intro">
         <span><strong>Join a Keeper&apos;s Apiary</strong><small>The private link is handed to this personal Hive. Opening it now guides you here without joining through the Keeper&apos;s browser.</small></span>
         <ol className="apiary-exchange-guide" aria-label="How this Hive joins an Apiary">

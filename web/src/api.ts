@@ -1224,6 +1224,26 @@ export async function fetchHive(operatorToken: string, signal?: AbortSignal): Pr
   return response.json() as Promise<HiveIdentity>;
 }
 
+export type PublicHiveProfile = {
+  hive_name: string;
+  operator_display_name: string;
+  contact_email: string | null;
+};
+
+export type LocalPublicHiveProfile = { revision: number; profile: PublicHiveProfile };
+
+export async function fetchPublicHiveProfile(operatorToken: string, signal?: AbortSignal): Promise<LocalPublicHiveProfile> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/hive/public-profile", { signal });
+  return response.json() as Promise<LocalPublicHiveProfile>;
+}
+
+export async function saveJoinPublicProfile(operatorToken: string, profile: PublicHiveProfile): Promise<LocalPublicHiveProfile> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/hive/join-profile", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(profile),
+  });
+  return response.json() as Promise<LocalPublicHiveProfile>;
+}
+
 export async function renameHive(operatorToken: string, name: string): Promise<HiveIdentity> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/hive", {
     method: "PUT",

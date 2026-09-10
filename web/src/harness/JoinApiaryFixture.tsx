@@ -16,6 +16,12 @@ export default function JoinApiaryFixture() {
     };
     window.fetch = async (input, init) => {
       const path = String(input);
+      if (path.endsWith("/hive/public-profile")) return new Response(JSON.stringify({ revision: 1, profile: { hive_name: "My Hive", operator_display_name: "Cora Bee", contact_email: "cora@example.test" } }));
+      if (path.endsWith("/hive/join-profile")) {
+        const profile = JSON.parse(String(init?.body));
+        if (profile.hive_name === "My Hive") profile.hive_name = `${profile.operator_display_name.split(" ")[0]}'s Hive`;
+        return new Response(JSON.stringify({ revision: 2, profile }));
+      }
       if (path.endsWith("/policy-acceptance") && init?.method === "POST") {
         invitation.state = "policy_accepted";
         invitation.readiness.blockers = [];

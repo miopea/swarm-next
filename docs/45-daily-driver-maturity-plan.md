@@ -15,7 +15,15 @@ UI tests, TypeScript checking and strict API Clippy pass. These changes are not
 yet deployed or browser-accepted. The HTTP check uses one member; independent
 three-Hive persistence evidence does not substitute for the final browser journey.
 
-Next: finish profile preview/default naming and directory freshness UI, then
+Profile preview/default naming is now implemented locally: the existing connect
+or join action saves the reviewed profile before sending membership work; there
+is no extra Save click. Five profile tests (including integrated join/save failure)
+and seven policy/join recovery tests pass. The authenticated default-name API test
+passes and verifies stable IDs and no implicit membership. Visual acceptance is
+still missing: Edge tooling failed before connecting with a kernel-assets path
+error twice. Do not claim browser acceptance from component tests.
+
+Next: verify profile preview visually and finish directory freshness UI, then
 verify Keeper and two members end to end. Announce release readiness only after
 those gates close. Preserve the unrelated untracked native-signal probe. Source
 transfer to the isolated server test checkout is approved; main push/deployment

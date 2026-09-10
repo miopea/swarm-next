@@ -1767,6 +1767,18 @@ impl ApiaryService {
             .map_err(Into::into)
     }
 
+    /// Saves the explicitly reviewed joining profile, replacing only My Hive.
+    ///
+    /// # Errors
+    /// Rejects invalid profile fields or unavailable persistence.
+    pub fn save_join_public_profile(
+        &self,
+        profile: swarm_domain::PublicHiveProfile,
+        now: i64,
+    ) -> Result<swarm_persistence::LocalPublicHiveProfile, ApplicationError> {
+        self.save_local_public_profile(&profile.with_default_join_name(), now)
+    }
+
     /// Renames the current Apiary public label. Only its Keeper can do this;
     /// backend, policy, membership, projects, and signed identity remain fixed.
     ///

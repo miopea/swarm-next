@@ -3,6 +3,16 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import PersonalHiveJoin from "./PersonalHiveJoin";
 
+// Profile persistence is covered independently; these tests isolate join policy
+// and membership failure/recovery rather than mocking its HTTP contract twice.
+vi.mock("./JoinPublicProfile", async () => {
+  const { useImperativeHandle } = await import("react");
+  return { default: ({ ref }: { ref: import("react").Ref<{ save: () => Promise<void> }> }) => {
+    useImperativeHandle(ref, () => ({ save: async () => undefined }));
+    return null;
+  } };
+});
+
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
