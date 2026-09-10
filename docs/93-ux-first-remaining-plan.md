@@ -1,5 +1,13 @@
 # Remaining maturity work — UX/UI first
 
+Latest checkpoint: App/API6ac6c145 is live; engine30ad01d has the same engine
+fingerprint and13 healthy running/retained sessions. Older staged-migration notes
+below are historical. Settings finish evidence is in94. CI's schema-ceiling
+fixture fix32dc50ee is local pending main-push permission, not a live defect fix.
+Native final-batch comparison passes8 tests and strict Clippy but remains disabled:
+multi-question final results, provenance and exact decision binding are still
+required. Do not promote this partial result to QUEEN-03/ATT-01 acceptance.
+
 ### Active acceptance checkpoint — ordinary-user UX first
 
 Operator applied the staged migration September10 at12:54 Eastern. Health and

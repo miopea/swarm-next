@@ -1,0 +1,13 @@
+{
+  "hook_event_name": "PostToolBatch",
+  "session_id": "a8cc6009-8360-4b1c-9533-e5715a1560f7",
+  "tool_calls": [{
+    "tool_name": "AskUserQuestion",
+    "tool_use_id": "toolu_018uc5wYY8xWwJ9eYosxCA5U",
+    "tool_input": {"questions": [{
+      "question": "Which fictional jar?", "header": "Jar", "multiSelect": false,
+      "options": [{"label": "Amber", "description": ""}, {"label": "Blue", "description": ""}]
+    }]},
+    "tool_response": "Your questions have been answered: \"Which fictional jar?\"=\"Blue\". You can now continue with these answers in mind."
+  }]
+}

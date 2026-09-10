@@ -202,6 +202,31 @@ automates/replaces fictional answers and must never be installed in Hive setting
 Next: verify final-result correlation and full immutable decision binding, then
 exercise genuine operator input plus API interruption and no duplicate delivery.
 
+### Final batch counterexample and comparison, September 10
+
+The next disposable native PTY run in
+`/tmp/swarm-native-answer-contract.5ucwF0` captured PostToolBatch contents.
+Claude Code2.1.267 returned Blue in its final string result for the same
+invocation whose PostToolUse input/result contained programmatic Amber. The
+batch input omitted those programmatic answers. Thus even the final batch cannot
+authenticate authorship: earlier contamination must remain tied to the invocation.
+The provider exited normally; no live Hive hooks were installed.
+
+The reduced fictional callback is retained in
+`crates/swarm-terminal/fixtures/claude-2.1.267-final-interview-batch.json`.
+`matches_final_batch` compares an existing completed observation against the
+same conversation, unique invocation, complete question and exact final string.
+It cannot create an observation or receipt. Only the observed single-question
+serialization is supported; multi-question final serialization remains unverified.
+Changed context, duplicate invocation, child events, programmatic input and
+oversize payloads refuse comparison. This adds no live capture caller.
+
+Eight provider-interview tests, formatting and strict terminal-crate Clippy pass
+in the isolated Linux verification tree. Exact immutable decision binding,
+authenticated human input and multi-question final-result correlation remain
+required before activation, followed by API-interruption/no-duplicate-delivery
+acceptance. This comparison is not completion of QUEEN-03 or ATT-01.
+
 ### Installed-provider reconciliation, 2026-09-04
 
 Read-only checks on the operator's remote host found Claude Code 2.1.260 at

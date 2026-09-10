@@ -50,6 +50,78 @@ impl NativeInterviewObservation {
             && self.tool_use_id == presented.tool_use_id
             && self.questions == presented.questions
     }
+
+    /// Compare an already observed single-question answer with the provider's
+    /// final batch result. This is not human provenance or a decision receipt.
+    /// A batch alone loses evidence of programmatic input, so it cannot create
+    /// a completed observation. Multi-question serialization remains unverified.
+    #[must_use]
+    pub fn matches_final_batch(&self, bytes: &[u8]) -> bool {
+        if self.phase != NativeInterviewPhase::Completed
+            || self.questions.len() != 1
+            || bytes.len() > crate::MAX_PROVIDER_LIFECYCLE_BYTES
+        {
+            return false;
+        }
+        let Ok(batch) = serde_json::from_slice::<FinalBatch>(bytes) else {
+            return false;
+        };
+        if batch.hook_event_name != "PostToolBatch"
+            || batch.agent_id.is_some()
+            || batch.session_id.parse::<ProviderConversationId>().ok() != Some(self.conversation)
+            || batch.tool_calls.len() > swarm_domain::MAX_NATIVE_INTERVIEW_BATCH
+        {
+            return false;
+        }
+        let mut matching = batch
+            .tool_calls
+            .iter()
+            .filter(|call| call.invocation == self.tool_use_id);
+        let Some(call) = matching.next() else {
+            return false;
+        };
+        if matching.next().is_some() || call.name != "AskUserQuestion" {
+            return false;
+        }
+        let Ok(input) = serde_json::from_value::<InterviewInput>(call.input.clone()) else {
+            return false;
+        };
+        if input.questions != self.questions
+            || !input.answers.is_empty()
+            || !input.annotations.is_empty()
+        {
+            return false;
+        }
+        let question = &self.questions[0].question;
+        let Some(answer) = self.answers.get(question) else {
+            return false;
+        };
+        let expected = format!(
+            "Your questions have been answered: \"{question}\"=\"{answer}\". You can now continue with these answers in mind."
+        );
+        call.response.as_str() == Some(expected.as_str())
+    }
+}
+
+#[derive(Deserialize)]
+struct FinalBatch {
+    hook_event_name: String,
+    session_id: String,
+    tool_calls: Vec<FinalBatchCall>,
+    #[serde(default)]
+    agent_id: Option<serde::de::IgnoredAny>,
+}
+
+#[derive(Deserialize)]
+struct FinalBatchCall {
+    #[serde(rename = "tool_use_id")]
+    invocation: String,
+    #[serde(rename = "tool_name")]
+    name: String,
+    #[serde(rename = "tool_input")]
+    input: serde_json::Value,
+    #[serde(rename = "tool_response")]
+    response: serde_json::Value,
 }
 
 impl std::fmt::Debug for NativeInterviewObservation {
@@ -200,6 +272,57 @@ mod tests {
 
     fn read(value: &Value) -> Option<NativeInterviewObservation> {
         read_claude_interview(&serde_json::to_vec(value).unwrap())
+    }
+
+    #[test]
+    fn final_batch_compares_results_but_cannot_create_operator_evidence() {
+        let bytes = include_bytes!("../fixtures/claude-2.1.267-final-interview-batch.json");
+        let batch: Value = serde_json::from_slice(bytes).unwrap();
+        assert!(read_claude_interview(bytes).is_none());
+        // Synthetic observations isolate the comparison; the captured batch
+        // came from programmatic hooks and is never human acceptance evidence.
+        let mut event = json!({
+            "hook_event_name":"PostToolUse", "session_id":batch["session_id"],
+            "tool_use_id":batch["tool_calls"][0]["tool_use_id"], "tool_name":"AskUserQuestion",
+            "tool_input":batch["tool_calls"][0]["tool_input"],
+            "tool_response":{"questions":batch["tool_calls"][0]["tool_input"]["questions"],
+                "answers":{"Which fictional jar?":"Amber"}}
+        });
+        assert!(!read(&event).unwrap().matches_final_batch(bytes));
+        event["tool_response"]["answers"]["Which fictional jar?"] = json!("Blue");
+        let completed = read(&event).unwrap();
+        assert!(completed.matches_final_batch(bytes));
+        for change in 0..7 {
+            let mut changed = batch.clone();
+            match change {
+                0 => changed["session_id"] = json!("00000000-0000-0000-0000-000000000001"),
+                1 => changed["tool_calls"][0]["tool_use_id"] = json!("toolu_other"),
+                2 => {
+                    changed["tool_calls"][0]["tool_input"]["questions"][0]["options"][0]["description"] =
+                        json!("Changed scope");
+                }
+                3 => {
+                    let duplicate = changed["tool_calls"][0].clone();
+                    changed["tool_calls"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(duplicate);
+                }
+                4 => changed["agent_id"] = json!("child"),
+                5 => {
+                    changed["tool_calls"][0]["tool_input"]["answers"] =
+                        json!({"Which fictional jar?":"Blue"});
+                }
+                _ => changed["tool_calls"][0]["tool_response"] = json!("Blue"),
+            }
+            assert!(!completed.matches_final_batch(&serde_json::to_vec(&changed).unwrap()));
+        }
+        assert!(
+            !completed.matches_final_batch(&vec![b' '; crate::MAX_PROVIDER_LIFECYCLE_BYTES + 1])
+        );
+        event["hook_event_name"] = json!("PreToolUse");
+        event.as_object_mut().unwrap().remove("tool_response");
+        assert!(!read(&event).unwrap().matches_final_batch(bytes));
     }
 
     #[test]

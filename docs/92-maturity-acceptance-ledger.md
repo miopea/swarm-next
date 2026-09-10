@@ -1,5 +1,24 @@
 # Current maturity acceptance ledger
 
+## September 10 — latest verification checkpoint
+
+Live health confirms App/API6ac6c145 and engine30ad01d with equal engine build
+fingerprints,13 running/retained sessions,0 unreadable and no degraded flags.
+The latest check was read-only, not another update or restart.
+
+CI34506586132 ultimately failed its Rust schema-ceiling fixture: the fixture
+dropped schema160 data while claiming to represent160. Local commit32dc50ee
+models the161 reader fence without dropping prior data and adds a populated
+native-source preservation regression. Targeted migration checks pass; the
+main push and CI rerun remain pending permission. Other CI jobs passed.
+
+The native final-batch comparison now passes8 parser tests, formatting and strict
+terminal Clippy. The fictional provider probe demonstrates that final batch input
+loses earlier programmatic-answer evidence; batch completion alone must never
+authenticate an operator. ADR0065 records the fixture and bounds. Hooks remain
+disabled, exact decision binding and authentic end-to-end reconciliation remain
+open. No claim that directly answered Needs You items now close automatically.
+
 ## September 10 — answer controls and update recovery
 
 Deployed App/API `1.7.0-dev-6ac6c14543de-20260910171052-580861` is healthy.
