@@ -21,6 +21,12 @@ import type { TaskActivityPage } from "../api";
 const now = Math.floor(Date.now() / 1000);
 
 export function hiveFixture(path: string, query = new URLSearchParams()): unknown | undefined {
+  if (path === "/api/v1/decisions" && new URLSearchParams(window.location.search).get("decisionHistory") === "1") return [
+    { ...demoDecision, id: "fixture-pending", title: "Fixture decision pending" },
+    { ...demoDecision, id: "fixture-answered", title: "Fixture decision answered", state: "resolved", resolution_action: "Fixture answer", resolved_at: now },
+    { ...demoDecision, id: "fixture-withdrawn", title: "Fixture decision withdrawn", state: "withdrawn", resolved_at: now },
+    { ...demoDecision, id: "fixture-waiting", title: "Fixture decision awaiting explanation", clarification: { next_move: "requester" } },
+  ];
   // An empty task/attention board is valid even while terminals are in use.
   if (new URLSearchParams(window.location.search).get("emptyWork") === "1"
     && ["/api/v1/tasks", "/api/v1/decisions"].includes(path)) return [];

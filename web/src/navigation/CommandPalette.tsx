@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useModalFocus } from "../shared/useModalFocus";
 import ModalPortal from "../shared/ModalPortal";
 
-export type CommandChoice = { id: string; label: string; detail: string; group: "Go to" | "Workers" | "Work" | "Attention"; run: () => void };
+export type CommandChoice = { id: string; label: string; detail: string; group: "Go to" | "Workers" | "Work" | "Attention" | "Decision history" | "Waiting for reply"; run: () => void };
 
 const PAGE_SIZE = 40;
 function preview(text: string) {

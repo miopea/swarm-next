@@ -128,6 +128,7 @@ import ShellModal from "./terminal/ShellModal";
 import ExperimentalHandoffDialog from "./workers/ExperimentalHandoffDialog";
 import { isExperimentalProvider } from "./settings/ExperimentalProviderControl";
 import CommandPalette, { type CommandChoice } from "./navigation/CommandPalette";
+import { decisionCommandPresentation } from "./navigation/decisionCommandPresentation";
 import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
 import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
 import UnsettledReviewCard from "./decisions/UnsettledReviewCard";
@@ -1776,8 +1777,7 @@ export function App() {
     ...decisions.map((decision) => ({
       id: `decision-${decision.id}`,
       label: decision.title,
-      detail: decision.reason,
-      group: "Attention" as const,
+      ...decisionCommandPresentation(decision),
       run: () => {
         setDecisionFocus((current) => ({ id: decision.id, request: (current?.request ?? 0) + 1 }));
         setSurface("decisions");

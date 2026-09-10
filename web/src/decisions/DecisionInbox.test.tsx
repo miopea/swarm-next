@@ -324,6 +324,17 @@ test("reveals and focuses a resolved decision selected through global navigation
   expect(scrollIntoView).toHaveBeenCalled();
 });
 
+test.each(["resolved", "withdrawn"] as const)("search navigation opens %s history without answer controls", async (state) => {
+  const onResolve = vi.fn();
+  render(<DecisionInbox decisions={[{ ...pending, state }]} tasks={[]} workers={[]} busy={false}
+    focusDecisionId={pending.id} focusRequest={1} onResolve={onResolve} />);
+  await waitFor(() => expect(screen.getByRole("article")).toHaveFocus());
+  expect(screen.getByRole("checkbox", { name: "Show history" })).toBeChecked();
+  expect(screen.getByText(state === "resolved" ? "Answered" : "Withdrawn", { selector: ".decision-urgency" })).toBeVisible();
+  expect(screen.queryByRole("button", { name: /Something else/ })).not.toBeInTheDocument();
+  expect(onResolve).not.toHaveBeenCalled();
+});
+
 test("decision navigation leaves Activity and focuses once after the request arrives", async () => {
   const scrollIntoView = vi.fn();
   Element.prototype.scrollIntoView = scrollIntoView;
