@@ -17,6 +17,21 @@
 .night-watch-settings button { justify-self: start; }
 
 :root {
+  /* ⚠️ THE UA DRAWS UNCOLOURED CONTROLS FROM THIS, NOT FROM OUR TOKENS.
+     A <button> does not inherit `color`: the UA stylesheet sets `color:
+     ButtonText` on it, which beats inheritance. Without a color-scheme the UA
+     resolves ButtonText against a LIGHT scheme, so any control that sets a
+     background and no colour draws near-black text — invisible on a dark
+     panel.
+
+     That is exactly what issue #71 reported: "very hard to read the items in
+     the queue in dark mode unless I hover over them". Hover only adds
+     `border-color`, so it never made the text readable — it made the row
+     locatable, which is what the reporter could actually see.
+
+     fcb4f174 fixed the one selector they hit. This fixes the class: every
+     unstyled control now resolves against the theme in force. */
+  color-scheme: light;
   /* Every pill-shaped control is this tall, and none is sized by its content.
      Measured before this existed: five different pill heights on one row —
      21, 26, 34, 38 and 39 pixels — because each carried its own padding and
@@ -128,6 +143,9 @@
 }
 
 :root[data-theme="dark"] {
+  /* Pairs with `color-scheme: light` on :root above — see the note there for
+     why an uncoloured button is invisible without it. */
+  color-scheme: dark;
   color: #f2ead8;
   background: #10191a;
   --bg: #10191a;

@@ -529,3 +529,31 @@ test("a scrolling surface declares both halves of the scroll", () => {
     ).toContain("min-height: 0");
   }
 });
+
+/**
+ * ⚠️ THE CLASS, NOT THE ONE SELECTOR THAT WAS REPORTED.
+ *
+ * A `<button>` does not inherit `color` — the UA stylesheet sets
+ * `color: ButtonText`, which beats inheritance. Absent a `color-scheme`, the UA
+ * resolves that against a LIGHT scheme, so every control setting a background
+ * and no colour draws near-black text. On the dark panel that is invisible,
+ * which is what issue #71 reported: "very hard to read the items in the queue
+ * in dark mode unless I hover over them."
+ *
+ * Hover only adds `border-color`, so it never made the text readable — it made
+ * the row locatable. fcb4f174 gave `.queue-group li button` an explicit colour
+ * and fixed that one instance; a scan then found twelve more rules with the
+ * same shape waiting.
+ *
+ * Declaring color-scheme is what closes the class, so it is asserted on BOTH
+ * palettes. Losing either one silently reopens every unstyled control.
+ */
+test("each palette declares its color-scheme, so unstyled controls follow the theme", () => {
+  const light = stylesheet.match(/:root\s*\{([\s\S]*?)\n\}/)?.[1];
+  expect(light, ":root must exist").toBeDefined();
+  expect(light).toMatch(/color-scheme:\s*light/);
+
+  const dark = stylesheet.match(/:root\[data-theme="dark"\]\s*\{([\s\S]*?)\n\}/)?.[1];
+  expect(dark, ':root[data-theme="dark"] must exist').toBeDefined();
+  expect(dark).toMatch(/color-scheme:\s*dark/);
+});
