@@ -1150,14 +1150,22 @@ impl TaskStore {
         let identity = self.local_hive_identity()?;
         let connection = self.connection()?;
         let mut statement = connection.prepare(
-            "SELECT h.id, h.name, o.id, o.display_name
+            "SELECT h.id, h.name, o.id, o.display_name,
+                    CASE WHEN h.id = ?3 THEN (SELECT contact_email FROM local_public_hive_profile WHERE singleton = 1)
+                         ELSE json_extract(p.payload_json, '$.profile.contact_email') END
              FROM hives h
              JOIN operators o ON o.id = h.operator_id
+             LEFT JOIN apiary_federation_memberships m ON m.member_hive_id = h.id AND m.apiary_id = h.apiary_id
+             LEFT JOIN federation_public_profiles p ON p.node_id = m.member_node_id AND p.apiary_id = m.apiary_id
              WHERE h.apiary_id = ?1
              ORDER BY CASE WHEN o.id = ?2 THEN 0 ELSE 1 END, lower(h.name), h.id",
         )?;
         let rows = statement.query_map(
-            [apiary.id.to_string(), apiary.keeper_operator_id.to_string()],
+            [
+                apiary.id.to_string(),
+                apiary.keeper_operator_id.to_string(),
+                identity.hive.id.to_string(),
+            ],
             |row| {
                 let hive_id = parse_domain_id::<HiveId>(&row.get::<_, String>(0)?)?;
                 let operator_id = parse_domain_id::<OperatorId>(&row.get::<_, String>(2)?)?;
@@ -1166,6 +1174,7 @@ impl TaskStore {
                     hive_name: row.get(1)?,
                     operator_id,
                     operator_display_name: row.get(3)?,
+                    operator_email: row.get(4)?,
                     role: if operator_id == apiary.keeper_operator_id {
                         LocalApiaryRole::Keeper
                     } else {

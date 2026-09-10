@@ -469,7 +469,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
               <ul aria-label="Apiary Hives">
                 {members.map((member) => (
                   <li key={member.hive_id}>
-                    <span><strong>{member.hive_name}</strong><small>{member.operator_display_name}</small></span>
+                    <span><strong>{member.hive_name}</strong><small>{member.operator_display_name}{member.operator_email ? ` · ${member.operator_email}` : ""}</small></span>
                     <span className="apiary-member-badges">
                       <span>{member.role === "keeper" ? "Keeper" : "Member"}</span>
                       {member.is_local ? <span className="readiness-ready">This Hive</span> : null}

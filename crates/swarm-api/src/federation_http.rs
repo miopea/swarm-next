@@ -63,6 +63,24 @@ struct BootstrapRequest<'a> {
 }
 
 impl FederationHttpClient {
+    /// Sends one latest signed profile and receives the complete signed roster.
+    ///
+    /// # Errors
+    /// Returns typed bounded transport/protocol errors; no implicit retries.
+    pub async fn exchange_directory(
+        &self,
+        credential: &str,
+        update: &swarm_domain::FederationProfileUpdate,
+    ) -> Result<swarm_domain::FederationDirectorySnapshot, FederationHttpError> {
+        self.send_json(
+            Method::PUT,
+            "api/v1/federation/directory",
+            Some(credential),
+            Some(update),
+        )
+        .await
+    }
+
     /// Creates a bounded, redirect-free transport for one signed Keeper base
     /// endpoint. Plain HTTP is accepted only for loopback test/development
     /// peers; remote federation always requires HTTPS.

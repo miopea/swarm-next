@@ -984,6 +984,17 @@ impl AppState {
                 return;
             }
         };
+        // Display-directory compatibility must not gate existing shared work.
+        // Owner: ApiaryService; retire the 404 fallback at the minimum directory-capable version (ADR0096).
+        match reconcile_federation_directory(&service, &client, &connection.node_credential, now)
+            .await
+        {
+            Ok(true) => self.control_room_notify.notify_waiters(),
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(%error, "Apiary directory could not refresh; existing shared-work sync continues");
+            }
+        }
         if let Err(condition) =
             reconcile_federation_catalog(&service, &client, &connection.node_credential, now).await
         {
@@ -3639,6 +3650,11 @@ fn api_router(state: AppState) -> Router {
         )
         .route("/api/v1/federation/catalog", get(federation_catalog))
         .route(
+            "/api/v1/federation/directory",
+            axum::routing::put(exchange_federation_directory),
+        )
+        .route("/api/v1/apiary/directory", get(local_apiary_directory))
+        .route(
             "/api/v1/federation/departure-readiness",
             get(federation_member_departure_readiness),
         )
@@ -5222,6 +5238,30 @@ async fn leave_apiary(
         .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(context)).into_response())
+}
+
+async fn local_apiary_directory(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let directory = apiary_service(&state)?
+        .local_directory()
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(directory)).into_response())
+}
+
+async fn exchange_federation_directory(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(update): Json<swarm_domain::FederationProfileUpdate>,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let directory = apiary_service(&state)?
+        .exchange_federation_directory(credential, &update, unix_timestamp())
+        .map_err(federation_catalog_error)?;
+    state.control_room_notify.notify_waiters();
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(directory)).into_response())
 }
 
 async fn federation_catalog(
@@ -7676,6 +7716,25 @@ async fn reconcile_federation_tasks(
         }
     }
     Ok(())
+}
+
+async fn reconcile_federation_directory(
+    service: &ApiaryService,
+    client: &federation_http::FederationHttpClient,
+    credential: &str,
+    now: i64,
+) -> Result<bool, String> {
+    let update = service
+        .signed_local_profile(now)
+        .map_err(|_| "local public profile unavailable".to_owned())?;
+    let snapshot = match client.exchange_directory(credential, &update).await {
+        Ok(snapshot) => snapshot,
+        Err(federation_http::FederationHttpError::RemoteRejected(404 | 405)) => return Ok(false),
+        Err(error) => return Err(error.to_string()),
+    };
+    service
+        .apply_directory(&snapshot, unix_timestamp())
+        .map_err(|_| "signed directory could not be verified or saved".to_owned())
 }
 
 async fn reconcile_federation_catalog(
@@ -11673,9 +11732,84 @@ mod tests {
         let projected = invited.list_local_apiary_tasks().unwrap();
         assert_eq!(projected.len(), 1);
         assert_eq!(projected[0].title, "Coordinate the release across Hives");
+        assert_member_directory_exchange(&state, &invited, &keeper, &keeper_endpoint).await;
 
         keeper_server.abort();
         let _ = keeper_server.await;
+    }
+
+    async fn assert_member_directory_exchange(
+        state: &AppState,
+        member: &TaskStore,
+        keeper: &TaskStore,
+        endpoint: &str,
+    ) {
+        let directory = member.local_federation_directory().unwrap().unwrap();
+        assert_eq!(directory.entries.len(), 2);
+        let app = router(state.clone());
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/apiary/directory")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let response = authorized_get(app, "/api/v1/apiary/directory").await;
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(
+            response_json(response).await["entries"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        member
+            .rename_local_hive("Clover House", unix_timestamp())
+            .unwrap();
+        let service = ApiaryService::new(member.clone());
+        let client = federation_http::FederationHttpClient::new(endpoint).unwrap();
+        let credential = member
+            .federation_member_connection()
+            .unwrap()
+            .node_credential;
+        assert!(
+            reconcile_federation_directory(&service, &client, &credential, unix_timestamp())
+                .await
+                .unwrap()
+        );
+        assert!(
+            keeper
+                .list_apiary_members()
+                .unwrap()
+                .iter()
+                .any(|entry| entry.hive_name == "Clover House")
+        );
+        let saved = member.local_federation_directory().unwrap().unwrap();
+        assert!(saved.revision > directory.revision);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let old_endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let old_keeper = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().fallback(|| async { StatusCode::NOT_FOUND }),
+            )
+            .await
+            .unwrap();
+        });
+        let old_client = federation_http::FederationHttpClient::new(&old_endpoint).unwrap();
+        let health = member.federation_sync_health().unwrap();
+        assert!(
+            !reconcile_federation_directory(&service, &old_client, &credential, unix_timestamp())
+                .await
+                .unwrap()
+        );
+        assert_eq!(member.federation_sync_health().unwrap(), health);
+        assert_eq!(member.local_federation_directory().unwrap().unwrap(), saved);
+        old_keeper.abort();
     }
 
     #[tokio::test]

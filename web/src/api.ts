@@ -623,6 +623,7 @@ export type ApiaryMember = {
   hive_name: string;
   operator_id: string;
   operator_display_name: string;
+  operator_email?: string | null;
   role: "keeper" | "member";
   is_local: boolean;
 };

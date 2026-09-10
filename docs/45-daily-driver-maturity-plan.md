@@ -1,5 +1,26 @@
 # Swarm daily-driver maturity: scope and delivery plan
 
+## Immediate priority — September 10 Apiary onboarding
+
+The operator wants this work completed before inviting another developer. Do not
+cut a release yet. Finish the joined experience, not just the underlying protocol:
+shared profile preview/editing, default-name replacement without changing custom
+names, a complete Keeper/two-member roster, rename propagation, and honest
+offline/mixed-version recovery. Keep private Hive work and authority isolated.
+
+Current local checkpoint: signed profiles and full directories are committed
+through `254e7ecf`. Normal HTTP sync and public roster projection now pass the
+real HTTP join/rename test; five domain directory tests, 27 Keeper/member/settings
+UI tests, TypeScript checking and strict API Clippy pass. These changes are not
+yet deployed or browser-accepted. The HTTP check uses one member; independent
+three-Hive persistence evidence does not substitute for the final browser journey.
+
+Next: finish profile preview/default naming and directory freshness UI, then
+verify Keeper and two members end to end. Announce release readiness only after
+those gates close. Preserve the unrelated untracked native-signal probe. Source
+transfer to the isolated server test checkout is approved; main push/deployment
+has a separate outstanding execution approval and must not be inferred from it.
+
 ## Active execution contract — September 9, 2026
 
 Read this section and [the UX-first remaining plan](93-ux-first-remaining-plan.md)

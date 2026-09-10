@@ -278,7 +278,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
         <article className="keeper-panel member-roster-panel">
           <header><div><p className="eyebrow">People and Hives</p><h4>Hives in this Apiary</h4></div><small>Shared identity and role · not live presence</small></header>
           {snapshot.members.length ? <ul className="member-project-list" aria-label="Apiary Hive roster">{snapshot.members.map((member) => <li key={member.hive_id}>
-            <span><strong>{member.hive_name}</strong><small>{member.operator_display_name}</small></span>
+            <span><strong>{member.hive_name}</strong><small>{member.operator_display_name}{member.operator_email ? ` · ${member.operator_email}` : ""}</small></span>
             <span className={`keeper-role-badge ${member.role}`}>{member.role === "keeper" ? "Keeper" : member.hive_id === identity.hive.id ? "This Hive" : "Member"}</span>
           </li>)}</ul> : <p className="keeper-empty">The Apiary roster has not arrived yet.</p>}
         </article>

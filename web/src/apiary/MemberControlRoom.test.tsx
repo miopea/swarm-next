@@ -9,7 +9,7 @@ test("shows a Member her Keeper, convergence, projects, and local shared ownersh
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
     if (url.endsWith("/members")) return Promise.resolve(ok([
-      { hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: false },
+      { hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", operator_email: "bea@example.test", role: "keeper", is_local: false },
       { hive_id: "hive-2", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", role: "member", is_local: true },
     ]));
     if (url.endsWith("/shared-work")) return Promise.resolve(ok([
@@ -46,11 +46,12 @@ test("shows a Member her Keeper, convergence, projects, and local shared ownersh
 
   expect(await screen.findByRole("heading", { name: "Grand Garden" })).toBeInTheDocument();
   expect(screen.getByLabelText("Member Apiary summary")).toHaveTextContent("KeeperMeadow HiveCatalogVerifiedProjects ready1/1My Jira claims1Keeper tasks1");
-  expect(screen.getAllByText("Bea")).toHaveLength(2);
+  expect(screen.getByText("Bea")).toBeInTheDocument();
+  expect(screen.getByText("Bea · bea@example.test")).toBeInTheDocument();
   expect(screen.getByRole("list", { name: "Member promoted Jira projects" })).toHaveTextContent("WWDWebsite DevelopmentReady");
   expect(screen.getByRole("list", { name: "Member shared work ownership" })).toHaveTextContent("WWD-101Website DevelopmentOwnedCora");
   expect(screen.getByRole("list", { name: "Member Keeper tasks" })).toHaveTextContent("Prepare shared briefready · high · revision 1UnassignedView only from Apiary");
-  expect(screen.getByRole("list", { name: "Apiary Hive roster" })).toHaveTextContent("Meadow HiveBeaKeeperClover HiveCoraThis Hive");
+  expect(screen.getByRole("list", { name: "Apiary Hive roster" })).toHaveTextContent("Meadow HiveBea · bea@example.testKeeperClover HiveCoraThis Hive");
   expect(screen.getByText("Keeper task cursor").parentElement).toHaveTextContent("4");
   const stewardship = screen.getByRole("heading", { name: "Trusted support for 1 Hive" }).closest("article");
   expect(stewardship).toHaveTextContent("Clover Hive");

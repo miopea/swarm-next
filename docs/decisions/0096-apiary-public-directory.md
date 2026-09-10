@@ -38,6 +38,11 @@ fail explicitly rather than truncating membership. Entries carry stable node,
 Hive and operator IDs plus public labels and Keeper/member role. No private
 worker, repository, task, session, credential or terminal data is included.
 
+As with the signed catalog, verification permits at most five minutes of clock
+skew for issue time. Expiry must remain after issue time, within the five-minute
+snapshot lifetime, and later than the recipient's current time. This accommodates
+independent machines without accepting indefinitely fresh or expired snapshots.
+
 The recipient verifies the pinned Keeper signature and scope, rejects duplicate
 or colliding identities, and replaces a dedicated directory projection in one
 persistence transaction. It does not overwrite its local owner profile from a

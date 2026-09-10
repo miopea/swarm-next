@@ -1671,6 +1671,8 @@ pub struct ApiaryMemberSummary {
     pub hive_name: String,
     pub operator_id: OperatorId,
     pub operator_display_name: String,
+    #[serde(default)]
+    pub operator_email: Option<String>,
     pub role: LocalApiaryRole,
     pub is_local: bool,
 }

@@ -11,6 +11,7 @@ pub const MAX_APIARY_DIRECTORY_ENTRIES: usize = 256;
 pub const MAX_PUBLIC_PROFILE_NAME_BYTES: usize = 120;
 pub const MAX_PUBLIC_CONTACT_EMAIL_BYTES: usize = 254;
 pub const MAX_DIRECTORY_SNAPSHOT_LIFETIME_SECONDS: i64 = 300;
+pub const MAX_DIRECTORY_CLOCK_SKEW_SECONDS: i64 = 300;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PublicHiveProfile {
@@ -148,8 +149,9 @@ impl FederationDirectoryPayload {
             || self.entries.len() > MAX_APIARY_DIRECTORY_ENTRIES
             || now < 0
             || self.issued_at < 0
-            || self.issued_at > now
+            || self.issued_at > now.saturating_add(MAX_DIRECTORY_CLOCK_SKEW_SECONDS)
             || self.expires_at <= now
+            || self.expires_at <= self.issued_at
             || self.expires_at.saturating_sub(self.issued_at)
                 > MAX_DIRECTORY_SNAPSHOT_LIFETIME_SECONDS
             || keeper == recipient
@@ -314,7 +316,11 @@ mod tests {
             candidate.revision = revision;
             assert!(!valid(&candidate));
         }
-        assert!(!payload.matches_scope(payload.apiary_id, payload.keeper, payload.recipient, 99));
+        assert!(payload.matches_scope(payload.apiary_id, payload.keeper, payload.recipient, 99));
+        let mut future = payload.clone();
+        future.issued_at = 402;
+        future.expires_at = 702;
+        assert!(!future.matches_scope(payload.apiary_id, payload.keeper, payload.recipient, 101));
         assert!(!payload.matches_scope(payload.apiary_id, payload.keeper, payload.recipient, 400));
         let mut oversized = payload.clone();
         oversized.entries.resize(257, payload.entries[0].clone());

@@ -97,6 +97,61 @@ pub struct FederationJoinInvitationOverview {
 }
 
 impl ApiaryService {
+    /// Exchanges an authenticated member's signed public profile for a signed
+    /// full directory. A retry after response loss does not duplicate changes.
+    ///
+    /// # Errors
+    /// Rejects invalid member credentials, signatures, revisions or storage.
+    pub fn exchange_federation_directory(
+        &self,
+        credential: &str,
+        update: &swarm_domain::FederationProfileUpdate,
+        now: i64,
+    ) -> Result<swarm_domain::FederationDirectorySnapshot, ApplicationError> {
+        self.store
+            .accept_federation_public_profile(credential, update, now)?;
+        self.store
+            .signed_federation_directory(credential, now)
+            .map_err(Into::into)
+    }
+
+    /// Prepares the latest local profile for its current membership.
+    ///
+    /// # Errors
+    /// Rejects missing membership, invalid profile or unavailable storage.
+    pub fn signed_local_profile(
+        &self,
+        now: i64,
+    ) -> Result<swarm_domain::FederationProfileUpdate, ApplicationError> {
+        self.store
+            .signed_local_profile_update(now)
+            .map_err(Into::into)
+    }
+
+    /// Verifies and saves the directory without granting local authority.
+    ///
+    /// # Errors
+    /// Rejects invalid signatures, scope, revisions or unavailable storage.
+    pub fn apply_directory(
+        &self,
+        snapshot: &swarm_domain::FederationDirectorySnapshot,
+        now: i64,
+    ) -> Result<bool, ApplicationError> {
+        self.store
+            .apply_federation_directory(snapshot, now)
+            .map_err(Into::into)
+    }
+
+    /// Reads the last verified member directory with its freshness metadata.
+    ///
+    /// # Errors
+    /// Rejects missing membership or corrupt/unavailable storage.
+    pub fn local_directory(
+        &self,
+    ) -> Result<Option<swarm_domain::FederationDirectoryPayload>, ApplicationError> {
+        self.store.local_federation_directory().map_err(Into::into)
+    }
+
     #[must_use]
     pub const fn new(store: TaskStore) -> Self {
         Self { store }
@@ -1209,6 +1264,38 @@ impl ApiaryService {
     /// # Errors
     /// Rejects personal Hives and unavailable persistence.
     pub fn members(&self) -> Result<Vec<ApiaryMemberSummary>, ApplicationError> {
+        if matches!(
+            self.store.local_apiary_context()?,
+            LocalApiaryContext::Federated {
+                local_role: LocalApiaryRole::Member,
+                ..
+            }
+        ) && let Some(directory) = self.store.local_federation_directory()?
+        {
+            let local = self.store.local_hive_identity()?;
+            let local_profile = self.store.local_public_hive_profile()?;
+            return Ok(directory
+                .entries
+                .into_iter()
+                .map(|entry| {
+                    let is_local = entry.identity.hive_id == local.hive.id;
+                    let profile = if is_local {
+                        local_profile.profile.clone()
+                    } else {
+                        entry.profile
+                    };
+                    ApiaryMemberSummary {
+                        hive_id: entry.identity.hive_id,
+                        hive_name: profile.hive_name,
+                        operator_id: entry.identity.operator_id,
+                        operator_display_name: profile.operator_display_name,
+                        operator_email: profile.contact_email,
+                        role: entry.role,
+                        is_local,
+                    }
+                })
+                .collect());
+        }
         self.store.list_apiary_members().map_err(Into::into)
     }
 
