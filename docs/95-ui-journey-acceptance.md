@@ -8,14 +8,14 @@ and remaining requirements; it is not whole-program completion.
 | Ask before deciding | Actual Queen and sleeping ordinary requester replies; explicit final answer; deployed f05f7f21, full CI34442276338 green | See94; direct-terminal answer correlation and older tool lists remain separate |
 | Operator queue -> decision | Live RCG Networks queue item opens its existing request and focuses that exact article | No answer, withdrawal or task transition sent |
 | Dependency -> upstream task | Live Admin prerequisite opens the Platform upstream task; exact title and ARTICLE focus verified | Navigation does not resume or assign work |
-| Task -> history | Actual upstream task history loads its recorded amendments/handoffs | Currently latest30 records, with truncation notice; older-page navigation not yet exposed |
+| Task -> history | Delivered cb7d4206; fictional75-event traversal and live exclusive-cursor reads pass | One30-event page; Older/Latest navigation; narrow/native paging gate remains |
 | History close/reopen | Fictional browser journey; out-of-order regression fails before correction and passes after | Cancellation/error/retry verified in tests, not by disrupting live networking |
 | Apiary -> management | Live desktop and390px overview; Manage Apiary opens Connections | No invitation, membership or integration changes |
 | Mobile runtime -> destination | Live390px System -> Diagnostics reveals the page; inline details stay open | fd35ca3e deployed; CI34443735026 green; not physical-device suspension proof |
 | Diagnostic assessment | Capacity separate from pressure assessment; CPU-only fixture and live page verified | b01aef1d deployed; CI34444605660 green; no causal performance claim |
 | Task editor on Android | Operator previously confirmed coverage and Close -> Keep editing preserves changes | Retained acceptance; no claim for other native picker/keyboard scenarios |
 
-## History ownership correction — locally verified
+## History ownership correction — delivered 444f7a56
 
 The existing TaskCard started an unowned read each time history opened. A test
 resolving the second read first and the first read last replaced Current handoff
@@ -46,6 +46,34 @@ The fictional harness server was stopped. CI is not yet confirmed complete.
 Do not rerun the already-green native clarification/backend suite.
 
 ## Remaining finish gates
+
+### Night Watch saved-versus-draft clarity — cb915ab1
+
+The form previously treated a definitive invalid-schedule400 rejection as an
+uncertain save and recommended retrying unchanged input. It now explains the
+region/city time-zone format and preserves edits. Transport uncertainty retains
+the distinct not-confirmed/retry wording. A saved daily-window summary remains
+separate from unsaved changes; disabled/no schedule does not imply automatic
+Night Watch. Overnight windows say next day, same-day windows do not. Confirmed
+server values become the saved form values; this is not an authority/policy change.
+
+All48 focused Settings/presence/controller/API tests and production build pass.
+The fictional desktop browser shows a timezone edit as unsaved while retaining
+the disabled saved-schedule summary. No live schedule change was sent. Deployment
+uses app/API only; record the exact schedule and worker comparison before marking
+live acceptance complete. Mobile/native schedule controls and actual scheduled/
+manual desktop-return behavior remain separate gates.
+History-navigation CI34449170913 is now fully green.
+
+Live acceptance: `1.6.0-dev-cb915ab171d6-20260910073144-117366` healthy; Edge
+loaded the matching bundle and displays the saved22:00–07:00 next-day window in
+America/New_York. Search for night watch shows both presence/schedule and Queen
+autonomy with its three distinct ceilings. No setting, decision or schedule was
+submitted. pre-schedule-config.json/post-schedule-config.json compare identical;
+the corresponding worker snapshots preserve34 records and12 running identities,
+with enginePID3408834/start unchanged. Evidence directory remains
+/tmp/swarm-clarification-deploy.cvm5VI. No release/engine update; fixture server
+stopped. CI34450368822 is pending. Native presence behavior is not closed.
 
 ### Older task history — delivered cb7d4206
 

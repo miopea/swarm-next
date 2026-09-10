@@ -1,6 +1,35 @@
 # Remaining maturity work — UX/UI first
 
-### Active package: Needs You clarification, not another reload patch
+### Active acceptance checkpoint — ordinary-user UX first
+
+Next verified code gap: TaskPrerequisiteDialog.submit awaits an unbounded
+changeTaskPrerequisite request while requestClose refuses closing and all controls
+remain disabled. Inspect/add the API cancellation signal and owned finite save
+deadline, fence unmounted/late responses and preserve explicit uncertainty (the
+server may have committed). Never automatically replay a mutation. Add focused
+timeout/unmount/recovery tests and a fictional browser proof before deployment.
+This is UI-4 linked-task failure recovery, not an orchestration-policy rewrite.
+
+The concise operator checklist and remaining release risks now live in96. It
+does not close the overall goal or request another AskUser/task-editor test.
+Current product remains cb915ab1 with verified unchanged schedule/worker sessions.
+Next implementation direction: remaining user-facing linked-task/prerequisite
+failure and recovery journey coverage, then the final integrated UI matrix. Keep
+native device and backend gaps explicit; no performance/BFG detour. Dedicated
+live tab is in Settings with night watch search; no unsaved live form or fixture
+server remains. CI34450368822 is the one pending product check for this package.
+
+LATEST after Night Watch UI package: cb915ab1 is live, healthy and browser-checked.
+Saved schedule versus draft and definitive validation versus network uncertainty
+are now explicit.48 tests/build pass. Exact configuration and34-worker/12-running
+identity comparisons unchanged; no engine update/release. Live Settings search
+for night watch exposes schedule and Queen autonomy together. CI34450368822 needs
+completion check; prior historyCI34449170913 is green. No fixture server remains.
+Next: consolidate the actual UI-1/2/3/4 acceptance gates into a short operator
+dogfood checklist and release-risk summary, then address remaining reproducible
+ordinary-user journey gaps. Do not mistake that artifact for overall completion.
+Keep physical Android/iOS picker, suspension/handoff and presence gates explicit;
+do not change the live Night Watch configuration to prove them. No BFG contact.
 
 LATEST September10 03:25EDT: bounded older/latest task historycb7d4206 is live,
 healthy, verified in Edge and authenticated live cursor reads. Exact34-worker/

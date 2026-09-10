@@ -15,7 +15,7 @@ is historical where superseded by the verified deployment section.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-cb7d420626f1-20260910071717-108659`.
+- App/API: `1.6.0-dev-cb915ab171d6-20260910073144-117366`.
 - Engine: last verified PID 3408834, started September 9 at 17:01:49 Eastern,
   after the operator's manually applied update. Subsequent app-only deployments
   preserved that engine and its running worker identity projections.
@@ -28,6 +28,18 @@ is historical where superseded by the verified deployment section.
 - No release is authorized. No customer-facing send is authorized by task closure.
 
 ## Requirement-by-requirement disposition
+
+### UI-3 Night Watch configuration clarity — delivered
+
+cb915ab1 separates saved schedules from unsaved edits, identifies overnight versus
+same-day windows, explains disabled automation/manual availability and gives a
+correction for definitive invalid-timezone400 rejection instead of retrying the
+same input. Unknown network outcomes retain not-confirmed wording.48 focused
+tests/build pass; fictional edits and live read-only summary/search checked.
+Exact schedule configuration,34 worker records and12 running identities remain
+unchanged; enginePID/start unchanged. See95 for receipts. CI34450368822 pending;
+preceding history-navigation CI34449170913 green. No live schedule changes.
+Native scheduled activation and desktop/mobile return remain separate acceptance.
 
 ### UI-4 retained task history — delivered
 
