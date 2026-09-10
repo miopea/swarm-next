@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { recordClientFailure } from "../feedback/clientDiagnostics";
 
 interface TerminalLoadBoundaryProps {
   children: ReactNode;
@@ -16,17 +17,17 @@ export default class TerminalLoadBoundary extends Component<TerminalLoadBoundary
     return { failed: true };
   }
 
-  componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("terminal view failed to load", error, info);
+  componentDidCatch(_error: Error, _info: ErrorInfo) {
+    recordClientFailure("react_render");
   }
 
   render() {
     if (!this.state.failed) return this.props.children;
     return (
       <div className="terminal-empty" role="alert">
-        <p className="eyebrow">Terminal update available</p>
-        <h3>Refresh to reconnect</h3>
-        <p>Swarm was updated while this tab was open. Your worker is still running.</p>
+        <p className="eyebrow">Display interrupted</p>
+        <h3>Swarm could not display this terminal</h3>
+        <p>Check your connection and refresh to reconnect. Refreshing reloads this view; it does not restart the worker.</p>
         <button onClick={this.props.onReload ?? (() => window.location.reload())}>Refresh Swarm</button>
       </div>
     );

@@ -17,6 +17,7 @@ import TerminalComposerFixture from "./TerminalComposerFixture";
 import DecisionInterviewFixture from "./DecisionInterviewFixture";
 import DecisionClarificationFixture from "./DecisionClarificationFixture";
 import SessionRecoveryFixture from "./SessionRecoveryFixture";
+import RenderRecoveryFixture from "./RenderRecoveryFixture";
 
 import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
 import { App } from "../App";
@@ -226,6 +227,7 @@ export type Surface = { id: string; title: string; why: string; render: () => Re
 const FILED = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
 
 export const SURFACES: Surface[] = [
+  { id: "render-recovery", title: "Display failure recovery", why: "Fictional rendering failure without a Hive, update or worker restart.", render: () => <RenderRecoveryFixture /> },
   {
     id: "task-previews",
     title: "Task image previews",

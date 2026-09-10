@@ -21,6 +21,9 @@ import type { TaskActivityPage } from "../api";
 const now = Math.floor(Date.now() / 1000);
 
 export function hiveFixture(path: string, query = new URLSearchParams()): unknown | undefined {
+  // An empty task/attention board is valid even while terminals are in use.
+  if (new URLSearchParams(window.location.search).get("emptyWork") === "1"
+    && ["/api/v1/tasks", "/api/v1/decisions"].includes(path)) return [];
   const activityTask = /^\/api\/v1\/tasks\/([^/]+)\/activity$/.exec(path);
   if (activityTask && new URLSearchParams(window.location.search).get("taskHistory") === "paged") {
     const before = Number(query.get("before") ?? 76);

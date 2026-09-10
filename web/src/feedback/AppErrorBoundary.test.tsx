@@ -17,6 +17,8 @@ test("replaces a blank render failure with a safe recovery screen", () => {
 
   expect(screen.getByRole("heading", { name: "Swarm hit a problem drawing this view" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Reload control room" })).toBeInTheDocument();
+  expect(screen.getByText(/Reloading this view does not restart your workers/)).toBeInTheDocument();
+  expect(screen.queryByText(/Your workers are still running/)).not.toBeInTheDocument();
   expect(readClientFailures()).toEqual([{ kind: "react_render", occurred_at: expect.any(Number) }]);
   expect(window.sessionStorage.getItem("swarm-next.client-failures.v1")).not.toContain("private path");
 });
