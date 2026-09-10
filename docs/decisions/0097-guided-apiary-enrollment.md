@@ -24,6 +24,15 @@ restarting the API, or losing a response must not require another approval or
 create duplicate membership. Cancellation must stop automatic progression.
 Completion opens Apiary, where optional setup is shown separately.
 
+The member journal is bounded to 32 saved enrollments. It records immutable
+consent and compare-and-swap phases: awaiting approval, joining, complete,
+cancelled, or attention. Cancellation wins against a stale pre-join attempt.
+Once a join request may have been sent, reconcile its receipt before offering
+departure; never claim cancellation undid an uncertain remote membership.
+Legacy saved links are migrated without invented consent. Removing a saved
+link also removes its enrollment record; completed signed membership receipts
+remain owned by the existing federation receipt store.
+
 Acceptance requires independent-Hive tests of the exact three-step flow,
 browser-closed completion, restart and response-loss recovery, policy/identity
 substitution, cancellation, expiry, and existing-member upgrade without rejoin.

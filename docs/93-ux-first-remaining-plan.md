@@ -10,6 +10,29 @@ approval completes membership automatically. No post-approval member click.
 ADR0097 now records this exact acceptance requirement. The deployed flow still
 requires post-approval acceptance and is NOT complete.
 
+Durable enrollment work now adds a bounded 32-record member journal with
+immutable consent, explicit phases and compare-and-swap advancement. Targeted
+tests prove reopen recovery, idempotent retries, cancellation against stale
+progress, capacity, and migration preserving legacy links without consent.
+It is not wired into the application or deployed. Next integrate authenticated
+pre-submission disclosure and automatic signed joining, then replace the UI
+flow and prove end-to-end failure/recovery. No runtime progress is claimed from
+the journal alone.
+
+Verification: all166 domain tests,5 enrollment persistence tests and39 existing
+federation tests pass. Strict domain/persistence Clippy passed before the final
+SQL-only idempotency correction; migration regressions were rerun after that
+correction and all passed. CI34540590845 for the already deployedf0934172 is
+now complete SUCCESS. This does not cover the new unpushed enrollment slice.
+
+MIGRATION NOTE: this branch reserves schema165 for enrollment. Private,
+unmerged native-answer branch56589cd1 also used165; that unpublished migration
+MUST be rebased/renumbered before any future merge. It is not included here.
+Do not deploy this database change as an app-only update against an older
+engine. Finish the complete slice and verify update compatibility first.
+The isolated test checkout had a stale native_operator_interviews.rs from that
+private branch; it has been replaced with this worktree's version for tests.
+
 The domain consent guard now compares the exact link, Apiary, Keeper node,
 member node/Hive/operator and policy revision, and rejects expired consent.
 All 165 domain tests (including three new consent tests) and strict domain

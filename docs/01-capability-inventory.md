@@ -13,6 +13,9 @@ The final submit-once / Keeper-approves enrollment flow is not yet implemented:
 the current flow still asks the member to accept after approval. Revision-bound
 pre-submission consent rules are tested, but durable automatic completion and
 the simplified UI remain required under ADR0097.
+The member-side enrollment journal now preserves consent and progress across
+restarts with bounded storage and cancellation guards. It remains unconnected
+to the runtime join coordinator; do not describe it as automatic enrollment yet.
 Keeper settings distribution, complete managed-authority controls and live
 browser acceptance remain unfinished; do not mark the overall Apiary capability
 complete. Existing Jira source-of-truth and credential boundaries remain intact.

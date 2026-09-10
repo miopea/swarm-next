@@ -52,6 +52,7 @@ pub use task_dispatches::{DispatchHold, HeldTaskDispatch};
 pub use task_outcomes::{
     CompletionEvidence, CompletionExemptionRecord, ReviewedSettlementPage, TaskEvidenceRecord,
 };
+mod apiary_enrollment;
 mod decisions;
 mod email;
 mod events;
@@ -291,7 +292,8 @@ const DECISION_OPTION_DESCRIPTIONS_SCHEMA_VERSION: i64 = 161;
 const PUBLIC_HIVE_PROFILE_SCHEMA_VERSION: i64 = 162;
 const FEDERATION_PUBLIC_PROFILES_SCHEMA_VERSION: i64 = 163;
 const APIARY_DIRECTORY_SCHEMA_VERSION: i64 = 164;
-const CURRENT_SCHEMA_VERSION: i64 = APIARY_DIRECTORY_SCHEMA_VERSION;
+const APIARY_ENROLLMENT_SCHEMA_VERSION: i64 = 165;
+const CURRENT_SCHEMA_VERSION: i64 = APIARY_ENROLLMENT_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4088,6 +4090,9 @@ fn migrate_ops_intake_schema_steps(
     }
     if schema_version < APIARY_DIRECTORY_SCHEMA_VERSION {
         apiary_directory::migrate_directory(transaction)?;
+    }
+    if schema_version < APIARY_ENROLLMENT_SCHEMA_VERSION {
+        apiary_enrollment::migrate(transaction)?;
     }
     Ok(())
 }

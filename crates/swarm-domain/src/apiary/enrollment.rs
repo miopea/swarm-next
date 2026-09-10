@@ -31,6 +31,38 @@ pub enum ApiaryEnrollmentConsentError {
     InvalidTime,
 }
 
+/// Durable progress owned by the member application, not its browser.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiaryEnrollmentPhase {
+    AwaitingApproval,
+    Joining,
+    Complete,
+    Cancelled,
+    Attention,
+}
+
+impl ApiaryEnrollmentPhase {
+    /// A retry may repeat a phase, but cannot revive cancelled/completed work.
+    #[must_use]
+    pub fn can_transition_to(self, next: Self) -> bool {
+        self == next
+            || matches!(
+                (self, next),
+                (
+                    Self::AwaitingApproval,
+                    Self::Joining | Self::Cancelled | Self::Attention
+                ) | (Self::Joining, Self::Complete | Self::Attention)
+            )
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApiaryEnrollment {
+    pub consent: ApiaryEnrollmentConsent,
+    pub phase: ApiaryEnrollmentPhase,
+}
+
 impl ApiaryEnrollmentConsent {
     /// Checks whether an approved invitation can use the consent already given.
     /// The caller must verify the invitation signature and link association first.
@@ -75,6 +107,23 @@ impl ApiaryEnrollmentConsent {
 mod tests {
     use super::*;
     use crate::{ApiaryInvitationId, SharedWorkBackend};
+
+    #[test]
+    fn enrollment_cannot_skip_approval_or_revive_terminal_phases() {
+        use ApiaryEnrollmentPhase::{Attention, AwaitingApproval, Cancelled, Complete, Joining};
+        let phases = [AwaitingApproval, Joining, Complete, Cancelled, Attention];
+        for from in phases {
+            for to in phases {
+                let allowed = from == to
+                    || matches!(
+                        (from, to),
+                        (AwaitingApproval, Joining | Cancelled | Attention)
+                            | (Joining, Complete | Attention)
+                    );
+                assert_eq!(from.can_transition_to(to), allowed);
+            }
+        }
+    }
 
     fn fixture() -> (ApiaryEnrollmentConsent, ApiaryInvitationEnvelopePayload) {
         let consent = ApiaryEnrollmentConsent {
