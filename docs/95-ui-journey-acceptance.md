@@ -3,6 +3,31 @@
 Scope remains45/93. This matrix distinguishes delivered behavior, isolated proof
 and remaining requirements; it is not whole-program completion.
 
+## Reduced-motion linked navigation — dba2868b
+
+Delivered runtime1.6.0-dev-dba2868be982-20260910095752-189394, healthy with no
+degraded subsystems. Development reload completed successfully. Pre/post-motion-
+workers.json in /tmp/swarm-clarification-deploy.cvm5VI match all34 records/12 running
+identities. EnginePID3408834/start unchanged. No release or worker-engine update.
+
+Both task and decision reveal paths explicitly requested smooth scrolling despite
+the reduced-motion CSS rule. They now read the preference at navigation time and
+request instant scrolling when reduced, retaining smooth behavior otherwise.
+Focus, history expansion, target identity and request ownership are unchanged.
+
+All116 task/inbox tests and build pass, including both preference values for both
+paths. Edge tab-scoped reduced-motion emulation reports true; selecting fictional
+answered history focuses fixture-answered, and completed work settles focus on
+the exact launch-digest ARTICLE. Visible presence marker styles report animation
+none. The browser facade did not expose document.getAnimations; no claim is made
+from that unavailable API. Media override cleared and fixture server stopped.
+
+Representative live light colors measured from rendered text/backgrounds:
+muted rail rgb95,106,94 over237,240,223 gives4.89:1; primary panel rgb41,48,39
+over255,253,247 gives13.35:1. This is sampled contrast, not blanket conformance.
+Dark theme, full zoom/reflow and native OS acceptance remain distinct gates.
+App/API deployment requested; continuity receipt pending.
+
 ## Decision search state — b20e2e22
 
 Delivered runtime1.6.0-dev-b20e2e2294eb-20260910094656-183627 is healthy, no degraded

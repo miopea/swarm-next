@@ -2,6 +2,15 @@
 
 ### Active acceptance checkpoint — ordinary-user UX first
 
+Delivered dba2868b: linked task/decision navigation respects reduced motion instead
+of always requesting smooth scroll.116 focused tests/build pass; Edge emulated
+reduce preference verified both exact-item focus journeys. Healthy app/API and
+all34 records/12 running identities preserved; enginePID/start unchanged. See95.
+Sampled light-theme contrast: muted rail4.89:1, primary panel13.35:1; these samples
+are not whole-app contrast acceptance. Next finish representative dark-theme and
+zoom/reflow checks, then consolidate the UI-first checkpoint against96, keeping
+native-device/backend gaps explicit. Do not repeat passed history/search tests.
+
 Delivered b20e2e22 preserves searchable decisions but distinguishes Attention,
 Waiting for reply and Decision history.132 focused tests/build pass;390px fixture
 and answered-history focus verified. Healthy app/API; all34 records/12 running
