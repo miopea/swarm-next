@@ -2,6 +2,23 @@
 
 ### Active acceptance checkpoint — ordinary-user UX first
 
+DELIVERED1e410476: healthy app/API, all34 worker records/12 running identities
+preserved, enginePID3408834/start unchanged. See95. CI34456655548 is pending.
+Do not redo update confirmation/cancellation: existing a716dad8 desktop/phone
+evidence below covers that unchanged path. Next inspect remaining UI-4 empty/
+offline/error journeys against retained receipts; close only genuinely unmet
+browser gates. Support native pickers and paired Admin acceptance remain open,
+but do not contact Admin or repeat this passing fictional support tranche.
+
+Current package1e410476: saved diagnostic bundles can be previewed exactly as
+stored, and clipboard refusal exposes the bundle plus recovery guidance instead
+of silently failing.45 focused tests/build and390/320px fictional browser checks
+pass. Support attachment lost-response/exact retry is also browser-verified at
+390px; see95. App/API deployment requested, continuity receipt pending. Previous
+d69e9b16 CI34454887235 is green. Do not rerun these passing suites; next close
+remaining UI-3 update confirmation/cancellation and UI-4 empty/offline journeys.
+No BFG contact, central test send, release, or engine-update authorization added.
+
 DELIVERED d69e9b16: healthy app/API, exact34-record/12-running identity match,
 enginePID3408834/start unchanged; see95. No fixture server remains. CI34454887235
 is the specific pending run. No release or engine update. Next: remaining UI-3

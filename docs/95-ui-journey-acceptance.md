@@ -3,6 +3,46 @@
 Scope remains45/93. This matrix distinguishes delivered behavior, isolated proof
 and remaining requirements; it is not whole-program completion.
 
+## Support and diagnostic preview — 1e410476
+
+Delivered runtime1.6.0-dev-1e41047644a9-20260910084326-153185 is healthy with no
+degraded subsystems; reload job completed successfully. Pre/post-saved-preview-
+workers.json in /tmp/swarm-clarification-deploy.cvm5VI match all34 records and12
+running session/provider identities. EnginePID3408834/start unchanged. Edge used
+Reload this tab; fixture server is stopped. No release or engine update.
+CI34456655548 remains in progress at this checkpoint.
+Live desktop verification opened an existing saved report and exposed its6,867-
+character bundle with the new Preview saved report action. No content was copied,
+uploaded or sent. The preview was closed and the tab returned to Your Hive,
+releasing diagnostic sampling. This verifies the delivered component against
+existing data; the clipboard-refusal path remains explicitly fixture-tested.
+
+At390px, the isolated support fixture recovered two explicitly selected fictional
+text files, showed a lost first-upload response, and kept the original report for
+explicit retry. Retry settled as Saved to Hive — waiting to send, not confirmed
+central delivery. No real Hive or central request was made. This supplements
+earlier desktop attachment proof, not native camera/gallery or paired Admin proof.
+
+Saved diagnostics lacked a bundle preview, and a failed clipboard write was
+silent. New regression tests failed on those missing behaviors before correction
+(after fixing the test's missing clipboard stub). The UI now optionally previews
+the exact retained bundle, mounts only one saved preview at a time, and reveals
+that same bundle with manual-copy guidance on clipboard refusal. Retry success
+clears the failure. It never regenerates old evidence, adds diagnostics, uploads
+files or sends to a developer automatically. Existing local report bounds remain.
+
+All45 focused diagnostic/report/support/file/download tests and production build
+pass. Edge's fictional clipboard-refusal journey showed the explicit message and
+original captured-version text at390px; saved preview width304px, page width390.
+At320px, preview width249.33px and page scrollWidth320; hide/show remains usable.
+Existing current-report preview states freshness and unavailable measurements
+without including fixture task text or worker names. No clipboard was written
+during browser verification. Real failed-copy recovery is covered by the test
+adapter and component tests, not by changing the operator's browser permissions.
+
+App/API-only deployment requested; confirm matching live bundle and worker
+continuity before claiming delivered. Prior d69e9b16 CI34454887235 is green.
+
 ## Responsive finish — September 10, d69e9b16
 
 Delivered:1.6.0-dev-d69e9b165493-20260910082408-144014 is healthy, with no degraded
