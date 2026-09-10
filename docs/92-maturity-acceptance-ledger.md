@@ -1,5 +1,21 @@
 # Current maturity acceptance ledger
 
+## September 10 — live update identity checked in Edge
+
+A fresh owned tab at swarm.bfgsolutions.net restored the trusted session and
+Settings > Updates showed App/API Healthy 1.7.0 revision6ac6c14, Installed
+revision6ac6c14, and worker engine revision30ad01d with13 active sessions.
+The engine card correctly explains matching source/dependency fingerprints and
+explicitly says no engine update or worker restart is needed. This agrees with
+the direct health/engine checks. The reported older App/API label was not
+reproduced; a fresh-tab result does not prove an existing stale tab recovered.
+
+Code inspection confirms visible-page health refresh feeds Settings and the
+runtime footer. No version-display change was justified by this observation.
+No update, worker input, restart, or access change was performed. The owned tab
+was closed after inspection. Retain the original stale-tab report as unverified,
+not a confirmed defect fix; return to the native reconciliation critical path.
+
 ## September 10 — native three-question evidence checkpoint
 
 An isolated native Claude Code2.1.267 probe completed three fictional questions
