@@ -2,7 +2,9 @@
 
 September 10, 2026. This is a handoff over the approved scope in45, not a new
 definition of completion. No release is authorized. Detailed receipts remain
-in92,94 and95. Last verified app/API: cb915ab1; live worker engine was preserved.
+in92,94 and95. Last verified app/API:80c7d1c4; live worker engine was preserved.
+Responsive prerequisite-footer correction d69e9b16 is being deployed; see95 for
+its failing-before layout evidence and the subsequent live receipt.
 
 ## What is ready to try
 

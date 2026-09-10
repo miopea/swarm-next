@@ -2,6 +2,34 @@
 
 ### Active acceptance checkpoint — ordinary-user UX first
 
+DELIVERED d69e9b16: healthy app/API, exact34-record/12-running identity match,
+enginePID3408834/start unchanged; see95. No fixture server remains. CI34454887235
+is the specific pending run. No release or engine update. Next: remaining UI-3
+support progress/errors/diagnostic-preview and UI-4 empty/offline/error journeys;
+do not repeat this passed prerequisite/history/schedule responsive tranche.
+Native-device gates and optional briefing approval remain separate, not blockers
+to safe ordinary-user work. Keep the full45 objective intact.
+
+Newest product package: d69e9b16 fixes the phone prerequisite-confirmation overlap
+found during responsive acceptance.118 focused tests/build pass; actual320px and
+desktop geometry confirms the footer no longer intersects the form. History at
+390px and Night Watch controls at320px were also inspected; see95. Deployment is
+in progress through the existing app/API reload service; do not restart it merely
+because a check still shows the old version. Verify live revision, worker snapshot
+and enginePID/start before claiming delivered.80c7d1c4 CI is green. Usage33% used.
+The optional briefing preview remains awaiting visual approval; not installed.
+
+Current continuation: operator has locked the computer and permits overnight live
+Hive verification. No further approval is needed for scoped app/API deployment;
+preserve workers, do not cut a release, and do not contact BFG Admin. The optional
+return briefing now has a fictional conversation preview at the thread-owned
+visualizations directory, `hive-return-briefing.html`. This closes mock preparation
+only, NOT visual approval or implementation. No live landing behavior changed.
+Default preview omits ordinary moving work and offers return to the previous
+worker or the exact Needs you decision. Await operator design review without
+blocking other work. Older "Next" paragraphs below are historical, superseded
+when the package they describe appears as delivered above them.
+
 Integrated web gate at80c7d1c4: all1,525 tests in157 files pass. Production build
 passes; live health/worker continuity and browser bundle match are verified.
 Account usage32% consumed/68% remaining; no resets available or used. Do not

@@ -3,6 +3,39 @@
 Scope remains45/93. This matrix distinguishes delivered behavior, isolated proof
 and remaining requirements; it is not whole-program completion.
 
+## Responsive finish — September 10, d69e9b16
+
+Delivered:1.6.0-dev-d69e9b165493-20260910082408-144014 is healthy, with no degraded
+subsystems. App reload service finished successfully. All34 worker records and12
+running session/provider identity projections exactly match pre-update evidence;
+enginePID3408834 and September9 17:01:49EDT start are unchanged. Receipts are
+pre/post-prerequisite-layout-workers.json in /tmp/swarm-clarification-deploy.cvm5VI.
+The dedicated Edge tab loaded the new bundle with Reload this tab. Fixture server
+stopped. No real prerequisite edit, schedule save, engine update or release.
+CI34454887235 remains in progress; check it once at the next package boundary.
+
+The phone-width prerequisite recovery check found a genuine layout defect:
+TaskPrerequisiteDialog has header/form/footer, but inherited the four-row
+TaskDetailDialog template. At320x740 its close-confirmation footer was only26.7px
+high while its content was205.7px high, overlapping the form. A scoped three-row
+template now reserves the footer and lets only the form shrink/scroll. The new
+stylesheet regression failed before the fix; all118 focused style/task/modal
+tests and the production build pass afterward.
+
+Settled Edge screenshot and DOM geometry after the fix: form bottom507.67,
+footer top507.67, footer bottom740, confirmation521.33–727; viewport320x740 with
+scrollWidth320. Warning and both44px actions are visible without overlap. Keep
+editing retains the fictional draft; explicit close returns to Tasks. At1280x800,
+form bottom and footer top both678.67, footer bottom775.33. No task mutation
+reached a real Hive. This is responsive browser proof, not native keyboard proof.
+
+Additional paired checks: fictional75-event history pages at390px show readable
+Older/Latest controls and replace the page with events16–45. Night Watch search
+at320px reveals schedule and autonomy together; time-zone/start/end controls are
+44px tall within the viewport and the page has no horizontal overflow. A fictional
+timezone edit was not saved. Physical Android/iOS and actual presence transitions
+remain open. Prior build80c7d1c4 CI34452563704 is now confirmed successful.
+
 | Journey | Evidence | Boundary |
 | --- | --- | --- |
 | Ask before deciding | Actual Queen and sleeping ordinary requester replies; explicit final answer; deployed f05f7f21, full CI34442276338 green | See94; direct-terminal answer correlation and older tool lists remain separate |
