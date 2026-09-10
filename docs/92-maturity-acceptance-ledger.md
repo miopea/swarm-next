@@ -1,5 +1,25 @@
 # Current maturity acceptance ledger
 
+## September 10 — Temporary Keeper failures no longer imply incompatibility
+
+Confirmed code defect: HTTP408/429 and5xx were RemoteRejected, which the
+reconciler mapped to Incompatible with no next attempt. Classify these temporary
+responses as TransportUnavailable so the existing durable bounded backoff owns
+recovery. Authentication, conflict, redirect, malformed and oversized response
+behavior remains unchanged. There is no new implicit transport retry.
+
+Isolated Linux validation: all11 federation transport tests pass, including a
+503 followed by a successful explicitly owned next attempt; durable bounded
+sync-health test passes; strict API Clippy passes. Formatted source retrieved.
+No running Hive files or services changed. WSL still reports the original halted
+state; its original HTTP cause is unavailable, so this is not a verified WSL fix.
+Existing halted states require explicit retry after installation, not silent
+reclassification of unknown past errors.
+
+ADR0096 records the separate signed public directory, profile ownership,
+bounded/revisioned synchronization and mixed-version gates. Implementation and
+independent-database/browser acceptance of directory propagation remain open.
+
 ## September 10 — Explicit combined join and truthful completion
 
 Operator approved onboarding simplification. A Keeper-approved invitation with

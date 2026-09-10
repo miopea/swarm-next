@@ -2,6 +2,16 @@
 
 ## Operator priority override — Apiary onboarding, September 10
 
+Latest execution: combined joining is committed cb17759c, with27 focused tests,
+TypeScript and fictional Edge interaction verified. Temporary Keeper HTTP408/429
+and5xx recovery classification is verified by11 transport tests, bounded-health
+test and strict API checks. Neither package is deployed. WSL's original stopped
+sync cause remains unknown; do not call it fixed or automatically clear it.
+Next substantive implementation: ADR0096 public directory and owned profile
+exchange, with independent-database tests and then Keeper/member browser checks.
+Do not append fields to the existing signed catalog: old readers would reconstruct
+different signature bytes. Keep directory failures separate from shared-work sync.
+
 Operator subsequently approved broad onboarding improvements, explicitly including
 the proposed Accept policy and join action. Preserve Keeper approval and server
 readiness validation; acceptance alone must not join if readiness changes.

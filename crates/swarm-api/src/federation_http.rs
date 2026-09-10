@@ -570,6 +570,10 @@ fn validate_keeper_endpoint(value: &str) -> Result<Url, FederationHttpError> {
 
 fn status_error(status: StatusCode) -> FederationHttpError {
     match status {
+        StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_MANY_REQUESTS => {
+            FederationHttpError::TransportUnavailable
+        }
+        status if status.is_server_error() => FederationHttpError::TransportUnavailable,
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
             FederationHttpError::AuthenticationRejected
         }
@@ -600,6 +604,71 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn temporary_keeper_http_errors_remain_retryable() {
+        for code in [408, 429, 500, 502, 503, 504, 520, 522, 599] {
+            assert!(
+                matches!(
+                    status_error(StatusCode::from_u16(code).unwrap()),
+                    FederationHttpError::TransportUnavailable
+                ),
+                "HTTP {code}"
+            );
+        }
+        for code in [401, 403] {
+            assert!(matches!(
+                status_error(StatusCode::from_u16(code).unwrap()),
+                FederationHttpError::AuthenticationRejected
+            ));
+        }
+        assert!(matches!(
+            status_error(StatusCode::CONFLICT),
+            FederationHttpError::Conflict
+        ));
+        for code in [301, 307, 400, 404, 422] {
+            assert!(matches!(status_error(StatusCode::from_u16(code).unwrap()),
+                FederationHttpError::RemoteRejected(actual) if actual == code));
+        }
+    }
+
+    #[tokio::test]
+    async fn temporary_keeper_failure_recovers_on_next_owned_attempt() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let counter = requests.clone();
+        let app = Router::new().route(
+            "/probe",
+            get(move || {
+                let counter = counter.clone();
+                async move {
+                    if counter.fetch_add(1, Ordering::SeqCst) == 0 {
+                        (StatusCode::SERVICE_UNAVAILABLE, Json(json!({})))
+                    } else {
+                        (StatusCode::OK, Json(json!({"recovered": true})))
+                    }
+                }
+            }),
+        );
+        let address = spawn_server(app).await;
+        let client = FederationHttpClient::new(&format!("http://{address}")).unwrap();
+        assert!(matches!(
+            client
+                .send_json::<(), serde_json::Value>(Method::GET, "probe", None, None)
+                .await,
+            Err(FederationHttpError::TransportUnavailable)
+        ));
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            1,
+            "transport must not retry implicitly"
+        );
+        let recovered = client
+            .send_json::<(), serde_json::Value>(Method::GET, "probe", None, None)
+            .await
+            .unwrap();
+        assert_eq!(recovered["recovered"], true);
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+    }
 
     #[test]
     fn endpoint_validation_requires_secure_secret_free_urls() {
