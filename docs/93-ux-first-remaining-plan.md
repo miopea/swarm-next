@@ -2,6 +2,23 @@
 
 ### Active package: Needs You clarification, not another reload patch
 
+LATEST: the clarification milestone and two bounded UI follow-throughs are
+committed/pushed/deployed through `b01aef1d`. Live runtime:
+`1.6.0-dev-b01aef1d1c9b-20260910061835-74026`. All three deployments preserved
+the enginePID/start and exact34-worker/12-running-session identity projections.
+No release, real decision answer or BFG communication occurred. Native fixture
+units, SSH forward and local UI fixture servers are stopped; the separate live
+Edge tab remains on diagnostics with its viewport restored.
+
+Clarification CI34442276338 is fully green. Follow-through CI34443735026 and
+34444605660 have separate final gates; inspect their status once at the next
+package boundary, not in a tight loop. Local gates and live browser acceptance
+are recorded in92/94. Next: finish the UI-4 linked task/dependency/history and
+navigation journey matrix, using fictional mutations only. The direct live
+operator-queue -> exact decision focus path passed. Keep Queen orchestration,
+direct-terminal reconciliation, provider/device and sustained performance gaps
+explicit; do not reopen passed native clarification tests or contact BFG Admin.
+
 Current checkpoint after closure: clarification is live with full CI green.
 Mobile runtime navigation follow-through `fd35ca3e` is also live at
 `1.6.0-dev-fd35ca3e7f17-20260910060616-63692`, with71 App tests, build, fictional

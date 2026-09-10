@@ -15,7 +15,7 @@ is historical where superseded by the verified deployment section.
 
 ## Verified runtime and delivery
 
-- App/API: `1.6.0-dev-fd35ca3e7f17-20260910060616-63692`.
+- App/API: `1.6.0-dev-b01aef1d1c9b-20260910061835-74026`.
 - Engine: last verified PID 3408834, started September 9 at 17:01:49 Eastern,
   after the operator's manually applied update. Subsequent app-only deployments
   preserved that engine and its running worker identity projections.
@@ -28,6 +28,26 @@ is historical where superseded by the verified deployment section.
 - No release is authorized. No customer-facing send is authorized by task closure.
 
 ## Requirement-by-requirement disposition
+
+### UI-3 diagnostic assessment consistency — delivered
+
+`b01aef1d` removes the competing machine-aggregate verdict from the capacity
+line. The existing assessment still reports CPU/process/machine pressure, and
+every detailed check retains its classification. No measurement, safety policy
+or polling interval changed. All31 diagnostic/report/assessment tests and the
+production build pass. Fictional CPU-only390px and live desktop checks pass.
+The live page now reads31.3GiB/8CPUs separately from the current assessment.
+
+`/tmp/swarm-clarification-deploy.cvm5VI/pre-diagnostics-workers.json` and
+`post-diagnostics-workers.json` confirm34 worker records and12 exact running
+session/provider identities preserved; enginePID3408834/start unchanged. The
+pending engine update was not applied. CI34444605660 remains a separate gate.
+The isolated fixture server is stopped and the browser viewport restored.
+
+Live queue -> decision navigation also passed: the RCG Networks operator-owned
+task opened its existing Needs You decision and focused that exact article.
+No decision was answered, dismissed or created. This validates navigation, not
+Queen's ability to clear the31 items currently recorded as hers.
 
 ### UI-3/UI-4 mobile runtime navigation follow-through
 
