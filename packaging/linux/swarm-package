@@ -1126,6 +1126,10 @@ reload_development() {
   dev_status_path=$(sed -n 's/^SWARM_DEV_RELOAD_STATUS_PATH=//p' "$dev_config")
   validate_dev_checkout "$dev_checkout"
   [ "$dev_status_path" = "$state_root/development-reload.status" ] || die "development status path is invalid"
+  # Consume this request before preflight can refuse it. PathExists otherwise
+  # immediately retriggers the same rejected request until systemd rate-limits
+  # the watcher. A refusal is terminal for this request, not an automatic retry.
+  rm -f "$state_root/development-reload.request"
   # REFUSED BEFORE THE BUILD, NOT AFTER IT.
   #
   # A reload ends in `update`, and update refuses a protocol change by design.
@@ -1164,7 +1168,6 @@ Build and migrate instead, which swaps the API and the host together. It STOPS E
   fail_status=$dev_status_path
   fail_stamp="revision=$dev_reload_revision"
   printf 'state=building\nrevision=%s\n' "$dev_reload_revision" > "$dev_status_path"
-  rm -f "$state_root/development-reload.request"
   dev_build_root="$state_root/development-build"
   mkdir -p "$dev_build_root"
   clear_managed_directory "$dev_build_root"

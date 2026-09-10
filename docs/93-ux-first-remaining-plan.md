@@ -2,6 +2,25 @@
 
 ### Active acceptance checkpoint — ordinary-user UX first
 
+September 10 development-update incident: the live checkout `0e35d90b` requires
+protocol17 while the running host remains16. The App/API is healthy at
+`1.6.0-dev-dba2868be982-20260910095752-189394`; host PID242380 still has its
+07:25:33 Eastern start. The development reload rejected before compilation, but
+left its request file present, causing immediate PathExists retries and ultimately
+`unit-start-limit-hit`. Local packaging now consumes the validated request before
+protocol preflight. The complete isolated package lifecycle test passes, including
+new assertions that refusal consumes the request, never runs the builder, and
+makes no service calls. Log: `/tmp/swarm-native-answer-check.6fkv8E/protocol-refusal-lifecycle.log`.
+Not deployed; the failed live watcher has not been reset or retried.
+
+The user-facing flow remains open: installer writes `step=protocol-change` but
+the API reads `reason=`; the failed card also hides protocol-specific guidance.
+The engine-update indicator compares the running API/engine, not the newer
+checkout. Implement and test an explicit preparation-to-maintenance journey;
+do not make a plain retry claim to prepare a migration or silently restart workers.
+The operator separately reports that clients upgraded to1.7.0 smoothly. That is
+client-upgrade acceptance, not proof of the development protocol17 migration.
+
 The in-progress exact-question package now preserves option descriptions in the
 shared decision format, JSON persistence, native conversion, agent schema25 and
 Needs You. Schema161 fences older database readers that would ignore conditions.

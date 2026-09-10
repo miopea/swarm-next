@@ -417,6 +417,8 @@ exit 1
 EOF
 chmod +x "$dev_checkout/packaging/linux/build-development-release.sh"
 rm -f "$HOME/the-builder-ran"
+printf 'request\n' > "$SWARM_STATE_ROOT/development-reload.request"
+protocol_service_calls=$(wc -l < "$HOME/systemctl.log")
 protocol_refusal=$("$package" reload-development 2>&1 || true)
 case "$protocol_refusal" in
   *migrate-protocol*) :;;
@@ -427,6 +429,10 @@ case "$protocol_refusal" in
   *) echo "the reload refusal does not say the migration stops workers" >&2; exit 1;;
 esac
 [ ! -f "$HOME/the-builder-ran" ] || { echo "the reload built before refusing" >&2; exit 1; }
+[ ! -e "$SWARM_STATE_ROOT/development-reload.request" ] \
+  || { echo "protocol refusal left a request that retriggers the watcher" >&2; exit 1; }
+[ "$(wc -l < "$HOME/systemctl.log")" -eq "$protocol_service_calls" ] \
+  || { echo "protocol refusal changed a service" >&2; exit 1; }
 grep -q '^step=protocol-change$' "$SWARM_STATE_ROOT/development-reload.status" \
   || { echo "the status did not record why the reload was refused" >&2; exit 1; }
 # Back to a checkout whose protocol agrees, so the rest of this file is unaffected.
