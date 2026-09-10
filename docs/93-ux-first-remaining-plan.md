@@ -2,6 +2,33 @@
 
 ### Active acceptance checkpoint — ordinary-user UX first
 
+The in-progress exact-question package now preserves option descriptions in the
+shared decision format, JSON persistence, native conversion, agent schema25 and
+Needs You. Schema161 fences older database readers that would ignore conditions.
+The current form clears drafts on changed descriptions but preserves equivalent
+map order. Edge fictional desktop and390px phone checks show readable descriptions,
+no horizontal overflow,44px minimum option buttons, and exact label submission.
+Screenshots: `artifacts/decision-descriptions/{desktop-light,phone-light}.png`.
+Those screenshots precede a final CSS-only change making description text inherit
+the option's font size for readability. Edge disconnected during the replacement
+capture; final-font visual verification and clearing its temporary390px viewport
+override remain pending. Do not call this native-device acceptance.
+All63 focused UI tests, TypeScript and production web build pass. Full domain153,
+affected persistence54 and served tool-contract1 pass; the initial fingerprint
+mismatch was expected and corrected with the observed revision25 fingerprint.
+Strict domain/persistence/API all-target, all-feature clippy now passes after
+replacing the four ambiguous default constructors. Linux logs are
+`/tmp/swarm-native-answer-check.6fkv8E/description-{domain,persistence,surface-verified,clippy-final}.log`.
+
+Do not deploy this package yet: an older already-open browser can still submit
+labels without having displayed the new descriptions. Next add an exact rendered
+question snapshot to the answer command and enforce it in the application/store
+before resolving a described question. Preserve ordinary legacy questions; do not
+accept a capability flag as proof of an exact question. Then finish immutable
+decision-ID binding and final native-result confirmation. These are explicit
+integration gates, not waived by schema161 or the rendering tests. The frozen
+1.7.0 candidate is unaffected. Main publication remains approval-gated.
+
 Native Claude 2.1.267 contract probe now demonstrates that a PostToolUse observer
 can retain a different answer from the final result received by the worker:
 programmatic Amber became Blue through another hook. The current parser rejects

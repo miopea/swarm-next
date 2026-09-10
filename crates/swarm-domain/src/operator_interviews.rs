@@ -8,7 +8,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-const MAX_OPTION_DESCRIPTION_BYTES: usize = 4096;
+const MAX_OPTION_DESCRIPTION_BYTES: usize = crate::MAX_DECISION_OPTION_DESCRIPTION_BYTES;
 pub const MAX_NATIVE_INTERVIEW_SOURCE_BYTES: usize = 128 * 1024;
 pub const MAX_NATIVE_INTERVIEW_BATCH: usize = 32;
 
@@ -30,6 +30,89 @@ pub struct NativeInterviewQuestion {
     pub options: Vec<NativeInterviewOption>,
     #[serde(default, rename = "multiSelect")]
     pub multi_select: bool,
+}
+
+impl NativeInterviewQuestion {
+    /// Lossless question-shape conversion, not decision identity or provenance.
+    /// Consumers must still bind the full decision ID and authenticated source.
+    #[must_use]
+    pub fn from_decision(question: &crate::DecisionQuestion) -> Option<Self> {
+        if !crate::valid_decision_questions(std::slice::from_ref(question)) {
+            return None;
+        }
+        Some(Self {
+            question: question.question.clone(),
+            header: question.header.clone(),
+            options: question
+                .options
+                .iter()
+                .map(|label| NativeInterviewOption {
+                    label: label.clone(),
+                    description: question
+                        .option_descriptions
+                        .get(label)
+                        .cloned()
+                        .unwrap_or_default(),
+                })
+                .collect(),
+            multi_select: question.multi_select,
+        })
+    }
+}
+
+#[cfg(test)]
+mod description_tests {
+    use super::*;
+
+    fn question() -> crate::DecisionQuestion {
+        serde_json::from_str(
+            r#"{"header":"Scope","question":"Which scope?","options":["Narrow","Broad"]}"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn old_questions_remain_readable_and_description_conversion_is_lossless() {
+        let mut question = question();
+        assert!(question.option_descriptions.is_empty());
+        assert!(
+            serde_json::to_value(&question)
+                .unwrap()
+                .get("option_descriptions")
+                .is_none()
+        );
+        question
+            .option_descriptions
+            .insert("Narrow".into(), " Only this repo.\nNo deployment. ".into());
+        let native = NativeInterviewQuestion::from_decision(&question).unwrap();
+        assert_eq!(
+            native.options[0].description,
+            " Only this repo.\nNo deployment. "
+        );
+        assert!(native.options[1].description.is_empty());
+        let roundtrip = serde_json::from_str(&serde_json::to_string(&question).unwrap()).unwrap();
+        assert_eq!(question, roundtrip);
+    }
+
+    #[test]
+    fn descriptions_cannot_change_or_disappear_in_an_exact_match() {
+        let mut question = question();
+        let bare = NativeInterviewQuestion::from_decision(&question).unwrap();
+        question
+            .option_descriptions
+            .insert("Narrow".into(), "Only after approval".into());
+        assert!(bare != NativeInterviewQuestion::from_decision(&question).unwrap());
+        question
+            .option_descriptions
+            .insert("Unknown".into(), "Condition".into());
+        assert!(NativeInterviewQuestion::from_decision(&question).is_none());
+        question.option_descriptions.remove("Unknown");
+        question.option_descriptions.insert(
+            "Narrow".into(),
+            "é".repeat(MAX_OPTION_DESCRIPTION_BYTES / 2 + 1),
+        );
+        assert!(NativeInterviewQuestion::from_decision(&question).is_none());
+    }
 }
 
 /// Private IPC evidence, not an agent-writable operator receipt. The API must

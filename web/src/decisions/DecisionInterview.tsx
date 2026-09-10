@@ -4,6 +4,11 @@ import type { DecisionQuestion } from "../api";
 
 const OTHER = "__other__";
 
+function optionDescription(question: DecisionQuestion, option: string): string {
+  const descriptions = question.option_descriptions;
+  return descriptions && Object.hasOwn(descriptions, option) ? descriptions[option] : "";
+}
+
 /**
  * Answering an interview-shaped decision request.
  *
@@ -28,6 +33,7 @@ export default function DecisionInterview(props: DecisionInterviewProps) {
   // Key the complete form so even optional notes cannot survive a changed ask.
   const identity = JSON.stringify(props.questions.map((question) => [
     question.header, question.question, question.options, question.multi_select ?? false,
+    question.options.map((option) => optionDescription(question, option)),
   ]));
   return <InterviewAnswers key={identity} {...props} />;
 }
@@ -78,7 +84,12 @@ function InterviewAnswers({ questions, busy, onAnswer }: DecisionInterviewProps)
                   aria-pressed={held.includes(option)}
                   disabled={busy}
                   onClick={() => choose(question, option)}
-                >{option}</button>
+                >
+                  <span>{option}</span>
+                  {optionDescription(question, option) ? (
+                    <small className="decision-option-description">{optionDescription(question, option)}</small>
+                  ) : null}
+                </button>
               ))}
               <button
                 type="button"

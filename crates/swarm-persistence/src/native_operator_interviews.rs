@@ -449,6 +449,7 @@ mod tests {
                     header: "Jar".into(),
                     question: "Which fictional jar?".into(),
                     options: vec!["Amber".into(), "Blue".into()],
+                    option_descriptions: std::collections::BTreeMap::new(),
                     multi_select: false,
                 }],
                 deadline: None,

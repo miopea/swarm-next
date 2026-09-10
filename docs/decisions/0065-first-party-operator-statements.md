@@ -139,6 +139,23 @@ delivery and API interruption, can close this milestone.
 
 ### Observed programmatic answer and output replacement, September 10
 
+The decision question contract now retains optional `option_descriptions`, keyed
+by the exact offered label, at most4096 UTF-8 bytes per description. Unknown
+labels are invalid. Existing string options and absent descriptions remain
+readable; no historical explanatory text is invented. Native question conversion
+preserves labels, order, descriptions, wording, header and selection mode. It is
+shape conversion only, not a decision-ID binding or an authenticated receipt.
+
+Descriptions are stored in the existing question JSON and participate in exact
+receipt comparison. Schema161 is a reader-compatibility fence: older code must
+not open this database and ignore approval-relevant descriptions. No existing
+question data is rewritten; downgrade requires a compatible backup. The agent
+tool surface moves to revision25 so existing sessions report their stale schema.
+Needs You displays descriptions with their options; changing a description clears
+the form's answers/notes, while equivalent map ordering preserves a draft. Answer
+payloads retain the option label or operator's custom text, not a concatenation
+of the label and its explanation. Automatic native reconciliation remains gated.
+
 A disposable native Claude Code 2.1.267 PTY exercised one fictional AskUser
 invocation with explicit isolated hooks and no Hive settings changes. PreToolUse
 supplied `Amber` through updated input. The observed PostToolUse callback retained

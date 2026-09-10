@@ -172,6 +172,7 @@ mod tests {
                 header: "Scope".into(),
                 question: "Which scope?".into(),
                 options: vec!["Narrow".into(), "Broad".into()],
+                option_descriptions: std::collections::BTreeMap::new(),
                 multi_select: false,
             },
         }
@@ -268,7 +269,7 @@ mod tests {
             OperatorAnswerConsumption::Confirmed,
         )
         .unwrap();
-        let mut variants = vec![target.clone(); 7];
+        let mut variants = vec![target.clone(); 8];
         variants[0].decision_id = DecisionRequestId::new();
         variants[1].worker_id = WorkerId::new();
         variants[2].session_id = WorkerSessionId::new();
@@ -276,6 +277,10 @@ mod tests {
         variants[4].question.question = "Different?".into();
         variants[5].question.options.reverse();
         variants[6].question.multi_select = true;
+        variants[7]
+            .question
+            .option_descriptions
+            .insert("Narrow".into(), "Also deploy".into());
         for changed in variants {
             assert_eq!(
                 evidence.correlate(&changed, None),

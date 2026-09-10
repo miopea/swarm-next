@@ -1043,6 +1043,7 @@ export type DecisionQuestion = {
   header: string;
   question: string;
   options: string[];
+  option_descriptions?: Record<string, string>;
   multi_select?: boolean;
 };
 

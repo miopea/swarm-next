@@ -285,7 +285,8 @@ const WORKER_ENGINE_RETURN_SESSIONS_SCHEMA_VERSION: i64 = 157;
 const WORKER_REVIVAL_ATTEMPTS_SCHEMA_VERSION: i64 = 158;
 const DECISION_CLARIFICATION_SCHEMA_VERSION: i64 = 159;
 const NATIVE_OPERATOR_INTERVIEWS_SCHEMA_VERSION: i64 = 160;
-const CURRENT_SCHEMA_VERSION: i64 = NATIVE_OPERATOR_INTERVIEWS_SCHEMA_VERSION;
+const DECISION_OPTION_DESCRIPTIONS_SCHEMA_VERSION: i64 = 161;
+const CURRENT_SCHEMA_VERSION: i64 = DECISION_OPTION_DESCRIPTIONS_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4043,6 +4044,15 @@ fn migrate_ops_intake_schema_steps(
     }
     if schema_version < NATIVE_OPERATOR_INTERVIEWS_SCHEMA_VERSION {
         native_operator_interviews::migrate(transaction)?;
+    }
+    if schema_version < DECISION_OPTION_DESCRIPTIONS_SCHEMA_VERSION {
+        // Question JSON now carries approval-relevant option descriptions.
+        // Fence older readers that would silently ignore those conditions.
+        transaction.pragma_update(
+            None,
+            "user_version",
+            DECISION_OPTION_DESCRIPTIONS_SCHEMA_VERSION,
+        )?;
     }
     Ok(())
 }

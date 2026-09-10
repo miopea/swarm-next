@@ -2255,6 +2255,7 @@ mod tests {
                 header: (*header).to_owned(),
                 question: format!("What about {header}?"),
                 options: options.iter().map(|o| (*o).to_owned()).collect(),
+                option_descriptions: BTreeMap::new(),
                 multi_select: false,
             })
             .collect()
@@ -2305,6 +2306,55 @@ mod tests {
         assert_eq!(resolved.resolution_surface, "inbox_interview");
         // Delivered back to the asker the same way a ruling is.
         assert_eq!(resolved.delivery_state, Some(DecisionDeliveryState::Queued));
+    }
+
+    #[test]
+    fn option_descriptions_survive_upgrade_restart_and_resolution() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("described-questions.sqlite3");
+        let store = TaskStore::open(&path).unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let mut questions = interview(&[("Scope", &["Narrow", "Broad"])]);
+        questions[0].option_descriptions.insert(
+            "Narrow".into(),
+            " No deployment.\nPreserve all data. ".into(),
+        );
+        let created = store
+            .create_decision_request(&NewDecisionRequest {
+                allowed_actions: &[],
+                questions: &questions,
+                ..request(queen.id, &[])
+            })
+            .unwrap();
+        store
+            .connection()
+            .unwrap()
+            .pragma_update(None, "user_version", 160)
+            .unwrap();
+        drop(store);
+        let store = TaskStore::open(&path).unwrap();
+        assert_eq!(
+            store.schema_version().unwrap(),
+            crate::CURRENT_SCHEMA_VERSION
+        );
+        let restored = store.get_decision_request(created.id).unwrap();
+        assert_eq!(restored.questions, questions);
+        let answers = BTreeMap::from([("Scope".into(), vec!["Narrow".into()])]);
+        let resolved = store
+            .answer_decision_request(created.id, &answers, "", "inbox_interview")
+            .unwrap();
+        assert_eq!(resolved.questions, questions);
+        questions[0]
+            .option_descriptions
+            .insert("Not offered".into(), "Unknown condition".into());
+        assert!(matches!(
+            store.create_decision_request(&NewDecisionRequest {
+                allowed_actions: &[],
+                questions: &questions,
+                ..request(queen.id, &[])
+            }),
+            Err(TaskStoreError::InvalidDecisionQuestions)
+        ));
     }
 
     #[test]

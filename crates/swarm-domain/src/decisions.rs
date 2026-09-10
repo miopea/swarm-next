@@ -200,6 +200,10 @@ pub struct DecisionQuestion {
     /// The choices offered. The operator is not limited to them; an answer that
     /// matches none of these is the most informative kind and must survive.
     pub options: Vec<String>,
+    /// Exact explanatory text keyed by option label. Omitted labels mean no
+    /// description; unknown labels are invalid, never silently discarded.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub option_descriptions: std::collections::BTreeMap<String, String>,
     /// Whether more than one option may be chosen.
     #[serde(default)]
     pub multi_select: bool,
@@ -217,6 +221,7 @@ pub const MAX_DECISION_QUESTION_OPTIONS: usize = 4;
 pub const MAX_DECISION_QUESTION_HEADER_BYTES: usize = 40;
 pub const MAX_DECISION_QUESTION_TEXT_BYTES: usize = 600;
 pub const MAX_DECISION_QUESTION_OPTION_BYTES: usize = 200;
+pub const MAX_DECISION_OPTION_DESCRIPTION_BYTES: usize = 4096;
 /// The most a decision's summary may run to.
 ///
 /// Short enough that it has to be the decision rather than the argument for it:
@@ -240,6 +245,13 @@ pub fn valid_decision_questions(questions: &[DecisionQuestion]) -> bool {
             && question.question.len() <= MAX_DECISION_QUESTION_TEXT_BYTES
             && (MIN_DECISION_QUESTION_OPTIONS..=MAX_DECISION_QUESTION_OPTIONS)
                 .contains(&question.options.len())
+            && question
+                .option_descriptions
+                .iter()
+                .all(|(label, description)| {
+                    question.options.contains(label)
+                        && description.len() <= MAX_DECISION_OPTION_DESCRIPTION_BYTES
+                })
             && question.options.iter().all(|option| {
                 !option.trim().is_empty()
                     && option.len() <= MAX_DECISION_QUESTION_OPTION_BYTES

@@ -32,6 +32,16 @@ is historical where superseded by the verified deployment section.
 
 ### QUEEN-03 / ATT-01 native answer capture — foundation verified, integration open
 
+Exact question representation now retains bounded option descriptions through
+decision storage, native conversion and the rendered Needs You form. Schema161
+protects against older database readers; MCP surface25 advertises the field.
+Domain153, affected persistence54, tool-contract1, UI63, TypeScript, production
+web build and strict affected-crate clippy passed. Desktop/390px Edge fictional
+views were checked, not native-device acceptance. This package remains local and
+not deployment-ready: the HTTP answer path still needs an exact rendered-question
+snapshot check to reject older browsers that did not show the descriptions.
+Immutable decision binding and final native-result verification also remain open.
+
 An isolated native Claude2.1.267 adversarial callback is now retained as a
 regression: programmatic input and the early completion result said Amber while
 a later hook supplied Blue to the model. The parser correctly refuses that

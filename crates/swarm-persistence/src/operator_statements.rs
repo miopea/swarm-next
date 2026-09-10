@@ -339,6 +339,7 @@ mod tests {
             header: "Scope".into(),
             question: "Which scope?".into(),
             options: vec!["Narrow".into(), "Broad".into()],
+            option_descriptions: std::collections::BTreeMap::new(),
             multi_select: false,
         };
         let decision = store

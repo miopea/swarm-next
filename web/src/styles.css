@@ -1716,6 +1716,7 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .decision-question-options { display: flex; flex-wrap: wrap; gap: 6px; }
 .decision-option { min-height: 44px; max-width: 100%; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; color: var(--text); background: var(--panel-raised); font-size: .8rem; line-height: 1.45; text-align: start; overflow-wrap: anywhere; }
 .decision-option:hover { border-color: var(--accent-strong); }
+.decision-option-description { display: block; max-width: 48ch; margin-top: 4px; color: inherit; font-size: inherit; font-weight: 400; white-space: pre-wrap; }
 .decision-option.selected { border-color: var(--accent-strong); color: var(--on-accent); background: var(--accent-strong); font-weight: 600; }
 .decision-dismiss-reason { display: grid; min-width: 0; flex: 1 1 14rem; gap: 3px; }
 .engine-update-cost { margin: 0; font-size: .78rem; color: var(--muted); }

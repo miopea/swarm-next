@@ -5,6 +5,22 @@ import DecisionInterview from "./DecisionInterview";
 
 afterEach(cleanup);
 
+test("descriptions are visible but answers keep their exact option labels", () => {
+  const onAnswer = vi.fn();
+  const described = [{ ...questions[0], option_descriptions: { "This repo": "No deployment.", "Every repo": "Only after backup." } }];
+  const { rerender } = render(<DecisionInterview questions={described} busy={false} onAnswer={onAnswer} />);
+  fireEvent.click(screen.getByRole("button", { name: "This repo No deployment." }));
+  rerender(<DecisionInterview questions={[{ ...described[0], option_descriptions: { "Every repo": "Only after backup.", "This repo": "No deployment." } }]} busy={false} onAnswer={onAnswer} />);
+  fireEvent.click(screen.getByRole("button", { name: "Send answers" }));
+  expect(onAnswer).toHaveBeenCalledWith({ Scope: ["This repo"] }, "");
+});
+
+test("option labels cannot read inherited descriptions", () => {
+  render(<DecisionInterview questions={[{ ...questions[0], options: ["constructor", "toString"], option_descriptions: {} }]} busy={false} onAnswer={vi.fn()} />);
+  expect(screen.getByRole("button", { name: "constructor" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "toString" })).toBeInTheDocument();
+});
+
 test("a selected custom answer must be completed or deselected before sending", () => {
   const onAnswer = vi.fn();
   render(<DecisionInterview questions={[{ header: "Areas", question: "Which areas?", options: ["Web", "API"], multi_select: true }]} busy={false} onAnswer={onAnswer} />);
@@ -48,6 +64,7 @@ test.each([
   { label: "wording", next: [{ ...questions[0], question: "Delete which repositories?" }, questions[1]] },
   { label: "options", next: [{ ...questions[0], options: ["One file", "Everything"] }, questions[1]] },
   { label: "option order", next: [{ ...questions[0], options: [...questions[0].options].reverse() }, questions[1]] },
+  { label: "option description", next: [{ ...questions[0], option_descriptions: { "This repo": "Including production deployment." } }, questions[1]] },
   { label: "selection mode", next: [{ ...questions[0], multi_select: true }, questions[1]] },
   { label: "question order", next: [...questions].reverse() },
 ])("requires fresh answers when $label changes, without resurrecting old drafts", ({ next }) => {

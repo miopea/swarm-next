@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 24;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 25;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -401,9 +401,9 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 24;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 24. Update this and the revision together.
+/// The served surface as of revision 25. Update this and the revision together.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "974fe1ca0503cd02c552973c30ddf108d7837bc61a268f9c78e7eb1a2c64510e";
+    "38276621f09ddf33c03b81fa61796e7d1a7590176691592ca4f894091eec27ed";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -3064,7 +3064,7 @@ fn request_decision_tool() -> Tool {
                 "risk": { "type": "string", "maxLength": 10000, "default": "" },
                 "evidence": { "type": "string", "maxLength": 10000, "default": "" },
                 "suggested_action": { "type": "string", "maxLength": 80, "description": "The recommended button label. During Queen automation this must exactly match one allowed_actions value." },
-                "questions": { "type": "array", "maxItems": 4, "description": "Ask instead of guessing. Each question offers 2 to 4 options and a unique header; the operator may still answer with something none of them offered. A record carries questions or allowed_actions, never both.", "items": { "type": "object", "properties": { "header": { "type": "string", "maxLength": 40 }, "question": { "type": "string", "maxLength": 600 }, "options": { "type": "array", "minItems": 2, "maxItems": 4, "items": { "type": "string", "maxLength": 200 } }, "multi_select": { "type": "boolean", "default": false } }, "required": ["header", "question", "options"], "additionalProperties": false } },
+                "questions": { "type": "array", "maxItems": 4, "description": "Ask instead of guessing. Each question offers 2 to 4 options and a unique header; the operator may still answer with something none of them offered. A record carries questions or allowed_actions, never both.", "items": { "type": "object", "properties": { "header": { "type": "string", "maxLength": 40 }, "question": { "type": "string", "maxLength": 600 }, "options": { "type": "array", "minItems": 2, "maxItems": 4, "items": { "type": "string", "maxLength": 200 } }, "option_descriptions": { "type": "object", "maxProperties": 4, "description": "Exact explanatory text keyed by an offered option label. Preserve conditions and scope; unknown option labels are rejected.", "additionalProperties": { "type": "string", "maxLength": 4096 } }, "multi_select": { "type": "boolean", "default": false } }, "required": ["header", "question", "options"], "additionalProperties": false } },
                 "allowed_actions": { "type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "description": "Short, task-specific operator choices. Do not encode actions for other tasks.", "items": { "type": "string", "minLength": 1, "maxLength": 80 } },
                 "deadline": { "type": ["integer", "null"] },
                 "command": { "type": ["string", "null"], "maxLength": 4000, "description": "The ONE shell command you are asking to be allowed to run, verbatim and complete. Supplying it adds a separate grant button to the request; approving THAT button, and only that button, lets you run this command. The grant is scoped to you, dies when the task leaves the board, and is offered to one session. Send the command you will actually run, not a pattern and not a shortened version: the operator reads this exact text before allowing it, and a command that does not match what you run is a request for something nobody approved. Omit this for an ordinary approval that authorises no execution." }
