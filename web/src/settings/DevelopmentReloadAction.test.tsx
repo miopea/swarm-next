@@ -5,6 +5,25 @@ import DevelopmentReloadAction from "./DevelopmentReloadAction";
 
 afterEach(cleanup);
 
+test("protocol refusal explains the missing engine package and does not offer a doomed retry", () => {
+  const reload = vi.fn();
+  const runtime: import("../api").DevelopmentRuntime = {
+    enabled: true, version: "1.7.0", state: "failed", reload_available: true,
+    source_revision: "abcdef012345", deployed_source_revision: "76543210fedc",
+    source_dirty: false, deployed_source_published: true,
+    protocol_migration_required: true,
+  };
+  const { rerender } = render(<DevelopmentReloadAction busy={false} onReload={reload} runtime={runtime} />);
+  expect(screen.getByLabelText("App and API status")).toHaveTextContent("Worker engine migration required");
+  expect(screen.getByLabelText("App and API status")).toHaveTextContent("No migration was prepared");
+  expect(screen.getByLabelText("App and API status")).toHaveTextContent("applying it interrupts workers");
+  expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  expect(reload).not.toHaveBeenCalled();
+  rerender(<DevelopmentReloadAction busy={false} onReload={reload} runtime={{ ...runtime, protocol_migration_required: false }} />);
+  expect(screen.getByRole("button", { name: "Retry development build" })).toBeInTheDocument();
+  expect(screen.queryByText("Worker engine migration required")).not.toBeInTheDocument();
+});
+
 test("prepared migration is waiting, not installed or still building", () => {
   render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
     enabled: true, version: "1.5.0", state: "deferred", reload_available: true,

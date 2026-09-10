@@ -151,6 +151,13 @@ export default function DevelopmentReloadAction({ busy, runtime, reachable = tru
       </article>
     );
   }
+  if (runtime.state === "failed" && runtime.protocol_migration_required === true) return (
+    <article className="runtime-subsystem-card runtime-subsystem-restart development-reload-action" aria-label="App and API status" role="alert">
+      <header><div><span className="runtime-component-name">App and API</span><strong>Worker engine migration required</strong></div><span className="runtime-status-badge restart">Current app preserved</span></header>
+      <p>Revision {runningRevision} remains active. Working-copy revision {workingRevision} requires a different worker-engine protocol, so an App/API-only reload cannot activate it.</p>
+      <small>No migration was prepared by this failed attempt. Retrying the same reload will not resolve this. A coordinated App/API and engine migration must be prepared before it can be applied; applying it interrupts workers.</small>
+    </article>
+  );
   if (runtime.state === "failed") return (
     <article className="runtime-subsystem-card runtime-subsystem-restart development-reload-action" aria-label="App and API status" role="alert">
       <header><div><span className="runtime-component-name">App and API</span><strong>Development build failed</strong></div><span className="runtime-status-badge restart">Current app preserved</span></header>

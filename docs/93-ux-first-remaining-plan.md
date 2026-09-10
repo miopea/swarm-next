@@ -15,6 +15,12 @@ Not deployed; the failed live watcher has not been reset or retried.
 
 The user-facing flow remains open: installer writes `step=protocol-change` but
 the API reads `reason=`; the failed card also hides protocol-specific guidance.
+The local card now uses the independently observed current protocol mismatch to
+show "Worker engine migration required", explicitly says no migration was prepared,
+and removes the ineffective retry. All25 component tests pass; TypeScript passes
+after correcting the new fixture's explicit runtime type. Clearing the mismatch
+restores ordinary failure recovery. This is a diagnostic correction, not the
+missing preparation action; browser acceptance and deployment remain open.
 The engine-update indicator compares the running API/engine, not the newer
 checkout. Implement and test an explicit preparation-to-maintenance journey;
 do not make a plain retry claim to prepare a migration or silently restart workers.
