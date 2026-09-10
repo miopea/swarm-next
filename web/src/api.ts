@@ -1287,6 +1287,10 @@ export async function renameApiary(
 
 export type ApiaryDirectory = { revision: number; issued_at: number; expires_at: number };
 
+export async function requestApiarySyncRetry(operatorToken: string): Promise<void> {
+  await authenticatedFetch(operatorToken, "/api/v1/apiary/sync-retry", { method: "POST" });
+}
+
 export async function fetchApiaryDirectory(operatorToken: string, signal?: AbortSignal): Promise<ApiaryDirectory | null> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/directory", { signal });
   const directory = await response.json() as ApiaryDirectory | null;

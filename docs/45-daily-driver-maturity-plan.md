@@ -2,6 +2,13 @@
 
 ## Immediate priority — September 10 Apiary onboarding
 
+Release-candidate scope is frozen following the operator's concern about a moving
+finish line. Finish the in-flight explicit synchronization retry, CI, and the
+existing Keeper/WSL in-place acceptance checks. Do not start cosmetic additions
+or unrelated maturity work before reporting this gate. New findings are deferred
+unless they prevent this agreed onboarding/recovery outcome or threaten data.
+The broader maturity goal remains open; this freezes sequencing, not its scope.
+
 The operator wants this work completed before inviting another developer. Do not
 cut a release yet. Finish the joined experience, not just the underlying protocol:
 shared profile preview/editing, default-name replacement without changing custom

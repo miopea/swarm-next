@@ -65,6 +65,14 @@ Compatibility owner: Apiary application service. Remove this fallback once the
 minimum supported federation build includes the directory endpoint, with explicit
 release compatibility evidence; do not silently retire it during dogfooding.
 
+An authenticated operator may explicitly request a synchronization retry after
+repairing connectivity or updating an incompatible peer. This queues the existing
+owned runner, retains failure/success history, and never marks the connection
+healthy before verification. The request is atomic with its runtime event and
+coalesces while queued. It neither replaces membership/credentials nor bypasses
+signature, expiry, or authorization checks. Repeated invalid credentials halt
+again normally; recovery does not require removing and rejoining the Hive.
+
 ## Required acceptance evidence
 
 - Independent Keeper and two member databases converge on all three profiles.

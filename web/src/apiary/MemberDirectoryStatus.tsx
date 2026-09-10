@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchApiaryDirectory, type ApiaryDirectory, type ApiaryMember } from "../api";
+import { fetchApiaryDirectory, requestApiarySyncRetry, type ApiaryDirectory, type ApiaryMember } from "../api";
 
 /** Display provenance only: a directory snapshot is not live worker presence. */
 export default function MemberDirectoryStatus({ operatorToken, members, onRefresh }: {
@@ -8,6 +8,19 @@ export default function MemberDirectoryStatus({ operatorToken, members, onRefres
   const [directory, setDirectory] = useState<ApiaryDirectory | null>();
   const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
   const [attempt, setAttempt] = useState(0);
+  const [retrying, setRetrying] = useState(false);
+  const [retryMessage, setRetryMessage] = useState("");
+  async function retrySynchronization() {
+    setRetrying(true);
+    setRetryMessage("");
+    try {
+      await requestApiarySyncRetry(operatorToken);
+      setRetryMessage("Synchronization retry requested. Membership is unchanged; this is not yet a successful connection.");
+      onRefresh();
+    } catch {
+      setRetryMessage("The retry could not be requested. Membership and credentials are unchanged; try again.");
+    } finally { setRetrying(false); }
+  }
   useEffect(() => {
     const controller = new AbortController();
     setState("loading");
@@ -25,5 +38,7 @@ export default function MemberDirectoryStatus({ operatorToken, members, onRefres
     {directory ? <p>Keeper directory issued {new Date(directory.issued_at * 1000).toLocaleString()}. This is a saved snapshot, not live presence.</p> : null}
     {directory && directory.expires_at * 1000 <= Date.now() ? <p>This snapshot is past its verification window. Refresh to check for membership changes; existing Hive work stays available.</p> : null}
     {state !== "loading" ? <button type="button" className="secondary-button" onClick={() => { setAttempt((value) => value + 1); onRefresh(); }}>Refresh member list</button> : null}
+    <button type="button" className="secondary-button" disabled={retrying} onClick={() => void retrySynchronization()}>{retrying ? "Requesting retry…" : "Retry Apiary synchronization"}</button>
+    {retryMessage ? <p role="status">{retryMessage}</p> : null}
   </div>;
 }

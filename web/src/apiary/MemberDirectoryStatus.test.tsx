@@ -4,6 +4,21 @@ import MemberDirectoryStatus from "./MemberDirectoryStatus";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
+test.each([false, true])("explicit synchronization retry reports acceptance honestly; fails=%s", async (fails) => {
+  const writes: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+    if (init?.method === "POST") {
+      writes.push(String(input));
+      return new Response("{}", { status: fails ? 503 : 202 });
+    }
+    return new Response("null");
+  }));
+  render(<MemberDirectoryStatus operatorToken="fictional" members={[]} onRefresh={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Retry Apiary synchronization" }));
+  expect(await screen.findByRole("status")).toHaveTextContent(fails ? "retry could not be requested" : "not yet a successful connection");
+  expect(writes).toEqual(["/api/v1/apiary/sync-retry"]);
+});
+
 test("an absent directory is incomplete, not an invitation to rejoin", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => new Response("null")));
   render(<MemberDirectoryStatus operatorToken="fictional" members={[]} onRefresh={vi.fn()} />);

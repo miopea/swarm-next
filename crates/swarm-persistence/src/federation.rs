@@ -370,6 +370,48 @@ impl TaskStore {
             .map_or(Ok(FederationSyncHealth::default()), Ok)
     }
 
+    /// Requests an operator-triggered recheck without clearing history or
+    /// changing membership. The existing runner still verifies every credential.
+    /// Repeated requests while already queued are idempotent.
+    ///
+    /// # Errors
+    /// Rejects personal and Keeper Hives, invalid time, and persistence failures.
+    pub fn request_federation_sync_retry(
+        &self,
+        now: i64,
+    ) -> Result<FederationSyncHealth, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationSync);
+        }
+        self.require_local_federation_member()?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let prior = transaction.query_row(
+            "SELECT condition, last_attempt_at, last_success_at, consecutive_failures, next_attempt_at FROM local_federation_sync WHERE singleton = 1",
+            [], federation_sync_health_from_row,
+        ).optional()?.unwrap_or_default();
+        if prior.condition == FederationSyncCondition::Idle && prior.next_attempt_at.is_some() {
+            return Ok(prior);
+        }
+        let health = FederationSyncHealth {
+            condition: FederationSyncCondition::Idle,
+            next_attempt_at: Some(now),
+            ..prior
+        };
+        transaction.execute(
+            "INSERT INTO local_federation_sync (singleton, condition, consecutive_failures, next_attempt_at, updated_at)
+             VALUES (1, 'idle', 0, ?1, ?1)
+             ON CONFLICT(singleton) DO UPDATE SET condition = 'idle', next_attempt_at = excluded.next_attempt_at, updated_at = excluded.updated_at",
+            params![now],
+        )?;
+        crate::insert_control_room_event(
+            &transaction,
+            swarm_domain::ControlRoomEventKind::RuntimeChanged,
+        )?;
+        transaction.commit()?;
+        Ok(health)
+    }
+
     /// Records one successful bounded Member reconciliation without retaining
     /// endpoints, credentials, response bodies, or shared-work content.
     ///
@@ -6574,6 +6616,63 @@ mod tests {
         let renamed = member.signed_local_profile_update(now + 1).unwrap();
         assert_eq!(renamed.payload.revision, update.payload.revision + 1);
         assert!(verify(&renamed).is_ok());
+    }
+
+    #[test]
+    fn stopped_sync_retry_preserves_membership_and_requires_real_success() {
+        let now = 80_000;
+        let (_, member) = joined_member(now);
+        let identity = member.local_hive_identity().unwrap();
+        let credential = member
+            .federation_member_connection()
+            .unwrap()
+            .node_credential;
+        member.record_federation_sync_success(now + 10).unwrap();
+        let failed = member
+            .record_federation_sync_failure(FederationSyncCondition::Incompatible, now + 20)
+            .unwrap();
+        let retry = member.request_federation_sync_retry(now + 30).unwrap();
+        assert_eq!(retry.condition, FederationSyncCondition::Idle);
+        assert_eq!(retry.last_success_at, failed.last_success_at);
+        assert_eq!(retry.last_attempt_at, failed.last_attempt_at);
+        assert_eq!(retry.consecutive_failures, failed.consecutive_failures);
+        assert_eq!(retry.next_attempt_at, Some(now + 30));
+        assert_eq!(
+            member.request_federation_sync_retry(now + 31).unwrap(),
+            retry
+        );
+        assert_eq!(member.local_hive_identity().unwrap(), identity);
+        assert_eq!(
+            member
+                .federation_member_connection()
+                .unwrap()
+                .node_credential,
+            credential
+        );
+        let rejected = member
+            .record_federation_sync_failure(
+                FederationSyncCondition::AuthenticationRequired,
+                now + 32,
+            )
+            .unwrap();
+        assert_eq!(rejected.next_attempt_at, None);
+        assert_eq!(rejected.last_success_at, failed.last_success_at);
+        member
+            .connection()
+            .unwrap()
+            .execute_batch(
+                "CREATE TEMP TRIGGER refuse_retry_event BEFORE INSERT ON control_room_events
+             BEGIN SELECT RAISE(ABORT, 'injected event failure'); END;",
+            )
+            .unwrap();
+        assert!(member.request_federation_sync_retry(now + 33).is_err());
+        assert_eq!(member.federation_sync_health().unwrap(), rejected);
+        assert!(
+            TaskStore::in_memory()
+                .unwrap()
+                .request_federation_sync_retry(now)
+                .is_err()
+        );
     }
 
     #[test]

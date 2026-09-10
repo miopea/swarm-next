@@ -3587,6 +3587,7 @@ fn api_router(state: AppState) -> Router {
             post(apiary_decline_claim_handoff),
         )
         .route("/api/v1/apiary/sync-health", get(apiary_sync_health))
+        .route("/api/v1/apiary/sync-retry", post(retry_apiary_sync))
         .route(
             "/api/v1/apiary/connection-card",
             get(download_hive_connection_card),
@@ -5252,6 +5253,24 @@ async fn leave_apiary(
         .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(context)).into_response())
+}
+
+async fn retry_apiary_sync(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let health = apiary_service(&state)?
+        .request_federation_sync_retry(unix_timestamp())
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    // The existing owned runner consumes the due retry; no per-click task.
+    Ok((
+        StatusCode::ACCEPTED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(health),
+    )
+        .into_response())
 }
 
 async fn local_apiary_directory(
@@ -11855,6 +11874,8 @@ mod tests {
         );
         let saved = member.local_federation_directory().unwrap().unwrap();
         assert!(saved.revision > directory.revision);
+        assert_stopped_sync_recovers_in_place(state, member, &credential).await;
+        let saved = member.local_federation_directory().unwrap().unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let old_endpoint = format!("http://{}", listener.local_addr().unwrap());
         let old_keeper = tokio::spawn(async move {
@@ -11875,6 +11896,61 @@ mod tests {
         assert_eq!(member.federation_sync_health().unwrap(), health);
         assert_eq!(member.local_federation_directory().unwrap().unwrap(), saved);
         old_keeper.abort();
+    }
+
+    async fn assert_stopped_sync_recovers_in_place(
+        state: &AppState,
+        member: &TaskStore,
+        credential: &str,
+    ) {
+        member
+            .record_federation_sync_failure(FederationSyncCondition::Incompatible, unix_timestamp())
+            .unwrap();
+        let retry_app = router(state.clone());
+        let unauthorized = retry_app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/apiary/sync-retry")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            member.federation_sync_health().unwrap().condition,
+            FederationSyncCondition::Incompatible
+        );
+        let retry = retry_app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/apiary/sync-retry")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(retry.status(), StatusCode::ACCEPTED);
+        assert_eq!(
+            member.federation_sync_health().unwrap().condition,
+            FederationSyncCondition::Idle
+        );
+        state.reconcile_federation().await;
+        assert_eq!(
+            member.federation_sync_health().unwrap().condition,
+            FederationSyncCondition::Current
+        );
+        assert_eq!(
+            member
+                .federation_member_connection()
+                .unwrap()
+                .node_credential,
+            credential
+        );
     }
 
     #[tokio::test]

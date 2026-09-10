@@ -1177,6 +1177,19 @@ impl ApiaryService {
             .map_err(Into::into)
     }
 
+    /// Requests an explicit retry by the existing owned synchronization runner.
+    ///
+    /// # Errors
+    /// Rejects non-Members, invalid time, and persistence failures.
+    pub fn request_federation_sync_retry(
+        &self,
+        now: i64,
+    ) -> Result<FederationSyncHealth, ApplicationError> {
+        self.store
+            .request_federation_sync_retry(now)
+            .map_err(Into::into)
+    }
+
     /// Records a successful reconciliation outcome for the bounded Member runner.
     ///
     /// # Errors

@@ -25,6 +25,11 @@ pushing it for another worker to validate. Do not cut a release from this docume
 - Five domain directory tests; explicit join-profile HTTP authentication/default
   naming test; strict API Clippy and TypeScript checks.
 - Combined 39 Keeper/member/settings/profile/join UI tests pass.
+- Explicit retry: persistence tests preserve identity/credentials/history, coalesce
+  repeated requests, and roll back when the event write fails. Real HTTP recovery
+  rejects an unauthenticated retry, then moves the existing stopped member through
+  authenticated retry to Current. Five directory/retry UI tests and strict API
+  Clippy pass. This is isolated evidence, not verification of the live WSL Hive.
 
 The earlier full persistence run covered schema 162. Later profile/directory
 schemas 163/164 have targeted migration and failure/recovery checks, not another
@@ -35,9 +40,12 @@ full persistence run. Review migration compatibility before activating a binary.
 1. Upgrade an existing Keeper plus two existing member Hives. Preserve their
    membership, node/Hive/operator IDs, keys, credentials and private work. Confirm
    all three see the complete roster and a member rename reaches the others.
-2. Existing members already stopped in an incompatible state may still require
-   safe sync recovery. Verify that path; do not assume the HTTP classification fix
-   automatically resets a previously stored stopped state. Never delete membership.
+2. Existing members stopped in an incompatible state can request “Retry Apiary
+   synchronization.” This queues the existing runner (normally checks every 15
+   seconds), retains failure history and credentials, and verifies the connection
+   again before reporting success. The HTTP test covers stopped → authenticated
+   retry → current without rejoining. Validate the existing WSL instance in place;
+   merely updating the build does not automatically clear its stored stopped state.
 3. Verify the new “Edit shared profile” control for already joined Hives. It uses
    the ordinary local profile endpoint, does not rename defaults automatically,
    and does not submit an invitation or join. Integrated UI tests cover saving
