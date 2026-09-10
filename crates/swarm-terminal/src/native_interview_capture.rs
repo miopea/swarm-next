@@ -235,6 +235,7 @@ impl NativeInterviewCapture {
             return false;
         }
         let source = NativeInterviewEvidence {
+            final_result: None,
             id: OperatorSubmissionId::new(),
             session_id,
             conversation: observation.conversation,
@@ -254,7 +255,7 @@ impl NativeInterviewCapture {
     /// Final provider output may differ from `PostToolUse`. Only an exact final
     /// match releases the provisional result to durable intake. Never replays input.
     pub fn finalize(&mut self, session: WorkerSessionId, revision: u64, payload: &[u8]) -> bool {
-        let Some((source, observation)) = self.awaiting_final.remove(&session) else {
+        let Some((mut source, observation)) = self.awaiting_final.remove(&session) else {
             return false;
         };
         if source.selection_revision != revision
@@ -263,6 +264,7 @@ impl NativeInterviewCapture {
         {
             return false;
         }
+        source.final_result = Some(swarm_domain::NativeInterviewFinalResult::ExactBatch);
         self.ready.push_back(source);
         true
     }
@@ -395,6 +397,12 @@ mod tests {
             }
             assert_eq!(capture.finalize(session, 1, &batch), mode == 0);
             assert_eq!(capture.retained().len(), usize::from(mode == 0));
+            if mode == 0 {
+                assert_eq!(
+                    capture.retained()[0].final_result,
+                    Some(swarm_domain::NativeInterviewFinalResult::ExactBatch)
+                );
+            }
         }
     }
 

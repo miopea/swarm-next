@@ -1,5 +1,20 @@
 # Current maturity acceptance ledger
 
+## September 10 — durable distinction for final-checked evidence
+
+Native sources now preserve an optional typed final-result marker. The engine
+sets it only after the final callback gate. Missing metadata on older payloads
+means unchecked; omission is preserved when serializing, retaining old exact-ID
+retries. An attempted in-place upgrade conflicts. New checked evidence retains
+its marker after database reopen, while old evidence remains unchecked.
+
+Isolated verification passed:12 native persistence tests,19 capture tests,
+strict terminal/persistence Clippy, and API compilation including tests. This
+checks integration compilation, not the entire API test suite or live behavior.
+The marker proves neither human authorship nor exact decision applicability.
+No hooks, deployment, engine restart or release. Application reconciliation and
+the end-to-end operator-answer lifecycle remain unfinished.
+
 ## September 10 — final callback gates native capture locally
 
 PostToolUse no longer releases a source to intake in the new implementation.

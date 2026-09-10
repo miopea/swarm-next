@@ -390,6 +390,16 @@ pre-migration database backup.
 
 ### Durable intake and acknowledgement ownership
 
+Native evidence now carries optional typed final_result metadata. Only the
+engine's successful final-batch comparison sets exact_batch. Older payloads
+deserialize with no result, and serialize without adding a default field, so
+their exact retry identity is preserved. Reusing an old source ID with a new
+final-result claim is a conflict, not an upgrade. The metadata survives storage
+and restart but is not a human-authorship claim or independently authenticatable
+credential. Trusted engine intake remains mandatory. No historical evidence is
+rewritten, no decision resolves, and no agent-facing write is added.
+
+
 The private persistence boundary now supports explicitly binding a retained
 source ID to a full decision ID. In one transaction it checks the local Hive,
 worker/session identity, active session, pending decision and complete native

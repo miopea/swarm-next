@@ -308,11 +308,56 @@ mod tests {
         migrated.verify_integrity().unwrap();
     }
 
+    #[test]
+    fn final_result_survives_restart_without_upgrading_old_evidence() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("final-evidence.sqlite3");
+        let store = TaskStore::open(&path).unwrap();
+        let source = fixture(&store);
+        let serialized = serde_json::to_value(&source).unwrap();
+        assert!(serialized.get("final_result").is_none());
+        let old: NativeInterviewEvidence = serde_json::from_value(serialized).unwrap();
+        assert_eq!(old.final_result, None);
+        store.record_native_interview(&old, 100).unwrap();
+        let mut checked = old.clone();
+        checked.final_result = Some(swarm_domain::NativeInterviewFinalResult::ExactBatch);
+        assert!(matches!(
+            store.record_native_interview(&checked, 101),
+            Err(NativeInterviewStoreError::Conflict)
+        ));
+        checked.id = OperatorSubmissionId::new();
+        checked.tool_use_id = "toolu_final_checked".into();
+        store.record_native_interview(&checked, 101).unwrap();
+        drop(store);
+        let store = TaskStore::open(&path).unwrap();
+        assert_eq!(
+            store
+                .native_interview(old.id)
+                .unwrap()
+                .unwrap()
+                .source
+                .final_result,
+            None
+        );
+        assert_eq!(
+            store
+                .native_interview(checked.id)
+                .unwrap()
+                .unwrap()
+                .source
+                .final_result,
+            Some(swarm_domain::NativeInterviewFinalResult::ExactBatch)
+        );
+        assert!(!store.record_native_interview(&old, 102).unwrap());
+        assert!(!store.record_native_interview(&checked, 102).unwrap());
+    }
+
     fn fixture(store: &TaskStore) -> NativeInterviewEvidence {
         let worker = store.ensure_queen("/fictional").unwrap();
         let session_id = WorkerSessionId::new();
         store.bind_worker_session(worker.id, session_id).unwrap();
         NativeInterviewEvidence {
+            final_result: None,
             id: OperatorSubmissionId::new(),
             session_id,
             conversation: ProviderConversationId::new(),

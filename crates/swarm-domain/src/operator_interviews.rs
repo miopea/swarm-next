@@ -165,6 +165,11 @@ mod description_tests {
 /// Source content must not enter ordinary session summaries or diagnostics.
 #[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct NativeInterviewEvidence {
+    /// Set only by the authenticated engine after exact final-result comparison.
+    /// Absence on older stored sources means unchecked, never implicit success.
+    /// This is provider evidence, not proof of human authorship.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_result: Option<NativeInterviewFinalResult>,
     pub id: OperatorSubmissionId,
     pub session_id: WorkerSessionId,
     pub conversation: ProviderConversationId,
@@ -175,6 +180,12 @@ pub struct NativeInterviewEvidence {
     pub submit_sequence: u64,
     pub questions: Vec<NativeInterviewQuestion>,
     pub answers: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeInterviewFinalResult {
+    ExactBatch,
 }
 
 impl std::fmt::Debug for NativeInterviewEvidence {

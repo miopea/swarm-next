@@ -75,6 +75,7 @@ mod tests {
         let session = WorkerSessionId::new();
         store.bind_worker_session(worker.id, session).unwrap();
         NativeInterviewEvidence {
+            final_result: None,
             id: OperatorSubmissionId::new(),
             session_id: session,
             conversation: ProviderConversationId::new(),
