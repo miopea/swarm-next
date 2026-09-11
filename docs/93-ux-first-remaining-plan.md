@@ -4,6 +4,34 @@
 
 ### Latest priority: guided enrollment, then workspace setup
 
+September10,22:56 Eastern: browser completion recovery is committed in7f2251cb,
+merged with concurrent email UI9fab0f40 asbfae43f8. A failed onJoined view refresh
+now retains completed membership and can retry Open Apiary without another join
+or approval. All1625 web tests and TypeScript pass; production build passed before
+the isolated email merge. The supported updater has started forbfae43f8 after
+checking clean source and an inactive service; activation not yet verified.
+The local Rust timestamp fix remains uncommitted and excluded from deployment.
+
+September10,22:47 Eastern: live health verifies d0d1c33f, statusok/no degradation,
+supported updater inactive/exit0. Includes all Apiary UI follow-ups through
+08118bc0. Host PID944143/start21:29:38 unchanged through this app update.
+Current-main CI34554256345 passed. Edge remains unavailable after fresh setup.
+
+Enrollment investigation now has a reproducible failure: the already-present
+isolated Linux suite passed all3 tests, then a bounded ten-run attempt stopped
+on repetition3 with the same missing membership as CI34551076767. No source
+transfer was performed. Source trace: poll_apiary_join_link issues the invitation
+during the HTTP request; reconcile_one then passed its pre-request timestamp to
+prepare_consented_join, whose consent validation rejects invitation.issued_at
+greater than now. Crossing a second boundary can therefore reject valid approval.
+Local correction refreshes time after bootstrap and receipt delivery, with a
+deterministic stale-request-time regression and better failure diagnostics.
+UNVERIFIED/UNCOMMITTED pending permission to transfer the corrected module into
+the existing isolated Linux test checkout. Do not call it deployed or fixed live.
+Remote-copy auto-review denied private-source egress; approval was requested.
+Running existing remote test source is permitted and does not replace validating
+the changed code. No release cut; fresh-Hive visual acceptance still open.
+
 September10,21:42 Eastern: Apiary Keeper/member overviews now refresh through
 the existing visibility-aware owner on returning to the page, without periodic
 polling. Optional AbortSignal reaches every overview read; hidden/unmounted
