@@ -11,7 +11,7 @@ export default function ApiaryWorkspace({ identity, operatorToken, busy, onIdent
 }) {
   const [managing, setManaging] = useState(false);
   const context = identity.apiary_context;
-  if (managing || context?.mode !== "federated") return <div>
+  if (managing || context?.mode !== "federated") return <div className="apiary-management">
     {context?.mode === "federated" ? <button className="secondary-button" type="button" onClick={() => setManaging(false)}>Back to Apiary overview</button> : null}
     <ApiarySettings busy={busy} hiveIdentity={identity} operatorToken={operatorToken}
       onHiveIdentityChange={(next) => { onIdentityChange(next); if (context?.mode !== "federated" && next.apiary_context?.mode === "federated") setManaging(false); }} />

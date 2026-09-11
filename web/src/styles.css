@@ -634,6 +634,9 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .mobile-manage-workers { width: 100%; }
 
 .keeper-control-room { width: 100%; min-height: 0; padding: 28px; overflow-y: auto; }
+/* Management replaces the overview in the clipped workspace: it owns scrolling. */
+.apiary-management { flex: 1; min-width: 0; min-height: 0; padding: 28px; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+.apiary-management > .secondary-button { margin-bottom: 14px; }
 .keeper-hero { display: grid; max-width: 1500px; grid-template-columns: 62px minmax(0, 1fr) auto auto; align-items: center; gap: 16px; margin: 0 auto 18px; padding: 20px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); box-shadow: var(--shadow); }
 .keeper-hero-mark { display: grid; width: 62px; height: 62px; place-items: center; overflow: hidden; border-radius: 50%; background: var(--accent-soft); }
 .keeper-hero-mark .bee-mascot { width: 68px; height: 68px; transform: translateY(7px); }
@@ -2233,6 +2236,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .worker-order-actions button { width: 44px; min-height: 44px; }
   .operator-presence-chip > span:last-child { display: none; }
   .keeper-control-room { padding: 12px; }
+  .apiary-management { padding: 12px; }
   .member-handoff-list li, .member-claim-list li { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
   .member-handoff-actions { justify-content: stretch; }
   .member-handoff-actions button { flex: 1; }

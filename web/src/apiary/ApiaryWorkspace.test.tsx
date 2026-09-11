@@ -19,6 +19,7 @@ test.each(["keeper", "member"] as const)("%s manages the Apiary in place and ret
   const label = role === "keeper" ? "Keeper management" : "Member management";
   fireEvent.click(screen.getByRole("button", { name: label }));
   expect(screen.getByText("Shared configuration")).toBeInTheDocument();
+  expect(screen.getByText("Shared configuration").parentElement).toHaveClass("apiary-management");
   expect(screen.queryByRole("button", { name: label })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Back to Apiary overview" }));
   expect(screen.getByRole("button", { name: label })).toBeInTheDocument();

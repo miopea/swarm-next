@@ -8,6 +8,15 @@ declare const process: { cwd(): string };
 
 const stylesheet = readFileSync(`${process.cwd()}/src/styles.css`, "utf8");
 
+test("Apiary management owns scrolling inside the fixed-height workspace", () => {
+  const rule = stylesheet.match(/\.apiary-management\s*\{([^}]+)\}/)?.[1];
+  expect(rule).toMatch(/flex:\s*1/);
+  expect(rule).toMatch(/min-height:\s*0/);
+  expect(rule).toMatch(/min-width:\s*0/);
+  expect(rule).toMatch(/overflow-y:\s*auto/);
+  expect(rule).toMatch(/overscroll-behavior:\s*contain/);
+});
+
 test("worker creation notices span the form instead of displacing repository fields", () => {
   const rule = stylesheet.match(/\.configure-worker-form > \.worker-form-notice, \.configure-worker-form > \[role="alert"\]\s*\{([^}]+)\}/)?.[1];
   expect(rule).toMatch(/grid-column:\s*1 \/ -1/);
