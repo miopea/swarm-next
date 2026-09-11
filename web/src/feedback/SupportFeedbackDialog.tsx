@@ -7,6 +7,7 @@ import UnsavedChangesPrompt from "../shared/UnsavedChangesPrompt";
 import { clearPendingSupport, loadPendingSupport, savePendingSupport, prepareSupportRetry, clearSupportRetry } from "./supportDraft";
 import { prepareSupportFiles, savePendingSupportFiles, loadPendingSupportFiles, clearPendingSupportFiles } from "./supportFiles";
 import { fetchPublicHiveProfile } from "../api";
+import { connectedIdentities, type ConnectedIdentity } from "../shared/connectedIdentity";
 
 type Props = { operatorToken: string; status: SupportStatus; onClose: () => void; onSaved?: () => void };
 const labels: Record<SupportDelivery["delivery"]["state"], string> = {
@@ -35,7 +36,8 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const contactEdited = useRef({ name: false, email: false });
-  const [savedContact, setSavedContact] = useState(false);
+  const [contactSource, setContactSource] = useState("");
+  const [identities, setIdentities] = useState<ConnectedIdentity[]>([]);
   const [kind, setKind] = useState<SupportSubmission["kind"]>("bug_report");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
@@ -62,12 +64,26 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
     // report. A slow response must not overwrite contact details already edited.
     const controller = new AbortController();
     const deadline = window.setTimeout(() => controller.abort(), 5_000);
-    void fetchPublicHiveProfile(operatorToken, controller.signal).then(({ profile }) => {
+    void fetchPublicHiveProfile(operatorToken, controller.signal).then(async ({ profile }) => {
       if (controller.signal.aborted) return;
       const savedName = profile.operator_display_name === "Operator" ? "" : profile.operator_display_name;
       if (!contactEdited.current.name) setName(savedName);
       if (!contactEdited.current.email) setEmail(profile.contact_email ?? "");
-      setSavedContact(Boolean(savedName || profile.contact_email));
+      if (savedName || profile.contact_email) setContactSource("your saved Hive profile");
+      if (savedName && profile.contact_email) return;
+      const candidates = await connectedIdentities(operatorToken, controller.signal);
+      if (controller.signal.aborted) return;
+      setIdentities(candidates);
+      const candidate = candidates.length === 1 ? candidates[0] : undefined;
+      // Never combine different identities, or overwrite a field typed/cleared
+      // while the lookup was pending. Multiple accounts require an explicit choice.
+      if (!candidate || contactEdited.current.name || contactEdited.current.email
+        || (savedName && savedName !== candidate.name)
+        || (profile.contact_email && profile.contact_email !== candidate.email)) return;
+      setName(savedName || candidate.name);
+      setEmail(profile.contact_email || candidate.email);
+      setContactSource(`your connected ${candidate.source} account`);
+      setIdentities([]);
     }).catch(() => { /* Unavailable identity never blocks writing a support message. */ })
       .finally(() => window.clearTimeout(deadline));
     return () => { controller.abort(); window.clearTimeout(deadline); };
@@ -189,7 +205,15 @@ export default function SupportFeedbackDialog({ operatorToken, status: initial, 
         <div className="feedback-fields">
           <label>Email<input type="email" required autoComplete="email" maxLength={320} value={email} onChange={(event) => { contactEdited.current.email = true; setEmail(event.target.value); }} /></label>
           <label>Name (optional)<input autoComplete="name" maxLength={200} value={name} onChange={(event) => { contactEdited.current.name = true; setName(event.target.value); }} /></label>
-          {savedContact && <small>Filled from your saved Hive profile. Changes here apply only to this message.</small>}
+          {contactSource && <small>Filled from {contactSource}. Changes here apply only to this message.</small>}
+          {identities.length > 0 && <div className="settings-actions" role="group" aria-label="Choose feedback identity">
+            <small>Choose the account to use for this message, or enter your details above.</small>
+            {identities.map((identity) => <button type="button" className="secondary-button" key={identity.source} onClick={() => {
+              contactEdited.current = { name: true, email: true };
+              setName(identity.name); setEmail(identity.email);
+              setContactSource(`your connected ${identity.source} account`);
+            }}>Use {identity.source}: {identity.name}{identity.email ? ` · ${identity.email}` : ""}</button>)}
+          </div>}
           <label>Type<select value={kind} onChange={(event) => setKind(event.target.value as SupportSubmission["kind"])}>
             <option value="bug_report">Bug report</option><option value="feature_request">Feature request</option><option value="feedback">Feedback</option>
           </select></label>

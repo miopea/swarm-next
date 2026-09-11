@@ -1,6 +1,6 @@
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { fetchPublicHiveProfile, saveJoinPublicProfile, savePublicHiveProfile, type PublicHiveProfile } from "../api";
-import { connectedIdentities, type ConnectedIdentity } from "./connectedIdentity";
+import { connectedIdentities, type ConnectedIdentity } from "../shared/connectedIdentity";
 
 export type JoinPublicProfileHandle = { save: () => Promise<void> };
 

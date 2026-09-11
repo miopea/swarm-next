@@ -3,7 +3,7 @@ import { fetchEmailReadiness } from "../api/email";
 
 export type ConnectedIdentity = { source: string; name: string; email: string };
 
-/** Suggestions only; reading accounts never saves or publishes a shared profile. */
+/** Shared suggestions for setup and feedback; reading accounts never publishes identity. */
 export async function connectedIdentities(token: string, signal: AbortSignal): Promise<ConnectedIdentity[]> {
   const results = await Promise.allSettled([
     fetchJiraReadiness(token, signal), fetchEmailReadiness(token, signal),

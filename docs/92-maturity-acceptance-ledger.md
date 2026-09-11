@@ -1,5 +1,21 @@
 # Current maturity acceptance ledger
 
+## September 11 — Feedback reuses connected identity
+
+Feedback now uses the same bounded Jira/Microsoft identity reader as onboarding
+when the saved Hive profile is incomplete. A single compatible account fills the
+contact fields; different accounts or conflicting saved details require a choice.
+Typed or cleared fields survive late responses. Reading identity does not publish
+a profile, submit feedback, or alter a retained reviewed message.
+
+61 affected tests across11 files, TypeScript and the production web build pass.
+The real Edge extension at390px verified two fictional account choices, matching
+Microsoft name/email after selection, no horizontal overflow, and discard
+confirmation after an explicit edit. The screenshot confirmed the email rendered;
+the browser's DOM inspection did not expose the email input value. No real message
+was sent. This is contact-entry acceptance, not central support-delivery acceptance.
+Deployment of this slice remains pending until an exact served revision is recorded.
+
 ## September 11, 01:20 Eastern — Optional integration is not failed membership
 
 Member overview and management previously painted the combined catalog/Jira

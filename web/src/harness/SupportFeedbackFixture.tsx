@@ -15,6 +15,17 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
 
 /** In-memory fictional responses only. Imported exclusively by the no-proxy harness. */
 export function supportFixtureResponse(path: string, init?: RequestInit): Response | Promise<Response> | undefined {
+  const query = new URLSearchParams(location.search);
+  const identity = query.get("identity");
+  if (query.get("surface") === "support-feedback" && (identity === "single" || identity === "multiple")) {
+    if (path === "/api/v1/hive/public-profile") return json({ revision: 1,
+      profile: { hive_name: "My Hive", operator_display_name: "Operator", contact_email: null } });
+    if (path === "/api/v1/integrations/jira/readiness") return json({ configured: true,
+      connection: "ready", account_name: "Bea Bee", account_address: "bea@example.test" });
+    if (path === "/api/v1/integrations/email/readiness") return json(identity === "multiple"
+      ? { configured: true, connection: "ready", account_name: "Cora Bee", account_address: "cora@example.test" }
+      : { configured: false, connection: "not_connected", account_name: null, account_address: null });
+  }
   if (!path.startsWith("/api/v1/feedback/support")) return;
   if (path.endsWith("/attachments")) {
     return (async () => {
