@@ -125,8 +125,6 @@ export {
   retryEmailReply,
   reviseEmailReplyDraft,
   sendEmailReply,
-  updateEmailConfiguration,
-  useBundledEmailApp,
   updateEmailReplyDraft,
 } from "./api/email";
 export type {

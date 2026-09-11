@@ -9,15 +9,22 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-test("opens delegated Microsoft authorization and explains the reviewed reply guardrail", async () => {
+// What every Hive reports now. There is no other shape: Swarm ships the
+// registration, so `managed_by` is "bundled" unless the HOST pinned one through
+// SWARM_EMAIL_*, which no browser can reach.
+const bundled = {
+  configured: true,
+  managed_by: "bundled",
+  tenant_id: "common",
+  client_id: "059c82a8-4d77-4b19-a6c7-d702dde10960",
+  callback_url: "https://swarm.test/auth/email/callback",
+};
+
+test("setup is one consent click, with nothing to type", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (url.endsWith("/configuration") && !init?.method) {
-      return ok({ configured: true, managed_by: "operator", tenant_id: "organizations", client_id: "client-id", callback_url: "https://swarm.test/auth/email/callback", secret_stored: true });
-    }
-    if (url.endsWith("/auth/start") && init?.method === "POST") {
-      return ok({ authorization_url: "https://login.microsoftonline.test/authorize" });
-    }
+    if (url.endsWith("/configuration") && !init?.method) return ok(bundled);
+    if (url.endsWith("/auth/start") && init?.method === "POST") return ok({ authorization_url: "https://login.microsoftonline.test/authorize" });
     throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
   }));
   const navigate = vi.fn();
@@ -31,14 +38,54 @@ test("opens delegated Microsoft authorization and explains the reviewed reply gu
     />,
   );
 
-  expect(screen.getByText(/Completing a task does not send mail/)).toBeInTheDocument();
-  expect(screen.getByText(/tokens remain private on this host/)).toBeInTheDocument();
+  // THE WHOLE POINT OF THE TICKET. Setup used to be a tenant id, a client id
+  // and a client secret, all required, behind an errand in the Entra portal.
+  expect(await screen.findByRole("button", { name: "Connect Outlook" })).toBeEnabled();
+  expect(screen.queryByRole("textbox", { name: /Application \(client\) ID/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole("form", { name: "Microsoft app setup" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /app registration|own Microsoft app|own app/i })).not.toBeInTheDocument();
+
   fireEvent.click(screen.getByRole("button", { name: "Connect Outlook" }));
   await waitFor(() => expect(navigate).toHaveBeenCalledWith("https://login.microsoftonline.test/authorize"));
 });
 
-test("shows the connected account without exposing implementation settings", () => {
-  vi.stubGlobal("fetch", vi.fn(async () => ok({ configured: true, managed_by: "operator", tenant_id: "organizations", client_id: "client-id", callback_url: "https://swarm.test/auth/email/callback", secret_stored: true })));
+test("the redirect URI stays legible, because the registration needs it", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => ok(bundled)));
+  render(
+    <EmailSettings
+      operatorToken="operator-token"
+      readiness={{ configured: true, connection: "not_connected", account_name: null, account_address: null }}
+      unavailable={false}
+    />,
+  );
+
+  // Microsoft matches redirect URIs exactly. A Hive published at its own
+  // address is refused with AADSTS50011 until this exact string is on the
+  // shared registration, and nobody can add what they cannot read.
+  expect(await screen.findByDisplayValue("https://swarm.test/auth/email/callback")).toBeInTheDocument();
+});
+
+test("an expired connection offers a reconnect rather than a setup form", async () => {
+  // THE MIGRATION PATH, such as it is. A Hive configured the old way holds
+  // tokens issued to a DIFFERENT client id; they stop working, and the whole
+  // recovery is this one button. Operator: "I don't care if we break users
+  // config, they are all RCG users and we'll just reconnect them."
+  vi.stubGlobal("fetch", vi.fn(async () => ok(bundled)));
+  render(
+    <EmailSettings
+      operatorToken="operator-token"
+      readiness={{ configured: true, connection: "credentials_invalid", account_name: null, account_address: null }}
+      unavailable={false}
+    />,
+  );
+
+  expect(await screen.findByRole("button", { name: "Reconnect Outlook" })).toBeEnabled();
+  expect(screen.queryByRole("form", { name: "Microsoft app setup" })).not.toBeInTheDocument();
+});
+
+test("shows the connected account without exposing implementation settings", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => ok(bundled)));
   render(
     <EmailSettings
       operatorToken="operator-token"
@@ -47,218 +94,13 @@ test("shows the connected account without exposing implementation settings", () 
     />,
   );
 
-  expect(screen.getByText("Connected as bea@example.com")).toBeInTheDocument();
+  expect(await screen.findByText("Connected as bea@example.com")).toBeInTheDocument();
   expect(screen.getByText(/Inbox access uses Bea's delegated identity/)).toBeInTheDocument();
   expect(screen.queryByText(/client secret|tenant id/i)).not.toBeInTheDocument();
 });
 
-test("registers a public client from one field, sending no secret at all", async () => {
-  let sent: unknown;
-  const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    if (url.endsWith("/configuration") && !init?.method) {
-      return ok({ configured: false, managed_by: null, tenant_id: null, client_id: null, callback_url: "https://swarm.test/auth/email/callback", secret_stored: false });
-    }
-    if (url.endsWith("/configuration") && init?.method === "PUT") {
-      sent = JSON.parse(String(init.body));
-      return ok({ configured: true, managed_by: "operator", tenant_id: "consumers", client_id: "11112222-bbbb-3333-cccc-4444dddd5555", callback_url: "https://swarm.test/auth/email/callback", secret_stored: false });
-    }
-    throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
-  });
-  vi.stubGlobal("fetch", fetch);
-
-  render(
-    <EmailSettings
-      operatorToken="operator-token"
-      readiness={{ configured: false, connection: "not_connected", account_name: null, account_address: null }}
-      unavailable={false}
-    />,
-  );
-
-  const form = await screen.findByRole("form", { name: "Microsoft app setup" });
-  expect(form).toHaveTextContent("User.Read, Mail.Read, Mail.Send");
-  expect(screen.getByDisplayValue("https://swarm.test/auth/email/callback")).toBeInTheDocument();
-
-  // ONE required field. The tenant and the secret are behind Advanced, so a
-  // person setting this up is not asked for either.
-  expect(screen.queryByLabelText("Directory (tenant) ID")).not.toBeInTheDocument();
-  expect(screen.queryByLabelText(/Client secret/)).not.toBeInTheDocument();
-
-  fireEvent.change(screen.getByLabelText("Application (client) ID"), { target: { value: "11112222-bbbb-3333-cccc-4444dddd5555" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save app registration" }));
-
-  expect(await screen.findByText(/registration saved privately/)).toBeInTheDocument();
-  // NOT `client_secret: ""`. Microsoft refuses an empty secret as an invalid
-  // client rather than reading it as absent, so the key must not be there.
-  expect(sent).toEqual({ tenant_id: "consumers", client_id: "11112222-bbbb-3333-cccc-4444dddd5555" });
-  expect(screen.getByRole("button", { name: "Connect Outlook" })).toBeEnabled();
-});
-
-test("defaults to a personal account and switches the authority for work or school", async () => {
-  let sent: unknown;
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    if (url.endsWith("/configuration") && !init?.method) {
-      return ok({ configured: false, managed_by: null, tenant_id: null, client_id: null, callback_url: "https://swarm.test/auth/email/callback", secret_stored: false });
-    }
-    sent = JSON.parse(String(init?.body));
-    return ok({ configured: true, managed_by: "operator", tenant_id: "organizations", client_id: "client-id", callback_url: "https://swarm.test/auth/email/callback", secret_stored: false });
-  }));
-
-  render(
-    <EmailSettings
-      operatorToken="operator-token"
-      readiness={{ configured: false, connection: "not_connected", account_name: null, account_address: null }}
-      unavailable={false}
-    />,
-  );
-
-  // The default has to be `consumers`, not `organizations`. An organizations
-  // authority refuses every outlook.com address with a sign-in page that does
-  // not say why, which is the failure this selector exists to prevent.
-  const personal = await screen.findByRole("radio", { name: /Personal Microsoft account/ });
-  expect(personal).toBeChecked();
-
-  fireEvent.click(screen.getByRole("radio", { name: /Work or school/ }));
-  fireEvent.change(screen.getByLabelText("Application (client) ID"), { target: { value: "client-id" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save app registration" }));
-
-  await waitFor(() => expect(sent).toEqual({ tenant_id: "organizations", client_id: "client-id" }));
-});
-
-test("keeps a Hive that already has a confidential registration working", async () => {
-  let sent: unknown;
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    if (url.endsWith("/configuration") && !init?.method) {
-      return ok({ configured: false, managed_by: null, tenant_id: null, client_id: null, callback_url: "https://swarm.test/auth/email/callback", secret_stored: false });
-    }
-    sent = JSON.parse(String(init?.body));
-    return ok({ configured: true, managed_by: "operator", tenant_id: "organizations", client_id: "client-id", callback_url: "https://swarm.test/auth/email/callback", secret_stored: true });
-  }));
-
-  render(
-    <EmailSettings
-      operatorToken="operator-token"
-      readiness={{ configured: false, connection: "not_connected", account_name: null, account_address: null }}
-      unavailable={false}
-    />,
-  );
-
-  fireEvent.click(await screen.findByRole("button", { name: "Advanced settings" }));
-  fireEvent.change(screen.getByLabelText("Directory (tenant) ID"), { target: { value: "organizations" } });
-  fireEvent.change(screen.getByLabelText("Application (client) ID"), { target: { value: "client-id" } });
-  fireEvent.change(screen.getByLabelText(/Client secret/), { target: { value: "private-value" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save app registration" }));
-
-  await waitFor(() => expect(sent).toEqual({ tenant_id: "organizations", client_id: "client-id", client_secret: "private-value" }));
-  expect(screen.queryByDisplayValue("private-value")).not.toBeInTheDocument();
-});
-
-test("a fresh Hive is already registered, so setup is one consent click", async () => {
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    if (url.endsWith("/configuration") && !init?.method) {
-      // `common` and the bundled application: what a Hive reports before
-      // anyone has touched Entra.
-      return ok({ configured: true, managed_by: "bundled", tenant_id: "common", client_id: "e7c58c91-ef37-44e8-ac20-b8df5feb2618", callback_url: "https://swarm.test/auth/email/callback", secret_stored: false });
-    }
-    if (url.endsWith("/auth/start") && init?.method === "POST") {
-      return ok({ authorization_url: "https://login.microsoftonline.test/authorize" });
-    }
-    throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
-  }));
-  const navigate = vi.fn();
-
-  render(
-    <EmailSettings
-      operatorToken="operator-token"
-      readiness={{ configured: true, connection: "not_connected", account_name: null, account_address: null }}
-      unavailable={false}
-      onNavigate={navigate}
-    />,
-  );
-
-  // NOT A FIELD IN SIGHT. This is the whole point: no tenant, no client id, no
-  // secret, and no question about which kind of account it is -- `common`
-  // routes personal and work alike.
-  expect(await screen.findByRole("button", { name: "Connect Outlook" })).toBeEnabled();
-  expect(screen.queryByRole("form", { name: "Microsoft app setup" })).not.toBeInTheDocument();
-  expect(screen.queryByLabelText("Application (client) ID")).not.toBeInTheDocument();
-  expect(screen.queryByRole("radio")).not.toBeInTheDocument();
-  expect(screen.getByText(/Personal and work accounts both work/)).toBeInTheDocument();
-  // But the callback URI stays on screen. Microsoft matches redirect URIs
-  // exactly, so a published Hive is refused until this exact string is on the
-  // shared registration -- and hiding the setup form hid the only place it
-  // was legible.
-  expect(screen.getByDisplayValue("https://swarm.test/auth/email/callback")).toBeInTheDocument();
-
-  fireEvent.click(screen.getByRole("button", { name: "Connect Outlook" }));
-  await waitFor(() => expect(navigate).toHaveBeenCalledWith("https://login.microsoftonline.test/authorize"));
-});
-
-test("an organisation that must own its own consent screen still can", async () => {
-  let sent: unknown;
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    if (url.endsWith("/configuration") && !init?.method) {
-      return ok({ configured: true, managed_by: "bundled", tenant_id: "common", client_id: "e7c58c91-ef37-44e8-ac20-b8df5feb2618", callback_url: "https://swarm.test/auth/email/callback", secret_stored: false });
-    }
-    sent = JSON.parse(String(init?.body));
-    return ok({ configured: true, managed_by: "operator", tenant_id: "organizations", client_id: "their-app", callback_url: "https://swarm.test/auth/email/callback", secret_stored: false });
-  }));
-
-  render(
-    <EmailSettings
-      operatorToken="operator-token"
-      readiness={{ configured: true, connection: "not_connected", account_name: null, account_address: null }}
-      unavailable={false}
-    />,
-  );
-
-  fireEvent.click(await screen.findByRole("button", { name: "Use your own Microsoft app" }));
-  fireEvent.click(screen.getByRole("radio", { name: /Work or school/ }));
-  fireEvent.change(screen.getByLabelText("Application (client) ID"), { target: { value: "their-app" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save app registration" }));
-
-  await waitFor(() => expect(sent).toEqual({ tenant_id: "organizations", client_id: "their-app" }));
-});
-
-test("a Hive configured before the bundled app can hand itself back to it", async () => {
-  let sentBody: string | undefined;
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    if (url.endsWith("/configuration") && !init?.method) {
-      // What an existing Hive reports: its OWN registration, saved back when
-      // three fields were required, complete with a stored secret.
-      return ok({ configured: true, managed_by: "operator", tenant_id: "organizations", client_id: "e7c58c91-ef37-44e8-ac20-b8df5feb2618", callback_url: "https://swarm.test/auth/email/callback", secret_stored: true });
-    }
-    sentBody = String(init?.body);
-    return ok({ configured: true, managed_by: "bundled", tenant_id: "common", client_id: "059c82a8-4d77-4b19-a6c7-d702dde10960", callback_url: "https://swarm.test/auth/email/callback", secret_stored: false });
-  }));
-
-  render(
-    <EmailSettings
-      operatorToken="operator-token"
-      readiness={{ configured: true, connection: "not_connected", account_name: null, account_address: null }}
-      unavailable={false}
-    />,
-  );
-
-  fireEvent.click(await screen.findByRole("button", { name: "Replace app registration" }));
-  fireEvent.click(screen.getByRole("button", { name: "Use Swarm's own app instead" }));
-
-  // AN EMPTY BODY IS THE WHOLE POINT. Clearing the Application ID field cannot
-  // express this -- the input is `required`, so the browser refuses to submit
-  // and nothing reaches the server. There has to be a control that sends no
-  // fields at all.
-  await waitFor(() => expect(sentBody).toBe("{}"));
-  expect(await screen.findByText(/no longer used/)).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Connect Outlook" })).toBeEnabled();
-});
-
 test("offers a direct retry when Outlook readiness is temporarily unavailable", () => {
-  vi.stubGlobal("fetch", vi.fn(async () => ok({ configured: true, managed_by: "operator", tenant_id: "organizations", client_id: "client-id", callback_url: "https://swarm.test/auth/email/callback", secret_stored: true })));
+  vi.stubGlobal("fetch", vi.fn(async () => ok(bundled)));
   const onRetryReadiness = vi.fn();
   render(
     <EmailSettings
@@ -271,7 +113,6 @@ test("offers a direct retry when Outlook readiness is temporarily unavailable", 
 
   fireEvent.click(screen.getByRole("button", { name: "Retry Outlook status" }));
   expect(onRetryReadiness).toHaveBeenCalledOnce();
-  expect(screen.queryByRole("form", { name: "Microsoft app setup" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Connect Outlook" })).not.toBeInTheDocument();
 });
 

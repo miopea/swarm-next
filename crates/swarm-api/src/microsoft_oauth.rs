@@ -122,17 +122,6 @@ struct PendingState {
     created_at: u64,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
-pub(crate) struct MicrosoftOAuthConfiguration {
-    pub tenant_id: String,
-    pub client_id: String,
-    /// Absent for a public client. `default` is what lets a registration saved
-    /// before public clients existed, and one saved after, read from the same
-    /// file without a migration.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_secret: Option<String>,
-}
-
 #[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
@@ -410,45 +399,6 @@ impl MicrosoftOAuthClient {
             Err(_) => Err(OAuthError::Storage),
         }
     }
-
-    pub(crate) async fn has_connection(&self) -> bool {
-        let tokens = self.inner.tokens.lock().await;
-        tokens
-            .refresh_token
-            .as_deref()
-            .is_some_and(|value| !value.is_empty())
-            || tokens
-                .access_token
-                .as_deref()
-                .is_some_and(|value| !value.is_empty())
-    }
-}
-
-pub(crate) fn load_configuration(
-    path: &Path,
-) -> Result<Option<MicrosoftOAuthConfiguration>, String> {
-    match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|_| "Email OAuth configuration file is invalid JSON".to_owned()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!(
-            "Email OAuth configuration file could not be read: {error}"
-        )),
-    }
-}
-
-pub(crate) fn save_configuration(
-    path: &Path,
-    configuration: &MicrosoftOAuthConfiguration,
-) -> Result<(), OAuthError> {
-    let parent = path.parent().ok_or(OAuthError::Storage)?;
-    fs::create_dir_all(parent).map_err(|_| OAuthError::Storage)?;
-    secure_directory(parent)?;
-    let temporary = path.with_extension("json.tmp");
-    let bytes = serde_json::to_vec(configuration).map_err(|_| OAuthError::Storage)?;
-    write_private(&temporary, &bytes)?;
-    fs::rename(temporary, path).map_err(|_| OAuthError::Storage)
 }
 
 async fn refresh(inner: &Inner, tokens: &mut OAuthTokens) -> Result<(), OAuthError> {
