@@ -32,6 +32,20 @@ test("signed link shows terms before one submission and no second acceptance", a
   expect(screen.queryByRole("button", { name: /Accept policy|Join Apiary/ })).not.toBeInTheDocument();
 });
 
+test("completed enrollment can recover a failed view refresh without submitting again", async () => {
+  const requests = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => new Response(
+    String(input).endsWith("/enrollments") ? JSON.stringify([{ consent: { link_id: "link-1" }, phase: "complete" }]) : "[]"));
+  vi.stubGlobal("fetch", requests);
+  const joined = vi.fn().mockRejectedValueOnce(new Error("refresh unavailable")).mockResolvedValue(undefined);
+  render(<PersonalHiveJoin busy={false} operatorToken="test" onError={vi.fn()} onMessage={vi.fn()} onJoined={joined} />);
+  const retry = await screen.findByRole("button", { name: "Open Apiary" });
+  expect(screen.getByRole("alert")).toHaveTextContent("Your membership is saved");
+  fireEvent.click(retry);
+  await waitFor(() => expect(joined).toHaveBeenCalledTimes(2));
+  expect(screen.queryByRole("button", { name: "Open Apiary" })).not.toBeInTheDocument();
+  expect(requests.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
+});
+
 test("saved completed enrollment opens Apiary without another member action", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(
     String(input).endsWith("/enrollments") ? JSON.stringify([{ consent: { link_id: "link-1" }, phase: "complete" }]) : "[]")));

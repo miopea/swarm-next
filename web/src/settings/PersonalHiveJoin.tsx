@@ -47,7 +47,20 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
   const [keeperPollingUnavailable, setKeeperPollingUnavailable] = useState(false);
   const [enrollments, setEnrollments] = useState<ApiaryEnrollment[]>([]);
   const joinedNotified = useRef(false);
+  const [openingFailed, setOpeningFailed] = useState(false);
   const enrollmentEpoch = useRef(0);
+  const openJoinedApiary = useCallback(async () => {
+    if (joinedNotified.current) return;
+    joinedNotified.current = true;
+    setOpeningFailed(false);
+    try {
+      await onJoined();
+      onMessage("Welcome to the Apiary. Your Hive has joined; Jira setup is optional.");
+    } catch {
+      joinedNotified.current = false;
+      setOpeningFailed(true);
+    }
+  }, [onJoined, onMessage]);
   let proposed: ApiaryKeeperJoinCapability | undefined;
   try { proposed = readApiaryHandoffLink<ApiaryKeeperJoinCapability>(keeperLink, "keeper"); } catch { /* Incomplete pasted link. */ }
 
@@ -63,9 +76,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
         if (cancelled || epoch !== enrollmentEpoch.current) return;
         setEnrollments(records);
         if (records.some((record) => record.phase === "complete") && !joinedNotified.current) {
-          joinedNotified.current = true;
-          onMessage("Welcome to the Apiary. Your Hive has joined; Jira setup is optional.");
-          await onJoined();
+          await openJoinedApiary();
         }
       } catch { /* Older runtimes retain their explicit invitation flow. */ }
       finally { running = false; }
@@ -73,7 +84,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
     void refresh();
     const timer = window.setInterval(() => void refresh(), 5000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [operatorToken, onJoined, onMessage]);
+  }, [operatorToken, openJoinedApiary]);
 
   const refreshSavedState = useCallback(async () => {
     const [links, invitations] = await Promise.allSettled([
@@ -289,6 +300,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
     const record = enrollments[0];
     return <section className="personal-hive-join" aria-label="Apiary joining progress">
       <h3>{record.phase === "complete" ? "Welcome to your Apiary" : record.phase === "joining" ? "Joining your Apiary…" : record.phase === "attention" ? "Joining needs attention" : "Waiting for Keeper approval"}</h3>
+      {record.phase === "complete" && openingFailed ? <div role="alert"><p>Your membership is saved, but the Apiary view could not open. You do not need to join again.</p><button className="secondary-button" onClick={() => void openJoinedApiary()}>Open Apiary</button></div> : null}
       <p>{record.phase === "attention" ? "The saved request could not finish. Review the invitation with your Keeper; your local work is unchanged." : "You have submitted your request. There is nothing else to approve here; Swarm finishes the connection in the background."}</p>
       <p>Your local tasks, workers, repositories and credentials stay on this Hive. Jira is optional.</p>
       {record.problem ? <p role="status">{record.problem === "keeper_unavailable"
