@@ -2,7 +2,25 @@
 
 ## September 11 — No-preference implementation and worker-setup checks
 
-Approved no-preference implementation is in the local worktree, not deployed.
+Activated production and WSL as1.7.1-dev-5439a9f8914f-20260911125454-1370054.
+Production engine1364561 and all8 worker/session pairs were preserved; receipts
+/tmp/swarm-no-preference-continuity.edY2qu have matching SHA256
+6f5196dda450ba7055d488e5ad8522c3fce006b1ecf8d203bf243fa64f100ca9.
+WSL engine45338 was preserved. Edge confirmed the production served revision.
+CI34601391478 failed only the extended test's too-many-lines lint; a documented
+test-only exemption follows. Runtime and focused tests passed; CI closure pending.
+
+Committed and pushed as5439a9f8. Focused persistence and unattended Queen MCP
+tests both passed; formatting check passed on Linux. Development package build
+completed successfully in exec session92717 from isolated checkout
+/tmp/swarm-shared-view-c8f74a85, output /tmp/swarm-no-preference-5439a9f8.*.
+The new production and WSL health endpoints report the revision above.
+Pre-activation engine baseline changed independently to1364561 at08:48:16 EDT:
+systemd records a graceful stop/start, NRestarts0. Initiator is not established.
+Capture fresh worker/session pairs before activation; do not assert continuity
+against the earlier944143 process or attribute the restart to this pending build.
+
+Approved no-preference implementation is deployed as recorded above.
 Explicit empty suggested_action means No preference; offered actions, reasons,
 task linkage and operator resolution stay required. Whitespace is rejected;
 unattended nonempty recommendations still require an exact allowed button.
@@ -13,7 +31,7 @@ test for no preference, preserved choices, pending state, rejected empty answer,
 whitespace and missing choices. The unattended Queen MCP integration test passed
 in the isolated Linux checkout: task linkage and exact nonempty recommendations
 remain enforced, while no preference creates a pending decision. Compilation
-completed normally in5m55s; no test remains running. Activation remains pending.
+completed normally in5m55s; no test remains running. Activation is verified above.
 
 Edge fictional clarification fixture verified no recommended button or fake
 No preference action, both real choices and custom answer available. Switching

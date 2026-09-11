@@ -2,8 +2,8 @@
 
 ## Genuine recommendations versus no preference — September 11, 2026
 
-Approved by the operator on September 11, 2026; implemented and tested locally,
-with activation pending. Queen may explicitly report **No preference** when there is no
+Approved by the operator on September 11, 2026; implemented, tested and activated
+on production dev and WSL as5439a9f8. Queen may explicitly report **No preference** when there is no
 meaningful basis to favor an answer. Genuine recommendations remain highlighted.
 This must not add a fake answer button, select an answer for the operator, or
 change existing decisions retrospectively.

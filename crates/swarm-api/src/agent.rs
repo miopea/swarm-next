@@ -8627,6 +8627,9 @@ mod tests {
     }
 
     #[tokio::test]
+    // Keep the running-review setup shared so rejection and acceptance prove
+    // the same authority boundary, including explicit no preference.
+    #[allow(clippy::too_many_lines)]
     async fn unattended_queen_decisions_are_task_specific_with_exact_buttons() {
         let (bridge, store, queen_id, _, _) = setup();
         let now = crate::unix_timestamp();
