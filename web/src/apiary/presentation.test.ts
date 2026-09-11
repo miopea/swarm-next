@@ -2,6 +2,11 @@ import { expect, test } from "vitest";
 import type { FederationCatalogReadiness } from "../api";
 import { catalogReadinessLabel, federationSyncCopy } from "./presentation";
 
+test("queued synchronization does not imply that previous synchronization never happened", () => {
+  expect(federationSyncCopy.idle[0]).toBe("Waiting to synchronize");
+  expect(federationSyncCopy.idle[1]).toContain("Previously received work remains available");
+});
+
 test("a retained signature acknowledgement does not label a stale catalog verified", () => {
   const catalog = { acknowledgement: {}, blockers: [] } as unknown as FederationCatalogReadiness;
   expect(catalogReadinessLabel(catalog)).toBe("Verified");

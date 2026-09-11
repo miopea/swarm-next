@@ -1,5 +1,29 @@
 # Current maturity acceptance ledger
 
+## September 11, 01:54 Eastern — Existing-member shared-task receipt and recovery
+
+Through the actual Keeper Tasks form, created fictional low-priority shared task
+`01a08f02-fc6b-7953-bf57-4c73e79cf3d8`, routed only to existing BGS WSL Hive.
+It arrived with revision1/cursor1 and the correct home Hive, appeared in Member
+Apiary and Tasks, and retained the same ID/state/ownership after a controlled WSL
+API restart. Engine PID6458 was preserved; health recovered normally. No Jira
+issue, provider session or local executable task was created. Both Hives have
+Jira configured, so this does not prove a completely Jira-disconnected journey.
+An explicit synchronization retry was requested while observing arrival; do not
+claim unattended arrival latency from this run.
+
+The fictional task remains Ready for further lifecycle acceptance. Its description
+explicitly forbids provider execution, repository changes and deployment. Do not
+leave it behind after the lifecycle check: close only this full task ID through
+the supported task flow. WSL currently has no non-Queen workers, so Send to worker
+is disabled with an empty chooser. Inspect the missing setup guidance next.
+
+Live evidence also exposed misleading presentation: zero Jira claims said no
+shared Apiary work despite this owned Swarm task, and an idle retry said first sync
+despite a recorded success. Copy now distinguishes Jira ownership and waiting to
+synchronize.34 affected tests, TypeScript and production build pass. This copy
+slice is not yet deployed; it does not change synchronization or ownership rules.
+
 ## September 11 — Feedback reuses connected identity
 
 Follow-up dialog-entry check: real Edge390x844 opens the long two-account form

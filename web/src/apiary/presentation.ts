@@ -1,7 +1,7 @@
 import type { FederationCatalogReadiness, FederationSyncCondition } from "../api";
 
 export const federationSyncCopy: Record<FederationSyncCondition, readonly [string, string]> = {
-  idle: ["Waiting for first sync", "This Hive will poll Keeper automatically."],
+  idle: ["Waiting to synchronize", "This Hive will poll Keeper automatically. Previously received work remains available."],
   current: ["Up to date", "This Hive completed its latest Keeper reconciliation."],
   offline: ["Keeper temporarily unavailable", "Owned work remains local; new shared claims wait."],
   authentication_required: ["Membership credentials need attention", "Keeper synchronization is paused until access is restored."],

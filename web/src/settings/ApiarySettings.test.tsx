@@ -737,7 +737,7 @@ test("shows honest Member convergence while waiting for the first automatic poll
   render(<ApiarySettings busy={false} hiveIdentity={memberIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
 
   const status = await screen.findByLabelText("Keeper synchronization status");
-  expect(status).toHaveTextContent("Waiting for first sync");
+  expect(status).toHaveTextContent("Waiting to synchronize");
   expect(status).toHaveTextContent("This Hive will poll Keeper automatically");
   expect(status).toHaveTextContent("CatalogWaitingProjects ready1/1JiraConnectedRetries0");
   expect(status).toHaveTextContent("Keeper catalog has not arrived");
