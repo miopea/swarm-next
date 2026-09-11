@@ -4,6 +4,21 @@
 
 ### Latest priority: guided enrollment, then workspace setup
 
+September 10, 20:38 Eastern: live health verified9c520d215ab2, statusok,
+no degradation; terminal host PID835651 unchanged. Enrollment still needs the
+fresh-Hive browser walkthrough. Edge skill was retried and failed before browser
+startup (`failed to write kernel assets`, missing path); do not claim visual QA.
+Worker setup follow-up fixes grid displacement by errors/provider controls,
+opens bounded discovered-folder suggestions on focus, and expands literal `~/`
+on the Hive server before existing directory/canonical-root validation. No
+shell evaluation, no relaxed outside-root permission. Verification:68 affected
+web/style tests, TypeScript/build,3 new Linux home-path tests, existing typed-path
+regression and API-library strict Clippy pass. Browser layout still unverified.
+Workspace root configuration remains unfinished; this does not close that scope.
+Deployment of this follow-up is held while the live source has concurrent
+uncommitted edits in agent.rs, application/lib.rs and persistence/lib.rs. Preserve
+those edits; do not fold unverified changes into a supposedly tested bundle.
+
 September 10, 20:30 Eastern checkpoint: integrated code is on main9c520d21.
 Full web verification now passes all1607 tests after updating the legacy guide
 assertion; older links explicitly explain that a new link is needed for the

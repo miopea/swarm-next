@@ -263,12 +263,17 @@ pub(super) async fn resolve_workspace_path(
     requested: &str,
     allow_outside_roots: bool,
 ) -> Result<PathBuf, ApiError> {
-    let requested = Path::new(requested.trim());
+    // Interpret home shorthand on the machine running this Hive, never in the
+    // browser. This is literal path expansion, not shell evaluation; all of the
+    // existing filesystem and explicit outside-root checks still follow.
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let expanded = expand_workspace_home(requested, home.as_deref());
+    let requested = expanded.as_path();
     if !requested.is_absolute() {
         return Err(ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             "unknown_workspace",
-            "enter an absolute path inside a configured workspace root",
+            "enter an absolute folder path on this Hive, or use ~/ for its home folder",
         ));
     }
     let metadata = tokio::fs::symlink_metadata(requested).await.map_err(|_| {
@@ -314,6 +319,95 @@ pub(super) async fn resolve_workspace_path(
         "unknown_workspace",
         "that folder is outside the configured workspace roots",
     ))
+}
+
+fn expand_workspace_home(requested: &str, home: Option<&Path>) -> PathBuf {
+    let requested = requested.trim();
+    match (
+        requested.strip_prefix("~/"),
+        home.filter(|path| path.is_absolute()),
+    ) {
+        (Some(relative), Some(home)) => home.join(relative.trim_start_matches('/')),
+        _ => PathBuf::from(requested),
+    }
+}
+
+#[cfg(test)]
+mod workspace_home_tests {
+    use super::*;
+
+    #[test]
+    fn expands_only_literal_current_home_prefix() {
+        let home = Path::new("/home/operator");
+        assert_eq!(
+            expand_workspace_home(" ~/projects/repo ", Some(home)),
+            home.join("projects/repo")
+        );
+        assert_eq!(
+            expand_workspace_home("~//projects/repo", Some(home)),
+            home.join("projects/repo")
+        );
+        for literal in [
+            "~other/projects",
+            "$HOME/projects",
+            "$(pwd)/repo",
+            "relative/repo",
+            "/projects/repo",
+        ] {
+            assert_eq!(
+                expand_workspace_home(literal, Some(home)),
+                PathBuf::from(literal)
+            );
+        }
+    }
+
+    #[test]
+    fn missing_or_relative_home_stays_invalid_instead_of_using_process_directory() {
+        assert_eq!(
+            expand_workspace_home("~/repo", None),
+            PathBuf::from("~/repo")
+        );
+        assert_eq!(
+            expand_workspace_home("~/repo", Some(Path::new("relative"))),
+            PathBuf::from("~/repo")
+        );
+    }
+
+    #[tokio::test]
+    async fn expanded_home_paths_still_require_outside_approval_and_existing_directory() {
+        let home = tempfile::TempDir::new().unwrap();
+        let root = home.path().join("projects");
+        let repository = root.join("demo");
+        std::fs::create_dir_all(&repository).unwrap();
+        let state = AppState::default().with_workspace_roots(vec![root]);
+        let expanded = expand_workspace_home("~/projects/demo", Some(home.path()));
+        assert_eq!(
+            resolve_workspace_path(&state, expanded.to_str().unwrap(), false)
+                .await
+                .unwrap(),
+            repository.canonicalize().unwrap()
+        );
+        let outside = home.path().join("other");
+        std::fs::create_dir(&outside).unwrap();
+        let escaped = expand_workspace_home("~/projects/../other", Some(home.path()));
+        assert!(
+            resolve_workspace_path(&state, escaped.to_str().unwrap(), false)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            resolve_workspace_path(&state, escaped.to_str().unwrap(), true)
+                .await
+                .unwrap(),
+            outside.canonicalize().unwrap()
+        );
+        std::fs::remove_dir(&outside).unwrap();
+        assert!(
+            resolve_workspace_path(&state, escaped.to_str().unwrap(), true)
+                .await
+                .is_err()
+        );
+    }
 }
 
 #[derive(Deserialize)]

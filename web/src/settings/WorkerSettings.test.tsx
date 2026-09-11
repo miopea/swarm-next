@@ -10,6 +10,28 @@ const studio = worker("studio", "Poppy", "/projects/sculpt-studio", 2);
 
 afterEach(cleanup);
 
+test("repository picker browses on focus and preserves choices through a failed creation", async () => {
+  const onCreate = vi.fn().mockRejectedValueOnce(new Error("Folder temporarily unavailable")).mockResolvedValue(undefined);
+  render(<WorkerSettings workers={[]} workspaces={[
+    { name: "trial", path: "/projects/trial", kind: "repository", configured_worker_id: null },
+  ]} busy={false} providers={{ claude_code: true, codex: true }}
+    onCreate={onCreate} onUpdate={vi.fn()} onChooseMark={vi.fn()} onRemove={vi.fn()}
+    onDraftDescription={vi.fn()} onReorder={vi.fn()} />);
+  const repository = screen.getByRole("combobox", { name: "Repository" });
+  fireEvent.focus(repository);
+  fireEvent.click(screen.getByRole("option", { name: /trial/ }));
+  fireEvent.change(screen.getByLabelText("Worker name"), { target: { value: "Daisy" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add sleeping worker" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Folder temporarily unavailable");
+  expect(repository).toHaveValue("/projects/trial");
+  expect(screen.getByLabelText("Worker name")).toHaveValue("Daisy");
+  fireEvent.click(screen.getByRole("button", { name: "Add sleeping worker" }));
+  await waitFor(() => expect(repository).toHaveValue(""));
+  expect(onCreate).toHaveBeenCalledTimes(2);
+  expect(onCreate).toHaveBeenLastCalledWith("Daisy", "/projects/trial", "claude_code", false);
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
 test.each(["cancel", "discard", "retry"])("returns focus to the edited worker after %s", async (action) => {
   const onUpdate = vi.fn().mockRejectedValueOnce(new Error("Save failed; retry is available")).mockResolvedValue(undefined);
   render(<WorkerSettings workers={[budget, studio]} workspaces={[]} busy={false}

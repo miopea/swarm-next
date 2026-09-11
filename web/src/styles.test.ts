@@ -8,6 +8,12 @@ declare const process: { cwd(): string };
 
 const stylesheet = readFileSync(`${process.cwd()}/src/styles.css`, "utf8");
 
+test("worker creation notices span the form instead of displacing repository fields", () => {
+  const rule = stylesheet.match(/\.configure-worker-form > \.worker-form-notice, \.configure-worker-form > \[role="alert"\]\s*\{([^}]+)\}/)?.[1];
+  expect(rule).toMatch(/grid-column:\s*1 \/ -1/);
+  expect(rule).toMatch(/overflow-wrap:\s*anywhere/);
+});
+
 test("prerequisite editor reserves its third row for the full close confirmation", () => {
   // Unlike TaskDetailDialog, this dialog has no summary row: header, form,
   // footer. A four-row template places the footer in the shrinking scroll row,

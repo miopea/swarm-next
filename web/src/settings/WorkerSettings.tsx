@@ -186,7 +186,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, p
         {roster.length > 0 && filteredRoster.length === 0 && matchingManaged.length === 0 && <p className="empty-worker-settings">No workers match “{workerQuery.trim()}”.</p>}
       </div>
       <form className="configure-worker-form" onSubmit={(event) => void submit(event)}>
-        <ExperimentalProviderControl enabled={allowExperimental} onChange={setAllowExperimental} />
+        <div className="worker-form-notice"><ExperimentalProviderControl enabled={allowExperimental} onChange={setAllowExperimental} /></div>
         {saveError && <p role="alert" className="field-error">{saveError}</p>}
         {providerCapabilitiesUnavailable && <div className="integration-state is-error" role="alert"><strong>Coding providers could not be checked</strong><span>Existing workers are unchanged. Refresh Swarm before adding a worker or changing her provider.</span></div>}
         <div className="field-stack">
@@ -229,7 +229,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, p
               }}
               onKeyDown={workspaceKeyDown}
             />
-            {workspaceOpen && workspace.trim() && (
+            {workspaceOpen && (
               <div id="workspace-suggestions" className="workspace-suggestions" role="listbox" aria-label="Repository path suggestions">
                 {matchingWorkspaces.map((choice, index) => (
                   <button
@@ -250,7 +250,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, p
               </div>
             )}
           </div>
-          <small>Start with a repository name and Swarm completes the path. Full paths still work.</small>
+          <small>Choose a discovered folder or search by name. You can also enter a full path or ~/projects/repo on the machine running this Hive, not your browser’s computer.</small>
           {customWorkspace && <label className="outside-workspace-warning"><input type="checkbox" checked={allowOutsideRoots} onChange={(event) => setAllowOutsideRoots(event.target.checked)} /><span><strong>Use this path outside discovered project folders</strong><small>Only continue if you recognize and trust this folder. Swarm still requires an existing real directory and blocks files, symlinks, and filesystem roots.</small></span></label>}
         </div>
         <button disabled={busy || providerCapabilitiesUnavailable || experimentalBlocked || !name.trim() || !workspace || (customWorkspace && !allowOutsideRoots)}>Add sleeping worker</button>
