@@ -12,6 +12,45 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.8.1
+
+Fixes for things that were reported, and one that had been quietly wrong since
+before 1.8.0.
+
+**Before upgrading: nothing.** The installer takes a verified database backup
+before migrating and checks that backup can still be opened by the release it
+would roll back to. This release migrates schema 167 to 168.
+
+**Workers are not stopped.** The worker-engine protocol is unchanged at 17, so
+this installs as an ordinary update and running terminals keep their sessions.
+
+### Fixes
+- **Working workers no longer show as Blocked.** The part of Swarm that
+  *reports* on a worker was sandboxed away from your home directory while the
+  part that actually *runs* it was not — so it looked at every workspace, found
+  it unwritable from where it was standing, and marked healthy workers Blocked.
+  Reported on a freshly built machine where all eight workers were answering
+  broadcasts while the board called them Blocked.
+- **An answer given in a worker's terminal can no longer resolve a different
+  worker's question.** Two workers asked the same question is an ordinary
+  thing; the check that was meant to keep their answers apart was missing.
+- **Swarm checks for updates on its own now.** A new Hive never used to check
+  at all unless someone went looking for the setting, and a Hive that did check
+  only did so once a day. It now checks when it starts and every four hours.
+- **"Retry conversation checks" says what happened.** It always worked — it
+  just looked identical whether it found something or not. It now reports that
+  it ran, or that it could not.
+- **The conversation panel is readable.** Workers with nothing to check yet —
+  the normal state of one that has never run — are counted rather than listed
+  one by one, so a real problem is not pushed down the page. Two raw timestamps
+  became the sentence they were for: "a newer transcript appeared 32 seconds
+  after the saved conversation's last entry".
+- **Diagnostics is sized like the secondary button it is**, instead of being
+  the largest thing in a column of notices. It keeps its full touch target on
+  touchscreens.
+- Apiary membership survives leaving and rejoining: departure ends authority
+  without discarding identity, history or receipts.
+
 ## 1.8.0
 
 A more welcoming Apiary — join a team with less setup and see shared work more
