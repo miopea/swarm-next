@@ -2,6 +2,14 @@
 
 ## September 11, 04:15 Eastern — Queen acceptance and separate delivery
 
+04:17 follow-up: child submitted Review at10939 and system completed it at10940
+under the explicit empty-commit rule. Edge Queues cleared both demo rows without
+manual reload. The bounded observer ended normally. The worker reported the
+stage-dependent test defect and requested a Queen-routed correction rather than
+silently editing source during delivery. That corrective routing is NOT yet
+verified; automatic empty-commit settlement is not proof the reported defect
+has been resolved. Preserve that distinction for the next worker-first gate.
+
 The normal, unassisted handoff gate passes for the new confined demo:
 parent01a08f7b-c8c7-7560-baa1-4401bc362713 and Queen-created delivery task
 01a08f82-9358-7fb1-a5f5-4651f230bd07. Controllerab907df6 admitted the parent

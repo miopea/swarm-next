@@ -6,6 +6,11 @@
 (system event10938). The bounded Queen acceptance/separate-delivery gate is now
 closed; details and stage-specific test caveat in92. Child review remains open.
 
+04:17: child also completed through its explicit empty-commit rule (10939/10940),
+and Edge Queues cleared both rows automatically. Next bounded orchestration
+check: whether Queen routes the worker's honestly reported fixture test defect
+to a corrective task. Do not call automatic child completion defect resolution.
+
 Shared closed-history and existing-profile review UX are deployed and browser
 verified on production and WSL at9003c3c1. Full CI34576264359 is now successful,
 including Rust;032bff1d's full CI34575108616 is also successful. Do not repeat
