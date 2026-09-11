@@ -11,7 +11,7 @@ vi.mock("../api/email", () => ({ fetchEmailReadiness: vi.fn() }));
 vi.mock("../api/jira", () => ({ fetchJiraReadiness: vi.fn() }));
 afterEach(() => { cleanup(); vi.resetAllMocks(); });
 const saved = { revision: 1, profile: { hive_name: "My Hive", operator_display_name: "Operator", contact_email: null as string | null } };
-const connected = { configured: true, accepts_api_token: false, connection: "ready" as const, account_name: "Bea Bee", account_address: "bea@example.test" };
+const connected = { configured: true, connection: "ready" as const, account_name: "Bea Bee", account_address: "bea@example.test" };
 function open(profile = saved) {
   vi.mocked(fetchPublicHiveProfile).mockResolvedValue(profile);
   const ref = createRef<JoinPublicProfileHandle>();

@@ -57,7 +57,7 @@ export default function EmailSettings({ operatorToken, readiness, unavailable, o
   return (
     <section id="settings-email" className="settings-card integration-settings email-settings" aria-labelledby="email-integration-heading">
       <div><p className="eyebrow">Email intake</p><h3 id="email-integration-heading">Turn reported issues into finished work</h3></div>
-      <p>Link one Microsoft Outlook account. Choose messages from Inbox on the task board; Swarm preserves the readable message, images, attachments, and original thread.</p>
+      <p>Link one Microsoft account. Choose messages from Inbox on the task board; Swarm preserves the readable message, images, attachments, and original thread. Importing is always your choice, and a reply is never sent without you reading it first.</p>
       <div className="integration-status" role="status">
         <span className={`presence ${connected ? "online" : unavailable || readiness?.connection === "credentials_invalid" || readiness?.connection === "permission_denied" ? "offline" : "waiting"}`} />
         <span><strong>{readinessLabel(readiness, unavailable)}</strong><small>{readinessDetail(readiness, unavailable)}</small></span>
@@ -68,7 +68,7 @@ export default function EmailSettings({ operatorToken, readiness, unavailable, o
       ) : unavailable ? null : (
         <div className="jira-connect-panel">
           <button className="primary-action jira-auth-action" type="button" disabled={busy} onClick={() => void connect()}>
-            {busy ? "Opening Microsoft…" : readiness?.connection === "credentials_invalid" ? "Reconnect Outlook" : "Connect Outlook"}
+            {busy ? "Opening Microsoft…" : readiness?.connection === "credentials_invalid" ? "Reconnect Microsoft account" : "Sign in with Microsoft"}
           </button>
           {/* THE CALLBACK STAYS ON SCREEN EVEN THOUGH NOBODY TYPES IT. It is
               the one value whoever maintains the shared registration needs:
@@ -82,15 +82,10 @@ export default function EmailSettings({ operatorToken, readiness, unavailable, o
             <input readOnly value={configuration?.callback_url ?? "This Hive does not know its own address yet"} onFocus={(event) => event.currentTarget.select()} />
           </label>
           <small className="privacy-note">
-            Personal and work accounts both work — sign in with the address you want Swarm to read, and Microsoft routes it. Nothing to register and no secret to store.
-            A Microsoft consent page opens, then returns here. Mail tokens remain private on this host and never enter Queen, workers, or browser storage.
+            Work, school or personal Microsoft account — sign in with the address you want Swarm to read. Mail tokens stay on this host and never enter Queen, workers, or browser storage.
           </small>
         </div>
       )}
-      <div className="integration-guardrails">
-        <strong>Closed-loop by design</strong>
-        <span>Import is always your choice. Completing a task does not send mail. A readable resolution reply becomes available only after completion and recorded deployment, and you review it before sending.</span>
-      </div>
       {message ? <p className="settings-message" role="status">{message}</p> : null}
     </section>
   );

@@ -2,7 +2,6 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import {
   addJiraComment,
-  beginJiraAuthorization,
   createJiraBinding,
   disconnectJira,
   fetchJiraBindingIssues,
@@ -74,7 +73,6 @@ test("owns bounded Jira readiness, discovery, mapping, issue, link, and comment 
 test("serializes Jira authorization, configuration, sync, retry, comment, and reconciliation commands", async () => {
   const task = { id: "task-1", hive_id: "hive-1", title: "Fix", description: "", priority: "normal", workspace: "/projects/web", state: "ready", assigned_worker_id: null, assigned_session_id: null, position: 1, created_at: 1, updated_at: 1 };
   const payloads = [
-    { authorization_url: "https://jira.example.test/authorize" },
     null,
     binding,
     mappings,
@@ -87,7 +85,8 @@ test("serializes Jira authorization, configuration, sync, retry, comment, and re
   const fetch = vi.fn().mockImplementation(() => Promise.resolve(response(payloads.shift())));
   vi.stubGlobal("fetch", fetch);
 
-  await expect(beginJiraAuthorization("operator")).resolves.toContain("authorize");
+  // No authorization URL to fetch any more: Jira connects with the user's own
+  // API token, so there is no consent round trip to start.
   await disconnectJira("operator");
   await createJiraBinding("operator", { id: "10000", key: "WWD", name: "Website Development" });
   await replaceJiraMappings("operator", "binding/one", mappings);
@@ -97,18 +96,18 @@ test("serializes Jira authorization, configuration, sync, retry, comment, and re
   await expect(addJiraComment("operator", "task/one", "Ready for proof")).resolves.toEqual({ state: "queued" });
   await reconcileJira("operator");
 
-  expect(fetch).toHaveBeenNthCalledWith(3, "/api/v1/integrations/jira/bindings", expect.objectContaining({
+  expect(fetch).toHaveBeenNthCalledWith(2, "/api/v1/integrations/jira/bindings", expect.objectContaining({
     method: "POST",
     body: JSON.stringify({ project_id: "10000", project_key: "WWD", project_name: "Website Development" }),
   }));
-  expect(fetch).toHaveBeenNthCalledWith(4, "/api/v1/integrations/jira/bindings/binding%2Fone/mappings", expect.objectContaining({
+  expect(fetch).toHaveBeenNthCalledWith(3, "/api/v1/integrations/jira/bindings/binding%2Fone/mappings", expect.objectContaining({
     method: "PUT",
     body: JSON.stringify({ mappings }),
   }));
-  expect(fetch).toHaveBeenNthCalledWith(6, "/api/v1/integrations/jira/bindings/binding%2Fone/sync", expect.objectContaining({
+  expect(fetch).toHaveBeenNthCalledWith(5, "/api/v1/integrations/jira/bindings/binding%2Fone/sync", expect.objectContaining({
     body: JSON.stringify({ issue_ids: ["20000"] }),
   }));
-  expect(fetch).toHaveBeenNthCalledWith(8, "/api/v1/integrations/jira/task-links/task%2Fone/comments", expect.objectContaining({
+  expect(fetch).toHaveBeenNthCalledWith(7, "/api/v1/integrations/jira/task-links/task%2Fone/comments", expect.objectContaining({
     body: JSON.stringify({ body: "Ready for proof" }),
   }));
 });

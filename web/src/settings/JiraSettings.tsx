@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 
 import {
-  beginJiraAuthorization,
   connectJiraWithApiToken,
   createJiraBinding,
   disconnectJira,
@@ -161,18 +160,6 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
     }
   }
 
-  async function connectJira() {
-    setBusy(true);
-    setMessage("");
-    try {
-      const authorizationUrl = await beginJiraAuthorization(operatorToken);
-      onNavigate(authorizationUrl);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Atlassian authorization could not start.");
-      setBusy(false);
-    }
-  }
-
   async function connectWithToken() {
     setBusy(true);
     setMessage("");
@@ -236,69 +223,60 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
           Disconnect Jira
         </button>
       ) : (
-        readiness?.accepts_api_token ? (
-          <form
-            className="jira-connect-panel jira-token-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void connectWithToken();
-            }}
-          >
-            <p className="jira-token-intro">
-              Connect with your own Atlassian account. You need an API token — Atlassian creates one for you at{" "}
-              <a href={ATLASSIAN_TOKEN_URL} target="_blank" rel="noreferrer noopener">id.atlassian.com → Security → API tokens</a>.
-            </p>
-            <ol className="jira-token-steps">
-              <li>Open <a href={ATLASSIAN_TOKEN_URL} target="_blank" rel="noreferrer noopener">the API tokens page</a> and sign in as the account that can see your Jira projects.</li>
-              <li>Choose <strong>Create API token</strong>, name it something you will recognise later — “Swarm on this machine” — and copy it. Atlassian shows it once.</li>
-              <li>Paste it below with your Jira site address and the email you signed in with.</li>
-            </ol>
-            <label>
-              <span>Jira site</span>
-              <input
-                type="url"
-                value={siteUrl}
-                onChange={(event) => setSiteUrl(event.target.value)}
-                placeholder="https://yourcompany.atlassian.net"
-                autoComplete="off"
-                required
-              />
-            </label>
-            <label>
-              <span>Atlassian email</span>
-              <input
-                type="email"
-                value={accountEmail}
-                onChange={(event) => setAccountEmail(event.target.value)}
-                placeholder="you@yourcompany.com"
-                autoComplete="off"
-                required
-              />
-            </label>
-            <label>
-              <span>API token</span>
-              <input
-                type="password"
-                value={apiToken}
-                onChange={(event) => setApiToken(event.target.value)}
-                placeholder="Paste the token from Atlassian"
-                autoComplete="off"
-                required
-              />
-            </label>
-            <button className="primary-action jira-auth-action" type="submit" disabled={busy || unavailable}>
-              {busy ? "Checking with Atlassian…" : readiness?.connection === "credentials_invalid" ? "Reconnect Jira" : "Connect Jira"}
-            </button>
-            <small className="privacy-note">Swarm checks the token with Atlassian before keeping it, stores it privately on this host, and never sends it anywhere else. Disconnecting forgets it.</small>
-          </form>
-        ) : (
-          <div className="jira-connect-panel">
-            <button className="primary-action jira-auth-action" type="button" disabled={busy || unavailable || readiness?.configured === false} onClick={() => void connectJira()}>
-              {busy ? "Opening Atlassian…" : readiness?.configured === false ? "Atlassian app setup required" : readiness?.connection === "credentials_invalid" ? "Reconnect with Atlassian" : "Connect with Atlassian"}
-            </button>
-            <small className="privacy-note">A browser consent page opens, then returns you here. Swarm stores the rotating token privately on this host.</small>
-          </div>
-        )
+        <form
+          className="jira-connect-panel jira-token-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void connectWithToken();
+          }}
+        >
+          <p className="jira-token-intro">
+            Connect with your own Atlassian account. You need an API token — Atlassian creates one for you at{" "}
+            <a href={ATLASSIAN_TOKEN_URL} target="_blank" rel="noreferrer noopener">id.atlassian.com → Security → API tokens</a>.
+          </p>
+          <ol className="jira-token-steps">
+            <li>Open <a href={ATLASSIAN_TOKEN_URL} target="_blank" rel="noreferrer noopener">the API tokens page</a> and sign in as the account that can see your Jira projects.</li>
+            <li>Choose <strong>Create API token</strong>, name it something you will recognise later — “Swarm on this machine” — and copy it. Atlassian shows it once.</li>
+            <li>Paste it below with your Jira site address and the email you signed in with.</li>
+          </ol>
+          <label>
+            <span>Jira site</span>
+            <input
+              type="url"
+              value={siteUrl}
+              onChange={(event) => setSiteUrl(event.target.value)}
+              placeholder="https://yourcompany.atlassian.net"
+              autoComplete="off"
+              required
+            />
+          </label>
+          <label>
+            <span>Atlassian email</span>
+            <input
+              type="email"
+              value={accountEmail}
+              onChange={(event) => setAccountEmail(event.target.value)}
+              placeholder="you@yourcompany.com"
+              autoComplete="off"
+              required
+            />
+          </label>
+          <label>
+            <span>API token</span>
+            <input
+              type="password"
+              value={apiToken}
+              onChange={(event) => setApiToken(event.target.value)}
+              placeholder="Paste the token from Atlassian"
+              autoComplete="off"
+              required
+            />
+          </label>
+          <button className="primary-action jira-auth-action" type="submit" disabled={busy || unavailable}>
+            {busy ? "Checking with Atlassian…" : readiness?.connection === "credentials_invalid" ? "Reconnect Jira" : "Connect Jira"}
+          </button>
+          <small className="privacy-note">Swarm checks the token with Atlassian before keeping it, stores it privately on this host, and never sends it anywhere else. Disconnecting forgets it.</small>
+        </form>
       )}
 
       {bindings.length > 0 ? (
@@ -419,7 +397,7 @@ function jiraReadinessDetail(readiness: JiraReadiness | undefined, unavailable: 
     case "credentials_invalid": return "Update the local Jira credential adapter.";
     case "permission_denied": return "This identity cannot access the requested Jira resource.";
     case "network_unavailable": return "Owned work stays available; new shared claims wait.";
-    case "not_connected": return readiness?.accepts_api_token ? "Connect your Atlassian account below to choose projects." : readiness?.configured ? "Connect your Atlassian account to choose projects." : "This host needs its one-time Atlassian app configuration.";
+    case "not_connected": return "Connect your Atlassian account below to choose projects.";
     default: return "Credentials never enter Queen or the browser.";
   }
 }

@@ -40,13 +40,13 @@ test("setup is one consent click, with nothing to type", async () => {
 
   // THE WHOLE POINT OF THE TICKET. Setup used to be a tenant id, a client id
   // and a client secret, all required, behind an errand in the Entra portal.
-  expect(await screen.findByRole("button", { name: "Connect Outlook" })).toBeEnabled();
+  expect(await screen.findByRole("button", { name: "Sign in with Microsoft" })).toBeEnabled();
   expect(screen.queryByRole("textbox", { name: /Application \(client\) ID/ })).not.toBeInTheDocument();
   expect(screen.queryByRole("form", { name: "Microsoft app setup" })).not.toBeInTheDocument();
   expect(screen.queryByRole("radio")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /app registration|own Microsoft app|own app/i })).not.toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole("button", { name: "Connect Outlook" }));
+  fireEvent.click(screen.getByRole("button", { name: "Sign in with Microsoft" }));
   await waitFor(() => expect(navigate).toHaveBeenCalledWith("https://login.microsoftonline.test/authorize"));
 });
 
@@ -80,7 +80,7 @@ test("an expired connection offers a reconnect rather than a setup form", async 
     />,
   );
 
-  expect(await screen.findByRole("button", { name: "Reconnect Outlook" })).toBeEnabled();
+  expect(await screen.findByRole("button", { name: "Reconnect Microsoft account" })).toBeEnabled();
   expect(screen.queryByRole("form", { name: "Microsoft app setup" })).not.toBeInTheDocument();
 });
 
@@ -113,7 +113,7 @@ test("offers a direct retry when Outlook readiness is temporarily unavailable", 
 
   fireEvent.click(screen.getByRole("button", { name: "Retry Outlook status" }));
   expect(onRetryReadiness).toHaveBeenCalledOnce();
-  expect(screen.queryByRole("button", { name: "Connect Outlook" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Sign in with Microsoft" })).not.toBeInTheDocument();
 });
 
 function ok(body: unknown) {

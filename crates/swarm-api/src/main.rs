@@ -620,64 +620,36 @@ fn email_attachment_root_from_database(database_path: &std::path::Path) -> PathB
 /// more ways than email had, on settings an operator types by hand. An
 /// incomplete pair of environment variables here used to be indistinguishable,
 /// from the outside, from a corrupt database.
+///
+/// Three of those five went with the Atlassian OAuth path on 2026-09-11.
+/// Atlassian will not accept a public client -- measured, and written up in
+/// `docs/99-integration-authentication-standard.md` -- so a centrally offered
+/// consent flow would have required a client secret in every install. The
+/// user's own API token is the better credential anyway: scoped to one person
+/// and revocable by them, with nothing shipped.
 fn configure_jira(state: AppState, database_path: &std::path::Path) -> AppState {
-    let api_token = (
+    let settings = (
         env::var("SWARM_JIRA_BASE_URL").ok(),
         env::var("SWARM_JIRA_EMAIL").ok(),
         env::var("SWARM_JIRA_API_TOKEN").ok(),
     );
-    let oauth = (
-        env::var("SWARM_JIRA_OAUTH_CLIENT_ID").ok(),
-        env::var("SWARM_JIRA_OAUTH_CLIENT_SECRET").ok(),
-    );
-    let public_url = env::var("SWARM_PUBLIC_BASE_URL").ok();
-    match (api_token, oauth) {
-        // Nothing in the environment is the ORDINARY case now, not an error:
-        // the operator types an Atlassian API token into Settings and this
-        // host keeps it. Anything already stored is loaded here, so a restart
-        // does not disconnect Jira.
-        ((None, None, None), (None, None)) => degrade(
+    match settings {
+        // Nothing in the environment is the ORDINARY case: the operator types
+        // an Atlassian API token into Settings and this host keeps it. Anything
+        // already stored is loaded here, so a restart does not disconnect Jira.
+        (None, None, None) => degrade(
             state,
             "Jira",
             |state, ()| state.with_jira_credentials_path(jira_credentials_path(database_path)),
             (),
         ),
-        ((None, None, None), (Some(client_id), Some(client_secret))) => {
-            let Some(public_url) = public_url else {
-                return state
-                    .with_degraded_subsystem("Jira", "Jira OAuth requires SWARM_PUBLIC_BASE_URL");
-            };
-            degrade(
-                state,
-                "Jira",
-                |state, ()| {
-                    state.with_jira_oauth(
-                        client_id,
-                        client_secret,
-                        &public_url,
-                        jira_token_path(database_path),
-                    )
-                },
-                (),
-            )
-        }
-        ((Some(base_url), Some(email), Some(api_token)), (None, None)) => degrade(
+        (Some(base_url), Some(email), Some(api_token)) => degrade(
             state,
             "Jira",
             |state, ()| state.with_jira_configuration(&base_url, email, api_token),
             (),
         ),
-        ((Some(_), Some(_), Some(_)), (Some(_), Some(_))) => state.with_degraded_subsystem(
-            "Jira",
-            "configure either Jira OAuth or Jira API-token authentication, not both",
-        ),
-        ((None, None, None), _) => {
-            state.with_degraded_subsystem("Jira", "Jira OAuth settings are incomplete")
-        }
-        (_, (None, None)) => {
-            state.with_degraded_subsystem("Jira", "Jira API-token settings are incomplete")
-        }
-        _ => state.with_degraded_subsystem("Jira", "Jira authentication settings are incomplete"),
+        _ => state.with_degraded_subsystem("Jira", "Jira API-token settings are incomplete"),
     }
 }
 
@@ -687,14 +659,6 @@ fn jira_credentials_path(database_path: &std::path::Path) -> PathBuf {
         .unwrap_or_else(|| std::path::Path::new("."))
         .join("secrets")
         .join("jira-api-token.json")
-}
-
-fn jira_token_path(database_path: &std::path::Path) -> PathBuf {
-    database_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .join("secrets")
-        .join("jira-oauth.json")
 }
 
 /// Configures Microsoft email, or leaves it off and says why.

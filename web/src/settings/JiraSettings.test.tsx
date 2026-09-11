@@ -38,7 +38,7 @@ test("a connected project says when its mapping has fallen behind, and changes n
   render(
     <JiraSettings
       operatorToken="operator-token"
-      readiness={{ configured: true, accepts_api_token: false, connection: "ready", account_name: "Bea" }}
+      readiness={{ configured: true, connection: "ready", account_name: "Bea" }}
       unavailable={false}
     />,
   );
@@ -68,7 +68,7 @@ test("Keeper suggestions verify access before offering mapping and preserve deni
     return ok([]);
   }));
   render(<JiraSettings operatorToken="fictional" unavailable={false}
-    readiness={{ configured: true, accepts_api_token: false, connection: "ready", account_name: "Bea" }}
+    readiness={{ configured: true, connection: "ready", account_name: "Bea" }}
     suggestedProjects={[{ id: "10002", key: "IT", name: "Information Technology" }]}
     setupId="apiary-jira-setup" />);
   const suggestion = screen.getByRole("button", { name: "IT Information Technology" });
@@ -86,7 +86,7 @@ test("Keeper suggestions verify access before offering mapping and preserve deni
 
 test("network unavailability explains the claim hold without implying owned work stopped", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => ok([])));
-  render(<JiraSettings operatorToken="operator-token" readiness={{ configured: true, accepts_api_token: false, connection: "network_unavailable", account_name: null }} unavailable={false} />);
+  render(<JiraSettings operatorToken="operator-token" readiness={{ configured: true, connection: "network_unavailable", account_name: null }} unavailable={false} />);
   expect(screen.getByText("Jira is temporarily unavailable")).toBeInTheDocument();
   expect(screen.getByText("Owned work stays available; new shared claims wait.")).toBeInTheDocument();
   await waitFor(() => expect(screen.queryByText("Checking connected Jira projects…")).not.toBeInTheDocument());
@@ -134,7 +134,7 @@ test("discovers a project, maps its workflow, and connects it as a shared Hive p
   render(
     <JiraSettings
       operatorToken="operator-token"
-      readiness={{ configured: true, accepts_api_token: false, connection: "ready", account_name: "Bea" }}
+      readiness={{ configured: true, connection: "ready", account_name: "Bea" }}
       unavailable={false}
     />,
   );
@@ -168,29 +168,32 @@ test("discovers a project, maps its workflow, and connects it as a shared Hive p
   expect(JSON.parse(assignedSync?.body ?? "{}")).toEqual({ enabled: true });
 });
 
-test("offers an operator-facing Atlassian connection instead of host-setting instructions", async () => {
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    if (url.includes("/bindings")) return ok([]);
-    if (url.endsWith("/auth/start") && init?.method === "POST") {
-      return ok({ authorization_url: "https://auth.atlassian.test/authorize" });
-    }
-    throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
-  }));
-  const assign = vi.fn();
+/// The user's own API token is the ONLY way in, and there is no longer a
+/// second path that depended on what the host was started with.
+///
+/// The Atlassian OAuth flow was removed on 2026-09-11. Atlassian refuses a
+/// public client -- measured, in docs/99-integration-authentication-standard.md
+/// -- so offering consent centrally would have meant a client secret shipped
+/// to every install, which is exactly what email had just been rid of. A
+/// per-person token is the better credential anyway: scoped to one account,
+/// revocable by its owner, and nothing is shipped.
+test("the only way to connect Jira is the operator's own API token", () => {
+  vi.stubGlobal("fetch", vi.fn(async () => ok([])));
 
   render(
     <JiraSettings
       operatorToken="operator-token"
-      readiness={{ configured: true, accepts_api_token: false, connection: "not_connected", account_name: null }}
+      readiness={{ configured: true, connection: "not_connected", account_name: null }}
       unavailable={false}
-      onNavigate={assign}
     />,
   );
 
-  expect(screen.getByText("Connect your Atlassian account to choose projects.")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Connect with Atlassian" }));
-  await waitFor(() => expect(assign).toHaveBeenCalledWith("https://auth.atlassian.test/authorize"));
+  expect(screen.getByText("Connect your Atlassian account below to choose projects.")).toBeInTheDocument();
+  expect(screen.getByLabelText("API token")).toBeRequired();
+  expect(screen.getByRole("button", { name: "Connect Jira" })).toBeInTheDocument();
+  // The consent affordance is gone, not merely hidden behind a flag.
+  expect(screen.queryByRole("button", { name: /Connect with Atlassian/ })).not.toBeInTheDocument();
+  expect(screen.queryByText(/Atlassian app setup/)).not.toBeInTheDocument();
 });
 
 test("a fresh Hive connects Jira with the operator's own token, and is told where to get one", async () => {
@@ -203,7 +206,7 @@ test("a fresh Hive connects Jira with the operator's own token, and is told wher
     const url = String(input);
     if (url.endsWith("/api/v1/integrations/jira/credentials")) {
       sent.push(JSON.parse(String(init?.body)));
-      return ok({ configured: true, accepts_api_token: true, connection: "ready", account_name: "Brad" });
+      return ok({ configured: true, connection: "ready", account_name: "Brad" });
     }
     if (url.endsWith("/api/v1/integrations/jira/bindings")) return ok([]);
     throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
@@ -212,7 +215,7 @@ test("a fresh Hive connects Jira with the operator's own token, and is told wher
   render(
     <JiraSettings
       operatorToken="operator-token"
-      readiness={{ configured: false, accepts_api_token: true, connection: "not_connected", account_name: null }}
+      readiness={{ configured: false, connection: "not_connected", account_name: null }}
       unavailable={false}
     />,
   );
@@ -254,7 +257,7 @@ test("keeps a transient binding failure distinct from an empty Jira configuratio
   render(
     <JiraSettings
       operatorToken="operator-token"
-      readiness={{ configured: true, accepts_api_token: false, connection: "ready", account_name: "Bea" }}
+      readiness={{ configured: true, connection: "ready", account_name: "Bea" }}
       unavailable={false}
     />,
   );
@@ -280,7 +283,7 @@ test("offers a direct retry when Jira readiness is temporarily unavailable", () 
 
   fireEvent.click(screen.getByRole("button", { name: "Retry Jira status" }));
   expect(onRetryReadiness).toHaveBeenCalledOnce();
-  expect(screen.getByRole("button", { name: "Connect with Atlassian" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Connect Jira" })).toBeDisabled();
 });
 
 function ok(body: unknown) {

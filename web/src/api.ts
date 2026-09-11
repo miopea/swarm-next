@@ -84,7 +84,6 @@ export type {
 } from "./api/migration";
 export {
   addJiraComment,
-  beginJiraAuthorization,
   connectJiraWithApiToken,
   createJiraBinding,
   disconnectJira,

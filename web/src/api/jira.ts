@@ -10,7 +10,6 @@ export type JiraConnectionState =
 export type JiraReadiness = {
   configured: boolean;
   /** Whether this host takes an Atlassian API token typed into Settings, rather than being wired to an OAuth app at start. */
-  accepts_api_token: boolean;
   connection: JiraConnectionState;
   account_name: string | null;
   /** Older servers and privacy-restricted OAuth accounts may omit this. */
@@ -104,10 +103,6 @@ export async function connectJiraWithApiToken(
   return response.json() as Promise<JiraReadiness>;
 }
 
-export async function beginJiraAuthorization(operatorToken: string): Promise<string> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/auth/start", { method: "POST" });
-  return ((await response.json()) as { authorization_url: string }).authorization_url;
-}
 
 export async function disconnectJira(operatorToken: string): Promise<void> {
   await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/auth", { method: "DELETE" });

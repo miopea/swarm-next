@@ -10,8 +10,6 @@ use serde::{Deserialize, Serialize};
 use swarm_domain::{JiraConnectionState, TaskState};
 use swarm_persistence::MAX_TASK_DESCRIPTION_BYTES as MAX_ISSUE_DESCRIPTION_BYTES;
 
-use crate::jira_oauth::{JiraOAuthClient, OAuthError};
-
 const PAGE_SIZE: usize = 50;
 const MAX_PROJECTS: usize = 500;
 const MAX_PROJECT_STATUSES: usize = 128;
@@ -37,7 +35,6 @@ pub(crate) enum JiraReadinessProbe {
         /// be able to run through the auth flow herself with her creds."
         credentials: Arc<tokio::sync::RwLock<Option<JiraCredentials>>>,
     },
-    OAuth(JiraOAuthClient),
 }
 
 /// What one Atlassian account needs to reach its site.
@@ -61,16 +58,11 @@ enum JiraAuthorization {
         email: Arc<str>,
         api_token: Arc<str>,
     },
-    Bearer(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct JiraReadiness {
     pub configured: bool,
-    /// Whether this host will take an Atlassian API token typed into Settings.
-    /// False when it is wired to an OAuth app at start, where the consent flow
-    /// is the way in.
-    pub accepts_api_token: bool,
     pub connection: JiraConnectionState,
     pub account_name: Option<String>,
     pub account_address: Option<String>,
@@ -291,18 +283,6 @@ struct JiraTransitionStatus {
 }
 
 impl JiraReadinessProbe {
-    pub(crate) fn oauth(client: JiraOAuthClient) -> Self {
-        Self::OAuth(client)
-    }
-
-    pub(crate) fn oauth_client(&self) -> Option<&JiraOAuthClient> {
-        if let Self::OAuth(client) = self {
-            Some(client)
-        } else {
-            None
-        }
-    }
-
     pub(crate) async fn browser_base_url(&self) -> Option<Url> {
         match self {
             Self::Configured { credentials, .. } => credentials
@@ -310,7 +290,6 @@ impl JiraReadinessProbe {
                 .await
                 .as_ref()
                 .map(|held| held.base_url.clone()),
-            Self::OAuth(client) => client.site_url().await,
             Self::NotConfigured => None,
         }
     }
@@ -362,21 +341,14 @@ impl JiraReadinessProbe {
                 *credentials.write().await = next;
                 true
             }
-            Self::NotConfigured | Self::OAuth(_) => false,
+            Self::NotConfigured => false,
         }
-    }
-
-    /// Whether this host takes an API token from the settings page, as opposed
-    /// to being wired to an Atlassian OAuth app at start.
-    pub(crate) const fn accepts_api_token(&self) -> bool {
-        matches!(self, Self::Configured { .. })
     }
 
     pub(crate) async fn readiness(&self) -> JiraReadiness {
         if matches!(self, Self::NotConfigured) {
             return JiraReadiness {
                 configured: false,
-                accepts_api_token: self.accepts_api_token(),
                 connection: JiraConnectionState::NotConnected,
                 account_name: None,
                 account_address: None,
@@ -387,7 +359,6 @@ impl JiraReadinessProbe {
             Err(JiraAdapterError::NotConfigured) => {
                 return JiraReadiness {
                     configured: true,
-                    accepts_api_token: self.accepts_api_token(),
                     connection: JiraConnectionState::NotConnected,
                     account_name: None,
                     account_address: None,
@@ -396,7 +367,6 @@ impl JiraReadinessProbe {
             Err(JiraAdapterError::CredentialsInvalid) => {
                 return JiraReadiness {
                     configured: true,
-                    accepts_api_token: self.accepts_api_token(),
                     connection: JiraConnectionState::CredentialsInvalid,
                     account_name: None,
                     account_address: None,
@@ -405,17 +375,16 @@ impl JiraReadinessProbe {
             Err(JiraAdapterError::PermissionDenied) => {
                 return JiraReadiness {
                     configured: true,
-                    accepts_api_token: self.accepts_api_token(),
                     connection: JiraConnectionState::PermissionDenied,
                     account_name: None,
                     account_address: None,
                 };
             }
-            Err(_) => return unavailable(self.accepts_api_token()),
+            Err(_) => return unavailable(),
         };
         let Ok(mut project_probe_url) = endpoint(&access.base_url, "/rest/api/3/project/search")
         else {
-            return unavailable(self.accepts_api_token());
+            return unavailable();
         };
         project_probe_url
             .query_pairs_mut()
@@ -427,13 +396,12 @@ impl JiraReadinessProbe {
                 .send()
                 .await;
         let Ok(project_response) = project_response else {
-            return unavailable(self.accepts_api_token());
+            return unavailable();
         };
         match project_response.status() {
             StatusCode::UNAUTHORIZED => {
                 return JiraReadiness {
                     configured: true,
-                    accepts_api_token: self.accepts_api_token(),
                     connection: JiraConnectionState::CredentialsInvalid,
                     account_name: None,
                     account_address: None,
@@ -442,14 +410,13 @@ impl JiraReadinessProbe {
             StatusCode::FORBIDDEN => {
                 return JiraReadiness {
                     configured: true,
-                    accepts_api_token: self.accepts_api_token(),
                     connection: JiraConnectionState::PermissionDenied,
                     account_name: None,
                     account_address: None,
                 };
             }
             status if status.is_success() => {}
-            _ => return unavailable(self.accepts_api_token()),
+            _ => return unavailable(),
         }
 
         // Project discovery is the capability Swarm requires. Profile access is
@@ -465,13 +432,12 @@ impl JiraReadinessProbe {
         let account_address = profile
             .and_then(|account| account.email_address)
             .filter(|email| !email.trim().is_empty())
-            .or_else(|| match &access.authorization {
-                JiraAuthorization::Basic { email, .. } => Some(email.to_string()),
-                JiraAuthorization::Bearer(_) => None,
+            .or_else(|| {
+                let JiraAuthorization::Basic { email, .. } = &access.authorization;
+                Some(email.to_string())
             });
         JiraReadiness {
             configured: true,
-            accepts_api_token: self.accepts_api_token(),
             connection: JiraConnectionState::Ready,
             account_name,
             account_address,
@@ -1069,14 +1035,6 @@ impl JiraReadinessProbe {
                     },
                 })
             }
-            Self::OAuth(oauth) => {
-                let access = oauth.access().await.map_err(oauth_error)?;
-                Ok(JiraAccess {
-                    client: access.client,
-                    base_url: access.base_url,
-                    authorization: JiraAuthorization::Bearer(access.access_token),
-                })
-            }
         }
     }
 }
@@ -1112,12 +1070,8 @@ fn authorize(
     request: reqwest::RequestBuilder,
     authorization: &JiraAuthorization,
 ) -> reqwest::RequestBuilder {
-    match authorization {
-        JiraAuthorization::Basic { email, api_token } => {
-            request.basic_auth(email.as_ref(), Some(api_token.as_ref()))
-        }
-        JiraAuthorization::Bearer(token) => request.bearer_auth(token),
-    }
+    let JiraAuthorization::Basic { email, api_token } = authorization;
+    request.basic_auth(email.as_ref(), Some(api_token.as_ref()))
 }
 
 async fn account(access: &JiraAccess) -> Result<JiraAccount, JiraAdapterError> {
@@ -1141,18 +1095,6 @@ async fn account(access: &JiraAccess) -> Result<JiraAccount, JiraAdapterError> {
         return Err(JiraAdapterError::InvalidResponse);
     }
     Ok(account)
-}
-
-fn oauth_error(error: OAuthError) -> JiraAdapterError {
-    match error {
-        OAuthError::NotConnected => JiraAdapterError::NotConfigured,
-        OAuthError::CredentialsInvalid => JiraAdapterError::CredentialsInvalid,
-        OAuthError::PermissionDenied => JiraAdapterError::PermissionDenied,
-        OAuthError::NetworkUnavailable => JiraAdapterError::NetworkUnavailable,
-        OAuthError::InvalidResponse | OAuthError::InvalidState | OAuthError::Storage => {
-            JiraAdapterError::InvalidResponse
-        }
-    }
 }
 
 fn endpoint(base_url: &Url, path: &str) -> Result<Url, JiraAdapterError> {
@@ -1486,10 +1428,9 @@ fn write_private_bytes(path: &std::path::Path, bytes: &[u8]) -> Result<(), Strin
         .map_err(|error| format!("the Jira account could not be saved: {error}"))
 }
 
-fn unavailable(accepts_api_token: bool) -> JiraReadiness {
+fn unavailable() -> JiraReadiness {
     JiraReadiness {
         configured: true,
-        accepts_api_token,
         connection: JiraConnectionState::NetworkUnavailable,
         account_name: None,
         account_address: None,
