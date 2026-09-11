@@ -52,8 +52,16 @@ pub(super) async fn observe(
             } else {
                 None
             };
-            let mut observation = evidence(signals.as_ref().map(|(signals, _)| *signals), crate::unix_timestamp());
             let current_profile = store.get_worker_profile(item.worker_id).ok();
+            // The host read is asynchronous. A partial snapshot or a session
+            // replaced during that read is not current recovery evidence, even
+            // if its remaining bytes happen to resemble a resting prompt.
+            let signals = signals.filter(|(_, snapshot)| {
+                !snapshot.truncated && current_profile.as_ref().is_some_and(|profile| {
+                    profile.active_session_id == Some(item.session_id)
+                })
+            });
+            let mut observation = evidence(signals.as_ref().map(|(signals, _)| *signals), crate::unix_timestamp());
             observation["prompt_has_unsent_input"] = match (&signals, &current_profile) {
                 (Some((signals, snapshot)), Some(profile))
                     if profile.active_session_id == Some(item.session_id)
@@ -938,7 +946,7 @@ mod tests {
     #[tokio::test]
     // One real socket exercises successful reads, identity refusal, and cancellation.
     #[allow(clippy::too_many_lines)]
-    async fn host_reads_refresh_activity_reject_wrong_sessions_and_cancel_timeout() {
+    async fn host_reads_reject_partial_and_replaced_sessions_and_recover_after_timeout() {
         use swarm_terminal::{HostClient, HostRequest, HostResponse, Resume, TerminalSnapshot};
         use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
         let directory = tempfile::tempdir().unwrap();
@@ -970,8 +978,10 @@ mod tests {
             age_seconds: 200,
         };
         let state = AppState::default().with_terminal_host(HostClient::new(&socket), "fixture");
+        let replacement_session = swarm_domain::WorkerSessionId::new();
+        let host_store = store.clone();
         let host = tokio::spawn(async move {
-            for index in 0..5 {
+            for index in 0..8 {
                 let (stream, _) = listener.accept().await.unwrap();
                 let mut reader = BufReader::new(stream);
                 let mut line = String::new();
@@ -980,12 +990,18 @@ mod tests {
                 assert!(
                     matches!(request, HostRequest::Read { session_id, .. } if session_id == session)
                 );
-                if index == 4 {
+                if index == 5 {
                     // A stalled host must observe EOF when the bounded read is
                     // cancelled; no background socket/task may remain waiting.
                     let mut byte = [0];
                     assert_eq!(reader.read(&mut byte).await.unwrap(), 0);
                     continue;
+                }
+                if index == 7 {
+                    host_store.release_worker_session(session).unwrap();
+                    host_store
+                        .bind_worker_session(worker.id, replacement_session)
+                        .unwrap();
                 }
                 let response = HostResponse::Output {
                     session_id: if index == 2 {
@@ -999,8 +1015,8 @@ mod tests {
                             sequence: index + 1,
                             rows: 24,
                             columns: 100,
-                            truncated: false,
-                            bytes: if index == 0 {
+                            truncated: index == 4,
+                            bytes: if matches!(index, 0 | 4 | 6 | 7) {
                                 "● Done.\r\n❯ \r\n? for shortcuts"
                             } else {
                                 "❯ do the thing\r\n✻ Working… (esc to interrupt)\r\n"
@@ -1021,6 +1037,9 @@ mod tests {
             "unavailable",
             "unavailable",
             "unavailable",
+            "unavailable",
+            "resting",
+            "unavailable",
         ] {
             let result = tokio::time::timeout(
                 Duration::from_secs(4),
@@ -1040,6 +1059,12 @@ mod tests {
             } else {
                 assert!(result["saved"]["prompt_has_unsent_input"].is_null());
                 assert!(result["saved"].get("resting_terminal_excerpt").is_none());
+                assert!(
+                    active_work_recovery(std::slice::from_ref(&row), &result)["tasks"]
+                        .as_array()
+                        .unwrap()
+                        .is_empty()
+                );
             }
         }
         tokio::time::timeout(Duration::from_secs(1), host)
@@ -1055,7 +1080,7 @@ mod tests {
                 .get_worker_profile(worker.id)
                 .unwrap()
                 .active_session_id,
-            Some(session)
+            Some(replacement_session)
         );
     }
 

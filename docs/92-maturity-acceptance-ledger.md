@@ -1,5 +1,25 @@
 # Current maturity acceptance ledger
 
+## September 11 — Complete, post-read-fenced recovery observations
+
+Queen's on-demand recovery observer now rejects truncated snapshots and rechecks
+the worker's live session after the asynchronous host read before publishing any
+activity, input-presence or terminal excerpt. Previously only revision/excerpt
+subpaths had some of those checks; partial or replaced-session output could still
+be described as idle activity. This does not change classifier semantics, task
+state, dispatch authority, observation bounds or polling.
+
+The real isolated socket regression covers valid resting/active reads, wrong and
+ended sessions, truncated idle-looking bytes, timeout cancellation with socket
+EOF, subsequent successful recovery, and session replacement during the read.
+Unavailable cases carry neither idle recovery candidates nor terminal excerpts.
+The first run exposed a fixture error (replacement without releasing the old
+binding); corrected to use the actual end/bind lifecycle. Full release-mode API
+suite:591 passed,3 ignored. Formatting and strict release API all-target/all-feature
+Clippy passed. No real provider session or task was altered by these tests.
+Activation is pending. This closes these adapter evidence cases, not model-driven
+failed-recovery escalation, real Queen backlog, or native answer reconciliation.
+
 ## September 11 — Member observation states
 
 Member overview now distinguishes initial loading, unavailable reads and retained

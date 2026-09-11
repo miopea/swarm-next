@@ -2,6 +2,13 @@
 
 ## Authoritative next gates — September 11, morning
 
+Next activation: on-demand Queen recovery observation now refuses partial and
+post-read replaced-session evidence before publishing activity/input/excerpts.
+Full API suite591 passed/3 ignored, formatting and strict API Clippy pass. See92
+for the real-socket negative and return scenarios. Commit/deploy this API-only
+correction without restarting engines; retain all broader failure/escalation,
+native-provenance and real-device/performance gates below.
+
 Current UI work: Keeper and Member overviews now separate loading/unavailable/
 last-known sources from real empty counts. All1,676 web tests, TypeScript, build
 and isolated Edge failure/recovery checks pass. Member status labels wrap instead

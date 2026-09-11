@@ -53,6 +53,13 @@ solely because a host read took time. No polling, terminal input, replay, or tas
 mutation is introduced. Delivery still rechecks engagement and current activity;
 a read-time observation cannot grant future input authority.
 
+September 11 correction: apply the complete-snapshot and post-read live-session
+checks before publishing activity, input presence or any recovery excerpt, not
+only before constructing a terminal revision. A truncated read or a worker
+rebound while the host was answering is unavailable, even if its bytes resemble
+an idle prompt. A later complete read of the current session can recover normally;
+the failed read must not leave a socket, stale excerpt or false idle candidate.
+
 - The control room can surface stalled-looking owned work without polling with
   an LLM or interrupting a provider turn.
 - **Active**, **Awaiting you**, **With you**, unknown, and sleeping workers are
