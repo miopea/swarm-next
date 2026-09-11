@@ -224,6 +224,39 @@ test("an organisation that must own its own consent screen still can", async () 
   await waitFor(() => expect(sent).toEqual({ tenant_id: "organizations", client_id: "their-app" }));
 });
 
+test("a Hive configured before the bundled app can hand itself back to it", async () => {
+  let sentBody: string | undefined;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/configuration") && !init?.method) {
+      // What an existing Hive reports: its OWN registration, saved back when
+      // three fields were required, complete with a stored secret.
+      return ok({ configured: true, managed_by: "operator", tenant_id: "organizations", client_id: "e7c58c91-ef37-44e8-ac20-b8df5feb2618", callback_url: "https://swarm.test/auth/email/callback", secret_stored: true });
+    }
+    sentBody = String(init?.body);
+    return ok({ configured: true, managed_by: "bundled", tenant_id: "common", client_id: "059c82a8-4d77-4b19-a6c7-d702dde10960", callback_url: "https://swarm.test/auth/email/callback", secret_stored: false });
+  }));
+
+  render(
+    <EmailSettings
+      operatorToken="operator-token"
+      readiness={{ configured: true, connection: "not_connected", account_name: null, account_address: null }}
+      unavailable={false}
+    />,
+  );
+
+  fireEvent.click(await screen.findByRole("button", { name: "Replace app registration" }));
+  fireEvent.click(screen.getByRole("button", { name: "Use Swarm's own app instead" }));
+
+  // AN EMPTY BODY IS THE WHOLE POINT. Clearing the Application ID field cannot
+  // express this -- the input is `required`, so the browser refuses to submit
+  // and nothing reaches the server. There has to be a control that sends no
+  // fields at all.
+  await waitFor(() => expect(sentBody).toBe("{}"));
+  expect(await screen.findByText(/no longer used/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Connect Outlook" })).toBeEnabled();
+});
+
 test("offers a direct retry when Outlook readiness is temporarily unavailable", () => {
   vi.stubGlobal("fetch", vi.fn(async () => ok({ configured: true, managed_by: "operator", tenant_id: "organizations", client_id: "client-id", callback_url: "https://swarm.test/auth/email/callback", secret_stored: true })));
   const onRetryReadiness = vi.fn();

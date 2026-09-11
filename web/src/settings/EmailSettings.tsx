@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 
-import { beginEmailAuthorization, disconnectEmail, fetchEmailConfiguration, updateEmailConfiguration, type EmailOAuthConfiguration, type EmailReadiness } from "../api";
+import { beginEmailAuthorization, disconnectEmail, fetchEmailConfiguration, updateEmailConfiguration, useBundledEmailApp, type EmailOAuthConfiguration, type EmailReadiness } from "../api";
 
 /// `consumers` is personal Microsoft accounts only, and `organizations` is work
 /// and school only. Neither accepts the other, which is the point: a mailbox
@@ -88,6 +88,30 @@ export default function EmailSettings({ operatorToken, readiness, unavailable, o
     }
   }
 
+  // A Hive configured before Swarm shipped an application can only get back to
+  // the bundled one through a control of its own. The setup form describes a
+  // registration, and "none of my own" is not a registration you can describe
+  // in it -- which left an existing Hive permanently on whatever it was set up
+  // with, including a secret it no longer needs.
+  async function adoptBundledApp() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const next = await useBundledEmailApp(operatorToken);
+      setConfiguration(next);
+      setTenantId(next.tenant_id ?? PERSONAL_AUTHORITY);
+      setClientId(next.client_id ?? "");
+      setClientSecret("");
+      setShowAdvanced(false);
+      setEditingConfiguration(false);
+      setMessage("Now using the Microsoft app Swarm ships with. Your old registration and its secret are no longer used. You can connect Outlook.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Swarm's own Microsoft app could not be selected.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveConfiguration(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
@@ -168,6 +192,7 @@ export default function EmailSettings({ operatorToken, readiness, unavailable, o
           <small className="privacy-note">Swarm signs in as a public client using PKCE, so there is no secret to store or rotate. A secret is only for a Hive that already registered a confidential Web application; anything entered above travels only to this Hive over HTTPS and is never returned to the browser, Queen, or workers.</small>
           <div className="email-configuration-actions">
             {configured ? <button className="secondary-button" type="button" disabled={busy} onClick={() => setEditingConfiguration(false)}>Cancel</button> : null}
+            {bundled ? null : <button className="secondary-button" type="button" disabled={busy} onClick={() => void adoptBundledApp()}>Use Swarm's own app instead</button>}
             <button className="primary-action" type="submit" disabled={busy}>{busy ? "Saving privately…" : "Save app registration"}</button>
           </div>
         </form>
