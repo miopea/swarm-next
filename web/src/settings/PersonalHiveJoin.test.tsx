@@ -46,6 +46,31 @@ test("completed enrollment can recover a failed view refresh without submitting 
   expect(requests.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
 });
 
+test("joining status pauses while hidden and cancels its read when leaving", async () => {
+  let visibility: DocumentVisibilityState = "hidden";
+  const visibilitySpy = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+  let signal: AbortSignal | null | undefined;
+  let enrollmentReads = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (!String(input).endsWith("/enrollments")) return new Response("[]");
+    enrollmentReads += 1;
+    signal = init?.signal;
+    return new Promise<Response>((_resolve, reject) => signal?.addEventListener("abort", () => reject(new DOMException("Cancelled", "AbortError")), { once: true }));
+  }));
+  try {
+    await act(async () => { render(<PersonalHiveJoin busy={false} operatorToken="test" onError={vi.fn()} onMessage={vi.fn()} onJoined={vi.fn()} />); });
+    expect(enrollmentReads).toBe(0);
+    visibility = "visible";
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    expect(enrollmentReads).toBe(1);
+    expect(signal?.aborted).toBe(false);
+    visibility = "hidden";
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    expect(signal?.aborted).toBe(true);
+    expect(enrollmentReads).toBe(1);
+  } finally { cleanup(); visibilitySpy.mockRestore(); }
+});
+
 test("saved completed enrollment opens Apiary without another member action", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(
     String(input).endsWith("/enrollments") ? JSON.stringify([{ consent: { link_id: "link-1" }, phase: "complete" }]) : "[]")));

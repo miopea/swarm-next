@@ -1868,8 +1868,8 @@ export type ApiaryEnrollment = {
   problem?: "keeper_unavailable" | "invitation_unavailable" | "approval_changed" | "runtime_incompatible" | null;
 };
 
-export async function fetchApiaryEnrollments(operatorToken: string): Promise<ApiaryEnrollment[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/enrollments");
+export async function fetchApiaryEnrollments(operatorToken: string, signal?: AbortSignal): Promise<ApiaryEnrollment[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/enrollments", { signal });
   return response.json() as Promise<ApiaryEnrollment[]>;
 }
 

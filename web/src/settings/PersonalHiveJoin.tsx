@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import JoinPublicProfile, { type JoinPublicProfileHandle } from "./JoinPublicProfile";
+import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
 import {
   fetchApiaryEnrollments, submitApiaryEnrollment, type ApiaryEnrollment,
@@ -64,27 +65,18 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
   let proposed: ApiaryKeeperJoinCapability | undefined;
   try { proposed = readApiaryHandoffLink<ApiaryKeeperJoinCapability>(keeperLink, "keeper"); } catch { /* Incomplete pasted link. */ }
 
-  useEffect(() => {
-    let cancelled = false;
-    let running = false;
-    const refresh = async () => {
-      if (running) return;
-      running = true;
-      const epoch = enrollmentEpoch.current;
-      try {
-        const records = await fetchApiaryEnrollments(operatorToken);
-        if (cancelled || epoch !== enrollmentEpoch.current) return;
-        setEnrollments(records);
-        if (records.some((record) => record.phase === "complete") && !joinedNotified.current) {
-          await openJoinedApiary();
-        }
-      } catch { /* Older runtimes retain their explicit invitation flow. */ }
-      finally { running = false; }
-    };
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 5000);
-    return () => { cancelled = true; window.clearInterval(timer); };
+  const refreshEnrollments = useCallback(async (signal: AbortSignal) => {
+    const epoch = enrollmentEpoch.current;
+    try {
+      const records = await fetchApiaryEnrollments(operatorToken, signal);
+      if (signal.aborted || epoch !== enrollmentEpoch.current) return;
+      setEnrollments(records);
+      if (records.some((record) => record.phase === "complete") && !joinedNotified.current) {
+        await openJoinedApiary();
+      }
+    } catch { /* Older runtimes retain their explicit invitation flow. */ }
   }, [operatorToken, openJoinedApiary]);
+  useVisiblePolling(refreshEnrollments, Boolean(operatorToken), 5000);
 
   const refreshSavedState = useCallback(async () => {
     const [links, invitations] = await Promise.allSettled([
