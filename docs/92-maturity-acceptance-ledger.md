@@ -2,6 +2,16 @@
 
 ## September 11 — False workspace blocker cause established
 
+ACTIVATED61e36a10 on production and WSL as
+1.7.1-dev-61e36a10d513-20260911131937-1383257. Production engine1364561 and all8
+worker/session pairs preserved; receipts /tmp/swarm-worker-status-continuity.LiR0dN
+match SHA2566f5196dda450ba7055d488e5ad8522c3fce006b1ecf8d203bf243fa64f100ca9.
+WSL engine45338 preserved. Independent post-update worker API shows Architecture
+running/resting/runtime_error null, versus the pre-update blocked/EROFS state.
+No workspace permissions or worker session were changed to clear the false flag.
+This closes the reproduced API-sandbox false blocker, not genuine engine-mount
+writability detection. Prior no-preference CI34602058173 is now SUCCESS.
+
 WSL API reports Architecture running but Blocked with EROFS. Actual mountinfo:
 API PID48532 has root read-only and no writable home mount; engine45338 has
 /home rw. The API's access(W_OK) therefore cannot establish engine writability.
@@ -12,7 +22,7 @@ read-only-mount detection requires bounded engine-owned evidence and remains
 open. Do not close that operational gate based on removal of this false positive.
 Local correction passed all3 focused backend tests in exec session93830:
 API EROFS exclusion, real permission refusal, and writable/missing directories.
-Activation remains pending; no test remains running.
+Activation is recorded above; no test remains running.
 The same package adds a collapsed runtime-error explanation beside the worker
 in Settings, retaining Edit and removing the explanation automatically when the
 error clears. All30 WorkerSettings tests and TypeScript check pass. Edge fixture
