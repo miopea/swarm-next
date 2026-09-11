@@ -1,5 +1,30 @@
 # Current maturity acceptance ledger
 
+## September 11 — Workspace live acceptance and member-read correction
+
+On WSL revision4e46e680, saved the existing `~/projects/rcg` search folder through
+Settings. It normalized to `/home/bschleifer/projects/rcg`; searching architecture
+found the existing repository. A fictional missing path returned422 without
+clearing fields or breaking desktop layout. Correcting it created a sleeping
+demo worker. At an actual390x844 viewport, a tilde path plus explicit override
+also created a sleeping worker with no horizontal document overflow. Both demo
+workers were removed through the confirmation UI; neither was started and no
+repository files were removed. The useful RCG search folder remains configured.
+
+The member overview's403 is traced to its Keeper-only local claims read. ADR0099
+adds an authenticated own-Hive read through Keeper, preserving the local Keeper
+rollup restriction. Persistence isolation/expiry/release/credential recovery
+test passed. Fifteen federation API tests passed; strict API/persistence Clippy
+passed after extracting test helpers. All ten member API tests passed, including
+the nonempty member overview. Deployment acceptance remains separate; do not
+claim a live fix from these checks.
+
+Validation note: the first isolated full-debug link exhausted disk headroom and
+failed. Removed only the inactive isolated target cache (9.6GiB reproducible
+artifacts), recovering8.6GB. Source and live installation were untouched. All
+subsequent isolated runs use two jobs, DEBUG=0 for dev/test and INCREMENTAL=0.
+The smaller API build completed successfully. Current-main CI34559330406 passed.
+
 ## September 10 — Live browser and WSL in-place upgrade evidence
 
 Edge reconnected. Production and WSL now serve healthy

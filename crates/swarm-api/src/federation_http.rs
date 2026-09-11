@@ -314,6 +314,23 @@ impl FederationHttpClient {
         .await
     }
 
+    /// Reads the authenticated Hive's bounded active claims from Keeper.
+    ///
+    /// # Errors
+    /// Returns typed authentication, transport, response-bound or protocol errors.
+    pub async fn own_claims(
+        &self,
+        node_credential: &str,
+    ) -> Result<Vec<FederationSharedClaim>, FederationHttpError> {
+        self.send_json::<(), _>(
+            Method::GET,
+            "api/v1/federation/claims",
+            Some(node_credential),
+            None,
+        )
+        .await
+    }
+
     /// Requests one bounded shared-issue reservation from the Keeper.
     ///
     /// # Errors
@@ -731,6 +748,36 @@ mod tests {
         let client = FederationHttpClient::new(&format!("http://{address}/swarm")).unwrap();
 
         assert_eq!(client.join(&submission).await.unwrap(), acceptance);
+    }
+
+    #[tokio::test]
+    async fn member_claim_read_preserves_prefix_and_recovers_after_rejection() {
+        use axum::response::IntoResponse;
+        let expected = sample_claim();
+        let served = expected.clone();
+        let app = Router::new().route(
+            "/swarm/api/v1/federation/claims",
+            get(move |headers: axum::http::HeaderMap| {
+                let served = served.clone();
+                async move {
+                    if headers
+                        .get(header::AUTHORIZATION)
+                        .and_then(|value| value.to_str().ok())
+                        != Some("Bearer member-secret")
+                    {
+                        return StatusCode::UNAUTHORIZED.into_response();
+                    }
+                    Json(vec![served]).into_response()
+                }
+            }),
+        );
+        let address = spawn_server(app).await;
+        let client = FederationHttpClient::new(&format!("http://{address}/swarm")).unwrap();
+        assert!(client.own_claims("expired").await.is_err());
+        assert_eq!(
+            client.own_claims("member-secret").await.unwrap(),
+            vec![expected]
+        );
     }
 
     #[tokio::test]

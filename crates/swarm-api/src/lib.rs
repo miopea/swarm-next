@@ -3672,7 +3672,10 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/federation/tasks/commands",
             post(apply_federation_task_command),
         )
-        .route("/api/v1/federation/claims", post(reserve_federation_claim))
+        .route(
+            "/api/v1/federation/claims",
+            get(member_federation_claims).post(reserve_federation_claim),
+        )
         .route(
             "/api/v1/federation/claims/{claim_id}",
             delete(release_federation_claim),
@@ -4525,9 +4528,21 @@ async fn apiary_shared_work(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let service = apiary_service(&state)?;
-    let claims = service
-        .active_federation_claims(unix_timestamp())
-        .map_err(application_error)?;
+    let claims = match service.local_context().map_err(application_error)? {
+        LocalApiaryContext::Federated {
+            local_role: LocalApiaryRole::Member,
+            ..
+        } => {
+            let (connection, client) = member_federation_transport(&state)?;
+            client
+                .own_claims(&connection.node_credential)
+                .await
+                .map_err(federation_http_error)?
+        }
+        _ => service
+            .active_federation_claims(unix_timestamp())
+            .map_err(application_error)?,
+    };
     let members = service.members().map_err(application_error)?;
     let projects = service
         .promoted_jira_projects()
@@ -5399,6 +5414,17 @@ async fn apply_federation_task_command(
         .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(receipt)).into_response())
+}
+
+async fn member_federation_claims(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let claims = apiary_service(&state)?
+        .member_federation_claims(credential, unix_timestamp())
+        .map_err(federation_claim_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(claims)).into_response())
 }
 
 async fn reserve_federation_claim(
@@ -11636,6 +11662,10 @@ mod tests {
         let directory = member.local_federation_directory().unwrap().unwrap();
         assert_eq!(directory.entries.len(), 2);
         let app = router(state.clone());
+        let claims = authorized_get(app.clone(), "/api/v1/apiary/shared-work").await;
+        assert_eq!(claims.status(), StatusCode::OK);
+        assert_eq!(claims.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response_json(claims).await, serde_json::json!([]));
         let unauthorized = app
             .clone()
             .oneshot(
@@ -12017,6 +12047,21 @@ mod tests {
         assert_eq!(member.list_jira_issue_links(binding.id).unwrap().len(), 1);
         let claims = keeper.list_active_federation_claims(now).unwrap();
         assert_eq!(claims.len(), 1);
+        let member_app = router(
+            AppState::default()
+                .with_terminal_host(
+                    HostClient::new("/unreachable/terminal.sock"),
+                    "member-secret",
+                )
+                .with_task_store(member.clone()),
+        );
+        let overview =
+            authorized_get_with_token(member_app, "/api/v1/apiary/shared-work", "member-secret")
+                .await;
+        assert_eq!(overview.status(), StatusCode::OK);
+        let overview = response_json(overview).await;
+        assert_eq!(overview.as_array().unwrap().len(), 1);
+        assert_eq!(overview[0]["id"], claims[0].id.to_string());
         assert_eq!(
             claims[0].state,
             swarm_domain::FederationClaimState::Confirmed
@@ -12727,6 +12772,8 @@ mod tests {
         assert_eq!(reserved_json["state"], "reserved");
         assert!(!reserved_json.to_string().contains("credential"));
 
+        assert_member_claim_read(app.clone(), credential, &reserved_json).await;
+
         let retry = app.clone().oneshot(reserve()).await.unwrap();
         assert_eq!(retry.status(), StatusCode::CREATED);
         assert_eq!(response_json(retry).await, reserved_json);
@@ -12762,6 +12809,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(release_confirmed.status(), StatusCode::BAD_REQUEST);
+    }
+
+    async fn assert_member_claim_read(app: Router, credential: &str, expected: &serde_json::Value) {
+        let own =
+            authorized_get_with_token(app.clone(), "/api/v1/federation/claims", credential).await;
+        assert_eq!(own.status(), StatusCode::OK);
+        assert_eq!(own.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response_json(own).await, serde_json::json!([expected]));
+        let missing = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/federation/claims")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
     }
 
     async fn assert_keeper_shared_work_rollup(app: Router) {

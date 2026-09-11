@@ -570,6 +570,49 @@ impl TaskStore {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// Lists active claims owned by the authenticated member, never another Hive.
+    ///
+    /// # Errors
+    /// Rejects invalid/expired credentials, invalid time, and unavailable storage.
+    pub fn list_member_federation_claims(
+        &self,
+        node_credential: &str,
+        now: i64,
+    ) -> Result<Vec<FederationSharedClaim>, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationClaim);
+        }
+        let identity = self.local_hive_identity()?;
+        let credential = decode_node_credential(node_credential)?;
+        let connection = self.connection()?;
+        let member = authenticate_member_credential(&connection, &identity, &credential, now)?;
+        let mut statement = connection.prepare(
+            "SELECT id, apiary_id, project_id, issue_id, issue_key,
+                    home_node_id, home_hive_id, home_operator_id, state,
+                    reserved_at, reservation_expires_at, confirmed_at, released_at
+             FROM apiary_federation_claims
+             WHERE apiary_id = ?1 AND home_node_id = ?2
+               AND home_hive_id = ?3 AND home_operator_id = ?4
+               AND (state = 'confirmed'
+                    OR (state = 'reserved' AND reservation_expires_at > ?5))
+             ORDER BY CASE state WHEN 'reserved' THEN 0 ELSE 1 END,
+                      COALESCE(confirmed_at, reserved_at) DESC, issue_key ASC
+             LIMIT ?6",
+        )?;
+        let rows = statement.query_map(
+            params![
+                member.apiary.to_string(),
+                member.node.to_string(),
+                member.hive.to_string(),
+                member.operator.to_string(),
+                now,
+                MAX_ACTIVE_FEDERATION_CLAIMS
+            ],
+            federation_claim_from_row,
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// Atomically reserves one promoted Jira issue for the authenticated member
     /// Hive. Exact retries by that Hive return the same claim; another Hive
     /// fails closed until an unconfirmed reservation expires or is released.
@@ -5878,12 +5921,84 @@ mod tests {
         ));
         assert_eq!(
             keeper.list_active_federation_claims(now + 24).unwrap(),
-            vec![confirmed]
+            vec![confirmed.clone()]
         );
+        assert_member_claim_visibility(&keeper, &first, &second, confirmed, now);
         assert!(matches!(
             first_member.list_active_federation_claims(now + 24),
             Err(TaskStoreError::ApiaryKeeperRequired)
         ));
+    }
+
+    fn assert_member_claim_visibility(
+        keeper: &TaskStore,
+        first: &FederationJoinAcceptance,
+        second: &FederationJoinAcceptance,
+        confirmed: FederationSharedClaim,
+        now: i64,
+    ) {
+        assert_eq!(
+            keeper
+                .list_member_federation_claims(&first.node_credential, now + 24)
+                .unwrap(),
+            vec![confirmed]
+        );
+        assert!(
+            keeper
+                .list_member_federation_claims(&second.node_credential, now + 24)
+                .unwrap()
+                .is_empty()
+        );
+        let other = keeper
+            .reserve_federation_claim(
+                &second.node_credential,
+                "10001",
+                "20002",
+                "WWD-102",
+                now + 25,
+            )
+            .unwrap();
+        assert_eq!(
+            keeper
+                .list_member_federation_claims(&second.node_credential, now + 26)
+                .unwrap(),
+            vec![other.clone()]
+        );
+        assert!(
+            keeper
+                .list_member_federation_claims(
+                    &second.node_credential,
+                    other.reservation_expires_at
+                )
+                .unwrap()
+                .is_empty()
+        );
+        keeper
+            .release_federation_claim(&second.node_credential, other.id, now + 27)
+            .unwrap();
+        assert!(
+            keeper
+                .list_member_federation_claims(&second.node_credential, now + 28)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            keeper
+                .list_member_federation_claims("invalid", now + 28)
+                .is_err()
+        );
+        assert!(
+            keeper
+                .list_member_federation_claims(&first.node_credential, i64::MAX)
+                .is_err()
+        );
+        assert_eq!(
+            keeper
+                .list_member_federation_claims(&first.node_credential, now + 29)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]

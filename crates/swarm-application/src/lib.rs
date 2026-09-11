@@ -939,6 +939,28 @@ impl ApiaryService {
             .map_err(Into::into)
     }
 
+    /// Reads only claims owned by the authenticated member from its Keeper.
+    ///
+    /// # Errors
+    /// Rejects invalid credentials, invalid time, or unavailable persistence.
+    pub fn member_federation_claims(
+        &self,
+        node_credential: &str,
+        now: i64,
+    ) -> Result<Vec<FederationSharedClaim>, ApplicationError> {
+        self.store
+            .list_member_federation_claims(node_credential, now)
+            .map_err(Into::into)
+    }
+
+    /// Returns the local membership role used to select the federation transport.
+    ///
+    /// # Errors
+    /// Returns an error when durable membership state is unavailable.
+    pub fn local_context(&self) -> Result<LocalApiaryContext, ApplicationError> {
+        self.store.local_apiary_context().map_err(Into::into)
+    }
+
     /// Lists public destination identities for a member-initiated handoff.
     ///
     /// # Errors

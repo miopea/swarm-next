@@ -1,6 +1,25 @@
 # Swarm daily-driver maturity: scope and delivery plan
 
-## Authoritative next gates — September 10, 23:18 Eastern
+## Authoritative next gates — September 11, overnight
+
+The browser extension is restored. Production and WSL now serve development
+revision 4e46e680; both engine processes were preserved. Enrollment timing and
+workspace recovery are deployed. Desktop and actual 390px Manage Apiary scrolling
+passed. Existing WSL membership and the three-Hive directory survived update.
+
+The immediate blocker is reproduced: member shared-work returns 403 because it
+uses a Keeper-only local read. Finish scoped outbound member claims, isolation
+and HTTP recovery tests, then verify the WSL warning clears after deployment.
+Next prove fresh submit-once enrollment without removing existing membership,
+then workspace selection/override/error acceptance and remaining UI-1 through
+UI-4. Do not replace these gates with unrelated polishing.
+
+The operator has authorized overnight commits, deployment, WSL modifications
+and a release if needed for testing. Do not release merely to bypass validation.
+Other worker changes are finished; recheck the shared checkout before updates.
+No BFG Admin worker communication without explicit operator approval.
+
+## Historical next gates — September 10, 23:18 Eastern
 
 The latest operator priority is guided Apiary onboarding and workspace setup.
 The dated sequencing paragraphs below are historical where they conflict with
