@@ -200,6 +200,36 @@ the consent screen carries the publisher's name, and a tenant that blocks user
 consent to third-party apps makes its people ask an admin once. That is tenant
 policy and it applies whether the app is yours or theirs.
 
+### Where to put the registration -- a ONE-WAY DOOR
+
+> *"Once created, you can't move the application object between different
+> tenants."*
+> -- [Register an application](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app)
+
+Choosing the tenant is therefore not a detail to settle later. Moving it means a
+NEW registration and a NEW client id, and every Hive in the field has to be
+reconfigured, because the client id is what each install holds.
+
+Weigh it on ownership rather than on who can sign in, which the section above
+settles: the owning organisation appears as the publisher on every consent
+screen, and its admins can rename, restrict or delete the app -- which would
+break email for every install at once.
+
+**A personal Microsoft account CAN hold one, through a directory.** There is no
+registration without a tenant; signing in to Entra with a personal account
+creates a free **Default Directory** and the app lives there. Microsoft's
+prerequisite: *"A workforce or external tenant. You can use your Default
+Directory for this quickstart."* All four audiences are offered, including
+`AzureADandPersonalMicrosoftAccount`, and that audience's documented limits do
+not bind this integration: at most two client secrets (we use none), a 90
+-character display name, no national clouds, and at most 30 permissions per
+resource against our three.
+
+⚠️ **Not verified from the docs:** whether the portal's dropdown actually renders
+the multitenant options inside an MSA-created Default Directory. Nothing says it
+hides them, but that is an inference from absence. It is visible on the
+registration form in seconds -- check there rather than trusting this line.
+
 ## Providers deliberately not supported
 
 Recorded so they are not reopened without the reasons. Operator: *"This is a
