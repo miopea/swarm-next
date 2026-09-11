@@ -2,6 +2,22 @@
 
 ## Authoritative next gates — September 11, overnight
 
+03:21 CLOSED combined-build activation: CI34572128235 completed SUCCESS.
+Production and WSL now serve1.7.1-dev-1df01d768b09-20260911070807-1180013,
+both health responses ok with no degraded components or database recovery.
+Worker-engine PIDs remain944143/6458 and build fingerprint10a05263c1940d4344ee51a4729949f6e846879d025025ae100247df14c411f2.
+The identical transferred archive SHA256 is
+2f0d94fe55e9869d72d5298295af09c856080049137c40116f2066492c56b1d6.
+No release cut. Post-update browser acceptance is NOT claimed: the previously
+owned tabs disappeared and the connected extension currently returns no tabs.
+Earlier c8f74a85 live shared-board acceptance remains valid evidence for that gate.
+Optional return briefing mock is ready for operator design review, not enabled:
+C:/Users/bschleifer/.codex/visualizations/2026/09/03/01a064ad-786d-7110-b2cb-1e206b6a2a16/swarm-return-briefing.html
+Recommend a quiet optional entry with direct Needs You navigation and return to
+the last worker; all mock content and actions are fictional. Do not treat the
+mock as approval. Continue independent remaining gates without retrying Daisy's
+denied membership grant or messaging BFG Admin.
+
 03:12 CURRENT NEXT ACTION: combined main1df01d76 (other worker's committed Jira
 token UI plus our shared-task fixes) is built, NOT deployed. Wait for existing
 CI34572128235; web/package/audit passed and Rust is still running. Do not rebuild

@@ -1,5 +1,14 @@
 # Remaining maturity work — UX/UI first
 
+## Current checkpoint — September 11, 03:21 Eastern
+
+Combined build1df01d76 is CI-green and deployed to production and WSL with both
+engines preserved; see45 for exact health/version/checksum evidence. This closes
+the activation gate below. Post-update browser checks remain unverified because
+the extension currently exposes no tabs. The optional return-briefing mock is
+ready for operator review, not activated or approved. Do not spend another pass
+rebuilding this same code or repeating the already-passed shared-task journey.
+
 ## Current checkpoint — September 11, 02:55 Eastern
 
 The shared-task arrival/restart/retirement and live board freshness gates are
