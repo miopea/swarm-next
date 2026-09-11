@@ -1,5 +1,32 @@
 # Current maturity acceptance ledger
 
+## September 11 — Scoped Queue explanations activated on both installations
+
+Commit94b3606609a941760e0711a35a5a3a42a871fc6a serves as
+1.7.1-dev-94b3606609a9-20260911100106-1273435 on production and WSL.
+Both health checks are okay, without degraded services or database recovery.
+Production enginePID944143 and all ten running worker/session pairs match exactly
+before/after; receipts `/tmp/swarm-scoped-delivery-continuity.A7YGQl`, both hashes
+bf0bd5558207e97bce4e675438d22500ab3749484f85573acefc6cc2b40cf3b6.
+WSL enginePID6458 remains unchanged; its separately pending engine update remains
+visible and was not applied. No worker restart or public release occurred.
+
+Edge rendered both exact versions and Queues. Production's existing40 waiting
+tasks remain17 Queen/5 dependencies/3 shipping/15 scheduled; WSL is empty. This
+confirms normal rendered acceptance, not a fresh live instance of the held-input
+message (the demo had already completed). Scoped message, clearing and priority
+are verified by the31 dispatch and64 focused UI tests, within1672 total web tests.
+Full CI34586975865 web/package/audit passed; Rust was still running at this check.
+
+Development bundle:
+`/tmp/swarm-scoped-delivery-94b36066/swarm-1.7.1-dev-94b3606609a9-20260911100106-1273435-linux-x86_64`.
+WSL archiveSHA256:e2f9d7d03cce2bd07406e15955b42f15c3bf532b998c13486bc1fa8a5aaca1fc.
+Both deployment command handles finished successfully. The new worker's final
+activity11001/11002 explicitly reports that the unsent marker did not arrive as
+submitted input,12 fixture tests passed, unchanged delivered artifact hash and
+clean unchanged HEADc9e4bfd3. These are worker-reported test receipts, separately
+from browser/controller observations of protected input and actual lifecycle.
+
 ## September 11 — Protected input, engagement and normal pickup
 
 The scoped Queue explanation fix passes all31 release-mode task-dispatch tests,

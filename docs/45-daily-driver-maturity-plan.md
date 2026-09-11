@@ -2,12 +2,23 @@
 
 ## Authoritative next gates — September 11, overnight
 
+94b36066 is LIVE on production and WSL as
+1.7.1-dev-94b3606609a9-20260911100106-1273435. Both healthy; production engine
+944143 and all ten exact worker/session pairs preserved; WSL engine6458 preserved.
+Edge confirmed both served versions/Queues. Scope: historical, assignment/session-
+fenced prompt explanations, no authority or engine changes. All1672 web tests,
+31 release-mode dispatch tests, strict persistence Clippy, TypeScript/build pass.
+Full CI34586975865 remains pending Rust; web/package/audit already green.
+Do not rebuild/redeploy this as unfinished. Account21% remaining at last check.
+Next: finish CI receipt, then the still-open negative/failure recovery and
+approved user-facing acceptance gates; preserve the full scope, not just this slice.
+
 Protected-input acceptance CLOSED: demo task01a08fd9-c08d-7dd1-a4e9-bf6afdc8838b
 remained queued behind real unsent text, then behind actual browser engagement.
 After clearing only the owned marker and releasing the terminal, ordinary dispatch
 and worker execution completed it:11001 Active,11002 Review,11003 system Completed.
 Same provider session; no manual completion/recovery or restart. See92 for limits.
-Current implementation target: surface scoped last-delivery evidence in Queues;
+Scoped last-delivery evidence is now implemented and live as above;
 no new terminal observations or authority. Do not repeat the closed demo.
 
 05:36 CLOSED the explicitly authorized positive corrective-routing acceptance.
