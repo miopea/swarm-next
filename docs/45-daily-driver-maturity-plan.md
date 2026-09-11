@@ -2,19 +2,23 @@
 
 ## Authoritative next gates — September 11, morning
 
-Next activation: on-demand Queen recovery observation now refuses partial and
+On-demand Queen recovery observation now refuses partial and
 post-read replaced-session evidence before publishing activity/input/excerpts.
 Full API suite591 passed/3 ignored, formatting and strict API Clippy pass. See92
-for the real-socket negative and return scenarios. Commit/deploy this API-only
-correction without restarting engines; retain all broader failure/escalation,
-native-provenance and real-device/performance gates below.
+for the real-socket negative and return scenarios. f63de8c2 is live on production
+and WSL with exact browser/runtime checks. Production's current eight sessions
+and engine944143 survived this update; WSL's separately changed engine45338 was
+verified and preserved. Recovery CI34595653807 is running. Next work remains
+broader failure/escalation and native-provenance, plus real-device/performance
+gates below. Android camera/gallery check requested asynchronously; do not block
+independent work or repeat the already-approved AskUser check.
 
 Current UI work: Keeper and Member overviews now separate loading/unavailable/
 last-known sources from real empty counts. All1,676 web tests, TypeScript, build
 and isolated Edge failure/recovery checks pass. Member status labels wrap instead
 of clipping. Package e0771351 is now live on production and WSL; authenticated
 Edge verifies both overviews and exact runtimes. Both engine PIDs were preserved,
-as were production's ten exact worker/session pairs. CI34593793390 remains pending.
+as were production's ten exact worker/session pairs. CI34593793390 passed all jobs.
 Do not silently promote this follow-on into the pinned3dfc019e release candidate.
 See92 for the exact scope and remaining presentation limits.
 

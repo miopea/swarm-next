@@ -17,8 +17,25 @@ The first run exposed a fixture error (replacement without releasing the old
 binding); corrected to use the actual end/bind lifecycle. Full release-mode API
 suite:591 passed,3 ignored. Formatting and strict release API all-target/all-feature
 Clippy passed. No real provider session or task was altered by these tests.
-Activation is pending. This closes these adapter evidence cases, not model-driven
-failed-recovery escalation, real Queen backlog, or native answer reconciliation.
+Committed/pushed f63de8c2 and built its exact clean source. Production and WSL
+now serve1.7.1-dev-f63de8c2b899-20260911114753-1334742; both health checks and
+authenticated Edge runtime/Apiary navigation passed. Production engine944143
+and all eight worker/session pairs present immediately before this update were
+preserved. Receipts:/tmp/swarm-recovery-observations-continuity.ajCJkV; matching
+before/after hash71908134eb5cd4125f4d811bae1514166cba487a947704d0690af4fd0b6c5aeb.
+This is not a claim that the earlier ten-worker roster stayed unchanged between
+updates; two sessions were already absent at this update's initial snapshot.
+
+WSL's first activation guard refused without updating because its engine had
+already changed from43236 to45338 (start07:33:46 Eastern, e0771351 executable).
+After verifying that source/protocol, the app-only update preserved PID45338.
+The cause of that preceding WSL engine replacement was not attributed by this
+check. Production's older engine remains pending; WSL already carries the newer
+engine fingerprint. Do not claim the new native-capture behavior was exercised
+by these ordinary browser checks. Prior UI CI34593793390 is fully successful;
+new recovery CI34595653807 is in progress. No release was cut.
+This closes these adapter evidence cases, not model-driven failed-recovery
+escalation, real Queen backlog, or native answer reconciliation.
 
 ## September 11 — Member observation states
 
