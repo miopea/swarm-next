@@ -20,6 +20,7 @@ the newest checkpoint for the same gate supersedes them.
 | Worker setup draft continuity |09bc29cc preserves unfinished worker entries across Settings sections and filtering. Regression failed before the fix; Edge fixture and deployed WSL retained the exact name and repository. No worker was created by these draft-only checks. |
 | Queue presentation | Live owner sections, worker grouping, recorded order, linked prerequisites and expandable explanations. Counts match37 waiting rows at the recorded checkpoint. This does not prove every underlying task is correctly orchestrated. |
 | Narrow queue/decision interactions | September11 Edge390x844 fixtures: owner shortcut reached the blocked group; task navigation focused the correct card and opened readable details with reachable Close/Save. Expanded long risk text did not overlap choices; the final long option and Send answers remained reachable. No task or answer was submitted. This is browser layout/interaction acceptance, not native-device proof. |
+| Paired support attachment recovery | September11 actual Swarm transport and Admin fixture routes: two tests passed for text/files, lost receipt, Hive reopen, exact replay, changed-content rejection and original-receipt preservation. Fictional memory-only Admin storage; no production activation or customer send. See86. |
 
 ## Exact current delivery
 
@@ -67,7 +68,7 @@ Material exceptions to disclose:
 | Operations | Exact conversation recovery and safe engine admission | Chosen conversation persists; safe recovery, provider continue, clearly identified fresh fallback; cancellation/failure/partial-stop/update-return receipts. |
 | Efficiency | Matched fresh versus aged workload | Browser and server attribution, output fidelity and sustained plateau. Payload reduction/short server baseline are not this gate. |
 | Metrics | Measure useful progress | Review yield, duplicate questions, false alerts, recovery outcomes and update convergence, not just run counts. |
-| Support | BFG linked task/attachment/approved-reply loop | Fictional end-to-end messages and attachments; Admin owns customer sends. No BFG worker contact without approval. |
+| Support | Production attachment activation and linked task/approved-reply loop | Paired route recovery now passes; native picking, production private storage and linked completion/approved reply still need end-to-end proof. Admin owns customer sends. No BFG worker contact without approval. |
 | Apiary extension | Capability-specific Keeper management | Scope in98 still design: applied configuration receipts, revocation, offline convergence and bounded transport. Joining is not arbitrary remote-command permission. |
 
 ## Short operator dogfood checklist

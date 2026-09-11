@@ -1,5 +1,37 @@
 # Support UI acceptance checkpoint
 
+## September 11: paired native attachment recovery accepted
+
+Swarm09bc29cc0c5480aead8f57b43f1363839829e8d2 exercised the actual Admin
+intake routes from Admin69a5b59dccaede5ebe2b94563409539f7daef059. The existing
+tracked `tools/serve-feedback-attachments-acceptance.mts` fixture used in-memory
+SQLite and attachment bytes, no production credentials, mail sender, AI provider
+or task gateway. Its SHA256 was
+`9b35c6ff848176d87ea484ad3bb7064e3fb5493cd576482ad0a0fded1216b88a`.
+The older main Admin checkout was not used or changed; unrelated worktree edits
+were preserved. No worker communication occurred.
+
+The correct release-profile test command selected `support_transport::paired_tests`
+with `--lib -- --ignored --nocapture`: **2 passed,0 failed,0 ignored**. An initial
+filename-based filter selected zero tests and was not counted as acceptance.
+
+- Text and native-file submissions received real route receipts.
+- Simulated loss after remote commit, then dropping/reopening the temporary Hive
+  database, recovered the same frozen submission and attachment bytes.
+- Exact replay returned the original conversation/message IDs and timestamp;
+  durable settlement became Confirmed with no remaining retryable key.
+- Changed content/file bytes under the same key conflicted; replaying the original
+  still recovered its receipt. No silent downgrade or second conversation.
+
+Both endpoints were confined to loopback through a temporary SSH reverse forward.
+The existing remote5197 listener was left untouched;55197 was used instead and
+closed with the test command. The owned local5197 fixture was stopped afterward;
+its fictional in-memory state was discarded. No production service changed.
+
+This closes the paired Swarm-to-Admin route/restart/replay gate, not production
+private-storage acceptance, native phone picking, linked task completion or
+operator-approved customer replies. Attachment activation remains separate.
+
 ## September 8: live Admin-owned intake
 
 The development Hive is healthy on
