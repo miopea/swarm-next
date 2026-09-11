@@ -134,6 +134,37 @@ connecting a mailbox is usually not an admin.
 Multitenant also requires a globally unique App ID URI and token validation that
 accepts multiple issuer values.
 
+### An app registration cannot be created by signing in. Measured.
+
+The obvious hope -- *"shouldn't the first authorization from an admin create
+it?"* -- is worth killing with evidence, because the answer sounds like it
+could go either way and the flows are easy to confuse.
+
+The device-code endpoint decides on the `client_id` alone, with no user present,
+which makes it the clean probe:
+
+```sh
+curl -sS -X POST https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode \
+  -d "client_id=11112222-3333-4444-5555-666677778888&scope=openid"
+```
+
+Result, 2026-09-11:
+
+    unauthorized_client
+    AADSTS700016: Application with identifier '1111...8888' was not found in the
+    directory '9188040d-6c67-4c5b-b112-36a304b66dad'
+
+⚠️ **Do not probe this at `/authorize` instead.** That endpoint returns **200 and
+a normal sign-in page** for an unregistered client id -- it defers the
+app-existence check until after credentials, so the request that proves the
+point looks like the request that worked.
+
+**What admin consent DOES create automatically is the service principal** -- the
+"Enterprise application" object in the consenting tenant -- for an app
+registration that already exists somewhere. That half needs no work from anyone.
+The registration itself is a prerequisite: one of them, in one directory, serves
+every tenant that later consents.
+
 ## Providers deliberately not supported
 
 Recorded so they are not reopened without the reasons. Operator: *"This is a
