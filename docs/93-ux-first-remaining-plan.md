@@ -4,6 +4,16 @@
 
 ### Latest priority: guided enrollment, then workspace setup
 
+September 10, 23:13 Eastern: activation VERIFIED for 1be4f138:
+health serves 1.7.1-dev-1be4f1387392-20260911031055-1016423, status ok,
+no degradation or database recovery. Supported updater is inactive/exit 0.
+Worker host PID 944143/start 21:29:38 remained unchanged; during switchover
+all 10 running/retained sessions survived, 1 busy, 0 unreadable, not draining.
+Merged email/onboarding checks passed (27 tests, TypeScript, production build).
+CI 34557364854 web and packaging passed; Rust/audit were still running at last
+check. Edge selection still reports unavailable. No release was cut.
+The server timestamp fix and fresh-Hive browser acceptance remain OPEN.
+
 September 10, 23:08 Eastern: enrollment status-read failures now show an inline
 warning and read-only retry instead of silently masquerading as legacy-server
 compatibility. Last-known enrollment remains visible; recovery clears the warning
