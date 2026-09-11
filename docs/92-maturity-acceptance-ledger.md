@@ -13,9 +13,21 @@ Sixteen focused tests and all 1,676 web tests passed. TypeScript and production
 Vite build passed. Isolated Edge fixture verified unavailable counts, recovery,
 and retained counts after another failure. Screenshot review caught a clipped
 last-known label; summary text now wraps (measured width equals scroll width).
-No real Hive or worker was changed. This package is not yet live and does not
-change the pinned release candidate below. Broader Steward/handoff observation
+The fixture changed no real Hive or worker. Broader Steward/handoff observation
 presentation is not claimed complete by this overview fix.
+
+Activation: committed/pushed e07713510df85669b9f6552ec346d703094833fa. Linux
+workspace release build and web build passed. Production and WSL now serve
+1.7.1-dev-e07713510df8-20260911112359-1314498; both health checks are ok.
+Production engine PID944143 and all ten worker/session pairs stayed identical:
+before/after hash bf0bd5558207e97bce4e675438d22500ab3749484f85573acefc6cc2b40cf3b6,
+receipts /tmp/swarm-apiary-observations-continuity.fydOW4. WSL enginePID43236
+stayed unchanged, its loaded worker remained visible and membership persisted.
+Authenticated Edge verified the exact runtime on both, production's three-member
+Keeper summary and WSL member overview. Engine update remains explicitly pending;
+native-capture code was not activated. CI34593793390 still in progress at handoff.
+This development deployment is not a release and does not replace the separately
+pinned3dfc019e candidate without its own final review.
 
 ## September 11 — Keeper observation states
 

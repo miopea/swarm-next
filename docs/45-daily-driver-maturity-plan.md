@@ -5,9 +5,11 @@
 Current UI work: Keeper and Member overviews now separate loading/unavailable/
 last-known sources from real empty counts. All1,676 web tests, TypeScript, build
 and isolated Edge failure/recovery checks pass. Member status labels wrap instead
-of clipping. Next: deploy the coherent UI package and verify live read/navigation
-behavior. Do not silently promote this follow-on into the pinned3dfc019e release
-candidate. See92 for the exact scope and remaining presentation limits.
+of clipping. Package e0771351 is now live on production and WSL; authenticated
+Edge verifies both overviews and exact runtimes. Both engine PIDs were preserved,
+as were production's ten exact worker/session pairs. CI34593793390 remains pending.
+Do not silently promote this follow-on into the pinned3dfc019e release candidate.
+See92 for the exact scope and remaining presentation limits.
 
 Native-capture follow-on: fixed changed callback retries resetting the same
 invocation's input evidence. All20 focused tests,171 full terminal tests (one
@@ -16,12 +18,13 @@ full native answer reconciliation/provenance is not complete. This is a separate
 engine-code change, not part of the already tested3dfc019e release candidate.
 Continue the complete source-to-decision lifecycle without enabling partial proof.
 
-Current runtime candidate is3dfc019e on production and WSL. Full CI34589715128
+Pinned release candidate is3dfc019e, superseded on development installs by e0771351.
+Full CI34589715128
 SUCCESS; deployment, browser checks and exact production ten-session continuity
 are recorded in92. WSL's separately pending engine was then explicitly updated;
 one loaded worker returned, enginePID43236, notice cleared. Do not repeat these
-build or activation gates. Subsequent native-capture and observation UI commits
-are not yet activated; do not describe latest main as the tested runtime candidate.
+build or activation gates. Observation UI is activated as described above; the
+native-capture engine change remains pending. Do not conflate these revisions.
 
 Fresh no-Jira enrollment is CLOSED live: operator approved fictional Daisy,
 Keeper approved once, and member joined while its browser remained blank. On
