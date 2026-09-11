@@ -1,5 +1,22 @@
 # Current maturity acceptance ledger
 
+## September 11 — Integrated UI verification checkpoint
+
+CI34605803223 for deployed82eac78a is COMPLETE SUCCESS, including Rust, web,
+Linux package and Rust audit. Do not poll or rebuild it as pending.
+
+Edge screenshots of the existing 390x844 iframe fixtures show readable long
+decision options, stacked queue owner navigation/worker groups and Settings
+fields. Frame dimensions were measured from rendered iframe bounds. Settings
+sections have an intentional horizontal scroller; content has its own vertical
+scroll. No new visual defect was established in these visible samples.
+The full-app Queues fixture displays unavailable recovery details (fictional
+transport), not a production outage. These screenshots do not establish inner
+document scrollWidth, off-screen control reachability, all narrow-screen edits,
+actual browser zoom or physical Android/iOS behavior. An attempted unscoped
+iframe option click matched no control; do not report it as a passed interaction.
+The separate desktop interaction acceptance above remains valid.
+
 ## September 11 — Needs You interaction acceptance closed at UI boundary
 
 Edge exercised actual DecisionInbox in the in-memory answer-recovery fixture:
