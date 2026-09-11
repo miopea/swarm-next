@@ -158,6 +158,18 @@ struct DevelopmentRuntimeResponse {
     /// The failing step's own last words, one bounded line.
     #[serde(skip_serializing_if = "Option::is_none")]
     failure_detail: Option<String>,
+    /// The last time this Hive tried to replace its worker engine.
+    ///
+    /// ⚠️ AN ATTEMPT WITH NO OUTCOME IS THE POINT, not a hole. A protocol
+    /// migration replaces the API process mid-update, so the code that records
+    /// the ending can be gone before it runs; the row then says "started, never
+    /// reported back", which is the state an operator most needs to see and the
+    /// one the journal was previously the only witness to.
+    ///
+    /// Absent means this Hive has never attempted one, or the store could not be
+    /// read. Neither is a claim that the last update went well.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_worker_engine_update: Option<swarm_persistence::WorkerEngineUpdateAttempt>,
 }
 
 #[derive(Debug, Serialize)]
@@ -351,6 +363,10 @@ pub(super) async fn development(
                 .map(|(_, version)| version),
             failure_reason: development_status_field(&state, "step="),
             failure_detail: development_status_field(&state, "detail="),
+            last_worker_engine_update: crate::task_store(&state)
+                .ok()
+                .and_then(|store| store.last_worker_engine_update().ok())
+                .flatten(),
         }),
     )
         .into_response())

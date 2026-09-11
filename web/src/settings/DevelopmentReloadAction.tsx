@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { engineUpdateHistory } from "../runtime/engineUpdateHistory";
 import { deployedRevision, runtimeVersionIdentity, shortRevision } from "./runtimeVersion";
 
 type Props = {
@@ -82,6 +83,20 @@ export default function DevelopmentReloadAction({ busy, runtime, reachable = tru
    * Queen, deliberately, so the rest wait to be started by hand.
    */
   const runningSessions = runtime.running_worker_sessions;
+  /**
+   * What happened the last time the engine was replaced.
+   *
+   * Shown whether or not an update is pending, because the question it answers
+   * — "did the last one work, and did it take my workers with it" — is asked
+   * most often when nothing is pending and the roster looks short.
+   */
+  const lastEngineUpdate = engineUpdateHistory(
+    runtime.last_worker_engine_update,
+    Math.floor(Date.now() / 1000),
+  );
+  const engineHistory = lastEngineUpdate ? (
+    <p className="runtime-engine-history" role="status">{lastEngineUpdate}</p>
+  ) : null;
   const engineBehind = runtime.worker_engine_update_required === true ? (
     <p className="runtime-engine-behind">
       <strong>The worker engine is behind this build. Automatic replacement waits while workers
@@ -187,12 +202,12 @@ export default function DevelopmentReloadAction({ busy, runtime, reachable = tru
     </article>
   );
   if (!runtime.reload_available) {
-    return <article className="runtime-subsystem-card runtime-subsystem-current development-reload-action" aria-label="App and API status"><header><div><span className="runtime-component-name">App and API</span><strong>Running build matches the working copy</strong></div><span className="runtime-status-badge current">Current</span></header><p className="runtime-version"><strong>Installed</strong> {runtimeVersionIdentity(healthVersion ?? runtime.version)}</p><p>Active revision {runningRevision} matches the product code in this checkout. No App/API build is waiting.</p>{unpublished}{protocolPending}{engineBehind}<small>Swarm checks the working copy every 15 seconds. When product code changes, you can build and activate it without restarting Claude, Codex, or the worker engine.</small></article>;
+    return <article className="runtime-subsystem-card runtime-subsystem-current development-reload-action" aria-label="App and API status"><header><div><span className="runtime-component-name">App and API</span><strong>Running build matches the working copy</strong></div><span className="runtime-status-badge current">Current</span></header><p className="runtime-version"><strong>Installed</strong> {runtimeVersionIdentity(healthVersion ?? runtime.version)}</p><p>Active revision {runningRevision} matches the product code in this checkout. No App/API build is waiting.</p>{unpublished}{protocolPending}{engineBehind}{engineHistory}<small>Swarm checks the working copy every 15 seconds. When product code changes, you can build and activate it without restarting Claude, Codex, or the worker engine.</small></article>;
   }
   return (
     <article className="runtime-subsystem-card runtime-subsystem-safe development-reload-action" aria-label="App and API status">
       <header><div><span className="runtime-component-name">App and API</span><strong>Development reload available</strong></div><span className="runtime-status-badge safe">Workers stay online</span></header>
-      {lastBuildLanded}{unpublished}{protocolPending}{engineBehind}
+      {lastBuildLanded}{unpublished}{protocolPending}{engineBehind}{engineHistory}
       <p>{uncommittedOnly
         ? <>Revision {runningRevision} is active, and the working copy has uncommitted changes on top of it. Building picks those up.</>
         : <>Revision {runningRevision} is active. Build and switch the browser and API to working-copy revision {workingRevision}.</>}</p>

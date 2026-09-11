@@ -36,6 +36,7 @@ mod queen_review_focus;
 mod queen_run_history;
 mod review_return_history;
 mod worker_engine_returns;
+mod worker_engine_updates;
 pub use worker_engine_returns::WorkerEngineReturnSession;
 mod task_block;
 mod task_decision_links;
@@ -147,6 +148,7 @@ pub use email::{
 };
 pub use night_watch::NightWatchConfiguration;
 pub use presence::PresenceMutation;
+pub use worker_engine_updates::{WorkerEngineUpdateAttempt, WorkerEngineUpdateOutcome};
 mod notifications;
 mod terminal_control_projection;
 pub use notifications::{
@@ -300,7 +302,8 @@ const APIARY_ENROLLMENT_SCHEMA_VERSION: i64 = 165;
 const WORKSPACE_SEARCH_SCHEMA_VERSION: i64 = 166;
 const FEDERATION_LIFECYCLE_STATES_SCHEMA_VERSION: i64 = 167;
 const FEDERATION_MEMBERSHIP_EPOCHS_SCHEMA_VERSION: i64 = 168;
-const CURRENT_SCHEMA_VERSION: i64 = FEDERATION_MEMBERSHIP_EPOCHS_SCHEMA_VERSION;
+const WORKER_ENGINE_UPDATE_HISTORY_SCHEMA_VERSION: i64 = 169;
+const CURRENT_SCHEMA_VERSION: i64 = WORKER_ENGINE_UPDATE_HISTORY_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4157,6 +4160,25 @@ fn migrate_ops_intake_schema_steps(
     }
     if schema_version < FEDERATION_MEMBERSHIP_EPOCHS_SCHEMA_VERSION {
         federation_membership_epochs::migrate(transaction)?;
+    }
+    migrate_engine_history_schema_steps(transaction, schema_version)
+}
+
+/// The steps from the engine-update history onwards.
+///
+/// Split from `migrate_ops_intake_schema_steps` for the same reason that one
+/// was split from the function before it: adding a step took it past the length
+/// limit. The order is still the order, and the LAST step in the last function
+/// is the one whose number the database ends up stamped with.
+fn migrate_engine_history_schema_steps(
+    transaction: &rusqlite::Transaction<'_>,
+    schema_version: i64,
+) -> rusqlite::Result<()> {
+    // LAST, because it stamps the ceiling. Every migration sets user_version to
+    // its OWN number as its final act, so one placed above this would wind the
+    // recorded version backwards and the ceiling tests would say so at once.
+    if schema_version < WORKER_ENGINE_UPDATE_HISTORY_SCHEMA_VERSION {
+        worker_engine_updates::migrate(transaction)?;
     }
     Ok(())
 }
@@ -9588,6 +9610,13 @@ mod tests {
             probe_sql: "SELECT COUNT(*) = 3 FROM sqlite_master WHERE type='index'
                 AND name IN ('active_federation_hive','active_federation_operator','active_federation_node')
                 AND sql LIKE '%WHERE state = ''active''%'",
+        },
+        SchemaStep {
+            table: "worker_engine_update_attempts",
+            artifact: "outcome",
+            undo_sql: "DROP TABLE worker_engine_update_attempts",
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type='table'
+                AND name = 'worker_engine_update_attempts' AND sql LIKE '%timed_out%'",
         },
     ];
 

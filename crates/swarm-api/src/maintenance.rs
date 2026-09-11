@@ -8,6 +8,8 @@ use axum::{
 };
 use serde::Serialize;
 use swarm_domain::ControlRoomEventKind;
+use swarm_persistence::WorkerEngineUpdateOutcome;
+use swarm_persistence::WorkerEngineUpdateOutcome::{Failed, Succeeded, TimedOut};
 use swarm_terminal::{HostRequest, HostResponse, TerminalHostStatus};
 use tokio::time::{sleep, timeout};
 
@@ -691,6 +693,113 @@ async fn maintain_worker_engine_locked(
         .into_iter()
         .filter(|session| session.running)
         .collect::<Vec<_>>();
+    let target_version = pending.as_ref().map_or_else(
+        || build_version().to_owned(),
+        |(_, version)| version.clone(),
+    );
+    let attempt = write_down_what_this_costs(
+        state,
+        &running,
+        &previous.host_version,
+        &target_version,
+        pending_protocol,
+    )?;
+    stop_running_sessions(state, &running).await?;
+    state.control_room_notify.notify_waiters();
+    let requested = std::fs::write(
+        request_path.as_ref(),
+        format!(
+            "requested_at={}\ntarget_version={target_version}\n",
+            unix_timestamp()
+        ),
+    )
+    .map_err(|error| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "worker_engine_maintenance_unavailable",
+            format!("the managed maintenance request could not be recorded: {error}"),
+        )
+    });
+    if let Err(error) = &requested {
+        finish_engine_update(state, attempt.as_deref(), Failed, &error.message);
+    }
+    requested?;
+
+    let updated = await_expected_engine(state, pending_protocol).await;
+    let _ = std::fs::remove_file(request_path.as_ref());
+    if updated.is_err() {
+        finish_engine_update(
+            state,
+            attempt.as_deref(),
+            TimedOut,
+            "the engine never reported the expected release inside the budget",
+        );
+    }
+    let current = updated.map_err(|_| {
+        ApiError::new(
+            StatusCode::GATEWAY_TIMEOUT,
+            "worker_engine_maintenance_timed_out",
+            "the worker engine has not yet reported the expected release. The workers it unloaded are still recorded as owed a return and will be started once the engine reports in; check the roster in a moment.",
+        )
+    })?;
+    finish_engine_update(state, attempt.as_deref(), Succeeded, "");
+    // Not revived here. This runs under the worker lifecycle, and starting a
+    // worker takes that same non-reentrant mutex, so reviving inside it would
+    // deadlock the API against itself. The caller revives after releasing it,
+    // and anything still owed is picked up by the supervisor.
+    state.control_room_notify.notify_waiters();
+    Ok(WorkerEngineMaintenanceResponse {
+        previous_version: previous.host_version,
+        current_version: current.host_version,
+        stopped_sessions: running.len(),
+        restarted_workers: 0,
+    })
+}
+
+/// Waits for the engine the operator asked for to report in.
+///
+/// A PROTOCOL MIGRATION MOVES CURRENT AND HOST-CURRENT TOGETHER, so the engine
+/// build ids already agree before it runs and the engine condition alone would
+/// return the instant the drain cleared — reporting success while the old
+/// protocol was still serving. The host's own `protocol_version` is the fact that
+/// actually changes, so that is what is waited on.
+async fn await_expected_engine(
+    state: &AppState,
+    pending_protocol: Option<u16>,
+) -> Result<TerminalHostStatus, tokio::time::error::Elapsed> {
+    timeout(state.maintenance_timeout, async {
+        loop {
+            sleep(Duration::from_millis(200)).await;
+            if let Ok(status) = host_status_snapshot(state).await
+                && !worker_engine_update_required(&status)
+                && !status.draining
+                && pending_protocol.is_none_or(|wanted| status.protocol_version == wanted)
+            {
+                return status;
+            }
+        }
+    })
+    .await
+}
+
+/// Records who is about to be stopped, and that the attempt is under way.
+///
+/// BOTH BEFORE ANYTHING IS STOPPED, and they fail differently on purpose.
+///
+/// The revival intents fail the whole operation, because the card promises
+/// these workers back and stopping them with no durable record of who they were
+/// is exactly how that promise was broken once already.
+///
+/// The history entry does NOT. It exists so an operator can see what happened;
+/// refusing to update the engine because the note ABOUT the update could not be
+/// filed would make the record more important than the thing it records.
+fn write_down_what_this_costs(
+    state: &AppState,
+    running: &[swarm_terminal::HostSessionSummary],
+    from_version: &str,
+    to_version: &str,
+    to_protocol: Option<u16>,
+) -> Result<Option<String>, ApiError> {
     // Replacing the engine unloads every worker. Remember which ones the
     // operator had loaded so they can be brought back afterwards: a warned
     // maintenance action should cost a restart, not a roster the operator has
@@ -704,70 +813,51 @@ async fn maintain_worker_engine_locked(
             .map(|session| session.session_id)
             .collect::<std::collections::HashSet<_>>(),
     );
-    // Written down before anything is stopped, and fails the whole operation
-    // if it cannot be: the card promises these workers back, and stopping them
-    // with no durable record of who they were is how that promise was broken.
     task_store(state)?
         .record_worker_revival_intents(&loaded_worker_ids, unix_timestamp())
         .map_err(|error| task_store_error(&error))?;
-    stop_running_sessions(state, &running).await?;
-    state.control_room_notify.notify_waiters();
-    std::fs::write(
-        request_path.as_ref(),
-        format!(
-            "requested_at={}\ntarget_version={}\n",
-            unix_timestamp(),
-            pending.as_ref().map_or_else(
-                || build_version().to_owned(),
-                |(_, version)| version.clone()
-            )
-        ),
-    )
-    .map_err(|error| {
-        ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "worker_engine_maintenance_unavailable",
-            format!("the managed maintenance request could not be recorded: {error}"),
-        )
-    })?;
+    Ok(task_store(state)
+        .and_then(|store| {
+            store
+                .begin_worker_engine_update(
+                    from_version,
+                    to_version,
+                    to_protocol,
+                    running.len(),
+                    unix_timestamp(),
+                )
+                .map_err(|error| task_store_error(&error))
+        })
+        .inspect_err(|error| {
+            tracing::warn!(message = %error.message, "this engine update will leave no history entry");
+        })
+        .ok())
+}
 
-    let updated = timeout(state.maintenance_timeout, async {
-        loop {
-            sleep(Duration::from_millis(200)).await;
-            if let Ok(status) = host_status_snapshot(state).await
-                && !worker_engine_update_required(&status)
-                && !status.draining
-                // A protocol migration moves current and host-current TOGETHER,
-                // so the engine ids already agree before it runs and the engine
-                // condition alone would return the instant the drain cleared —
-                // reporting success while the old protocol was still serving.
-                // The host's own protocol_version is the fact that changes.
-                && pending_protocol.is_none_or(|wanted| status.protocol_version == wanted)
-            {
-                return status;
-            }
-        }
-    })
-    .await;
-    let _ = std::fs::remove_file(request_path.as_ref());
-    let current = updated.map_err(|_| {
-        ApiError::new(
-            StatusCode::GATEWAY_TIMEOUT,
-            "worker_engine_maintenance_timed_out",
-            "the worker engine has not yet reported the expected release. The workers it unloaded are still recorded as owed a return and will be started once the engine reports in; check the roster in a moment.",
-        )
-    })?;
-    // Not revived here. This runs under the worker lifecycle, and starting a
-    // worker takes that same non-reentrant mutex, so reviving inside it would
-    // deadlock the API against itself. The caller revives after releasing it,
-    // and anything still owed is picked up by the supervisor.
-    state.control_room_notify.notify_waiters();
-    Ok(WorkerEngineMaintenanceResponse {
-        previous_version: previous.host_version,
-        current_version: current.host_version,
-        stopped_sessions: running.len(),
-        restarted_workers: 0,
-    })
+/// Closes out an attempt's history entry, and never gets in the way.
+///
+/// ⚠️ AN ATTEMPT WITH NO ENDING IS A REAL ANSWER, so this failing quietly is
+/// correct rather than lazy. A protocol migration replaces this very process;
+/// the call that would record the outcome may simply never run, and the row
+/// stays open saying "started, never heard from again" -- which is what an
+/// operator needs to see. Turning a storage failure here into an error on the
+/// update path would report a successful engine swap as a failure.
+fn finish_engine_update(
+    state: &AppState,
+    attempt: Option<&str>,
+    outcome: WorkerEngineUpdateOutcome,
+    detail: &str,
+) {
+    let Some(attempt) = attempt else {
+        return;
+    };
+    if let Err(error) = task_store(state).and_then(|store| {
+        store
+            .finish_worker_engine_update(attempt, outcome, detail, unix_timestamp())
+            .map_err(|error| task_store_error(&error))
+    }) {
+        tracing::warn!(message = %error.message, "an engine update outcome could not be recorded");
+    }
 }
 
 /// Stops every session the engine replacement is about to invalidate, and lets

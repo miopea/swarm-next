@@ -18011,6 +18011,17 @@ mod tests {
         // stopped it, so the supervisor can still bring it back.
         assert!(!session.is_running().unwrap());
         assert_eq!(store.worker_revival_intents().unwrap(), vec![worker.id]);
+        // AND THE BOARD SAYS SO, which it did not before. This interruption was
+        // previously visible only in the journal, so "did the update go through,
+        // and did it take my workers with it" had no answer on any screen.
+        let attempt = store.last_worker_engine_update().unwrap().unwrap();
+        assert_eq!(
+            attempt.outcome,
+            Some(swarm_persistence::WorkerEngineUpdateOutcome::TimedOut)
+        );
+        assert_eq!(attempt.stopped_sessions, 1, "it stopped this worker");
+        assert_eq!(attempt.from_version, "old-host");
+        assert!(attempt.finished_at.is_some());
 
         server_task.abort();
         let _ = server_task.await;

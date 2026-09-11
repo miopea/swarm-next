@@ -482,6 +482,33 @@ export type DevelopmentRuntime = {
   failure_reason?: string | null;
   /** The failing step's own last words, one bounded line. */
   failure_detail?: string | null;
+  /**
+   * The last time this Hive tried to replace its worker engine.
+   *
+   * Absent means it never has, or the store could not be read. Neither is a
+   * claim that the last one went well.
+   */
+  last_worker_engine_update?: WorkerEngineUpdateAttempt | null;
+};
+
+/**
+ * One recorded engine-update attempt.
+ *
+ * `outcome: null` means started and never heard from again — which is what a
+ * protocol migration looks like when it replaces Swarm itself, and is NOT a
+ * success. The row is written before any worker is stopped precisely so this
+ * case can be recorded at all.
+ */
+export type WorkerEngineUpdateAttempt = {
+  id: string;
+  started_at: number;
+  from_version: string;
+  to_version: string;
+  to_protocol?: number | null;
+  stopped_sessions: number;
+  outcome?: "succeeded" | "timed_out" | "failed" | null;
+  detail: string;
+  finished_at?: number | null;
 };
 /** One release the origin currently offers. Absent from the manifest means withdrawn. */
 export type ReleaseOffer = {

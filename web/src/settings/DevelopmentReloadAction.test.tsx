@@ -513,3 +513,56 @@ test("an unknown session count degrades to a sentence rather than a number", () 
   expect(screen.getByText(/every running worker session/)).toBeInTheDocument();
   expect(screen.queryByText(/all null/)).not.toBeInTheDocument();
 });
+
+/**
+ * The engine-update history reaches the card, including when it is up to date.
+ *
+ * ⚠️ THE QUESTION IS ASKED WHEN NOTHING IS PENDING. "Did the last update work,
+ * and did it bring my workers back" gets asked because the roster looks short,
+ * not because a badge is lit — so gating this on worker_engine_update_required
+ * would hide it at exactly the moment somebody goes looking.
+ */
+test("shows what the last worker engine update did, even with the engine current", () => {
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-123456789abc-20260815040000-10",
+    state: "idle",
+    reload_available: false,
+    deployed_source_revision: "76543210fedc",
+    source_revision: "76543210fedc",
+    source_dirty: false,
+    deployed_source_published: true,
+    worker_engine_update_required: false,
+    last_worker_engine_update: {
+      id: "01a0",
+      started_at: Math.floor(Date.now() / 1000) - 600,
+      from_version: "1.8.1",
+      to_version: "1.9.0",
+      to_protocol: 18,
+      stopped_sessions: 4,
+      outcome: null,
+      detail: "",
+      finished_at: null,
+    },
+  }} />);
+
+  // The sentence that matters: started, never reported back, not a success.
+  expect(screen.getByText(/never recorded how it ended/)).toBeInTheDocument();
+  expect(screen.getByText(/not confirmation that it worked/)).toBeInTheDocument();
+});
+
+test("says nothing about past updates when this Hive has never attempted one", () => {
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-123456789abc-20260815040000-10",
+    state: "idle",
+    reload_available: false,
+    deployed_source_revision: "76543210fedc",
+    source_revision: "76543210fedc",
+    source_dirty: false,
+    deployed_source_published: true,
+    worker_engine_update_required: false,
+  }} />);
+
+  expect(screen.queryByText(/worker engine update/)).not.toBeInTheDocument();
+});
