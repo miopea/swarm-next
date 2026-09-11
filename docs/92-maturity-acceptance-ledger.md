@@ -1,5 +1,20 @@
 # Current maturity acceptance ledger
 
+## September 11 — Bounded management reads activated
+
+Production and WSL serve `1.7.1-dev-42ace825b3ea-20260911141056-1411729`.
+Production engine1364561 and all eight running worker/session pairs match exactly
+in `/tmp/swarm-apiary-reads-continuity.SgLaAq`; both snapshots hash to
+`6f5196dda450ba7055d488e5ad8522c3fce006b1ecf8d203bf243fa64f100ca9`.
+WSL engine45338 is unchanged. Full web174 files/1683 tests and Linux package
+build passed. CI34608555581 remains in progress independently.
+
+Edge verified both served revisions and opened Keeper/member management. WSL
+Refresh retained an unsaved test name; closed the name editor and test tabs
+without saving. No identity, membership or work was changed. No release cut.
+Production now reports2.0GiB free storage; do not start more large builds without
+checking headroom. No files were deleted for this package.
+
 ## September 11 — Bound Apiary management read lifetimes
 
 Follow-up to the refresh wiring: the four older management read effects now
