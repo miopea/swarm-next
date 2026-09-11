@@ -1,5 +1,9 @@
 # Apiary onboarding validation handoff — September 10
 
+September11: the historical pending enrollment/worker-setup checks below have
+newer completed evidence. Use [the current user-facing closeout](maturity-user-facing-closeout.md)
+and the newest92 receipts for delivery, remaining gates and release assessment.
+
 ## Current acceptance flow — supersedes the historical checkpoints below
 
 Production-dev0dc1b248 is live and healthy (September10,21:08 Eastern), with

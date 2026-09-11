@@ -1,5 +1,9 @@
 # Swarm daily-driver maturity: scope and delivery plan
 
+Current concise delivery/remaining-work handoff:
+[User-facing maturity closeout](maturity-user-facing-closeout.md).
+The full objective and requirements below remain in force.
+
 ## Authoritative next gates — September 11, morning
 
 ### September 11, 09:53 Eastern — user-facing closeout checkpoint
