@@ -30,6 +30,68 @@ esac
   echo "release tag $version does not match the workspace version $base_version in Cargo.toml" >&2
   exit 1
 }
+# REFUSE BEFORE STARTING, rather than dying partway through.
+#
+# A release build is the thing that fills the disk: target/release alone is
+# 5.2 GiB on the machine this was written on, and a cargo build that runs out of
+# space leaves a partial target tree and a half-written artifact. Recoverable.
+# What is not recoverable in the same breath is the rest of a release running on
+# a full volume -- the signing step, the manifest write, and on a Hive taking the
+# update, the database backup and migration.
+#
+# Measured rather than guessed, on 2026-09-11: the host was at ~3.6 GiB free when
+# this was raised, a single release build took it to 2.9 GiB (96% used), and
+# target/release is 5.2 GiB. So a few GiB of headroom is a build's ordinary
+# working set, not a safety margin.
+#
+# ⚠️ A WARNING, NOT A FLOOR, BELOW THE THRESHOLD IS NOT THE POINT. The default
+# refuses. An operator who knows better overrides it with SWARM_MIN_FREE_MIB=0
+# and owns the outcome, which is different from never having been told.
+min_free_mib=${SWARM_MIN_FREE_MIB:-4096}
+case "$min_free_mib" in
+  *[!0-9]*)
+    echo "SWARM_MIN_FREE_MIB must be a whole number of MiB, found '$min_free_mib'" >&2
+    exit 1
+    ;;
+esac
+if [ "$min_free_mib" -gt 0 ]; then
+  # POSIX df -P keeps one record per filesystem on a single line, which the
+  # default output does not guarantee for long device names.
+  free_mib=$(df -Pk "$repo_root" | awk 'NR==2 {print int($4 / 1024)}')
+  case "$free_mib" in
+    ''|*[!0-9]*)
+      echo "could not read free space for $repo_root; set SWARM_MIN_FREE_MIB=0 to build anyway" >&2
+      exit 1
+      ;;
+  esac
+  if [ "$free_mib" -lt "$min_free_mib" ]; then
+    echo "not enough free space to build a release: ${free_mib} MiB available, ${min_free_mib} MiB required" >&2
+    echo "" >&2
+    echo "A release build needs several GiB, and running out midway leaves a partial" >&2
+    echo "target tree and no artifact. Reclaim space, then run this again." >&2
+    echo "" >&2
+    # Only name what is actually there, and stay silent if none of it is. A
+    # suggestion to delete a directory that does not exist reads as the tool not
+    # knowing this machine, and the reader trusts the rest of the message less.
+    reclaimable=
+    for candidate in "target/debug:rebuilt on demand" \
+                     "dist:superseded artifacts; published releases are on GitHub"; do
+      path=$repo_root/${candidate%%:*}
+      [ -d "$path" ] || continue
+      size=$(du -sh "$path" 2>/dev/null | cut -f1)
+      [ -n "$size" ] || continue
+      reclaimable="${reclaimable}  ${size}	${path}  (${candidate#*:})
+"
+    done
+    if [ -n "$reclaimable" ]; then
+      echo "Usually reclaimable on this host:" >&2
+      printf '%s\n' "$reclaimable" >&2
+    fi
+    echo "Override with SWARM_MIN_FREE_MIB=0 if you know this host needs less." >&2
+    exit 1
+  fi
+fi
+
 release_verifying_key=$(cat "$repo_root/packaging/release-verifying-key" 2>/dev/null | tr -d "\r\n")
 protocol=$(sed -n 's/^pub const PROTOCOL_VERSION: u16 = \([0-9][0-9]*\);/\1/p' "$repo_root/crates/swarm-terminal/src/ipc.rs" | tr -d '\r')
 worker_engine_build_id=$(sh "$repo_root/packaging/linux/worker-engine-build-id.sh" "$repo_root")
