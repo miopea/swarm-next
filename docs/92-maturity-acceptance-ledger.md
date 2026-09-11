@@ -19,7 +19,20 @@ lost offer reply and recognition of the saved offer; no second Send control,
 page width1465px with no horizontal overflow. Screenshot found the new notice
 displacing fields; full-width notice/actions fixed it and were visually checked.
 The no-proxy harness cannot reach a Hive. This is not a real Jira handoff test,
-native device acceptance, or actual200% browser zoom. Deployment still pending.
+native device acceptance, or actual200% browser zoom.
+
+Activation:6d1ac295a1d4b806fa197b7e429818cb93d2dc95 is deployed on production
+and WSL as1.7.1-dev-6d1ac295a1d4-20260911121244-1346703. Linux release workspace
+build and embedded web build pass. Both health endpoints report healthy/no
+degraded services; Edge confirms exact runtimes and Keeper/Member rendering.
+Production engine944143 and all eight worker/session pairs are unchanged;
+receipts `/tmp/swarm-handoff-recovery-continuity.oQggZB`, before/after SHA256
+`71908134eb5cd4125f4d811bae1514166cba487a947704d0690af4fd0b6c5aeb`.
+WSL engine45338 is unchanged. Archive transferred/verified with SHA256
+`5189d855c741bfaf9bd4950c0c73f7bbc6ea5091aa4fbfd0ddb1bed2c9096245`.
+Production still carries its separately pending engine update; none applied.
+CI34597720262 is running. Earlier recovery CI34595653807 completed SUCCESS.
+No new release was cut. Full maturity acceptance remains open.
 
 ## September 11 — Complete, post-read-fenced recovery observations
 
