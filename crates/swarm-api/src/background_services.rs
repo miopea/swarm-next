@@ -41,8 +41,20 @@ impl BackgroundServices {
         F: FnMut() -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send,
     {
+        // ⚠️ A TRIPWIRE, NOT A CAPACITY LIMIT. Shutdown stops admission, lets the
+        // current pass finish, and JOINS every service here; a service spawned
+        // anywhere else is not joined and its half-written delivery is lost.
+        // The count exists so that adding one makes somebody read this.
+        //
+        // It panics at BOOT, which is severe on purpose and worth knowing before
+        // you add the next one: a seventh service raised here without thought is
+        // a Hive that will not start. Raise it deliberately, having checked the
+        // new service is owned by this struct and finishes its pass promptly.
+        //
+        // 7 since 2026-09-11, when the release sweep that closes the tickets a
+        // release carried was added.
         assert!(
-            self.tasks.len() < 6,
+            self.tasks.len() < 7,
             "all background services need a bounded owner"
         );
         let mut stop = self.stop.subscribe();

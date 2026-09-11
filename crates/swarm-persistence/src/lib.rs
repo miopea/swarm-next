@@ -142,7 +142,8 @@ pub use decisions::{DecisionDeliveryFailure, DecisionDispatch, NewDecisionReques
 pub use email::{
     EmailAttachmentSnapshot, EmailImport, EmailMessageSnapshot, EmailReplyDispatch,
     EmailReplyFailure, EmailReplyState, EmailReplyTarget, EmailReplyTargetDispatch,
-    EmailTaskAttachment, EmailTaskDraft, EmailTaskLink, TaskDeploymentRecord, UnansweredEmailTask,
+    EmailTaskAttachment, EmailTaskDraft, EmailTaskLink, MAX_DEPLOYMENT_FIELD_BYTES,
+    TaskDeploymentRecord, UnansweredEmailTask,
 };
 pub use night_watch::NightWatchConfiguration;
 pub use presence::PresenceMutation;

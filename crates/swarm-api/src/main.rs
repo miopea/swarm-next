@@ -399,6 +399,20 @@ fn start_background_services(state: &AppState) -> BackgroundServices {
             state.intake_github_issues().await;
         }
     });
+    // A RELEASE CLOSES THE TICKETS IT CARRIED, without anybody remembering to.
+    //
+    // Five minutes because a tag appears at a moment nothing here is watching,
+    // and the sweep costs one git call per parked task -- usually none at all,
+    // since the query returns nothing when no work is waiting to ship.
+    let released_tasks = state.clone();
+    services.periodic(std::time::Duration::from_secs(5 * 60), true, move || {
+        let state = released_tasks.clone();
+        async move {
+            // Blocking thread, not the runtime's: this runs a git subprocess
+            // per parked task and holds a database connection while it does.
+            let _ = tokio::task::spawn_blocking(move || state.record_released_tasks()).await;
+        }
+    });
     let jira_reconciler = state.clone();
     services.periodic(std::time::Duration::from_secs(60), false, move || {
         let state = jira_reconciler.clone();

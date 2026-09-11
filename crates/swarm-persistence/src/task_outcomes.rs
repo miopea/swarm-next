@@ -408,6 +408,105 @@ mod tests {
         }
     }
 
+    /// Only parked, readable work is offered to the release sweep.
+    ///
+    /// ⚠️ THE STATE FILTER IS THE SAFETY PROPERTY, not a convenience. The caller
+    /// records a whole-task deployment for whatever this returns, and a
+    /// whole-task deployment CLOSES work — so a task in Review appearing here
+    /// would be closed by a sweep on evidence nobody accepted. Review means
+    /// finished and handed over; Awaiting Release means accepted and unshipped,
+    /// and only the second is a question a tag can answer.
+    #[test]
+    fn only_parked_work_in_a_readable_repository_is_offered_to_the_release_sweep() {
+        let store = TaskStore::in_memory().unwrap();
+        let parked = store.create_task("Parked", "/workspace").unwrap();
+        let reviewing = store.create_task("In review", "/workspace").unwrap();
+        let no_repository = store.create_task("No git here", "/elsewhere").unwrap();
+        let never_reported = store.create_task("Asked nothing", "/workspace").unwrap();
+        for id in [parked.id, reviewing.id, no_repository.id, never_reported.id] {
+            store.transition_task(id, TaskState::Ready).unwrap();
+            store.transition_task(id, TaskState::Active).unwrap();
+            store.transition_task(id, TaskState::Review).unwrap();
+        }
+        for id in [parked.id, no_repository.id, never_reported.id] {
+            store
+                .transition_task(id, TaskState::AwaitingRelease)
+                .unwrap();
+        }
+        let commit = TaskCommit {
+            sha: "246e98ba".to_owned(),
+            verdict: CommitVerdict::Present,
+            subject: "build(release): refuse without headroom".to_owned(),
+            changed_paths: vec!["packaging/linux/build-release.sh".to_owned()],
+        };
+        for id in [parked.id, reviewing.id] {
+            store
+                .record_task_commits(
+                    id,
+                    "/workspace",
+                    CommitRepositoryState::Read,
+                    std::slice::from_ref(&commit),
+                    1_000,
+                )
+                .unwrap();
+        }
+        store
+            .record_task_commits(
+                no_repository.id,
+                "/elsewhere",
+                CommitRepositoryState::NotARepository,
+                &[],
+                1_000,
+            )
+            .unwrap();
+
+        let offered = store.awaiting_release_commit_reports().unwrap();
+
+        assert_eq!(
+            offered
+                .iter()
+                .map(|report| report.task_id)
+                .collect::<Vec<_>>(),
+            vec![parked.id],
+            "only parked work whose repository could be read belongs here"
+        );
+        assert_eq!(offered[0].workspace, "/workspace");
+        assert_eq!(offered[0].commits.len(), 1);
+    }
+
+    /// An empty commit report reaches the caller rather than being filtered out.
+    ///
+    /// "This task built nothing" is an ANSWER, and the refusal it earns belongs
+    /// with the policy that can be read and tested, not buried in a WHERE clause
+    /// where nothing would ever exercise it again.
+    #[test]
+    fn a_task_that_built_nothing_still_reaches_the_policy_that_refuses_it() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store
+            .create_task("A written decision", "/workspace")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        store
+            .transition_task(task.id, TaskState::AwaitingRelease)
+            .unwrap();
+        store
+            .record_task_commits(
+                task.id,
+                "/workspace",
+                CommitRepositoryState::Read,
+                &[],
+                1_000,
+            )
+            .unwrap();
+
+        let offered = store.awaiting_release_commit_reports().unwrap();
+
+        assert_eq!(offered.len(), 1);
+        assert!(offered[0].commits.is_empty());
+    }
+
     /// A recorded deployment supersedes an unapproved claim that nothing
     /// shipped, because the two cannot both be true.
     ///
@@ -3565,6 +3664,48 @@ impl TaskStore {
         drop(connection);
         self.task_commit_report(task_id)?
             .ok_or(TaskStoreError::NotFound)
+    }
+
+    /// Commit reports for every task parked in Awaiting Release.
+    ///
+    /// The caller asks its repository which release carries these commits, so
+    /// this only returns reports whose repository could be READ. A report of
+    /// `not_a_repository` recorded a workspace with no git in it, and there is
+    /// no tag to ask about; a task with no report at all has been asked nothing.
+    ///
+    /// Tasks with an empty commit list are returned rather than filtered here.
+    /// "Built nothing" is an answer the policy layer has to see and refuse for
+    /// its own reason -- hiding it at the query would make that refusal
+    /// untestable and the query the only place the rule lived.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn awaiting_release_commit_reports(&self) -> Result<Vec<TaskCommitReport>, TaskStoreError> {
+        let task_ids = {
+            let connection = self.connection()?;
+            let mut statement = connection.prepare(
+                "SELECT report.task_id
+                   FROM task_commit_reports report
+                   JOIN tasks ON tasks.id = report.task_id
+                  WHERE tasks.state = ?1 AND report.repository_state = 'read'
+                  ORDER BY report.reported_at, report.task_id",
+            )?;
+            statement
+                .query_map([TaskState::AwaitingRelease.to_string()], |row| {
+                    row.get::<_, String>(0)
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let mut reports = Vec::new();
+        for task_id in task_ids {
+            let Ok(task_id) = task_id.parse::<TaskId>() else {
+                continue;
+            };
+            if let Some(report) = self.task_commit_report(task_id)? {
+                reports.push(report);
+            }
+        }
+        Ok(reports)
     }
 
     /// What this task's worker reported, or `None` if nobody has reported.

@@ -44,6 +44,7 @@ mod private_store;
 mod provider_activity;
 mod queen_run_history;
 mod release;
+mod released_tasks;
 mod reload_backup;
 mod runtime;
 mod runtime_storage;

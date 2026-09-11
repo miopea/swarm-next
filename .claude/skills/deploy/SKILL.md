@@ -353,6 +353,23 @@ tarball path. `ls` the downloads directory. Print what you found.
 
 ## Afterwards
 
-Record deployment evidence against any task this release closes, and say
+**Awaiting Release closes itself now — you do not have to.** Within five minutes
+of the tag being pushed, Swarm asks each parked task's repository whether a
+pushed tag carries every commit it recorded, and records the deployment for the
+ones it does. That is what completes them. It was added because this step was
+skipped across several releases and two tickets sat on the board saying
+"waiting" for a day after the work was in people's hands.
+
+What it will NOT do, and what is therefore still yours:
+
+- Work in **Review** rather than Awaiting Release. A deployment does not close
+  review work, and the sweep deliberately never touches it.
+- A task whose commits are **split across releases**. It waits for the release
+  carrying all of them, which is correct and occasionally not what you want.
+- Any claim that something is **running**. The sweep checks a tag, so it records
+  that the work was released. Watching it work in production is a different
+  claim and still needs you.
+
+So: record deployment evidence for anything the sweep cannot see, and say
 plainly what was **not** proven — a released fix that nobody has watched work is
 released, not verified.

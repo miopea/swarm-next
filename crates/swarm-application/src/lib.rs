@@ -40,6 +40,8 @@ pub use native_operator_sources::{NativeAnswerLink, NativeSourceAdmission, Nativ
 mod ops_tickets;
 mod queen_review;
 mod queue_snapshot;
+mod released_tasks;
+pub use released_tasks::{release_carrying_every_commit, release_deployment_reference};
 mod support;
 mod support_submission;
 mod task_block;

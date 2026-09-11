@@ -35,7 +35,13 @@ const MAX_EMAIL_ATTACHMENT_TOTAL_BYTES: u64 = 25 * 1024 * 1024;
 const MAX_ATTACHMENT_NAME_BYTES: usize = 255;
 const MAX_MEDIA_TYPE_BYTES: usize = 127;
 const MAX_CONTENT_ID_BYTES: usize = 512;
-pub(crate) const MAX_DEPLOYMENT_FIELD_BYTES: usize = 512;
+/// The longest a deployment's environment or reference may be.
+///
+/// Public because a CALLER that composes a reference has to stay inside it.
+/// Over-running this returns `InvalidTaskDeployment`, which for an automatic
+/// recorder reads as "that task simply never closed" -- a silent failure, and
+/// exactly what is not wanted from the thing built to stop silent failures.
+pub const MAX_DEPLOYMENT_FIELD_BYTES: usize = 512;
 const MAX_EMAIL_REPLY_BYTES: usize = 10_000;
 const MAX_PENDING_EMAIL_REPLIES: i64 = 256;
 const MAX_EMAIL_MESSAGES_PER_TASK: usize = 20;
