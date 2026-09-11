@@ -1,5 +1,30 @@
 # Current maturity acceptance ledger
 
+## September 11, 04:47 Eastern — Correction message reached Queen
+
+04:48 full CI34579413391 completed SUCCESS (all jobs), superseding the earlier
+pending Rust gate for deployed f05b2f0f. No further update was necessary.
+
+Exact message01a08f86-48de-7ba2-b3c3-c247d9fd171b was delivered in Queen's
+provider conversation182fc487-7cd9-463a-b1df-d4abe211c9db at08:17 UTC. Read only
+the relevant208015–208055 transcript range: Queen acknowledged both task-linked
+messages, used swarm_read_task_history on the child and explicitly declined
+additional work at08:18:51. Her reasoning: disposable fixture, authorized two-stage
+exercise already finished, real test flaw transparently retained in evidence;
+a third correction task would extend its stated design. No silent lost message
+or indefinite queue wait was established. Do not "fix" this by overriding scope.
+
+This closes the investigation, not the broader worker-first recovery acceptance.
+A future correction-routing test must explicitly authorize that remediation
+within its intended task scope. No worker input, task edit or retry was sent.
+
+Started existing bounded read-only server sampler at08:45:54 UTC for1800 seconds,
+30-second intervals; verified live PID1236669/exec30572 and first content-free
+sample in/tmp/swarm-f05b2f0f-live-soak/20260911T084554Z-live-samples.csv. Same10
+running/retained sessions, no dropped history in initial sample. API cgroup and
+process RSS are separate metrics; engine cgroup includes child providers and is
+not the engine process's own memory/CPU. Full result and interpretation pending.
+
 ## September 11, 04:41 Eastern — Compact coordinator live on both Hives
 
 f05b2f0f is deployed to production and WSL as

@@ -2,6 +2,27 @@
 
 ## Authoritative next gates — September 11, overnight
 
+04:48 full CI34579413391 SUCCESS, including Rust and the release-mode terminal
+resize regression. f05b2f0f's implementation, activation and CI gates are closed;
+do not repeat builds/tests to obtain the same evidence again.
+
+04:47 Queen follow-up investigation CLOSED as a test-scope limitation, not a
+delivery defect. Exact message01a08f86-48de-7ba2-b3c3-c247d9fd171b appears in
+Queen's provider conversation at08:17 UTC; she read the child history and at08:18
+explicitly declined a third task because this disposable exercise was bounded
+to two stages. Do not keep polling or patch orchestration to force this fixture.
+The test did not authorize corrective follow-on work clearly enough to prove
+worker-first recovery; that broader gate remains open. See92 for exact evidence.
+
+Read-only baseline is LIVE: exec session30572, remote PID1236669, started
+08:45:54 UTC,1800 seconds at30-second intervals, current f05b2f0f app/10 original
+sessions. Script scripts/dogfood/observe-live-soak.sh, report directory
+/tmp/swarm-f05b2f0f-live-soak, samples20260911T084554Z-live-samples.csv.
+First valid sample verified. Do not deploy/restart the API or change the workload
+just to add activity during this mostly-idle observation. Poll the same handle;
+do not restart on timeout. This records server metrics only, not browser CPU,
+busy workload, fresh-vs-aged comparison or overall performance acceptance.
+
 04:41 CLOSED compact coordinator activation and live navigation gate. Production
 and WSL serve1.7.1-dev-f05b2f0fa8ca-20260911083327-1230303, healthy/no degradation.
 Engine PIDs944143/6458 and engine build10a05263c1940d4344ee51a4729949f6e846879d025025ae100247df14c411f2
