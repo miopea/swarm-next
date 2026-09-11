@@ -4,6 +4,13 @@
 
 This checkpoint supersedes older sequencing and revision statements below.
 
+Combined web regression: at 23:18 Eastern, `npm test` on 195e7225 completed
+successfully: all 1,632 tests in 169 files, 29.85 seconds. This includes the
+workspace changes in 8a96fe34 and earlier onboarding/email merges. TypeScript
+and production build passed for the same code (later commits only update docs).
+This is automated web coverage, not real browser, Linux timestamp-fix, or live
+multi-Hive acceptance. The Rust correction remains outside these commits.
+
 | Outcome | Current evidence | Remaining gate |
 | --- | --- | --- |
 | Manage Apiary can scroll | Scroll owner fix is included in healthy live 1be4f138; targeted checks passed | Actual desktop/mobile browser scroll acceptance |
