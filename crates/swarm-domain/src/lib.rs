@@ -3,6 +3,8 @@ use std::{fmt, str::FromStr};
 use uuid::Uuid;
 
 mod apiary;
+mod workspace_settings;
+pub use workspace_settings::WorkspaceSearchSettings;
 mod apiary_directory;
 mod control_room;
 mod conversation_recovery;

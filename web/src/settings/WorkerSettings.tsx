@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
 
 import type { ProviderCapabilities, ProviderKind, Worker, WorkspaceChoice } from "../api";
+import { fetchWorkspaces } from "../api";
+import WorkspaceSearchSettings from "./WorkspaceSearchSettings";
 import BeeMascot from "../brand/BeeMascot";
 import { BEE_MARKS, BEE_MARK_LABELS, markFor, resolveMark } from "../brand/beeMarks";
 import UnsavedChangesPrompt from "../shared/UnsavedChangesPrompt";
@@ -9,6 +11,7 @@ import { workerAttention } from "../workers/workerAttention";
 import { ExperimentalProviderControl, ExperimentalProviderOptions, isExperimentalProvider } from "./ExperimentalProviderControl";
 
 type Props = {
+  operatorToken?: string;
   workers: Worker[];
   workspaces: WorkspaceChoice[];
   busy: boolean;
@@ -24,7 +27,9 @@ type Props = {
   onReorder: (workerIds: string[]) => Promise<void>;
 };
 
-export default function WorkerSettings({ workers, workspaces, busy, providers, providerCapabilitiesUnavailable = false, onCreate, onUpdate, onChooseMark, onRemove, onDraftDescription, onImproveDescription, onReorder }: Props) {
+export default function WorkerSettings({ workers, workspaces: initialWorkspaces, operatorToken, busy, providers, providerCapabilitiesUnavailable = false, onCreate, onUpdate, onChooseMark, onRemove, onDraftDescription, onImproveDescription, onReorder }: Props) {
+  const [workspaces, setWorkspaces] = useState(initialWorkspaces);
+  useEffect(() => setWorkspaces(initialWorkspaces), [initialWorkspaces]);
   // THESE TWO FILTERS MUST AGREE WITH THE SERVER, which excludes a worker from
   // reordering with `role != 'queen' AND system_role IS NULL` — ANY system
   // role, not one named value. `roster` is both what is rendered as draggable
@@ -185,6 +190,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, p
         {roster.length === 0 && <p className="empty-worker-settings">No repository workers configured yet.</p>}
         {roster.length > 0 && filteredRoster.length === 0 && matchingManaged.length === 0 && <p className="empty-worker-settings">No workers match “{workerQuery.trim()}”.</p>}
       </div>
+      {operatorToken && <WorkspaceSearchSettings operatorToken={operatorToken} onSaved={async () => setWorkspaces(await fetchWorkspaces(operatorToken))} />}
       <form className="configure-worker-form" onSubmit={(event) => void submit(event)}>
         <div className="worker-form-notice"><ExperimentalProviderControl enabled={allowExperimental} onChange={setAllowExperimental} /></div>
         {saveError && <p role="alert" className="field-error">{saveError}</p>}

@@ -31,6 +31,8 @@ use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
 
 mod decision_clarification;
+mod workspace_settings;
+pub use workspace_settings::WorkspaceSettingsService;
 #[cfg(test)]
 mod enrollment_tests;
 mod native_operator_sources;

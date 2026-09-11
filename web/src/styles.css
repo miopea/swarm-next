@@ -1335,6 +1335,10 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .migration-section { display: grid; gap: 12px; padding-block: 16px; border-block-start: 1px solid var(--line); }
 .migration-section > p { margin: 0; color: var(--muted); line-height: 1.5; }
 .worker-settings { grid-column: 1 / -1; }
+.workspace-search-settings { padding: 12px; border: 1px solid var(--line); border-radius: 12px; min-width: 0; overflow-wrap: anywhere; }
+.workspace-search-settings summary { cursor: pointer; min-height: 32px; }
+.workspace-search-settings > div { margin-top: 12px; }
+.workspace-search-settings textarea { width: 100%; box-sizing: border-box; }
 .worker-roster-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 4px 12px; }
 .worker-roster-search > span { grid-column: 1 / -1; color: var(--muted); font-size: .72rem; font-weight: 700; }
 .worker-roster-search input { min-width: 0; }

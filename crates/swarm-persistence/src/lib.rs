@@ -53,6 +53,7 @@ pub use task_outcomes::{
     CompletionEvidence, CompletionExemptionRecord, ReviewedSettlementPage, TaskEvidenceRecord,
 };
 mod apiary_enrollment;
+mod workspace_settings;
 mod decisions;
 mod email;
 mod events;
@@ -294,7 +295,8 @@ const PUBLIC_HIVE_PROFILE_SCHEMA_VERSION: i64 = 162;
 const FEDERATION_PUBLIC_PROFILES_SCHEMA_VERSION: i64 = 163;
 const APIARY_DIRECTORY_SCHEMA_VERSION: i64 = 164;
 const APIARY_ENROLLMENT_SCHEMA_VERSION: i64 = 165;
-const CURRENT_SCHEMA_VERSION: i64 = APIARY_ENROLLMENT_SCHEMA_VERSION;
+const WORKSPACE_SEARCH_SCHEMA_VERSION: i64 = 166;
+const CURRENT_SCHEMA_VERSION: i64 = WORKSPACE_SEARCH_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4094,6 +4096,9 @@ fn migrate_ops_intake_schema_steps(
     }
     if schema_version < APIARY_ENROLLMENT_SCHEMA_VERSION {
         apiary_enrollment::migrate(transaction)?;
+    }
+    if schema_version < WORKSPACE_SEARCH_SCHEMA_VERSION {
+        workspace_settings::migrate(transaction)?;
     }
     Ok(())
 }
@@ -9473,6 +9478,18 @@ mod tests {
             undo_sql: "DROP TABLE local_apiary_directory; DROP TABLE apiary_directory_revisions",
             probe_sql: "",
         },
+        SchemaStep {
+            table: "apiary_enrollments",
+            artifact: "",
+            undo_sql: "DROP TABLE apiary_enrollments",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "workspace_search_settings",
+            artifact: "",
+            undo_sql: "DROP TABLE workspace_search_settings",
+            probe_sql: "",
+        },
     ];
 
     /// The step that introduced a named artifact, rather than whichever is newest.
@@ -9511,6 +9528,21 @@ mod tests {
             .query_row(&newest_step().probe(), [], |row| row.get(0))
             .unwrap();
         assert!(present, "the newest step listed is not in the schema");
+    }
+
+    #[test]
+    fn schema_164_receives_enrollment_and_workspace_settings_without_losing_tasks() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("hive.db");
+        let store = TaskStore::open(&path).unwrap();
+        let task = store.create_task("Keep this task", "/projects/demo").unwrap();
+        store.connection().unwrap().execute_batch("DROP TABLE apiary_enrollments; DROP TABLE workspace_search_settings; PRAGMA user_version=164;").unwrap();
+        drop(store);
+        let store = TaskStore::open(path).unwrap();
+        assert_eq!(store.get_task(task.id).unwrap().title, "Keep this task");
+        assert!(store.apiary_enrollments().unwrap().is_empty());
+        assert_eq!(store.workspace_search_settings().unwrap().revision, 0);
+        store.verify_integrity().unwrap();
     }
 
     /// The ceiling migration survives a database that HAS DATA IN IT.

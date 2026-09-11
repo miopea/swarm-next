@@ -4,6 +4,21 @@
 
 ### Latest priority: guided enrollment, then workspace setup
 
+September 10, workspace-search implementation checkpoint: additional trusted
+folders now have a Workers editor, revision-checked durable schema166 storage,
+canonical path validation and immediate discovery refresh. Installation roots
+remain separate; removing discovery never removes workers/files. Scans cap256
+results, depth6 and4096 examined entries. Missing roots are exposed in settings
+and do not hide healthy roots. Tests:1611 web tests; TypeScript;16 API workspace
+checks; domain bounds; durable save/reopen/stale-save test; strict API all-target/
+all-feature Clippy. Five targeted migration tests pass, including the CI failure
+from a missing schema165 RECENT_SCHEMA_STEPS entry, now corrected alongside166.
+Real browser acceptance and deployment remain OPEN. Browser tooling now starts,
+but Edge selection is unavailable even after approved new-window recovery;
+supported next action is user reinstall of Browser plugin. User confirmed Claude
+owns live uncommitted edits; preserve them. Concurrent main831d4d8e must be merged
+before push. No release is authorized.
+
 September 10, 20:38 Eastern: live health verified9c520d215ab2, statusok,
 no degradation; terminal host PID835651 unchanged. Enrollment still needs the
 fresh-Hive browser walkthrough. Edge skill was retried and failed before browser

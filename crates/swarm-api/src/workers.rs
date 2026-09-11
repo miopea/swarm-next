@@ -193,15 +193,41 @@ pub(super) async fn workspace_catalog(
 ) -> Result<Vec<WorkspaceView>, ApiError> {
     const MAX_WORKSPACES: usize = 256;
     const MAX_FOLDER_DEPTH: usize = 6;
+    const MAX_SCANNED_ENTRIES: usize = 4096;
+    let mut scanned = 0;
     let mut workspaces = Vec::new();
-    for root in state.workspace_roots.iter() {
-        let entries = tokio::fs::read_dir(root).await.map_err(|_| {
-            ApiError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "workspace_catalog_unavailable",
-                "configured repository catalog is unavailable",
-            )
-        })?;
+    'roots: for root in effective_workspace_roots(state)? {
+        if workspaces.len() >= MAX_WORKSPACES {
+            break;
+        }
+        if tokio::fs::try_exists(root.join(".git"))
+            .await
+            .unwrap_or(false)
+        {
+            let path = root.to_string_lossy().into_owned();
+            if !workspaces
+                .iter()
+                .any(|entry: &WorkspaceView| entry.path == path)
+            {
+                workspaces.push(WorkspaceView {
+                    name: root
+                        .file_name()
+                        .map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned()),
+                    configured_worker_id: profiles
+                        .iter()
+                        .find(|profile| profile.workspace == path)
+                        .map(|profile| profile.id),
+                    path,
+                    kind: "repository",
+                });
+            }
+            continue;
+        }
+        // Folder health is exposed alongside editable search settings. One
+        // disconnected mount must not hide repositories in every other root.
+        let Ok(entries) = tokio::fs::read_dir(&root).await else {
+            continue;
+        };
         let mut pending = VecDeque::from([(entries, 0_usize)]);
         while let Some((mut entries, depth)) = pending.pop_front() {
             while let Some(entry) = entries.next_entry().await.map_err(|_| {
@@ -211,6 +237,10 @@ pub(super) async fn workspace_catalog(
                     "configured repository catalog could not be read",
                 )
             })? {
+                scanned += 1;
+                if scanned > MAX_SCANNED_ENTRIES {
+                    break 'roots;
+                }
                 if workspaces.len() >= MAX_WORKSPACES {
                     break;
                 }
@@ -226,6 +256,9 @@ pub(super) async fn workspace_catalog(
                 }
                 let path = entry.path();
                 let path_text = path.to_string_lossy().into_owned();
+                if workspaces.iter().any(|entry| entry.path == path_text) {
+                    continue;
+                }
                 let configured_worker_id = profiles
                     .iter()
                     .find(|profile| profile.workspace == path_text)
@@ -263,6 +296,25 @@ pub(super) async fn resolve_workspace_path(
     requested: &str,
     allow_outside_roots: bool,
 ) -> Result<PathBuf, ApiError> {
+    let canonical = canonical_workspace_folder(requested).await?;
+    for root in effective_workspace_roots(state)? {
+        if let Ok(root) = tokio::fs::canonicalize(root).await
+            && canonical.starts_with(root)
+        {
+            return Ok(canonical);
+        }
+    }
+    if allow_outside_roots {
+        return Ok(canonical);
+    }
+    Err(ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "unknown_workspace",
+        "that folder is outside the configured workspace roots",
+    ))
+}
+
+async fn canonical_workspace_folder(requested: &str) -> Result<PathBuf, ApiError> {
     // Interpret home shorthand on the machine running this Hive, never in the
     // browser. This is literal path expansion, not shell evaluation; all of the
     // existing filesystem and explicit outside-root checks still follow.
@@ -304,21 +356,114 @@ pub(super) async fn resolve_workspace_path(
             "a filesystem root cannot be used as a worker repository",
         ));
     }
-    for root in state.workspace_roots.iter() {
-        if let Ok(root) = tokio::fs::canonicalize(root).await
-            && canonical.starts_with(root)
-        {
-            return Ok(canonical);
+    Ok(canonical)
+}
+
+fn effective_workspace_roots(state: &AppState) -> Result<Vec<PathBuf>, ApiError> {
+    let mut roots = state.workspace_roots.as_ref().clone();
+    if let Some(store) = &state.task_store {
+        let settings = swarm_application::WorkspaceSettingsService(store.clone())
+            .settings()
+            .map_err(|error| task_store_error(&error))?;
+        for folder in settings.folders {
+            let path = PathBuf::from(folder);
+            if !roots.contains(&path) {
+                roots.push(path);
+            }
         }
     }
-    if allow_outside_roots {
-        return Ok(canonical);
+    Ok(roots)
+}
+
+#[derive(Serialize)]
+struct SearchFolderView {
+    path: String,
+    available: bool,
+}
+
+#[derive(Serialize)]
+struct WorkspaceSearchView {
+    revision: u64,
+    folders: Vec<String>,
+    installation_folders: Vec<String>,
+    health: Vec<SearchFolderView>,
+}
+
+pub(super) async fn workspace_search_settings(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let settings = swarm_application::WorkspaceSettingsService(task_store(&state)?.clone())
+        .settings()
+        .map_err(|error| task_store_error(&error))?;
+    let mut health = Vec::new();
+    for root in effective_workspace_roots(&state)? {
+        let available = tokio::fs::read_dir(&root).await.is_ok();
+        health.push(SearchFolderView {
+            path: root.to_string_lossy().into_owned(),
+            available,
+        });
     }
-    Err(ApiError::new(
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "unknown_workspace",
-        "that folder is outside the configured workspace roots",
-    ))
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(WorkspaceSearchView {
+            revision: settings.revision,
+            folders: settings.folders,
+            installation_folders: state
+                .workspace_roots
+                .iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect(),
+            health,
+        }),
+    )
+        .into_response())
+}
+
+pub(super) async fn save_workspace_search_settings(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<swarm_domain::WorkspaceSearchSettings>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    if !swarm_domain::WorkspaceSearchSettings::valid_folders(&request.folders) {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_search_folders",
+            "Choose at most 16 distinct repository search folders.",
+        ));
+    }
+    let mut folders = Vec::new();
+    for folder in request.folders {
+        let canonical = canonical_workspace_folder(&folder).await.map_err(|error| {
+            ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_search_folder",
+                format!("{folder}: {}", error.message),
+            )
+        })?;
+        folders.push(canonical.to_string_lossy().into_owned());
+    }
+    if !swarm_domain::WorkspaceSearchSettings::valid_folders(&folders) {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "duplicate_search_folder",
+            "Two entries resolve to the same folder. Keep one.",
+        ));
+    }
+    let service = swarm_application::WorkspaceSettingsService(task_store(&state)?.clone());
+    if !service
+        .replace(request.revision, &folders)
+        .map_err(|error| task_store_error(&error))?
+    {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "search_folders_changed",
+            "Search folders changed elsewhere. Reload the saved folders before trying again.",
+        ));
+    }
+    workspace_search_settings(State(state), headers).await
 }
 
 fn expand_workspace_home(requested: &str, home: Option<&Path>) -> PathBuf {
@@ -335,6 +480,103 @@ fn expand_workspace_home(requested: &str, home: Option<&Path>) -> PathBuf {
 #[cfg(test)]
 mod workspace_home_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn workspace_settings_save_discovers_and_removes_without_changing_workers() {
+        let directory = tempfile::tempdir().unwrap();
+        let repository = directory.path().join("demo");
+        std::fs::create_dir_all(repository.join(".git")).unwrap();
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Demo",
+                swarm_domain::ProviderKind::ClaudeCode,
+                repository.to_str().unwrap(),
+                false,
+                1,
+            )
+            .unwrap();
+        let state = Arc::new(AppState::default().with_task_store(store.clone()));
+        *state.operator_token.write().unwrap() = Some(Arc::from("test-only"));
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer test-only".parse().unwrap());
+        let input = swarm_domain::WorkspaceSearchSettings {
+            revision: 0,
+            folders: vec![directory.path().to_string_lossy().into_owned()],
+        };
+        assert!(
+            save_workspace_search_settings(
+                State(state.clone()),
+                HeaderMap::new(),
+                Json(input.clone())
+            )
+            .await
+            .is_err()
+        );
+        save_workspace_search_settings(State(state.clone()), headers.clone(), Json(input.clone()))
+            .await
+            .unwrap();
+        assert_eq!(
+            workspace_catalog(&state, &[]).await.unwrap()[0].path,
+            repository.to_string_lossy()
+        );
+        assert!(
+            resolve_workspace_path(&state, repository.to_str().unwrap(), false)
+                .await
+                .is_ok()
+        );
+        assert_eq!(
+            save_workspace_search_settings(State(state.clone()), headers.clone(), Json(input))
+                .await
+                .unwrap_err()
+                .status,
+            StatusCode::CONFLICT
+        );
+        let invalid = swarm_domain::WorkspaceSearchSettings {
+            revision: 1,
+            folders: vec!["/missing-swarm-test-folder".into()],
+        };
+        assert!(
+            save_workspace_search_settings(State(state.clone()), headers.clone(), Json(invalid))
+                .await
+                .is_err()
+        );
+        assert_eq!(store.workspace_search_settings().unwrap().revision, 1);
+        save_workspace_search_settings(
+            State(state.clone()),
+            headers,
+            Json(swarm_domain::WorkspaceSearchSettings {
+                revision: 1,
+                folders: vec![],
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(workspace_catalog(&state, &[]).await.unwrap().is_empty());
+        assert!(repository.is_dir());
+        let profiles = store.list_worker_profiles().unwrap();
+        assert_eq!(profiles.len(), 1); // No workers were added or removed by search settings.
+        assert_eq!(
+            profiles
+                .iter()
+                .find(|profile| profile.id == worker.id)
+                .unwrap()
+                .workspace,
+            repository.to_string_lossy()
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_catalog_accepts_repository_root_and_skips_unavailable_roots() {
+        let directory = tempfile::tempdir().unwrap();
+        let repository = directory.path().join("demo");
+        std::fs::create_dir_all(repository.join(".git")).unwrap();
+        let state = AppState::default()
+            .with_workspace_roots(vec![directory.path().join("missing"), repository.clone()]);
+        let catalog = workspace_catalog(&state, &[]).await.unwrap();
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].path, repository.to_string_lossy());
+    }
 
     #[test]
     fn expands_only_literal_current_home_prefix() {
