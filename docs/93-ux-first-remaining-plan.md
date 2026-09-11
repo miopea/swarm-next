@@ -1,5 +1,16 @@
 # Remaining maturity work — UX/UI first
 
+## Current checkpoint — September 11, 04:41 Eastern
+
+Compact coordinator optimization f05b2f0f is live on production/WSL with both
+engines and all10 production sessions preserved. Full1668 browser tests and
+focused API checks pass; full Rust CI still running. Live status payload falls
+from201362 to3695 bytes outside Queues; production navigation retains full review
+groups on return. Do not rerun this deployment as unfinished work. Original45
+performance/operational/native/answer-provenance gates remain; this is traffic
+reduction, not sustained CPU acceptance. Queen's separate correction-routing
+gate remains open despite successful demo delivery. See newest45/92 receipts.
+
 ## Current checkpoint — September 11, 04:12 Eastern
 
 04:15 follow-up: parent automatically completed on truthful deployment evidence

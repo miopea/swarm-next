@@ -1,5 +1,42 @@
 # Current maturity acceptance ledger
 
+## September 11, 04:41 Eastern — Compact coordinator live on both Hives
+
+f05b2f0f is deployed to production and WSL as
+1.7.1-dev-f05b2f0fa8ca-20260911083327-1230303. Supported app-only updates exited0;
+both health endpoints report ok, no degradation/recovery. Production engine
+PID944143/start September10 21:29:38EDT and WSL PID6458 stayed unchanged. All10
+production running worker/session identities hash identically before/after
+(exact hash in45). No terminal input, task mutation, release or membership grant.
+
+Measured serialized coordinator response: full201362 bytes with30 saved review
+entries, compact3695 bytes withnull optional review detail. Existing global
+holds/recovery/counters remain available. Full1668 web tests,98 focused browser
+tests, TypeScript and the API compact/full/compact-compatible contract regression
+pass. The API fixture has a real saved judgment, not an unassessed Draft. Its
+first incomplete-fixture failure and the query-aware visibility assertion were
+corrected, not hidden. CI34579413391 web/package/audit green; Rust pending.
+
+Edge verified exact runtime, production Queues -> Needs You -> Queues with the
+same reviewed groups and no unavailable-detail notice. WSL restored its existing
+membership and rendered normal empty Queues. Unit/integration tests verify query
+selection and cancellation; this live check did not inspect browser network
+internals. Payload reduction is not a measured CPU/long-session performance win.
+
+Correct package:
+/tmp/swarm-compact-clean-f05b2f0f/swarm-1.7.1-dev-f05b2f0fa8ca-20260911083327-1230303-linux-x86_64.
+Archive/tmp/swarm-wsl-f05b2f0f.tar.gz SHA256
+07a90cf06f49248a6f308af97cc7cfcb556341065bbd462c19bf735814ca2ff4 verified on both
+machines before update. WSL extraction/tmp/swarm-wsl-validation-f05b2f0f.
+Earlier61a8d81a-labeled package was never deployed; its source checkout did not
+advance because of transferred CRLF test content. All owned copies were verified
+against committed source, replaced from Git, and rebuilt from clean f05b2f0f.
+
+Remaining separate orchestration gate: the worker's corrective Queen message has
+a real queued receipt, but no corrective task was observed through08:40 UTC.
+The delivery query permits messages on completed tasks; completion is not itself
+an exclusion. Do not infer confirmed delivery or repair the demo manually.
+
 ## September 11, 04:15 Eastern — Queen acceptance and separate delivery
 
 04:17 follow-up: child submitted Review at10939 and system completed it at10940

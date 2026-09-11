@@ -2,6 +2,22 @@
 
 ## Authoritative next gates — September 11, overnight
 
+04:41 CLOSED compact coordinator activation and live navigation gate. Production
+and WSL serve1.7.1-dev-f05b2f0fa8ca-20260911083327-1230303, healthy/no degradation.
+Engine PIDs944143/6458 and engine build10a05263c1940d4344ee51a4729949f6e846879d025025ae100247df14c411f2
+unchanged. All10 production running worker/session pairs have the same canonical
+SHA256 before/after:3f676cce77220ce4ae6bcd3770e4c6736747105da703050cf129518a6df9fcf9.
+Live full coordinator201362 bytes/30 review entries; compact3695 bytes/null review
+with independent global status preserved. About98% less serialized payload for
+this request outside Queues, NOT evidence of sustained CPU improvement.
+
+Edge verified production Queues -> Needs You -> Queues without losing reviewed
+groups or showing unavailable details, and WSL's normal empty Queues on the exact
+same runtime. Full1668 web tests,98 targeted tests and saved-judgment API test pass.
+CI34579413391 web/package/audit green; full Rust still running at08:40 UTC.
+Clean build18991 finished; do not rebuild. Artifact and limitations in92. No
+release, engine restart, membership change or BFG Admin communication.
+
 04:34 build-identity follow-up: earlier74932 finished successfully but its61a8d81a
 package is NOT for deployment. All tracked content was verified against the
 committed branch before removing only the three transferred copies. Isolated
