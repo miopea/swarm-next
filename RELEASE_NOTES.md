@@ -12,6 +12,83 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.8.0
+
+A more welcoming Apiary — join a team with less setup and see shared work more
+clearly — plus a much shorter way to connect Outlook, and a shorter one for Jira
+that asks for a credential you own.
+
+**⚠️ Before upgrading: two integrations may need reconnecting once.** This is a
+deliberate change and it is the only manual step.
+
+- **Outlook.** If your Hive used its own Microsoft app registration — a tenant
+  ID, client ID and client secret you typed in — reconnect in
+  Settings → Integrations after updating. Setup is now a single
+  **Sign in with Microsoft**, so there is nothing to type the second time.
+- **Jira.** If your Hive connected through Atlassian OAuth, reconnect with your
+  site address, account email and a personal API token. A Jira connection that
+  already used an API token keeps working untouched.
+- Jira stays optional for Apiary membership, and an integration that needs
+  reconnecting does **not** mean leaving and rejoining an Apiary.
+
+The installer takes a verified database backup before migrating and checks that
+backup can still be opened by the release it would roll back to. This release
+migrates schema 164 to 167.
+
+**Workers are not stopped.** The worker-engine protocol is unchanged at 17, so
+this installs as an ordinary update and running terminals keep their sessions.
+
+### New features
+- **Connect Outlook with one click.** Email setup no longer asks for a tenant
+  ID, client ID or client secret. Swarm ships its own Microsoft registration and
+  signs in as a public client, so there is no secret to store or rotate — and
+  work, school and personal Microsoft accounts all sign in at the same button.
+- **Connect Jira with a credential that is yours.** Jira now uses your own
+  Atlassian API token: scoped to your account, revocable by you, and nothing
+  shared between installs. The setup steps say which kind of token to create and
+  why the other kind fails later rather than at connect time.
+- **Jira tells you before its token lapses.** Atlassian expires API tokens
+  within a year of creating them. Swarm now records when a connection was made
+  and warns about a month ahead, instead of a working Jira turning into an
+  unexplained refusal one morning.
+- **Join an Apiary once.** Paste an invitation, review it and submit; after the
+  Keeper approves, your Hive finishes joining on its own — even with the browser
+  closed.
+- **Jira is optional for joining.** Join and receive Swarm tasks without a Jira
+  account, and connect only the projects you actually use.
+- **One Apiary home.** Invitations, membership, shared setup and next steps are
+  together on the Apiary page.
+- **Your Hive, recognised.** Reuse Jira or Microsoft profile details, review them
+  before sharing, and reuse your saved identity for feedback.
+- **Easier worker setup.** Manage trusted project folders, discover repositories,
+  and use paths relative to your Hive's home directory.
+- **Shared work stays current.** Task lifecycle changes reach member boards, and
+  finished work moves into optional history instead of crowding open work.
+- **Clearer waiting reasons.** Queues explain the last scoped terminal-delivery
+  check and link the ownership and prerequisites involved.
+- **Lighter routine status.** Detailed Queen review data is fetched on Queues
+  rather than carried through every ordinary status refresh.
+
+### Fixes
+- Restored scrolling in Apiary management, and navigation to setup sections.
+- Preserved your reviewed identity when creating an Apiary.
+- Recovered opening the Apiary view when membership had already been saved.
+- Made enrollment failures and retries visible; progress survives a restart.
+- Kept optional Jira configuration separate from shared-work recovery problems.
+- Corrected member-owned claim reads through the Keeper.
+- Preserved complete shared-task lifecycle states while synchronising.
+- Refreshed shared-task boards through durable change notifications.
+- Separated active shared work from retained completed history.
+- Labelled unavailable and retained member observations, and told an empty
+  Keeper observation apart from a missing one.
+- Kept worker setup errors from breaking the form, and made folder discovery
+  retryable.
+- Stopped failed provider checks from reporting availability, or "no updates",
+  when the check itself did not run.
+- Paused browser enrollment observation while the tab is hidden; joining
+  continues on the server.
+- Preserved a terminal refusal across a changed native question retry.
+
 ## 1.7.1
 
 Apiary onboarding you can finish without rejoining, plus two dark-mode and
