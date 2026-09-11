@@ -2,6 +2,15 @@
 
 ## Authoritative next gates — September 11, overnight
 
+04:15 CLOSED the bounded Queen acceptance/separate-delivery handoff gate:
+parent01a08f7b-c8c7-7560-baa1-4401bc362713 traversed Review -> Awaiting Release
+by Queen, then Completed by system evidence10938. Queen created separate task
+01a08f82-9358-7fb1-a5f5-4651f230bd07 and the worker picked it up without manual
+help. Source/delivered hashes and unchanged session independently verified;
+full receipt and test caveat in92. Child review and broader failure/recovery
+remain open, so this does not close the whole orchestration scope. Both latest
+full CI runs34576264359/34575108616 are green. Continue original remaining gates.
+
 03:57 CLOSED existing-Hive profile discovery/review UX: live public profiles
 retain the old Operator/null-contact values (Keeper revision1, WSL revision4),
 while Microsoft on Keeper and Jira on WSL provide usable account identity.

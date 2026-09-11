@@ -1,5 +1,30 @@
 # Remaining maturity work — UX/UI first
 
+## Current checkpoint — September 11, 04:12 Eastern
+
+04:15 follow-up: parent automatically completed on truthful deployment evidence
+(system event10938). The bounded Queen acceptance/separate-delivery gate is now
+closed; details and stage-specific test caveat in92. Child review remains open.
+
+Shared closed-history and existing-profile review UX are deployed and browser
+verified on production and WSL at9003c3c1. Full CI34576264359 is now successful,
+including Rust;032bff1d's full CI34575108616 is also successful. Do not repeat
+these passed packages. The newest45/92 receipts supersede older pending CI notes.
+
+The new isolated Queen delivery acceptance is running through normal admission,
+not terminal nudges. Parent01a08f7b-c8c7-7560-baa1-4401bc362713 reached Review,
+Queen moved it to Awaiting Release and created/assigned separate delivery task
+01a08f82-9358-7fb1-a5f5-4651f230bd07. The worker picked that up and the confined
+delivered artifact independently matches its recorded source hash. Final evidence
+recording and automatic settlement remain unverified at this checkpoint. Do not
+manually finish either task to manufacture acceptance. Controller:
+scripts/dogfood/queen-release-assignment.sh; status mode is read-only.
+
+Keep the remaining original45 gates active: worker-first escalation, native
+answer provenance/mobile journeys, matched aged performance, operational recovery,
+support acceptance and final Apiary enrollment approval. The optional briefing
+is still a mock requiring review, not approved product UI. No BFG Admin messages.
+
 ## Current checkpoint — September 11, 03:21 Eastern
 
 03:25 follow-up: new dedicated Edge tabs recovered browser access without user

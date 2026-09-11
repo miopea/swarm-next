@@ -1,5 +1,38 @@
 # Current maturity acceptance ledger
 
+## September 11, 04:15 Eastern — Queen acceptance and separate delivery
+
+The normal, unassisted handoff gate passes for the new confined demo:
+parent01a08f7b-c8c7-7560-baa1-4401bc362713 and Queen-created delivery task
+01a08f82-9358-7fb1-a5f5-4651f230bd07. Controllerab907df6 admitted the parent
+once through ordinary Draft/Ready/assignment APIs; no terminal injection,
+manual completion, returned-review substitute or controller repair followed.
+
+Recorded events: Ready10926 at1789113650; worker Active10928 at1789113692;
+Review10932 at1789113835; Queen Awaiting Release10933 at1789114084;
+Queen created/assigned/readied the delivery at10934/10935/10936; the same worker
+picked it up at10937/1789114160 (53 seconds after Ready). System event10938
+at1789114262 automatically settled the parent on deployment evidence. This is
+the previously missing Review -> Awaiting Release -> separate assignment ->
+evidence-backed completion path, not a product release.
+
+Independent SSH checks: source commit94d8eb4beb4e3e946e21f2d9f3aa5cc68f9354ed
+contains exactly four added files, all underqueen-release-assignment-20260911.
+The tree is clean. Delivery did not exist immediately after Queen acceptance;
+it later contains payload.json whose SHA256 matches source:
+9540c83bf8c3ece4bcc0f6b8d4e6daafb74d30bea682fb0d6d801fe3fd51bf8e.
+Worker session01a08e16-5be5-72e2-b808-43ffb8261975 stayed the same. Edge Queues
+showed the parent's Awaiting release row while delivery was active.
+
+The worker transparently reported62/63 post-delivery tests: one fixture test
+asserts delivery is absent and is therefore build-stage-only. Do not call the
+post-delivery suite all-green or rerun it as a product regression. Delivery-child
+review/settlement remains separate. No real project, membership or provider
+changed; broader worker-first escalation and failure/recovery gates remain open.
+
+Also verified full CI34576264359 (9003c3c1) and34575108616 (032bff1d) successful,
+superseding earlier pending Rust notes. No further rebuild was needed.
+
 ## September 11, 03:57 Eastern — Existing-Hive shared identity review
 
 Confirmed the remaining default Operator labels reflect unsaved public profiles,
