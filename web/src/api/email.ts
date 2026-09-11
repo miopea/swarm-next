@@ -11,11 +11,10 @@ export type EmailReadiness = {
 };
 export type EmailOAuthConfiguration = {
   configured: boolean;
-  managed_by: "environment" | "operator" | "bundled" | null;
+  managed_by: "environment" | "bundled" | null;
   tenant_id: string | null;
   client_id: string | null;
   callback_url: string | null;
-  secret_stored: boolean;
 };
 export type EmailAttachment = { id: string; name: string; media_type: string; byte_size: number; inline: boolean; content_id: string | null };
 export type EmailMessageSummary = {
@@ -88,35 +87,6 @@ export async function fetchEmailReadiness(operatorToken: string, signal?: AbortS
 
 export async function fetchEmailConfiguration(operatorToken: string): Promise<EmailOAuthConfiguration> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/email/configuration");
-  return response.json() as Promise<EmailOAuthConfiguration>;
-}
-
-// The secret is OPTIONAL, and omitted rather than sent empty. Swarm is a public
-// client: PKCE proves possession, and Microsoft refuses a `client_secret=` with
-// no value as an invalid client rather than treating it as absent.
-export async function updateEmailConfiguration(operatorToken: string, tenantId: string, clientId: string, clientSecret: string): Promise<EmailOAuthConfiguration> {
-  const secret = clientSecret.trim();
-  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/email/configuration", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(secret ? { tenant_id: tenantId, client_id: clientId, client_secret: secret } : { tenant_id: tenantId, client_id: clientId }),
-  });
-  return response.json() as Promise<EmailOAuthConfiguration>;
-}
-
-/// Hands this Hive back to the application Swarm ships with.
-///
-/// An empty body is how the server is told "the bundled one" -- it fills in
-/// both the authority and the client id. A Hive configured before Swarm shipped
-/// an application had no way to say this: its saved registration wins over the
-/// bundled default, and the setup form can only describe a DIFFERENT
-/// registration, never the absence of one.
-export async function useBundledEmailApp(operatorToken: string): Promise<EmailOAuthConfiguration> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/email/configuration", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: "{}",
-  });
   return response.json() as Promise<EmailOAuthConfiguration>;
 }
 

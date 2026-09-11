@@ -220,10 +220,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     state = configure_github_feedback(state);
     state = configure_central_support(state);
     state = configure_github_issue_intake(state);
-    state = state.with_email_oauth_paths(
-        email_configuration_path(&database_path),
-        email_token_path(&database_path),
-    );
+    state = state.with_email_token_path(email_token_path(&database_path));
     // THE BIND ADDRESS IS SET BEFORE configure_email, AND THE ORDER IS THE FIX.
     //
     // consent_base_url falls back to http://localhost:<port> when no public
@@ -761,14 +758,6 @@ fn email_token_path(database_path: &std::path::Path) -> PathBuf {
         .unwrap_or_else(|| std::path::Path::new("."))
         .join("secrets")
         .join("email-oauth.json")
-}
-
-fn email_configuration_path(database_path: &std::path::Path) -> PathBuf {
-    database_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .join("secrets")
-        .join("email-oauth-config.json")
 }
 
 /// Where swarm.env lives. Beside the config the unit already loads, derived

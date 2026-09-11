@@ -2562,28 +2562,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .jira-connect-panel { display: grid; gap: 10px; }
 .jira-auth-action { width: fit-content; min-width: 12rem; }
 .email-settings { grid-column: 1 / -1; }
-.email-connect-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.email-configuration { display: grid; gap: 12px; padding: 14px; border: 1px solid color-mix(in srgb, var(--honey) 55%, var(--line)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--honey-soft) 35%, var(--panel-raised)); }
-.email-configuration-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
-.email-configuration-heading > div { display: grid; min-width: 0; gap: 3px; }
-.email-configuration-heading small { color: var(--muted); line-height: 1.4; }
-.email-configuration-heading .compact-action { flex: 0 0 auto; text-decoration: none; }
-.email-setup-steps { display: grid; gap: 5px; margin: 0; padding-left: 20px; color: var(--muted); font-size: .77rem; line-height: 1.4; }
-.email-configuration label { display: grid; gap: 5px; color: var(--muted); font-size: .74rem; font-weight: 650; }
-.email-configuration input { width: 100%; min-width: 0; }
 .email-callback-field input { color: var(--text); font-family: var(--font-mono); font-size: .75rem; }
-/* Two columns now, not three. The tenant and the secret moved behind Advanced,
-   so the ordinary path is one field. */
-.email-configuration-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; }
-.email-account-type { display: grid; gap: 8px; margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
-.email-account-type legend { padding: 0 4px; color: var(--muted); font-size: .74rem; font-weight: 650; }
-.email-account-type label { display: flex; align-items: start; gap: 8px; font-weight: 500; cursor: pointer; }
-.email-account-type input { width: auto; margin-top: 3px; flex: 0 0 auto; }
-.email-account-type span { display: grid; gap: 2px; min-width: 0; }
-.email-account-type strong { color: var(--text); font-size: .82rem; }
-.email-account-type small { color: var(--muted); font-size: .74rem; line-height: 1.4; }
-.email-configuration .link-button { justify-self: start; padding: 0; border: 0; background: none; color: var(--accent-strong); font-size: .77rem; font-weight: 650; text-decoration: underline; cursor: pointer; }
-.email-configuration-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .jira-binding-list, .jira-project-setup, .jira-workflow-setup, .jira-status-map { display: grid; gap: 10px; }
 /* Advisory, not an error: the mapping may have been chosen deliberately. Sits
    under the binding it describes rather than shouting from the top of the page. */
@@ -2698,11 +2677,6 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .jira-binding-card > span:last-child { text-align: left; }
   .jira-binding-destination { grid-column: 1; }
   .jira-auth-action { width: 100%; }
-  .email-connect-actions, .email-configuration-heading { display: grid; grid-template-columns: 1fr; }
-  .email-connect-actions button, .email-configuration-heading .compact-action { width: 100%; }
-  .email-configuration-fields { grid-template-columns: 1fr; }
-  .email-configuration-actions { display: grid; grid-template-columns: 1fr; }
-  .email-configuration-actions button { width: 100%; }
   .jira-status-map label { grid-template-columns: 1fr; }
   .jira-intake { padding: 12px; }
   .jira-intake-heading { align-items: start; }

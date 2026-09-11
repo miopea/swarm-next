@@ -18,7 +18,6 @@ import {
   recordTaskDeployment,
   retryEmailReply,
   sendEmailReply,
-  updateEmailConfiguration,
   updateEmailReplyDraft,
 } from "../api";
 
@@ -52,7 +51,7 @@ function response(payload: unknown): Response {
 test("owns bounded email configuration, inbox, preview, source, deployment, and reply reads", async () => {
   const payloads = [
     { configured: true, connection: "ready", account_name: "Bea", account_address: "bea@example.test" },
-    { configured: true, managed_by: "operator", tenant_id: "tenant", client_id: "client", callback_url: "https://swarm.test/callback", secret_stored: true },
+    { configured: true, managed_by: "bundled", tenant_id: "common", client_id: "059c82a8-4d77-4b19-a6c7-d702dde10960", callback_url: "https://swarm.test/callback" },
     [summary],
     { summary, body_text: "Please fix this", attachments: [{ id: "attachment/one", name: "screen.png", media_type: "image/png", byte_size: 100, inline: true, content_id: "image-1" }] },
     { attachment: "bytes" },
@@ -65,7 +64,7 @@ test("owns bounded email configuration, inbox, preview, source, deployment, and 
   vi.stubGlobal("fetch", fetch);
 
   await expect(fetchEmailReadiness("operator")).resolves.toMatchObject({ connection: "ready" });
-  await expect(fetchEmailConfiguration("operator")).resolves.toMatchObject({ secret_stored: true });
+  await expect(fetchEmailConfiguration("operator")).resolves.toMatchObject({ managed_by: "bundled" });
   await expect(fetchEmailInbox("operator", "  issue report  ")).resolves.toHaveLength(1);
   await expect(fetchEmailMessage("operator", "message/one")).resolves.toMatchObject({ body_text: "Please fix this" });
   await expect(fetchEmailAttachmentPreview("operator", "message/one", "attachment/one")).resolves.toBeInstanceOf(Blob);
@@ -81,12 +80,14 @@ test("owns bounded email configuration, inbox, preview, source, deployment, and 
 });
 
 test("serializes email setup, import, deployment evidence, and reviewed reply commands", async () => {
-  const configuration = { configured: true, managed_by: "operator", tenant_id: "tenant", client_id: "client", callback_url: "https://swarm.test/callback", secret_stored: true };
+  // `bundled` is the only shape a Hive reports now: Swarm ships the
+  // registration, so there is nothing an operator could have saved.
+  const configuration = { configured: true, managed_by: "bundled", tenant_id: "common", client_id: "059c82a8-4d77-4b19-a6c7-d702dde10960", callback_url: "https://swarm.test/callback" };
   const payloads = [configuration, { authorization_url: "https://login.example.test/authorize" }, null, emailImport, emailImport, deployment, reply, reply, reply, reply];
   const fetch = vi.fn().mockImplementation(() => Promise.resolve(response(payloads.shift())));
   vi.stubGlobal("fetch", fetch);
 
-  await updateEmailConfiguration("operator", "tenant", "client", "one-time-secret");
+  await expect(fetchEmailConfiguration("operator")).resolves.toEqual(configuration);
   await expect(beginEmailAuthorization("operator")).resolves.toContain("authorize");
   await disconnectEmail("operator");
   await expect(importEmailMessage("operator", "message/one", "high")).resolves.toEqual(emailImport);
@@ -98,9 +99,10 @@ test("serializes email setup, import, deployment evidence, and reviewed reply co
   await sendEmailReply("operator", "reply/one");
   await retryEmailReply("operator", "reply/one");
 
-  expect(fetch).toHaveBeenNthCalledWith(1, "/api/v1/integrations/email/configuration", expect.objectContaining({
-    method: "PUT", body: JSON.stringify({ tenant_id: "tenant", client_id: "client", client_secret: "one-time-secret" }),
-  }));
+  // A READ, NOT A WRITE. The PUT that saved a per-Hive registration is gone
+  // along with the form that fed it; this endpoint only reports what the
+  // bundled application is.
+  expect(fetch).toHaveBeenNthCalledWith(1, "/api/v1/integrations/email/configuration", expect.not.objectContaining({ method: "PUT" }));
   expect(fetch).toHaveBeenNthCalledWith(4, "/api/v1/integrations/email/messages/message%2Fone/import", expect.objectContaining({ body: JSON.stringify({ priority: "high" }) }));
   expect(fetch).toHaveBeenNthCalledWith(5, "/api/v1/integrations/email/import", expect.objectContaining({ body: JSON.stringify(importInput) }));
   expect(fetch).toHaveBeenNthCalledWith(6, "/api/v1/tasks/task%2Fone/deployments", expect.objectContaining({ body: JSON.stringify({ environment: "production", reference: "release-42" }) }));
