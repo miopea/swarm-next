@@ -108,8 +108,10 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       return;
     }
     let cancelled = false;
+    const controller = new AbortController();
+    const deadline = window.setTimeout(() => controller.abort(new DOMException("Apiary read timed out", "TimeoutError")), 8_000);
     setMemberRosterState("loading");
-    void fetchApiaryMembers(operatorToken)
+    void fetchApiaryMembers(operatorToken, controller.signal)
       .then((value) => {
         if (cancelled) return;
         setMembers(value);
@@ -117,8 +119,8 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       })
       .catch(() => {
         if (!cancelled) setMemberRosterState("error");
-      });
-    return () => { cancelled = true; };
+      }).finally(() => window.clearTimeout(deadline));
+    return () => { cancelled = true; controller.abort(); window.clearTimeout(deadline); };
   }, [personal, operatorToken, hiveIdentity?.hive.apiary_id, memberRosterAttempt, refreshKey]);
 
   useEffect(() => {
@@ -127,10 +129,13 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       return;
     }
     let cancelled = false;
-    void fetchApiaryCollapseReadiness(operatorToken)
+    const controller = new AbortController();
+    const deadline = window.setTimeout(() => controller.abort(new DOMException("Apiary read timed out", "TimeoutError")), 8_000);
+    void fetchApiaryCollapseReadiness(operatorToken, controller.signal)
       .then((value) => { if (!cancelled) setReadiness(value); })
-      .catch(() => { if (!cancelled) setReadiness(undefined); });
-    return () => { cancelled = true; };
+      .catch(() => { if (!cancelled) setReadiness(undefined); })
+      .finally(() => window.clearTimeout(deadline));
+    return () => { cancelled = true; controller.abort(); window.clearTimeout(deadline); };
   }, [keeper, operatorToken, hiveIdentity?.hive.apiary_id, refreshKey]);
 
   useEffect(() => {
@@ -141,16 +146,18 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       return;
     }
     let cancelled = false;
+    const controller = new AbortController();
+    const deadline = window.setTimeout(() => controller.abort(new DOMException("Apiary read timed out", "TimeoutError")), 8_000);
     void Promise.allSettled([
-      fetchFederationSyncHealth(operatorToken),
-      fetchFederationCatalogReadiness(operatorToken),
+      fetchFederationSyncHealth(operatorToken, controller.signal),
+      fetchFederationCatalogReadiness(operatorToken, controller.signal),
     ]).then(([sync, catalog]) => {
       if (cancelled) return;
       setMemberSync(sync.status === "fulfilled" ? sync.value : undefined);
       setMemberCatalog(catalog.status === "fulfilled" ? catalog.value : undefined);
       setMemberSyncLoadError(sync.status === "rejected" || catalog.status === "rejected");
-    });
-    return () => { cancelled = true; };
+    }).finally(() => window.clearTimeout(deadline));
+    return () => { cancelled = true; controller.abort(); window.clearTimeout(deadline); };
   }, [member, operatorToken, hiveIdentity?.hive.apiary_id, refreshKey]);
 
   useEffect(() => {
@@ -166,11 +173,13 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       return;
     }
     let cancelled = false;
+    const controller = new AbortController();
+    const deadline = window.setTimeout(() => controller.abort(new DOMException("Apiary read timed out", "TimeoutError")), 8_000);
     void Promise.allSettled([
-      fetchApiaryJiraProjects(operatorToken),
-      fetchJiraBindings(operatorToken),
-      fetchApiarySharedWork(operatorToken),
-      fetchApiaryStewardships(operatorToken),
+      fetchApiaryJiraProjects(operatorToken, controller.signal),
+      fetchJiraBindings(operatorToken, controller.signal),
+      fetchApiarySharedWork(operatorToken, controller.signal),
+      fetchApiaryStewardships(operatorToken, controller.signal),
     ])
       .then(([projects, bindings, claims, delegations]) => {
         if (cancelled) return;
@@ -181,8 +190,8 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
         setSharedWorkLoadError(claims.status === "rejected");
         if (delegations.status === "fulfilled") setStewardships(delegations.value);
         setStewardshipLoadError(delegations.status === "rejected");
-      });
-    return () => { cancelled = true; };
+      }).finally(() => window.clearTimeout(deadline));
+    return () => { cancelled = true; controller.abort(); window.clearTimeout(deadline); };
   }, [keeper, operatorToken, hiveIdentity?.hive.apiary_id, refreshKey]);
 
   const blockers = useMemo(() => collapseBlockers(readiness), [readiness]);

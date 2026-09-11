@@ -1,5 +1,22 @@
 # Current maturity acceptance ledger
 
+## September 11 — Bound Apiary management read lifetimes
+
+Follow-up to the refresh wiring: the four older management read effects now
+pass AbortSignals to their transport, cancel on dependency change/unmount, and
+own eight-second deadlines cleared on settlement. Added optional signals to
+Jira bindings and collapse readiness reads; existing callers remain unchanged.
+Writes, task authority and membership transitions are unchanged. No polling added.
+
+New Keeper/member tests verify all six/three owned reads receive signals,
+replacement cancels previous requests, stalled requests reach TimeoutError,
+fresh invalidation retries, unmount cancels and clears timers, and the same
+unsaved name input survives. Both tests pass; existing26 ApiarySettings,11 Jira
+and73 App tests pass, as does the production web build. A first member fixture
+used an invalid departure-readiness response; corrected to an explicit unavailable
+read outside this test's scope. This is not a production departure fix.
+Deployment is pending; production/WSL remain on82eac78a.
+
 ## September 11 — Integrated UI verification checkpoint
 
 CI34605803223 for deployed82eac78a is COMPLETE SUCCESS, including Rust, web,

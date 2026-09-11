@@ -1764,8 +1764,9 @@ export async function importFederationJoinInvitation(
 
 export async function fetchApiaryCollapseReadiness(
   operatorToken: string,
+  signal?: AbortSignal,
 ): Promise<ApiaryCollapseReadiness> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/collapse-readiness");
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/collapse-readiness", { signal });
   return response.json() as Promise<ApiaryCollapseReadiness>;
 }
 

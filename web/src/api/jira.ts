@@ -130,8 +130,8 @@ export async function fetchJiraProjectStatuses(operatorToken: string, projectIdO
   return response.json() as Promise<JiraProjectStatus[]>;
 }
 
-export async function fetchJiraBindings(operatorToken: string): Promise<JiraProjectBinding[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/bindings");
+export async function fetchJiraBindings(operatorToken: string, signal?: AbortSignal): Promise<JiraProjectBinding[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/bindings", { signal });
   return response.json() as Promise<JiraProjectBinding[]>;
 }
 
