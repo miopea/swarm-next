@@ -6,6 +6,17 @@ The full objective and requirements below remain in force.
 
 ## Authoritative next gates — September 11, morning
 
+### September 11, 10:53 Eastern — budget-directed package closeout
+
+The current handoff above supersedes older build and usage snapshots. Production
+dev and WSL now serve09bc29cc: worker creation drafts survive section/filter
+navigation.137 focused Settings/App tests and both package builds pass; live WSL
+draft-only acceptance passed. Both engines and eight production session pairs
+were preserved. Previouscd7889fa full CI is green;09bc29cc run34612113986 remains
+the specific pending release gate. Account10% remains; preserve5%. No release.
+The full objective remains open; do not equate the three delivered UX slices
+with complete performance, native provenance, orchestration or mobile maturity.
+
 ### September 11, 09:53 Eastern — user-facing closeout checkpoint
 
 Follow-up: CLOSED Needs You custom-answer and clarification UI acceptance in

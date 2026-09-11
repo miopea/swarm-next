@@ -17,17 +17,18 @@ the newest checkpoint for the same gate supersedes them.
 | Needs You recommendations |5439a9f8 supports explicit No preference without a fake choice or automatic answer; genuine recommendations stay visible. |
 | Needs You interactions | Actual components in fictional Edge fixtures: custom text, failed-send retention, exact retry, clarification/reply attribution, correct attention counts and explicit final answer. This is not live/native terminal correlation. |
 | Interview draft continuity |cd7889fa fixes reproduced custom-answer/note loss across Activity; changed questions still reset answers. Regression and390px interaction passed. |
+| Worker setup draft continuity |09bc29cc preserves unfinished worker entries across Settings sections and filtering. Regression failed before the fix; Edge fixture and deployed WSL retained the exact name and repository. No worker was created by these draft-only checks. |
 | Queue presentation | Live owner sections, worker grouping, recorded order, linked prerequisites and expandable explanations. Counts match37 waiting rows at the recorded checkpoint. This does not prove every underlying task is correctly orchestrated. |
 
 ## Exact current delivery
 
-- Production dev and WSL App/API: `1.7.1-dev-cd7889fa6beb-20260911143022-1427938`.
-- Source commit: `cd7889fa6bebf43f37ee23e0ca75eb8ca62d40d0`; subsequent commits document evidence only.
+- Production dev and WSL App/API: `1.7.1-dev-09bc29cc0c54-20260911144639-1439784`.
+- Source commit: `09bc29cc0c5480aead8f57b43f1363839829e8d2`; subsequent handoff/fixture changes do not change the shipped application.
 - Engine package intentionally remains `1.7.1-dev-6d1ac295a1d4-20260911121244-1346703`.
 - Production engine PID1364561; WSL engine PID45338. Both preserved during updates.
-- Eight production worker/session pairs match before/after in `/tmp/swarm-interview-draft-continuity.LvjaNg`.
-- Full web:174 files/1684 tests passed; TypeScript, production web and Linux development package builds passed.
-- Prior42ace825 full CI34608555581 succeeded. Currentcd7889fa CI34610465314 is running at this handoff. Recheck that exact run once it finishes; do not rerun the package to generate activity.
+- Eight production worker/session pairs match before/after in `/tmp/swarm-settings-draft-continuity.rRcd1B`; both hashes are `6f5196dda450ba7055d488e5ad8522c3fce006b1ecf8d203bf243fa64f100ca9`.
+- Previous full web:174 files/1684 tests passed. Current change:137 Settings, worker setup and App tests passed; TypeScript, production web and Linux development package builds passed.
+- Priorcd7889fa full CI34610465314 succeeded. Current09bc29cc CI34612113986 is running at this handoff. Recheck that exact run once it finishes; do not rerun the package to generate activity.
 - No release cut by this work. No worker-engine update applied. No BFG Admin communication.
 - Worktree: `C:\projects\swarm-next\.worktrees\recovery-main-20260907`; branch `codex/apiary-and-workspace-ux`; changes pushed to main.
 - Preserve unrelated untracked `scripts/dogfood/native-signal-probe.cjs`.
@@ -83,3 +84,18 @@ Material exceptions to disclose:
 At roughly10% remaining, finish the current package and consolidate this handoff;
 at roughly5%, stop new implementation. Leave the full goal open with explicit
 remaining gates. Do not consume resets, contact another worker, or cut a release.
+
+### Final budget-directed package checkpoint
+
+Account reported10% remaining on September11 around10:52 Eastern. Protect5%.
+The three delivered user-facing slices are no-Jira one-approval enrollment,
+everyday worker setup, and Needs You custom answers/clarification/draft continuity.
+Their recorded acceptance is complete within those boundaries; the full Apiary,
+native answer reconciliation, orchestration and mobile programs are not complete.
+
+The Settings browser fixture had an obsolete workspace string-array response;
+typing a repository caused that fictional app to go blank. Updating the fixture
+to the existing WorkspaceChoice contract restored the interaction. This was not
+reproduced against live WSL. Exact draft retention passed there; the test draft
+was cleared, and all testing tabs were closed. No credentials, membership,
+worker assignment or persistent configuration were changed by this check.

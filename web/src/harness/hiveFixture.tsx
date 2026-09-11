@@ -139,7 +139,10 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
         ],
       };
     case "/api/v1/workspaces":
-      return ["/home/you/projects/orchard", "/home/you/projects/orchard-web"];
+      return [
+        { name: "orchard", path: "/home/you/projects/orchard", kind: "repository", configured_worker_id: null },
+        { name: "orchard-web", path: "/home/you/projects/orchard-web", kind: "repository", configured_worker_id: demoWorkers[1].id },
+      ];
     case "/api/v1/runtime/resources":
       // Normal, so the header carries no pressure badge in a screenshot.
       return {
