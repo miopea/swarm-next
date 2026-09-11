@@ -3371,15 +3371,12 @@ fn keeper_join_context(
         .ok_or(TaskStoreError::ApiaryInvitationNotFound)
 }
 
-fn register_federation_membership(
+fn attach_invited_hive_identity(
     transaction: &rusqlite::Transaction<'_>,
-    identity: &swarm_domain::HiveIdentity,
-    local_node: &LocalFederationIdentity,
     join: &KeeperJoinContext,
     payload: &FederationJoinSubmissionPayload,
-    context: KeeperInvitationContext,
     now: i64,
-) -> Result<FederationJoinAcceptance, TaskStoreError> {
+) -> Result<(), TaskStoreError> {
     let returning: bool = transaction.query_row(
         "SELECT EXISTS (SELECT 1 FROM apiary_federation_memberships m
          JOIN hives h ON h.id = m.member_hive_id AND h.operator_id = m.member_operator_id
@@ -3429,6 +3426,19 @@ fn register_federation_membership(
             )
             .map_err(|_| TaskStoreError::ApiaryMembershipConflict)?;
     }
+    Ok(())
+}
+
+fn register_federation_membership(
+    transaction: &rusqlite::Transaction<'_>,
+    identity: &swarm_domain::HiveIdentity,
+    local_node: &LocalFederationIdentity,
+    join: &KeeperJoinContext,
+    payload: &FederationJoinSubmissionPayload,
+    context: KeeperInvitationContext,
+    now: i64,
+) -> Result<FederationJoinAcceptance, TaskStoreError> {
+    attach_invited_hive_identity(transaction, join, payload, now)?;
     let (credential, encoded_credential) = node_credential_material()?;
     let credential_expires_at = now
         .checked_add(FEDERATION_NODE_CREDENTIAL_LIFETIME_SECONDS)
