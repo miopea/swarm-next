@@ -1,5 +1,71 @@
 # Current maturity acceptance ledger
 
+## September 11, 05:27 Eastern — Update-feedback fix live; corrective routing active
+
+47e45a08 is fully CI-green (34581960262, all four jobs). Production and WSL now
+serve1.7.1-dev-47e45a086279-20260911091605-1250714, healthy with no degraded
+services or database recovery. Supported updates exit0 and retain engine
+PIDs944143/6458. All10 production worker/session pairs compare byte-identically
+before/after, canonical hashbf0bd5558207e97bce4e675438d22500ab3749484f85573acefc6cc2b40cf3b6.
+This comparison's JSON key shape differs from the earlier snapshot hash; use
+its actual before/after pair, not cross-format hash equality.
+Receipts:/tmp/swarm-provider-observation-continuity.oBk0Qr.
+
+The build waited for successful baseline completion, compiled in2m15s and built
+all web assets. Its SSH wrapper then exited1 on a trailingCR blank line after
+printing the completed package path. Every bundle checksum and the exact source
+revision/fingerprint were verified; no unnecessary rebuild was performed.
+Deployment wrappers strip transportCR before execution. Bundle root:
+/tmp/swarm-provider-observation-47e45a08. Archive/tmp/swarm-wsl-47e45a08.tar.gz,
+SHA256bb6ae584847f36902ff58366ee358a9538e5338624876f346b673c96517efd6b,
+verified after Windows transfer and again before WSL extraction/update.
+
+Edge restored both exact runtimes; production Queues shows17 Queen,5 holds,
+3 shipping,15 scheduled; WSL shows its valid empty queue. Both tabs were left
+on Queues. Initial production restoration briefly selected the idle Contract
+demo terminal; no input was sent, then navigation released that selection.
+Live provider outage was not injected; failure/recovery behavior is established
+by the focused/full UI tests, while browser checks establish deployed rendering.
+
+Corrective investigation01a08fc6-90ca-74f1-bf42-b57aba18233d was admitted once,
+assigned to Swarm Dogfood, and picked up normally in19 seconds (events10977–10980).
+Worker reproduced11/12 passing fixture tests, submitted its exact finding and
+preservation evidence at10984, and system empty-commit completion occurred10985.
+The task explicitly authorizes Queen to create one same-worker corrective task;
+none explicitly linked was observed at this checkpoint. No terminal nudge, manual
+completion, source fix or corrective assignment was injected by the controller.
+This is an active routing test, NOT yet end-to-end correction acceptance.
+
+## September 11, 05:16 Eastern — Bounded ten-session server baseline complete
+
+Observer30572 exited0 after1800 seconds, collecting60 samples across1781 seconds.
+Its final report independently confirms original10 sessions, appPID1232277 and
+enginePID944143 remained continuous. Build68602 began only after this result,
+so its compilation does not contaminate the observation. No workload was injected.
+
+| Metric | Average / range | Maximum interval / ending value |
+| --- | --- | --- |
+| API cgroup CPU, percent of one core | 1.345% | 4.406% |
+| Engine process CPU, percent of one core | 0.721% | 1.5% |
+| Engine cgroup including providers, percent of one core | 14.868% | 62.786% |
+| API process RSS | 67,153,920–89,321,472 bytes | Ends87,228,416; starts87,224,320 |
+| API anonymous memory | 38,776,832–60,944,384 bytes | File-backed28,377,088 constant |
+| Engine cgroup INCLUDING providers | 5,647,290,368–7,897,530,368 bytes | Not engine-only memory |
+| Retained history | 535,701,258–536,409,174 bytes | Zero dropped bytes |
+| Collection cost | 0–1 seconds per30-second interval | 10 running sessions throughout |
+
+Raw files remain in/tmp/swarm-f05b2f0f-live-soak and local ignored dist/ with
+prefix20260911T084554Z-live. CSV SHA256:
+dc40c95a2611e4f9baef92be12dce807b5a268813b4acd89877d2322c2fa4e32.
+Analysis used scripts/dogfood/live-soak-summary.cjs; continuity is established by
+the observer's final report, not inferred by its numerical analyzer.
+
+This is a natural ten-session baseline, not a prescribed busy workload. The
+provider-inclusive cgroup accounts for most observed resource use, but the run
+does not isolate any particular worker or prove that past spikes have vanished.
+It contains no browser CPU/heap evidence and no matched fresh/aged comparison.
+Do not mark overall performance acceptance complete from these numbers.
+
 ## September 11, 04:59 Eastern — Provider update notices survive failed checks
 
 Found by source inspection: useRuntimeUpdate converted an unavailable provider

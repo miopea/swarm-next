@@ -2,6 +2,32 @@
 
 ## Authoritative next gates — September 11, overnight
 
+05:27 CLOSED47e45a08 activation: production and WSL serve
+1.7.1-dev-47e45a086279-20260911091605-1250714, healthok, enginePIDs944143/6458
+preserved. All10 production worker/session pairs match before/after; full
+CI34581960262 SUCCESS. Edge verified both exact runtimes and Queues, then left
+both test tabs away from terminals. Do not redeploy/retest this as unfinished.
+
+New confined worker-first investigation01a08fc6-90ca-74f1-bf42-b57aba18233d was
+normally delivered, picked up after19 seconds, and completed with truthful
+test-isolation evidence. One subsequent same-worker correction is explicitly
+authorized this time. Queen's linked corrective assignment is NOT yet observed;
+do not equate investigation completion with correction. Controller
+scripts/dogfood/queen-corrective-assignment.sh defaults to read-only status and
+reports explicitly linked follow-ons. Keep the original delivered artifact intact.
+An optional external-wait grouping question is recorded in09 and asked
+asynchronously; do not change ADR0082's presentation before the answer arrives.
+
+05:16 baseline COMPLETE, observer30572 exited0:60 samples,1781-second sampled
+span within1800-second observation; same10 sessions, appPID1232277 and engine
+PID944143 throughout, zero history drops. Average one-core CPU:API1.345%, engine
+process0.721%, engine cgroup INCLUDING providers14.868%; maxima4.406/1.5/62.786%.
+API RSS67.15–89.32MB, ending87.23MB versus starting87.22MB. Provider-inclusive
+cgroup memory5.65–7.90GB must not be attributed to the engine process itself.
+This closes this content-free baseline collection, NOT fresh/aged, busy-workload,
+browser CPU or overallPERF acceptance. Build68602 passed the final-report gate
+and is now compiling exact47e45a08; no deployment yet. See92 for receipt/hash.
+
 05:07 continuation checkpoint: previous turn made verified code progress; this
 turn confirmed live sampler30572 still running. UI fix47e45a08 is pushed to main;
 CI34581960262 web/security/package jobs pass, Rust still running. Build session

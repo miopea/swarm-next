@@ -1,5 +1,17 @@
 # Open product questions
 
+## External-wait presentation between Queen reviews — September 11, 2026
+
+Awaiting operator direction, asked asynchronously. ADR0082 currently returns a
+previous external condition to Queen's visible queue immediately between review
+runs, even when its local evidence still matches. Live Watchfaces rows show this
+despite a recent check. Proposed presentation: keep these under Dependencies /
+holds with explicit Last checked wording between runs; still require fresh
+evidence before action. Missing/changed evidence and insufficient-evidence
+investigations would remain Queen work. This changes no task owner, permission,
+review coverage or execution rule. Do not implement or amend the accepted
+presentation boundary until answered. Continue other maturity work meanwhile.
+
 ## Keeper management authority — September 10, 2026
 
 Resolved: the operator approved joining as consent to Apiary-wide Keeper
