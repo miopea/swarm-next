@@ -18027,6 +18027,89 @@ mod tests {
         let _ = server_task.await;
     }
 
+    /// A failure after the workers are down still leaves a receipt.
+    ///
+    /// ⚠️ THE STATE WITH NO WITNESS. The sessions are stopped, the engine was
+    /// never replaced, and the roster is short — and before this the only thing
+    /// recorded was an open attempt row, which reads as "the update replaced
+    /// Swarm mid-flight". That is a different and much rosier story than "it
+    /// could not carry out the swap and gave up with the workers down".
+    #[tokio::test]
+    async fn a_failed_swap_records_why_rather_than_leaving_the_attempt_open() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
+        );
+        let session = registry
+            .spawn(
+                &ProviderCommand {
+                    executable: PathBuf::from("/bin/sh"),
+                    arguments: vec!["-lc".into(), "sleep 10".into()],
+                    working_directory: workspace.clone(),
+                },
+                TerminalSize::default(),
+            )
+            .unwrap();
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind_with_identity(
+            &socket,
+            Arc::clone(&registry),
+            "old-host",
+            "old-engine",
+        )
+        .unwrap();
+        let server_task = tokio::spawn(server.run());
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Dahlia",
+                ProviderKind::ClaudeCode,
+                workspace.to_str().unwrap(),
+                false,
+                1,
+            )
+            .unwrap();
+        store.bind_worker_session(worker.id, session.id()).unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new(&socket), "secret")
+            .with_task_store(store.clone())
+            // The request cannot be written: its directory does not exist. This
+            // is reached AFTER the workers are stopped, which is the point.
+            .with_maintenance_request_path(runtime.path().join("absent/maintenance.request"))
+            .with_maintenance_timeout(Duration::from_millis(300));
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/runtime/terminal-host/maintenance")
+                    .header("authorization", "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!session.is_running().unwrap(), "the worker was stopped");
+        let attempt = store.last_worker_engine_update().unwrap().unwrap();
+        assert_eq!(
+            attempt.outcome,
+            Some(swarm_persistence::WorkerEngineUpdateOutcome::Failed),
+            "an attempt left open would read as Swarm having been replaced mid-update"
+        );
+        assert_eq!(attempt.stopped_sessions, 1);
+        assert!(
+            attempt.detail.contains("could not be recorded"),
+            "the receipt must say what refused: {}",
+            attempt.detail
+        );
+
+        server_task.abort();
+        let _ = server_task.await;
+    }
+
     #[tokio::test]
     async fn app_only_release_does_not_restart_a_matching_worker_engine() {
         let runtime = TempDir::new().unwrap();

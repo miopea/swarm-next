@@ -240,7 +240,11 @@ test("settled recovery replaces startup uncertainty and does not follow another 
     recovery_attempt: { recovery_id: "recovery-1", number: 2, step: { kind: "continue" } },
     recovery_outcome: { state: "restored", conversation: "restored-context", via_continue: true },
   }} />);
-  expect(screen.getByText(/Provider context was restored at startup/)).toBeInTheDocument();
+  // via_continue: the provider chose. Saying "restored" here claimed a check
+  // nothing performed — the returned id was never compared to the selection.
+  expect(screen.getByText(/provider's own continuation was used/)).toBeInTheDocument();
+  expect(screen.getByText(/did not verify it against the one you chose/)).toBeInTheDocument();
+  expect(screen.queryByText(/Provider context was restored at startup/)).not.toBeInTheDocument();
   expect(screen.getByText("restored-context").closest("details")).not.toHaveAttribute("open");
   expect(screen.queryByText(/Swarm has not verified/)).not.toBeInTheDocument();
   expect(screen.queryByText(/Continuation fallback/)).not.toBeInTheDocument();

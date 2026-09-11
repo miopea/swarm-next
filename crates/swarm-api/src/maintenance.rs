@@ -704,26 +704,14 @@ async fn maintain_worker_engine_locked(
         &target_version,
         pending_protocol,
     )?;
-    stop_running_sessions(state, &running).await?;
-    state.control_room_notify.notify_waiters();
-    let requested = std::fs::write(
+    stop_and_request_swap(
+        state,
+        &running,
         request_path.as_ref(),
-        format!(
-            "requested_at={}\ntarget_version={target_version}\n",
-            unix_timestamp()
-        ),
+        &target_version,
+        attempt.as_deref(),
     )
-    .map_err(|error| {
-        ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "worker_engine_maintenance_unavailable",
-            format!("the managed maintenance request could not be recorded: {error}"),
-        )
-    });
-    if let Err(error) = &requested {
-        finish_engine_update(state, attempt.as_deref(), Failed, &error.message);
-    }
-    requested?;
+    .await?;
 
     let updated = await_expected_engine(state, pending_protocol).await;
     let _ = std::fs::remove_file(request_path.as_ref());
@@ -832,6 +820,52 @@ fn write_down_what_this_costs(
             tracing::warn!(message = %error.message, "this engine update will leave no history entry");
         })
         .ok())
+}
+
+/// Takes the workers down and asks the package layer for the swap.
+///
+/// EVERY WAY OUT OF HERE LEAVES A RECEIPT, which is the part that was missing.
+/// Failing partway means some sessions are down and the engine was never
+/// replaced -- the worst state to leave undescribed, because the roster is
+/// short and nothing says why. Returning through `?` alone left the attempt row
+/// open, and an open row reads as "the update replaced Swarm mid-flight": a
+/// different and rosier story than "it could not stop a worker and gave up".
+async fn stop_and_request_swap(
+    state: &AppState,
+    running: &[swarm_terminal::HostSessionSummary],
+    request_path: &std::path::Path,
+    target_version: &str,
+    attempt: Option<&str>,
+) -> Result<(), ApiError> {
+    if let Err(error) = stop_running_sessions(state, running).await {
+        finish_engine_update(
+            state,
+            attempt,
+            Failed,
+            &format!(
+                "workers could not be stopped, so the engine was not replaced: {}",
+                error.message
+            ),
+        );
+        return Err(error);
+    }
+    state.control_room_notify.notify_waiters();
+    std::fs::write(
+        request_path,
+        format!(
+            "requested_at={}\ntarget_version={target_version}\n",
+            unix_timestamp()
+        ),
+    )
+    .map_err(|error| {
+        let refusal = ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "worker_engine_maintenance_unavailable",
+            format!("the managed maintenance request could not be recorded: {error}"),
+        );
+        finish_engine_update(state, attempt, Failed, &refusal.message);
+        refusal
+    })
 }
 
 /// Closes out an attempt's history entry, and never gets in the way.
