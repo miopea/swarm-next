@@ -1,5 +1,26 @@
 # Current maturity acceptance ledger
 
+## September 10, 23:18 — Current Apiary acceptance boundary
+
+This checkpoint supersedes older sequencing and revision statements below.
+
+| Outcome | Current evidence | Remaining gate |
+| --- | --- | --- |
+| Manage Apiary can scroll | Scroll owner fix is included in healthy live 1be4f138; targeted checks passed | Actual desktop/mobile browser scroll acceptance |
+| Submit once, Keeper approves, automatic membership | Server-owned enrollment exists; UI completion/retry checks pass | Prepared server timestamp fix must pass isolated Linux tests; fresh WSL/browser-closed join must complete |
+| Saved enrollment status remains understandable | 18 component tests cover submission, saved progress, read failure/retry, hidden-page cancellation and completion-view failure; live 1be4f138 | Real browser failure/recovery acceptance |
+| No Jira required for membership/shared task intake | Existing HTTP test explicitly omits Jira and asserts task feed, catalog acknowledgement and member directory | Live no-Jira onboarding; test does not prove every assignment path |
+| Existing members keep identity and share roster/renames | Earlier independent persistence and HTTP evidence retained below | Existing Keeper plus two members: in-place update, complete roster and rename convergence |
+| Workspace setup recovery | Main 8a96fe34; 4 search-settings + 29 worker-form tests, TypeScript and production build pass | Deployment held for concurrent dirty Linux checkout; browser path/override/error-layout acceptance |
+| Worker-preserving app update | Live 1be4f138, health ok/no degradation; host PID944143/start21:29:38 unchanged; 10 retained/running, 0 unreadable | This proves this update, not automatic engine-update maturity |
+
+CI34557364854: web, linux-package and rust-audit passed; Rust was still running
+at the latest check. Do not label full CI green until its terminal result is read.
+Edge is unavailable to this task. The isolated Linux source transfer awaits
+explicit operator approval; do not bypass the denied transfer through another
+transport. The timestamp correction is not committed, deployed or verified.
+Broader maturity requirements in document45 remain open. No release was cut.
+
 ## September 10 — 1.7.1 deployed; resume the remaining UX work
 
 The operator confirms deployment. WSL health independently reports 1.7.1 and

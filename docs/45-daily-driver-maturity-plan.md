@@ -1,5 +1,33 @@
 # Swarm daily-driver maturity: scope and delivery plan
 
+## Authoritative next gates — September 10, 23:18 Eastern
+
+The latest operator priority is guided Apiary onboarding and workspace setup.
+The dated sequencing paragraphs below are historical where they conflict with
+this checkpoint. Keep the full maturity objective; do not claim completion from
+individual UI patches or deployment health.
+
+1. Validate the prepared enrollment timestamp correction on isolated Linux.
+   Existing-source restart testing reproduced a valid approved join being rejected
+   across a second boundary. The changed module and deterministic regression are
+   local, uncommitted, unverified and excluded from deployments. Source transfer
+   was denied by the permission reviewer; explicit operator approval is pending.
+2. Restore the requested Edge extension connection, then verify the fresh WSL
+   submit-once/Keeper-approval flow and existing-member directory/rename behavior.
+   No remove/rejoin workaround for existing members. Component tests are not
+   browser acceptance; do not substitute another browser surface without approval.
+3. Activate verified workspace setup recovery from main 8a96fe34 only when the
+   shared Linux checkout is clean and the supported updater is inactive. It now
+   has another worker's uncommitted API changes; do not overwrite or deploy them.
+4. Complete desktop/mobile workspace selection, path override and inline-error
+   acceptance, then return to document93's remaining UI-1 through UI-4 gates.
+
+Live app 1be4f138 is healthy; its update preserved all 10 worker sessions and the
+existing engine process. No release is authorized. Documents92/93 distinguish
+current evidence from the historical checkpoints below. Do not contact the BFG
+Admin worker without operator approval, and do not replace major acceptance
+work with unrelated polishing while a gate is blocked.
+
 ## Current sequencing — 1.7.1 deployed, September 10
 
 The operator confirms deployment and instructs continued work. The release hold
