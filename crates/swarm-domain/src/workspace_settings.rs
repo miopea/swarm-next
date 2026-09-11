@@ -35,7 +35,7 @@ mod tests {
             "/projects".into(),
             "/projects".into()
         ]));
-        assert!(!WorkspaceSearchSettings::valid_folders(&["".into()]));
+        assert!(!WorkspaceSearchSettings::valid_folders(&[String::new()]));
         assert!(!WorkspaceSearchSettings::valid_folders(&["x".repeat(4097)]));
         assert!(!WorkspaceSearchSettings::valid_folders(
             &(0..17).map(|n| format!("/{n}")).collect::<Vec<_>>()

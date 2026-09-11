@@ -87,7 +87,7 @@ mod tests {
         assert!(!store.replace_workspace_search_settings(0, &[]).unwrap());
         assert!(
             store
-                .replace_workspace_search_settings(1, &["".into()])
+                .replace_workspace_search_settings(1, &[String::new()])
                 .is_err()
         );
         drop(store);
