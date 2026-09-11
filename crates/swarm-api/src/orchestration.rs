@@ -452,10 +452,10 @@ pub(super) async fn coordinator_status(
             recovery,
             review_queue: if query.include_review.unwrap_or(true) {
                 swarm_application::TaskService::new(task_store(&state)?.clone())
-                .queen_review_queue_snapshot()
-                // An unavailable judgment read must not take delivery/recovery
-                // visibility down with it. Null is unavailable, never empty.
-                .ok()
+                    .queen_review_queue_snapshot()
+                    // An unavailable judgment read must not take delivery/recovery
+                    // visibility down with it. Null is unavailable, never empty.
+                    .ok()
             } else {
                 None
             },
