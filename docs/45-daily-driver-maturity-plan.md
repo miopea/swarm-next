@@ -2,6 +2,15 @@
 
 ## Authoritative next gates — September 11, overnight
 
+01:15 checkpoint:94b210fb is live on production and WSL. Existing member rename
+and restoration both reached Keeper without rejoining. Direct Invite a Hive
+navigation passes desktop1465px/phone390px focus, visibility and overflow checks;
+invitations precede advanced delegation settings. Optional-Jira labels are live
+and prior78a212de CI is green. Preserve the pending Daisy approval gate below.
+Do not repeat workspace, creation-profile, rename or invitation-entry acceptance.
+Next: remaining user-facing proof gaps in93/96, with native/device boundaries
+explicit. No BFG Admin communication or release merely to create activity.
+
 Latest checkpoint: member claims fix8f320a9b is live on production and WSL.
 All overview reads now200; warning absent; three-Hive roster retained; both
 worker-engine PIDs unchanged. CI34561952448 passed all four jobs. Workspace

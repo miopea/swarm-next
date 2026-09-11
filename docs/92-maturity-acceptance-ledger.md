@@ -13,7 +13,14 @@ acceptance or proof of immediate live presence.
 The next UI correction adds an Invite a Hive action to Keeper overview, opens and
 focuses the existing invitation controls, and puts invitations before advanced
 delegation settings. Navigation creates no link. All64 affected tests, TypeScript
-and production web build pass. Browser desktop/narrow layout acceptance is next.
+and production web build pass. Revision94b210fb is now healthy on production and
+WSL through supported worker-preserving updates. Production retains PID944143;
+the WSL updater confirms its terminal host was preserved. Edge1465px and390px
+journeys pass: the dedicated action opens Invite Hives with DOM focus, existing
+Create invitation link is visible, and no horizontal document overflow occurs.
+Both phone actions measure44px tall. No link was generated or approved by these
+navigation checks. Existing pending Daisy approval remains untouched.
+Optional-Jira revision78a212de CI34563963150 is now green;94b210fb CI is pending.
 
 
 ## September 11, 00:57 Eastern — Optional Jira presentation corrected
