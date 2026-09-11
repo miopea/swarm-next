@@ -4,6 +4,24 @@
 
 ### Latest priority: guided enrollment, then workspace setup
 
+September 10, 21:32 Eastern checkpoint: Manage Apiary scrolling fixed in
+5b61099a and VERIFIED LIVE via health version
+1.7.1-dev-5b61099a5f71-20260911012826-942980, status ok/no degradation;
+updater finished ready. Both Keeper/member management now own a bounded-height
+scroll container with mobile padding. 42 targeted tests passed. Visual acceptance
+remains open: Edge selector still reports unavailable, so do not claim browser QA.
+The host restarted at21:29:38; the operator explicitly confirmed "That was me."
+Afterward host reports10 running/10 retained,4 busy,0 unreadable,not draining.
+
+1544be0d fixes another onboarding gap: Settings hash links from Apiary now switch
+the displayed surface immediately, with listener cleanup and unrelated-anchor
+protection. All1618 web tests, TypeScript and production web build PASS.
+Pushed to main, NOT deployed: live checkout has another worker's uncommitted
+crates/swarm-api/src/microsoft_oauth.rs change. Preserve it; do not deploy that
+unverified work. Next: clean-checkout activation, then fresh WSL enrollment and
+existing-member directory/rename/management scroll validation through Edge once
+available. Jira remains optional. No release cut; full maturity goal remains open.
+
 September10 21:17 Eastern follow-up: CI's formatting-only failure was corrected
 in cd579e7a; cargo fmt --all --check passes. Member setup now distinguishes
 optional first-time Jira connection from network outage, invalid credentials
