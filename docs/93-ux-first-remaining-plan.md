@@ -8,8 +8,10 @@ September10,22:56 Eastern: browser completion recovery is committed in7f2251cb,
 merged with concurrent email UI9fab0f40 asbfae43f8. A failed onJoined view refresh
 now retains completed membership and can retry Open Apiary without another join
 or approval. All1625 web tests and TypeScript pass; production build passed before
-the isolated email merge. The supported updater has started forbfae43f8 after
-checking clean source and an inactive service; activation not yet verified.
+the isolated email merge. Activation VERIFIED at22:58 Eastern: health serves
+1.7.1-dev-bfae43f84f0d-20260911025543-1003407, statusok/no degradation;
+updater inactive/exit0. Host PID944143/start21:29:38 unchanged;10 running/10
+retained sessions,2 busy,0 unreadable,not draining. No engine restart or release.
 The local Rust timestamp fix remains uncommitted and excluded from deployment.
 
 September10,22:47 Eastern: live health verifies d0d1c33f, statusok/no degradation,
