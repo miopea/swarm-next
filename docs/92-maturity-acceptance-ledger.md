@@ -1,5 +1,37 @@
 # Current maturity acceptance ledger
 
+## September 11 — No-Jira live enrollment gate closed
+
+After explicit operator approval, restored the existing fictional Daisy member
+database at `/tmp/swarm-enrollment-pair.iR9f1v/member` with the current3dfc019e
+bundle. Dedicated API/engine units were bounded to2h/512MB and2h/256MB; engine
+networking isolated and provider PATH restricted. No real worker or database used.
+The already-submitted request survived the test API shutdown and restart.
+
+Verified Keeper showed exactly Daisy's Hive / Daisy Member awaiting approval.
+Navigated the member browser to about:blank, then clicked the single scoped
+Approve Hive action. Without reopening the member browser, Keeper's roster
+subsequently contained Daisy Member / daisy@example.test as the fourth Hive.
+Opening the member then went directly to Grand Garden, not another consent or
+readiness screen. Member showed Catalog Verified,0/2 Jira projects, Jira not
+connected (optional), successful synchronization, zero retries, task cursor4,
+two applied shared tasks and the same four-Hive directory. No Jira configuration,
+second acceptance, manual finalization or forced reconciliation was performed.
+
+This closes the previously pending live approval/automatic completion gate,
+including browser-independent joining and no-Jira shared task reconciliation.
+It does not establish broader Keeper remote-management capabilities.
+
+Cleanup used Daisy's own Leave Apiary review: zero claims, active shared tasks,
+Stewardships or pending updates; typed Grand Garden and confirmed departure.
+Daisy returned to personal mode. Production roster independently returned to
+Lead Hive, BGS WSL Hive and Honeysuckle Hive, with ten workers still shown.
+Only the fictional membership was removed; audit history and disposable database
+remain. Stopped both owned Daisy test services and left the test browser blank.
+The newly created but unused test pair at4PWZe0 was stopped before restoring Daisy.
+
+Full CI34589715128 completed successfully, including the Rust job. No release cut.
+
 ## September 11 — Provider outage reporting and Apiary verification
 
 Found an API false-success path: a failed worker-engine provider-capability read
