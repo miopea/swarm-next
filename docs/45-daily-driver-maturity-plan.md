@@ -2,6 +2,12 @@
 
 ## Authoritative next gates — September 11, overnight
 
+01:25 checkpoint:78ec2bc1 is healthy on production/WSL with both engines retained.
+Integrated UI1641/170 passes. Optional Jira setup no longer claims failed membership
+or hides real catalog/policy holds; no-Jira, mixed-failure, recovery and unknown
+states have390px fixture acceptance. Live WSL retains1 usable Jira project despite
+an additional catalog project's setup requirement. See92 for exact boundaries.
+
 01:15 checkpoint:94b210fb is live on production and WSL. Existing member rename
 and restoration both reached Keeper without rejoining. Direct Invite a Hive
 navigation passes desktop1465px/phone390px focus, visibility and overflow checks;

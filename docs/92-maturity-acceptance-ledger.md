@@ -13,7 +13,13 @@ distinguish optional disconnected, unavailable, invalid credentials and access.
 All62 affected tests pass; the final40-test focused rerun, TypeScript and build
 pass. The no-network browser harness at390px verifies optional Jira, mixed policy
 failure, recovery, and absent status with no overflow and a44px setup action.
-This is fictional rendering acceptance; production activation remains pending.
+Production and WSL now serve healthy
+`1.7.1-dev-78ec2bc1d127-20260911052037-1110561`, retaining host PIDs944143 and6458.
+Integrated UI suite passes1641 tests across170 files, with two bounded test workers.
+Live WSL overview shows1 Jira project ready and an additional-project setup link,
+while shared catalog prerequisites remain ready. Existing roster is intact.
+Management uses the same shared-status presentation. Fictional no-Jira/mixed-failure
+cases remain distinct from this live connected-Jira evidence. Latest CI pending.
 
 
 ## September 11, 01:09 Eastern — Member rename round trip accepted
