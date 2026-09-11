@@ -2,6 +2,17 @@
 
 ## Authoritative next gates — September 11, overnight
 
+02:00 checkpoint: real shared-task acceptance is now the active journey. Fictional
+task01a08f02-fc6b-7953-bf57-4c73e79cf3d8 reached existing WSL Hive and survived
+an API restart with engine6458 preserved. It remains Ready, unexecuted, for the
+next browser check. f66e9e68 adds worker-setup guidance to the empty chooser,
+retains ownership, and suppresses impossible non-Ready/stale-worker dispatch.
+70 task-board tests and production build pass. Supported production deployment
+is started, not yet verified. Next: verify deployment, update WSL with the exact
+bundle, browser-check Set up a worker navigation, then retire ONLY this fictional
+task through supported lifecycle commands and verify Keeper/member convergence.
+Do not run a provider merely to clean up this test. Earlier2e4e0dfb CI is green.
+
 Latest: feedback contact identity reuse is committed and live on production/WSL
 at2e4e0dfb;61 affected tests, TypeScript/build and390px fictional account-choice
 acceptance pass. Both engines preserved. CI pending; see92. This completes the
