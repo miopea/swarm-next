@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import JoinPublicProfile, { type JoinPublicProfileHandle } from "./JoinPublicProfile";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
@@ -33,10 +33,12 @@ type Props = {
   onError: (message: string) => void;
   onMessage: (message: string) => void;
   onJoined: () => Promise<void>;
+  creationProfileRef?: RefObject<JoinPublicProfileHandle | null>;
 };
 
-export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessage, onJoined }: Props) {
-  const profileRef = useRef<JoinPublicProfileHandle>(null);
+export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessage, onJoined, creationProfileRef }: Props) {
+  const localProfileRef = useRef<JoinPublicProfileHandle>(null);
+  const profileRef = creationProfileRef ?? localProfileRef;
   const [keeperLinks, setKeeperLinks] = useState<ApiaryKeeperLink[]>([]);
   const [joinInvitations, setJoinInvitations] = useState<FederationJoinInvitationOverview[]>([]);
   const [invitationPreview, setInvitationPreview] = useState<ApiaryInvitationBundle>();
@@ -367,12 +369,9 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
         </ul>
       ) : null}
       {!proposed?.enrollment_offer ? <div className="apiary-join-card">
-        <div>
-          <strong>Review before joining</strong>
-          <small>After Keeper approval, the invitation appears here automatically. Review and accept the shared policy to join; configure optional integrations afterward.</small>
-        </div>
         <details className="apiary-manual-fallback">
           <summary>Advanced: import a legacy invitation</summary>
+          <p>Older invitations need a separate policy review before joining. New Keeper links use the three-step flow above; approval finishes joining automatically.</p>
           <ApiaryLinkEntry label="Legacy invitation link" value={invitationLink} action="Review invitation" disabled={busy || working} onChange={setInvitationLink} onAction={previewInvitationLink} />
           <ApiaryFileFallback summary="Use an invitation file" ariaLabel="Choose Apiary invitation" disabled={busy || working} label="Choose invitation file" detail="or drop the Keeper's .json invitation here" onFile={(file) => void previewInvitationFile(file)} />
         </details>

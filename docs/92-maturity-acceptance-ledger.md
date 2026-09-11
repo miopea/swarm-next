@@ -1,5 +1,38 @@
 # Current maturity acceptance ledger
 
+## September 11 — Claim overview repaired live; fresh-join gate narrowed
+
+Production and existing WSL member both serve healthy
+`1.7.1-dev-8f320a9be908-20260911042258-1083431`. Supported development updates
+preserved production hostPID944143/start21:29:38 and WSL hostPID6458/start17:18:49.
+WSL browser Network.responseReceived shows shared-work200 (previously403), all
+other member overview reads200, and the partial-refresh warning is absent.
+The existing three-Hive roster and membership remain intact. No release cut.
+
+Fresh browser enrollment uses disposable WSL state
+`/tmp/swarm-enrollment-pair.iR9f1v`, ports8871/8872. Its dedicated engines have
+private networking, separate history/workspace roots and a two-hour lifetime;
+no real providers or projects are used. Plain loopback Keeper invite issuance
+correctly fails remote-HTTPS validation. A test invitation from the real HTTPS
+Keeper was handed to Daisy Member (`daisy@example.test`). The UI showed exact
+policy1 management disclosure, saved default name as Daisy's Hive, and submitted
+once without Jira. Member then showed waiting for Keeper with no further action.
+Keeper showed the verified Daisy identity and one Approve Hive action.
+
+Auto-review rejected the production membership grant. The operator has been
+asked explicitly to approve this one test membership and subsequent cleanup.
+Do not retry or bypass approval. No membership was granted. Final automatic
+completion/browser-closed acceptance remains OPEN; automated no-Jira/member
+restart tests pass but do not substitute for that last live action. The test
+member page was navigated to about:blank before the rejected approval.
+
+The isolated Create Apiary journey also reproduced a real UX defect: it discarded
+the shared profile entered above the create action. The UI correction saves the
+reviewed profile first and refreshes identity afterward, with failure/recovery
+coverage;47 focused tests and TypeScript pass. Full UI suite and live creation
+acceptance remain to finish. The temporary Keeper is Moonflower Test Garden;
+its pre-fix generic profile is evidence, not corrected acceptance.
+
 ## September 11 — Workspace live acceptance and member-read correction
 
 On WSL revision4e46e680, saved the existing `~/projects/rcg` search folder through

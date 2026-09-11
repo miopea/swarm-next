@@ -320,11 +320,18 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     setError("");
     setMessage("");
     try {
+      if (!profileRef.current) throw new Error("Your profile is not ready yet.");
+      await profileRef.current.save();
       const nextContext = await createApiary(operatorToken, name.trim(), "jira");
       applyApiaryContext(nextContext);
       setConfirmCreate(false);
       const createdName = nextContext.mode === "federated" ? nextContext.apiary.name : name.trim();
       setMessage(`${createdName} is now an Apiary.`);
+      try {
+        await refreshIdentity();
+      } catch {
+        setError("Your Apiary and profile were saved, but this view could not refresh. Reload the page; do not create another Apiary.");
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The Apiary could not be created.");
     } finally {
@@ -447,7 +454,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       {personal ? (
         <>
           <p>Bring independent Hives together for shared Swarm tasks and Keeper coordination. Jira can be connected later if your team uses it.</p>
-          <PersonalHiveJoin busy={busy || working} operatorToken={operatorToken} onMessage={setMessage} onError={setError} onJoined={refreshIdentity} />
+          <PersonalHiveJoin busy={busy || working} operatorToken={operatorToken} onMessage={setMessage} onError={setError} onJoined={refreshIdentity} creationProfileRef={profileRef} />
           <label className="field-stack" htmlFor="apiary-name">
             <span>Apiary name</span>
             <input id="apiary-name" value={name} maxLength={120} placeholder="Wildflower Garden" onChange={(event) => { setName(event.target.value); setConfirmCreate(false); }} />

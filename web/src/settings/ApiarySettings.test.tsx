@@ -162,12 +162,22 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-test("creates a reviewed Apiary with optional Jira and refreshes Hive identity", async () => {
+test.each([false, true])("creates Apiary after saving its reviewed profile; refresh fails=%s", async (refreshFails) => {
   const onHiveIdentityChange = vi.fn();
   const federated = keeperIdentity();
+  federated.hive.name = "Bea's Hive";
+  const writes: string[] = [];
+  const profile = { hive_name: "My Hive", operator_display_name: "Bea Keeper", contact_email: "bea@example.test" };
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url === "/api/v1/hive/public-profile") return ok({ revision: 1, profile });
+    if (url === "/api/v1/hive/join-profile") {
+      writes.push("profile");
+      expect(JSON.parse(String(init?.body))).toEqual(profile);
+      return ok({ revision: 2, profile: { ...profile, hive_name: "Bea's Hive" } });
+    }
     if (url === "/api/v1/apiary") {
+      writes.push("create");
       expect(init?.method).toBe("POST");
       expect(JSON.parse(String(init?.body))).toEqual({
         name: "Wildflower Garden",
@@ -175,8 +185,8 @@ test("creates a reviewed Apiary with optional Jira and refreshes Hive identity",
       });
       return ok(federated.apiary_context, 201);
     }
-    if (url === "/api/v1/hive") return ok(federated);
-    throw new Error(`unexpected request ${url}`);
+    if (url === "/api/v1/hive") return refreshFails ? new Response("Unavailable", { status: 503 }) : ok(federated);
+    return ok([]);
   });
   vi.stubGlobal("fetch", fetchMock);
 
@@ -184,6 +194,7 @@ test("creates a reviewed Apiary with optional Jira and refreshes Hive identity",
 
   expect(screen.getByText("Swarm shared work").parentElement).toHaveTextContent("included");
   expect(screen.getByText("Jira is optional")).toBeInTheDocument();
+  await screen.findByDisplayValue("Bea Keeper");
   const review = screen.getByRole("button", { name: "Review Apiary setup" });
   expect(review).toBeDisabled();
   fireEvent.change(screen.getByLabelText("Apiary name"), { target: { value: "  Wildflower Garden  " } });
@@ -192,8 +203,29 @@ test("creates a reviewed Apiary with optional Jira and refreshes Hive identity",
   expect(screen.getByRole("group", { name: "Confirm Apiary setup" })).toHaveTextContent("Members keep local tasks and workers");
   fireEvent.click(screen.getByRole("button", { name: "Create Apiary" }));
 
-  await vi.waitFor(() => expect(onHiveIdentityChange).toHaveBeenCalledWith(federated));
-  expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/v1/hive")).toBe(false);
+  await vi.waitFor(() => expect(writes).toEqual(["profile", "create"]));
+  if (refreshFails) expect(await screen.findByRole("alert")).toHaveTextContent("do not create another Apiary");
+  else await vi.waitFor(() => expect(onHiveIdentityChange).toHaveBeenCalledWith(federated));
+  expect(screen.queryByRole("button", { name: "Create Apiary" })).not.toBeInTheDocument();
+});
+
+test("failed profile save keeps creation confirmation and never creates an Apiary", async () => {
+  const writes: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/v1/hive/public-profile") return ok({ revision: 1, profile: { hive_name: "My Hive", operator_display_name: "Bea Keeper", contact_email: "bea@example.test" } });
+    if (init?.method === "PUT" || init?.method === "POST") { writes.push(url); return new Response("Unavailable", { status: 503 }); }
+    return ok([]);
+  }));
+  render(<ApiarySettings busy={false} hiveIdentity={personalIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
+  await screen.findByDisplayValue("Bea Keeper");
+  fireEvent.change(screen.getByLabelText("Apiary name"), { target: { value: "Test Garden" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review Apiary setup" }));
+  fireEvent.click(screen.getByRole("button", { name: "Create Apiary" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("503");
+  expect(writes).toEqual(["/api/v1/hive/join-profile"]);
+  expect(screen.getByDisplayValue("Test Garden")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Create Apiary" })).toBeEnabled();
 });
 
 test("Keeper creates one private invitation link for an outbound member connection", async () => {

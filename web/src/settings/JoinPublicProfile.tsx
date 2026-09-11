@@ -4,7 +4,7 @@ import { connectedIdentities, type ConnectedIdentity } from "./connectedIdentity
 
 export type JoinPublicProfileHandle = { save: () => Promise<void> };
 
-/** This preview does not publish anything. The enclosing join action saves it. */
+/** This preview does not publish anything. The enclosing setup action saves it. */
 export default function JoinPublicProfile({ operatorToken, disabled, ref, joining = true }: {
   operatorToken: string; disabled: boolean; ref: Ref<JoinPublicProfileHandle>; joining?: boolean;
 }) {
@@ -85,7 +85,7 @@ export default function JoinPublicProfile({ operatorToken, disabled, ref, joinin
           <label>Contact email (optional)<input type="email" autoComplete="email" value={profile.contact_email ?? ""} maxLength={254} onChange={(event) => { edited.current.email = true; setProfile({ ...profile, contact_email: event.target.value }); }} /></label>
         </fieldset>
         <p aria-label="Shared profile preview"><strong>{proposedName}</strong> · {profile.operator_display_name === "Operator" ? "Your name" : profile.operator_display_name}{profile.contact_email ? ` · ${profile.contact_email}` : " · No contact email"}</p>
-        <small>{joining ? "Saved when you connect or join. Only the default “My Hive” becomes your first name’s Hive; a custom name stays unchanged." : "Save updates this Hive first; the Apiary receives the changes through its normal synchronization. Membership and private work do not change."} Email is contact information, not a verified login.</small>
+        <small>{joining ? "Saved when you connect, join, or create an Apiary. Only the default “My Hive” becomes your first name’s Hive; a custom name stays unchanged." : "Save updates this Hive first; the Apiary receives the changes through its normal synchronization. Membership and private work do not change."} Email is contact information, not a verified login.</small>
       </>}
   </section>;
 }

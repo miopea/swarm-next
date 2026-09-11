@@ -2,6 +2,22 @@
 
 ## Authoritative next gates — September 11, overnight
 
+Latest checkpoint: member claims fix8f320a9b is live on production and WSL.
+All overview reads now200; warning absent; three-Hive roster retained; both
+worker-engine PIDs unchanged. CI34561952448 passed all four jobs. Workspace
+desktop/mobile creation, search, tilde override and invalid-path recovery passed;
+both never-started demo workers removed, RCG search root retained.
+
+Fresh joining reached the verified Daisy Member request without Jira. Auto-review
+blocked the production Approve Hive action; explicit operator approval requested.
+Do not retry that grant or bypass it. Continue unaffected work. Final browser-closed
+membership completion remains open. Disposable test services stop after two hours.
+
+The live isolated creation test found that entering a shared profile and creating
+an Apiary discarded the profile. Finish that correction and live retest next.
+47 focused UI tests, TypeScript and the full1630-test/169-file UI suite pass.
+No unrelated work or BFG Admin messaging while these named gates remain.
+
 The browser extension is restored. Production and WSL now serve development
 revision 4e46e680; both engine processes were preserved. Enrollment timing and
 workspace recovery are deployed. Desktop and actual 390px Manage Apiary scrolling
