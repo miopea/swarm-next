@@ -2,6 +2,16 @@
 
 ## Authoritative next gates — September 11, overnight
 
+04:34 build-identity follow-up: earlier74932 finished successfully but its61a8d81a
+package is NOT for deployment. All tracked content was verified against the
+committed branch before removing only the three transferred copies. Isolated
+checkout is now clean (apart from the expected untracked target link) at exact
+f05b2f0fa8ca098cbe1714619bfa0fb53e3d1761. Correct build is RUNNING in exec session
+18991, output root/tmp/swarm-compact-clean-f05b2f0f. Resume that live handle;
+do not repeat build setup. Next: finish build/CI, activate with the supported
+app-only updater, verify engine continuity and compact/full byte counts, then
+check Queues navigation in Edge. Full web1668 and focused API tests already pass.
+
 04:32 IN PROGRESS compact coordinator reads, f05b2f0f on main. Live pre-change
 response measured201362 bytes,197671 in30 review entries. Browser now requests
 include_review=false outside Queues, preserving holds/recovery/counters; Queues
