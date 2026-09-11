@@ -17,6 +17,7 @@ import {
   type JiraStatusMapping,
   type TaskState,
 } from "../api";
+import { jiraTokenLife, jiraTokenLifeMessage } from "./jiraTokenLife";
 
 type Props = {
   operatorToken: string;
@@ -47,6 +48,10 @@ const taskStates: { value: TaskState; label: string }[] = [
 ];
 
 export default function JiraSettings({ operatorToken, readiness, unavailable, onRetryReadiness, onReadinessChanged, suggestedProjects, setupId = "settings-integrations", onNavigate = (url) => window.location.assign(url) }: Props) {
+  // Computed per render rather than held: it depends on the wall clock, and a
+  // value frozen at mount would still say "30 days" a month later.
+  const tokenLife = jiraTokenLife(readiness?.token_connected_at, new Date());
+  const tokenLifeMessage = jiraTokenLifeMessage(tokenLife);
   const [siteUrl, setSiteUrl] = useState("");
   const [accountEmail, setAccountEmail] = useState("");
   const [apiToken, setApiToken] = useState("");
@@ -219,9 +224,16 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
       </div>
 
       {readiness?.connection === "ready" ? (
-        <button className="secondary-button jira-auth-action" type="button" disabled={busy} onClick={() => void disconnect()}>
-          Disconnect Jira
-        </button>
+        <div className="jira-connect-panel">
+          {tokenLifeMessage ? (
+            <p className={tokenLife.kind === "fine" ? "privacy-note" : "jira-token-expiry-warning"} role={tokenLife.kind === "fine" ? undefined : "status"}>
+              {tokenLifeMessage}
+            </p>
+          ) : null}
+          <button className="secondary-button jira-auth-action" type="button" disabled={busy} onClick={() => void disconnect()}>
+            Disconnect Jira
+          </button>
+        </div>
       ) : (
         <form
           className="jira-connect-panel jira-token-form"
@@ -236,7 +248,8 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
           </p>
           <ol className="jira-token-steps">
             <li>Open <a href={ATLASSIAN_TOKEN_URL} target="_blank" rel="noreferrer noopener">the API tokens page</a> and sign in as the account that can see your Jira projects.</li>
-            <li>Choose <strong>Create API token</strong>, name it something you will recognise later — “Swarm on this machine” — and copy it. Atlassian shows it once.</li>
+            <li>Choose <strong>Create API token</strong> — the plain one, <strong>not</strong> “Create API token with scopes”. A scoped token means choosing a permission set up front, and a wrong guess does not fail here; it fails later, on whichever Jira call needed the scope nobody picked.</li>
+            <li>Name it something you will recognise later — “Swarm on this machine” — and copy it. Atlassian shows it once, and it expires within a year.</li>
             <li>Paste it below with your Jira site address and the email you signed in with.</li>
           </ol>
           <label>

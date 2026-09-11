@@ -43,6 +43,20 @@ pub(crate) struct JiraCredentials {
     pub(crate) base_url: Url,
     pub(crate) email: Arc<str>,
     pub(crate) api_token: Arc<str>,
+    /// When SWARM was handed this token — NOT when Atlassian minted it, and the
+    /// difference is the whole reason this is worded carefully everywhere it
+    /// surfaces.
+    ///
+    /// Atlassian expires an API token within a year of its CREATION, and tells
+    /// us nothing about that date: basic auth carries no expiry and there is no
+    /// endpoint to ask. A token can also be pasted months after it was made. So
+    /// this is a LOWER BOUND on remaining life — the token was created at or
+    /// before this instant, so it dies at or before this instant plus a year.
+    /// Report it as "on or before", never as the expiry.
+    ///
+    /// `None` on a connection stored before this field existed. Unknown is a
+    /// third state and must read as unknown, not as new.
+    pub(crate) connected_at: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -66,6 +80,13 @@ pub(crate) struct JiraReadiness {
     pub connection: JiraConnectionState,
     pub account_name: Option<String>,
     pub account_address: Option<String>,
+    /// Unix seconds when this host was given the current API token, or `None`
+    /// when it is not connected or the connection predates the field.
+    ///
+    /// A LOWER BOUND on the token's life, not its expiry — see
+    /// `JiraCredentials::connected_at`. The wording lives in the UI because
+    /// that is where the sentence is read.
+    pub token_connected_at: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -315,6 +336,11 @@ impl JiraReadinessProbe {
             base_url,
             email: email.into(),
             api_token: api_token.into(),
+            // A host-configured token is handed over at every start, so this
+            // moves forward on each restart and can only OVERSTATE remaining
+            // life. Still a lower bound in the right direction: it is never
+            // later than the token's creation.
+            connected_at: Some(unix_seconds()),
         }))
     }
 
@@ -345,13 +371,31 @@ impl JiraReadinessProbe {
         }
     }
 
+    /// When this host was handed the token it is holding, if it holds one.
+    pub(crate) async fn token_connected_at(&self) -> Option<u64> {
+        match self {
+            Self::Configured { credentials, .. } => credentials
+                .read()
+                .await
+                .as_ref()
+                .and_then(|held| held.connected_at),
+            Self::NotConfigured => None,
+        }
+    }
+
     pub(crate) async fn readiness(&self) -> JiraReadiness {
+        // Read ONCE, and carry it into every branch below -- including the
+        // failure ones. An expired token surfaces as CredentialsInvalid, so
+        // that is exactly the branch where knowing the connection is a year
+        // old turns a mystery refusal into an explanation.
+        let token_connected_at = self.token_connected_at().await;
         if matches!(self, Self::NotConfigured) {
             return JiraReadiness {
                 configured: false,
                 connection: JiraConnectionState::NotConnected,
                 account_name: None,
                 account_address: None,
+                token_connected_at: None,
             };
         }
         let access = match self.access().await {
@@ -362,6 +406,7 @@ impl JiraReadinessProbe {
                     connection: JiraConnectionState::NotConnected,
                     account_name: None,
                     account_address: None,
+                    token_connected_at,
                 };
             }
             Err(JiraAdapterError::CredentialsInvalid) => {
@@ -370,6 +415,7 @@ impl JiraReadinessProbe {
                     connection: JiraConnectionState::CredentialsInvalid,
                     account_name: None,
                     account_address: None,
+                    token_connected_at,
                 };
             }
             Err(JiraAdapterError::PermissionDenied) => {
@@ -378,13 +424,14 @@ impl JiraReadinessProbe {
                     connection: JiraConnectionState::PermissionDenied,
                     account_name: None,
                     account_address: None,
+                    token_connected_at,
                 };
             }
-            Err(_) => return unavailable(),
+            Err(_) => return unavailable(token_connected_at),
         };
         let Ok(mut project_probe_url) = endpoint(&access.base_url, "/rest/api/3/project/search")
         else {
-            return unavailable();
+            return unavailable(token_connected_at);
         };
         project_probe_url
             .query_pairs_mut()
@@ -396,7 +443,7 @@ impl JiraReadinessProbe {
                 .send()
                 .await;
         let Ok(project_response) = project_response else {
-            return unavailable();
+            return unavailable(token_connected_at);
         };
         match project_response.status() {
             StatusCode::UNAUTHORIZED => {
@@ -405,6 +452,7 @@ impl JiraReadinessProbe {
                     connection: JiraConnectionState::CredentialsInvalid,
                     account_name: None,
                     account_address: None,
+                    token_connected_at,
                 };
             }
             StatusCode::FORBIDDEN => {
@@ -413,10 +461,11 @@ impl JiraReadinessProbe {
                     connection: JiraConnectionState::PermissionDenied,
                     account_name: None,
                     account_address: None,
+                    token_connected_at,
                 };
             }
             status if status.is_success() => {}
-            _ => return unavailable(),
+            _ => return unavailable(token_connected_at),
         }
 
         // Project discovery is the capability Swarm requires. Profile access is
@@ -441,6 +490,7 @@ impl JiraReadinessProbe {
             connection: JiraConnectionState::Ready,
             account_name,
             account_address,
+            token_connected_at,
         }
     }
 
@@ -1348,7 +1398,16 @@ pub(crate) fn parse_credentials(
         base_url,
         email: email.into(),
         api_token: api_token.into(),
+        connected_at: Some(unix_seconds()),
     })
+}
+
+/// Seconds since the epoch, saturating rather than panicking on a clock before
+/// it — a Hive with a wrong clock should report a useless hint, not die.
+fn unix_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
 }
 
 /// The Atlassian account this host uses, kept on the host and nowhere else.
@@ -1360,6 +1419,10 @@ pub(crate) struct StoredJiraCredentials {
     pub(crate) base_url: String,
     pub(crate) email: String,
     pub(crate) api_token: String,
+    /// `default` is what lets a file written before this field existed still
+    /// load. A Hive does not get disconnected to gain an expiry hint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) connected_at: Option<u64>,
 }
 
 /// Reads the account a previous session stored, if any.
@@ -1370,6 +1433,7 @@ pub(crate) fn read_stored_credentials(path: &std::path::Path) -> Option<JiraCred
         base_url: Url::parse(&stored.base_url).ok()?,
         email: stored.email.into(),
         api_token: stored.api_token.into(),
+        connected_at: stored.connected_at,
     })
 }
 
@@ -1399,6 +1463,7 @@ pub(crate) fn write_stored_credentials(
         base_url: credentials.base_url.to_string(),
         email: credentials.email.to_string(),
         api_token: credentials.api_token.to_string(),
+        connected_at: credentials.connected_at,
     };
     let bytes = serde_json::to_vec(&stored)
         .map_err(|error| format!("the Jira account could not be prepared: {error}"))?;
@@ -1428,12 +1493,13 @@ fn write_private_bytes(path: &std::path::Path, bytes: &[u8]) -> Result<(), Strin
         .map_err(|error| format!("the Jira account could not be saved: {error}"))
 }
 
-fn unavailable() -> JiraReadiness {
+fn unavailable(token_connected_at: Option<u64>) -> JiraReadiness {
     JiraReadiness {
         configured: true,
         connection: JiraConnectionState::NetworkUnavailable,
         account_name: None,
         account_address: None,
+        token_connected_at,
     }
 }
 
@@ -1444,6 +1510,57 @@ mod tests {
     use serde_json::json;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// The connect time survives a round trip to disk, and a file written
+    /// before the field existed still loads.
+    ///
+    /// The second half is the one that matters operationally: a Hive connected
+    /// last month must not be disconnected, nor silently reported as freshly
+    /// connected, merely because Swarm learned to record a date. Unknown is a
+    /// third state and it has to stay distinguishable from "just connected" —
+    /// otherwise every pre-existing connection would claim a year of life it
+    /// may not have.
+    #[test]
+    fn a_stored_connection_keeps_its_date_and_an_older_file_still_loads() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("secrets/jira-api-token.json");
+
+        let credentials = parse_credentials(
+            "https://example.atlassian.net",
+            "person@example.test",
+            "token-value",
+        )
+        .unwrap();
+        let recorded = credentials
+            .connected_at
+            .expect("a freshly parsed credential records when it arrived");
+        write_stored_credentials(&path, Some(&credentials)).unwrap();
+
+        let read_back = read_stored_credentials(&path).expect("the stored account reloads");
+        assert_eq!(
+            read_back.connected_at,
+            Some(recorded),
+            "the date has to survive the restart, or the warning resets every time"
+        );
+
+        // A file from before the field existed. Not a hypothetical: every Hive
+        // already connected has one of these.
+        std::fs::write(
+            &path,
+            br#"{"base_url":"https://example.atlassian.net","email":"person@example.test","api_token":"token-value"}"#,
+        )
+        .unwrap();
+        let legacy = read_stored_credentials(&path).expect("an older file must still load");
+        assert_eq!(
+            legacy.email.as_ref(),
+            "person@example.test",
+            "the connection keeps working"
+        );
+        assert_eq!(
+            legacy.connected_at, None,
+            "and reports its date as UNKNOWN rather than borrowing today's"
+        );
+    }
 
     async fn probe(project_status: AxumStatus, profile_status: AxumStatus) -> JiraReadiness {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

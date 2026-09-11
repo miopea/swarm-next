@@ -14,6 +14,15 @@ export type JiraReadiness = {
   account_name: string | null;
   /** Older servers and privacy-restricted OAuth accounts may omit this. */
   account_address?: string | null;
+  /**
+   * Unix seconds when this host was handed the current API token.
+   *
+   * NOT the token's expiry, and not its creation date either — Atlassian tells
+   * us neither. It is a LOWER BOUND: the token existed by this moment, so it
+   * dies at or before this moment plus a year. `null` when not connected, or
+   * when the connection predates the field.
+   */
+  token_connected_at?: number | null;
 };
 export type JiraProject = { id: string; key: string; name: string };
 export type JiraProjectStatus = { id: string; name: string; category_key: string; recommended_task_state: TaskState };

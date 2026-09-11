@@ -2569,6 +2569,10 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .email-settings { grid-column: 1 / -1; }
 .email-callback-field input { color: var(--text); font-family: var(--font-mono); font-size: .75rem; }
 .jira-binding-list, .jira-project-setup, .jira-workflow-setup, .jira-status-map { display: grid; gap: 10px; }
+/* An expiry that has crept up is advisory, not an error — Jira still works
+   today. It earns colour only because the thing it warns about is invisible
+   until the morning it breaks. */
+.jira-token-expiry-warning { margin: 0; padding: 10px; border: 1px solid var(--accent-line); border-radius: var(--radius-sm); background: var(--honey-wash); color: var(--text); font-size: .77rem; line-height: 1.45; }
 /* Advisory, not an error: the mapping may have been chosen deliberately. Sits
    under the binding it describes rather than shouting from the top of the page. */
 .jira-mapping-drift { display: grid; gap: 6px; margin-top: 10px; padding: 10px; border: 1px solid var(--accent-line); border-radius: var(--radius-sm); background: var(--honey-wash); }

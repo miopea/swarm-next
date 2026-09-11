@@ -269,6 +269,57 @@ test("keeps a transient binding failure distinct from an empty Jira configuratio
   expect(screen.queryByText("Connected projects could not be refreshed")).not.toBeInTheDocument();
 });
 
+test("the setup steps name the CLASSIC token and say why the scoped one bites later", () => {
+  vi.stubGlobal("fetch", vi.fn(async () => ok([])));
+  render(
+    <JiraSettings
+      operatorToken="operator-token"
+      readiness={{ configured: true, connection: "not_connected", account_name: null }}
+      unavailable={false}
+    />,
+  );
+
+  const steps = screen.getByRole("list", { name: "" }) ?? document.body;
+  expect(steps).toHaveTextContent(/not.*Create API token with scopes/i);
+  // The REASON matters more than the instruction. A scoped token does not fail
+  // at connect time, so someone who picks wrong gets a working setup and a
+  // mystery failure weeks later on whichever call needed the missing scope.
+  expect(steps).toHaveTextContent(/fails later/i);
+});
+
+test("a connected Hive is told when its token stops working, hedged to what we can know", () => {
+  vi.stubGlobal("fetch", vi.fn(async () => ok([])));
+  const elevenMonthsAgo = Math.floor(Date.now() / 1000) - 340 * 86_400;
+  render(
+    <JiraSettings
+      operatorToken="operator-token"
+      readiness={{ configured: true, connection: "ready", account_name: "Bea", token_connected_at: elevenMonthsAgo }}
+      unavailable={false}
+    />,
+  );
+
+  const warning = screen.getByText(/on or before/);
+  expect(warning).toHaveTextContent(/25 days/);
+  expect(warning).toHaveAttribute("role", "status");
+  expect(screen.getByRole("button", { name: "Disconnect Jira" })).toBeInTheDocument();
+});
+
+test("a connection from before Swarm recorded dates claims nothing", () => {
+  // The regression this guards: describing every pre-existing connection as
+  // freshly made, and promising it a year it may not have.
+  vi.stubGlobal("fetch", vi.fn(async () => ok([])));
+  render(
+    <JiraSettings
+      operatorToken="operator-token"
+      readiness={{ configured: true, connection: "ready", account_name: "Bea" }}
+      unavailable={false}
+    />,
+  );
+
+  expect(screen.queryByText(/on or before/)).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Disconnect Jira" })).toBeInTheDocument();
+});
+
 test("offers a direct retry when Jira readiness is temporarily unavailable", () => {
   vi.stubGlobal("fetch", vi.fn(async () => ok([])));
   const onRetryReadiness = vi.fn();
