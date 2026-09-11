@@ -1318,20 +1318,21 @@ export async function fetchApiaryDirectory(operatorToken: string, signal?: Abort
   return directory;
 }
 
-export async function fetchApiaryMembers(operatorToken: string): Promise<ApiaryMember[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/members");
+export async function fetchApiaryMembers(operatorToken: string, signal?: AbortSignal): Promise<ApiaryMember[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/members", { signal });
   return response.json() as Promise<ApiaryMember[]>;
 }
 
-export async function fetchApiaryStewardships(operatorToken: string): Promise<Stewardship[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/stewardships");
+export async function fetchApiaryStewardships(operatorToken: string, signal?: AbortSignal): Promise<Stewardship[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/stewardships", { signal });
   return response.json() as Promise<Stewardship[]>;
 }
 
 export async function fetchApiaryStewardTaskAudit(
   operatorToken: string,
+  signal?: AbortSignal,
 ): Promise<FederationStewardTaskAuditEntry[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/steward-task-audit");
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/steward-task-audit", { signal });
   return response.json() as Promise<FederationStewardTaskAuditEntry[]>;
 }
 
@@ -1366,18 +1367,19 @@ export async function revokeApiaryStewardship(
 
 export async function fetchApiarySharedWork(
   operatorToken: string,
+  signal?: AbortSignal,
 ): Promise<ApiarySharedWorkClaim[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/shared-work");
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/shared-work", { signal });
   return response.json() as Promise<ApiarySharedWorkClaim[]>;
 }
 
-export async function fetchApiaryHandoffTargets(operatorToken: string): Promise<FederationHandoffTarget[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/handoff-targets");
+export async function fetchApiaryHandoffTargets(operatorToken: string, signal?: AbortSignal): Promise<FederationHandoffTarget[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/handoff-targets", { signal });
   return response.json() as Promise<FederationHandoffTarget[]>;
 }
 
-export async function fetchApiaryClaimHandoffs(operatorToken: string): Promise<FederationClaimHandoff[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/handoffs");
+export async function fetchApiaryClaimHandoffs(operatorToken: string, signal?: AbortSignal): Promise<FederationClaimHandoff[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/handoffs", { signal });
   return response.json() as Promise<FederationClaimHandoff[]>;
 }
 
@@ -1412,13 +1414,14 @@ export async function cancelApiaryClaimHandoff(operatorToken: string, handoffId:
 
 export async function fetchFederationSyncHealth(
   operatorToken: string,
+  signal?: AbortSignal,
 ): Promise<FederationSyncHealth> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/sync-health");
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/sync-health", { signal });
   return response.json() as Promise<FederationSyncHealth>;
 }
 
-export async function fetchApiaryTasks(operatorToken: string): Promise<ApiaryTask[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/tasks");
+export async function fetchApiaryTasks(operatorToken: string, signal?: AbortSignal): Promise<ApiaryTask[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/tasks", { signal });
   return response.json() as Promise<ApiaryTask[]>;
 }
 
@@ -1436,8 +1439,9 @@ export async function createApiaryTask(
 
 export async function fetchLocalApiaryTaskExecutions(
   operatorToken: string,
+  signal?: AbortSignal,
 ): Promise<LocalApiaryTaskExecution[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/tasks/local-executions");
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/tasks/local-executions", { signal });
   return response.json() as Promise<LocalApiaryTaskExecution[]>;
 }
 
@@ -1460,18 +1464,19 @@ export async function materializeLocalApiaryTaskExecution(
 
 export async function fetchFederationTaskSyncStatus(
   operatorToken: string,
+  signal?: AbortSignal,
 ): Promise<FederationTaskSyncStatus> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/task-sync-status");
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/task-sync-status", { signal });
   return response.json() as Promise<FederationTaskSyncStatus>;
 }
 
-export async function fetchFederationTaskOutbox(operatorToken: string): Promise<FederationTaskOutboxEntry[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/task-outbox");
+export async function fetchFederationTaskOutbox(operatorToken: string, signal?: AbortSignal): Promise<FederationTaskOutboxEntry[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/task-outbox", { signal });
   return response.json() as Promise<FederationTaskOutboxEntry[]>;
 }
 
-export async function fetchFederationTaskOutboxStatus(operatorToken: string): Promise<FederationTaskOutboxStatus> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/task-outbox-status");
+export async function fetchFederationTaskOutboxStatus(operatorToken: string, signal?: AbortSignal): Promise<FederationTaskOutboxStatus> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/task-outbox-status", { signal });
   return response.json() as Promise<FederationTaskOutboxStatus>;
 }
 
@@ -1491,22 +1496,25 @@ export async function transitionApiaryTask(operatorToken: string, taskId: string
 
 export async function fetchFederationCatalogReadiness(
   operatorToken: string,
+  signal?: AbortSignal,
 ): Promise<FederationCatalogReadiness> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/catalog-readiness");
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/catalog-readiness", { signal });
   return response.json() as Promise<FederationCatalogReadiness>;
 }
 
 export async function fetchMyFederationStewardship(
   operatorToken: string,
+  signal?: AbortSignal,
 ): Promise<FederationStewardshipSnapshot | null> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/my-stewardship");
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/my-stewardship", { signal });
   return response.json() as Promise<FederationStewardshipSnapshot | null>;
 }
 
 export async function fetchFederationStewardTaskOutbox(
   operatorToken: string,
+  signal?: AbortSignal,
 ): Promise<FederationStewardTaskOutboxEntry[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/steward/tasks");
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/steward/tasks", { signal });
   return response.json() as Promise<FederationStewardTaskOutboxEntry[]>;
 }
 
@@ -1784,8 +1792,9 @@ export async function leaveApiary(operatorToken: string): Promise<LocalApiaryCon
 
 export async function fetchApiaryJiraProjects(
   operatorToken: string,
+  signal?: AbortSignal,
 ): Promise<ApiaryJiraProject[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/jira-projects");
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/jira-projects", { signal });
   return response.json() as Promise<ApiaryJiraProject[]>;
 }
 

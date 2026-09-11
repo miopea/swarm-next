@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import {
   fetchApiaryClaimHandoffs, fetchApiaryJiraProjects, fetchApiaryMembers, fetchApiarySharedWork, fetchApiaryStewardships, fetchApiaryStewardTaskAudit, fetchApiaryTasks,
   type ApiaryJiraProject, type ApiaryMember, type ApiarySharedWorkClaim, type ApiaryTask, type FederationClaimHandoff, type FederationStewardTaskAuditEntry, type HiveIdentity, type Stewardship,
 } from "../api";
 import BeeMascot from "../brand/BeeMascot";
+import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
 type Props = { identity: HiveIdentity; operatorToken: string; onManage: () => void; onOpenTasks: () => void };
 type KeeperSnapshot = { members: ApiaryMember[]; projects: ApiaryJiraProject[]; sharedWork: ApiarySharedWorkClaim[]; tasks: ApiaryTask[]; stewardships: Stewardship[]; stewardAudit: FederationStewardTaskAuditEntry[]; handoffs: FederationClaimHandoff[] };
@@ -14,20 +15,31 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
   const context = identity.apiary_context;
   const [snapshot, setSnapshot] = useState(emptySnapshot);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
-  const refresh = useCallback(async () => {
+  const loadSnapshot = useCallback(async (signal: AbortSignal) => {
     setState("loading");
-    try {
-      const [members, projects, sharedWork, tasks, stewardships, stewardAudit, handoffs] = await Promise.all([
-        fetchApiaryMembers(operatorToken), fetchApiaryJiraProjects(operatorToken),
-        fetchApiarySharedWork(operatorToken), fetchApiaryTasks(operatorToken), fetchApiaryStewardships(operatorToken),
-        fetchApiaryStewardTaskAudit(operatorToken),
-        fetchApiaryClaimHandoffs(operatorToken),
+      const results = await Promise.allSettled([
+        fetchApiaryMembers(operatorToken, signal), fetchApiaryJiraProjects(operatorToken, signal),
+        fetchApiarySharedWork(operatorToken, signal), fetchApiaryTasks(operatorToken, signal), fetchApiaryStewardships(operatorToken, signal),
+        fetchApiaryStewardTaskAudit(operatorToken, signal),
+        fetchApiaryClaimHandoffs(operatorToken, signal),
       ]);
-      setSnapshot({ members, projects, sharedWork, tasks, stewardships, stewardAudit: Array.isArray(stewardAudit) ? stewardAudit : [], handoffs: Array.isArray(handoffs) ? handoffs : [] });
-      setState("ready");
-    } catch { setState("error"); }
+      if (signal.aborted) {
+        if (signal.reason?.name === "TimeoutError") setState("error");
+        return;
+      }
+      const [members, projects, sharedWork, tasks, stewardships, stewardAudit, handoffs] = results;
+      setSnapshot((current) => ({
+        members: members.status === "fulfilled" ? members.value : current.members,
+        projects: projects.status === "fulfilled" ? projects.value : current.projects,
+        sharedWork: sharedWork.status === "fulfilled" ? sharedWork.value : current.sharedWork,
+        tasks: tasks.status === "fulfilled" ? tasks.value : current.tasks,
+        stewardships: stewardships.status === "fulfilled" ? stewardships.value : current.stewardships,
+        stewardAudit: stewardAudit.status === "fulfilled" && Array.isArray(stewardAudit.value) ? stewardAudit.value : current.stewardAudit,
+        handoffs: handoffs.status === "fulfilled" && Array.isArray(handoffs.value) ? handoffs.value : current.handoffs,
+      }));
+      setState(results.some((result) => result.status === "rejected") ? "error" : "ready");
   }, [operatorToken]);
-  useEffect(() => { void refresh(); }, [refresh]);
+  const refresh = useVisiblePolling(loadSnapshot, Boolean(operatorToken), null);
 
   const members = useMemo(() => [...snapshot.members].sort((left, right) => Number(right.is_local) - Number(left.is_local) || left.hive_name.localeCompare(right.hive_name)), [snapshot.members]);
   const memberByOperator = useMemo(() => new Map(members.map((member) => [member.operator_id, member])), [members]);
@@ -44,7 +56,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
         <span className="apiary-backend-badge">{context.apiary.shared_work_backend === "jira" ? "Jira-backed" : "Native"}</span>
         <button className="secondary-button" type="button" onClick={onManage}>Manage Apiary</button>
       </header>
-      {state === "error" ? <div className="keeper-load-state" role="alert"><span>Apiary status could not be refreshed.</span><button type="button" onClick={() => void refresh()}>Try again</button></div> : null}
+      {state === "error" ? <div className="keeper-load-state" role="alert"><span>Some Apiary status could not be refreshed. Last-known information is kept where available.</span><button type="button" onClick={() => void refresh()}>Try again</button></div> : null}
       <dl className="keeper-summary" aria-label="Apiary summary">
         <div><dt>Registered Hives</dt><dd>{members.length}</dd></div><div><dt>Promoted Jira projects</dt><dd>{snapshot.projects.length}</dd></div>
         <div><dt>Active Jira claims</dt><dd>{snapshot.sharedWork.length}</dd></div><div><dt>Work handoffs</dt><dd>{activeHandoffs.length}</dd></div><div><dt>Swarm tasks</dt><dd>{snapshot.tasks.length}</dd></div><div><dt>Steward scopes</dt><dd>{snapshot.stewardships.length}</dd></div>

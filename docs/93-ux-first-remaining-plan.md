@@ -4,6 +4,20 @@
 
 ### Latest priority: guided enrollment, then workspace setup
 
+September10,21:42 Eastern: Apiary Keeper/member overviews now refresh through
+the existing visibility-aware owner on returning to the page, without periodic
+polling. Optional AbortSignal reaches every overview read; hidden/unmounted
+views cancel pending reads and cannot publish obsolete snapshots. Keeper keeps
+successful sections during partial failure. Regression tests cover renamed Hive
+visibility, no hidden reads/intervals, single-flight refresh and cancellation for
+both roles. All1620 web tests, TypeScript and production build PASS. Earlier
+combined CI c019921a/run34550293027 is now fully green (not a claim for newer CI).
+443f4541 also keeps handoff acceptance/offer errors beside their own actions.
+These follow-ups are pending deployment while the live checkout has concurrent
+Microsoft/email integration edits. Last verified live revision stays5b61099a.
+Fresh onboarding, real directory convergence and visual acceptance remain open;
+do not equate mocked rename refresh with end-to-end federation verification.
+
 September 10, 21:32 Eastern checkpoint: Manage Apiary scrolling fixed in
 5b61099a and VERIFIED LIVE via health version
 1.7.1-dev-5b61099a5f71-20260911012826-942980, status ok/no degradation;

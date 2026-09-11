@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import {
   acceptApiaryClaimHandoff,
@@ -38,6 +38,7 @@ import {
   type LocalApiaryTaskExecution,
 } from "../api";
 import BeeMascot from "../brand/BeeMascot";
+import { useVisiblePolling } from "../runtime/useVisiblePolling";
 import MemberDirectoryStatus from "./MemberDirectoryStatus";
 import MemberSetup from "./MemberSetup";
 import { catalogBlockerLabel, catalogReadinessLabel, federationSyncCopy } from "./presentation";
@@ -71,24 +72,28 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
   const context = identity.apiary_context;
   const [snapshot, setSnapshot] = useState<MemberSnapshot>(emptySnapshot);
   const [state, setState] = useState<"loading" | "ready" | "partial">("loading");
-  const refresh = useCallback(async () => {
+  const loadSnapshot = useCallback(async (signal: AbortSignal) => {
     setState("loading");
     const [members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, stewardTasks, stewardAssists, handoffs, handoffTargets, executions] = await Promise.allSettled([
-      fetchApiaryMembers(operatorToken),
-      fetchApiarySharedWork(operatorToken),
-      fetchApiaryTasks(operatorToken),
-      fetchFederationSyncHealth(operatorToken),
-      fetchFederationTaskSyncStatus(operatorToken),
-      fetchFederationCatalogReadiness(operatorToken),
-      fetchFederationTaskOutbox(operatorToken),
-      fetchFederationTaskOutboxStatus(operatorToken),
-      fetchMyFederationStewardship(operatorToken),
-      fetchFederationStewardTaskOutbox(operatorToken),
-      fetchFederationStewardAssists(operatorToken),
-      fetchApiaryClaimHandoffs(operatorToken),
-      fetchApiaryHandoffTargets(operatorToken),
-      fetchLocalApiaryTaskExecutions(operatorToken),
+      fetchApiaryMembers(operatorToken, signal),
+      fetchApiarySharedWork(operatorToken, signal),
+      fetchApiaryTasks(operatorToken, signal),
+      fetchFederationSyncHealth(operatorToken, signal),
+      fetchFederationTaskSyncStatus(operatorToken, signal),
+      fetchFederationCatalogReadiness(operatorToken, signal),
+      fetchFederationTaskOutbox(operatorToken, signal),
+      fetchFederationTaskOutboxStatus(operatorToken, signal),
+      fetchMyFederationStewardship(operatorToken, signal),
+      fetchFederationStewardTaskOutbox(operatorToken, signal),
+      fetchFederationStewardAssists(operatorToken, signal),
+      fetchApiaryClaimHandoffs(operatorToken, signal),
+      fetchApiaryHandoffTargets(operatorToken, signal),
+      fetchLocalApiaryTaskExecutions(operatorToken, signal),
     ]);
+    if (signal.aborted) {
+      if (signal.reason?.name === "TimeoutError") setState("partial");
+      return;
+    }
     setSnapshot((current) => ({
       members: members.status === "fulfilled" ? members.value : current.members,
       sharedWork: sharedWork.status === "fulfilled" ? sharedWork.value : current.sharedWork,
@@ -107,7 +112,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
     }));
     setState([members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, stewardTasks, stewardAssists, handoffs, handoffTargets, executions].some((result) => result.status === "rejected") ? "partial" : "ready");
   }, [operatorToken]);
-  useEffect(() => { void refresh(); }, [refresh]);
+  const refresh = useVisiblePolling(loadSnapshot, Boolean(operatorToken), null);
 
   const keeper = snapshot.members.find((member) => member.role === "keeper");
   const localClaims = useMemo(
