@@ -1,5 +1,25 @@
 # Current maturity acceptance ledger
 
+## September 11, 00:57 Eastern — Optional Jira presentation corrected
+
+The newly created, no-Jira garden displayed Jira-backed because its historical
+backend enum was used as a user-facing capability label. Keeper, member, Settings
+and legacy invitation presentation now describe Swarm shared work with optional
+Jira, without changing the federation contract. Catalog copy no longer promises
+project access to every member; it explains per-operator permissions.
+
+Revision78a212de is pushed. All99 affected tests, TypeScript and the production
+web build pass. Supported production development deployment is in progress;
+do not count that as a served-revision receipt yet. This correction adds no new
+permissions, Jira connection, member mutation or background work.
+
+Creation-profile revisionb4322b19 CI34563096043 completed successfully. The
+fictional Keeper name also survives a fresh browser load. The test build routes
+feedback to local developer diagnostics, so this instance is not live acceptance
+of the central-support contact prefill; the existing component evidence remains
+separate. No report was sent or saved during this inspection.
+
+
 ## September 11, 00:50 Eastern — Creation profile accepted live
 
 Revision `b4322b193f6a` is healthy on production and WSL through their supported
