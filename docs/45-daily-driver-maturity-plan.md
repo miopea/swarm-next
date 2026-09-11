@@ -2,6 +2,29 @@
 
 ## Authoritative next gates — September 11, overnight
 
+04:32 IN PROGRESS compact coordinator reads, f05b2f0f on main. Live pre-change
+response measured201362 bytes,197671 in30 review entries. Browser now requests
+include_review=false outside Queues, preserving holds/recovery/counters; Queues
+requests full detail through the same cancellable visible-polling owner. No new
+timer or business-state change. Full1668-test web suite,98 focused navigation/
+cancellation/recovery tests, TypeScript and saved-judgment compact/full API test
+pass. Full CI34579413391 is running. Not deployed yet; live remains9003c3c1.
+
+Build session74932 is genuinely compiling in/tmp/swarm-shared-view-c8f74a85 but
+its HEAD remained61a8d81a because one transferred test file has CRLF differences.
+All three touched source files match f05b2f0f ignoring line endings; do NOT deploy
+the incorrectly labeled package. Let this confirmed build handle finish, normalize
+only those owned transferred files to the already-verified commit, advance the
+isolated checkout to f05b2f0f, verify clean tracked state, then build the exact
+commit and use the supported worker-preserving updater. Do not restart merely
+because observation times out. Untracked target is the shared build-cache link.
+
+Queen correction follow-up remains unproven: demo worker actually queued message
+01a08f86-48de-7ba2-b3c3-c247d9fd171b on the completed child; its saved tool receipt
+says queued, not delivered. By Queen's08:22 review, no corrective task existed
+and she described the demo as settled. Do not manually repair the fixture or
+equate the parent's successful delivery with resolution of its reported test bug.
+
 04:15 CLOSED the bounded Queen acceptance/separate-delivery handoff gate:
 parent01a08f7b-c8c7-7560-baa1-4401bc362713 traversed Review -> Awaiting Release
 by Queen, then Completed by system evidence10938. Queen created separate task
