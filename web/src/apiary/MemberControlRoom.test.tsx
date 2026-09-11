@@ -45,6 +45,8 @@ test("shows a Member her Keeper, convergence, projects, and local shared ownersh
   render(<MemberControlRoom identity={memberIdentity()} operatorToken="secret" onManage={onManage} onOpenTasks={onOpenTasks} />);
 
   expect(await screen.findByRole("heading", { name: "Grand Garden" })).toBeInTheDocument();
+  expect(screen.getByText("Swarm shared work")).toBeInTheDocument();
+  expect(screen.queryByText("Jira-backed")).not.toBeInTheDocument();
   expect(screen.getByLabelText("Member Apiary summary")).toHaveTextContent("KeeperMeadow HiveCatalogVerifiedProjects ready1/1My Jira claims1Keeper tasks1");
   expect(screen.getByText("Bea")).toBeInTheDocument();
   expect(screen.getByText("Bea · bea@example.test")).toBeInTheDocument();

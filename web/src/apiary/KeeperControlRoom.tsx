@@ -53,7 +53,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
       <header className="keeper-hero">
         <div className="keeper-hero-mark"><BeeMascot role="queen" expression="focused" /></div>
         <div><p className="eyebrow">Keeper overview</p><h3 id="keeper-control-heading">{context.apiary.name}</h3><p>See durable Apiary ownership without pulling routine worker activity out of each Hive.</p></div>
-        <span className="apiary-backend-badge">{context.apiary.shared_work_backend === "jira" ? "Jira-backed" : "Native"}</span>
+        <span className="apiary-backend-badge">Swarm shared work</span>
         <button className="secondary-button" type="button" onClick={onManage}>Manage Apiary</button>
       </header>
       {state === "error" ? <div className="keeper-load-state" role="alert"><span>Some Apiary status could not be refreshed. Last-known information is kept where available.</span><button type="button" onClick={() => void refresh()}>Try again</button></div> : null}
@@ -75,7 +75,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
           {activeHandoffs.length ? <><header className="keeper-handoff-heading"><div><p className="eyebrow">Transfers</p><h4>Active Hive handoffs</h4></div><small>Source remains responsible until Jira confirms the new assignee</small></header><ul className="keeper-work-list" aria-label="Keeper active Jira handoffs">{activeHandoffs.map((handoff) => <li key={handoff.id}><span><strong>{handoff.issue_key}</strong><small>{handoff.state === "offered" ? "Awaiting acceptance" : "Changing Jira owner"}</small></span><span><strong>{memberByHive.get(handoff.source_hive_id)?.hive_name ?? "Source Hive"} → {memberByHive.get(handoff.target_hive_id)?.hive_name ?? "Receiving Hive"}</strong><small>{handoff.reason ?? "No handoff note"}</small></span></li>)}</ul></> : null}
         </article>
         <article className="keeper-panel">
-          <header><div><p className="eyebrow">Shared catalog</p><h4>Promoted Jira projects</h4></div><small>Available to every joined Hive</small></header>
+          <header><div><p className="eyebrow">Optional Jira work</p><h4>Promoted Jira projects</h4></div><small>Each Hive uses only projects its operator can access</small></header>
           {snapshot.projects.length ? <ul className="keeper-project-list" aria-label="Keeper promoted Jira projects">{snapshot.projects.map((project) => <li key={project.project_id}><strong>{project.project_key}</strong><span>{project.project_name}</span></li>)}</ul> : <p className="keeper-empty">No Jira projects have been promoted to this Apiary.</p>}
         </article>
         <article className="keeper-panel">

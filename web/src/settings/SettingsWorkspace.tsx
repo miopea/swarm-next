@@ -819,9 +819,8 @@ function apiaryMembershipLabel(identity: HiveIdentity | undefined) {
   if (!identity) return "Unavailable";
   if (!identity.apiary_context) return identity.hive.apiary_id ? "Apiary member" : "Personal Hive";
   if (identity.apiary_context.mode === "personal") return "Personal Hive";
-  const backend = identity.apiary_context.apiary.shared_work_backend === "jira" ? "Jira-backed" : "Native";
   const role = identity.apiary_context.local_role === "keeper" ? "Keeper" : "Member";
-  return `${identity.apiary_context.apiary.name} · ${role} · ${backend}`;
+  return `${identity.apiary_context.apiary.name} · ${role} · Swarm shared work`;
 }
 function liveFeedLabel(state: LiveFeedState) {
   if (state === "connected") return "Connected";

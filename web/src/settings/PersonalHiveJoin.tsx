@@ -413,7 +413,7 @@ function InvitationPreview({ bundle, working, onCancel, onTrust }: { bundle: Api
       <div><span>Apiary</span><strong>{bundle.invitation.payload.apiary_name}</strong></div>
       <div><span>Keeper Hive</span><strong>{bundle.keeper_connection_card.payload.hive_name}</strong></div>
       <div><span>Keeper operator</span><strong>{bundle.keeper_connection_card.payload.operator_display_name}</strong></div>
-      <div><span>Shared work</span><strong>{bundle.invitation.payload.shared_work_backend === "jira" ? "Jira-backed" : "Native Swarm"}</strong></div>
+      <div><span>Shared work</span><strong>Swarm tasks · Jira optional</strong></div>
       <div><span>Policy revision</span><strong>{bundle.invitation.payload.required_policy_revision}</strong></div>
       <div><span>Shared Jira projects</span><strong>{bundle.promoted_projects.length}</strong></div>
       <div><span>Expires</span><strong>{new Date(bundle.invitation.payload.expires_at * 1000).toLocaleString()}</strong></div>

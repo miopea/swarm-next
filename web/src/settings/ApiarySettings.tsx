@@ -401,7 +401,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
             {context?.mode === "federated" ? (
               <span><small>{context.local_role === "keeper" ? "Keeper of" : "Member of"}</small><strong>{context.apiary.name}</strong></span>
             ) : <span><small>Mode</small><strong>Personal Hive</strong></span>}
-            {context?.mode === "federated" ? <span className="apiary-backend-badge">{context.apiary.shared_work_backend === "jira" ? "Jira-backed" : "Native"}</span> : null}
+            {context?.mode === "federated" ? <span className="apiary-backend-badge">Swarm shared work</span> : null}
             <button className="secondary-button" disabled={working} onClick={() => { setEditingProfile(false); setEditingIdentity((current) => !current); }}>{editingIdentity ? "Close names" : "Edit names"}</button>
             {!personal ? <button className="secondary-button" disabled={working} onClick={() => { setEditingIdentity(false); setEditingProfile((current) => !current); }}>{editingProfile ? "Close profile" : "Edit shared profile"}</button> : null}
           </div>

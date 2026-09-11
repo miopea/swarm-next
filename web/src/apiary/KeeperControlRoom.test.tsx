@@ -4,6 +4,17 @@ import KeeperControlRoom from "./KeeperControlRoom";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
+test("an empty Apiary does not imply Jira is required or grants project access", async () => {
+  vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(ok([]))));
+  render(<KeeperControlRoom identity={keeperIdentity()} operatorToken="fictional" onManage={vi.fn()} onOpenTasks={vi.fn()} />);
+  expect(await screen.findByText("No Jira projects have been promoted to this Apiary.")).toBeInTheDocument();
+  expect(screen.getByText("Swarm shared work")).toBeInTheDocument();
+  expect(screen.getByText("Optional Jira work")).toBeInTheDocument();
+  expect(screen.getByText("Each Hive uses only projects its operator can access")).toBeInTheDocument();
+  expect(screen.queryByText("Jira-backed")).not.toBeInTheDocument();
+  expect(screen.queryByText("Available to every joined Hive")).not.toBeInTheDocument();
+});
+
 test("shows a low-noise Keeper rollup from public Apiary records", async () => {
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
     const url = String(input);

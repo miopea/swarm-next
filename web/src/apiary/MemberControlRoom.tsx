@@ -197,7 +197,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
       <header className="keeper-hero">
         <div className="keeper-hero-mark"><BeeMascot role="worker" expression="focused" /></div>
         <div><p className="eyebrow">Member Hive</p><h3 id="member-control-heading">{context.apiary.name}</h3><p>Your Hive receives shared Swarm tasks from Keeper. Connect Jira only if you use it.</p></div>
-        <span className="apiary-backend-badge">{context.apiary.shared_work_backend === "jira" ? "Jira-backed" : "Native"}</span>
+        <span className="apiary-backend-badge">Swarm shared work</span>
         <button className="secondary-button" type="button" onClick={onManage}>Manage membership</button>
       </header>
       {state === "partial" ? <div className="keeper-load-state" role="alert"><span>Some Apiary status could not be refreshed. Local workers and owned work are unchanged.</span><button type="button" onClick={() => void refresh()}>Try again</button></div> : null}
