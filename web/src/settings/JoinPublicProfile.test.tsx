@@ -6,6 +6,28 @@ import PersonalHiveJoin from "./PersonalHiveJoin";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
+test.each(["Your name", "Hive name"])("missing %s is explained inline and focused without submitting", async (field) => {
+  const ref = createRef<JoinPublicProfileHandle>();
+  let writes = 0;
+  vi.stubGlobal("fetch", vi.fn(async (_input, init) => {
+    if (init?.method === "PUT") writes++;
+    return new Response(JSON.stringify({ revision: 1, profile: {
+      hive_name: "My Hive", operator_display_name: "Cora", contact_email: "cora@example.test",
+    } }));
+  }));
+  const { rerender } = render(<JoinPublicProfile ref={ref} operatorToken="fictional" disabled={false} />);
+  fireEvent.change(await screen.findByLabelText(field), { target: { value: " " } });
+  rerender(<JoinPublicProfile ref={ref} operatorToken="fictional" disabled={true} />);
+  await act(async () => { await expect(ref.current!.save()).rejects.toThrow("Enter"); });
+  rerender(<JoinPublicProfile ref={ref} operatorToken="fictional" disabled={false} />);
+  expect(await screen.findByRole("alert")).toHaveTextContent("Your join request has not been sent");
+  expect(screen.getByLabelText(field)).toHaveAttribute("aria-invalid", "true");
+  expect(screen.getByLabelText(field)).toHaveFocus();
+  expect(writes).toBe(0);
+  fireEvent.change(screen.getByLabelText(field), { target: { value: "Cora" } });
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
 test.each([false, true])("joining saves the visible profile first; profile failure=%s", async (fails) => {
   const actions: string[] = [];
   const profile = { hive_name: "My Hive", operator_display_name: "Cora Bee", contact_email: null };

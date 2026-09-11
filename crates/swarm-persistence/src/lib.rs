@@ -57,6 +57,7 @@ mod decisions;
 mod email;
 mod events;
 mod federation;
+mod federation_membership_epochs;
 mod federation_handoff_reconciliation;
 mod federation_handoffs;
 mod federation_jira_claims;
@@ -297,7 +298,8 @@ const APIARY_DIRECTORY_SCHEMA_VERSION: i64 = 164;
 const APIARY_ENROLLMENT_SCHEMA_VERSION: i64 = 165;
 const WORKSPACE_SEARCH_SCHEMA_VERSION: i64 = 166;
 const FEDERATION_LIFECYCLE_STATES_SCHEMA_VERSION: i64 = 167;
-const CURRENT_SCHEMA_VERSION: i64 = FEDERATION_LIFECYCLE_STATES_SCHEMA_VERSION;
+const FEDERATION_MEMBERSHIP_EPOCHS_SCHEMA_VERSION: i64 = 168;
+const CURRENT_SCHEMA_VERSION: i64 = FEDERATION_MEMBERSHIP_EPOCHS_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -1161,7 +1163,7 @@ impl TaskStore {
                          ELSE json_extract(p.payload_json, '$.profile.contact_email') END
              FROM hives h
              JOIN operators o ON o.id = h.operator_id
-             LEFT JOIN apiary_federation_memberships m ON m.member_hive_id = h.id AND m.apiary_id = h.apiary_id
+             LEFT JOIN apiary_federation_memberships m ON m.member_hive_id = h.id AND m.apiary_id = h.apiary_id AND m.state = 'active'
              LEFT JOIN federation_public_profiles p ON p.node_id = m.member_node_id AND p.apiary_id = m.apiary_id
              WHERE h.apiary_id = ?1
              ORDER BY CASE WHEN o.id = ?2 THEN 0 ELSE 1 END, lower(h.name), h.id",
@@ -4151,6 +4153,9 @@ fn migrate_ops_intake_schema_steps(
     }
     if schema_version < FEDERATION_LIFECYCLE_STATES_SCHEMA_VERSION {
         federation_tasks::migrate_complete_lifecycle_states(transaction)?;
+    }
+    if schema_version < FEDERATION_MEMBERSHIP_EPOCHS_SCHEMA_VERSION {
+        federation_membership_epochs::migrate(transaction)?;
     }
     Ok(())
 }
@@ -9572,6 +9577,16 @@ mod tests {
             probe_sql: "SELECT COUNT(*) = 3 FROM sqlite_master WHERE type='table'
                 AND name IN ('apiary_tasks','local_apiary_task_commands','local_apiary_task_lifecycle_intents')
                 AND sql LIKE '%awaiting_release%' AND sql LIKE '%abandoned%'",
+        },
+        SchemaStep {
+            table: "apiary_federation_memberships",
+            artifact: "active_federation_hive",
+            undo_sql: "DROP INDEX active_federation_hive;
+                DROP INDEX active_federation_operator; DROP INDEX active_federation_node;
+                CREATE UNIQUE INDEX legacy_member_hive ON apiary_federation_memberships(member_hive_id)",
+            probe_sql: "SELECT COUNT(*) = 3 FROM sqlite_master WHERE type='index'
+                AND name IN ('active_federation_hive','active_federation_operator','active_federation_node')
+                AND sql LIKE '%WHERE state = ''active''%'",
         },
     ];
 

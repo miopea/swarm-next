@@ -137,6 +137,9 @@ pub struct ApiaryJoinLink {
     pub keeper_endpoint: String,
     pub state: ApiaryJoinLinkState,
     pub candidate: Option<ApiaryHiveCandidate>,
+    /// This exact invitation was consumed; delivery alone is not membership.
+    #[serde(default)]
+    pub membership_confirmed: bool,
     pub issued_at: i64,
     pub expires_at: i64,
 }

@@ -12,6 +12,15 @@ export default function JoinPublicProfile({ operatorToken, disabled, ref, joinin
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [identities, setIdentities] = useState<ConnectedIdentity[]>([]);
+  const [validationField, setValidationField] = useState<"name" | "hive">();
+  const nameInput = useRef<HTMLInputElement>(null);
+  const hiveInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (disabled || !validationField) return;
+    const input = validationField === "name" ? nameInput.current : hiveInput.current;
+    input?.scrollIntoView?.({ block: "center" });
+    input?.focus();
+  }, [disabled, validationField]);
   const edited = useRef({ name: false, email: false });
   useEffect(() => {
     const controller = new AbortController();
@@ -53,8 +62,18 @@ export default function JoinPublicProfile({ operatorToken, disabled, ref, joinin
   useImperativeHandle(ref, () => ({ save: async () => {
     if (!profile) throw new Error("Your shared profile has not loaded. Retry it before continuing.");
     if (!profile.operator_display_name.trim() || profile.operator_display_name.trim() === "Operator") {
+      setValidationField("name");
+      nameInput.current?.scrollIntoView?.({ block: "center" });
+      nameInput.current?.focus();
       throw new Error("Enter your name so the Apiary can recognize you.");
     }
+    if (!profile.hive_name.trim()) {
+      setValidationField("hive");
+      hiveInput.current?.scrollIntoView?.({ block: "center" });
+      hiveInput.current?.focus();
+      throw new Error("Enter a Hive name before continuing.");
+    }
+    setValidationField(undefined);
     // Once the reviewed snapshot is submitted, late account lookups cannot
     // change what the form shows relative to what was actually saved.
     edited.current = { name: true, email: true };
@@ -80,10 +99,13 @@ export default function JoinPublicProfile({ operatorToken, disabled, ref, joinin
           }}>Use {identity.source}: {identity.name}{identity.email ? ` · ${identity.email}` : ""}</button>)}
         </div>}
         <fieldset disabled={disabled} className="apiary-public-profile-fields">
-          <label>Your name<input value={profile.operator_display_name === "Operator" ? "" : profile.operator_display_name} autoComplete="name" maxLength={120} onChange={(event) => { edited.current.name = true; setProfile({ ...profile, operator_display_name: event.target.value }); }} /></label>
-          <label>Hive name<input value={profile.hive_name} maxLength={120} onChange={(event) => setProfile({ ...profile, hive_name: event.target.value })} /></label>
+          <label>Your name<input ref={nameInput} required aria-invalid={validationField === "name"} aria-describedby={validationField === "name" ? "join-profile-name-error" : undefined} value={profile.operator_display_name === "Operator" ? "" : profile.operator_display_name} autoComplete="name" maxLength={120} onChange={(event) => { edited.current.name = true; setValidationField(undefined); setProfile({ ...profile, operator_display_name: event.target.value }); }} /></label>
+          <label>Hive name<input ref={hiveInput} required aria-invalid={validationField === "hive"} aria-describedby={validationField === "hive" ? "join-profile-hive-error" : undefined} value={profile.hive_name} maxLength={120} onChange={(event) => { setValidationField(undefined); setProfile({ ...profile, hive_name: event.target.value }); }} /></label>
           <label>Contact email (optional)<input type="email" autoComplete="email" value={profile.contact_email ?? ""} maxLength={254} onChange={(event) => { edited.current.email = true; setProfile({ ...profile, contact_email: event.target.value }); }} /></label>
         </fieldset>
+        {validationField === "name" && <p className="form-error" role="alert" id="join-profile-name-error">Enter your name so the Apiary can recognize you. {joining ? "Your join request has not been sent." : "Your changes have not been saved."}</p>}
+        {validationField === "hive" && <p className="form-error" role="alert" id="join-profile-hive-error">Enter a Hive name before continuing. {joining ? "Your join request has not been sent." : "Your changes have not been saved."}</p>}
+        <small>Your name and Hive name are required. Jira and contact email are optional.</small>
         <p aria-label="Shared profile preview"><strong>{proposedName}</strong> · {profile.operator_display_name === "Operator" ? "Your name" : profile.operator_display_name}{profile.contact_email ? ` · ${profile.contact_email}` : " · No contact email"}</p>
         <small>{joining ? "Saved when you connect, join, or create an Apiary. Only the default “My Hive” becomes your first name’s Hive; a custom name stays unchanged." : "Save updates this Hive first; the Apiary receives the changes through its normal synchronization. Membership and private work do not change."} Email is contact information, not a verified login.</small>
       </>}

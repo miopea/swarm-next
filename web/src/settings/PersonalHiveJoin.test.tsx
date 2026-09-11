@@ -154,6 +154,20 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+test("a submitted join refuses dismissal without claiming its link is missing", async () => {
+  const link = { link_id: "link-1", apiary_name: "Fictional Garden", keeper_endpoint: "https://keeper.example.test", state: "invitation_issued" };
+  const onError = vi.fn();
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "DELETE") return new Response(JSON.stringify({ message: "Join is not ready", code: "apiary_join_not_ready" }), { status: 409 });
+    return new Response(JSON.stringify(String(input).endsWith("/keeper-links") ? [link] : []));
+  }));
+  render(<PersonalHiveJoin busy={false} operatorToken="fictional" onError={onError} onMessage={vi.fn()} onJoined={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Dismiss" }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove link" }));
+  await waitFor(() => expect(onError).toHaveBeenCalledWith(expect.stringContaining("Keeper may already have accepted your Hive")));
+  expect(screen.getByText("Fictional Garden")).toBeInTheDocument();
+});
+
 test.each(["ready", "readiness changed", "acceptance failed", "submission failed"])("explicit accept and join: %s", async (outcome) => {
   const invitation = {
     invitation_id: "invite-1", apiary_name: "Clover Garden", keeper_hive_name: "Lead Hive",

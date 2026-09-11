@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import KeeperInvitationManager from "./KeeperInvitationManager";
-import { approveApiaryJoinLink, createApiaryJoinLink, fetchApiaryJoinLinks } from "../api";
+import { approveApiaryJoinLink, createApiaryJoinLink, fetchApiaryJoinLinks, revokeApiaryJoinLink } from "../api";
 
 vi.mock("../api", async (importOriginal) => ({
   RuntimeRequestError: (await importOriginal<typeof import("../api")>()).RuntimeRequestError,
@@ -33,6 +33,25 @@ const bundle = {
     issued_at: 1, expires_at: 86401 },
   one_time_secret: "fictional",
 };
+
+test("delivered invitations remain cancellable; confirmed membership appears only in history", async () => {
+  const delivered = { ...bundle.link, state: "invitation_issued" as const };
+  const joined = { ...delivered, id: "joined-link", membership_confirmed: true };
+  vi.mocked(fetchApiaryJoinLinks).mockResolvedValue([delivered, joined]);
+  vi.mocked(revokeApiaryJoinLink).mockResolvedValue({ ...delivered, state: "revoked" });
+  mount();
+  await flush();
+  expect(screen.getByRole("list", { name: "Apiary invitation links" }).children).toHaveLength(1);
+  expect(screen.getByText("Joined through this invitation")).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "Cancel" })).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  vi.mocked(fetchApiaryJoinLinks).mockResolvedValue([{ ...delivered, state: "revoked" }, joined]);
+  fireEvent.click(screen.getByRole("button", { name: "Cancel invitation" }));
+  await flush();
+  expect(revokeApiaryJoinLink).toHaveBeenCalledOnce();
+  expect(screen.queryByRole("list", { name: "Apiary invitation links" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+});
 
 test.each(["timeout", "unmount"] as const)("fences late invitation creation after %s without copying or retrying", async (reason) => {
   vi.useFakeTimers();

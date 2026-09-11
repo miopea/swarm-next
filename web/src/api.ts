@@ -954,6 +954,7 @@ export type ApiaryJoinLink = {
   keeper_endpoint: string;
   state: ApiaryJoinLinkState;
   candidate: ApiaryHiveCandidate | null;
+  membership_confirmed?: boolean;
   issued_at: number;
   expires_at: number;
 };

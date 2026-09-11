@@ -201,7 +201,9 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
         ? "The cancelled or expired invitation was removed from this Hive."
         : "This Hive stopped waiting for that Keeper invitation. The private link must be pasted again to reconnect.");
     } catch (cause) {
-      onError(cause instanceof Error ? cause.message : "That saved Keeper invitation could not be removed.");
+      onError(cause instanceof RuntimeRequestError && cause.status === 409
+        ? "This invitation has a submitted join. Check joining status before removing it; Keeper may already have accepted your Hive. Your saved request is unchanged."
+        : cause instanceof Error ? cause.message : "That saved Keeper invitation could not be removed.");
     } finally {
       setWorking(false);
     }
@@ -321,7 +323,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
       </p> : null}
       {record.phase === "awaiting_approval" || record.phase === "attention" ? <button className="secondary-button" disabled={working} onClick={() => {
         setWorking(true);
-        void removeApiaryKeeperLink(operatorToken, record.consent.link_id).then(() => { enrollmentEpoch.current += 1; setEnrollments([]); })
+        void removeApiaryKeeperLink(operatorToken, record.consent.link_id).then(async () => { enrollmentEpoch.current += 1; setEnrollments([]); await refreshSavedState(); })
           .catch(() => onError("The request may already be joining. Refresh its status before trying again."))
           .finally(() => setWorking(false));
       }}>Cancel request</button> : null}
@@ -377,7 +379,6 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
         </details>
         {invitationPreview ? <InvitationPreview bundle={invitationPreview} working={working} onCancel={() => setInvitationPreview(undefined)} onTrust={() => void trustKeeperAndImport()} /> : null}
         {joinInvitations.length > 0 ? <div className="settings-actions">
-          <a className="secondary-button" href="#settings-integrations">Open Jira settings</a>
           <button className="secondary-button" type="button" disabled={busy || working} onClick={() => void refreshSavedState()}>Refresh setup status</button>
         </div> : null}
         {joinInvitations.length > 0 ? (
@@ -449,6 +450,9 @@ function InvitationReadiness({ invitation, working, onAccept, onJoin }: { invita
           : ready ? <button className="primary-action" disabled={working} onClick={onJoin}>{working ? "Joining…" : "Join Apiary"}</button>
           : <span className="readiness-ready">Acknowledged</span>}
       </div>
+      {invitation.readiness.projects.length > 0 ? <details>
+      <summary>Optional Jira projects — configure after joining</summary>
+      <a className="secondary-button" href="#settings-integrations">Open Jira settings</a>
       <ul className="apiary-project-readiness" aria-label={`Jira readiness for ${invitation.apiary_name}`}>
         {invitation.readiness.projects.map((project) => {
           const projectReady = Boolean(project.binding_id && project.access_verified && project.workflow_mapped);
@@ -456,6 +460,7 @@ function InvitationReadiness({ invitation, working, onAccept, onJoin }: { invita
           return <li key={project.project.project_id}><span><strong>{project.project.project_key}</strong><small>{project.project.project_name}</small></span><span className={projectReady ? "readiness-ready" : "readiness-blocked"}>{status}</span></li>;
         })}
       </ul>
+      </details> : null}
       {invitation.readiness.blockers.some((blocker) => blocker === "integration_not_ready" || blocker === "project_access_not_ready") ? <p className="readiness-blocked">This runtime still requires Jira setup before joining. Update it to join without Jira; your invitation remains saved.</p>
         : invitation.readiness.jira_connection !== "ready" ? <p>Jira is optional. You can connect it later from your Apiary setup checklist.</p> : null}
       <small>{invitation.state === "submitted" ? "The signed request is durable and retry-stable. Retry after a temporary Keeper outage." : "Joining sends one signed request to the Keeper; Jira credentials and private Hive data stay local."}</small>

@@ -356,6 +356,82 @@ fn journal_is_bounded_and_existing_retries_work_at_capacity() {
 }
 
 #[test]
+fn removing_a_join_in_progress_is_a_conflict_not_a_missing_link() {
+    let store = TaskStore::in_memory().unwrap();
+    let consent = consent(&store);
+    store.save_apiary_enrollment(&consent, 10).unwrap();
+    store
+        .advance_apiary_enrollment(
+            consent.link_id,
+            ApiaryEnrollmentPhase::AwaitingApproval,
+            ApiaryEnrollmentPhase::Joining,
+        )
+        .unwrap();
+    assert!(matches!(
+        store.remove_local_apiary_keeper_link(consent.link_id),
+        Err(TaskStoreError::ApiaryJoinNotReady)
+    ));
+    assert_eq!(
+        store.apiary_enrollments().unwrap()[0].phase,
+        ApiaryEnrollmentPhase::Joining
+    );
+    assert!(matches!(
+        store.remove_local_apiary_keeper_link(swarm_domain::ApiaryJoinLinkId::new()),
+        Err(TaskStoreError::ApiaryJoinLinkNotFound)
+    ));
+}
+
+#[test]
+fn cancelling_enrollment_retires_imported_invitation_without_reviving_legacy_join() {
+    let (member, consent, invitation) = approved_join();
+    member
+        .remove_local_apiary_keeper_link(consent.link_id)
+        .unwrap();
+    assert!(member.apiary_enrollments().unwrap().is_empty());
+    let state: String = member
+        .connection()
+        .unwrap()
+        .query_row(
+            "SELECT state FROM apiary_join_invitations WHERE id = ?1",
+            [invitation.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "revoked");
+    assert!(
+        member
+            .prepare_consented_apiary_join(consent.link_id, invitation, 15)
+            .is_err()
+    );
+}
+
+#[test]
+fn uncertain_join_cancellation_rolls_back_invitation_changes() {
+    let (member, consent, invitation) = approved_join();
+    member
+        .prepare_consented_apiary_join(consent.link_id, invitation, 15)
+        .unwrap();
+    assert!(matches!(
+        member.remove_local_apiary_keeper_link(consent.link_id),
+        Err(TaskStoreError::ApiaryJoinNotReady)
+    ));
+    let state: String = member
+        .connection()
+        .unwrap()
+        .query_row(
+            "SELECT state FROM apiary_join_invitations WHERE id = ?1",
+            [invitation.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "policy_accepted");
+    assert_eq!(
+        member.apiary_enrollments().unwrap()[0].phase,
+        ApiaryEnrollmentPhase::Joining
+    );
+}
+
+#[test]
 fn migration_preserves_existing_links_without_inventing_consent() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("upgrade.sqlite");

@@ -22,6 +22,7 @@ type Props = {
 export default function KeeperInvitationManager({ busy, operatorToken, onInvitationCreated }: Props) {
   const [links, setLinks] = useState<ApiaryJoinLink[]>([]);
   const [generatedLink, setGeneratedLink] = useState("");
+  const [generatedLinkId, setGeneratedLinkId] = useState<string>();
   const [working, setWorking] = useState(false);
   const [confirmingCancellation, setConfirmingCancellation] = useState<string>();
   const [message, setMessage] = useState("");
@@ -70,6 +71,7 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
       };
       const link = createApiaryHandoffLink("keeper", capability, bundle.link.keeper_endpoint);
       setGeneratedLink(link);
+      setGeneratedLinkId(bundle.link.id);
       await refresh();
       signal.throwIfAborted();
       const copied = await copyLink(link);
@@ -106,7 +108,7 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
       setGeneratedLink("");
       await refresh();
       signal.throwIfAborted();
-      setMessage("Invitation cancelled. That private link can no longer introduce a Hive.");
+      setMessage("Invitation cancelled. That link and its pending invitation can no longer join a Hive. Existing memberships are unchanged.");
     }, "That invitation could not be cancelled.");
   }
 
@@ -155,8 +157,10 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
     }
   }
 
-  const pending = links.filter((link) => link.state === "awaiting_approval");
-  const active = links.filter((link) => link.state !== "expired" && link.state !== "revoked");
+  const active = links.filter((link) => !link.membership_confirmed && link.state !== "expired" && link.state !== "revoked");
+  const pending = active.filter((link) => link.state === "awaiting_approval");
+  const history = links.filter((link) => link.membership_confirmed || link.state === "expired" || link.state === "revoked");
+  const generatedResolved = history.some((link) => link.id === generatedLinkId);
 
   return (
     <div className="apiary-hive-candidates apiary-link-invitations">
@@ -173,7 +177,7 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
         <span><strong>Jira work</strong><small>Each Hive polls Jira directly with its own operator identity.</small></span>
         <span><strong>Swarm work</strong><small>Member Hives poll this Keeper for shared tasks, policy, and coordination.</small></span>
       </div>
-      {generatedLink ? <ApiaryGeneratedLink link={generatedLink} onCopy={copyLink} /> : null}
+      {generatedLink && !generatedResolved ? <ApiaryGeneratedLink link={generatedLink} onCopy={copyLink} /> : null}
       {pending.length > 0 ? (
         <section className="apiary-pending-approvals" aria-label="Hives waiting for approval">
           <h4>Waiting for your approval</h4>
@@ -197,15 +201,22 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
               <span><strong>{link.candidate?.hive_name ?? "Invitation link"}</strong><small>Expires {new Date(link.expires_at * 1000).toLocaleString()}</small></span>
               <span className="apiary-link-actions">
                 <span className={`apiary-link-state state-${link.state}`}>{joinStateLabel(link.state)}</span>
-                {link.state !== "invitation_issued" ? confirmingCancellation === link.id
+                {confirmingCancellation === link.id
                   ? <span className="apiary-cancel-confirm" role="group" aria-label="Confirm invitation cancellation"><button className="danger-button" disabled={working} onClick={() => void cancel(link)}>Cancel invitation</button><button className="secondary-button" disabled={working} onClick={() => setConfirmingCancellation(undefined)}>Keep link</button></span>
                   : <button className="danger-link" disabled={working} onClick={() => setConfirmingCancellation(link.id)}>Cancel</button>
-                  : null}
+                }
               </span>
             </li>
           ))}
         </ul>
       ) : <p className="empty-copy">{loaded ? "No active invitation links. Create one when another Hive is ready to join." : refreshError ? "Invitation status is unavailable." : "Checking invitation status…"}</p>}
+      {history.length > 0 ? <details className="apiary-invitation-history">
+        <summary>Invitation history ({history.length})</summary>
+        <ul className="apiary-link-status" aria-label="Past Apiary invitations">
+          {history.map((link) => <li key={link.id}><strong>{link.candidate?.hive_name ?? "Invitation link"}</strong>
+            <span>{link.membership_confirmed ? "Joined through this invitation" : joinStateLabel(link.state)}</span></li>)}
+        </ul>
+      </details> : null}
       {message ? <p className="form-message" role="status">{message}</p> : null}
       {refreshError ? <div className="form-error apiary-refresh-error" role="alert"><span>Invitation status could not be refreshed. {loaded ? "Showing the last confirmed information. " : ""}Checking status does not change membership.</span><button className="secondary-button" type="button" disabled={working} onClick={() => void refresh()}>Check invitation status again</button></div> : null}
       {error ? <p className="form-error" role="alert">{error}</p> : null}

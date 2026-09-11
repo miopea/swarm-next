@@ -1132,6 +1132,7 @@ impl TaskStore {
                 keeper_endpoint: endpoint,
                 state: ApiaryJoinLinkState::Open,
                 candidate: None,
+                membership_confirmed: false,
                 issued_at: now,
                 expires_at,
             },
@@ -1158,13 +1159,11 @@ impl TaskStore {
         load_apiary_join_links(&connection, apiary_id, now)
     }
 
-    /// Revokes one undelivered Keeper invitation capability. A link remains
-    /// cancellable while it is open, awaiting approval, or approved but not
-    /// yet polled. Once its signed invitation has been delivered, revoking the
-    /// transport link is intentionally too late.
+    /// Revokes a link and its delivered but unconsumed signed invitation in one
+    /// transaction. Consumption and cancellation cannot both win.
     ///
     /// # Errors
-    /// Rejects non-Keepers, expired/resolved/delivered links, and unavailable
+    /// Rejects non-Keepers, expired/resolved/consumed links, and unavailable
     /// persistence.
     pub fn revoke_apiary_join_link(
         &self,
@@ -1176,19 +1175,30 @@ impl TaskStore {
             .hive
             .apiary_id
             .ok_or(TaskStoreError::ApiaryKeeperRequired)?;
-        let connection = self.connection()?;
-        keeper_invitation_context(&connection, apiary_id, &identity.operator.id.to_string())?;
-        let changed = connection.execute(
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        keeper_invitation_context(&transaction, apiary_id, &identity.operator.id.to_string())?;
+        let changed = transaction.execute(
             "UPDATE apiary_join_links
              SET state = 'revoked'
              WHERE id = ?1 AND apiary_id = ?2
-               AND state IN ('open','awaiting_approval','approved')
+               AND (state IN ('open','awaiting_approval','approved')
+                    OR (state = 'invitation_issued' AND EXISTS (
+                        SELECT 1 FROM apiary_federation_invitations i
+                        WHERE i.id = apiary_join_links.invitation_id AND i.state = 'pending')))
                AND expires_at > ?3",
             params![link_id.to_string(), apiary_id.to_string(), now],
         )?;
         if changed != 1 {
             return Err(TaskStoreError::ApiaryJoinLinkResolved);
         }
+        transaction.execute(
+            "UPDATE apiary_federation_invitations SET state = 'revoked'
+             WHERE id = (SELECT invitation_id FROM apiary_join_links WHERE id = ?1)
+               AND state = 'pending'",
+            [link_id.to_string()],
+        )?;
+        transaction.commit()?;
         load_apiary_join_links(&connection, apiary_id, now)?
             .into_iter()
             .find(|link| link.id == link_id)
@@ -1322,8 +1332,23 @@ impl TaskStore {
         &self,
         link_id: ApiaryJoinLinkId,
     ) -> Result<(), TaskStoreError> {
-        let connection = self.connection()?;
-        if connection.execute(
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        // Cancelling recorded enrollment also retires its imported invitation.
+        // Legacy bootstrap cleanup has no enrollment and must retain the
+        // invitation. A submitted request stays protected by the delete guard;
+        // failure rolls back this update as well.
+        transaction.execute(
+            "UPDATE apiary_join_invitations SET state = 'revoked'
+             WHERE state IN ('keeper_pinned', 'policy_accepted')
+               AND EXISTS (SELECT 1 FROM local_apiary_keeper_links l
+                   JOIN apiary_enrollments e ON e.link_id = l.link_id
+                   WHERE l.link_id = ?1
+                     AND l.one_time_secret = apiary_join_invitations.one_time_secret
+                     AND l.keeper_endpoint = apiary_join_invitations.keeper_endpoint)",
+            [link_id.to_string()],
+        )?;
+        if transaction.execute(
             "DELETE FROM local_apiary_keeper_links WHERE link_id = ?1
              AND NOT EXISTS (SELECT 1 FROM apiary_enrollments e
                  WHERE e.link_id = ?1 AND json_extract(e.record_json, '$.phase') = 'joining')
@@ -1334,8 +1359,18 @@ impl TaskStore {
             [link_id.to_string()],
         )? != 1
         {
-            return Err(TaskStoreError::ApiaryJoinLinkNotFound);
+            let exists: bool = transaction.query_row(
+                "SELECT EXISTS (SELECT 1 FROM local_apiary_keeper_links WHERE link_id = ?1)",
+                [link_id.to_string()],
+                |row| row.get(0),
+            )?;
+            return Err(if exists {
+                TaskStoreError::ApiaryJoinNotReady
+            } else {
+                TaskStoreError::ApiaryJoinLinkNotFound
+            });
         }
+        transaction.commit()?;
         Ok(())
     }
 
@@ -3345,26 +3380,55 @@ fn register_federation_membership(
     context: KeeperInvitationContext,
     now: i64,
 ) -> Result<FederationJoinAcceptance, TaskStoreError> {
-    transaction
-        .execute(
-            "INSERT INTO operators (id, display_name, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?3)",
-            params![join.candidate_operator_id, join.operator_display_name, now],
-        )
-        .map_err(|_| TaskStoreError::ApiaryMembershipConflict)?;
-    transaction
-        .execute(
-            "INSERT INTO hives (id, name, operator_id, apiary_id, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+    let returning: bool = transaction.query_row(
+        "SELECT EXISTS (SELECT 1 FROM apiary_federation_memberships m
+         JOIN hives h ON h.id = m.member_hive_id AND h.operator_id = m.member_operator_id
+         WHERE m.apiary_id = ?1 AND m.member_node_id = ?2 AND m.member_hive_id = ?3
+           AND m.member_operator_id = ?4 AND m.state = 'departed' AND h.apiary_id IS NULL)",
+        params![
+            join.apiary_id,
+            join.candidate_node_id,
+            join.candidate_hive_id,
+            join.candidate_operator_id
+        ],
+        |row| row.get(0),
+    )?;
+    if returning {
+        if transaction.execute(
+            "UPDATE hives SET apiary_id = ?1, updated_at = ?2
+             WHERE id = ?3 AND operator_id = ?4 AND apiary_id IS NULL",
             params![
+                join.apiary_id,
+                now,
                 join.candidate_hive_id,
-                join.hive_name,
-                join.candidate_operator_id,
-                payload.apiary_id.to_string(),
-                now
+                join.candidate_operator_id
             ],
-        )
-        .map_err(|_| TaskStoreError::ApiaryMembershipConflict)?;
+        )? != 1
+        {
+            return Err(TaskStoreError::ApiaryMembershipConflict);
+        }
+    } else {
+        transaction
+            .execute(
+                "INSERT INTO operators (id, display_name, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?3)",
+                params![join.candidate_operator_id, join.operator_display_name, now],
+            )
+            .map_err(|_| TaskStoreError::ApiaryMembershipConflict)?;
+        transaction
+            .execute(
+                "INSERT INTO hives (id, name, operator_id, apiary_id, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+                params![
+                    join.candidate_hive_id,
+                    join.hive_name,
+                    join.candidate_operator_id,
+                    payload.apiary_id.to_string(),
+                    now
+                ],
+            )
+            .map_err(|_| TaskStoreError::ApiaryMembershipConflict)?;
+    }
     let (credential, encoded_credential) = node_credential_material()?;
     let credential_expires_at = now
         .checked_add(FEDERATION_NODE_CREDENTIAL_LIFETIME_SECONDS)
@@ -3504,6 +3568,37 @@ fn insert_remote_apiary_identity(
     invitation: &InvitedJoinApplicationContext,
     now: i64,
 ) -> Result<(), TaskStoreError> {
+    let returning: bool = transaction.query_row(
+        "SELECT EXISTS (SELECT 1 FROM local_federation_departures d
+         JOIN apiaries a ON a.id = d.apiary_id
+         JOIN hives h ON h.id = ?2 AND h.apiary_id = a.id AND h.operator_id = a.keeper_operator_id
+         WHERE d.apiary_id = ?1 AND a.keeper_operator_id = ?3 AND a.shared_work_backend = ?4
+           AND a.collapsed_at IS NULL
+           AND json_extract(d.receipt_json, '$.payload.keeper_node_id') = ?5
+           AND json_extract(d.receipt_json, '$.payload.keeper_hive_id') = ?2
+           AND json_extract(d.receipt_json, '$.payload.keeper_operator_id') = ?3
+           AND json_extract(d.receipt_json, '$.payload.member_node_id') = ?6
+           AND json_extract(d.receipt_json, '$.payload.member_hive_id') = ?7
+           AND json_extract(d.receipt_json, '$.payload.member_operator_id') = ?8)",
+        params![
+            invitation.apiary_id,
+            invitation.keeper_hive_id,
+            invitation.keeper_operator_id,
+            invitation.backend.to_string(),
+            invitation.keeper_node_id,
+            invitation.invited_node_id,
+            invitation.invited_hive_id,
+            invitation.invited_operator_id
+        ],
+        |row| row.get(0),
+    )?;
+    if returning {
+        transaction.execute(
+            "UPDATE apiaries SET policy_revision = ?2, updated_at = ?3 WHERE id = ?1",
+            params![invitation.apiary_id, invitation.policy_revision, now],
+        )?;
+        return Ok(());
+    }
     transaction
         .execute(
             "INSERT INTO operators (id, display_name, created_at, updated_at)
@@ -4599,7 +4694,9 @@ fn load_apiary_join_links(
 ) -> Result<Vec<ApiaryJoinLink>, TaskStoreError> {
     let mut statement = connection.prepare(
         "SELECT l.id, a.name, l.keeper_endpoint, l.state,
-                l.candidate_hive_id, l.created_at, l.expires_at
+                l.candidate_hive_id, l.created_at, l.expires_at,
+                EXISTS (SELECT 1 FROM apiary_federation_invitations i
+                        WHERE i.id = l.invitation_id AND i.state = 'consumed')
          FROM apiary_join_links l
          JOIN apiaries a ON a.id = l.apiary_id
          WHERE l.apiary_id = ?1
@@ -4615,6 +4712,7 @@ fn load_apiary_join_links(
                 row.get::<_, Option<String>>(4)?,
                 row.get::<_, i64>(5)?,
                 row.get::<_, i64>(6)?,
+                row.get::<_, bool>(7)?,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -4630,6 +4728,7 @@ fn load_apiary_join_links(
                 candidate_hive_id,
                 issued_at,
                 expires_at,
+                membership_confirmed,
             )| {
                 let state = if expires_at <= now
                     && !matches!(stored_state.as_str(), "invitation_issued" | "revoked")
@@ -4656,6 +4755,7 @@ fn load_apiary_join_links(
                     keeper_endpoint,
                     state,
                     candidate,
+                    membership_confirmed,
                     issued_at,
                     expires_at,
                 })
@@ -5001,7 +5101,7 @@ mod tests {
     }
 
     #[test]
-    fn keeper_can_revoke_an_undelivered_link_but_not_a_delivered_invitation() {
+    fn keeper_can_revoke_a_delivered_invitation_before_membership() {
         let member = TaskStore::in_memory().unwrap();
         let card = member.issue_hive_connection_card(10_000, 3_600).unwrap();
         let keeper = TaskStore::in_memory().unwrap();
@@ -5039,10 +5139,102 @@ mod tests {
         keeper
             .poll_apiary_join_link(delivered.link.id, &delivered.one_time_secret, 10_013)
             .unwrap();
-        assert!(matches!(
-            keeper.revoke_apiary_join_link(delivered.link.id, 10_014),
-            Err(TaskStoreError::ApiaryJoinLinkResolved)
-        ));
+        assert_eq!(
+            keeper
+                .revoke_apiary_join_link(delivered.link.id, 10_014)
+                .unwrap()
+                .state,
+            ApiaryJoinLinkState::Revoked
+        );
+        assert!(
+            keeper
+                .poll_apiary_join_link(delivered.link.id, &delivered.one_time_secret, 10_015)
+                .unwrap()
+                .invitation
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn delivered_invitation_cancellation_and_consumption_are_mutually_exclusive() {
+        for cancel_first in [true, false] {
+            let now = 15_000;
+            let keeper = TaskStore::in_memory().unwrap();
+            keeper
+                .create_apiary_for_local_hive("Fictional Garden", SharedWorkBackend::Jira, now)
+                .unwrap();
+            let member = TaskStore::in_memory().unwrap();
+            let card = member.issue_hive_connection_card(now, 3600).unwrap();
+            let link = keeper
+                .issue_apiary_join_link("https://keeper.example.test", now, 3600)
+                .unwrap();
+            keeper
+                .present_apiary_join_link_identity(
+                    link.link.id,
+                    &link.one_time_secret,
+                    &card,
+                    now + 1,
+                )
+                .unwrap();
+            keeper
+                .approve_apiary_join_link(link.link.id, now + 2)
+                .unwrap();
+            let bundle = keeper
+                .poll_apiary_join_link(link.link.id, &link.one_time_secret, now + 3)
+                .unwrap()
+                .invitation
+                .unwrap();
+            let invitation = member
+                .import_apiary_invitation_bundle(&bundle, now + 4)
+                .unwrap();
+            member
+                .accept_federation_join_policy(invitation.invitation_id, 1, now + 5)
+                .unwrap();
+            let submission = member
+                .prepare_federation_join_submission(
+                    invitation.invitation_id,
+                    &FederationJoinReadiness {
+                        jira_connection: swarm_domain::JiraConnectionState::NotConnected,
+                        projects: Vec::new(),
+                        blockers: Vec::new(),
+                    },
+                    now + 6,
+                )
+                .unwrap();
+            if cancel_first {
+                let cancelled = keeper
+                    .revoke_apiary_join_link(link.link.id, now + 7)
+                    .unwrap();
+                assert!(!cancelled.membership_confirmed);
+                assert!(
+                    keeper
+                        .consume_federation_join_submission(&submission, now + 8)
+                        .is_err()
+                );
+                assert_eq!(keeper.list_apiary_members().unwrap().len(), 1);
+            } else {
+                let accepted = keeper
+                    .consume_federation_join_submission(&submission, now + 7)
+                    .unwrap();
+                assert!(
+                    keeper
+                        .revoke_apiary_join_link(link.link.id, now + 8)
+                        .is_err()
+                );
+                assert!(keeper.apiary_join_links(now + 9).unwrap()[0].membership_confirmed);
+                assert_eq!(
+                    keeper
+                        .consume_federation_join_submission(&submission, now + 9)
+                        .unwrap(),
+                    accepted
+                );
+                assert!(
+                    keeper
+                        .signed_federation_catalog(&accepted.node_credential, now + 10)
+                        .is_ok()
+                );
+            }
+        }
     }
 
     #[test]
@@ -6578,6 +6770,126 @@ mod tests {
                 .unwrap(),
             "departed"
         );
+    }
+
+    #[test]
+    fn departed_hive_can_rejoin_without_replacing_identity_or_private_work() {
+        let now = 125_000;
+        let (keeper, member) = joined_member(now);
+        let identity = member.local_hive_identity().unwrap();
+        let task = member
+            .create_task("Private rejoin fixture", "/private")
+            .unwrap();
+        let old = member.federation_member_connection().unwrap();
+        let old_acceptance = {
+            let connection = keeper.connection().unwrap();
+            let id = connection
+                .query_row(
+                    "SELECT invitation_id FROM apiary_federation_memberships",
+                    [],
+                    |row| parse_domain_id::<ApiaryInvitationId>(&row.get::<_, String>(0)?),
+                )
+                .unwrap();
+            federation_acceptance_by_invitation(&connection, id)
+                .unwrap()
+                .unwrap()
+        };
+        member.begin_federation_departure(now + 10).unwrap();
+        let departure = keeper
+            .depart_federation_member(&old.node_credential, now + 11)
+            .unwrap();
+        member
+            .apply_federation_departure(&departure, now + 12)
+            .unwrap();
+
+        // Reopen populated legacy constraints, including a departure FK, through
+        // the real migration boundary before exercising the rejoin.
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("keeper.db");
+        keeper.backup_to(&path).unwrap();
+        {
+            let legacy = rusqlite::Connection::open(&path).unwrap();
+            legacy.execute_batch("CREATE UNIQUE INDEX legacy_member_hive ON apiary_federation_memberships(member_hive_id);
+                CREATE UNIQUE INDEX legacy_member_operator ON apiary_federation_memberships(member_operator_id);
+                CREATE UNIQUE INDEX legacy_member_node ON apiary_federation_memberships(apiary_id,member_node_id);
+                PRAGMA user_version=167;").unwrap();
+        }
+        let keeper = TaskStore::open(&path).unwrap();
+        keeper.verify_integrity().unwrap();
+
+        let acceptance = register_remote_member(&keeper, &member, now + 20);
+        member
+            .apply_federation_join_acceptance(
+                acceptance.receipt.payload.invitation_id,
+                &acceptance,
+                now + 25,
+            )
+            .unwrap();
+        assert_eq!(
+            member.local_hive_identity().unwrap().hive.id,
+            identity.hive.id
+        );
+        assert_eq!(
+            member.local_hive_identity().unwrap().operator.id,
+            identity.operator.id
+        );
+        assert_eq!(member.get_task(task.id).unwrap().title, task.title);
+        assert!(
+            keeper
+                .signed_federation_catalog(&old.node_credential, now + 26)
+                .is_err()
+        );
+        assert!(
+            keeper
+                .signed_federation_catalog(&acceptance.node_credential, now + 26)
+                .is_ok()
+        );
+        // Retrying an earlier departure must not detach the new membership.
+        assert_eq!(
+            keeper
+                .depart_federation_member(&old.node_credential, now + 27)
+                .unwrap(),
+            departure
+        );
+        assert!(
+            keeper
+                .signed_federation_catalog(&acceptance.node_credential, now + 28)
+                .is_ok()
+        );
+        assert!(
+            member
+                .apply_federation_join_acceptance(
+                    old_acceptance.receipt.payload.invitation_id,
+                    &old_acceptance,
+                    now + 29
+                )
+                .is_err()
+        );
+        assert_eq!(keeper.list_apiary_members().unwrap().len(), 2);
+        assert_eq!(
+            keeper
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM apiary_federation_memberships",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            2
+        );
+        assert!(
+            keeper
+                .connection()
+                .unwrap()
+                .execute(
+                    "UPDATE apiary_federation_memberships SET receipt_json = '{}'",
+                    []
+                )
+                .is_err()
+        );
+        keeper.verify_integrity().unwrap();
+        member.verify_integrity().unwrap();
     }
 
     #[test]
