@@ -2,6 +2,22 @@
 
 ## Authoritative next gates — September 11, overnight
 
+02:03 CURRENT PRIORITY: fix the now-reproduced shared-task lifecycle persistence
+bug, not another speculative UI polish. f66e9e68 is live on production/WSL at
+1.7.1-dev-f66e9e684e2b-20260911055744-1127069. Both engines preserved. WSL's
+real Set up a worker link reaches the roster and add-worker form. Integrated
+1649 tests/170 files pass. Fictional task01a08f02-fc6b-7953-bf57-4c73e79cf3d8
+still Ready because supported POST transition to abandoned returns503; outbox
+remains empty and revision1 unchanged. WSL log proves CHECK constraint failure:
+target_state IN ('draft','ready','active','blocked','review','completed').
+local_apiary_task_commands schema in federation_tasks.rs:1613 omitted later
+abandoned/awaiting_release states. Existing domain permits retirement and
+the canonical task table already gained abandoned. Inspect all involved schema
+constraints and current migration version; add forward migration preserving
+queued commands/receipts, regression and failure/recovery tests. No raw DB edits
+or fake Active/Review transitions to bypass this. After verified deployment,
+retire this exact fictional task normally and prove Keeper/member convergence.
+
 02:00 checkpoint: real shared-task acceptance is now the active journey. Fictional
 task01a08f02-fc6b-7953-bf57-4c73e79cf3d8 reached existing WSL Hive and survived
 an API restart with engine6458 preserved. It remains Ready, unexecuted, for the
