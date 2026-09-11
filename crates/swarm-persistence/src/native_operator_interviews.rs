@@ -111,9 +111,17 @@ impl TaskStore {
         }
         let questions: Option<String> = tx
             .query_row(
+                // ⚠️ d.requesting_worker_id=?3 IS LOAD-BEARING, not belt-and-braces.
+                // Without it this checked only that the session belonged to the
+                // worker, never that the DECISION did — so any worker's confirmed
+                // answer could resolve any other worker's pending decision whose
+                // questions happened to match. Two workers asked the same
+                // question is not a rare shape; it is the normal one.
+                // Found 2026-09-11 by the wrong-session negative this bridge was
+                // required to prove, which resolved the decision instead.
                 "SELECT d.questions FROM decision_requests d
              JOIN local_hive_identity l ON l.hive_id=d.hive_id AND l.singleton=1
-             WHERE d.id=?1 AND d.state='pending'
+             WHERE d.id=?1 AND d.state='pending' AND d.requesting_worker_id=?3
              AND EXISTS(SELECT 1 FROM worker_sessions s
                WHERE s.session_id=?2 AND s.worker_id=?3 AND s.ended_at IS NULL)",
                 params![

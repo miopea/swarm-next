@@ -1,5 +1,6 @@
 //! Private first-party evidence, never automatic diagnostic content.
 use rusqlite::{OptionalExtension, Transaction, params};
+use std::str::FromStr;
 use swarm_domain::{
     DecisionQuestion, DecisionRequestId, MAX_DECISION_QUESTIONS, OperatorAnswerConsumption,
     OperatorAnswerEvidence, OperatorAnswerTarget, OperatorStatementId, WorkerId, WorkerSessionId,
@@ -119,6 +120,70 @@ impl TaskStore {
             ));
         }
         Ok(receipt)
+    }
+
+    /// Resolves an interview from a complete set of stored, confirmed receipts.
+    /// Revalidates question and session identities in the same transaction as
+    /// resolution and delivery bookkeeping. No terminal input is written here.
+    /// Returns false for the identical already-consumed receipt set.
+    ///
+    /// # Errors
+    /// Rejects incomplete, mismatched, stale, conflicting or unavailable evidence.
+    /// Statements this worker session already recorded for one decision.
+    ///
+    /// Exists so orchestration is RESUMABLE. Statement IDs are random, so a
+    /// pass that recorded two of three answers and then died could not find its
+    /// own earlier work on a retry, and would mint duplicates for questions it
+    /// had already answered. Reading them back makes every step replayable
+    /// without needing one giant transaction across three modules.
+    ///
+    /// Returns the question TEXT alongside the id, decoded here because this is
+    /// where the stored shape is known. Matching is by question rather than by
+    /// position -- a decision's questions are a set to the caller, and relying
+    /// on order would break the moment one is edited.
+    ///
+    /// # Errors
+    /// Propagates persistence failures.
+    pub fn recorded_statement_answers(
+        &self,
+        decision: DecisionRequestId,
+        worker: WorkerId,
+        session: WorkerSessionId,
+    ) -> Result<Vec<(OperatorStatementId, String, String)>, OperatorStatementError> {
+        let connection = self.connection()?;
+        let mut query = connection.prepare(
+            "SELECT s.id, s.question, s.answer FROM operator_statements s
+             JOIN worker_profiles w ON w.id = s.worker_id
+             JOIN local_hive_identity l ON l.hive_id = w.hive_id AND l.singleton = 1
+             WHERE s.decision_id = ?1 AND s.worker_id = ?2 AND s.session_id = ?3",
+        )?;
+        let rows = query
+            .query_map(
+                params![
+                    decision.to_string(),
+                    worker.to_string(),
+                    session.to_string()
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(id, question, answer)| {
+                let question: DecisionQuestion = serde_json::from_str(&question).ok()?;
+                Some((
+                    OperatorStatementId::from_str(&id).ok()?,
+                    question.question,
+                    answer,
+                ))
+            })
+            .collect())
     }
 
     /// Resolves an interview from a complete set of stored, confirmed receipts.
