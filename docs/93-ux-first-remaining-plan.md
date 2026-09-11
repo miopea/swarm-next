@@ -4,6 +4,19 @@
 
 ### Latest priority: guided enrollment, then workspace setup
 
+LIVE VERIFIED September10 21:08 Eastern:0dc1b248 is active as
+1.7.1-dev-0dc1b248641a-20260911010527-922539. Healthok/no degradation;
+updater terminal ready/exit0. Host PID835651 and19:10:11 start unchanged,
+13 running/13 retained sessions,1 busy,0 unreadable. Pre-update backup exists
+(47,738,880 bytes); supported updater publishes it only after verification.
+Claude's committed831d4d8e task changes and381233ae migration correction are
+integrated. Combined draft tests pass (2 application,5 API), strict all-target/
+all-feature API Clippy passes; full web1611 and production web build pass.
+Workspace-settings implementation/deployment is done; visual acceptance is NOT.
+The fresh-Hive journey also remains open. Edge has no connected backend despite
+enabled extension/valid native host and approved new-window recovery; skill's
+supported next action is user reinstall of the Browser plugin. No release cut.
+
 September 10, workspace-search implementation checkpoint: additional trusted
 folders now have a Workers editor, revision-checked durable schema166 storage,
 canonical path validation and immediate discovery refresh. Installation roots

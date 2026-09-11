@@ -1,5 +1,25 @@
 # Apiary onboarding validation handoff — September 10
 
+## Current acceptance flow — supersedes the historical checkpoints below
+
+Production-dev0dc1b248 is live and healthy (September10,21:08 Eastern), with
+13 worker sessions and the existing engine preserved. New invitations use:
+
+1. Keeper generates a new link.
+2. Member pastes it, reviews management/identity disclosure, and submits once.
+3. Keeper approves; server-owned enrollment finishes without another member
+   acceptance, readiness or finalize click, even with the member browser closed.
+
+Jira is optional, not membership admission. Older links disclose their legacy
+policy-review flow; generate a new link for this fresh onboarding test. Existing
+joined Hives upgrade in place and must never need removal/rejoining.
+
+Check the fresh WSL journey plus the existing member directory/rename experience
+in Edge. These are still unverified live; component and HTTP tests are not visual
+acceptance. Worker setup now includes Repository search folders, trusted local
+folders and `~/` paths. Verify that surface on desktop/mobile too. Do not publish
+a release from these implementation or deployment results.
+
 This is a validation build, **not release acceptance**. The operator approved
 pushing it for another worker to validate. Do not cut a release from this document.
 
