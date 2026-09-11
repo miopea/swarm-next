@@ -2,6 +2,13 @@
 
 ## September 11 — Feedback reuses connected identity
 
+Follow-up dialog-entry check: real Edge390x844 opens the long two-account form
+with dialog y10/height824/scrollTop0, heading y42 and Close y28/height44.
+The earlier cropped heading was an internally scrolled view, not an offscreen
+initial layout. No speculative layout patch is needed. This does not verify a
+physical phone keyboard or suspension. CI34566816835 web, packaging and audit
+passed; Rust was still running at the follow-up check.
+
 Feedback now uses the same bounded Jira/Microsoft identity reader as onboarding
 when the saved Hive profile is incomplete. A single compatible account fills the
 contact fields; different accounts or conflicting saved details require a choice.
