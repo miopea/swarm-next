@@ -53,6 +53,31 @@ const resolved: DecisionRequest = {
   resolved_at: 2,
 };
 
+test("interview choices and notes survive Activity but never a changed question", () => {
+  const question = { header: "Scope", question: "Which scope?", options: ["One", "All"] };
+  const decision = { ...pending, questions: [question] };
+  const onAnswer = vi.fn();
+  const props = { decisions: [decision], tasks: [], workers: [], busy: false, onResolve: vi.fn(), onAnswer };
+  const view = render(<DecisionInbox {...props} />);
+  fireEvent.click(screen.getByRole("button", { name: "Something else" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Your answer" }), { target: { value: "Only the reviewed rows" } });
+  fireEvent.click(screen.getByText("Add an optional note"));
+  fireEvent.change(screen.getByRole("textbox", { name: "Anything else the worker should know" }), { target: { value: "Keep the rest unchanged" } });
+  fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+  expect(screen.queryByRole("textbox", { name: "Your answer" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: /Needs you/ }));
+  expect(screen.getByRole("textbox", { name: "Your answer" })).toHaveValue("Only the reviewed rows");
+  expect(screen.getByRole("textbox", { name: "Anything else the worker should know" })).toHaveValue("Keep the rest unchanged");
+  expect(screen.getByRole("button", { name: "Send answers" })).toBeEnabled();
+  expect(onAnswer).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+  view.rerender(<DecisionInbox {...props} decisions={[{ ...decision, questions: [{ ...question, question: "A different scope?" }] }]} />);
+  fireEvent.click(screen.getByRole("tab", { name: /Needs you/ }));
+  expect(screen.queryByRole("textbox", { name: "Your answer" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Send answers" })).toBeDisabled();
+  expect(screen.queryByDisplayValue("Keep the rest unchanged")).not.toBeInTheDocument();
+});
+
 const queued = { ...resolved, id: "decision-3", title: "Queued release", delivery_state: "queued" } as DecisionRequest;
 
 test("withdrawn requests leave attention and history never presents them as approval", () => {
@@ -368,8 +393,12 @@ test("decision navigation leaves Activity and focuses once after the request arr
   expect(screen.getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
   expect(scrollIntoView).toHaveBeenCalledTimes(1);
   rerender(<DecisionInbox {...props} decisions={[pending]} focusDecisionId={pending.id} focusRequest={2} />);
-  await waitFor(() => expect(screen.getByRole("article")).toHaveFocus());
-  expect(scrollIntoView).toHaveBeenCalledTimes(2);
+  // Preserved forms can retain jsdom's activeElement while hidden; wait for the
+  // new navigation frame itself, not an already-true focus assertion.
+  await waitFor(() => {
+    expect(scrollIntoView).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("article")).toHaveFocus();
+  });
 });
 
 test("attention tabs support manual keyboard activation without starting reads on focus", () => {

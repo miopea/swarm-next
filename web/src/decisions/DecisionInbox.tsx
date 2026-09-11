@@ -222,7 +222,11 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
         <button ref={activityTab} id={`${tabId}-activity`} role="tab" aria-controls={`${tabId}-panel`} tabIndex={view === "activity" ? 0 : -1} aria-selected={view === "activity"} onKeyDown={moveTabFocus} onClick={() => { pendingNavigation.current = false; if (view === "activity") void loadActivity(); else setView("activity"); }}>Activity</button>
       </div>
       <div id={`${tabId}-panel`} role="tabpanel" aria-labelledby={`${tabId}-${view}`}>
-      {view === "activity" ? <WorkActivity activity={activity} tasks={tasks} workers={workers} loading={activityLoading} failed={activityFailed} onRetry={() => void loadActivity()} onOpenTask={onOpenTask} /> : <>
+      {view === "activity" && <WorkActivity activity={activity} tasks={tasks} workers={workers} loading={activityLoading} failed={activityFailed} onRetry={() => void loadActivity()} onOpenTask={onOpenTask} />}
+      {/* Keep pending forms owned by the inbox across tab switches. Hidden
+          controls leave the accessibility tree; clarification reads remain
+          disabled on Activity. Changed questions still reset their keyed form. */}
+      <div hidden={view !== "attention"}>
       <div className="decision-inbox-intro">
         {waitingReplies > 0 && <p className="muted">{waitingReplies} {waitingReplies === 1 ? "conversation is" : "conversations are"} waiting for a reply, not an answer from you. Your decision options remain available.</p>}
         <label className="decision-history-toggle">
@@ -451,7 +455,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
           })}
         </div>
       )}
-      </>}
+      </div>
       </div>
       {trailingCards}
     </section>

@@ -1,5 +1,24 @@
 # Current maturity acceptance ledger
 
+## September 11 — Reproduced interview draft loss on Activity switch
+
+The390px long-decision fixture reproduced a real bug: choose Something else,
+type a custom interview answer, switch to Activity and back; the choice/input
+disappeared. A regression failed before the fix at the missing custom textbox.
+The attention subtree now remains mounted but hidden during Activity, preserving
+its local forms without making their controls accessible or enabling clarification
+reads. Changed questions still reset the keyed interview and resolved requests
+still leave the active list. No persistent draft store or new polling was added.
+
+All71 decision/interview/activity tests pass, plus73 App tests and the production
+web build. An existing navigation assertion was updated to await the new scroll
+frame, since jsdom can retain focus on a preserved hidden element. Its two-scroll
+requirement remains unchanged. Edge repeated the390px tab-switch sequence: custom
+choice/text remained and the below-fold Send answers control was reachable. The
+fixture callback is a no-op, so this verifies controls/draft retention, not a live
+submission. Nested-frame attribute reads timed out; screenshot and the exact
+regression assertion provide the evidence instead. Activation remains pending.
+
 ## September 11 — Safe build-cache cleanup restored headroom
 
 Root storage reached2.0GiB free. Exact cache
