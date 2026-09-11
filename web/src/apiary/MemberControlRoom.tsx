@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import SharedTaskGroups, { isClosedSharedTask } from "./SharedTaskGroups";
+import SharedProfileHint from "./SharedProfileHint";
 
 import {
   acceptApiaryClaimHandoff,
@@ -49,6 +50,7 @@ type Props = {
   identity: HiveIdentity;
   operatorToken: string;
   onManage: () => void;
+  onReviewProfile?: () => void;
   onOpenTasks: () => void;
 };
 type MemberSnapshot = {
@@ -70,7 +72,7 @@ type MemberSnapshot = {
 
 const emptySnapshot: MemberSnapshot = { members: [], sharedWork: [], tasks: [], outbox: [], stewardTasks: [], stewardAssists: { incoming: [], outbox: [] }, handoffs: [], handoffTargets: [], executions: [] };
 
-export default function MemberControlRoom({ identity, operatorToken, onManage, onOpenTasks }: Props) {
+export default function MemberControlRoom({ identity, operatorToken, onManage, onReviewProfile, onOpenTasks }: Props) {
   const context = identity.apiary_context;
   const [snapshot, setSnapshot] = useState<MemberSnapshot>(emptySnapshot);
   const [state, setState] = useState<"loading" | "ready" | "partial">("loading");
@@ -203,6 +205,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
         <button className="secondary-button" type="button" onClick={onManage}>Manage membership</button>
       </header>
       {state === "partial" ? <div className="keeper-load-state" role="alert"><span>Some Apiary status could not be refreshed. Local workers and owned work are unchanged.</span><button type="button" onClick={() => void refresh()}>Try again</button></div> : null}
+      <SharedProfileHint name={identity.operator.display_name} onReview={onReviewProfile ?? onManage} />
       <dl className="keeper-summary member-summary" aria-label="Member Apiary summary">
         <div><dt>Keeper</dt><dd>{keeper?.hive_name ?? "Waiting"}</dd></div>
         <div><dt>Catalog</dt><dd>{catalogReadinessLabel(snapshot.catalog)}</dd></div>

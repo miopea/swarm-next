@@ -6,13 +6,14 @@ import {
 } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 import SharedTaskGroups, { isClosedSharedTask } from "./SharedTaskGroups";
+import SharedProfileHint from "./SharedProfileHint";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
-type Props = { identity: HiveIdentity; operatorToken: string; onManage: () => void; onInvite: () => void; onOpenTasks: () => void };
+type Props = { identity: HiveIdentity; operatorToken: string; onManage: () => void; onReviewProfile?: () => void; onInvite: () => void; onOpenTasks: () => void };
 type KeeperSnapshot = { members: ApiaryMember[]; projects: ApiaryJiraProject[]; sharedWork: ApiarySharedWorkClaim[]; tasks: ApiaryTask[]; stewardships: Stewardship[]; stewardAudit: FederationStewardTaskAuditEntry[]; handoffs: FederationClaimHandoff[] };
 const emptySnapshot: KeeperSnapshot = { members: [], projects: [], sharedWork: [], tasks: [], stewardships: [], stewardAudit: [], handoffs: [] };
 
-export default function KeeperControlRoom({ identity, operatorToken, onManage, onInvite, onOpenTasks }: Props) {
+export default function KeeperControlRoom({ identity, operatorToken, onManage, onReviewProfile, onInvite, onOpenTasks }: Props) {
   const context = identity.apiary_context;
   const [snapshot, setSnapshot] = useState(emptySnapshot);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
@@ -60,6 +61,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
           <button className="secondary-button" type="button" onClick={onManage}>Manage Apiary</button>
         </div>
       </header>
+      <SharedProfileHint name={identity.operator.display_name} onReview={onReviewProfile ?? onManage} />
       {state === "error" ? <div className="keeper-load-state" role="alert"><span>Some Apiary status could not be refreshed. Last-known information is kept where available.</span><button type="button" onClick={() => void refresh()}>Try again</button></div> : null}
       <dl className="keeper-summary" aria-label="Apiary summary">
         <div><dt>Registered Hives</dt><dd>{members.length}</dd></div><div><dt>Promoted Jira projects</dt><dd>{snapshot.projects.length}</dd></div>

@@ -5,6 +5,31 @@ import type { HiveIdentity } from "../api";
 import ApiarySettings from "./ApiarySettings";
 import { clearStagedApiaryHandoff, createApiaryHandoffLink, stageApiaryHandoff } from "./apiaryHandoff";
 
+test("profile entry opens and focuses the prefilled review without saving or renaming", async () => {
+  const originalScroll = Element.prototype.scrollIntoView;
+  const scroll = vi.fn();
+  Element.prototype.scrollIntoView = scroll;
+  const fetch = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/hive/public-profile")) return ok({ revision: 1, profile: { hive_name: "Custom Hive", operator_display_name: "Operator", contact_email: null } });
+    if (url.endsWith("/jira/readiness")) return ok({ configured: true, connection: "ready", account_name: "Bea Bee", account_address: "bea@example.test" });
+    if (url.endsWith("/email/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null, account_address: null });
+    return ok([]);
+  });
+  vi.stubGlobal("fetch", fetch);
+  try {
+    render(<ApiarySettings busy={false} hiveIdentity={keeperIdentity()} operatorToken="fictional" onHiveIdentityChange={vi.fn()} initialFocus="profile" />);
+    expect(screen.getByRole("group", { name: "Review your shared profile" })).toHaveFocus();
+    expect(await screen.findByDisplayValue("Bea Bee")).toBeInTheDocument();
+    expect(screen.getByLabelText("Contact email (optional)")).toHaveValue("bea@example.test");
+    expect(screen.getByLabelText("Hive name")).toHaveValue("Custom Hive");
+    expect(scroll).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "Close profile" }));
+    expect(screen.queryByRole("group", { name: "Review your shared profile" })).not.toBeInTheDocument();
+    expect(fetch.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
+  } finally { Element.prototype.scrollIntoView = originalScroll; }
+});
+
 test("invitation entry focuses the existing controls without creating a link", async () => {
   const scroll = vi.fn();
   const originalScroll = Element.prototype.scrollIntoView;

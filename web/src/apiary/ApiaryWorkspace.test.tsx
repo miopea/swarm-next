@@ -3,8 +3,8 @@ import { afterEach, expect, test, vi } from "vitest";
 import type { HiveIdentity } from "../api";
 import ApiaryWorkspace from "./ApiaryWorkspace";
 
-vi.mock("./KeeperControlRoom", () => ({ default: ({ onManage, onInvite }: { onManage: () => void; onInvite: () => void }) => <><button onClick={onManage}>Keeper management</button><button onClick={onInvite}>Invite a Hive</button></> }));
-vi.mock("./MemberControlRoom", () => ({ default: ({ onManage }: { onManage: () => void }) => <button onClick={onManage}>Member management</button> }));
+vi.mock("./KeeperControlRoom", () => ({ default: ({ onManage, onInvite, onReviewProfile }: { onManage: () => void; onInvite: () => void; onReviewProfile: () => void }) => <><button onClick={onManage}>Keeper management</button><button onClick={onInvite}>Invite a Hive</button><button onClick={onReviewProfile}>Review shared profile</button></> }));
+vi.mock("./MemberControlRoom", () => ({ default: ({ onManage, onReviewProfile }: { onManage: () => void; onReviewProfile: () => void }) => <><button onClick={onManage}>Member management</button><button onClick={onReviewProfile}>Review shared profile</button></> }));
 vi.mock("../settings/ApiarySettings", () => ({ default: ({ initialFocus }: { initialFocus?: string }) => <div data-focus={initialFocus}>Shared configuration</div> }));
 afterEach(cleanup);
 
@@ -24,6 +24,9 @@ test.each(["keeper", "member"] as const)("%s manages the Apiary in place and ret
   fireEvent.click(screen.getByRole("button", { name: "Back to Apiary overview" }));
   expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
   expect(screen.queryByText("Shared configuration")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Review shared profile" }));
+  expect(screen.getByText("Shared configuration")).toHaveAttribute("data-focus", "profile");
+  fireEvent.click(screen.getByRole("button", { name: "Back to Apiary overview" }));
   if (role === "keeper") {
     fireEvent.click(screen.getByRole("button", { name: "Invite a Hive" }));
     expect(screen.getByText("Shared configuration")).toHaveAttribute("data-focus", "invitations");

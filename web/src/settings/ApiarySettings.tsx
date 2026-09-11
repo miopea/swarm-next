@@ -42,7 +42,7 @@ type Props = {
   hiveIdentity: HiveIdentity | undefined;
   operatorToken: string;
   onHiveIdentityChange: (identity: HiveIdentity) => void;
-  initialFocus?: "invitations";
+  initialFocus?: "invitations" | "profile";
 };
 
 export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHiveIdentityChange, initialFocus }: Props) {
@@ -51,7 +51,8 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [name, setName] = useState("");
   const [confirmCreate, setConfirmCreate] = useState(false);
   const [editingIdentity, setEditingIdentity] = useState(false);
-  const [editingProfile, setEditingProfile] = useState(false);
+  const [editingProfile, setEditingProfile] = useState(initialFocus === "profile");
+  const profileEntryRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<JoinPublicProfileHandle>(null);
   const invitationsRef = useRef<HTMLDivElement>(null);
   const [hiveName, setHiveName] = useState(hiveIdentity?.hive.name ?? "");
@@ -80,6 +81,12 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [error, setError] = useState("");
   const keeper = context?.mode === "federated" && context.local_role === "keeper";
   const member = context?.mode === "federated" && context.local_role === "member";
+
+  useEffect(() => {
+    if (initialFocus !== "profile" || personal) return;
+    profileEntryRef.current?.focus({ preventScroll: true });
+    profileEntryRef.current?.scrollIntoView({ block: "start", behavior: "instant" });
+  }, [initialFocus, personal]);
 
   useEffect(() => {
     if (initialFocus !== "invitations" || !keeper) return;
@@ -414,7 +421,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
             <button className="secondary-button" disabled={working} onClick={() => { setEditingProfile(false); setEditingIdentity((current) => !current); }}>{editingIdentity ? "Close names" : "Edit names"}</button>
             {!personal ? <button className="secondary-button" disabled={working} onClick={() => { setEditingIdentity(false); setEditingProfile((current) => !current); }}>{editingProfile ? "Close profile" : "Edit shared profile"}</button> : null}
           </div>
-          {editingProfile ? <div>
+          {editingProfile ? <div ref={profileEntryRef} tabIndex={-1} role="group" aria-label="Review your shared profile">
             <JoinPublicProfile ref={profileRef} operatorToken={operatorToken} disabled={busy || working} joining={false} />
             <button className="primary-action" disabled={busy || working} onClick={() => void saveSharedProfile()}>{working ? "Saving…" : "Save shared profile"}</button>
           </div> : null}
