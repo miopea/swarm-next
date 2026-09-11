@@ -165,6 +165,41 @@ registration that already exists somewhere. That half needs no work from anyone.
 The registration itself is a prerequisite: one of them, in one directory, serves
 every tenant that later consents.
 
+### The registration's home tenant does NOT limit who can sign in. Measured.
+
+The natural worry -- *"doesn't a registration in our tenant restrict this to our
+own email domain?"* -- is the reason people register one app per install and make
+setup harder than it needs to be. It is wrong, and the endpoint settles it:
+
+```sh
+# Azure CLI's client id, registered in MICROSOFT's tenant.
+# /consumers is personal Microsoft accounts ONLY -- no organizations at all.
+curl -sS -X POST https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode \
+  -d "client_id=04b07795-8ddb-461a-bbee-02f9e1bf7b46&scope=openid"
+```
+
+Result, 2026-09-11: a `device_code` is issued. An app registered in one tenant
+starts a **personal-account** sign-in without complaint. (Request the code only.
+Do not complete the flow -- that is authenticating as somebody.)
+
+Three things get conflated, and keeping them apart is the whole answer:
+
+| | Whose | How many |
+| --- | --- | --- |
+| **App registration** | the publisher's | exactly one, ever |
+| **The account signing in** | each user's own | one per Hive |
+| **Service principal** | auto-created in the signer's tenant | one per organisation |
+
+The registration is the identity of **the software**, not of a mailbox -- the
+"published by" line. Who may use it is a separate field on it, **Supported
+account types**, and *"any organizational directory and personal Microsoft
+accounts"* is the one that admits everybody.
+
+The real consequence of a shared registration is narrower than the feared one:
+the consent screen carries the publisher's name, and a tenant that blocks user
+consent to third-party apps makes its people ask an admin once. That is tenant
+policy and it applies whether the app is yours or theirs.
+
 ## Providers deliberately not supported
 
 Recorded so they are not reopened without the reasons. Operator: *"This is a
