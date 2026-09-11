@@ -11,7 +11,7 @@ export type EmailReadiness = {
 };
 export type EmailOAuthConfiguration = {
   configured: boolean;
-  managed_by: "environment" | "operator" | null;
+  managed_by: "environment" | "operator" | "bundled" | null;
   tenant_id: string | null;
   client_id: string | null;
   callback_url: string | null;

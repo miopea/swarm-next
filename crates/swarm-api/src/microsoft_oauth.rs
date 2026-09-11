@@ -14,6 +14,33 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
 const GRAPH_BASE_URL: &str = "https://graph.microsoft.com/v1.0/";
+
+/// The Entra application Swarm ships with, so nobody has to register one.
+///
+/// A CLIENT ID IS PUBLIC BY DESIGN -- it travels in the query string of every
+/// authorization URL, in plain sight of the browser. It is not a secret and it
+/// does not belong in 1Password; the thing that must never ship is a client
+/// SECRET, and this integration no longer has one.
+///
+/// One registration serves every Hive. The home tenant does not limit who may
+/// sign in -- that is the `signInAudience` setting on the registration, which
+/// is "any organizational directory and personal Microsoft accounts" -- and
+/// each organisation's first consent creates its own service principal with no
+/// work from anyone. Measured, with the probe, in
+/// `docs/99-integration-authentication-standard.md`.
+///
+/// ⚠️ THIS CANNOT BE MOVED. Microsoft: "Once created, you can't move the
+/// application object between different tenants." Replacing it means a new id
+/// and every Hive in the field reconfigured.
+pub(crate) const BUNDLED_CLIENT_ID: &str = "e7c58c91-ef37-44e8-ac20-b8df5feb2618";
+
+/// Serves personal and work accounts from one authority.
+///
+/// ⚠️ NOT `organizations`, which silently excludes every personal account, and
+/// not `consumers`, which excludes every work one. `common` is the only value
+/// that lets a person type their address and be routed, which is the whole
+/// point of not asking them which kind of account they have.
+pub(crate) const BUNDLED_AUTHORITY: &str = "common";
 const SCOPES: &str = "openid profile offline_access User.Read Mail.Read Mail.Send";
 const MAX_PENDING_STATES: usize = 8;
 const STATE_LIFETIME_SECONDS: u64 = 600;

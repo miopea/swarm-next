@@ -110,6 +110,9 @@ export default function EmailSettings({ operatorToken, readiness, unavailable, o
   // single-tenant corporate registration, and there are far more possible UUIDs
   // than there are keywords -- so the unknown case has to land on "work".
   const accountType: AccountTypeId = tenantId === PERSONAL_AUTHORITY || tenantId === "common" ? "personal" : "work";
+  // Swarm ships with a registered Microsoft application, so a fresh Hive is
+  // already configured and the only thing left is consent.
+  const bundled = configuration?.managed_by === "bundled";
   const connected = readiness?.connection === "ready";
   const configured = readiness?.configured === true || configuration?.configured === true;
   const canManageConfiguration = configuration?.managed_by !== "environment";
@@ -176,9 +179,12 @@ export default function EmailSettings({ operatorToken, readiness, unavailable, o
             <button className="primary-action jira-auth-action" type="button" disabled={busy || unavailable || !configured} onClick={() => void connect()}>
               {busy ? "Opening Microsoft…" : readiness?.connection === "credentials_invalid" ? "Reconnect Outlook" : "Connect Outlook"}
             </button>
-            {canManageConfiguration && configured ? <button className="secondary-button" type="button" disabled={busy} onClick={() => setEditingConfiguration(true)}>Replace app registration</button> : null}
+            {canManageConfiguration && configured ? <button className="secondary-button" type="button" disabled={busy} onClick={() => setEditingConfiguration(true)}>{bundled ? "Use your own Microsoft app" : "Replace app registration"}</button> : null}
           </div>
-          <small className="privacy-note">A Microsoft consent page opens, then returns here. Mail tokens remain private on this host and never enter Queen, workers, or browser storage.</small>
+          <small className="privacy-note">
+            {bundled ? "Personal and work accounts both work — sign in with the address you want Swarm to read, and Microsoft routes it. Nothing to register and no secret to store. " : null}
+            A Microsoft consent page opens, then returns here. Mail tokens remain private on this host and never enter Queen, workers, or browser storage.
+          </small>
         </div>
       )}
       <div className="integration-guardrails">

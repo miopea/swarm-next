@@ -350,6 +350,9 @@ pub struct AppState {
 enum EmailOAuthConfigurationSource {
     Environment,
     Operator,
+    /// The application Swarm ships with. Replaceable by the operator, unlike
+    /// `Environment`, which the host pins.
+    Bundled,
 }
 
 #[derive(Clone, Debug)]
@@ -357,6 +360,38 @@ struct EmailOAuthConfigurationState {
     tenant_id: String,
     client_id: String,
     source: EmailOAuthConfigurationSource,
+    /// Whether a client secret is actually held, rather than whether anything
+    /// is configured at all. The view used to report `true` for every
+    /// configured Hive, which was harmless while a secret was mandatory and
+    /// became a lie the moment one was optional -- it would have told a public
+    /// client that Swarm was storing a secret for it.
+    secret_stored: bool,
+}
+
+/// Builds the OAuth client for the application Swarm ships with.
+///
+/// Returns `None` rather than an error when this Hive has no address to come
+/// back to or no private token storage. A Hive that cannot do email must still
+/// start: on 2026-08 a Microsoft registration with no public base URL exited 1
+/// and was restart-looped by systemd, so the control room was gone because mail
+/// was misconfigured. Email never belongs in the set of things that can refuse
+/// to start.
+fn bundled_outlook_oauth(state: &AppState) -> Option<microsoft_oauth::MicrosoftOAuthClient> {
+    let public_base_url = state.consent_base_url()?;
+    let token_path = state.email_oauth_token_path.as_deref()?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .ok()?;
+    microsoft_oauth::MicrosoftOAuthClient::new(
+        client,
+        microsoft_oauth::BUNDLED_AUTHORITY,
+        microsoft_oauth::BUNDLED_CLIENT_ID,
+        None,
+        &public_base_url,
+        token_path.clone(),
+    )
+    .ok()
 }
 
 impl AppState {
@@ -522,6 +557,7 @@ impl AppState {
                 tenant_id: tenant_id.trim().to_owned(),
                 client_id: client_id.to_string(),
                 source: EmailOAuthConfigurationSource::Environment,
+                secret_stored: client_secret.is_some(),
             })));
         Ok(self)
     }
@@ -548,6 +584,19 @@ impl AppState {
         };
         let Some(configuration) = microsoft_oauth::load_configuration(configuration_path.as_ref())?
         else {
+            // NOTHING SAVED IS NOW A WORKING STATE, not an unconfigured one.
+            // A Hive ships with an application already registered, so the
+            // operator's first act is consent rather than an Entra errand.
+            if let Some(oauth) = bundled_outlook_oauth(&self) {
+                self.outlook = Arc::new(RwLock::new(outlook::OutlookProbe::oauth(oauth)));
+                self.email_oauth_configuration =
+                    Arc::new(RwLock::new(Some(EmailOAuthConfigurationState {
+                        tenant_id: microsoft_oauth::BUNDLED_AUTHORITY.to_owned(),
+                        client_id: microsoft_oauth::BUNDLED_CLIENT_ID.to_owned(),
+                        source: EmailOAuthConfigurationSource::Bundled,
+                        secret_stored: false,
+                    })));
+            }
             return Ok(self);
         };
         let public_base_url = self
@@ -575,6 +624,7 @@ impl AppState {
                 tenant_id: configuration.tenant_id,
                 client_id: configuration.client_id,
                 source: EmailOAuthConfigurationSource::Operator,
+                secret_stored: configuration.client_secret.is_some(),
             })));
         Ok(self)
     }
@@ -6611,8 +6661,16 @@ struct EmailOAuthConfigurationView {
 
 #[derive(Deserialize)]
 struct UpdateEmailOAuthConfiguration {
-    tenant_id: String,
-    client_id: String,
+    /// Absent means the application Swarm ships with, whose authority serves
+    /// personal and work accounts alike.
+    #[serde(default)]
+    tenant_id: Option<String>,
+    /// Absent means the bundled application. Present means an operator brought
+    /// their own registration, which is still supported and always will be --
+    /// an organisation that must own its own consent screen is not an edge
+    /// case, it is a policy some tenants have.
+    #[serde(default)]
+    client_id: Option<String>,
     /// Absent, or an empty string from a form field nobody filled in, both mean
     /// a PUBLIC client. The browser cannot easily send "absent" from an empty
     /// input, so both have to arrive at the same place or the simple path would
@@ -6713,11 +6771,12 @@ async fn email_configuration(
             managed_by: Some(match configuration.source {
                 EmailOAuthConfigurationSource::Environment => "environment",
                 EmailOAuthConfigurationSource::Operator => "operator",
+                EmailOAuthConfigurationSource::Bundled => "bundled",
             }),
             tenant_id: Some(configuration.tenant_id),
             client_id: Some(configuration.client_id),
             callback_url,
-            secret_stored: true,
+            secret_stored: configuration.secret_stored,
         },
         None => EmailOAuthConfigurationView {
             configured: false,
@@ -6729,6 +6788,38 @@ async fn email_configuration(
         },
     };
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(response)).into_response())
+}
+
+/// Fills in the application Swarm ships with wherever the request left a
+/// field out.
+///
+/// An empty string and an absent field mean the same thing on purpose. A
+/// browser cannot easily send "absent" from an input nobody typed in, so
+/// treating them differently would make the simple path depend on which shape
+/// the client happened to emit.
+fn requested_registration(
+    request: UpdateEmailOAuthConfiguration,
+) -> (String, String, Option<String>) {
+    fn supplied(value: Option<&String>, fallback: &str) -> String {
+        value
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(fallback)
+            .to_owned()
+    }
+    (
+        supplied(
+            request.tenant_id.as_ref(),
+            microsoft_oauth::BUNDLED_AUTHORITY,
+        ),
+        supplied(
+            request.client_id.as_ref(),
+            microsoft_oauth::BUNDLED_CLIENT_ID,
+        ),
+        request
+            .client_secret
+            .filter(|secret| !secret.trim().is_empty()),
+    )
 }
 
 async fn update_email_configuration(
@@ -6762,11 +6853,7 @@ async fn update_email_configuration(
             "Disconnect Outlook before replacing its Microsoft app registration",
         ));
     }
-    let tenant_id = request.tenant_id.trim().to_owned();
-    let client_id = request.client_id.trim().to_owned();
-    let client_secret = request
-        .client_secret
-        .filter(|secret| !secret.trim().is_empty());
+    let (tenant_id, client_id, client_secret) = requested_registration(request);
     // A Hive nobody has published still has an address, and Microsoft accepts
     // http://localhost as a redirect. Refusing the registration outright left a
     // developer holding a tenant, a client id and a secret with nowhere to put
@@ -6822,7 +6909,7 @@ async fn update_email_configuration(
         &microsoft_oauth::MicrosoftOAuthConfiguration {
             tenant_id: tenant_id.clone(),
             client_id: client_id.clone(),
-            client_secret,
+            client_secret: client_secret.clone(),
         },
     )
     .map_err(email_oauth_error)?;
@@ -6831,6 +6918,7 @@ async fn update_email_configuration(
         tenant_id,
         client_id,
         source: EmailOAuthConfigurationSource::Operator,
+        secret_stored: client_secret.is_some(),
     });
     email_configuration(State(state), headers).await
 }
@@ -19250,6 +19338,76 @@ mod tests {
         assert!(
             saved.status().is_success(),
             "a local Hive must be able to store its registration: {}",
+            saved.status()
+        );
+    }
+
+    /// A Hive that has never been told anything about Microsoft is already
+    /// registered, and the only thing left for a person to do is consent.
+    ///
+    /// This is the whole ticket. Setup used to be a tenant id, a client id and
+    /// a client secret, every one of them `required`, behind an errand in the
+    /// Entra portal. Swarm ships an application now, so there is nothing to
+    /// register and nothing to type.
+    ///
+    /// ⚠️ THE AUTHORITY IS LOAD-BEARING. `common` serves personal and work
+    /// accounts alike; `organizations` silently refuses every outlook.com
+    /// address and `consumers` refuses every corporate one. Whichever is wrong
+    /// fails as a sign-in page that will not say why.
+    #[tokio::test]
+    async fn a_hive_told_nothing_about_microsoft_is_already_registered() {
+        let runtime = TempDir::new().unwrap();
+        let state = AppState::default()
+            .with_terminal_host(
+                HostClient::new(runtime.path().join("absent.sock")),
+                "secret",
+            )
+            .with_public_base_url("https://swarm.example.test/")
+            .unwrap()
+            .with_email_oauth_paths(
+                runtime.path().join("secrets/email-oauth-config.json"),
+                runtime.path().join("secrets/email-oauth.json"),
+            )
+            .with_saved_outlook_oauth()
+            .expect("a Hive with nothing saved must still start");
+        let app = router(state);
+
+        let view = response_json(
+            authorized_get(app.clone(), "/api/v1/integrations/email/configuration").await,
+        )
+        .await;
+        assert_eq!(
+            view["configured"], true,
+            "nothing saved is a working state now, not an unconfigured one: {view}"
+        );
+        assert_eq!(view["managed_by"], "bundled");
+        assert_eq!(
+            view["tenant_id"], "common",
+            "personal and work accounts must both be able to sign in"
+        );
+        assert_eq!(view["client_id"], microsoft_oauth::BUNDLED_CLIENT_ID);
+        assert_eq!(
+            view["secret_stored"], false,
+            "a public client has no secret to store"
+        );
+
+        // And an empty save is a valid save: the form sends no fields at all
+        // when the operator is using the application Swarm ships with.
+        let saved = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/integrations/email/configuration")
+                    .header("authorization", "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            saved.status().is_success(),
+            "an empty registration means the bundled one: {}",
             saved.status()
         );
     }
