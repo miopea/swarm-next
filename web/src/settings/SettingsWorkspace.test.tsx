@@ -145,13 +145,20 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   fireEvent.change(screen.getByLabelText("Reachable"), { target: { value: "advisory" } });
   expect(onQueenPolicyChange).toHaveBeenCalledWith({ at_hive: "coordinate", away: "advisory", night_watch: "local_execution" });
 
-  // Who this Hive is, and what it is connected to.
+  // Who this Hive is — including who it is federated with. The Apiary card moved
+  // here from Connections when joining was simplified: an Apiary is not an
+  // outside service you integrate with, it is this Hive's own identity.
   rerender(<SettingsWorkspace {...props} section="settings-hive" />);
   expect(screen.getByText("Bea")).toBeInTheDocument();
-  rerender(<SettingsWorkspace {...props} section="settings-connections" />);
   expect(screen.getAllByText("Meadow Hive").length).toBeGreaterThan(0);
-  expect(screen.queryByRole("region", { name: "Your Hive" })).toBeNull();
   expect(screen.getAllByText("Personal Hive").length).toBeGreaterThan(0);
+
+  // And what it connects OUT to. Integrations holds third-party services and
+  // nothing about this Hive's identity — asserted in both directions so the two
+  // cannot quietly drift back together.
+  rerender(<SettingsWorkspace {...props} section="settings-connections" />);
+  expect(screen.queryByRole("region", { name: "Your Hive" })).toBeNull();
+  expect(screen.queryByText("Personal Hive")).toBeNull();
   expect(await screen.findByText("Jira not connected", {}, { timeout: 5_000 })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Bring Jira into your Hive" }).closest("section")).toHaveTextContent("Jira remains the authority for issue identity");
 

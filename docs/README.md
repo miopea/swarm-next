@@ -102,3 +102,4 @@ Current decision records:
 42. [Making the Queen work](43-making-the-queen-work.md)
 43. [No transition that is true](44-no-transition-that-is-true.md)
 44. [A question that cannot be unasked](45-a-question-that-cannot-be-unasked.md)
+45. [How an integration authenticates](99-integration-authentication-standard.md)

@@ -6,12 +6,20 @@
  * internals — "Crew", "System", "Integrations" — while four cards were in the
  * page and in no section at all: Appearance, Access, Remote access and Email.
  * Two of those are the ones the operator went looking for and could not find.
+ *
+ * ⚠️ "INTEGRATIONS" IS BACK AS A NAME, AND IT IS NOT THE SECTION THAT WAS
+ * REMOVED. The old one was a subsystem bucket. This one holds exactly what a
+ * person means by the word: the outside services this Hive connects to — MCP
+ * tools, Jira, Email. What made the difference is that Apiary LEFT: an Apiary is
+ * not a service you integrate with, it is who this Hive is federated with, so it
+ * moved to "Your Hive" beside identity. Once it was gone, "Connections" was the
+ * vaguer word for what remained.
  */
 export const SETTINGS_SECTIONS = [
   ["settings-hive", "Your Hive"],
   ["settings-workers", "Workers"],
   ["settings-access", "Access"],
-  ["settings-connections", "Connections"],
+  ["settings-connections", "Integrations"],
   ["settings-updates", "Updates"],
   ["settings-maintenance", "Maintenance"],
   ["settings-dogfood", "Developer Dogfood"],
@@ -59,8 +67,14 @@ export const SETTINGS_CARDS: readonly SettingsCard[] = [
     keywords: ["remote", "tunnel", "phone", "qr", "qr code", "cloudflare", "cloudflared", "public address", "share", "mobile", "away from my desk"] },
   { id: "settings-connections-tools", section: "settings-connections", title: "Outside tools",
     keywords: ["mcp", "connector", "outside tool", "claude desktop", "external", "oauth", "connection", "disconnect", "revoke"] },
-  { id: "settings-apiary", section: "settings-connections", title: "Apiary",
-    keywords: ["apiary", "hive name", "identity", "keeper", "member", "join", "federation", "invite"] },
+  // MOVED OUT OF INTEGRATIONS, and deliberately. An Apiary is not an outside
+  // tool this Hive connects to — it is who this Hive is federated with, which is
+  // the same question "Your Hive" already answers. It sat under Connections when
+  // joining was an involved setup; that has been simplified, so it belongs with
+  // identity. "connections" and "integrations" stay in the keywords so anyone who
+  // learned the old location still finds it.
+  { id: "settings-apiary", section: "settings-hive", title: "Apiary",
+    keywords: ["apiary", "hive name", "identity", "keeper", "member", "join", "federation", "invite", "connections", "integrations"] },
   { id: "settings-integrations", section: "settings-connections", title: "Jira",
     keywords: ["jira", "atlassian", "project", "issue", "board", "ticket"] },
   { id: "settings-email", section: "settings-connections", title: "Email",
