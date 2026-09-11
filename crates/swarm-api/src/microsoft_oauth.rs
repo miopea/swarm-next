@@ -32,7 +32,21 @@ const GRAPH_BASE_URL: &str = "https://graph.microsoft.com/v1.0/";
 /// ⚠️ THIS CANNOT BE MOVED. Microsoft: "Once created, you can't move the
 /// application object between different tenants." Replacing it means a new id
 /// and every Hive in the field reconfigured.
-pub(crate) const BUNDLED_CLIENT_ID: &str = "e7c58c91-ef37-44e8-ac20-b8df5feb2618";
+///
+/// ⚠️ ITS REDIRECT URIS ARE `native`, NOT `web`, AND THAT IS NOT COSMETIC. A
+/// `web` redirect URI demands client authentication, so redeeming against one
+/// without a secret fails with AADSTS7000218 -- which reads as a code problem
+/// and is a registration problem. The first application offered for this job
+/// had four `web` URIs and would have failed exactly that way.
+///
+/// ⚠️ EVERY HIVE'S CALLBACK MUST BE ON THIS ONE REGISTRATION, because Microsoft
+/// matches redirect URIs exactly, wildcards are unsupported for an audience
+/// that includes personal accounts, and the ceiling is 100. A Hive that has not
+/// published itself is already covered: the port is ignored for loopback
+/// matching, so the single registered `http://localhost/auth/email/callback`
+/// serves 8677, 8765 and every other port. A Hive published at its own HTTPS
+/// address needs its own line added.
+pub(crate) const BUNDLED_CLIENT_ID: &str = "059c82a8-4d77-4b19-a6c7-d702dde10960";
 
 /// Serves personal and work accounts from one authority.
 ///
