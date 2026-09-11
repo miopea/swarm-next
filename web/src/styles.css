@@ -830,6 +830,7 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .apiary-task-board-owner button { margin-top: 4px; }
 .apiary-task-worker-route { display: grid; justify-items: stretch; gap: 6px; min-width: min(310px, 34vw); margin-top: 4px; }
 .apiary-task-worker-route select { min-width: 0; }
+.apiary-task-worker-route > a { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); text-decoration: none; }
 .apiary-work-boundary { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px; border: 1px solid var(--accent-line); border-radius: var(--radius-md); background: var(--surface-soft); }
 .apiary-work-boundary > span { display: grid; gap: 3px; }
 .apiary-work-boundary small { color: var(--muted); }

@@ -414,6 +414,27 @@ test("routes owned Apiary work to a private worker from Tasks", async () => {
   await waitFor(() => expect(onOpenTask).toHaveBeenCalledWith("local-1"));
 });
 
+test.each(["ready", "blocked", "completed"])("owned %s Apiary task has an honest next step without repository workers", async (state) => {
+  const fetchMock = vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/apiary/tasks")) return Promise.resolve(ok([{ ...apiaryTask(), state, home_hive_id: "hive-2", home_node_id: "node-2" }]));
+    if (url.endsWith("/api/v1/apiary/my-stewardship")) return Promise.resolve(ok(null));
+    return Promise.resolve(ok([]));
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  renderBoard({ tasks: [], workers: [{ ...worker, role: "queen" }], hiveIdentity: memberIdentity() });
+  await screen.findByText("Prepare shared brief");
+  expect(screen.queryByRole("button", { name: "Send to worker" })).not.toBeInTheDocument();
+  if (state === "ready") {
+    expect(screen.getByRole("link", { name: "Set up a worker" })).toHaveAttribute("href", "#settings-workers");
+    expect(screen.getByText(/Your Hive keeps ownership while you set up/)).toBeInTheDocument();
+  } else {
+    expect(screen.queryByRole("link", { name: "Set up a worker" })).not.toBeInTheDocument();
+    expect(screen.getByText("Worker routing becomes available when this task is Ready.")).toBeInTheDocument();
+  }
+  expect(fetchMock.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
+});
+
 test("lets a Steward route work from Tasks only to Hives in her scope", async () => {
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
