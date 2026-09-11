@@ -2,9 +2,24 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, expect, test, vi } from "vitest";
 
 import type { HeldBriefing } from "../api";
-import HeldBriefingList, { briefingWait } from "./HeldBriefingList";
+import HeldBriefingList, { briefingWait, holdReason } from "./HeldBriefingList";
 
 afterEach(cleanup);
+
+test("explains scoped prompt observations without replacing current durable holds", () => {
+  const held = briefing({ reason: "awaiting_safe_delivery", last_delivery_check: "delivery_held_unsent_text" });
+  expect(holdReason(held)).toBe("last delivery check found unsent text; Swarm will not change that input");
+  expect(holdReason({ ...held, last_delivery_check: "delivery_held_open_prompt" })).toBe("last delivery check found a prompt waiting for an answer");
+  for (const last_delivery_check of [undefined, null, "future_kind"]) {
+    expect(holdReason({ ...held, last_delivery_check })).toBe("awaiting safe delivery; no task-order blocker is recorded");
+  }
+  expect(holdReason({ ...held, reason: "operator_in_the_terminal" })).toBe("you are in that terminal");
+  expect(holdReason({ ...held, reason: "operator_decision_pending" })).toBe("waiting for your answer in Needs You");
+  const view = render(<HeldBriefingList briefings={[held]} />);
+  expect(screen.getByText(/last delivery check found unsent text/)).toBeVisible();
+  view.rerender(<HeldBriefingList briefings={[{ ...held, last_delivery_check: null }]} />);
+  expect(screen.queryByText(/last delivery check found unsent text/)).not.toBeInTheDocument();
+});
 
 test("queue age distinguishes exact evidence, migrated bounds and older API responses", () => {
   const exact = briefing({ queued_at: 100, queued_at_is_lower_bound: false });

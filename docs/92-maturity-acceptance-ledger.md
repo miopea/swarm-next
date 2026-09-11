@@ -1,5 +1,31 @@
 # Current maturity acceptance ledger
 
+## September 11 — Protected input, engagement and normal pickup
+
+The scoped Queue explanation fix passes all31 release-mode task-dispatch tests,
+strict persistence Clippy, all1672 web tests across173 files, TypeScript and Vite
+production build. It returns only a refusal kind, not input contents, and leaves
+dispatch/authority untouched. Source validation is complete; activation and live
+browser acceptance remain separate gates.
+
+Task01a08fd9-c08d-7dd1-a4e9-bf6afdc8838b was admitted once through the checked
+demo controller while the actual Edge terminal contained the owned unsent marker.
+Leaving the terminal released engagement but did not admit delivery: eleven
+`delivery_held_unsent_text` observations fenced to dispatch assignment
+01a08fd9-c0b1-7aa0-813e-f2025a165991 generation0 recorded the protected input.
+The browser owner cleared only that marker using Control+U, never Enter.
+The empty but engaged terminal still held the briefing. Leaving it released
+ordinary delivery, then worker execution:11001 Ready-to-Active at1789120048,
+11002 Active-to-Review at1789120096,11003 system completion at the same second.
+Final read: completed/delivered, no remaining holds, same running session
+01a08e16-5be5-72e2-b808-43ffb8261975. No controller repair or manual completion.
+
+This closes this protected-input/engagement and normal recovery scenario, not
+background/unknown observation or failed-recovery acceptance. The queue displayed
+a generic safe-delivery reason despite scoped refusal evidence; its explanation
+is the next implementation item. Controller defaults to read-only status; do not
+admit another copy of this completed fixture.
+
 ## September 11, 05:36 Eastern — Same-worker corrective handoff completed
 
 The new explicit authorization removed the earlier two-stage fixture scope

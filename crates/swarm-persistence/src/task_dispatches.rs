@@ -189,6 +189,9 @@ pub struct HeldTaskDispatch {
     /// reported it at once on 2026-08-24 and it named nothing to look at.
     pub blocked_by: Option<String>,
     pub blocking_task_id: Option<String>,
+    /// Latest uncleared prompt observation for this exact assignment,
+    /// generation and live session. Historical evidence, not a fresh safety check.
+    pub last_delivery_check: Option<String>,
 }
 
 impl TaskStore {
@@ -332,7 +335,16 @@ impl TaskStore {
                            WHERE p.task_id = t.id AND (upstream.id IS NULL OR upstream.removed_at IS NOT NULL OR upstream.state != 'completed')),
                     active.id, earlier.id, td.queue_age_lower_bound,
                     EXISTS(SELECT 1 FROM decision_requests d WHERE d.state='pending'
-                           AND d.id IN (SELECT decision_id FROM task_decision_membership WHERE task_id=t.id))
+                           AND d.id IN (SELECT decision_id FROM task_decision_membership WHERE task_id=t.id)),
+                    (SELECT refusal.kind FROM coordinator_refusals refusal
+                     JOIN task_assignments assignment ON assignment.id = td.assignment_id
+                     JOIN worker_sessions session ON session.session_id = assignment.worker_session_id
+                     WHERE refusal.subject = 'task-dispatch:' || td.assignment_id || ':' || td.generation
+                       AND refusal.kind IN ('delivery_held_open_prompt', 'delivery_held_unsent_text')
+                       AND refusal.worker_id = td.worker_id AND session.worker_id = td.worker_id
+                       AND refusal.session_id = session.session_id AND session.ended_at IS NULL
+                       AND assignment.released_at IS NULL AND refusal.cleared_at IS NULL
+                     ORDER BY refusal.last_observed_at DESC, refusal.kind LIMIT 1)
              FROM task_dispatches td
              JOIN tasks t ON t.id = td.task_id
              JOIN worker_profiles w ON w.id = td.worker_id
@@ -392,6 +404,7 @@ impl TaskStore {
                 queued_at_is_lower_bound: row.get(12)?,
                 blocked_by,
                 blocking_task_id,
+                last_delivery_check: row.get(14)?,
                 reason,
             })
         })?;
@@ -1439,6 +1452,118 @@ mod tests {
                 "a blocker is not command permission"
             );
         }
+    }
+
+    #[test]
+    fn held_briefing_prompt_evidence_is_fenced_and_read_only() {
+        for invalidation in [
+            "UPDATE coordinator_refusals SET cleared_at = 102",
+            "UPDATE task_dispatches SET generation = generation + 1",
+            "UPDATE task_assignments SET released_at = 102",
+            "UPDATE worker_sessions SET ended_at = 102",
+            "UPDATE coordinator_refusals SET session_id = 'different-session'",
+            "UPDATE coordinator_refusals SET worker_id = NULL",
+            "UPDATE coordinator_refusals SET subject = 'task-brief:legacy'",
+        ] {
+            let (store, _, session) = assigned_task();
+            let (assignment, worker): (String, String) = store
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT assignment_id, worker_id FROM task_dispatches",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            let subject = format!("task-dispatch:{assignment}:0");
+            store
+                .record_coordinator_refusal(
+                    crate::REFUSAL_DELIVERY_HELD_UNSENT_TEXT,
+                    &subject,
+                    Some(WorkerId::from_str(&worker).unwrap()),
+                    Some(session),
+                    "private input",
+                    101,
+                )
+                .unwrap();
+            let before = store.connection().unwrap().total_changes();
+            let held = store.held_task_dispatches(102).unwrap();
+            assert_eq!(held[0].reason, DispatchHold::AwaitingSafeDelivery);
+            assert_eq!(
+                held[0].last_delivery_check.as_deref(),
+                Some("delivery_held_unsent_text")
+            );
+            assert_eq!(store.connection().unwrap().total_changes(), before);
+            store
+                .connection()
+                .unwrap()
+                .execute(invalidation, [])
+                .unwrap();
+            assert!(
+                store
+                    .held_task_dispatches(103)
+                    .unwrap()
+                    .iter()
+                    .all(|row| row.last_delivery_check.is_none()),
+                "{invalidation}"
+            );
+        }
+    }
+
+    #[test]
+    fn held_briefing_prompt_observation_recovers_without_changing_hold_priority() {
+        let (store, _, session) = assigned_task();
+        let (assignment, worker): (String, String) = store
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT assignment_id, worker_id FROM task_dispatches",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let subject = format!("task-dispatch:{assignment}:0");
+        for (kind, now) in [
+            (crate::REFUSAL_DELIVERY_HELD_UNSENT_TEXT, 101),
+            (crate::REFUSAL_DELIVERY_HELD, 102),
+        ] {
+            store
+                .record_coordinator_refusal(
+                    kind,
+                    &subject,
+                    Some(WorkerId::from_str(&worker).unwrap()),
+                    Some(session),
+                    "observation",
+                    now,
+                )
+                .unwrap();
+            assert_eq!(
+                store.held_task_dispatches(now).unwrap()[0]
+                    .last_delivery_check
+                    .as_deref(),
+                Some(kind)
+            );
+        }
+        store
+            .renew_worker_engagement(
+                session,
+                Some(swarm_domain::PresenceDeviceId::new()),
+                103,
+                300,
+            )
+            .unwrap();
+        assert_eq!(
+            store.held_task_dispatches(104).unwrap()[0].reason,
+            DispatchHold::OperatorInTheTerminal
+        );
+        store
+            .clear_coordinator_refusal(crate::REFUSAL_DELIVERY_HELD, &subject, 105)
+            .unwrap();
+        assert!(
+            store.held_task_dispatches(106).unwrap()[0]
+                .last_delivery_check
+                .is_none()
+        );
     }
 
     fn assigned_task() -> (TaskStore, TaskId, WorkerSessionId) {

@@ -142,6 +142,12 @@ export function holdReason(briefing: HeldBriefing): string {
     case "waiting_its_turn":
       return briefing.blocked_by ? `behind ${briefing.blocked_by}` : "awaiting safe delivery; no earlier task is recorded";
     case "awaiting_safe_delivery":
+      if (briefing.last_delivery_check === "delivery_held_unsent_text") {
+        return "last delivery check found unsent text; Swarm will not change that input";
+      }
+      if (briefing.last_delivery_check === "delivery_held_open_prompt") {
+        return "last delivery check found a prompt waiting for an answer";
+      }
       return "awaiting safe delivery; no task-order blocker is recorded";
     default:
       return briefing.reason;

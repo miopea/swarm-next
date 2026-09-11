@@ -404,6 +404,8 @@ export type HeldBriefing = {
   blocked_by?: string | null;
   /** Exact Active/earlier Ready task selected for this hold; absent on older APIs. */
   blocking_task_id?: string | null;
+  /** Historical prompt observation fenced to this dispatch; absent on older APIs. */
+  last_delivery_check?: string | null;
 };
 export type HeldDelivery = {
   /**

@@ -2,6 +2,14 @@
 
 ## Authoritative next gates — September 11, overnight
 
+Protected-input acceptance CLOSED: demo task01a08fd9-c08d-7dd1-a4e9-bf6afdc8838b
+remained queued behind real unsent text, then behind actual browser engagement.
+After clearing only the owned marker and releasing the terminal, ordinary dispatch
+and worker execution completed it:11001 Active,11002 Review,11003 system Completed.
+Same provider session; no manual completion/recovery or restart. See92 for limits.
+Current implementation target: surface scoped last-delivery evidence in Queues;
+no new terminal observations or authority. Do not repeat the closed demo.
+
 05:36 CLOSED the explicitly authorized positive corrective-routing acceptance.
 Queen created/assigned child01a08fcc-75cd-7b82-815b-f1c08e1bf9af (10986–10988),
 the same worker picked it up47 seconds after Ready (10989), submitted its

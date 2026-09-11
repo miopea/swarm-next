@@ -208,6 +208,21 @@ terminal. Queen escalates an actual inability to recover with a concrete request
 
 ## Acceptance
 
+### Scoped delivery explanations in Queues (September 11)
+
+Queued briefings expose the latest uncleared prompt-refusal kind from the existing
+bounded ledger, matched to exact assignment, generation, worker and live session.
+The persistence read neither observes terminals nor changes dispatch or task state.
+Released assignments, ended sessions, cleared observations and prior generations
+cannot explain current work. No prompt contents are returned.
+
+Presentation uses this optional evidence only when no higher-priority durable hold
+is present and labels it "last delivery check", not a fresh assertion about input.
+An absent or unknown kind retains the existing honest safe-delivery fallback.
+The UI owns this rolling-version fallback until supported APIs supply the field.
+No polling, retry, schema, escalation or authority changes. Test identity fences,
+clearing/replacement, read-only behavior and durable hold priority.
+
 ### Optional presentation detail outside Queues (September 11)
 
 The coordinator read accepts `include_review=false` to skip constructing and
