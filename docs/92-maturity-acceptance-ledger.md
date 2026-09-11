@@ -1,5 +1,24 @@
 # Current maturity acceptance ledger
 
+## September 11 — Needs You interaction acceptance closed at UI boundary
+
+Edge exercised actual DecisionInbox in the in-memory answer-recovery fixture:
+Say something else, exact custom text, deliberate first-send failure, retained
+text and editable retry, exact local receipt, then Needs You0 with the resolved
+card absent. No Hive decision or worker message was written.
+
+Clarification fixture: failed question send retained the exact question, retry
+left original choices available and showed Waiting for Petal with attention0.
+A simulated reply attributed to Queen restored attention1 and displayed its full
+explanation. Only the explicit final answer resolved the decision and removed
+the card. Desktop screenshot confirmed readable reply, risk, optional detail and
+custom/quick-answer controls with the existing bee styling. Test tabs closed.
+
+This closes custom-answer/failure/retry and ask-without-deciding UI acceptance,
+not native operator provenance, live Queen delivery or physical-device behavior.
+Those retain their separate gates. Full deployed82eac78a web suite1681 passed;
+CI34605803223 web, package and rust-audit succeeded, Rust still in progress.
+
 ## September 11 — Everyday worker setup acceptance closed
 
 Final missing check on live WSL82eac78a: added Setup Acceptance Aster using the

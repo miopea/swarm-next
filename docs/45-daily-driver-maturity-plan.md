@@ -4,6 +4,13 @@
 
 ### September 11, 09:53 Eastern — user-facing closeout checkpoint
 
+Follow-up: CLOSED Needs You custom-answer and clarification UI acceptance in
+Edge using fictional transport: retained drafts after failure, exact retry,
+attributed reply and truthful attention counts, explicit final resolution.
+No live decisions were altered. Remaining consistency gate is narrow/mobile
+presentation across the current journeys; native provenance and real-device
+acceptance remain explicitly separate. See92 for actual steps and limitations.
+
 - CLOSED everyday worker setup: configured roots and discovery search, explicit
   existing-path override including tilde expansion, readable failure with retained
   inputs, and truthful new-worker Sleeping presentation. Live WSL creation/removal
