@@ -2,14 +2,16 @@
 
 Updated September 11, 2026. This is a handoff over the approved scope in45, not a
 new definition of completion. No release was cut. Detailed receipts remain in
-45,92,94 and95. Production and WSL now serve9003c3c1 with engines944143/6458
-preserved. Use the newest45 receipt for exact build identity and current CI.
+45,92,94 and95. Production and WSL now serve3dfc019e; production engine944143
+and ten worker sessions were preserved. WSL's pending engine was explicitly
+applied and its one worker returned, engine43236. Full candidate CI34589715128
+passed. See92 for receipts and release-candidate-2026-09-11.md for the handoff.
 
 ## Current user-facing milestone map
 
 | Package | Delivered and verified | Still outside that evidence |
 | --- | --- | --- |
-| Apiary onboarding and shared work | Guided enrollment implementation; existing-member upgrade and profile preservation; optional/project-scoped Jira readiness; workspace discovery UX; paired task arrival/restart/retirement and automatic board refresh; open-work versus optional closed history; direct prefilled profile review for old default-name Hives | Final fresh-join browser approval remains gated; complete no-Jira independent-Hive acceptance; existing public identities require explicit Save; broader Keeper management details |
+| Apiary onboarding and shared work | Guided enrollment; live no-Jira joining after one Keeper approval with member browser closed; shared-task/directory reconciliation; existing-member upgrade and profile preservation; optional/project-scoped Jira readiness; workspace discovery UX; paired task arrival/restart/retirement and automatic board refresh; open-work versus optional closed history; prefilled profile review | Existing public identities require explicit Save; broader Keeper management details; enrollment acceptance is not acceptance of every cross-Hive operation |
 | Needs You and linked work | Compact choices/custom answer; clarification round trip; exact Queue-to-decision and prerequisite-to-task navigation | Direct terminal answers reconciling the original request; native clarification use |
 | Terminal controls | Draft retention, explicit ownership/reconnect notices, bounded controls and retry fixtures; operator accepted Android AskUser questions2/3 | Real camera/gallery, suspension/handoff, aged performance and reload geometry |
 | Settings and runtime | Search/navigation; saved-vs-draft Night Watch; quiet safeguards; distinct diagnostic evidence; saved preview/copy refusal; update confirmation/cancel; fictional support retry | Physical scheduled presence; engine automatic admission; paired central support acceptance |
@@ -77,7 +79,7 @@ treated as a blanket mobile signoff. No urgent interruption is needed overnight.
 | Area | Actual remaining boundary |
 | --- | --- |
 | Direct answers and duplicate requests | Terminal/AskUser answers still need authenticated capture and exact decision correlation; worker prose alone is not permission. |
-| Queen and worker orchestration | Automatic recovery, genuine blocker reconciliation, release handoff and safe protected-input/background-work cases remain. A queue presentation fix does not close the loop. |
+| Queen and worker orchestration | Positive release handoff, same-worker corrective assignment and protected-input/background-work cases passed live. Unknown/failed recovery and genuine real-backlog reconciliation remain; isolated successes do not close the whole loop. |
 | Worker-engine updates | Safe automatic admission, durable receipts and partial-stop/return recovery are unfinished. Do not apply an engine update based only on a Resting label. |
 | Conversation recovery | Chosen provider conversation, native continue and clearly identified fresh fallback need remaining real failure/cancellation acceptance. No automatic provider switching. |
 | Efficiency and metrics | A matched fresh/aged workload, sustained plateau and attribution remain; test counts and Queen run counts do not prove productivity or efficiency. |

@@ -1,6 +1,28 @@
 # Swarm daily-driver maturity: scope and delivery plan
 
-## Authoritative next gates — September 11, overnight
+## Authoritative next gates — September 11, morning
+
+Current runtime candidate is3dfc019e on production and WSL. Full CI34589715128
+SUCCESS; deployment, browser checks and exact production ten-session continuity
+are recorded in92. WSL's separately pending engine was then explicitly updated;
+one loaded worker returned, enginePID43236, notice cleared. Do not repeat these
+build or activation gates. Subsequent commits are documentation only.
+
+Fresh no-Jira enrollment is CLOSED live: operator approved fictional Daisy,
+Keeper approved once, and member joined while its browser remained blank. On
+return it showed current membership,0/2 optional Jira projects, successful shared
+task reconciliation and all four members. Approved cleanup returned Daisy to a
+personal Hive and production to its original three members. No real Hive rejoined.
+See92 for evidence and scope. No release cut; candidate handoff is
+`release-candidate-2026-09-11.md`. Full maturity program remains open.
+
+Next implementation priorities remain native answer reconciliation/provenance,
+unknown and failed recovery, and the outstanding real-device/performance gates.
+Broader Keeper management capabilities are design work in98, not a prerequisite
+for releasing the verified enrollment improvements. Do not return to closed demo
+fixtures or treat real Queen backlog as resolved by successful isolated tasking.
+
+### Earlier overnight checkpoints (historical, superseded where noted above)
 
 Next coherent fix is API provider-outage reporting: stop returning fabricated
 HTTP200/Claude available/no updates when the engine or roster read fails. Private
