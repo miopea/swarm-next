@@ -133,6 +133,33 @@ test("replaces the answer as soon as any subsystem reports", () => {
   expect(settled).toEqual([]);
 });
 
+test("provider recovery is independent of the other runtime endpoints", () => {
+  const providers = [{ provider: "claude_code" as const, version: "2.1.0", installed_at: null, worker_ids: ["demo"] }];
+  const previous = runtimeUpdates(health("same"), host("same"), development({ state: "building" }), providers);
+  const unavailable = nextRuntimeUpdates(previous, undefined, undefined, undefined);
+  expect(unavailable?.map((entry) => entry.kind)).toEqual(["provider", "building"]);
+  expect(unavailable?.[0].action).toBeUndefined();
+  expect(unavailable?.[0].label).toContain("unavailable");
+  expect(previous[0].action).toBe("restart_providers");
+  expect(nextRuntimeUpdates(unavailable, undefined, undefined, undefined)).toEqual(unavailable);
+
+  const recovered = nextRuntimeUpdates(unavailable, undefined, undefined, undefined, providers);
+  expect(recovered?.[0].action).toBe("restart_providers");
+  const current = nextRuntimeUpdates(recovered, undefined, undefined, undefined, []);
+  expect(current?.map((entry) => entry.kind)).toEqual(["building"]);
+});
+
+test("unavailable provider data invents no pending update and keeps update ordering", () => {
+  expect(nextRuntimeUpdates(undefined, undefined, undefined, undefined)).toBeUndefined();
+  expect(nextRuntimeUpdates(undefined, health("same"), host("same"), development({}))).toEqual([]);
+  const pending = [{ provider: "claude_code" as const, version: "2.1.0", installed_at: null, worker_ids: ["demo"] }];
+  const previous = runtimeUpdates(health("new"), host("old"), development({ reload_available: true }), pending);
+  const unavailable = nextRuntimeUpdates(previous, health("new"), host("old"), development({ reload_available: true }));
+  expect(unavailable?.map((entry) => entry.kind)).toEqual(["worker_engine", "provider", "app"]);
+  expect(unavailable?.[0].action).toBe("apply_worker_engine");
+  expect(unavailable?.[2].action).toBe("build");
+});
+
 test("does not report uncommitted work in progress as an update waiting", () => {
   // The indicator would never go quiet while anyone is editing the checkout,
   // and an alert that is always on is not an alert.

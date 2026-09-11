@@ -236,10 +236,28 @@ export function nextRuntimeUpdates(
   health: Health | undefined,
   host: TerminalHostStatus | undefined,
   development: DevelopmentRuntime | undefined,
-  superseded: SupersededProvider[] = [],
+  superseded: SupersededProvider[] | undefined = undefined,
 ): RuntimeUpdateSummary[] | undefined {
-  if (!health && !host && !development) return previous;
-  return runtimeUpdates(health, host, development, superseded);
+  // A failed provider read is not evidence that its pending update disappeared.
+  // Retain only one notice, without an action based on an unverified worker set.
+  const provider = superseded === undefined
+    ? previous?.some((entry) => entry.kind === "provider")
+      ? {
+        kind: "provider" as const,
+        label: "Provider update status unavailable",
+        detail: "A provider update was previously reported. Its current status could not be checked. Swarm will check again before offering a restart.",
+        busy: false,
+      }
+      : undefined
+    : providerUpdate(superseded);
+  const others = !health && !host && !development
+    ? previous?.filter((entry) => entry.kind !== "provider")
+    : runtimeUpdates(health, host, development);
+  if (!others && !provider && superseded === undefined) return previous;
+  const entries = others ?? [];
+  const engineIndex = entries.findIndex((entry) => entry.kind !== "worker_engine");
+  if (provider) entries.splice(engineIndex < 0 ? entries.length : engineIndex, 0, provider);
+  return entries;
 }
 
 /** One sentence for the step that failed, and none invented when it is unknown. */

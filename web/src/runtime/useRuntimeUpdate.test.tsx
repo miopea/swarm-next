@@ -73,3 +73,37 @@ test("says nothing at all before the operator is authenticated", async () => {
 
   expect(result.current.runtimeUpdates).toEqual([]);
 });
+
+test("a failed provider check preserves an honest notice until recovery confirms its state", async () => {
+  let providerState: "pending" | "unavailable" | "current" = "pending";
+  stubRuntime(() => true);
+  const normalFetch = globalThis.fetch;
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("providers")) {
+      if (providerState === "unavailable") return Promise.reject(new Error("provider check failed"));
+      return Promise.resolve(ok({ superseded: providerState === "pending"
+        ? [{ provider: "claude_code", version: "2.1.0", installed_at: null, worker_ids: ["demo"] }]
+        : [] }));
+    }
+    return normalFetch(input, init);
+  }));
+  const { result } = renderHook(() => useRuntimeUpdate("secret"));
+  await act(async () => { await Promise.resolve(); });
+  expect(result.current.runtimeUpdates[0].action).toBe("restart_providers");
+
+  providerState = "unavailable";
+  await act(async () => { await result.current.refreshRuntimeUpdate(); });
+  expect(result.current.runtimeUpdates.map((entry) => entry.kind)).toEqual(["provider", "app"]);
+  expect(result.current.runtimeUpdates[0].label).toContain("unavailable");
+  expect(result.current.runtimeUpdates[0].action).toBeUndefined();
+  const unavailable = result.current.runtimeUpdates;
+  await act(async () => { await result.current.refreshRuntimeUpdate(); });
+  expect(result.current.runtimeUpdates).toEqual(unavailable);
+
+  providerState = "pending";
+  await act(async () => { await result.current.refreshRuntimeUpdate(); });
+  expect(result.current.runtimeUpdates[0].action).toBe("restart_providers");
+  providerState = "current";
+  await act(async () => { await result.current.refreshRuntimeUpdate(); });
+  expect(result.current.runtimeUpdates.map((entry) => entry.kind)).toEqual(["app"]);
+});

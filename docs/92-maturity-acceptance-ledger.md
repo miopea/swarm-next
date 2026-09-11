@@ -1,5 +1,25 @@
 # Current maturity acceptance ledger
 
+## September 11, 04:59 Eastern — Provider update notices survive failed checks
+
+Found by source inspection: useRuntimeUpdate converted an unavailable provider
+response to an empty list. If any other endpoint succeeded, nextRuntimeUpdates
+discarded the pending provider notice. It also ignored successful provider-only
+recovery when the three other endpoints were unavailable.
+
+The change distinguishes unknown from empty, retains one explicitly unverified
+notice without a restart action, and restores/clears it on successful observation.
+No new timers or worker commands. Tests cover mixed-success failure, repeated
+failure without notice growth, recovery with/without a remaining update, independent
+provider recovery, update ordering, and no invented notice before evidence.
+Full1671 tests/173 files,119 focused tests, TypeScript and production web build
+PASS locally. Test fixtures were corrected to the actual claude_code/installed_at
+contract after the initial type check rejected them. Local tooling now works;
+earlier toolchain-blocked notes should not cause another Linux-only test detour.
+Not yet live; leave f05b2f0f and its original sessions undisturbed until the active
+1800-second baseline finishes. This is update-feedback correctness, not a worker
+engine lifecycle or broad performance closure.
+
 ## September 11, 04:47 Eastern — Correction message reached Queen
 
 04:48 full CI34579413391 completed SUCCESS (all jobs), superseding the earlier

@@ -2,6 +2,15 @@
 
 ## Authoritative next gates — September 11, overnight
 
+04:59 provider-update observation failure/recovery fix prepared. A failed provider
+check no longer becomes an empty successful update list when other runtime reads
+succeed. Keep one explicit unavailable-status notice, suppress stale restart
+actions, and restore/clear it only on a successful provider observation. Provider
+recovery also works while other endpoints are unavailable. No new polling,
+automatic restarts, engine changes or permissions. Full1671 web tests,119 focused
+tests, TypeScript and production web build pass locally. Activation still pending;
+do not interrupt the server baseline below to deploy this UI-only change.
+
 04:48 full CI34579413391 SUCCESS, including Rust and the release-mode terminal
 resize regression. f05b2f0f's implementation, activation and CI gates are closed;
 do not repeat builds/tests to obtain the same evidence again.

@@ -41,7 +41,7 @@ export function useRuntimeUpdate(
     // An API restart is unknown status, not a switch to a release installation.
     if (development) setDevelopmentMode(development.enabled);
     setUpdates((previous) =>
-      nextRuntimeUpdates(previous, health, host, development, providers?.superseded ?? []));
+      nextRuntimeUpdates(previous, health, host, development, providers ? providers.superseded ?? [] : undefined));
   }, [operatorToken]);
 
   const refresh = useVisiblePolling(poll, Boolean(operatorToken), refreshMs);
