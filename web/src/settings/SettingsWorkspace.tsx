@@ -259,9 +259,11 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
       ) : null}
       {/* The section list lives in the rail now, with every other surface's
           navigation. */}
-      {shows("settings-crew") && (
+      {/* Keep the single roster's unsaved forms across section/search changes.
+          Hidden controls cannot be operated; this adds no polling or storage. */}
+      <div hidden={!shows("settings-crew")}>
     <WorkerSettings operatorToken={operatorToken} workers={workers} workspaces={workspaces} busy={busy} providers={providers} providerCapabilitiesUnavailable={providerCapabilitiesUnavailable} onCreate={onCreateWorker} onUpdate={onUpdateWorker} onChooseMark={onChooseWorkerMark} onRemove={onRemoveWorker} onDraftDescription={async (workerId) => (await draftWorkerDescription(operatorToken, workerId)).description} onImproveDescription={async (workerId) => (await improveWorkerDescription(operatorToken, workerId)).description} onReorder={onReorderWorkers} />
-      )}
+      </div>
       {shows("settings-presence") && (
     <section id="settings-presence" className="settings-card presence-settings" aria-labelledby="presence-heading">
           <div><p className="eyebrow">Presence</p><h3 id="presence-heading">Let attention follow you</h3></div>

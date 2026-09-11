@@ -308,7 +308,8 @@ test("a section shows its own cards and nothing else", async () => {
   await waitFor(() => expect(container.querySelector("#settings-access")).not.toBeNull());
   expect(container.querySelector("#settings-remote")).not.toBeNull();
   // And nothing from any other section.
-  expect(container.querySelector("#settings-crew")).toBeNull();
+  expect(container.querySelector("#settings-crew")).not.toBeVisible();
+  expect(screen.queryByRole("region", { name: "Your familiar crew" })).not.toBeInTheDocument();
   expect(container.querySelector("#settings-backup")).toBeNull();
 });
 
@@ -679,6 +680,27 @@ test("prepared migration is visible with matching engines and stale consent cann
   fireEvent.click(screen.getByRole("button", { name: "Prepare worker engine update" }));
   fireEvent.click(screen.getByRole("button", { name: "Stop workers and update" }));
   expect(apply).toHaveBeenCalledWith("1.7.0-replacement");
+});
+
+test("worker creation draft survives section changes and settings filtering without submitting", () => {
+  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+  const props = minimalProps();
+  const view = render(<SettingsWorkspace {...props} section="settings-workers" />);
+  fireEvent.change(screen.getByLabelText("Worker name"), { target: { value: "Aster" } });
+  fireEvent.change(screen.getByRole("combobox", { name: "Repository" }), { target: { value: "~/projects/aster" } });
+  fireEvent.click(screen.getByLabelText(/Use this path outside discovered project folders/));
+  view.rerender(<SettingsWorkspace {...props} section="settings-hive" />);
+  expect(screen.queryByRole("button", { name: "Add sleeping worker" })).not.toBeInTheDocument();
+  view.rerender(<SettingsWorkspace {...props} section="settings-workers" />);
+  expect(screen.getByLabelText("Worker name")).toHaveValue("Aster");
+  expect(screen.getByRole("combobox", { name: "Repository" })).toHaveValue("~/projects/aster");
+  expect(screen.getByLabelText(/Use this path outside discovered project folders/)).toBeChecked();
+  view.rerender(<SettingsWorkspace {...props} section="settings-workers" query="nothing-matches-this" />);
+  expect(screen.queryByRole("button", { name: "Add sleeping worker" })).not.toBeInTheDocument();
+  view.rerender(<SettingsWorkspace {...props} section="settings-workers" />);
+  expect(screen.getByLabelText("Worker name")).toHaveValue("Aster");
+  expect(screen.getByRole("combobox", { name: "Repository" })).toHaveValue("~/projects/aster");
+  expect(props.onCreateWorker).not.toHaveBeenCalled();
 });
 
 function minimalProps() {
