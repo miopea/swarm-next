@@ -4,6 +4,13 @@
 
 ### Latest priority: guided enrollment, then workspace setup
 
+September 10, 23:16 Eastern: workspace search-folder loading now has an 8-second
+deadline and an explicit retry. After a successful folder save, a failed repository
+list refresh offers a read-only retry rather than requiring leaving Workers or
+saving again. Retry preserves any subsequent folder draft. Four search-settings
+and 29 worker-form tests, TypeScript and production build pass. Not yet activated
+or visually accepted. These changes do not alter filesystem admission rules.
+
 September 10, 23:13 Eastern: activation VERIFIED for 1be4f138:
 health serves 1.7.1-dev-1be4f1387392-20260911031055-1016423, status ok,
 no degradation or database recovery. Supported updater is inactive/exit 0.
