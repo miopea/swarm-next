@@ -48,7 +48,8 @@ Material exceptions to disclose:
    engine updates are separate from the verified App/API updates here.
 4. Mobile camera/gallery, suspension/cutover and full narrow-screen interaction
    need real-device evidence. Desktop390px samples are not physical-phone proof.
-5. Production disk has approximately2GiB free. Inspect headroom and only verified
+5. Production disk has approximately3.6GiB free after removal of the verified
+   inactive native-answer compiler cache. Inspect headroom and only verified
    inactive reproducible build artifacts before another large build; preserve
    sources, data, attachments, backups, installed packages and active processes.
 

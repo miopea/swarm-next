@@ -1,5 +1,16 @@
 # Current maturity acceptance ledger
 
+## September 11 — Safe build-cache cleanup restored headroom
+
+Root storage reached2.0GiB free. Exact cache
+`/tmp/swarm-native-answer-check.6fkv8E/target` occupied1.6GiB. Verified its resolved
+path, real-directory/non-symlink status, Cargo cache marker, absence of open files
+with lsof and nearby symlink consumers. Removed only that reproducible compiler
+cache under the operator's cache-cleanup authority. Cargo.toml/source and the
+artifacts directory remain; installed current/previous/engine packages and all
+Hive data were untouched. Free space rose to3.6GiB;42ace825 health remains okay.
+This is recovered operating headroom, not a sustained storage-growth fix.
+
 ## September 11 — Bounded management reads activated
 
 Production and WSL serve `1.7.1-dev-42ace825b3ea-20260911141056-1411729`.
