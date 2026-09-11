@@ -14,7 +14,12 @@ Microsoft name/email after selection, no horizontal overflow, and discard
 confirmation after an explicit edit. The screenshot confirmed the email rendered;
 the browser's DOM inspection did not expose the email input value. No real message
 was sent. This is contact-entry acceptance, not central support-delivery acceptance.
-Deployment of this slice remains pending until an exact served revision is recorded.
+Deployment verified on production and WSL:
+`1.7.1-dev-2e4e0dfbd9a8-20260911054018-1118976`, healthy and no degradation or
+database recovery. Production engine PID944143 and WSL PID6458 were retained;
+engine build10a05263c194 remains unchanged. Production Apiary still lists all
+three registered Hives. Archive checksum matched before WSL installation.
+CI34566816835 remains pending; earlier94b210fb and78ec2bc1 CI passed all jobs.
 
 ## September 11, 01:20 Eastern — Optional integration is not failed membership
 

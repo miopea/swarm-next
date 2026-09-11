@@ -2,6 +2,14 @@
 
 ## Authoritative next gates — September 11, overnight
 
+Latest: feedback contact identity reuse is committed and live on production/WSL
+at2e4e0dfb;61 affected tests, TypeScript/build and390px fictional account-choice
+acceptance pass. Both engines preserved. CI pending; see92. This completes the
+contact-entry gap, not central feedback delivery. Keep native answer reconciliation
+and real-device gates open. The pending Daisy membership approval must not be
+retried without the requested approval; continue unrelated work. Usage69% consumed
+at the last check; prioritize coherent closures, not repeated passed UI checks.
+
 01:25 checkpoint:78ec2bc1 is healthy on production/WSL with both engines retained.
 Integrated UI1641/170 passes. Optional Jira setup no longer claims failed membership
 or hides real catalog/policy holds; no-Jira, mixed-failure, recovery and unknown
