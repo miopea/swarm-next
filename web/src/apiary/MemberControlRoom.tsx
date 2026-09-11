@@ -105,6 +105,10 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
       return;
     }
     const results = [members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, stewardTasks, stewardAssists, handoffs, handoffTargets, executions];
+    if (handoffs.status === "fulfilled" && Array.isArray(handoffs.value)) {
+      setHandoffError(undefined);
+      setHandoffOfferError(undefined);
+    }
     setObserved((current) => new Set([...current, ...snapshotKeys.filter((_, index) => results[index].status === "fulfilled")]));
     setFailed(new Set(snapshotKeys.filter((_, index) => results[index].status === "rejected")));
     setSnapshot((current) => ({
@@ -175,11 +179,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
       else await cancelApiaryClaimHandoff(operatorToken, handoff.id);
       await refresh();
     } catch {
-      setHandoffError(action === "accept"
-        ? "This handoff could not be accepted. Jira ownership and both Hives are unchanged."
-        : action === "decline"
-          ? "This handoff could not be declined. The offer is still waiting for your decision."
-          : "This handoff could not be cancelled. The receiving Hive may still accept it.");
+      setHandoffError("Swarm could not confirm the handoff response. It may have reached Keeper. Check handoff status before trying again.");
     } finally { setActingHandoff(undefined); }
   }, [operatorToken, refresh]);
   const requestStewardAssist = useCallback(async () => {
@@ -239,19 +239,20 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
           </li>)}</ul>
           {assistError ? <p className="member-command-attention" role="alert">{assistError}</p> : null}
         </article> : null}
-        {(incomingHandoffs.length > 0 || outgoingHandoffs.length > 0) ? <article className="keeper-panel member-handoff-panel">
-          <header><div><p className="eyebrow">Work handoffs</p><h4>{incomingHandoffs.length ? "Another Hive needs your help" : "Waiting on another Hive"}</h4></div><small>Jira ownership changes only after acceptance</small></header>
-          <ul className="member-handoff-list" aria-label="Active Jira work handoffs">
+        {(incomingHandoffs.length > 0 || outgoingHandoffs.length > 0 || failed.has("handoffs")) ? <article className="keeper-panel member-handoff-panel">
+          <header><div><p className="eyebrow">Work handoffs</p><h4>{incomingHandoffs.length ? "Another Hive needs your help" : outgoingHandoffs.length ? "Waiting on another Hive" : "Handoff status unavailable"}</h4></div><small>Jira ownership changes only after acceptance</small></header>
+          {section("handoffs", "Work handoffs", <ul className="member-handoff-list" aria-label="Active Jira work handoffs">
             {incomingHandoffs.map((handoff) => <li key={handoff.id}>
               <span><strong>{handoff.issue_key}</strong><small>From {hiveName.get(handoff.source_hive_id) ?? "another Hive"}{handoff.reason ? ` · ${handoff.reason}` : ""}</small></span>
-              {handoff.state === "offered" ? <span className="member-handoff-actions"><button className="secondary-button" disabled={actingHandoff === handoff.id} onClick={() => void transitionHandoff(handoff, "decline")}>Decline</button><button className="primary-action" disabled={actingHandoff === handoff.id} onClick={() => void transitionHandoff(handoff, "accept")}>{actingHandoff === handoff.id ? "Accepting…" : "Accept work"}</button></span> : <span className="member-handoff-progress"><strong>Accepted</strong><small>Assigning to you in Jira, then adding it to this Hive</small></span>}
+              {handoff.state === "offered" ? <span className="member-handoff-actions"><button className="secondary-button" disabled={actingHandoff === handoff.id || state === "loading" || failed.has("handoffs") || Boolean(handoffError)} onClick={() => void transitionHandoff(handoff, "decline")}>Decline</button><button className="primary-action" disabled={actingHandoff === handoff.id || state === "loading" || failed.has("handoffs") || Boolean(handoffError)} onClick={() => void transitionHandoff(handoff, "accept")}>{actingHandoff === handoff.id ? "Accepting…" : "Accept work"}</button></span> : <span className="member-handoff-progress"><strong>Accepted</strong><small>Assigning to you in Jira, then adding it to this Hive</small></span>}
             </li>)}
             {outgoingHandoffs.map((handoff) => <li key={handoff.id}>
               <span><strong>{handoff.issue_key}</strong><small>Offered to {hiveName.get(handoff.target_hive_id) ?? "another Hive"}{handoff.reason ? ` · ${handoff.reason}` : ""}</small></span>
-              {handoff.state === "offered" ? <button className="secondary-button" disabled={actingHandoff === handoff.id} onClick={() => void transitionHandoff(handoff, "cancel")}>Cancel offer</button> : <span className="member-handoff-progress"><strong>Accepted</strong><small>You remain responsible until Jira confirms the transfer</small></span>}
+              {handoff.state === "offered" ? <button className="secondary-button" disabled={actingHandoff === handoff.id || state === "loading" || failed.has("handoffs") || Boolean(handoffError)} onClick={() => void transitionHandoff(handoff, "cancel")}>Cancel offer</button> : <span className="member-handoff-progress"><strong>Accepted</strong><small>You remain responsible until Jira confirms the transfer</small></span>}
             </li>)}
-          </ul>
+          </ul>)}
           {handoffError ? <p className="member-command-attention" role="alert">{handoffError}</p> : null}
+          <button className="secondary-button" type="button" disabled={state === "loading" || Boolean(actingHandoff)} onClick={() => void refresh()}>Check handoff status</button>
         </article> : null}
         {stewardship ? <article className="keeper-panel member-stewardship-panel">
           <header><div><p className="eyebrow">My Stewardship</p><h4>Trusted support for {managedHives.length} Hive{managedHives.length === 1 ? "" : "s"}</h4></div><span className="keeper-role-badge steward">Steward</span></header>
@@ -349,26 +350,29 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
         <article className="keeper-panel">
           <header><div><p className="eyebrow">Optional Jira work</p><h4>Jira work owned by this Hive</h4></div><small>Reservations and confirmed homes only</small></header>
           {section("sharedWork", "Jira claims", <>
-          {localClaims.length ? <ul className="keeper-work-list member-claim-list" aria-label="Member shared work ownership">{localClaims.map((claim) => <li key={claim.id}><span><strong>{claim.issue_key}</strong><small>{claim.project_name}</small></span><span><strong>{claim.state === "confirmed" ? "Owned" : "Reserved"}</strong><small>{claim.home_operator_display_name}</small></span>{claim.state === "confirmed" ? <ClaimHandoffControl claim={claim} existing={activeHandoffByClaim.get(claim.id)} targets={snapshot.handoffTargets} busy={Boolean(actingHandoff)} onOffer={async (target, reason) => { setActingHandoff(claim.id); setHandoffOfferError(undefined); try { await offerApiaryClaimHandoff(operatorToken, claim.id, target, reason); await refresh(); } catch { setHandoffOfferError("This handoff offer could not be sent. This Hive still owns the Jira work."); } finally { setActingHandoff(undefined); } }} /> : null}</li>)}</ul> : <p className="keeper-empty">No Jira issues are reserved or owned by this Hive.</p>}
+          {localClaims.length ? <ul className="keeper-work-list member-claim-list" aria-label="Member shared work ownership">{localClaims.map((claim) => <li key={claim.id}><span><strong>{claim.issue_key}</strong><small>{claim.project_name}</small></span><span><strong>{claim.state === "confirmed" ? "Owned" : "Reserved"}</strong><small>{claim.home_operator_display_name}</small></span>{claim.state === "confirmed" ? <ClaimHandoffControl claim={claim} existing={activeHandoffByClaim.get(claim.id)} targets={snapshot.handoffTargets} unavailable={state === "loading" || !observed.has("handoffs") || failed.has("handoffs") || !observed.has("handoffTargets") || failed.has("handoffTargets") || failed.has("sharedWork") || Boolean(handoffOfferError)} busy={Boolean(actingHandoff)} onOffer={async (target, reason) => { setActingHandoff(claim.id); setHandoffOfferError(undefined); try { await offerApiaryClaimHandoff(operatorToken, claim.id, target, reason); await refresh(); } catch { setHandoffOfferError("Swarm could not confirm the offer. It may have reached Keeper. Check offer status before sending again; your draft is kept."); } finally { setActingHandoff(undefined); } }} /> : null}</li>)}</ul> : <p className="keeper-empty">No Jira issues are reserved or owned by this Hive.</p>}
           </>)}
           {handoffOfferError ? <p className="member-command-attention" role="alert">{handoffOfferError}</p> : null}
+          {localClaims.some((claim) => claim.state === "confirmed") ? <button className="secondary-button" type="button" disabled={state === "loading" || Boolean(actingHandoff)} onClick={() => void refresh()}>Check offer status</button> : null}
         </article>
       </div>
     </section>
   );
 }
 
-function ClaimHandoffControl({ claim, existing, targets, busy, onOffer }: { claim: ApiarySharedWorkClaim; existing?: FederationClaimHandoff; targets: FederationHandoffTarget[]; busy: boolean; onOffer: (target: string, reason: string) => Promise<void> }) {
+function ClaimHandoffControl({ claim, existing, targets, unavailable, busy, onOffer }: { claim: ApiarySharedWorkClaim; existing?: FederationClaimHandoff; targets: FederationHandoffTarget[]; unavailable: boolean; busy: boolean; onOffer: (target: string, reason: string) => Promise<void> }) {
   const [open, setOpen] = useState(false);
   const [target, setTarget] = useState("");
   const [reason, setReason] = useState("");
-  if (existing) return <span className="member-claim-handoff-state">Handoff {existing.state}</span>;
-  if (!targets.length) return null;
-  if (!open) return <button className="secondary-button" type="button" onClick={() => setOpen(true)}>Offer to another Hive</button>;
-  return <form className="member-claim-handoff-form" onSubmit={(event) => { event.preventDefault(); if (target) void onOffer(target, reason); }}>
+  if (existing) return <span className="member-claim-handoff-state">Handoff {existing.state}{unavailable ? " (last known)" : ""}</span>;
+  const notice = unavailable ? "Check offer status before handing off work." : !targets.length ? "No receiving Hives are available." : null;
+  if (!open) return <>{notice ? <small role="status">{notice}</small> : <button className="secondary-button" type="button" disabled={busy} onClick={() => setOpen(true)}>Offer to another Hive</button>}</>;
+  const canSend = !unavailable && !busy && targets.some((candidate) => candidate.node_id === target);
+  return <form className="member-claim-handoff-form" onSubmit={(event) => { event.preventDefault(); if (canSend) void onOffer(target, reason); }}>
+    {notice ? <p role="status">{notice}</p> : null}
     <label><span>Receiving Hive</span><select required value={target} onChange={(event) => setTarget(event.target.value)}><option value="">Choose a Hive</option>{targets.map((candidate) => <option key={candidate.node_id} value={candidate.node_id}>{candidate.hive_name} · {candidate.operator_display_name}</option>)}</select></label>
     <label><span>Why hand this off? <small>optional</small></span><input value={reason} maxLength={500} placeholder={`Context for ${claim.issue_key}`} onChange={(event) => setReason(event.target.value)} /></label>
-    <span className="member-handoff-actions"><button className="secondary-button" type="button" disabled={busy} onClick={() => setOpen(false)}>Keep here</button><button className="primary-action" type="submit" disabled={busy || !target}>{busy ? "Offering…" : "Send offer"}</button></span>
+    <span className="member-handoff-actions"><button className="secondary-button" type="button" disabled={busy} onClick={() => setOpen(false)}>Keep here</button><button className="primary-action" type="submit" disabled={!canSend}>{busy ? "Offering…" : "Send offer"}</button></span>
   </form>;
 }
 

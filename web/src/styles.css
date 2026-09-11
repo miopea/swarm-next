@@ -738,7 +738,10 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .member-claim-list li { grid-template-columns: minmax(120px, .7fr) minmax(100px, .4fr) auto; align-items: center; }
 .member-claim-list li > span:last-of-type { text-align: left; }
 .member-claim-handoff-state { color: var(--muted); font-size: .72rem; text-transform: capitalize; }
-.member-claim-handoff-form { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(190px, .7fr) minmax(220px, 1fr) auto; align-items: end; gap: 10px; padding: 11px; border: 1px solid var(--honey-line); border-radius: var(--radius-sm); background: var(--honey-wash); }
+.member-claim-handoff-form { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 10px; padding: 11px; border: 1px solid var(--honey-line); border-radius: var(--radius-sm); background: var(--honey-wash); }
+.member-claim-handoff-form > p, .member-claim-handoff-form > .member-handoff-actions { grid-column: 1 / -1; }
+.member-claim-handoff-form > p { margin: 0; color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; }
+.member-claim-handoff-form > .member-handoff-actions { flex-wrap: wrap; }
 .member-claim-handoff-form label { display: grid; min-width: 0; gap: 5px; color: var(--muted); font-size: .68rem; }
 .member-claim-handoff-form label > span { font-weight: 650; }
 .member-claim-handoff-form label small { color: var(--quiet); font-weight: 400; }

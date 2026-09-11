@@ -45,6 +45,18 @@ and provider sessions remain inside each Hive.
 
 ## Consequences
 
+### Browser failure and recovery
+
+A failed browser command response does not prove Keeper rejected the command.
+Offer, acceptance, decline and cancellation failures therefore report an
+unconfirmed outcome, retain the known transfer/draft, and require a successful
+handoff read before enabling another attempt. Missing or failed handoff/recipient
+reads must not appear as no existing offer or no eligible recipients. A retained
+offer is labelled last known; the form preserves its note and selection through
+read failures and revalidates the selected recipient against the recovered list.
+This is presentation protection, not new transfer authority: Keeper still owns
+all validation, idempotency and ownership transitions above.
+
 - Cross-Hive ownership is explicit, audited, and cannot become two homes.
 - A lost Keeper response after Jira assignment is safe to retry.
 - Temporary Keeper or Jira outages pause the durable local operation instead of

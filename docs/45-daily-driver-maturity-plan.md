@@ -2,6 +2,16 @@
 
 ## Authoritative next gates — September 11, morning
 
+08:12: Apiary handoff failure/recovery follow-up implemented: do not claim a lost
+command response means no change; reconcile before another attempt, preserve
+drafts and last-known transfers, and distinguish unavailable recipient/offer
+reads from empty lists. All51 Apiary tests pass, including saved-command/lost-
+reply and read-failure/return scenarios. Edge fictional form interaction proves
+draft retention and recognition of the saved offer; screenshot caught and fixed
+an error-message grid displacement. Commit/deployment pending. This is not native
+answer reconciliation or full real-Jira transfer acceptance. Browser200% zoom and
+real-device gates remain open. Recovery CI34595653807 is now SUCCESS.
+
 On-demand Queen recovery observation now refuses partial and
 post-read replaced-session evidence before publishing activity/input/excerpts.
 Full API suite591 passed/3 ignored, formatting and strict API Clippy pass. See92

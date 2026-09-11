@@ -1,5 +1,26 @@
 # Current maturity acceptance ledger
 
+## September 11 — Handoff command uncertainty and retained drafts
+
+Member handoff presentation now preserves uncertainty across offer, acceptance,
+decline and cancellation response failures. A successful status read is required
+before another attempt. Failed first reads no longer imply there are no offers
+or eligible recipients; retained transfers are labelled last known. Offer notes
+and the selected recipient survive a failed read, and sending is refused if the
+recipient disappeared from the recovered list. Keeper remains the authority.
+
+Evidence: all51 Apiary tests pass, TypeScript and Vite production build pass.
+Regression cases simulate Keeper saving an offer or acceptance then losing its
+reply; only one POST occurs, and a recovered read displays the saved transfer.
+Both failed handoff and recipient reads are exercised before/after loading,
+including retained notes and removal/return of the selected recipient.
+Edge at1465px exercised the actual fictional form through read failure, return,
+lost offer reply and recognition of the saved offer; no second Send control,
+page width1465px with no horizontal overflow. Screenshot found the new notice
+displacing fields; full-width notice/actions fixed it and were visually checked.
+The no-proxy harness cannot reach a Hive. This is not a real Jira handoff test,
+native device acceptance, or actual200% browser zoom. Deployment still pending.
+
 ## September 11 — Complete, post-read-fenced recovery observations
 
 Queen's on-demand recovery observer now rejects truncated snapshots and rechecks

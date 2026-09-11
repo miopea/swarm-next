@@ -2,8 +2,46 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, expect, test, vi } from "vitest";
 
 import MemberControlRoom from "./MemberControlRoom";
+import { handoffScenario } from "../harness/handoffScenario";
 
 afterEach(() => vi.unstubAllGlobals());
+
+test.each(["/handoffs", "/handoff-targets"])("handoff drafts survive %s failure and an uncertain send is reconciled once", async (endpoint) => {
+  const scenario = handoffScenario();
+  scenario.state.unavailable = endpoint;
+  vi.stubGlobal("fetch", scenario.fetch);
+  render(<MemberControlRoom identity={memberIdentity()} operatorToken="fictional" onManage={vi.fn()} onOpenTasks={vi.fn()} />);
+  await screen.findByRole("alert");
+  expect(screen.queryByRole("button", { name: "Offer to another Hive" })).not.toBeInTheDocument();
+  expect(screen.getByText("Check offer status before handing off work.")).toBeInTheDocument();
+  scenario.state.unavailable = "";
+  fireEvent.click(screen.getByRole("button", { name: "Check offer status" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Offer to another Hive" }));
+  fireEvent.change(screen.getByRole("combobox", { name: "Receiving Hive" }), { target: { value: "node-3" } });
+  fireEvent.change(screen.getByRole("textbox", { name: /Why hand this off/ }), { target: { value: "Please check the fictional flowers." } });
+  scenario.state.unavailable = endpoint;
+  fireEvent.click(screen.getByRole("button", { name: "Check offer status" }));
+  await screen.findByRole("alert");
+  expect(screen.getByRole("button", { name: "Send offer" })).toBeDisabled();
+  expect(screen.getByRole("textbox", { name: /Why hand this off/ })).toHaveValue("Please check the fictional flowers.");
+  scenario.state.unavailable = "";
+  scenario.state.hasTarget = false;
+  fireEvent.click(screen.getByRole("button", { name: "Check offer status" }));
+  await screen.findByText("No receiving Hives are available.");
+  expect(screen.getByRole("button", { name: "Send offer" })).toBeDisabled();
+  scenario.state.hasTarget = true;
+  fireEvent.click(screen.getByRole("button", { name: "Check offer status" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Send offer" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Send offer" }));
+  await screen.findByText(/Swarm could not confirm the offer/);
+  expect(screen.getByRole("button", { name: "Send offer" })).toBeDisabled();
+  expect(screen.getByRole("textbox", { name: /Why hand this off/ })).toHaveValue("Please check the fictional flowers.");
+  fireEvent.click(screen.getByRole("button", { name: "Check offer status" }));
+  await screen.findByText("Handoff offered");
+  expect(screen.queryByRole("button", { name: "Send offer" })).not.toBeInTheDocument();
+  expect(screen.queryByText(/Swarm could not confirm the offer/)).not.toBeInTheDocument();
+  expect(scenario.state.posts).toBe(1);
+});
 
 test("unknown Member observations never become empty facts and recover without rejoining", async () => {
   let release!: () => void;
@@ -162,10 +200,14 @@ test.each([false, true])("keeps local work usable when Member status is unavaila
   } else expect(screen.getByRole("list", { name: "Shared work blockers" })).toHaveTextContent("Keeper catalog has not arrived");
 });
 
-test("keeps a Jira handoff actionable and explains when acceptance fails", async () => {
+test("reconciles an uncertain acceptance before allowing another action", async () => {
+  let accepted = false;
+  let unavailable = false;
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/handoffs/handoff-1/acceptance") && init?.method === "POST") {
+      accepted = true;
+      unavailable = true;
       return Promise.resolve(new Response(JSON.stringify({ message: "keeper unavailable" }), { status: 502, headers: { "Content-Type": "application/json" } }));
     }
     if (url.endsWith("/members")) return Promise.resolve(ok([
@@ -173,9 +215,10 @@ test("keeps a Jira handoff actionable and explains when acceptance fails", async
       { hive_id: "hive-2", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", role: "member", is_local: true },
       { hive_id: "hive-3", hive_name: "Fern Hive", operator_id: "operator-3", operator_display_name: "Faye", role: "member", is_local: false },
     ]));
+    if (url.endsWith("/handoffs") && unavailable) return Promise.reject(new Error("fictional read outage"));
     if (url.endsWith("/handoffs")) return Promise.resolve(ok([{
       id: "handoff-1", apiary_id: "apiary-1", claim_id: "claim-1", source_node_id: "node-3", source_hive_id: "hive-3", source_operator_id: "operator-3",
-      target_node_id: "node-2", target_hive_id: "hive-2", target_operator_id: "operator-2", issue_key: "WWD-101", reason: "Please continue the fix", state: "offered", offered_at: 1,
+      target_node_id: "node-2", target_hive_id: "hive-2", target_operator_id: "operator-2", issue_key: "WWD-101", reason: "Please continue the fix", state: accepted ? "accepted" : "offered", offered_at: 1,
     }]));
     if (url.endsWith("/sync-health")) return Promise.resolve(ok({ condition: "current", last_attempt_at: 1, last_success_at: 1, consecutive_failures: 0, next_attempt_at: null }));
     if (url.endsWith("/task-sync-status")) return Promise.resolve(ok({ cursor: 0, task_count: 0, last_applied_at: 1 }));
@@ -191,11 +234,20 @@ test("keeps a Jira handoff actionable and explains when acceptance fails", async
 
   const accept = await screen.findByRole("button", { name: "Accept work" });
   fireEvent.click(accept);
-  expect(await screen.findByText("This handoff could not be accepted. Jira ownership and both Hives are unchanged.")).toHaveAttribute("role", "alert");
-  expect(screen.getByText("This handoff could not be accepted. Jira ownership and both Hives are unchanged.").closest("article"))
+  expect(await screen.findByText(/Swarm could not confirm the handoff response/)).toHaveAttribute("role", "alert");
+  expect(screen.getByText(/Swarm could not confirm the handoff response/).closest("article"))
     .toBe(accept.closest("article"));
-  expect(accept).toBeEnabled();
+  expect(accept).toBeDisabled();
   expect(screen.getByRole("list", { name: "Active Jira work handoffs" })).toHaveTextContent("WWD-101");
+  fireEvent.click(screen.getByRole("button", { name: "Check handoff status" }));
+  await screen.findByText("Work handoffs: showing last-known information.");
+  expect(accept).toBeDisabled();
+  unavailable = false;
+  fireEvent.click(screen.getByRole("button", { name: "Check handoff status" }));
+  await screen.findByText("Assigning to you in Jira, then adding it to this Hive");
+  expect(screen.queryByRole("button", { name: "Accept work" })).not.toBeInTheDocument();
+  expect(screen.queryByText(/Swarm could not confirm the handoff response/)).not.toBeInTheDocument();
+  expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
 });
 
 test("keeps Steward work routing in Tasks without exposing the target Hive's workers", async () => {
