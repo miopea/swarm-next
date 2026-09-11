@@ -2,6 +2,19 @@
 
 ## Authoritative next gates — September 11, morning
 
+08:35: CLOSED the live missing-input safe-recovery/escalation/return journey.
+Task01a0906b-87cc-7291-b7b2-4a678a498e16 exhausted its authorized read-only sources;
+Queen created one task-linked decision01a09071-fd93-7512-b348-ef3790b438bb. One
+controller answer through real Needs You was followed by Queen unblocking in23s,
+worker pickup32s later, then system settlement11104. Same provider session;
+no manual lifecycle repair, second answer or source change. Needs You0/Queues39
+returned automatically. See92 for exact scope and timing (5m36s from blocker to
+escalation, not instantaneous). This does not close unknown-terminal/failed-session
+recovery, native answer capture or real backlog acceptance. A genuine UI issue
+was found: required recommendations force a label even when Queen has no basis
+for preferring either answer. Asked the operator about explicit No preference;
+do not change that contract before the answer. Handoff CI34597720262 now SUCCESS.
+
 08:18 activation: handoff fix6d1ac295 is live on production and WSL as
 1.7.1-dev-6d1ac295a1d4-20260911121244-1346703. Exact production eight worker/session
 pairs and engine944143 preserved; WSL engine45338 preserved. Edge verified both

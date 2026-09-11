@@ -1,11 +1,13 @@
 # Operator dogfood checklist and remaining release risks
 
 Updated September 11, 2026. This is a handoff over the approved scope in45, not a
-new definition of completion. No release was cut. Detailed receipts remain in
-45,92,94 and95. Production and WSL now serve3dfc019e; production engine944143
-and ten worker sessions were preserved. WSL's pending engine was explicitly
-applied and its one worker returned, engine43236. Full candidate CI34589715128
-passed. See92 for receipts and release-candidate-2026-09-11.md for the handoff.
+new definition of completion. This task cut no release; another worker published
+1.8.0. Detailed receipts remain in45,92,94 and95. Production and WSL now serve
+6d1ac295, with production engine944143 and WSL engine45338 preserved. Handoff
+CI34597720262 passed. The isolated missing-input recovery journey also completed:
+Queen asked once, one browser answer resumed the same assigned task/session,
+and system completion cleared Needs You without manual lifecycle repair. See92
+for scope, timing and the still-open recommendation-label question in09.
 
 ## Current user-facing milestone map
 

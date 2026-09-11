@@ -1,5 +1,59 @@
 # Current maturity acceptance ledger
 
+## September 11 — Missing-input recovery, Queen escalation and automatic return
+
+Live production dev6d1ac295; isolated Swarm Dogfood worker
+01a06eda-bdd1-7a82-928e-cffbee0be6c1 only. The controller created task
+01a0906b-87cc-7291-b7b2-4a678a498e16 and woke that sleeping demo worker through
+the normal start API. No direct PTY input or lifecycle repair was performed.
+The task allowed read-only investigation of a fictional missing specimen input,
+not choosing it, manufacturing files or asking other workers. Existing source
+and completed fixtures were preserved.
+
+| Event | UTC | Authoritative evidence |
+| --- | --- | --- |
+| Task created/assigned |12:22:41–43|11093–11095 operator setup|
+| Worker picked up |12:23:17|11098 worker Active|
+| Authorized sources exhausted; blocked on Queen |12:24:08|11100 worker Blocked; finding01a0906c-9bcf-78f0-a058-d3d0c262f265|
+| Queen filed one operator choice |12:29:44|Decision01a09071-fd93-7512-b348-ef3790b438bb; requesting worker is Queen019ff136-7a90-7631-bbc0-f95efd1df576|
+| Controller chose fictional A/amber once in Edge |12:31:05|Saved resolution, inbox_action; no direct worker message|
+| Queen unblocked, preserving assignment |12:31:28|11101 Queen Blocked→Ready|
+| Worker verified saved answer and resumed |12:32:00|11102 same worker Ready→Active|
+| Worker submitted; system settled |12:32:52|11103 Review,11104 system Completed; decision discharged|
+
+Escalation took5m36s from the worker's blocked finding. The scheduled review
+remained queued with a12:32:51 pacing deadline while the ordinary task-linked
+message path already produced the decision; do not confuse that review state
+with all Queen activity. Resolution→unblock23s, unblock→pickup32s,
+resolution→completion107s. No timer expiry was used as authority to escalate.
+
+Worker reported three inline Node assertions passing: A→amber, B→blue and absent/
+unknown specimen rejected rather than defaulted. The immutable activity record
+retains exact output and empty-commit/no-deployment evidence. Independently
+checked clean working tree, unchanged HEAD
+c9e4bfd36a4472c5c93c521b08c36a96545e62e4 and input file still absent. Provider
+session01a0906b-8f35-7591-a566-aa8d3acc9551 remained identical throughout the task.
+Production engine944143 stayed unchanged. Edge observed the actual pending
+request, then automatic Needs You0 and Queues39 with no manual refresh/repair.
+
+Limits: this proves a scoped missing-input recovery/escalation/answer journey,
+not native-terminal answer provenance, unknown/provider failure recovery,
+all existing blocked work or native conversation restoration after a crash.
+The browser answer was controller-authored fictional test input, not an actual
+operator preference. Cancellation was mentioned by Queen but omitted from quick
+actions; Say something else remained available. Cancellation was not exercised.
+Queen explicitly had no preference, yet the required suggested_action rendered
+Queen recommends A. Operator direction on explicit no preference is requested
+in09. Do not call this presentation defect fixed or silently weaken safeguards.
+
+Controller: scripts/dogfood/queen-failed-recovery.sh, default read-only status.
+The fixture is complete: do not recreate it or wake it for this gate again.
+After independently checking completion, no remaining assignment, no engagement
+and a Resting prompt in the exact test session, the controller returned only the
+demo worker to its original sleeping state. Engine944143 stayed unchanged.
+No new runtime build is required for this acceptance record. Previous handoff
+CI34597720262 is now SUCCESS.
+
 ## September 11 — Handoff command uncertainty and retained drafts
 
 Member handoff presentation now preserves uncertainty across offer, acceptance,

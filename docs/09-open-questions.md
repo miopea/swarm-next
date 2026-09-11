@@ -1,5 +1,17 @@
 # Open product questions
 
+## Genuine recommendations versus no preference — September 11, 2026
+
+Awaiting operator direction, asked asynchronously. Live fictional decision
+01a09071-fd93-7512-b348-ef3790b438bb says there is no basis to prefer A or B,
+but the required suggested_action forced an alphabetical placeholder. Needs You
+labels it Queen recommends. Proposed: explicitly allow No preference when there
+is no meaningful basis, while continuing to highlight genuine recommendations.
+Do not infer an answer from earlier approval to show Queen's opinion. This is a
+truthful recommendation contract change, not permission to omit needed options,
+change operator answers, or grant authority. The demo also mentioned cancellation
+only in details, not as a quick action; that branch was not exercised.
+
 ## External-wait presentation between Queen reviews — September 11, 2026
 
 Awaiting operator direction, asked asynchronously. ADR0082 currently returns a
