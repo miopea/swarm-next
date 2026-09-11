@@ -1,5 +1,30 @@
 # Current maturity acceptance ledger
 
+## September 11 — Provider outage reporting and Apiary verification
+
+Found an API false-success path: a failed worker-engine provider-capability read
+returned HTTP200 with hardcoded Claude availability and an empty provider-update
+list. The old test called an unreachable socket an "older host" and asserted that
+fabricated success. The correction propagates unavailable evidence and roster-read
+errors; valid capability replies retain optional-field compatibility. Existing
+UI unavailable/recovery states handle the failure without changing workers.
+
+Isolated HTTP/IPC tests verify private access, unavailable host without capability
+claims, and recovery when an actual isolated HostServer appears at the same socket
+without API recreation. Both passed, as did the full API library suite and66
+related runtime-update/worker-settings web tests. Strict all-target API lint also
+passed. Activation remains a separate gate; production/WSL currently remain94b36066.
+
+During that validation, Edge verified Keeper/WSL Apiary navigation and the same
+three registered Hives. WSL shows1/2 Jira projects ready, optional remaining setup,
+and successful synchronization; it does not require every project for membership.
+Review Jira projects navigates to Integrations, including the Jira setup section.
+Manage Apiary opens within Apiary; actual keyboard PageDown after focusing its
+Edit names control moved its scrollTop from0 to820.67 (clientHeight1258,
+scrollHeight2080). A click on a nonfocusable heading alone did not establish
+keyboard scrolling. No names, profiles, invitations, memberships or settings were
+changed. Both owned tabs returned to their Apiary overviews.
+
 ## September 11 — Native background work protected and resumed
 
 Task01a08ff4-9cb0-7692-82d1-e82e625fea07 admitted once through

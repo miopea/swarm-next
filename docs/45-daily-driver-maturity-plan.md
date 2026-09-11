@@ -2,6 +2,13 @@
 
 ## Authoritative next gates — September 11, overnight
 
+Next coherent fix is API provider-outage reporting: stop returning fabricated
+HTTP200/Claude available/no updates when the engine or roster read fails. Private
+HTTP failure and actual isolated-host return pass, plus the full API library suite,
+strict all-target API Clippy and66 relevant web tests. Commit/build/activation is
+next; no worker-engine change is needed. Do not claim general unknown-terminal or
+failed-Queen-recovery acceptance from this provider-status correction. See92.
+
 Native background-work acceptance CLOSED for task01a08ff4-9cb0-7692-82d1-e82e625fea07.
 Observed same-session provider Resting/background_work=true, no engagement and
 no matching recovery item in a complete snapshot while the actual bounded job

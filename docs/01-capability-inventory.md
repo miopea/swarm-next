@@ -2,22 +2,24 @@
 
 Status: **M0 draft recommendation**
 
-## September 10 Apiary maturity update
+## September 11 Apiary maturity update
 
 ADR0097 supersedes the older Jira-required enrollment direction: Swarm shared
 tasks are baseline and Jira is optional. Membership-only signed joins and
 shared-task reconciliation pass isolated HTTP acceptance without Jira. Apiary
 management now stays on the Apiary page; Settings starts enrollment and links
 existing members back there. Member setup shows optional integration steps.
-The final submit-once / Keeper-approves enrollment flow is not yet implemented:
-the current flow still asks the member to accept after approval. Revision-bound
-pre-submission consent rules are tested, but durable automatic completion and
-the simplified UI remain required under ADR0097.
-The member-side enrollment journal now preserves consent and progress across
-restarts with bounded storage and cancellation guards. Automatic runtime joining
-and the submit-once UI pass isolated HTTP and component tests, including receipt
-recovery with Keeper offline. Error/retry UX, live acceptance and deployment are
-still required; the running build does not yet contain this slice.
+For new invitations, submit-once / Keeper-approves enrollment is implemented and
+deployed. The member-side journal preserves pre-submission consent and progress
+across restarts with bounded storage and cancellation guards. Automatic runtime
+joining and the simplified UI pass isolated HTTP/component tests, including
+receipt recovery with Keeper offline. Live Edge acceptance reached the single
+Keeper approval for a fictional no-Jira member; that production membership grant
+remains operator-gated, so final automatic/browser-closed completion is not claimed.
+Existing WSL membership, directory/rename convergence, shared-task arrival and
+closed-history presentation were verified without removal/rejoining. Detailed
+receipts and remaining gates are in the [acceptance ledger](92-maturity-acceptance-ledger.md);
+these supersede older chronological deployment checkpoints.
 Keeper settings distribution, complete managed-authority controls and live
 browser acceptance remain unfinished; do not mark the overall Apiary capability
 complete. Existing Jira source-of-truth and credential boundaries remain intact.

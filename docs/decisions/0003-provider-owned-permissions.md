@@ -36,6 +36,14 @@ exists, but they do not become Swarm's independent authorization engine.
 
 ## Revisit condition
 
+Provider availability reads must fail explicitly when the worker engine or local
+session roster cannot be read. An unreachable host is not evidence of an older
+host or of Claude availability, and cannot supply an empty successful update
+list. Existing workers remain untouched; the browser uses its unavailable state
+and recovers after the next successful read. Older hosts that actually return a
+valid capability response retain the protocol's optional-field compatibility.
+No permissions, provider binding, retry owner or restart authority changes.
+
 Revisit only if a required provider lacks a safe native permission mechanism
 and an explicit operator journey cannot be served without mediation. A new ADR
 and threat model are required before adding such mediation.

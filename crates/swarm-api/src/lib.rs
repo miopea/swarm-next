@@ -13304,7 +13304,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn provider_capabilities_are_private_and_degrade_for_an_older_host() {
+    async fn provider_capabilities_are_private_and_do_not_invent_success_for_a_failed_host() {
         let app = router(
             AppState::default()
                 .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret"),
@@ -13322,11 +13322,41 @@ mod tests {
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
 
         let response = authorized_get(app, "/api/v1/providers").await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let json = response_json(response).await;
+        assert!(json.get("claude_code").is_none());
+        assert!(json.get("superseded").is_none());
+    }
+
+    #[tokio::test]
+    async fn provider_capabilities_recover_after_host_returns_without_an_api_restart() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = runtime.path().canonicalize().unwrap();
+        let socket = runtime.path().join("terminal.sock");
+        let store = TaskStore::in_memory().unwrap();
+        let state = AppState::default()
+            .with_task_store(store)
+            .with_terminal_host(HostClient::new(&socket), "secret");
+        let app = router(state);
+        assert_eq!(
+            authorized_get(app.clone(), "/api/v1/providers")
+                .await
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let registry =
+            Arc::new(SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace]).unwrap());
+        let server = HostServer::bind(&socket, registry).unwrap();
+        let server_task = tokio::spawn(server.run());
+        let response = authorized_get(app, "/api/v1/providers").await;
+        server_task.abort();
+        let _ = server_task.await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         let json = response_json(response).await;
-        assert_eq!(json["claude_code"], true);
-        assert_eq!(json["codex"], false);
+        assert!(json["claude_code"].is_boolean());
+        assert!(json["codex"].is_boolean());
+        assert_eq!(json["superseded"], serde_json::json!([]));
     }
 
     #[test]

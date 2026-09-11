@@ -44,22 +44,16 @@ pub(super) struct SupersededProviderView {
 
 /// The workers still running a provider release that disk has moved past.
 ///
-/// Reports nothing rather than guessing when the roster cannot be read: a
-/// restart prompt that is not needed teaches the operator to ignore the one
-/// that is.
+/// A failed roster read is unavailable evidence, not an empty update list.
 fn superseded_providers(
     state: &AppState,
     claude_release: Option<&swarm_terminal::ProviderRelease>,
     codex_release: Option<&swarm_terminal::ProviderRelease>,
-) -> Vec<SupersededProviderView> {
-    let Ok(sessions) = crate::task_store(state).and_then(|store| {
-        store
-            .active_worker_sessions()
-            .map_err(|error| crate::task_store_error(&error))
-    }) else {
-        return Vec::new();
-    };
-    [
+) -> Result<Vec<SupersededProviderView>, ApiError> {
+    let sessions = crate::task_store(state)?
+        .active_worker_sessions()
+        .map_err(|error| crate::task_store_error(&error))?;
+    Ok([
         (
             "claude_code",
             swarm_domain::ProviderKind::ClaudeCode,
@@ -84,7 +78,7 @@ fn superseded_providers(
             worker_ids,
         })
     })
-    .collect()
+    .collect())
 }
 
 async fn observe(
@@ -388,14 +382,14 @@ pub(super) async fn capabilities(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let capabilities = match request_host(&state, HostRequest::ProviderCapabilities).await {
-        Ok(HostResponse::ProviderCapabilities {
+    let capabilities = match request_host(&state, HostRequest::ProviderCapabilities).await? {
+        HostResponse::ProviderCapabilities {
             claude_code,
             codex,
             experimental,
             claude_release,
             codex_release,
-        }) => ProviderCapabilitiesView {
+        } => ProviderCapabilitiesView {
             claude_code,
             codex,
             experimental,
@@ -403,14 +397,15 @@ pub(super) async fn capabilities(
                 &state,
                 claude_release.as_ref(),
                 codex_release.as_ref(),
-            ),
+            )?,
         },
-        _ => ProviderCapabilitiesView {
-            claude_code: true,
-            codex: false,
-            experimental: None,
-            superseded: Vec::new(),
-        },
+        _ => {
+            return Err(ApiError::new(
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "provider_status_unavailable",
+                "The worker engine did not return provider availability. Existing workers are unchanged.",
+            ));
+        }
     };
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(capabilities)).into_response())
 }
