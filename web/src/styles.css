@@ -823,6 +823,8 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .task-create-error { grid-column: 1 / -1; margin: 0; color: var(--bad); font-size: .75rem; }
 .apiary-task-section .section-heading small { display: block; margin-top: 3px; color: var(--muted); font-size: .7rem; }
 .apiary-task-board-list { display: grid; gap: 8px; }
+.shared-task-history { margin-block-start: 12px; }
+.shared-task-history > section { margin-block-start: 12px; }
 .apiary-task-board-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, auto); align-items: center; gap: 20px; padding: 13px 15px; border: 1px solid var(--accent-line); border-left: 3px solid var(--honey); border-radius: var(--radius-md); background: var(--panel); }
 .apiary-task-board-card > span { display: grid; min-width: 0; gap: 4px; }
 .apiary-task-board-card > span:last-child { justify-items: end; text-align: right; }
