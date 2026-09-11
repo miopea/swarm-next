@@ -761,6 +761,10 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .member-sync-copy { margin: 0 0 13px; color: var(--muted); font-size: .8rem; line-height: 1.5; }
 .member-blocker-list { display: grid; margin: 12px 0 0; padding: 10px 10px 10px 28px; gap: 5px; border: 1px solid color-mix(in srgb, var(--honey-strong) 38%, var(--line)); border-radius: var(--radius-sm); color: var(--muted); background: var(--honey-soft); font-size: .75rem; }
 .member-ready-copy { margin: 12px 0 0; padding: 9px 10px; border-radius: var(--radius-sm); color: var(--good); background: var(--good-soft); font-size: .75rem; }
+.apiary-optional-setup { margin-top: 12px; color: var(--muted); font-size: .8rem; }
+.apiary-optional-setup p { margin: 6px 0; }
+.apiary-optional-setup ul { padding-left: 20px; margin: 8px 0; }
+.apiary-optional-setup > a { display: inline-flex; align-items: center; min-height: 44px; }
 .member-project-list { display: grid; margin: 0; padding: 0; list-style: none; }
 .member-project-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
 .member-project-list li > span:first-child { display: grid; min-width: 0; gap: 3px; }

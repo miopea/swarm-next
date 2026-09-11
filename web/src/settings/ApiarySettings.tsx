@@ -30,7 +30,8 @@ import {
   type StewardCapability,
   type Stewardship,
 } from "../api";
-import { catalogReadinessLabel, federationSyncCopy } from "../apiary/presentation";
+import { catalogReadinessLabel, federationSyncCopy, jiraSetupLabel } from "../apiary/presentation";
+import SharedCatalogStatus from "../apiary/SharedCatalogStatus";
 import KeeperInvitationManager from "./KeeperInvitationManager";
 import MemberDeparturePanel from "./MemberDeparturePanel";
 import MemberDirectoryStatus from "../apiary/MemberDirectoryStatus";
@@ -506,12 +507,10 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
               <dl>
                 <div><dt>Catalog</dt><dd>{catalogReadinessLabel(memberCatalog)}</dd></div>
                 <div><dt>Projects ready</dt><dd>{memberCatalog ? `${memberCatalog.projects.filter((project) => project.binding_id && project.access_verified && project.workflow_mapped).length}/${memberCatalog.projects.length}` : "—"}</dd></div>
-                <div><dt>Jira</dt><dd>{memberCatalog?.jira_connection === "ready" ? "Connected" : "Needs attention"}</dd></div>
+                <div><dt>Jira</dt><dd>{jiraSetupLabel(memberCatalog?.jira_connection)}</dd></div>
                 <div><dt>Retries</dt><dd>{memberSync?.consecutive_failures ?? 0}</dd></div>
               </dl>
-              {memberCatalog && memberCatalog.blockers.length > 0 ? (
-                <p className="apiary-blockers">Shared work waits for: {memberCatalog.blockers.map((blocker) => blocker.replaceAll("_", " ")).join(", ")}.</p>
-              ) : null}
+              <SharedCatalogStatus catalog={memberCatalog} />
               {memberSyncLoadError ? <p className="apiary-blockers">Synchronization status could not be refreshed. Local workers and owned work are unchanged.</p> : null}
             </div>
           ) : null}

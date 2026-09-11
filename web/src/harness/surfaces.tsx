@@ -20,6 +20,7 @@ import SessionRecoveryFixture from "./SessionRecoveryFixture";
 import RenderRecoveryFixture from "./RenderRecoveryFixture";
 import InvitationRecoveryFixture from "./InvitationRecoveryFixture";
 import JoinApiaryFixture from "./JoinApiaryFixture";
+import ApiarySetupStatusFixture from "./ApiarySetupStatusFixture";
 
 import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
 import { App } from "../App";
@@ -229,6 +230,7 @@ export type Surface = { id: string; title: string; why: string; render: () => Re
 const FILED = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
 
 export const SURFACES: Surface[] = [
+  { id: "apiary-setup-status", title: "Shared setup without mandatory Jira", why: "Fictional optional integration, policy failure and recovery states.", render: () => <ApiarySetupStatusFixture /> },
   { id: "invitation-recovery", title: "Invitation status recovery", why: "Read-only fictional status failure and explicit recovery.", render: () => <InvitationRecoveryFixture /> },
   { id: "join-apiary", title: "Accept policy and join", why: "Fictional approved invitation and confirmed membership recovery.", render: () => <JoinApiaryFixture /> },
   { id: "render-recovery", title: "Display failure recovery", why: "Fictional rendering failure without a Hive, update or worker restart.", render: () => <RenderRecoveryFixture /> },

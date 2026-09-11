@@ -16,6 +16,13 @@ export function catalogReadinessLabel(catalog?: FederationCatalogReadiness) {
   return "Verified";
 }
 
+export function jiraSetupLabel(connection?: FederationCatalogReadiness["jira_connection"]) {
+  if (!connection) return "Checking";
+  return ({ ready: "Connected", not_connected: "Not connected (optional)",
+    network_unavailable: "Temporarily unavailable", credentials_invalid: "Sign-in needed",
+    permission_denied: "Access needs review" } as const)[connection];
+}
+
 export function catalogBlockerLabel(blocker: FederationCatalogReadiness["blockers"][number]) {
   return ({
     catalog_missing: "Keeper catalog has not arrived",

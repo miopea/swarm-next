@@ -1,5 +1,21 @@
 # Current maturity acceptance ledger
 
+## September 11, 01:20 Eastern — Optional integration is not failed membership
+
+Member overview and management previously painted the combined catalog/Jira
+blocker list as Shared work waits, while disconnected optional Jira was labeled
+Needs attention. SharedCatalogStatus now presents catalog/policy blockers apart
+from optional Jira requirements. It preserves every reported blocker, adds no
+authorization or readiness override, and links Jira setup to Integrations.
+Missing observations do not receive a green ready treatment. Connection labels
+distinguish optional disconnected, unavailable, invalid credentials and access.
+
+All62 affected tests pass; the final40-test focused rerun, TypeScript and build
+pass. The no-network browser harness at390px verifies optional Jira, mixed policy
+failure, recovery, and absent status with no overflow and a44px setup action.
+This is fictional rendering acceptance; production activation remains pending.
+
+
 ## September 11, 01:09 Eastern — Member rename round trip accepted
 
 Using the existing WSL member's Edit names form, temporarily changed BGS WSL Hive

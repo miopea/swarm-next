@@ -41,7 +41,8 @@ import BeeMascot from "../brand/BeeMascot";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 import MemberDirectoryStatus from "./MemberDirectoryStatus";
 import MemberSetup from "./MemberSetup";
-import { catalogBlockerLabel, catalogReadinessLabel, federationSyncCopy } from "./presentation";
+import { catalogReadinessLabel, federationSyncCopy } from "./presentation";
+import SharedCatalogStatus from "./SharedCatalogStatus";
 
 type Props = {
   identity: HiveIdentity;
@@ -301,7 +302,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
             <div><dt>Keeper task cursor</dt><dd>{snapshot.taskSync?.cursor ?? 0}</dd></div>
             <div><dt>Tasks applied</dt><dd>{snapshot.taskSync?.task_count ?? 0}</dd></div>
           </dl>
-          {snapshot.catalog?.blockers.length ? <ul className="member-blocker-list" aria-label="Shared work blockers">{snapshot.catalog.blockers.map((blocker) => <li key={blocker}>{catalogBlockerLabel(blocker)}</li>)}</ul> : <p className="member-ready-copy">{snapshot.catalog ? "Shared catalog prerequisites are ready." : "Waiting for shared catalog status."}</p>}
+          <SharedCatalogStatus catalog={snapshot.catalog} />
         </article>
         <article className="keeper-panel member-task-panel">
           <header><div><p className="eyebrow">Shared work pulse</p><h4>Swarm tasks polled from Keeper</h4></div><button className="secondary-button" type="button" onClick={onOpenTasks}>Manage in Tasks</button></header>

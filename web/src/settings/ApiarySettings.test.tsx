@@ -740,7 +740,7 @@ test("shows honest Member convergence while waiting for the first automatic poll
   expect(status).toHaveTextContent("Waiting for first sync");
   expect(status).toHaveTextContent("This Hive will poll Keeper automatically");
   expect(status).toHaveTextContent("CatalogWaitingProjects ready1/1JiraConnectedRetries0");
-  expect(status).toHaveTextContent("Shared work waits for: catalog missing");
+  expect(status).toHaveTextContent("Keeper catalog has not arrived");
   expect(status).not.toHaveTextContent("credential");
 });
 
