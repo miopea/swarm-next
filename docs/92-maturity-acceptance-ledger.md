@@ -1,5 +1,27 @@
 # Current maturity acceptance ledger
 
+## September 11 — Everyday worker setup acceptance closed
+
+Final missing check on live WSL82eac78a: added Setup Acceptance Aster using the
+existing `~/swarm-worker-setup-20260911.h2Cli6/override` and explicit outside-
+discovery consent. Its Settings row showed `override · Claude · Sleeping`, not
+Blocked. Never opened its terminal or started its provider. Reviewed the exact
+worker removal confirmation, removed only this disposable worker, and verified
+the roster returned to Queen plus Architecture. Repository files remain intact.
+Together with the recorded root/search/missing-path/retry checks below and
+61e36a10's verified sandbox correction, this closes the reported worker-setup
+journey. Genuine engine-owned writability diagnostics remain a separate open gate.
+
+Queue read-only check on82eac78a:37 waiting rows match owner sections Queen17,
+worker1, dependencies5, scheduled14. Sections are grouped by worker with recorded
+ordering, linked prerequisites and expandable prior evidence. Platform's held
+briefing names an unanswered prompt without asserting a task blocker. External
+conditions still return to Queen between reviews under current ADR0082; the
+proposed different presentation remains awaiting operator direction in09. These
+counts and labels do not prove orchestration completion. Needs You currently0;
+nonempty interaction acceptance requires fictional fixtures, not invented live
+decisions or changes to real tasks.
+
 ## September 11 — Apiary refresh activated and live regression closed
 
 Production and WSL now serve

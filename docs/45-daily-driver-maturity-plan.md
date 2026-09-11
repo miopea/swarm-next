@@ -2,6 +2,24 @@
 
 ## Authoritative next gates — September 11, morning
 
+### September 11, 09:53 Eastern — user-facing closeout checkpoint
+
+- CLOSED everyday worker setup: configured roots and discovery search, explicit
+  existing-path override including tilde expansion, readable failure with retained
+  inputs, and truthful new-worker Sleeping presentation. Live WSL creation/removal
+  on82eac78a confirmed the final status gate after61e36a10's API-sandbox correction.
+  No test provider was started. See92 for exact fixtures and cleanup.
+- CLOSED reproduced Apiary global-refresh defect: production/WSL82eac78a,
+  unchanged engines and eight production sessions, cross-Hive rename reflected
+  without page reload, unsaved management name retained. Original name restored.
+  This does not establish automatic directory propagation latency or all broader
+  Keeper capabilities. Previously accepted no-Jira one-approval enrollment stands.
+- CLOSED explicit Needs You no-preference contract and its deployment; do not
+  reimplement it. Native authenticated-answer correlation remains separate/open.
+- NEXT: bounded Needs You/Queues presentation and interaction acceptance; preserve
+  the unanswered external-wait presentation decision in09. No broad profiling or
+  BFG Admin contact. Latest account12% remaining; preserve5% handoff reserve.
+
 ### Remaining usage allocation (operator direction, September 11)
 
 At 15% account usage remaining, use the next approximately 10 percentage points
