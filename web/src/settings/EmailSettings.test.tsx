@@ -187,6 +187,11 @@ test("a fresh Hive is already registered, so setup is one consent click", async 
   expect(screen.queryByLabelText("Application (client) ID")).not.toBeInTheDocument();
   expect(screen.queryByRole("radio")).not.toBeInTheDocument();
   expect(screen.getByText(/Personal and work accounts both work/)).toBeInTheDocument();
+  // But the callback URI stays on screen. Microsoft matches redirect URIs
+  // exactly, so a published Hive is refused until this exact string is on the
+  // shared registration -- and hiding the setup form hid the only place it
+  // was legible.
+  expect(screen.getByDisplayValue("https://swarm.test/auth/email/callback")).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: "Connect Outlook" }));
   await waitFor(() => expect(navigate).toHaveBeenCalledWith("https://login.microsoftonline.test/authorize"));
