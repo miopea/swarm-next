@@ -2662,6 +2662,37 @@ impl TaskService {
         owned.then_some(task).ok_or(ApplicationError::NotAuthorized)
     }
 
+    /// A draft this worker filed and nobody has routed yet.
+    ///
+    /// `create_task` lets a worker record work it noticed, as an unassigned
+    /// draft for Queen to route. The filer could not then correct it: a draft is
+    /// nobody's assignment, so it fails the visibility check, and it was never
+    /// finished, so it fails `task_this_worker_finished` too.
+    ///
+    /// So the one party who knows the ticket is wrong — the one who wrote it —
+    /// was the only party who could not say so.
+    ///
+    /// ⚠️ DRAFT ONLY. The moment Queen routes it this stops applying and the
+    /// ordinary assignment rules govern, which is what keeps this from being a
+    /// way to reach into live work.
+    ///
+    /// # Errors
+    /// Denies a task that is not an unrouted draft this worker filed, and
+    /// propagates persistence failures.
+    pub fn unrouted_draft_this_worker_filed(
+        &self,
+        principal: AgentPrincipal,
+        task_id: TaskId,
+    ) -> Result<Task, ApplicationError> {
+        if self
+            .store
+            .worker_owns_unrouted_draft(task_id, principal.worker_id)?
+        {
+            return Ok(self.store.get_task(task_id)?);
+        }
+        Err(ApplicationError::NotAuthorized)
+    }
+
     /// Reads one task's history, including the notes workers wrote on it.
     ///
     /// Queen's job is to accept or reject finished work, and the outcome
@@ -3403,6 +3434,110 @@ mod tests {
         store
             .archive_worker_profile(worker.id)
             .expect("abandoned work must not keep its worker open");
+    }
+
+    /// A worker that files a draft can correct it, and loses that reach the
+    /// moment the draft is routed.
+    ///
+    /// The filer was the one party who could not fix its own ticket: a draft is
+    /// nobody's assignment, so it fails visibility, and it never started, so it
+    /// fails `task_this_worker_finished`. The narrowness is the point -- the
+    /// three denials below are what stop this being a way into live work.
+    #[test]
+    fn a_worker_may_correct_its_own_draft_until_the_moment_it_is_routed() {
+        let (service, _queen, worker) = setup();
+        let store = service.store.clone();
+        let other = store
+            .create_worker(
+                "Thistle",
+                ProviderKind::ClaudeCode,
+                "/workspace/thistle",
+                false,
+                1,
+            )
+            .unwrap();
+        let principal = AgentPrincipal {
+            worker_id: worker.id,
+            role: WorkerRole::Worker,
+            active_session_id: None,
+        };
+        let other_principal = AgentPrincipal {
+            worker_id: other.id,
+            role: WorkerRole::Worker,
+            active_session_id: None,
+        };
+
+        let draft = service
+            .create_task(
+                principal,
+                "Rotate the signing key",
+                "Noticed while packaging.",
+                TaskPriority::Normal,
+                "/workspace/petal",
+            )
+            .unwrap();
+        assert_eq!(draft.state, TaskState::Draft, "precondition: it is a draft");
+
+        // THE POINT: the filer reaches it.
+        assert_eq!(
+            service
+                .unrouted_draft_this_worker_filed(principal, draft.id)
+                .unwrap()
+                .id,
+            draft.id,
+            "the worker that wrote the ticket must be able to correct it"
+        );
+
+        // And nobody else's draft becomes reachable by filing one of your own.
+        let theirs = service
+            .create_task(
+                other_principal,
+                "Something else entirely",
+                "Filed by a different worker.",
+                TaskPriority::Normal,
+                "/workspace/thistle",
+            )
+            .unwrap();
+        assert!(
+            matches!(
+                service.unrouted_draft_this_worker_filed(principal, theirs.id),
+                Err(ApplicationError::NotAuthorized)
+            ),
+            "another worker's draft is not this worker's to edit"
+        );
+
+        // THE BOUNDARY. Routing hands the ticket to Queen's judgement, and the
+        // filer's authorship stops being authority over it.
+        store.transition_task(draft.id, TaskState::Ready).unwrap();
+        assert!(
+            matches!(
+                service.unrouted_draft_this_worker_filed(principal, draft.id),
+                Err(ApplicationError::NotAuthorized)
+            ),
+            "a routed ticket is governed by assignment again, not by who filed it"
+        );
+
+        // Assignment is the other half of routed: a draft handed straight to a
+        // worker is no longer an unrouted draft either.
+        let assigned = service
+            .create_task(
+                principal,
+                "Handed over before routing",
+                "Filed, then assigned while still a draft.",
+                TaskPriority::Normal,
+                "/workspace/petal",
+            )
+            .unwrap();
+        store
+            .assign_task_to_worker_as(assigned.id, other.id, &TaskActivityActor::operator())
+            .unwrap();
+        assert!(
+            matches!(
+                service.unrouted_draft_this_worker_filed(principal, assigned.id),
+                Err(ApplicationError::NotAuthorized)
+            ),
+            "once a draft carries an assignee it belongs to the assignee, not the filer"
+        );
     }
 
     #[test]

@@ -1471,6 +1471,54 @@ impl TaskStore {
         self.get_task(id)
     }
 
+    /// Whether this worker created this task and it is STILL A DRAFT.
+    ///
+    /// A worker may file work it noticed with `create_task`, which lands as an
+    /// unassigned draft for Queen to route. Until now it could then do nothing
+    /// to it: a draft is nobody's assignment, so it is not visible, and it was
+    /// never finished — so both amendment and notes were refused with "this
+    /// agent is not authorized for that outcome".
+    ///
+    /// That bites exactly when the filer learns something. Measured
+    /// 2026-09-10: two integration drafts were filed, the operator then ruled
+    /// out two providers and corrected the authority the design depended on,
+    /// and none of it could be attached to the tickets it changed. It went into
+    /// a doc instead, which is a worse place to find it.
+    ///
+    /// ⚠️ SCOPED TO DRAFT ON PURPOSE. Once Queen routes it the ordinary rules
+    /// apply again: a worker holds it because it is assigned, or it does not
+    /// hold it at all. This does not let anyone reach into work that is
+    /// underway, and it cannot move scope — `amend_task_facts` already refuses
+    /// that by construction.
+    ///
+    /// The creator comes from the `created` activity row rather than a new
+    /// column, because that row already records the actor and has since tasks
+    /// existed. No migration, and it is true retroactively.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn worker_owns_unrouted_draft(
+        &self,
+        task_id: TaskId,
+        worker_id: WorkerId,
+    ) -> Result<bool, TaskStoreError> {
+        let connection = self.connection()?;
+        Ok(connection.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM tasks t
+                 JOIN task_activity a
+                   ON a.task_id = t.id AND a.kind = 'created'
+                 WHERE t.id = ?1
+                   AND t.removed_at IS NULL
+                   AND t.state = 'draft'
+                   AND t.assigned_worker_id IS NULL
+                   AND a.actor_kind = 'worker'
+                   AND a.actor_id = ?2)",
+            params![task_id.to_string(), worker_id.to_string()],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Appends a correction to a task's record WITHOUT changing its state.
     ///
     /// A handoff that was true when written stops being true, and until now the
