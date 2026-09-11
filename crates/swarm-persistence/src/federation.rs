@@ -6783,6 +6783,9 @@ mod tests {
     }
 
     #[test]
+    // Keep the leave/migrate/rejoin/replay sequence together so its history
+    // and identity assertions can be reviewed as one recovery scenario.
+    #[allow(clippy::too_many_lines)]
     fn departed_hive_can_rejoin_without_replacing_identity_or_private_work() {
         let now = 125_000;
         let (keeper, member) = joined_member(now);
