@@ -10149,7 +10149,14 @@ mod tests {
                 .unwrap();
             assert!(
                 restored,
-                "{} on {} did not survive the migration",
+                "{} on {} did not survive the migration.\n\nCHECK RECENT_SCHEMA_STEPS BEFORE \
+                 CHECKING THE MIGRATION. This test rewinds only the LAST entry in that list and \
+                 sets user_version to CURRENT_SCHEMA_VERSION - 1. A step added to \
+                 migrate_newest_schema_steps without a matching line here leaves the last entry \
+                 describing the version BELOW the ceiling, so the rewound artifact sits at or \
+                 under user_version and its guard never fires -- and the failure names the \
+                 rewound step rather than the missing line. That is how schema 165 \
+                 (apiary_enrollments) landed: the list still ended at 164.",
                 step.artifact, step.table
             );
         }
