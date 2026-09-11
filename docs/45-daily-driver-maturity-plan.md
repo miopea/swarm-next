@@ -2,6 +2,13 @@
 
 ## Authoritative next gates — September 11, morning
 
+Native-capture follow-on: fixed changed callback retries resetting the same
+invocation's input evidence. All20 focused tests,171 full terminal tests (one
+opt-in profiler ignored), and strict terminal Clippy pass. Hooks remain disabled;
+full native answer reconciliation/provenance is not complete. This is a separate
+engine-code change, not part of the already tested3dfc019e release candidate.
+Continue the complete source-to-decision lifecycle without enabling partial proof.
+
 Current runtime candidate is3dfc019e on production and WSL. Full CI34589715128
 SUCCESS; deployment, browser checks and exact production ten-session continuity
 are recorded in92. WSL's separately pending engine was then explicitly updated;

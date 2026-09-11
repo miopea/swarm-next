@@ -166,11 +166,18 @@ impl NativeInterviewCapture {
         }
         match observation.phase {
             NativeInterviewPhase::Requested => {
-                if let Some(pending) = self.pending.get(&session_id)
-                    && pending.observation == observation
+                if let Some(pending) = self.pending.get_mut(&session_id)
+                    && pending.observation.conversation == observation.conversation
+                    && pending.observation.tool_use_id == observation.tool_use_id
                     && pending.selection_revision == selection_revision
                 {
-                    // A callback retry cannot reset contamination or reuse input.
+                    // The same invocation cannot change its question and then
+                    // retry the original shape to erase contaminated input.
+                    // Keep this window refused until a genuinely new invocation.
+                    if pending.observation != observation {
+                        pending.tainted = true;
+                        return false;
+                    }
                     return true;
                 }
                 if self.ready.len() == MAX_READY
@@ -407,7 +414,15 @@ mod tests {
     }
 
     fn observation(completed: bool, id: &str) -> NativeInterviewObservation {
-        let questions = json!([{"question":"Which fictional jar?","header":"Jar",
+        observation_with_header(completed, id, "Jar")
+    }
+
+    fn observation_with_header(
+        completed: bool,
+        id: &str,
+        header: &str,
+    ) -> NativeInterviewObservation {
+        let questions = json!([{"question":"Which fictional jar?","header":header,
             "options":[{"label":"Amber"},{"label":"Blue"}]}]);
         let mut event = json!({"session_id":"00000000-0000-0000-0000-000000000001",
             "tool_use_id":id, "tool_name":"AskUserQuestion", "tool_input":{"questions":questions},
@@ -494,6 +509,35 @@ mod tests {
         capture.record_write(&input(session, 3), true);
         assert!(!capture.observe(session, observation(true, "toolu_one")));
         assert!(capture.observe(session, observation(true, "toolu_two")));
+    }
+
+    #[test]
+    fn changed_request_retry_cannot_reset_the_same_invocation_input_evidence() {
+        for contaminated in [false, true] {
+            let mut capture = NativeInterviewCapture::default();
+            let session = WorkerSessionId::new();
+            let original = observation(false, "toolu_one");
+            let ticket = capture.prepare(session, 1, original.clone()).unwrap();
+            assert!(capture.begin_prepared(session, 1, ticket, original.clone()));
+            capture.record_write(&input(session, 1), !contaminated);
+
+            let changed = observation_with_header(false, "toolu_one", "Changed");
+            let changed_ticket = capture.prepare(session, 1, changed.clone()).unwrap();
+            assert!(!capture.begin_prepared(session, 1, changed_ticket, changed));
+            let retry = capture.prepare(session, 1, original.clone()).unwrap();
+            assert!(capture.begin_prepared(session, 1, retry, original));
+            capture.record_write(&input(session, 2), true);
+            assert!(!capture.observe(session, observation(true, "toolu_one")));
+            assert!(capture.retained().is_empty());
+
+            // A new invocation is independent; recovery never replays old input.
+            let next = observation(false, "toolu_two");
+            let ticket = capture.prepare(session, 1, next.clone()).unwrap();
+            assert!(capture.begin_prepared(session, 1, ticket, next));
+            capture.record_write(&input(session, 3), true);
+            assert!(capture.observe(session, observation(true, "toolu_two")));
+            assert_eq!(capture.retained().len(), 1);
+        }
     }
 
     #[test]

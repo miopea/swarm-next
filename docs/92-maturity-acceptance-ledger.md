@@ -1,5 +1,26 @@
 # Current maturity acceptance ledger
 
+## September 11 — Native question retry preserves refusal evidence
+
+Source inspection found that a changed Requested callback for the same native
+invocation replaced its pending input window. A later callback restoring the
+original question could therefore discard the prior contamination. The capture
+path now retains the original window and marks it ineligible when that invocation's
+question changes. Exact original retries cannot undo this; a genuinely new
+invocation can recover with fresh generation-checked input.
+
+The regression exercises real prepare/admit calls, changes the header, retries
+the original, and attempts completion, both with previously clean and untrusted
+input. Neither emits a source. A distinct invocation then completes normally.
+All20 focused native-interview tests and strict all-target release-mode terminal
+Clippy passed on Linux. The full release-mode terminal suite also passed:
+171 passed, one explicitly opt-in profiling test ignored;82.47 seconds including
+the sustained-output history bound. No tests remain running for this patch.
+Capture remains disabled in live provider settings: this correction does not
+enable automatic Needs You answers or prove the full human-origin lifecycle.
+It changes engine code; the already verified3dfc019e Apiary release candidate
+and running production/WSL engines are untouched by this follow-on work.
+
 ## September 11 — No-Jira live enrollment gate closed
 
 After explicit operator approval, restored the existing fictional Daisy member

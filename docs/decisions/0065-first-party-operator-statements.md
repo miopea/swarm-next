@@ -349,6 +349,12 @@ last submit refuse evidence. The collector retains native questions and answers,
 device identities and sequence boundaries, not keystroke text. It does not itself
 prove exact decision identity or rule out every provider-side programmatic answer.
 
+A requested callback that changes the same invocation's question snapshot marks
+that pending invocation ineligible. Restoring its original snapshot cannot reset
+earlier input contamination or regain eligibility. A genuinely new invocation
+may recover normally; this adds no timer, retry, replay or retained queue. The
+prepared/admitted callback path must enforce this rule, not only direct reads.
+
 The engine owns at most32 prepared/pending observations and32 completed entries;
 source payloads use the parser's64KiB bound. Admission failure does not block or
 misreport an otherwise successful terminal write. Completed entries survive API
