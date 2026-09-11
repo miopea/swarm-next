@@ -52,6 +52,8 @@ type Props = {
   focusTaskId?: string;
   focusRequest?: number;
   composeRequest?: number;
+  /** Existing task-event stream plus explicit control-room refresh, not a poll. */
+  sharedWorkRefreshKey?: string;
   sessions: SessionSummary[];
   workers: Worker[];
   busy: boolean;
@@ -133,6 +135,7 @@ export default function TaskBoard({
   focusTaskId,
   focusRequest,
   composeRequest,
+  sharedWorkRefreshKey,
   sessions,
   workers,
   busy,
@@ -189,6 +192,7 @@ export default function TaskBoard({
   const [apiaryOutbox, setApiaryOutbox] = useState<FederationTaskOutboxEntry[]>([]);
   const [stewardship, setStewardship] = useState<FederationStewardshipSnapshot | null>(null);
   const [apiaryRefreshState, setApiaryRefreshState] = useState<"idle" | "loading" | "ready" | "partial">("idle");
+  const apiaryRead = useRef<AbortController | undefined>(undefined);
   const [apiaryWorkerChoices, setApiaryWorkerChoices] = useState<Record<string, string>>({});
   const [actingApiaryTask, setActingApiaryTask] = useState<string>();
   const [creating, setCreating] = useState(false);
@@ -268,6 +272,9 @@ export default function TaskBoard({
     : apiaryMembers.filter((member) => member.role === "member");
 
   async function refreshApiaryWork() {
+    apiaryRead.current?.abort();
+    const controller = new AbortController();
+    apiaryRead.current = controller;
     if (!inApiary) {
       setApiaryTasks([]);
       setApiaryMembers([]);
@@ -279,12 +286,13 @@ export default function TaskBoard({
     }
     setApiaryRefreshState("loading");
     const [shared, members, executions, outbox, stewardshipResult] = await Promise.allSettled([
-      fetchApiaryTasks(operatorToken),
-      fetchApiaryMembers(operatorToken),
-      fetchLocalApiaryTaskExecutions(operatorToken),
-      fetchFederationTaskOutbox(operatorToken),
-      fetchMyFederationStewardship(operatorToken),
+      fetchApiaryTasks(operatorToken, controller.signal),
+      fetchApiaryMembers(operatorToken, controller.signal),
+      fetchLocalApiaryTaskExecutions(operatorToken, controller.signal),
+      fetchFederationTaskOutbox(operatorToken, controller.signal),
+      fetchMyFederationStewardship(operatorToken, controller.signal),
     ]);
+    if (controller.signal.aborted) return;
     if (shared.status === "fulfilled") setApiaryTasks(Array.isArray(shared.value) ? shared.value : []);
     if (members.status === "fulfilled") setApiaryMembers(Array.isArray(members.value) ? members.value : []);
     if (executions.status === "fulfilled") setApiaryExecutions(Array.isArray(executions.value) ? executions.value : []);
@@ -354,7 +362,8 @@ export default function TaskBoard({
   }, [operatorToken, removedTasksAttempt, tasks]);
   useEffect(() => {
     void refreshApiaryWork();
-  }, [operatorToken, inApiary]);
+    return () => apiaryRead.current?.abort();
+  }, [operatorToken, inApiary, hiveIdentity?.hive.apiary_id, sharedWorkRefreshKey]);
   useEffect(() => {
     if (!canCreateApiaryWork && workScope === "apiary") setWorkScope("hive");
   }, [canCreateApiaryWork, workScope]);
@@ -636,13 +645,15 @@ export default function TaskBoard({
             const home = task.home_hive_id ? apiaryMembers.find((member) => member.hive_id === task.home_hive_id)?.hive_name ?? "Assigned Hive" : "Available to claim";
             const localHiveId = hiveIdentity?.hive.id;
             const mine = Boolean(localHiveId && task.home_hive_id === localHiveId);
+            const closed = task.state === "completed" || task.state === "abandoned";
             const queued = apiaryOutbox.some((entry) => entry.state === "queued" && entry.command.task_id === task.id);
             const execution = apiaryExecutions.find((candidate) => candidate.apiary_task_id === task.id);
             return <article key={task.id} className="apiary-task-board-card">
               <span><small>{priorityLabels[task.priority]} · {stateLabels[task.state]}</small><strong>{task.title}</strong>{task.description ? <p>{task.description}</p> : null}</span>
               <span className="apiary-task-board-owner"><strong>{home}</strong><small>{mine ? "Owned by this Hive" : "Apiary task"}</small>
-                {queued ? <small>Change queued for Keeper</small> : inApiary && apiaryContext.local_role === "member" && !task.home_hive_id ? <button className="secondary-button" type="button" disabled={actingApiaryTask === task.id} onClick={() => void claimSharedTask(task)}>{actingApiaryTask === task.id ? "Claiming…" : "Claim for this Hive"}</button> : null}
+                {queued ? <small>Change queued for Keeper</small> : !closed && inApiary && apiaryContext.local_role === "member" && !task.home_hive_id ? <button className="secondary-button" type="button" disabled={actingApiaryTask === task.id} onClick={() => void claimSharedTask(task)}>{actingApiaryTask === task.id ? "Claiming…" : "Claim for this Hive"}</button> : null}
                 {mine && execution ? <button className="secondary-button" type="button" onClick={() => onOpenTask?.(execution.local_task_id)}>Open local task</button>
+                  : closed ? <small>Closed · retained in shared history.</small>
                   : mine && task.state !== "ready" ? <small>Worker routing becomes available when this task is Ready.</small>
                   : mine && assignableWorkers.length === 0 ? <span className="apiary-task-worker-route">
                     <small>Add a repository worker to carry this task. Your Hive keeps ownership while you set up.</small>

@@ -240,6 +240,7 @@ impl TaskStore {
                 cursor = excluded.cursor, last_applied_at = excluded.last_applied_at",
             params![page.next_cursor, now],
         )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
         drop(connection);
         self.federation_task_sync_status()
@@ -913,6 +914,7 @@ impl TaskStore {
                 now,
             ],
         )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
         Ok(FederationTaskOutboxEntry {
             command,
@@ -1021,6 +1023,7 @@ impl TaskStore {
                     receipt.command_id.to_string(),
                 ],
             )?;
+            insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         }
         let entry = transaction.query_row(
             "SELECT command_json, state, attempt_count, last_attempt_at, receipt_json
@@ -1221,6 +1224,7 @@ fn insert_task_event(
             now,
         ],
     )?;
+    insert_control_room_event(transaction, ControlRoomEventKind::TasksChanged)?;
     Ok(())
 }
 
@@ -1831,6 +1835,15 @@ mod tests {
 
     #[test]
     fn lifecycle_states_cross_member_outbox_keeper_and_projection() {
+        let task_events = |store: &TaskStore| {
+            store
+                .list_control_room_events(0)
+                .unwrap()
+                .events
+                .into_iter()
+                .filter(|event| event.kind == ControlRoomEventKind::TasksChanged)
+                .count()
+        };
         for states in [
             vec![TaskState::Abandoned],
             vec![
@@ -1855,8 +1868,14 @@ mod tests {
                 .federation_task_page(&acceptance.node_credential, 0, now + 11)
                 .unwrap();
             member.apply_federation_task_page(&page, now + 11).unwrap();
+            let projected_events = task_events(&member);
+            assert!(projected_events > 0);
+            member.apply_federation_task_page(&page, now + 12).unwrap();
+            assert_eq!(task_events(&member), projected_events);
             for (index, target) in states.into_iter().enumerate() {
                 let time = now + 20 + i64::try_from(index).unwrap() * 10;
+                let member_before = task_events(&member);
+                let keeper_before = task_events(&keeper);
                 let command = member
                     .queue_federation_task_transition(task.id, target, time)
                     .unwrap();
@@ -1864,6 +1883,7 @@ mod tests {
                     .queue_federation_task_transition(task.id, target, time + 1)
                     .unwrap();
                 assert_eq!(command.command.id, retry.command.id);
+                assert_eq!(task_events(&member), member_before + 1);
                 let receipt = keeper
                     .apply_federation_task_command(
                         &acceptance.node_credential,
@@ -1872,6 +1892,7 @@ mod tests {
                     )
                     .unwrap();
                 assert_eq!(receipt.outcome, FederationTaskCommandOutcome::Applied);
+                assert_eq!(task_events(&keeper), keeper_before + 1);
                 assert_eq!(
                     keeper
                         .apply_federation_task_command(
@@ -1882,13 +1903,19 @@ mod tests {
                         .unwrap(),
                     receipt
                 );
+                assert_eq!(task_events(&keeper), keeper_before + 1);
                 member
                     .apply_federation_task_command_receipt(&receipt, time + 4)
                     .unwrap();
+                member
+                    .apply_federation_task_command_receipt(&receipt, time + 4)
+                    .unwrap();
+                assert_eq!(task_events(&member), member_before + 2);
                 let page = keeper
                     .federation_task_page(&acceptance.node_credential, 0, time + 5)
                     .unwrap();
                 member.apply_federation_task_page(&page, time + 5).unwrap();
+                assert_eq!(task_events(&member), member_before + 3);
                 assert_eq!(member.list_local_apiary_tasks().unwrap()[0].state, target);
                 assert_eq!(
                     member.federation_task_outbox_status().unwrap().queued_count,

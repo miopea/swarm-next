@@ -2,6 +2,31 @@
 
 ## Authoritative next gates — September 11, overnight
 
+02:45 next fix validated locally: shared-task persistence now emits existing
+TasksChanged events for canonical writes, new member projections, queued commands
+and first receipts (not exact replays). TaskBoard listens to the existing event
+sequence plus explicit refresh, aborts superseded reads and preserves last-known
+rows with Retry on failure. Closed rows no longer offer claim/setup guidance.
+104 web tests/typecheck and all8 shared persistence tests/strict Clippy pass.
+Commit/deploy then test automatic cross-Hive browser refresh with one new fictional
+task; do not refresh tabs to manufacture evidence. e49d44cf full CI is GREEN.
+
+02:38 LIVE closure: e49d44cf schema167 is deployed on production and WSL as
+1.7.1-dev-e49d44cf2c01-20260911062550-1142843. Isolated committed build excluded
+the shared checkout's unfinished jira.rs edit (still untouched). Healthy APIs;
+engine PIDs944143/6458 preserved. Both verified pre-update backups retain schema166;
+live production schema167 confirmed read-only. Fictional task
+01a08f02-fc6b-7953-bf57-4c73e79cf3d8 retired through the supported Member API;
+command01a08f2d-9413-74a2-811c-215af10b7160 applied in one automatic attempt,
+Member projection Abandoned/revision2, Keeper browser agrees after tab reload.
+No worker/provider was started, no real task changed, no release cut.
+CI34569820313: web/package/audit and workspace fmt/Clippy pass; Rust tests pending.
+NEXT user-facing gate: the mounted shared task board is stale even after general
+Refresh, because its reads only run on mount/membership/token change. Also closed
+shared tasks show misleading Ready/worker-routing guidance. Fix refresh ownership
+and closed-work presentation with race/failure tests, then browser verify. Do not
+claim the general UI freshness issue closed by this backend lifecycle fix.
+
 02:10 implementation checkpoint: schema167 forward migration is LOCAL ONLY,
 uncommitted in persistence lib.rs/federation_tasks.rs. It rebuilds canonical
 Apiary task state, Member command target_state and local lifecycle intent state

@@ -414,7 +414,7 @@ test("routes owned Apiary work to a private worker from Tasks", async () => {
   await waitFor(() => expect(onOpenTask).toHaveBeenCalledWith("local-1"));
 });
 
-test.each(["ready", "blocked", "completed"])("owned %s Apiary task has an honest next step without repository workers", async (state) => {
+test.each(["ready", "blocked", "completed", "abandoned"])("owned %s Apiary task has an honest next step without repository workers", async (state) => {
   const fetchMock = vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/api/v1/apiary/tasks")) return Promise.resolve(ok([{ ...apiaryTask(), state, home_hive_id: "hive-2", home_node_id: "node-2" }]));
@@ -430,9 +430,53 @@ test.each(["ready", "blocked", "completed"])("owned %s Apiary task has an honest
     expect(screen.getByText(/Your Hive keeps ownership while you set up/)).toBeInTheDocument();
   } else {
     expect(screen.queryByRole("link", { name: "Set up a worker" })).not.toBeInTheDocument();
-    expect(screen.getByText("Worker routing becomes available when this task is Ready.")).toBeInTheDocument();
+    expect(screen.getByText(state === "blocked" ? "Worker routing becomes available when this task is Ready." : "Closed · retained in shared history.")).toBeInTheDocument();
   }
   expect(fetchMock.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
+});
+
+test("refreshes shared work on invalidation and ignores an older in-flight response", async () => {
+  let resolveOld!: (response: ReturnType<typeof ok>) => void;
+  let reads = 0;
+  const fetchMock = vi.fn((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/apiary/tasks")) {
+      reads += 1;
+      if (reads === 2) return new Promise<ReturnType<typeof ok>>((resolve) => { resolveOld = resolve; });
+      return Promise.resolve(ok([{ ...apiaryTask(), state: reads === 1 ? "ready" : "abandoned" }]));
+    }
+    if (url.endsWith("/api/v1/apiary/my-stewardship")) return Promise.resolve(ok(null));
+    return Promise.resolve(ok([]));
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const { props, rerender } = renderBoard({ tasks: [], hiveIdentity: memberIdentity(), sharedWorkRefreshKey: "0" });
+  await screen.findByRole("button", { name: "Claim for this Hive" });
+  rerender(<TaskBoard {...props} sharedWorkRefreshKey="1" />);
+  await waitFor(() => expect(reads).toBe(2));
+  rerender(<TaskBoard {...props} sharedWorkRefreshKey="2" />);
+  await screen.findByText("Closed · retained in shared history.");
+  await act(async () => { resolveOld(ok([apiaryTask()])); });
+  expect(screen.queryByRole("button", { name: "Claim for this Hive" })).not.toBeInTheDocument();
+  expect(screen.getByText("Closed · retained in shared history.")).toBeInTheDocument();
+});
+
+test("keeps last-known shared work on refresh failure and can retry", async () => {
+  let fail = false;
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/apiary/tasks")) return fail ? Promise.reject(new Error("offline")) : Promise.resolve(ok([apiaryTask()]));
+    if (url.endsWith("/api/v1/apiary/my-stewardship")) return Promise.resolve(ok(null));
+    return Promise.resolve(ok([]));
+  }));
+  const { props, rerender } = renderBoard({ tasks: [], hiveIdentity: memberIdentity(), sharedWorkRefreshKey: "0" });
+  await screen.findByText("Prepare shared brief");
+  fail = true;
+  rerender(<TaskBoard {...props} sharedWorkRefreshKey="1" />);
+  await screen.findByRole("button", { name: "Retry Apiary work" });
+  expect(screen.getByText("Prepare shared brief")).toBeInTheDocument();
+  fail = false;
+  fireEvent.click(screen.getByRole("button", { name: "Retry Apiary work" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Retry Apiary work" })).not.toBeInTheDocument());
 });
 
 test("lets a Steward route work from Tasks only to Hives in her scope", async () => {
