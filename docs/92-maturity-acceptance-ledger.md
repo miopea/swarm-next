@@ -1,5 +1,21 @@
 # Current maturity acceptance ledger
 
+## September 11, 03:43 Eastern — Open shared work and closed history separated
+
+All three shared-work surfaces (Keeper overview, Member overview, Tasks) now
+count only unfinished tasks and retain completed/abandoned records in optional,
+unmounted-while-collapsed history. Blocked, Review and Awaiting Release remain
+visible. Three grouping tests cover every state, closure, reopening and empty
+history;158 targeted/App tests pass. Full web CI passes after correcting the
+App fixture's invalid task response; package/audit also pass, Rust still running
+in34575108616. Exact deployment/checksum/engine continuity is recorded in45.
+
+Live Edge on production and WSL verified0 open/2 closed, opening and closing
+history on each surface, retained fictional records and unchanged memberships.
+Keeper screenshot inspected. No task state was changed for this presentation
+check, no provider input was sent, and no release was cut. This is a desktop
+shared-work UI gate, not native mobile or full Apiary orchestration acceptance.
+
 ## September 11, 02:55 Eastern — Shared-task lifecycle and live board freshness closed
 
 `e49d44cf` repairs schema167 constraints for canonical task state, member command

@@ -2,6 +2,24 @@
 
 ## Authoritative next gates — September 11, overnight
 
+03:43 CLOSED shared-work presentation: Keeper and Member overviews and Tasks
+now count unfinished work separately from completed/abandoned history. History
+is opt-in and not mounted while collapsed; blocked/review/awaiting_release stay
+visible. Commits a9cec2b2/8d5194c6, integration fixture correction032bff1d.
+Both Hives serve1.7.1-dev-032bff1da08c-20260911073608-1192823; health ok,
+engines944143/6458 preserved. Identical archive SHA256:
+2a926b3e315a6d718cae724191710e3909445391368a6358f3aa23c279f81f93.
+158 targeted/App tests pass. Full CI34575108616 web/package/audit pass; Rust
+still running. Prior CI34574713336 caught an App fixture returning a notification
+object instead of the task array; corrected the fixture, not product checks.
+Live Edge: all three views show0 open/2 closed, history opens and closes, both
+fictional records retained; Keeper screenshot inspected. Both tabs left on Apiary,
+history collapsed, no provider input or real task/membership mutation. No release.
+NEXT: inspect why existing connected Hives still show the default Operator label
+and no email. Distinguish missing provider identity from an unpropagated saved
+profile; preserve explicit operator values and credential boundaries. Do not
+claim this source-identity issue fixed from earlier onboarding fixture evidence.
+
 03:25 browser recovery succeeded by opening new dedicated tabs through the
 existing Edge connection (no restart, authentication prompt or user action).
 Both rendered the exact1df01d76 runtime. WSL retained its membership and both
