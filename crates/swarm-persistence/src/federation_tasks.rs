@@ -1643,6 +1643,70 @@ pub(super) fn migrate_local_apiary_task_executions(
     )
 }
 
+/// Keep all persisted federation lifecycle stages aligned with `TaskState`.
+/// The owning migration transaction has foreign keys disabled and checks them
+/// after commit. Create-copy-drop-rename preserves inbound reference names.
+/// Neither command JSON, receipt identity nor pending local intent is rewritten.
+pub(super) fn migrate_complete_lifecycle_states(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE apiary_tasks_v167 (
+             id TEXT PRIMARY KEY,
+             apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+             source TEXT NOT NULL CHECK (source = 'swarm'),
+             title TEXT NOT NULL,
+             description TEXT NOT NULL DEFAULT '',
+             priority TEXT NOT NULL CHECK (priority IN ('low','normal','high','urgent')),
+             state TEXT NOT NULL CHECK (state IN ('draft','ready','active','blocked','review','awaiting_release','completed','abandoned')),
+             home_node_id TEXT,
+             home_hive_id TEXT REFERENCES hives(id),
+             revision INTEGER NOT NULL CHECK (revision > 0),
+             created_at INTEGER NOT NULL CHECK (created_at >= 0),
+             updated_at INTEGER NOT NULL CHECK (updated_at >= created_at),
+             CHECK ((home_node_id IS NULL) = (home_hive_id IS NULL))
+         );
+         INSERT INTO apiary_tasks_v167 SELECT * FROM apiary_tasks;
+         DROP TABLE apiary_tasks;
+         ALTER TABLE apiary_tasks_v167 RENAME TO apiary_tasks;
+         CREATE INDEX apiary_tasks_by_apiary_state
+             ON apiary_tasks(apiary_id, state, updated_at DESC);
+         CREATE TABLE local_apiary_task_commands_v167 (
+             command_id TEXT PRIMARY KEY,
+             apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+             task_id TEXT NOT NULL,
+             expected_revision INTEGER NOT NULL CHECK (expected_revision > 0),
+             kind TEXT NOT NULL CHECK (kind IN ('claim','transition')),
+             target_state TEXT CHECK (target_state IN ('draft','ready','active','blocked','review','awaiting_release','completed','abandoned')),
+             command_json TEXT NOT NULL,
+             state TEXT NOT NULL CHECK (state IN ('queued','applied','conflict','rejected')),
+             attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+             last_attempt_at INTEGER CHECK (last_attempt_at >= 0),
+             receipt_json TEXT,
+             created_at INTEGER NOT NULL CHECK (created_at >= 0),
+             updated_at INTEGER NOT NULL CHECK (updated_at >= created_at),
+             CHECK ((kind = 'claim' AND target_state IS NULL) OR
+                    (kind = 'transition' AND target_state IS NOT NULL))
+         );
+         INSERT INTO local_apiary_task_commands_v167 SELECT * FROM local_apiary_task_commands;
+         DROP TABLE local_apiary_task_commands;
+         ALTER TABLE local_apiary_task_commands_v167 RENAME TO local_apiary_task_commands;
+         CREATE INDEX local_apiary_task_commands_queue
+             ON local_apiary_task_commands(state, created_at, command_id);
+         CREATE TABLE local_apiary_task_lifecycle_intents_v167 (
+             apiary_task_id TEXT PRIMARY KEY
+                 REFERENCES local_apiary_task_executions(apiary_task_id) ON DELETE CASCADE,
+             desired_state TEXT NOT NULL
+                 CHECK (desired_state IN ('ready','active','blocked','review','awaiting_release','completed','abandoned')),
+             updated_at INTEGER NOT NULL CHECK (updated_at >= 0)
+         );
+         INSERT INTO local_apiary_task_lifecycle_intents_v167 SELECT * FROM local_apiary_task_lifecycle_intents;
+         DROP TABLE local_apiary_task_lifecycle_intents;
+         ALTER TABLE local_apiary_task_lifecycle_intents_v167 RENAME TO local_apiary_task_lifecycle_intents;
+         PRAGMA user_version = 167;",
+    )
+}
+
 pub(super) fn migrate_local_apiary_task_lifecycle_intents(
     transaction: &rusqlite::Transaction<'_>,
 ) -> rusqlite::Result<()> {
@@ -1762,6 +1826,170 @@ mod tests {
                 )
                 .expect("table lookup");
             assert!(exists, "missing {table}");
+        }
+    }
+
+    #[test]
+    fn lifecycle_states_cross_member_outbox_keeper_and_projection() {
+        for states in [
+            vec![TaskState::Abandoned],
+            vec![
+                TaskState::Active,
+                TaskState::Review,
+                TaskState::AwaitingRelease,
+                TaskState::Completed,
+            ],
+        ] {
+            let now = 100_000;
+            let (keeper, member, acceptance) = joined_member(now);
+            let task = keeper
+                .create_apiary_task_for_hive(
+                    "Lifecycle regression",
+                    "",
+                    TaskPriority::Low,
+                    Some(acceptance.receipt.payload.member_hive_id),
+                    now + 10,
+                )
+                .unwrap();
+            let page = keeper
+                .federation_task_page(&acceptance.node_credential, 0, now + 11)
+                .unwrap();
+            member.apply_federation_task_page(&page, now + 11).unwrap();
+            for (index, target) in states.into_iter().enumerate() {
+                let time = now + 20 + i64::try_from(index).unwrap() * 10;
+                let command = member
+                    .queue_federation_task_transition(task.id, target, time)
+                    .unwrap();
+                let retry = member
+                    .queue_federation_task_transition(task.id, target, time + 1)
+                    .unwrap();
+                assert_eq!(command.command.id, retry.command.id);
+                let receipt = keeper
+                    .apply_federation_task_command(
+                        &acceptance.node_credential,
+                        &command.command,
+                        time + 2,
+                    )
+                    .unwrap();
+                assert_eq!(receipt.outcome, FederationTaskCommandOutcome::Applied);
+                assert_eq!(
+                    keeper
+                        .apply_federation_task_command(
+                            &acceptance.node_credential,
+                            &command.command,
+                            time + 3,
+                        )
+                        .unwrap(),
+                    receipt
+                );
+                member
+                    .apply_federation_task_command_receipt(&receipt, time + 4)
+                    .unwrap();
+                let page = keeper
+                    .federation_task_page(&acceptance.node_credential, 0, time + 5)
+                    .unwrap();
+                member.apply_federation_task_page(&page, time + 5).unwrap();
+                assert_eq!(member.list_local_apiary_tasks().unwrap()[0].state, target);
+                assert_eq!(
+                    member.federation_task_outbox_status().unwrap().queued_count,
+                    0
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn lifecycle_schema_upgrade_preserves_rows_and_rolls_back_failure() {
+        for fail in [false, true] {
+            let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+            // Match TaskStore's migration owner, which disables enforcement
+            // before beginning the atomic table-rebuild transaction.
+            connection
+                .pragma_update(None, "foreign_keys", "OFF")
+                .unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE apiaries(id TEXT PRIMARY KEY);
+                 CREATE TABLE hives(id TEXT PRIMARY KEY);
+                 CREATE TABLE tasks(id TEXT PRIMARY KEY);
+                 CREATE TABLE worker_profiles(id TEXT PRIMARY KEY);
+                 INSERT INTO apiaries VALUES('apiary'); INSERT INTO hives VALUES('hive');
+                 INSERT INTO tasks VALUES('local'); INSERT INTO worker_profiles VALUES('worker');",
+                )
+                .unwrap();
+            {
+                let tx = connection.transaction().unwrap();
+                super::migrate_federation_tasks(&tx).unwrap();
+                super::migrate_federation_task_commands(&tx).unwrap();
+                super::migrate_local_apiary_task_executions(&tx).unwrap();
+                super::migrate_local_apiary_task_lifecycle_intents(&tx).unwrap();
+                tx.execute_batch(
+                    "INSERT INTO apiary_tasks VALUES('task','apiary','swarm','Keep me','','low','review',NULL,NULL,1,1,1);
+                     INSERT INTO apiary_task_events VALUES('apiary',1,'task',1,'exact snapshot',1);
+                     INSERT INTO local_apiary_task_commands VALUES('command','apiary','task',1,'transition','review','exact command','queued',3,4,'exact receipt',1,4);
+                     INSERT INTO local_apiary_task_executions VALUES('task','local','worker',1);
+                     INSERT INTO local_apiary_task_lifecycle_intents VALUES('task','review',4);
+                     PRAGMA user_version = 166;",
+                ).unwrap();
+                tx.commit().unwrap();
+            }
+            if fail {
+                connection
+                    .execute_batch(
+                        "CREATE TABLE local_apiary_task_commands_v167(injected INTEGER);",
+                    )
+                    .unwrap();
+            }
+            {
+                let tx = connection.transaction().unwrap();
+                let result = super::migrate_complete_lifecycle_states(&tx);
+                if fail {
+                    assert!(result.is_err());
+                } else {
+                    result.unwrap();
+                    tx.commit().unwrap();
+                }
+            }
+            let version: i64 = connection
+                .pragma_query_value(None, "user_version", |r| r.get(0))
+                .unwrap();
+            assert_eq!(version, if fail { 166 } else { 167 });
+            let row: (String, String, i64) = connection.query_row(
+                "SELECT command_json,receipt_json,attempt_count FROM local_apiary_task_commands",
+                [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            ).unwrap();
+            assert_eq!(row, ("exact command".into(), "exact receipt".into(), 3));
+            let events: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM apiary_task_events WHERE task_id='task'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(events, 1);
+            let violations: i64 = connection
+                .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(violations, 0);
+            connection
+                .pragma_update(None, "foreign_keys", "ON")
+                .unwrap();
+            for target in ["abandoned", "awaiting_release"] {
+                let update = connection.execute(
+                    "UPDATE local_apiary_task_commands SET target_state=?1",
+                    [target],
+                );
+                assert_eq!(update.is_ok(), !fail);
+                let update = connection.execute("UPDATE apiary_tasks SET state=?1", [target]);
+                assert_eq!(update.is_ok(), !fail);
+                let update = connection.execute(
+                    "UPDATE local_apiary_task_lifecycle_intents SET desired_state=?1",
+                    [target],
+                );
+                assert_eq!(update.is_ok(), !fail);
+            }
         }
     }
 

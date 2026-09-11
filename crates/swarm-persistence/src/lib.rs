@@ -296,7 +296,8 @@ const FEDERATION_PUBLIC_PROFILES_SCHEMA_VERSION: i64 = 163;
 const APIARY_DIRECTORY_SCHEMA_VERSION: i64 = 164;
 const APIARY_ENROLLMENT_SCHEMA_VERSION: i64 = 165;
 const WORKSPACE_SEARCH_SCHEMA_VERSION: i64 = 166;
-const CURRENT_SCHEMA_VERSION: i64 = WORKSPACE_SEARCH_SCHEMA_VERSION;
+const FEDERATION_LIFECYCLE_STATES_SCHEMA_VERSION: i64 = 167;
+const CURRENT_SCHEMA_VERSION: i64 = FEDERATION_LIFECYCLE_STATES_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4147,6 +4148,9 @@ fn migrate_ops_intake_schema_steps(
     }
     if schema_version < WORKSPACE_SEARCH_SCHEMA_VERSION {
         workspace_settings::migrate(transaction)?;
+    }
+    if schema_version < FEDERATION_LIFECYCLE_STATES_SCHEMA_VERSION {
+        federation_tasks::migrate_complete_lifecycle_states(transaction)?;
     }
     Ok(())
 }
@@ -9537,6 +9541,37 @@ mod tests {
             artifact: "",
             undo_sql: "DROP TABLE workspace_search_settings",
             probe_sql: "",
+        },
+        SchemaStep {
+            table: "local_apiary_task_commands",
+            artifact: "complete_federation_lifecycle_states",
+            // Rewind the command constraint. The migration-specific tests also
+            // exercise old canonical/intent constraints and transactional rollback.
+            undo_sql: "ALTER TABLE local_apiary_task_commands RENAME TO commands_undo;
+                CREATE TABLE local_apiary_task_commands (
+                    command_id TEXT PRIMARY KEY,
+                    apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+                    task_id TEXT NOT NULL,
+                    expected_revision INTEGER NOT NULL CHECK (expected_revision > 0),
+                    kind TEXT NOT NULL CHECK (kind IN ('claim','transition')),
+                    target_state TEXT CHECK (target_state IN ('draft','ready','active','blocked','review','completed')),
+                    command_json TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK (state IN ('queued','applied','conflict','rejected')),
+                    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+                    last_attempt_at INTEGER CHECK (last_attempt_at >= 0),
+                    receipt_json TEXT,
+                    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+                    updated_at INTEGER NOT NULL CHECK (updated_at >= created_at),
+                    CHECK ((kind = 'claim' AND target_state IS NULL) OR
+                           (kind = 'transition' AND target_state IS NOT NULL))
+                );
+                INSERT INTO local_apiary_task_commands SELECT * FROM commands_undo;
+                DROP TABLE commands_undo;
+                CREATE INDEX local_apiary_task_commands_queue
+                    ON local_apiary_task_commands(state,created_at,command_id)",
+            probe_sql: "SELECT COUNT(*) = 3 FROM sqlite_master WHERE type='table'
+                AND name IN ('apiary_tasks','local_apiary_task_commands','local_apiary_task_lifecycle_intents')
+                AND sql LIKE '%awaiting_release%' AND sql LIKE '%abandoned%'",
         },
     ];
 

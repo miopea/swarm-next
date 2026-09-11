@@ -2,6 +2,28 @@
 
 ## Authoritative next gates — September 11, overnight
 
+02:10 implementation checkpoint: schema167 forward migration is LOCAL ONLY,
+uncommitted in persistence lib.rs/federation_tasks.rs. It rebuilds canonical
+Apiary task state, Member command target_state and local lifecycle intent state
+to retain existing fields/JSON/receipts and admit abandoned/awaiting_release.
+No live migration has happened. Six targeted Linux lifecycle tests pass, including
+complete Member-to-Keeper retirement/release propagation and migration data/FK
+preservation plus forced mid-migration rollback. First migration fixture failed
+because it omitted the real owner's FK-off transaction setting; corrected fixture
+now matches TaskStore::from_connection. Pinned rustfmt applied to federation_tasks.
+Full persistence suite: 778 passed, one schema-registration regression failed.
+Registered schema167 in the migration test ledger; all three affected migration
+checks now pass, including populated related rows. Strict all-target Clippy passes.
+The original 779-test run was not rerun wholesale after the test-ledger correction.
+Validation checkout: /tmp/swarm-lifecycle-check.0tUFf7.
+Always DEBUG=0/INCREMENTAL=0/jobs2; disk had6.9GB before this fresh small build.
+Production checkout contains an unrelated unfinished crates/swarm-api/src/jira.rs
+edit. Preserve it; build the committed migration in isolation rather than deploy
+that dirty checkout. Schema167 requires the verified pre-update database backup
+for downgrade; do not open that backup with the new binary before rollback.
+Next: backup-aware supported deployment
+and exact fictional task retirement. Do not substitute documentation for that gate.
+
 02:03 CURRENT PRIORITY: fix the now-reproduced shared-task lifecycle persistence
 bug, not another speculative UI polish. f66e9e68 is live on production/WSL at
 1.7.1-dev-f66e9e684e2b-20260911055744-1127069. Both engines preserved. WSL's
