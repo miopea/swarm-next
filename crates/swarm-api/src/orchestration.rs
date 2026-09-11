@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use axum::{
     Json,
-    extract::State,
+    extract::{Query, State},
     http::{HeaderMap, header},
     response::{IntoResponse, Response},
 };
@@ -387,9 +387,17 @@ pub(super) async fn queen_automation_status(
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(status)).into_response())
 }
 
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct CoordinatorStatusQuery {
+    /// Omit the expensive presentation detail when only global status is visible.
+    /// Absence preserves the existing full response for older clients.
+    include_review: Option<bool>,
+}
+
 pub(super) async fn coordinator_status(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
+    Query(query): Query<CoordinatorStatusQuery>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let observations = state
@@ -442,11 +450,15 @@ pub(super) async fn coordinator_status(
             blocked_escalations: blocked_escalations(&state)?,
             unsettled_review: unsettled_review(&state)?,
             recovery,
-            review_queue: swarm_application::TaskService::new(task_store(&state)?.clone())
+            review_queue: if query.include_review.unwrap_or(true) {
+                swarm_application::TaskService::new(task_store(&state)?.clone())
                 .queen_review_queue_snapshot()
                 // An unavailable judgment read must not take delivery/recovery
                 // visibility down with it. Null is unavailable, never empty.
-                .ok(),
+                .ok()
+            } else {
+                None
+            },
         }),
     )
         .into_response())

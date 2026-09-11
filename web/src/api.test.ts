@@ -59,6 +59,23 @@ test("background status requests forward cancellation to fetch", async () => {
   } finally { fetch.mockRestore(); }
 });
 
+test("compact coordinator reads omit only optional review detail and preserve cancellation", async () => {
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("{}", { status: 200 }));
+  try {
+    const controller = new AbortController();
+    await fetchCoordinatorStatus("token", controller.signal, false);
+    await fetchCoordinatorStatus("token", controller.signal, true);
+    expect(fetch.mock.calls.map(([url]) => String(url))).toEqual([
+      "/api/v1/orchestration/coordinator?include_review=false",
+      "/api/v1/orchestration/coordinator",
+    ]);
+    for (const [, init] of fetch.mock.calls) {
+      expect(init?.signal).toBe(controller.signal);
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer token");
+    }
+  } finally { fetch.mockRestore(); }
+});
+
 test("materializes Keeper work for one private worker through the bounded Apiary API", async () => {
   const execution = {
     apiary_task_id: "apiary-task-1",

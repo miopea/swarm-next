@@ -873,7 +873,7 @@ test("does not invent a Queen request that was never filed", async () => {
     if (url === "/api/v1/hive") return Promise.resolve(ok(hiveIdentity()));
     if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: [{ session_id: queenSession, running: true }] }));
     if (url === "/api/v1/workers") return Promise.resolve(ok([queen]));
-    if (url === "/api/v1/orchestration/coordinator") return Promise.resolve(ok({ held: [], held_briefings: [], blocked_escalations: [] }));
+    if (url.startsWith("/api/v1/orchestration/coordinator")) return Promise.resolve(ok({ held: [], held_briefings: [], blocked_escalations: [] }));
     if (url === "/api/v1/workspaces" || url === "/api/v1/tasks" || url === "/api/v1/decisions" || url === "/api/v1/integrations/jira/task-links") return Promise.resolve(ok([]));
     if (url === "/api/v1/orchestration/queen-policy") return Promise.resolve(ok({ at_hive: "coordinate", away: "coordinate", night_watch: "local_execution" }));
     if (url === "/api/v1/orchestration/queen-automation") return Promise.resolve(ok({
@@ -1941,11 +1941,13 @@ test("a queued briefing is shown but does not inflate the Needs you count", asyn
   // exactly this. Deleting it would trade one defect for a blind spot: nothing
   // else under web/src reads held briefings.
   // The nav button, not its pop-out sibling, which shares the word.
+  expect(fetch.mock.calls.some(([url]) => String(url) === "/api/v1/orchestration/coordinator?include_review=false")).toBe(true);
   fireEvent.click(screen.getAllByRole("button", { name: /Queues/ })[0]);
   expect(await screen.findByText("One briefing is queued")).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Queues", level: 2 })).toBeVisible();
   expect(screen.getByText("Who has the next move")).toBeVisible();
   expect(screen.getByRole("button", { name: /^Queues/ })).toHaveTextContent("1");
+  await waitFor(() => expect(fetch.mock.calls.some(([url]) => String(url) === "/api/v1/orchestration/coordinator")).toBe(true));
 
   const refresh = async () => {
     await act(async () => {

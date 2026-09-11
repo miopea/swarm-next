@@ -2233,8 +2233,9 @@ export async function fetchNotificationSubscriptionStatus(
   return response.json() as Promise<{ registered: boolean }>;
 }
 
-export async function fetchCoordinatorStatus(operatorToken: string, signal?: AbortSignal): Promise<CoordinatorStatus> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/orchestration/coordinator", { signal });
+export async function fetchCoordinatorStatus(operatorToken: string, signal?: AbortSignal, includeReview = true): Promise<CoordinatorStatus> {
+  const path = `/api/v1/orchestration/coordinator${includeReview ? "" : "?include_review=false"}`;
+  const response = await authenticatedFetch(operatorToken, path, { signal });
   return response.json() as Promise<CoordinatorStatus>;
 }
 

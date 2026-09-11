@@ -15211,6 +15211,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn compact_coordinator_keeps_status_and_skips_optional_review_details() {
+        let store = TaskStore::in_memory().unwrap();
+        store.create_task("Review detail fixture", "/fixture").unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store),
+        );
+        let compact_path = "/api/v1/orchestration/coordinator?include_review=false";
+        let unauthorized = app.clone().oneshot(
+            Request::builder().uri(compact_path).body(Body::empty()).unwrap()
+        ).await.unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let full = response_json(authorized_get(app.clone(), "/api/v1/orchestration/coordinator").await).await;
+        assert_eq!(full["review_queue"]["items"].as_array().unwrap().len(), 1);
+        let compact_response = authorized_get(app.clone(), compact_path).await;
+        assert_eq!(compact_response.headers()[header::CACHE_CONTROL], "no-store");
+        let compact = response_json(compact_response).await;
+        assert!(compact["review_queue"].is_null());
+        for key in ["held", "held_briefings", "blocked_escalations", "unsettled_review", "automatic_start_admission", "queued_actions"] {
+            assert_eq!(compact[key], full[key], "compact status lost {key}");
+        }
+        assert_eq!(compact["recovery"]["items"], full["recovery"]["items"]);
+        // Returning to Queues must recover detail; compact reads do not clear it.
+        let restored = response_json(authorized_get(app, "/api/v1/orchestration/coordinator?include_review=true").await).await;
+        assert_eq!(restored["review_queue"]["items"], full["review_queue"]["items"]);
+    }
+
+    #[tokio::test]
     async fn queen_automation_routes_are_private_opt_in_and_durable_without_a_running_queen() {
         let app = router(
             AppState::default()

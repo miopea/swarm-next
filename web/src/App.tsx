@@ -652,10 +652,11 @@ export function App() {
       setReviewQueue(undefined);
     }
   }, [operatorToken]);
+  const includeReviewDetails = surface === "queues";
   const refreshHeldDeliveries = useCallback(async (signal: AbortSignal) => {
     if (!operatorToken) return;
     try {
-      const status = await fetchCoordinatorStatus(operatorToken, signal);
+      const status = await fetchCoordinatorStatus(operatorToken, signal, includeReviewDetails);
       if (signal.aborted) return;
       setHeldDeliveries(status.held ?? []);
       setBlockedEscalations(status.blocked_escalations ?? []);
@@ -670,7 +671,7 @@ export function App() {
         setCoordinatorUnavailable(true);
       }
     }
-  }, [operatorToken, heldDeliveryRefresh]);
+  }, [operatorToken, heldDeliveryRefresh, includeReviewDetails]);
   const retryQueueDetails = useVisiblePolling(refreshHeldDeliveries, Boolean(operatorToken), HELD_DELIVERY_POLL_MS);
 
   useEffect(() => {

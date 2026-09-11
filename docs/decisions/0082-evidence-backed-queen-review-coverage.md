@@ -208,6 +208,22 @@ terminal. Queen escalates an actual inability to recover with a concrete request
 
 ## Acceptance
 
+### Optional presentation detail outside Queues (September 11)
+
+The coordinator read accepts `include_review=false` to skip constructing and
+serializing its optional review-judgment snapshot. All global holds, recovery
+and counters retain their existing reads. The browser requests full detail only
+while Queues is selected; navigation cancels the previous request through the
+existing visible-polling owner and starts a fresh read. No additional timer,
+cache, task mutation or authority change. Missing detail remains unavailable,
+not an empty/all-clear result; the existing full-task evidence fence is unchanged.
+
+Omitting the query keeps the full existing contract for older clients. The API
+owns this rolling-client default until pre-option clients leave the supported
+update window. Verify private reads, compact/full/compact navigation, cancellation,
+failed-read recovery and unchanged non-review fields. Measure payload reduction;
+do not infer sustained CPU improvement from byte counts alone.
+
 ### Checked waits in the operator queue
 
 Expose a separate bounded review-judgment snapshot through the existing
