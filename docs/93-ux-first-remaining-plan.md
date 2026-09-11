@@ -4,6 +4,14 @@
 
 ### Latest priority: guided enrollment, then workspace setup
 
+Latest: operator approved the isolated enrollment-module transfer. All four
+enrollment tests, ten repeated restart regressions and pinned-toolchain rustfmt
+pass. Earlier transfer-blocked/unverified notes below are superseded by this
+targeted evidence. The isolated checkout predates current main (package1.6.0),
+so current-main CI remains necessary. No live Hive changed during this test.
+Next: commit/push the correction, verify CI, then supported clean-checkout
+deployment and actual Edge/WSL acceptance. Do not require existing members to rejoin.
+
 September 10, 23:16 Eastern: workspace search-folder loading now has an 8-second
 deadline and an explicit retry. After a successful folder save, a failed repository
 list refresh offers a read-only retry rather than requiring leaving Workers or

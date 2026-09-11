@@ -106,6 +106,9 @@ async fn reconcile_one(
             .await
             .map_err(enrollment_http_error)?;
     }
+    // Keeper can issue the invitation during bootstrap. Validate the response
+    // at receipt time, not against a timestamp from before that network call.
+    let now = unix_timestamp();
     service
         .record_keeper_link_poll(&poll.link, now)
         .map_err(application_error)?;
@@ -142,7 +145,7 @@ async fn reconcile_one(
         .await
         .map_err(enrollment_http_error)?;
     service
-        .apply_remote_join_acceptance(invitation_id, &acceptance, now)
+        .apply_remote_join_acceptance(invitation_id, &acceptance, unix_timestamp())
         .map_err(application_error)?;
     service
         .finish_consented_join(link_id)
@@ -216,15 +219,20 @@ mod tests {
 
     #[tokio::test]
     async fn submitted_hive_joins_after_restart_without_browser_or_jira() {
-        assert_background_join(false).await;
+        assert_background_join(false, false).await;
     }
 
     #[tokio::test]
     async fn saved_membership_receipt_finishes_after_restart_with_keeper_offline() {
-        assert_background_join(true).await;
+        assert_background_join(true, false).await;
     }
 
-    async fn assert_background_join(crash_after_receipt: bool) {
+    #[tokio::test]
+    async fn received_invitation_is_not_checked_against_stale_request_time() {
+        assert_background_join(false, true).await;
+    }
+
+    async fn assert_background_join(crash_after_receipt: bool, stale_request_time: bool) {
         let now = unix_timestamp();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -302,10 +310,22 @@ mod tests {
             );
             server.abort();
         }
-        resumed.reconcile_apiary_enrollments().await;
+        if stale_request_time {
+            let service = ApiaryService::new(reopened.clone());
+            let record = reopened.apiary_enrollments().unwrap().remove(0);
+            // Model an earlier request timestamp without sleeping across a
+            // wall-clock boundary. Keeper issues the invitation during polling.
+            reconcile_one(&service, &record, unix_timestamp() - 1)
+                .await
+                .unwrap();
+        } else {
+            resumed.reconcile_apiary_enrollments().await;
+        }
         assert_eq!(
             reopened.local_hive_identity().unwrap().hive.apiary_id,
-            Some(bundle.link.apiary_id)
+            Some(bundle.link.apiary_id),
+            "enrollment did not finish: {:?}",
+            reopened.apiary_enrollments().unwrap()
         );
         assert_eq!(
             reopened.apiary_enrollments().unwrap()[0].phase,

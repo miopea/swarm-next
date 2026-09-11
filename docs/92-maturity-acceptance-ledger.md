@@ -1,5 +1,19 @@
 # Current maturity acceptance ledger
 
+## September 10 — Enrollment timestamp correction verified in isolation
+
+Operator approved the corrected-module transfer to the existing isolated Linux
+checkout. All four apiary_enrollment tests pass, including the deterministic
+stale-request-time regression and receipt-after-restart recovery. Ten consecutive
+runs of the previously intermittent restart test pass (the unfixed code failed
+on repetition three). Pinned-toolchain rustfmt check passes. No live Hive changed.
+
+The isolated checkout reports package 1.6.0 and predates current main, although
+the original enrollment module matched main before the correction. This proves
+targeted correction behavior, not full current-main compatibility. Current-main
+CI, deployment and actual WSL/Edge onboarding acceptance remain required.
+The source-transfer permission blocker below is resolved by the operator's yes.
+
 ## September 10, 23:18 — Current Apiary acceptance boundary
 
 This checkpoint supersedes older sequencing and revision statements below.

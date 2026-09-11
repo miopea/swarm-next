@@ -7,11 +7,13 @@ The dated sequencing paragraphs below are historical where they conflict with
 this checkpoint. Keep the full maturity objective; do not claim completion from
 individual UI patches or deployment health.
 
-1. Validate the prepared enrollment timestamp correction on isolated Linux.
-   Existing-source restart testing reproduced a valid approved join being rejected
-   across a second boundary. The changed module and deterministic regression are
-   local, uncommitted, unverified and excluded from deployments. Source transfer
-   was denied by the permission reviewer; explicit operator approval is pending.
+1. Finish current-main CI and deployment of the enrollment timestamp correction.
+   The operator approved isolated transfer. All four enrollment tests and ten
+   repetitions of the previously intermittent restart test now pass, as does
+   pinned-toolchain formatting. The isolated checkout is older than current main;
+   this targeted result does not substitute for current-main CI or live acceptance.
+   Validation now uses receipt time for invitations issued during the request,
+   without relaxing consent checks. The correction is not yet deployed.
 2. Restore the requested Edge extension connection, then verify the fresh WSL
    submit-once/Keeper-approval flow and existing-member directory/rename behavior.
    No remove/rejoin workaround for existing members. Component tests are not
