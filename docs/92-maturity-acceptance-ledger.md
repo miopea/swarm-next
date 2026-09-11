@@ -1,5 +1,38 @@
 # Current maturity acceptance ledger
 
+## September 11 — Native background work protected and resumed
+
+Task01a08ff4-9cb0-7692-82d1-e82e625fea07 admitted once through
+`scripts/dogfood/background-work-acceptance.sh`. Ready/assignment11020/11021 at
+1789121567; worker Active11022 at1789121592 (25 seconds). The worker launched one
+native Bash background job waiting on a controller-owned FIFO, with a240-second
+hard safety deadline. This was an event-controlled wait, not a correctness delay.
+
+Independent observations while the actual timeout process1279582 was live:
+worker01a06eda-bdd1-7a82-928e-cffbee0be6c1, same session
+01a08e16-5be5-72e2-b808-43ffb8261975, provider resting, background_work=true,
+engaged_device_id=null, task Active/delivered. The coordinator's actual `recovery`
+snapshot was complete (`truncated=false`) with no item for this task. An initial
+controller query used the wrong field name and returned null; that read is not
+acceptance evidence. The corrected controller preserves missing-data semantics.
+
+The controller then released ONLY `/tmp/swarm-background-gate.THMEAWBH/release`.
+No terminal input, Queen nudge, manual task transition or restart. Next observation
+showed provider Active/background_work=false, then11023 Review and11024 system
+Completed at1789121721:154 seconds after admission,129 after pickup. Final state
+resting/background_work=false, same session, no remaining recovery item or hold.
+
+Worker activity reports native completion jobb2cx11hd5 with exit0 (not deadline
+124), twelve passing fixture tests, no commits and unchanged artifact. Native
+notification causality/exit status are worker-reported; the process, release,
+runtime flags, task transitions and source/artifact preservation were separately
+checked. This closes the live resting-with-background observation and ordinary
+completion scenario, not unknown snapshots, failed recovery, every Queen model
+intervention, or engine-update admission. No actual permission was synthesized.
+After verifying the job had exited, removed only the test FIFO and its empty
+temporary directory. Demo source remained clean atc9e4bfd3 and delivered SHA256
+9540c83bf8c3ece4bcc0f6b8d4e6daafb74d30bea682fb0d6d801fe3fd51bf8e.
+
 ## September 11 — Scoped Queue explanations activated on both installations
 
 Commit94b3606609a941760e0711a35a5a3a42a871fc6a serves as
@@ -16,7 +49,8 @@ tasks remain17 Queen/5 dependencies/3 shipping/15 scheduled; WSL is empty. This
 confirms normal rendered acceptance, not a fresh live instance of the held-input
 message (the demo had already completed). Scoped message, clearing and priority
 are verified by the31 dispatch and64 focused UI tests, within1672 total web tests.
-Full CI34586975865 web/package/audit passed; Rust was still running at this check.
+Full CI34586975865 subsequently completed SUCCESS across all four jobs, including
+full-workspace Rust checks/tests and the release-mode terminal resize regression.
 
 Development bundle:
 `/tmp/swarm-scoped-delivery-94b36066/swarm-1.7.1-dev-94b3606609a9-20260911100106-1273435-linux-x86_64`.

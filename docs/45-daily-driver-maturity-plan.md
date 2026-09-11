@@ -2,15 +2,26 @@
 
 ## Authoritative next gates — September 11, overnight
 
+Native background-work acceptance CLOSED for task01a08ff4-9cb0-7692-82d1-e82e625fea07.
+Observed same-session provider Resting/background_work=true, no engagement and
+no matching recovery item in a complete snapshot while the actual bounded job
+was live. Released only its controller-owned FIFO; provider became Active with
+background_work=false, then11023 Review/11024 system Completed. No PTY input,
+manual task recovery, new decision or restart. Worker reports native completion
+notification/exit0; immutable task events prove actual settlement. See92 limits.
+Do not repeat this or the already closed protected-input/corrective fixtures.
+Unknown-observation, failed-recovery, native answer provenance and remaining
+mobile/performance gates are still open; the full program is not complete.
+
 94b36066 is LIVE on production and WSL as
 1.7.1-dev-94b3606609a9-20260911100106-1273435. Both healthy; production engine
 944143 and all ten exact worker/session pairs preserved; WSL engine6458 preserved.
 Edge confirmed both served versions/Queues. Scope: historical, assignment/session-
 fenced prompt explanations, no authority or engine changes. All1672 web tests,
 31 release-mode dispatch tests, strict persistence Clippy, TypeScript/build pass.
-Full CI34586975865 remains pending Rust; web/package/audit already green.
+Full CI34586975865 completed SUCCESS across all four jobs.
 Do not rebuild/redeploy this as unfinished. Account21% remaining at last check.
-Next: finish CI receipt, then the still-open negative/failure recovery and
+Next: the still-open negative/failure recovery and
 approved user-facing acceptance gates; preserve the full scope, not just this slice.
 
 Protected-input acceptance CLOSED: demo task01a08fd9-c08d-7dd1-a4e9-bf6afdc8838b
