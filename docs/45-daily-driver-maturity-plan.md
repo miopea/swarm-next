@@ -2,11 +2,12 @@
 
 ## Authoritative next gates — September 11, morning
 
-Current UI work: Keeper overview now separates loading/unavailable/last-known
-sources from real empty counts. Full web regression and isolated Edge failure/
-recovery checks pass. Apply the same evidence distinction to MemberControlRoom,
-then validate/deploy the coherent UI package. Do not call the member case fixed
-or silently promote this follow-on into the pinned3dfc019e release candidate.
+Current UI work: Keeper and Member overviews now separate loading/unavailable/
+last-known sources from real empty counts. All1,676 web tests, TypeScript, build
+and isolated Edge failure/recovery checks pass. Member status labels wrap instead
+of clipping. Next: deploy the coherent UI package and verify live read/navigation
+behavior. Do not silently promote this follow-on into the pinned3dfc019e release
+candidate. See92 for the exact scope and remaining presentation limits.
 
 Native-capture follow-on: fixed changed callback retries resetting the same
 invocation's input evidence. All20 focused tests,171 full terminal tests (one
@@ -19,7 +20,8 @@ Current runtime candidate is3dfc019e on production and WSL. Full CI34589715128
 SUCCESS; deployment, browser checks and exact production ten-session continuity
 are recorded in92. WSL's separately pending engine was then explicitly updated;
 one loaded worker returned, enginePID43236, notice cleared. Do not repeat these
-build or activation gates. Subsequent commits are documentation only.
+build or activation gates. Subsequent native-capture and observation UI commits
+are not yet activated; do not describe latest main as the tested runtime candidate.
 
 Fresh no-Jira enrollment is CLOSED live: operator approved fictional Daisy,
 Keeper approved once, and member joined while its browser remained blank. On

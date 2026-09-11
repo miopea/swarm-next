@@ -1,8 +1,9 @@
 import type { FederationCatalogReadiness, FederationSyncHealth } from "../api";
 
-export default function MemberSetup({ catalog, sync, onManage, onRefresh }: {
+export default function MemberSetup({ catalog, sync, unavailable = false, onManage, onRefresh }: {
   catalog?: FederationCatalogReadiness;
   sync?: FederationSyncHealth;
+  unavailable?: boolean;
   onManage: () => void;
   onRefresh: () => void;
 }) {
@@ -12,7 +13,7 @@ export default function MemberSetup({ catalog, sync, onManage, onRefresh }: {
   return <article className="keeper-panel member-setup" aria-labelledby="member-setup-heading">
     <header><div><p className="eyebrow">Make yourself at home</p><h4 id="member-setup-heading">Your Apiary setup</h4></div></header>
     <p>Your Hive is a member. Local tasks and workers remain on this Hive. Jira is an optional source of shared work.</p>
-    {!sync || !catalog ? <p role="status">Checking shared setup. Missing status is not a failed membership.</p> : null}
+    {unavailable ? <p role="status">Shared setup status is temporarily unavailable. Your membership is unchanged.</p> : !sync || !catalog ? <p role="status">Checking shared setup. Missing status is not a failed membership.</p> : null}
     {sync?.condition === "current" ? <p><strong>Connected to Keeper</strong> · Latest synchronization completed.</p>
       : sync?.condition === "offline" ? <div><strong>Waiting on Keeper connection</strong><p>Your Hive will reconnect automatically. Local work can continue.</p><button className="secondary-button" onClick={onRefresh}>Check connection</button></div>
       : sync?.condition === "authentication_required" || sync?.condition === "incompatible" ? <div><strong>Shared connection needs attention</strong><p>Review the membership connection before shared changes can resume.</p><button className="secondary-button" onClick={onManage}>Review connection</button></div> : null}

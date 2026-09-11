@@ -1,5 +1,22 @@
 # Current maturity acceptance ledger
 
+## September 11 — Member observation states
+
+Member overview now distinguishes initial loading, unavailable reads and retained
+last-known information in its summary, roster, shared tasks, Jira projects/claims
+and synchronization details. Failed sync reads remove the green current indicator
+and connected claim; missing setup status does not imply failed membership.
+Successful sibling sources remain usable, and Jira remains optional. Existing
+refresh ownership and action permissions are unchanged.
+
+Sixteen focused tests and all 1,676 web tests passed. TypeScript and production
+Vite build passed. Isolated Edge fixture verified unavailable counts, recovery,
+and retained counts after another failure. Screenshot review caught a clipped
+last-known label; summary text now wraps (measured width equals scroll width).
+No real Hive or worker was changed. This package is not yet live and does not
+change the pinned release candidate below. Broader Steward/handoff observation
+presentation is not claimed complete by this overview fix.
+
 ## September 11 — Keeper observation states
 
 Live enrollment verification exposed initial Keeper counts of0 and empty-work

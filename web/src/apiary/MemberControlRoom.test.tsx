@@ -1,9 +1,68 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import MemberControlRoom from "./MemberControlRoom";
 
 afterEach(() => vi.unstubAllGlobals());
+
+test("unknown Member observations never become empty facts and recover without rejoining", async () => {
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  let failing = true;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    await pending;
+    if (failing) throw new Error("fictional read failure");
+    return memberObservationResponse(String(input));
+  }));
+  render(<MemberControlRoom identity={memberIdentity()} operatorToken="fictional" onManage={vi.fn()} onOpenTasks={vi.fn()} />);
+  const summary = screen.getByLabelText("Member Apiary summary");
+  const values = () => [...summary.querySelectorAll("dd")].map((node) => node.textContent);
+  expect(values()).toEqual(Array(6).fill("Loading…"));
+  expect(screen.queryByText("No open Swarm-generated Apiary tasks are waiting.")).not.toBeInTheDocument();
+  await act(async () => { release(); });
+  await screen.findByRole("alert");
+  expect(values()).toEqual(Array(6).fill("Unavailable"));
+  expect(screen.getByText("Swarm tasks unavailable.")).toBeInTheDocument();
+  expect(screen.getByText("Shared setup status is temporarily unavailable. Your membership is unchanged.")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Manage in Tasks" })).toBeEnabled();
+  failing = false;
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await screen.findByText("Connected to Keeper");
+  expect(values().slice(2)).toEqual(["0", "0", "0", "0"]);
+  expect(screen.getByText("Optional: connect Jira")).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+test("Member partial failures label retained counts and never retain a green connection claim", async () => {
+  let failSync = false;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (failSync && (url.endsWith("/sync-health") || url.endsWith("/tasks"))) throw new Error("fictional outage");
+    if (!failSync && url.endsWith("/catalog-readiness")) throw new Error("fictional catalog outage");
+    return memberObservationResponse(url);
+  }));
+  render(<MemberControlRoom identity={memberIdentity()} operatorToken="fictional" onManage={vi.fn()} onOpenTasks={vi.fn()} />);
+  await screen.findByRole("alert");
+  expect(screen.getByText("Connected to Keeper")).toBeInTheDocument();
+  expect(screen.getByLabelText("Member Apiary summary")).toHaveTextContent("Projects readyUnavailableMy Jira claims0Open Keeper tasks0");
+  failSync = true;
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await screen.findByText("Swarm tasks: showing last-known information.");
+  expect(screen.queryByText("Connected to Keeper")).not.toBeInTheDocument();
+  expect(document.querySelector(".apiary-sync-current")).toBeNull();
+  expect(screen.getByLabelText("Member Apiary summary")).toHaveTextContent("Projects ready0My Jira claims0Open Keeper tasks0 (last known)");
+});
+
+function memberObservationResponse(url: string) {
+  if (url.endsWith("/members")) return ok([{ hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: false }]);
+  if (url.endsWith("/catalog-readiness")) return ok({ acknowledgement: null, jira_connection: "not_connected", projects: [], blockers: [] });
+  if (url.endsWith("/sync-health")) return ok({ condition: "current", last_attempt_at: 100, last_success_at: 100, consecutive_failures: 0 });
+  if (url.endsWith("/task-sync-status")) return ok({ cursor: 0, task_count: 0 });
+  if (url.endsWith("/task-outbox-status")) return ok({ queued_count: 0, conflict_count: 0, rejected_count: 0 });
+  if (url.endsWith("/my-stewardship")) return ok(null);
+  if (url.endsWith("/steward/assists")) return ok({ incoming: [], outbox: [] });
+  return ok([]);
+}
 
 test("shows a Member her Keeper, convergence, projects, and local shared ownership", async () => {
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
@@ -98,7 +157,7 @@ test.each([false, true])("keeps local work usable when Member status is unavaila
   render(<MemberControlRoom identity={memberIdentity()} operatorToken="secret" onManage={() => undefined} onOpenTasks={() => undefined} />);
   expect(await screen.findByRole("alert")).toHaveTextContent("Local workers and owned work are unchanged");
   if (missingCatalog) {
-    expect(screen.getByText("Waiting for shared catalog status.")).toBeInTheDocument();
+    expect(screen.getByText("Shared catalog unavailable.")).toBeInTheDocument();
     expect(screen.queryByText("Shared catalog prerequisites are ready.")).not.toBeInTheDocument();
   } else expect(screen.getByRole("list", { name: "Shared work blockers" })).toHaveTextContent("Keeper catalog has not arrived");
 });

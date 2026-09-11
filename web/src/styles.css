@@ -754,7 +754,7 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .keeper-steward-audit-list small { color: var(--muted); font-size: .7rem; }
 .keeper-empty { margin: 0; padding: 17px 0 4px; color: var(--muted); font-size: .8rem; line-height: 1.5; }
 .keeper-load-state { display: flex; max-width: 1500px; align-items: center; justify-content: space-between; gap: 12px; margin: 0 auto 16px; padding: 11px 14px; border: 1px solid var(--bad); border-radius: var(--radius-sm); background: var(--bad-soft); }
-.member-summary dd { overflow: hidden; font-size: 1rem; text-overflow: ellipsis; white-space: nowrap; }
+.member-summary dd { font-size: 1rem; overflow-wrap: anywhere; white-space: normal; }
 .member-detail-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; gap: 12px; }
 .member-detail-list > div { display: grid; min-width: 0; gap: 3px; padding: 10px; border-radius: var(--radius-sm); background: var(--surface-soft); }
 .member-detail-list dt { color: var(--quiet); font-size: .62rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
