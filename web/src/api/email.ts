@@ -104,6 +104,22 @@ export async function updateEmailConfiguration(operatorToken: string, tenantId: 
   return response.json() as Promise<EmailOAuthConfiguration>;
 }
 
+/// Hands this Hive back to the application Swarm ships with.
+///
+/// An empty body is how the server is told "the bundled one" -- it fills in
+/// both the authority and the client id. A Hive configured before Swarm shipped
+/// an application had no way to say this: its saved registration wins over the
+/// bundled default, and the setup form can only describe a DIFFERENT
+/// registration, never the absence of one.
+export async function useBundledEmailApp(operatorToken: string): Promise<EmailOAuthConfiguration> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/email/configuration", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+  return response.json() as Promise<EmailOAuthConfiguration>;
+}
+
 export async function beginEmailAuthorization(operatorToken: string): Promise<string> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/email/auth/start", { method: "POST" });
   return ((await response.json()) as { authorization_url: string }).authorization_url;
