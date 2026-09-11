@@ -30,6 +30,17 @@ Main advanced concurrently:04b83c7b adds integration-auth documentation;
 Preserve both when integrating; their intent does not conflict with Apiary being
 the management home after joining. No BFG Admin communication occurred.
 
+INTEGRATED: merged origin/main694c2c2d without conflicts after707c4990. All63
+affected Settings/navigation/invitation UI tests, TypeScript and production web
+build pass after the merge. This coherent branch is ready for main/CI, not yet
+claimed live. NEXT operational step: inspect the existing dev updater's schema/
+worker-engine compatibility gate, build and activate through the supported
+workflow with worker continuity/recovery evidence. Do not improvise an app-only
+schema165 activation. Then verify new invitation generation and fresh member
+join against production-dev plus existing WSL membership. No release authority
+is inferred. Visual acceptance is still open because the Edge control tool
+failed before session startup on its latest actual attempt.
+
 LATEST VERTICAL SLICE: authenticated /api/v1/apiary/enrollments submit/list,
 application-owned pending selection/receipt recovery, and existing federation
 background service now complete a consented join without browser actions.
