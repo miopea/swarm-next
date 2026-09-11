@@ -1,5 +1,10 @@
 # Operator dogfood checklist and remaining release risks
 
+Current build and remaining-gate authority:
+[Maturity closeout](maturity-user-facing-closeout.md) and
+[Post-1.8.0 release handoff](post-1.8.0-release-handoff.md).
+Older revision/PID snapshots below are retained as historical evidence.
+
 Updated September 11, 2026. This is a handoff over the approved scope in45, not a
 new definition of completion. This task cut no release; another worker published
 1.8.0. Detailed receipts remain in45,92,94 and95. Production and WSL now serve

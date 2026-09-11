@@ -1,5 +1,9 @@
 # Apiary-focused release candidate — September 11, 2026
 
+Historical pre-1.8.0 handoff. Version1.8.0 has since been published by another
+worker. For the current incremental package, use
+[Post-1.8.0 handoff](post-1.8.0-release-handoff.md); do not repeat these launch notes.
+
 Status: runtime candidate verified; release version, production release package,
 signature, manifest publication and tag have NOT been created by this work.
 This handoff does not authorize publishing a release or declare the full maturity

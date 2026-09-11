@@ -29,7 +29,7 @@ the newest checkpoint for the same gate supersedes them.
 - Production engine PID1364561; WSL engine PID45338. Both preserved during updates.
 - Eight production worker/session pairs match before/after in `/tmp/swarm-settings-draft-continuity.rRcd1B`; both hashes are `6f5196dda450ba7055d488e5ad8522c3fce006b1ecf8d203bf243fa64f100ca9`.
 - Previous full web:174 files/1684 tests passed. Current change:137 Settings, worker setup and App tests passed; TypeScript, production web and Linux development package builds passed.
-- Priorcd7889fa full CI34610465314 succeeded. Current09bc29cc CI34612113986 has passed web, Rust audit and Linux packaging; only Rust remains running at this handoff. Recheck that exact run once it finishes; do not rerun the package to generate activity.
+- Priorcd7889fa full CI34610465314 succeeded. Current09bc29cc full CI34612113986 also succeeded: web, Rust audit, Linux packaging and Rust all passed. Do not repeat the completed gate.
 - No release cut by this work. No worker-engine update applied. No BFG Admin communication.
 - Worktree: `C:\projects\swarm-next\.worktrees\recovery-main-20260907`; branch `codex/apiary-and-workspace-ux`; changes pushed to main.
 - Preserve unrelated untracked `scripts/dogfood/native-signal-probe.cjs`.
@@ -37,8 +37,9 @@ the newest checkpoint for the same gate supersedes them.
 ## Release assessment
 
 The delivered onboarding/worker-setup/attention UI improvements are suitable for
-focused developer dogfooding. Wait for current CI before recommending a release
-candidate. Do not market the full maturity program or broader Keeper management
+focused developer dogfooding. Current CI is green; the incremental candidate is
+ready for the release worker's review using [the post-1.8.0 handoff](post-1.8.0-release-handoff.md).
+Do not market the full maturity program or broader Keeper management
 as complete. Existing users should upgrade in place, not leave and rejoin.
 
 Material exceptions to disclose:
