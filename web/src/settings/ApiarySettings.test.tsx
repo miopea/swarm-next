@@ -57,12 +57,13 @@ test("connects outward to a Keeper without requiring an inbound member URL", asy
   render(<ApiarySettings busy={false} hiveIdentity={personalIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
   const joinGuide = screen.getByRole("list", { name: "How this Hive joins an Apiary" });
   expect(joinGuide).toHaveTextContent("Hand the link to this Hive");
-  expect(joinGuide).toHaveTextContent("Wait for her approval");
-  expect(joinGuide).toHaveTextContent("Review and join");
+  expect(joinGuide).toHaveTextContent("Review and submit");
+  expect(joinGuide).toHaveTextContent("Keeper approves");
   fireEvent.change(screen.getByLabelText("Keeper invitation link"), {
     target: { value: createApiaryHandoffLink("keeper", capability, capability.keeper_endpoint) },
   });
   await screen.findByLabelText("Your name");
+  expect(screen.getByText(/This older invitation needs a policy review/)).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Connect to Keeper" }));
 
   expect(await screen.findByRole("status")).toHaveTextContent(/introduced itself.*Waiting for the Keeper/i);

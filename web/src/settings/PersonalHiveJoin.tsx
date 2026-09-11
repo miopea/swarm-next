@@ -326,6 +326,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
             <small>No Jira connection is required. Keeper approval completes your membership automatically.</small>
           </div>
         </div> : null}
+        {proposed && !proposed.enrollment_offer ? <p role="note">This older invitation needs a policy review after Keeper approval. Ask for a newly generated link to use the simpler submit-once flow.</p> : null}
         <ApiaryLinkEntry label="Keeper invitation link" value={keeperLink} action={working ? "Submitting…" : proposed?.enrollment_offer ? "Request to join" : "Connect to Keeper"} disabled={busy || working} onChange={setKeeperLink} onAction={() => void connectToKeeper()} />
         <div className="apiary-transport-boundary" role="note">
           <span><strong>Optional Jira work</strong><small>If connected, this Hive reads Jira directly as you.</small></span>

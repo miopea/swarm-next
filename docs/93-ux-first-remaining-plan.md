@@ -4,6 +4,19 @@
 
 ### Latest priority: guided enrollment, then workspace setup
 
+September 10, 20:30 Eastern checkpoint: integrated code is on main9c520d21.
+Full web verification now passes all1607 tests after updating the legacy guide
+assertion; older links explicitly explain that a new link is needed for the
+submit-once flow. The earlier live build rejected source movement before
+activation and is terminal failed, not running; old app and13 workers remained.
+Start a fresh supported development reload after pulling the final test fix.
+Activation clarification supersedes the caution below: schema165 is API-owned;
+terminal host has no persistence dependency and protocol remains17. The normal
+package updater makes a verified backup and preserves the worker engine. A
+schema change alone does not justify restarting workers. Verify served revision,
+backup and engine continuity afterward. Fresh-member browser acceptance stays
+open; no release is authorized.
+
 CURRENT NEXT ACTION — final three-step enrollment (supersedes historical notes
 below): Keeper generates link; member reviews terms and submits once; Keeper
 approval completes membership automatically. No post-approval member click.
