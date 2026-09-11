@@ -2535,6 +2535,7 @@ export function App() {
         ) : surface === "apiary" && hiveIdentity ? (
           <Suspense fallback={<WorkspaceLoading label="Apiary" />}>
             <ApiaryWorkspace
+              refreshKey={`${heldDeliveryRefresh}:${recentEvents.filter(event => event.kind === "runtime_changed" || event.kind === "tasks_changed").at(-1)?.sequence ?? 0}`}
               identity={hiveIdentity}
               operatorToken={operatorToken}
               busy={busy}

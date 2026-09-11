@@ -1,5 +1,39 @@
 # Current maturity acceptance ledger
 
+## September 11 — Apiary explicit refresh regression fixed locally
+
+App refresh and runtime/task event invalidation now reach Keeper, member and
+management reads without remounting the Apiary workspace. Keeper/member reads
+reuse their existing abort/deadline and visibility owner; no periodic interval
+was added. Management effects ignore superseded results and retain editor state;
+this does not claim those older effect-based reads gained transport cancellation.
+
+The actual App test changes the served directory, clicks Refresh control room,
+and verifies the new name. It repeats inside management with an unsaved Hive name
+and verifies the same input survives with its draft intact. Both role views also
+verify explicit invalidation, hidden-page suppression and visible return. The
+request-owner regression proves invalidation aborts an obsolete read and unchanged
+keys do not reread. All 173 web test files / 1,681 tests and the production web
+build pass. Live activation and post-deployment browser acceptance remain pending.
+
+## September 11 — Live Apiary rename acceptance and refresh gap
+
+On61e36a10, temporarily renamed only BGS WSL Hive to BGS WSL Hive — acceptance
+check using Manage membership / Edit names. It survived a member page reload.
+The open Keeper overview retained the old name even after Refresh control room.
+After member Retry Apiary synchronization and a full Keeper page reload, Keeper
+showed the new name. This proves signed propagation can work, not automatic
+propagation timing: the explicit retry is part of the evidence.
+Restored BGS WSL Hive through the same save and synchronization path; no Hive
+was removed or rejoined and no operator profile, task or worker was changed.
+
+Source confirms KeeperControlRoom uses on-demand useVisiblePolling with a null
+interval. App Refresh control room refreshes its model and heldDeliveryRefresh,
+but ApiaryWorkspace does not receive that invalidation. This leaves the visible
+Apiary snapshot stale until remount/visibility return. Wire bounded invalidation
+through the existing refresh/event path, preserving drafts rather than remounting
+management. Do not add frequent polling or call this acceptance gate complete yet.
+
 ## September 11 — False workspace blocker cause established
 
 ACTIVATED61e36a10 on production and WSL as

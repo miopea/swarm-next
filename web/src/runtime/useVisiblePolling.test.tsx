@@ -4,6 +4,26 @@ import { useVisiblePolling } from "./useVisiblePolling";
 
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
+test("invalidating a snapshot cancels its old read without adding periodic traffic", async () => {
+  const intervals = vi.spyOn(window, "setInterval");
+  const signals: AbortSignal[] = [];
+  const task = vi.fn((signal: AbortSignal) => new Promise<void>((resolve) => {
+    signals.push(signal);
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  }));
+  const { rerender, unmount } = renderHook(({ revision }) => useVisiblePolling(task, true, null, 8_000, { refreshKey: revision }), { initialProps: { revision: 0 } });
+  await act(async () => { await Promise.resolve(); });
+  rerender({ revision: 1 });
+  await act(async () => { await Promise.resolve(); });
+  expect(signals[0].aborted).toBe(true);
+  expect(task).toHaveBeenCalledTimes(2);
+  rerender({ revision: 1 });
+  expect(task).toHaveBeenCalledTimes(2);
+  expect(intervals).not.toHaveBeenCalled();
+  unmount();
+  expect(signals[1].aborted).toBe(true);
+});
+
 test("deduplicates refreshes and cancels a stalled request at its deadline", async () => {
   vi.useFakeTimers();
   const signals: AbortSignal[] = [];

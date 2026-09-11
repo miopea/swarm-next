@@ -47,6 +47,7 @@ import { catalogReadinessLabel, federationSyncCopy } from "./presentation";
 import SharedCatalogStatus from "./SharedCatalogStatus";
 
 type Props = {
+  refreshKey?: string;
   identity: HiveIdentity;
   operatorToken: string;
   onManage: () => void;
@@ -73,7 +74,7 @@ type MemberSnapshot = {
 const emptySnapshot: MemberSnapshot = { members: [], sharedWork: [], tasks: [], outbox: [], stewardTasks: [], stewardAssists: { incoming: [], outbox: [] }, handoffs: [], handoffTargets: [], executions: [] };
 const snapshotKeys = ["members", "sharedWork", "tasks", "sync", "taskSync", "catalog", "outbox", "outboxStatus", "stewardship", "stewardTasks", "stewardAssists", "handoffs", "handoffTargets", "executions"] as const;
 
-export default function MemberControlRoom({ identity, operatorToken, onManage, onReviewProfile, onOpenTasks }: Props) {
+export default function MemberControlRoom({ identity, operatorToken, onManage, onReviewProfile, onOpenTasks, refreshKey }: Props) {
   const context = identity.apiary_context;
   const [snapshot, setSnapshot] = useState<MemberSnapshot>(emptySnapshot);
   const [observed, setObserved] = useState<Set<keyof MemberSnapshot>>(() => new Set());
@@ -129,7 +130,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
     }));
     setState([members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, stewardTasks, stewardAssists, handoffs, handoffTargets, executions].some((result) => result.status === "rejected") ? "partial" : "ready");
   }, [operatorToken]);
-  const refresh = useVisiblePolling(loadSnapshot, Boolean(operatorToken), null);
+  const refresh = useVisiblePolling(loadSnapshot, Boolean(operatorToken), null, 8_000, { refreshKey });
   const value = (key: keyof MemberSnapshot, content: string | number) => observed.has(key)
     ? failed.has(key) ? `${content} (last known)` : content
     : failed.has(key) ? "Unavailable" : "Loading…";

@@ -263,6 +263,7 @@ test("restores tasks and workers after a refresh", async () => {
 });
 
 test("gives a Keeper a first-class Apiary control-room surface", async () => {
+  let directoryName = "Meadow Hive";
   const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
@@ -284,7 +285,7 @@ test("gives a Keeper a first-class Apiary control-room surface", async () => {
     if (url === "/api/v1/runtime/development") return Promise.resolve(ok({ enabled: false, version: "0.1.0", state: "idle", reload_available: false, source_revision: null, source_dirty: false }));
     if (url === "/api/v1/runtime/resources") return Promise.resolve(ok({ sampled_at: 1, policy: { mode: "observe_only", advisory_bytes: 268435456, critical_bytes: 536870912 }, api: { resident_memory_bytes: 1, pressure: "normal" }, terminal_host: { resident_memory_bytes: 1, pressure: "normal" } }));
     if (url === "/api/v1/terminal/history/diagnostics") return Promise.resolve(ok({ type: "history_diagnostics", diagnostics: null }));
-    if (url.endsWith("/apiary/members")) return Promise.resolve(ok([{ hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: true }]));
+    if (url.endsWith("/apiary/members")) return Promise.resolve(ok([{ hive_id: "hive-1", hive_name: directoryName, operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: true }]));
     if (url.endsWith("/apiary/jira-projects") || url.endsWith("/apiary/shared-work") || url.endsWith("/apiary/stewardships") || url.endsWith("/apiary/steward-task-audit") || url.endsWith("/apiary/tasks") || url.endsWith("/apiary/handoffs")) return Promise.resolve(ok([]));
     if (url.includes("/api/v1/control-room/events")) return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
     if (url.includes("/api/v1/orchestration/queen-policy")) return Promise.resolve(ok({ at_hive: "coordinate", away: "coordinate", night_watch: "local_execution" }));
@@ -303,10 +304,22 @@ test("gives a Keeper a first-class Apiary control-room surface", async () => {
   expect(await screen.findByRole("heading", { name: "Grand Garden" })).toBeInTheDocument();
   expect(apiary).toHaveAttribute("aria-current", "page");
   expect(screen.getByText("Registration, not live presence")).toBeInTheDocument();
+  directoryName = "Updated directory Hive";
+  fireEvent.click(screen.getByRole("button", { name: "Refresh control room" }));
+  expect(await screen.findByText("Updated directory Hive")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Manage Apiary" }));
   expect(await screen.findByRole("button", { name: "Back to Apiary overview" })).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Settings" })).not.toBeInTheDocument();
   expect(apiary).toHaveAttribute("aria-current", "page");
+
+  fireEvent.click(screen.getByRole("button", { name: "Edit names" }));
+  const nameInput = screen.getByRole("textbox", { name: "Hive name" });
+  fireEvent.change(nameInput, { target: { value: "Unsaved Hive name" } });
+  directoryName = "Refreshed management Hive";
+  fireEvent.click(screen.getByRole("button", { name: "Refresh control room" }));
+  expect(await screen.findByText("Refreshed management Hive")).toBeInTheDocument();
+  expect(nameInput).toBeInTheDocument();
+  expect(nameInput).toHaveValue("Unsaved Hive name");
 
   cleanup();
   window.sessionStorage.clear();

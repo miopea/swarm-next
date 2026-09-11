@@ -9,12 +9,12 @@ import SharedTaskGroups, { isClosedSharedTask } from "./SharedTaskGroups";
 import SharedProfileHint from "./SharedProfileHint";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
-type Props = { identity: HiveIdentity; operatorToken: string; onManage: () => void; onReviewProfile?: () => void; onInvite: () => void; onOpenTasks: () => void };
+type Props = { refreshKey?: string; identity: HiveIdentity; operatorToken: string; onManage: () => void; onReviewProfile?: () => void; onInvite: () => void; onOpenTasks: () => void };
 type KeeperSnapshot = { members: ApiaryMember[]; projects: ApiaryJiraProject[]; sharedWork: ApiarySharedWorkClaim[]; tasks: ApiaryTask[]; stewardships: Stewardship[]; stewardAudit: FederationStewardTaskAuditEntry[]; handoffs: FederationClaimHandoff[] };
 const emptySnapshot: KeeperSnapshot = { members: [], projects: [], sharedWork: [], tasks: [], stewardships: [], stewardAudit: [], handoffs: [] };
 const snapshotKeys = ["members", "projects", "sharedWork", "tasks", "stewardships", "stewardAudit", "handoffs"] as const;
 
-export default function KeeperControlRoom({ identity, operatorToken, onManage, onReviewProfile, onInvite, onOpenTasks }: Props) {
+export default function KeeperControlRoom({ identity, operatorToken, onManage, onReviewProfile, onInvite, onOpenTasks, refreshKey }: Props) {
   const context = identity.apiary_context;
   const [snapshot, setSnapshot] = useState(emptySnapshot);
   const [observed, setObserved] = useState<Set<keyof KeeperSnapshot>>(() => new Set());
@@ -49,7 +49,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
       }));
       setState(results.some((result) => result.status === "rejected") ? "error" : "ready");
   }, [operatorToken]);
-  const refresh = useVisiblePolling(loadSnapshot, Boolean(operatorToken), null);
+  const refresh = useVisiblePolling(loadSnapshot, Boolean(operatorToken), null, 8_000, { refreshKey });
 
   const members = useMemo(() => [...snapshot.members].sort((left, right) => Number(right.is_local) - Number(left.is_local) || left.hive_name.localeCompare(right.hive_name)), [snapshot.members]);
   const memberByOperator = useMemo(() => new Map(members.map((member) => [member.operator_id, member])), [members]);

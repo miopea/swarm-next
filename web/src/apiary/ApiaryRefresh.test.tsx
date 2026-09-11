@@ -36,9 +36,15 @@ test.each(["keeper", "member"] as const)("%s refreshes renamed Hives on return w
   await act(async () => { view = render(<View identity={identity} operatorToken="fictional" onManage={vi.fn()} onInvite={vi.fn()} onOpenTasks={vi.fn()} />); });
   expect(screen.getAllByText("Before rename").length).toBeGreaterThan(0);
   expect(intervals).not.toHaveBeenCalled();
+  hiveName = "Explicit refresh rename";
+  await act(async () => { view.rerender(<View identity={identity} operatorToken="fictional" onManage={vi.fn()} onInvite={vi.fn()} onOpenTasks={vi.fn()} refreshKey="1" />); });
+  expect(screen.getAllByText("Explicit refresh rename").length).toBeGreaterThan(0);
+  expect(screen.queryByText("Before rename")).not.toBeInTheDocument();
   visibility = "hidden";
   await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
   const reads = fetchMock.mock.calls.length;
+  await act(async () => { view.rerender(<View identity={identity} operatorToken="fictional" onManage={vi.fn()} onInvite={vi.fn()} onOpenTasks={vi.fn()} refreshKey="2" />); });
+  expect(fetchMock).toHaveBeenCalledTimes(reads);
   await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
   expect(fetchMock).toHaveBeenCalledTimes(reads);
   hiveName = "After rename";

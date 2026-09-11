@@ -38,6 +38,7 @@ import MemberDirectoryStatus from "../apiary/MemberDirectoryStatus";
 import PersonalHiveJoin from "./PersonalHiveJoin";
 
 type Props = {
+  refreshKey?: string;
   busy: boolean;
   hiveIdentity: HiveIdentity | undefined;
   operatorToken: string;
@@ -45,7 +46,7 @@ type Props = {
   initialFocus?: "invitations" | "profile";
 };
 
-export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHiveIdentityChange, initialFocus }: Props) {
+export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHiveIdentityChange, initialFocus, refreshKey }: Props) {
   const context = hiveIdentity?.apiary_context;
   const personal = !context || context.mode === "personal";
   const [name, setName] = useState("");
@@ -118,7 +119,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
         if (!cancelled) setMemberRosterState("error");
       });
     return () => { cancelled = true; };
-  }, [personal, operatorToken, hiveIdentity?.hive.apiary_id, memberRosterAttempt]);
+  }, [personal, operatorToken, hiveIdentity?.hive.apiary_id, memberRosterAttempt, refreshKey]);
 
   useEffect(() => {
     if (!keeper) {
@@ -130,7 +131,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       .then((value) => { if (!cancelled) setReadiness(value); })
       .catch(() => { if (!cancelled) setReadiness(undefined); });
     return () => { cancelled = true; };
-  }, [keeper, operatorToken, hiveIdentity?.hive.apiary_id]);
+  }, [keeper, operatorToken, hiveIdentity?.hive.apiary_id, refreshKey]);
 
   useEffect(() => {
     if (!member) {
@@ -150,7 +151,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       setMemberSyncLoadError(sync.status === "rejected" || catalog.status === "rejected");
     });
     return () => { cancelled = true; };
-  }, [member, operatorToken, hiveIdentity?.hive.apiary_id]);
+  }, [member, operatorToken, hiveIdentity?.hive.apiary_id, refreshKey]);
 
   useEffect(() => {
     if (!keeper) {
@@ -182,7 +183,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
         setStewardshipLoadError(delegations.status === "rejected");
       });
     return () => { cancelled = true; };
-  }, [keeper, operatorToken, hiveIdentity?.hive.apiary_id]);
+  }, [keeper, operatorToken, hiveIdentity?.hive.apiary_id, refreshKey]);
 
   const blockers = useMemo(() => collapseBlockers(readiness), [readiness]);
 

@@ -6,9 +6,10 @@ export function useVisiblePolling(
   enabled: boolean,
   intervalMs: number | null,
   timeoutMs = 8_000,
-  options: { initialRefresh?: boolean } = {},
+  options: { initialRefresh?: boolean; refreshKey?: string | number } = {},
 ) {
   const initialRefresh = options.initialRefresh ?? true;
+  const refreshKey = options.refreshKey;
   const refreshRef = useRef<() => Promise<void>>(async () => undefined);
   useEffect(() => {
     let disposed = false;
@@ -60,6 +61,6 @@ export function useVisiblePolling(
       document.removeEventListener("visibilitychange", visibility);
       refreshRef.current = async () => undefined;
     };
-  }, [task, enabled, intervalMs, timeoutMs, initialRefresh]);
+  }, [task, enabled, intervalMs, timeoutMs, initialRefresh, refreshKey]);
   return useCallback(() => refreshRef.current(), []);
 }
