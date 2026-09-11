@@ -177,6 +177,22 @@ test("one shared decision lists its other tasks without duplicating the answer o
   expect(open).toHaveBeenCalledWith(shared.id);
 });
 
+test("explicit no preference does not invent, recommend, or submit an answer", () => {
+  const onResolve = vi.fn();
+  const props = { tasks: [], workers: [worker], busy: false, onResolve };
+  const view = render(<DecisionInbox {...props} decisions={[{ ...pending, suggested_action: "" }]} />);
+  expect(screen.getByText("No preference")).toBeVisible();
+  expect(screen.queryByText(/Petal recommends/)).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "No preference" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Durable path" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Minimal path" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Say something else" })).toBeEnabled();
+  expect(onResolve).not.toHaveBeenCalled();
+  view.rerender(<DecisionInbox {...props} decisions={[{ ...pending, suggested_action: "durable_path" }]} />);
+  expect(screen.queryByText("No preference")).not.toBeInTheDocument();
+  expect(screen.getByText("Petal recommends")).toBeVisible();
+});
+
 test("long recommendations expand without changing the custom answer", () => {
   const recommendation = "Choose the durable route after verifying the migration. ".repeat(20).trim();
   render(<DecisionInbox decisions={[{ ...pending, suggested_action: recommendation }]} tasks={[]} workers={[worker]} busy={false} onResolve={vi.fn()} />);

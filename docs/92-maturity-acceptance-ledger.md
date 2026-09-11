@@ -1,5 +1,32 @@
 # Current maturity acceptance ledger
 
+## September 11 — No-preference implementation and worker-setup checks
+
+Approved no-preference implementation is in the local worktree, not deployed.
+Explicit empty suggested_action means No preference; offered actions, reasons,
+task linkage and operator resolution stay required. Whitespace is rejected;
+unattended nonempty recommendations still require an exact allowed button.
+The existing string schema needs no migration and old decisions are not rewritten.
+
+Validated: 51 DecisionInbox tests, TypeScript check, and focused Linux persistence
+test for no preference, preserved choices, pending state, rejected empty answer,
+whitespace and missing choices. The unattended Queen MCP integration test passed
+in the isolated Linux checkout: task linkage and exact nonempty recommendations
+remain enforced, while no preference creates a pending decision. Compilation
+completed normally in5m55s; no test remains running. Activation remains pending.
+
+Edge fictional clarification fixture verified no recommended button or fake
+No preference action, both real choices and custom answer available. Switching
+recommendation mode preserved the typed custom answer without submitting it.
+
+Worker setup: 29 WorkerSettings and4 WorkspaceSearchSettings tests passed.
+Edge experimental-admission fixture accepted a ~/projects/fictional-aster draft,
+required explicit outside-discovery consent, then retained name/path/consent
+after its simulated provider error. Screenshot confirms full-width error above
+the form, aligned fields, and no former error-as-grid-column collapse.
+This does not prove a real filesystem override or mobile creation journey;
+those remain live acceptance checks, not inferred from a fixture.
+
 ## September 11 — Missing-input recovery, Queen escalation and automatic return
 
 Live production dev6d1ac295; isolated Swarm Dogfood worker

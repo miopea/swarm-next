@@ -44,6 +44,17 @@ Swarm owns one durable, typed operator decision inbox.
 
 ## Consequences
 
+### Explicit no preference (September 11, operator approved)
+
+The required suggested_action field may explicitly contain an empty string:
+the requester has no meaningful basis to prefer an answer. Needs You presents
+this as No preference, never as a recommended answer or an extra action.
+Nonempty recommendations retain their existing meaning and unattended Queen
+reviews still require an exact offered button. Whitespace is not an explicit
+no-preference value. Choices, reasons, task linkage, operator-only resolution,
+and audit requirements are unchanged. Existing stored recommendations are not
+rewritten. This uses the existing string contract without a schema migration.
+
 The operator gets one calm, mobile-first “Needs you” queue instead of terminal
 interruptions or fleet broadcasts. Durable context survives browser and API
 restarts, while role visibility prevents workers from reading peer requests or

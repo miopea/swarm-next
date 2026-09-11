@@ -2,6 +2,28 @@
 
 ## Authoritative next gates — September 11, morning
 
+### Remaining usage allocation (operator direction, September 11)
+
+At 15% account usage remaining, use the next approximately 10 percentage points
+for release-worthy user-facing milestones, preserving the full program scope:
+
+1. Finish, validate, commit and activate the approved Needs You no-preference
+   contract; preserve the worker engine and existing sessions.
+2. Close Apiary onboarding acceptance: invite, submit, one Keeper approval,
+   joined without Jira; identity/name and directory synchronization, centralized
+   management, scrolling and actionable optional setup. Reuse recorded complete
+   journey evidence where still applicable; do not repeat it for activity's sake.
+3. Close everyday worker setup: workspace roots, repository search, existing-path
+   override and readable validation failures.
+4. Finish the user-facing consistency pass across these journeys and Queues:
+   truthful states, next actions, responsive layout and draft preservation.
+
+At approximately 5% remaining, stop new implementation and leave a durable
+handoff with exact shipped revisions, acceptance evidence, defects and unverified
+gates. Deep profiling, native-answer provenance, broader engine recovery and BFG
+integration remain open but deferred from this allocation. No BFG worker contact
+or release cutting. Do not call the overall goal complete based on this subset.
+
 08:35: CLOSED the live missing-input safe-recovery/escalation/return journey.
 Task01a0906b-87cc-7291-b7b2-4a678a498e16 exhausted its authorized read-only sources;
 Queen created one task-linked decision01a09071-fd93-7512-b348-ef3790b438bb. One

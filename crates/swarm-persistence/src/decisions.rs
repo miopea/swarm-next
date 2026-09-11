@@ -1095,7 +1095,7 @@ fn validate_new_request(request: &NewDecisionRequest<'_>) -> Result<(), TaskStor
     }
     if request.title.is_empty()
         || request.reason.is_empty()
-        || request.suggested_action.is_empty()
+        || (!request.suggested_action.is_empty() && request.suggested_action.trim().is_empty())
         || request.title.len() > MAX_TITLE_BYTES
         || content[1..]
             .iter()
@@ -1492,6 +1492,30 @@ mod tests {
             deadline: None,
             requested_command: None,
         }
+    }
+
+    #[test]
+    fn no_preference_preserves_choices_and_requires_an_operator_answer() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let actions = vec!["Amber".to_owned(), "Blue".to_owned()];
+        let mut input = request(queen.id, &actions);
+        input.suggested_action = "";
+        let decision = store.create_decision_request(&input).unwrap();
+        assert_eq!(decision.suggested_action, "");
+        assert_eq!(decision.allowed_actions, actions);
+        assert_eq!(decision.state, DecisionRequestState::Pending);
+        assert!(decision.resolution_action.is_none());
+        assert!(
+            store
+                .resolve_decision_request(decision.id, "", "", "inbox")
+                .is_err()
+        );
+        input.suggested_action = "   ";
+        assert!(store.create_decision_request(&input).is_err());
+        input.suggested_action = "";
+        input.allowed_actions = &[];
+        assert!(store.create_decision_request(&input).is_err());
     }
 
     #[test]

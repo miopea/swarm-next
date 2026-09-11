@@ -714,6 +714,8 @@ pub struct DecisionRequest {
     pub reason: String,
     pub risk: String,
     pub evidence: String,
+    /// Empty means the requester explicitly has no preference. It is not an
+    /// answer, authorization, or permission to omit the available choices.
     pub suggested_action: String,
     pub allowed_actions: Vec<String>,
     /// The one command this request asks to be allowed to run.

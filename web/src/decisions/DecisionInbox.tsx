@@ -265,7 +265,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
             const decisionBusy = busy || submittingIds.has(decision.id);
             // Combine only an exact displayed match. Authored commands and
             // identifiers are case-sensitive; a similar answer is not advice.
-            const recommendedAction = decision.state === "pending" && !decision.questions?.length
+            const recommendedAction = decision.suggested_action !== "" && decision.state === "pending" && !decision.questions?.length
               ? decision.allowed_actions.find(action => humanize(action).trim() === humanize(decision.suggested_action).trim())
               : undefined;
             const recommendationId = `${tabId}-recommendation-${decision.id}`;
@@ -287,6 +287,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                     together — so they fold behind it rather than in front. */}
                 {decision.summary ? <div className="decision-summary"><LongText text={decision.summary} label="the summary" foldAbove={300} /></div> : null}
                 {decision.suggested_action && recommendedAction === undefined && <div className="decision-ask"><span>{requester} {decision.state === "pending" ? "recommends" : "recommended"}</span><LongText text={humanize(decision.suggested_action)} label="the recommendation" foldAbove={300} /></div>}
+                {decision.suggested_action === "" && <div className="decision-ask"><span>{requester}'s view</span><p>No preference</p></div>}
                 {decision.risk && <dl className="decision-context">
                   <div className="decision-risk"><dt>Risk</dt><dd><LongText text={decision.risk} label="the risk" foldAbove={300} /></dd></div>
                 </dl>}

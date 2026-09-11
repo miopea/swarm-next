@@ -8,6 +8,7 @@ export default function DecisionClarificationFixture() {
   const [theme, setTheme] = useState<ColorTheme>("light");
   const [history, setHistory] = useState<DecisionClarification[]>([]);
   const [failNext, setFailNext] = useState(false);
+  const [noPreference, setNoPreference] = useState(false);
   const [finalChoice, setFinalChoice] = useState("");
   useEffect(() => applyColorTheme(theme), [theme]);
   const waiting = history.some((round) => round.reply === null && round.delivery_state !== "cancelled");
@@ -20,9 +21,9 @@ export default function DecisionClarificationFixture() {
   const decision: DecisionRequest = {
     id: "fictional-decision", hive_id: "fictional-hive", requesting_worker_id: "petal", task_id: null,
     kind: "input", urgency: "normal", title: "Should the export wait for its missing source?",
-    summary: "Petal recommends pausing this export until the source is available.",
+    summary: noPreference ? "Choose how to handle this fictional export; Petal has no preference." : "Petal recommends pausing this export until the source is available.",
     reason: "The source has not arrived.", risk: "Partial results could be mistaken for the complete export.",
-    evidence: "Fictional export fixture only.", suggested_action: "Wait for the source",
+    evidence: "Fictional export fixture only.", suggested_action: noPreference ? "" : "Wait for the source",
     allowed_actions: ["Wait for the source", "Use partial results"], deadline: null,
     state: finalChoice ? "resolved" : "pending", resolution_action: finalChoice || null,
     resolution_note: "", resolved_by_operator_id: finalChoice ? "fictional-operator" : null,
@@ -35,6 +36,7 @@ export default function DecisionClarificationFixture() {
     <h1>Fictional Needs You clarification</h1>
     <p>No Hive request or worker message is sent.</p>
     <details><summary>Fixture controls</summary>
+      <label><input type="checkbox" checked={noPreference} onChange={event => setNoPreference(event.target.checked)} />No meaningful preference</label>
       <button type="button" onClick={() => setTheme(theme === "light" ? "dark" : "light")}>Switch to {theme === "light" ? "dark" : "light"} theme</button>
       <label><input type="checkbox" checked={failNext} onChange={(event) => setFailNext(event.target.checked)} />Fail the next question send</label>
       <button type="button" disabled={!waiting || Boolean(finalChoice)} onClick={() => setHistory(rounds => rounds.map(round => round.reply === null ? {

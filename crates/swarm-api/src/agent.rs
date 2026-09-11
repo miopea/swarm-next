@@ -1116,6 +1116,7 @@ impl ServerHandler for AgentMcp {
                             ));
                         }
                         if input.questions.is_empty()
+                            && !input.suggested_action.is_empty()
                             && !input
                                 .allowed_actions
                                 .iter()
@@ -1123,7 +1124,7 @@ impl ServerHandler for AgentMcp {
                         {
                             return Err(ApplicationError::Store(
                                 TaskStoreError::IntegrityFailure(
-                                    "The suggested action must exactly match one button in allowed_actions during unattended review.".into(),
+                                    "The suggested action must exactly match one button in allowed_actions during unattended review, or be an empty string for No preference.".into(),
                                 ),
                             ));
                         }
@@ -3073,7 +3074,7 @@ fn request_decision_tool() -> Tool {
                 "reason": { "type": "string", "maxLength": 10000 },
                 "risk": { "type": "string", "maxLength": 10000, "default": "" },
                 "evidence": { "type": "string", "maxLength": 10000, "default": "" },
-                "suggested_action": { "type": "string", "maxLength": 80, "description": "The recommended button label. During Queen automation this must exactly match one allowed_actions value." },
+                "suggested_action": { "type": "string", "maxLength": 80, "description": "The recommended button label, or an empty string to explicitly report No preference when there is no meaningful basis to favor an answer. Do not invent a recommendation or add a No preference answer button. During Queen automation a nonempty recommendation must exactly match one allowed_actions value." },
                 "questions": { "type": "array", "maxItems": 4, "description": "Ask instead of guessing. Each question offers 2 to 4 options and a unique header; the operator may still answer with something none of them offered. A record carries questions or allowed_actions, never both.", "items": { "type": "object", "properties": { "header": { "type": "string", "maxLength": 40 }, "question": { "type": "string", "maxLength": 600 }, "options": { "type": "array", "minItems": 2, "maxItems": 4, "items": { "type": "string", "maxLength": 200 } }, "option_descriptions": { "type": "object", "maxProperties": 4, "description": "Exact explanatory text keyed by an offered option label. Preserve conditions and scope; unknown option labels are rejected.", "additionalProperties": { "type": "string", "maxLength": 4096 } }, "multi_select": { "type": "boolean", "default": false } }, "required": ["header", "question", "options"], "additionalProperties": false } },
                 "allowed_actions": { "type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "description": "Short, task-specific operator choices. Do not encode actions for other tasks.", "items": { "type": "string", "minLength": 1, "maxLength": 80 } },
                 "deadline": { "type": ["integer", "null"] },
@@ -8698,6 +8699,33 @@ mod tests {
                 .contains("exactly match one button")
         );
 
+        let no_preference = response_json(
+            handle(
+                bridge.clone(),
+                plain_state(),
+                request(json!({
+                    "task_id": task.id.to_string(),
+                    "kind": "input",
+                    "title": "Choose a fictional colour",
+                    "reason": "Both are equally valid; there is no basis to prefer either.",
+                    "summary": "Choose amber or blue for the fictional specimen.",
+                    "suggested_action": "",
+                    "allowed_actions": ["Amber", "Blue"]
+                })),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(no_preference["result"]["isError"], false);
+        assert_eq!(
+            no_preference["result"]["structuredContent"]["suggested_action"],
+            ""
+        );
+        assert_eq!(
+            no_preference["result"]["structuredContent"]["state"],
+            "pending"
+        );
+
         let concrete = response_json(
             handle(
                 bridge,
@@ -8716,7 +8744,7 @@ mod tests {
         )
         .await;
         assert_eq!(concrete["result"]["isError"], false);
-        assert_eq!(store.list_decision_requests().unwrap().len(), 1);
+        assert_eq!(store.list_decision_requests().unwrap().len(), 2);
         assert_eq!(
             concrete["result"]["structuredContent"]["task_id"],
             task.id.to_string()
