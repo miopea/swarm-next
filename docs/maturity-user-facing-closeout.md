@@ -102,3 +102,26 @@ to the existing WorkspaceChoice contract restored the interaction. This was not
 reproduced against live WSL. Exact draft retention passed there; the test draft
 was cleared, and all testing tabs were closed. No credentials, membership,
 worker assignment or persistent configuration were changed by this check.
+
+### Budget checkpoint and isolated recovery cleanup
+
+September11 around11:30 Eastern: live account meter reported8% remaining.
+Preserve5%; no new investigation or repeated completed acceptance suite.
+Use the remaining allowance only for a bounded existing gate or release handoff.
+
+The isolated Swarm Dogfood Contract worker was awakened with no assigned tasks.
+Its terminal reported restored conversation
+`c4435eee-57b0-4546-b6ef-dc182080e7b5`. A native `/clear` and one fictional,
+no-tools prompt created a second conversation and returned `resume-fixture-ready`.
+Native `/resume c4435eee-57b0-4546-b6ef-dc182080e7b5` restored the original;
+Session details confirmed that exact selection was saved for the next start.
+The demo was then put back to sleep. Read-only verification confirmed
+`running:false`, no active session, no background work and zero assigned tasks.
+No project worker was restarted and no engine update was applied.
+
+This is not acceptance of switching to the second conversation across sleep/wake,
+nor of missing-context/continue/fresh fallback. Those remain open. The harmless
+fictional second conversation `e38c03b3-c21b-437a-9e6a-2794d1887604` remains on
+disk; freshness now labels the intentionally restored older demo conversation
+stale. Do not treat that timestamp comparison as proof the chosen identity was
+lost, and do not delete provider history just to make the diagnostic green.
