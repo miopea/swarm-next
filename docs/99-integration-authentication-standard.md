@@ -230,6 +230,63 @@ the multitenant options inside an MSA-created Default Directory. Nothing says it
 hides them, but that is an inference from absence. It is visible on the
 registration form in seconds -- check there rather than trusting this line.
 
+## Registering the app: four things that cost a session each
+
+Learned building the Swarm Email registration on 2026-09-11. Every one of these
+presents as a code bug and is a registration setting.
+
+**1. A `web` redirect URI defeats a public client.** The platform an URI is
+registered under decides whether client authentication is demanded. Redeeming
+against a `web` URI with no secret fails `AADSTS7000218` -- *"The request body
+must contain the following parameter: 'client_secret' or 'client_assertion'"* --
+which reads as "our code forgot the secret" and is actually "this URI is the
+wrong type". Register under **Mobile and desktop applications**. The Overview
+blade states the tally plainly: `0 web, 0 spa, 2 public client`.
+
+**2. An existing single-tenant app usually CANNOT be widened in place.** Setting
+supported account types to include personal accounts fails with *"Property
+api.requestedAccessTokenVersion is invalid"*. Personal accounts require v2
+access tokens; an app created single-tenant is on v1. Fixable by editing the
+manifest to `"requestedAccessTokenVersion": 2` first -- but only safe when the
+app exposes no API of its own, so check the Application ID URI before doing it.
+Creating a fresh registration with the right audience avoids the whole question.
+
+**3. Every install's callback must be on the ONE registration, and the ceiling
+is real.** Microsoft matches redirect URIs exactly. Wildcards are unsupported
+once the audience includes personal accounts, query parameters are unsupported
+too, and the cap drops from 256 to **100**. What makes a shared registration
+workable anyway is the loopback rule: **the port is ignored when matching a
+localhost URI**, so one `http://localhost/<path>` entry serves every port. Only
+an install published at its own HTTPS address needs a line of its own. Do not
+register two localhost URIs differing only by port -- the login server picks one
+arbitrarily and applies its platform type.
+
+**4. READ THE OVERVIEW, NOT THE FORM.** A changed dropdown that was never saved
+looks identical to a saved one. The Overview blade renders the stored object:
+supported account types, the redirect tally, and whether any credential exists.
+It is the only screen that answers "what is actually true right now", and it is
+what caught a supported-account-types change that had not been committed.
+
+### Probing a registration from outside: what each endpoint can and cannot say
+
+`POST /{tenant}/oauth2/v2.0/devicecode` judges the `client_id` with **no user
+present**, which makes it the best available probe -- but read the error, since
+two of them mean opposite things:
+
+| Result | Means |
+| --- | --- |
+| `device_code` issued | app exists here, scopes fine, public client flows on |
+| `AADSTS700016` not found in directory | the app is **not** available to that audience |
+| `AADSTS70002` client not supported for this feature | the app **is** there; device code specifically is not offered |
+| `AADSTS50059` no tenant-identifying information | you used `/common` or `/organizations`; device code needs a concrete tenant |
+
+⚠️ **`/authorize` CANNOT be used to check a redirect URI.** It returns 200 and an
+ordinary sign-in page for an unregistered client id *and* for a wrong redirect
+URI, deferring both checks until after credentials. A control run with a
+deliberately wrong redirect proved this: it was indistinguishable from the
+correct one. **There is no way to verify redemption without a real sign-in** --
+say so rather than implying the probe covered it.
+
 ## Providers deliberately not supported
 
 Recorded so they are not reopened without the reasons. Operator: *"This is a
