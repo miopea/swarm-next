@@ -1,5 +1,17 @@
 # Current maturity acceptance ledger
 
+## September 11 — Interview draft preservation activated
+
+Production/WSL serve `1.7.1-dev-cd7889fa6beb-20260911143022-1427938`.
+Both engine PIDs1364561/45338 remain unchanged. Eight production session pairs
+match in `/tmp/swarm-interview-draft-continuity.LvjaNg` with the same recorded
+SHA2566f5196dda450ba7055d488e5ad8522c3fce006b1ecf8d203bf243fa64f100ca9.
+All174 web files/1684 tests passed, plus production web and Linux package builds.
+Edge verified both revisions and production Needs You/Activity navigation; no
+real decision was answered. The actual draft reproduction remains the fictional
+390px acceptance recorded below. Previous42ace825 CI34608555581 fully passed;
+currentcd7889fa CI34610465314 is running. No release or engine update was applied.
+
 ## September 11 — Reproduced interview draft loss on Activity switch
 
 The390px long-decision fixture reproduced a real bug: choose Something else,

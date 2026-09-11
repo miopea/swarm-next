@@ -16,17 +16,18 @@ the newest checkpoint for the same gate supersedes them.
 | Honest worker status |61e36a10 removes false API read-only-sandbox evidence; actual Architecture worker now Resting without permission/session changes. Real engine-owned read-only detection remains open. |
 | Needs You recommendations |5439a9f8 supports explicit No preference without a fake choice or automatic answer; genuine recommendations stay visible. |
 | Needs You interactions | Actual components in fictional Edge fixtures: custom text, failed-send retention, exact retry, clarification/reply attribution, correct attention counts and explicit final answer. This is not live/native terminal correlation. |
+| Interview draft continuity |cd7889fa fixes reproduced custom-answer/note loss across Activity; changed questions still reset answers. Regression and390px interaction passed. |
 | Queue presentation | Live owner sections, worker grouping, recorded order, linked prerequisites and expandable explanations. Counts match37 waiting rows at the recorded checkpoint. This does not prove every underlying task is correctly orchestrated. |
 
 ## Exact current delivery
 
-- Production dev and WSL App/API: `1.7.1-dev-42ace825b3ea-20260911141056-1411729`.
-- Source commit: `42ace825b3ea9be26e2ef35cc696e17a0ac134ac`; subsequent commits document evidence only.
+- Production dev and WSL App/API: `1.7.1-dev-cd7889fa6beb-20260911143022-1427938`.
+- Source commit: `cd7889fa6bebf43f37ee23e0ca75eb8ca62d40d0`; subsequent commits document evidence only.
 - Engine package intentionally remains `1.7.1-dev-6d1ac295a1d4-20260911121244-1346703`.
 - Production engine PID1364561; WSL engine PID45338. Both preserved during updates.
-- Eight production worker/session pairs match before/after in `/tmp/swarm-apiary-reads-continuity.SgLaAq`.
-- Full web:174 files/1683 tests passed; TypeScript, production web and Linux development package builds passed.
-- Prior82eac78a full CI34605803223 succeeded. Current42ace825 CI34608555581: web/package/audit succeeded, Rust still running at this handoff. Recheck that exact run once it finishes; do not rerun the package to generate activity.
+- Eight production worker/session pairs match before/after in `/tmp/swarm-interview-draft-continuity.LvjaNg`.
+- Full web:174 files/1684 tests passed; TypeScript, production web and Linux development package builds passed.
+- Prior42ace825 full CI34608555581 succeeded. Currentcd7889fa CI34610465314 is running at this handoff. Recheck that exact run once it finishes; do not rerun the package to generate activity.
 - No release cut by this work. No worker-engine update applied. No BFG Admin communication.
 - Worktree: `C:\projects\swarm-next\.worktrees\recovery-main-20260907`; branch `codex/apiary-and-workspace-ux`; changes pushed to main.
 - Preserve unrelated untracked `scripts/dogfood/native-signal-probe.cjs`.
